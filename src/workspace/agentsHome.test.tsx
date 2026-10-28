@@ -193,6 +193,15 @@ describe("what a workstream's heading says of where it stands", () => {
     seed(useWorkstreams, { list: [paused] });
     expect(renderToStaticMarkup(<WorkstreamHeadExtras view={paused} />)).toMatch(/data-status="needs-you"[^>]*>Needs you/);
   });
+
+  it("says it waits for a pull request while the workstream is open, and not once it is closed and done", () => {
+    const open = { ...view("ws-1", "CA-401"), waitingForPr: "b1" } as WorkstreamView;
+    const closed = { ...view("ws-1", "CA-401", { closedAt: "2026-09-20T10:00:00Z" }), waitingForPr: "b1" } as WorkstreamView;
+    expect(renderToStaticMarkup(<WorkstreamHeadExtras view={open} />)).toContain("waiting for PR");
+    const html = renderToStaticMarkup(<WorkstreamHeadExtras view={closed} />);
+    expect(html).toMatch(/data-status="done"[^>]*>Done/);
+    expect(html).not.toContain("waiting for PR");
+  });
 });
 
 describe("a workstream's detail", () => {

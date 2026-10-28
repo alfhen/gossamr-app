@@ -1,4 +1,4 @@
-import { SHORTCUTS } from "../lib/keys";
+import { SHORTCUTS, isTypingTarget } from "../lib/keys";
 
 /**
  * One keyboard model for every list that holds things to act on: the Needs you list, draft cards (in the conversation, the
@@ -30,15 +30,16 @@ const BY_KEY = new Map(KEY_BINDINGS.flatMap((b) => b.keys.map((k) => [k, b.inten
 
 interface Modifiers {
   key: string;
+  target?: unknown;
   metaKey?: boolean;
   ctrlKey?: boolean;
   altKey?: boolean;
   shiftKey?: boolean;
 }
 
-/** What a plain key press means in the model; null for any other key, and for any press with a modifier held. */
+/** What a plain key press means in the model; null for any other key, for any press with a modifier held, and for one typed into a field. */
 export function keyIntent(ev: Modifiers): KeyIntent | null {
-  if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey) return null;
+  if (ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || isTypingTarget(ev.target)) return null;
   return BY_KEY.get(ev.key) ?? null;
 }
 

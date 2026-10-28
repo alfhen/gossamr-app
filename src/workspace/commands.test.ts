@@ -266,7 +266,7 @@ describe("agent commands", () => {
   const labels = () => buildCommands([], [], noop, ctx).map((c) => c.label);
 
   it("offers the agent entries, and no way to start one: that is Ask Pip", () => {
-    expect(labels()).toEqual(expect.arrayContaining(["Show what needs me", "Stop all agents…", "Agent safety and settings"]));
+    expect(labels()).toEqual(expect.arrayContaining(["Show what needs me", "Stop all agents…", "Agent settings"]));
     expect(labels()).not.toContain("Start an agent…");
     expect(labels()).not.toContain("Start a workstream…");
   });
@@ -276,7 +276,7 @@ describe("agent commands", () => {
     const found = buildCommands([], [], a, { ...ctx, needsYou: 2 });
     const named = (label: string) => found.find((c) => c.label === label)!;
     named("Show what needs me").run();
-    named("Agent safety and settings").run();
+    named("Agent settings").run();
     expect(a.showNeedsYou).toHaveBeenCalled();
     expect(a.openAgentSafety).toHaveBeenCalled();
     expect(named("Show what needs me").hint).toBe("2 waiting");

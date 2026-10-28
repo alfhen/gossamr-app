@@ -363,7 +363,7 @@ describe("what the agent was told", () => {
   });
 });
 
-describe("safety and settings", () => {
+describe("agent settings", () => {
   it("counts what Stop all reaches and what keeps running after a quit", () => {
     const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     // Stop all counts what it can stop, a set apart from Your agents, and says so.

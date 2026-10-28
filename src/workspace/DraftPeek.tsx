@@ -16,6 +16,7 @@ import { usePrefs } from "./prefs";
 import { PeekView, typingIn, type DraftSlots, type PeekViewProps } from "./PeekSheet";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
+import { isTypingTarget } from "../lib/keys";
 
 const SAVE_DELAY_MS = 700;
 const HANDOVER_MS = 6000;
@@ -195,7 +196,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
               {open && revision && <p className="m-0 font-semibold text-ws-pip">↻ {revision.note}</p>}
               {open && place && place.total > 1 && (
                 <p className="m-0 text-ws-ink2">
-                  Either way, the next draft opens.
+                  Create or skip, the next draft opens.
                 </p>
               )}
             </>
@@ -383,7 +384,7 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
       if (ev.defaultPrevented && ev.key === "Escape") return;
       if (usePrefs.getState().paletteOpen || document.getElementById("agent-sheet")) return;
       const focus = document.activeElement;
-      const typing = focus instanceof HTMLElement && (focus.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(focus.tagName));
+      const typing = isTypingTarget(focus);
       const inside = !!focus?.closest("#peek-sheet");
       if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && !ev.altKey) {
         if (typing && !inside) return;

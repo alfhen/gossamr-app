@@ -185,7 +185,7 @@ describe("the draft ticket in the peek sheet", () => {
     const out = view(p, { place: placeOf(["p0", "p1", "p2"], "p1"), onStep: vi.fn() });
     expect(out).toContain('aria-label="Drafts waiting, 2 of 3"');
     expect(out).not.toContain('disabled=""');
-    expect(out).toContain("Either way, the next draft opens.");
+    expect(out).toContain("Create or skip, the next draft opens.");
     expect(view(p, { place: placeOf(["p1", "p2"], "p1"), onStep: vi.fn() })).toMatch(/data-step="prev"[^>]*disabled=""/);
   });
 

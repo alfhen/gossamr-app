@@ -10,8 +10,9 @@ import { useRuns } from "./runsStore";
 import { bulkCleanup, cleanable, cleanupReport } from "./cleanupLogic";
 import { messageOf, useToasts } from "./toasts";
 import type { AgentSettings } from "../types";
+import { isTypingTarget } from "../lib/keys";
 
-const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || !!t.closest("input, textarea, select, [contenteditable], [data-esc-local]"));
+const typing = (t: EventTarget | null) => isTypingTarget(t) || (t instanceof HTMLElement && !!t.closest("[data-esc-local]"));
 
 function Settings() {
   const backend = useBackend();

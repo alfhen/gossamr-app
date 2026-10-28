@@ -313,7 +313,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
           </button>
           <button type="button" onClick={on.openSafety} className={BUTTON}>
             <Icon name="shield" />
-            Safety and settings
+            Agent settings
           </button>
           {clear}
           <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />

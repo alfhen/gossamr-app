@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, openAgents, openApp, pipPane, selectWorkstream, startWorkstream } from "./support/app";
 
-// Backlog items of the twelfth dogfood round: one story of who posts (G23), the workstream controls explaining themselves (G24), the Ctrl+0 note not queuing (G30), live regions said once (G31),
+// Backlog items of the twelfth dogfood round: the workstream controls explaining themselves (G24), the Ctrl+0 note not queuing (G30), live regions said once (G31),
 // names for a screen reader (G32), where F6 and Enter land (G33).
 
 const VAGUE = "CA-408";

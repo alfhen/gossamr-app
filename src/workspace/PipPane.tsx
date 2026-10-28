@@ -1,4 +1,4 @@
-import { showOf } from "../lib/keys";
+import { isTypingTarget, showOf } from "../lib/keys";
 import { useEffect, useMemo, useState } from "react";
 import { SwitchRow } from "../components/Switch";
 import { developmentLine } from "../lib/devLinks";
@@ -84,7 +84,7 @@ function usePaneEscape(onClose: () => void) {
       if (ev.key !== "Escape") return;
       const tabs = useTabs.getState();
       const field = document.activeElement;
-      const editable = field instanceof HTMLElement && (field.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName));
+      const editable = isTypingTarget(field);
       const close = escapeClosesPane({
         peekOpen: tabs.selected !== null && tabs.route !== "settings",
         ticked: tabs.marked.length > 0,
@@ -146,7 +146,7 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
   return { scene, kind, label, context, words, quote, following: pinned === null };
 }
 
-/** The line naming the conversation: "General", or "Workstream: <title> · <Stage>" with only the title cut short. */
+/** The line naming the conversation: "General", or "Workstream: <title>" with the title cut short. */
 export function ConversationLine({ conversation, workstream }: { conversation: string; workstream: WorkstreamView | null }) {
   return (
     // The status pill sits beside the line, not in it.

@@ -1,9 +1,10 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PROMISES } from "./Settings";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 const sources = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -17,7 +18,7 @@ describe("the two facts the app states", () => {
     expect(PROMISES).toEqual(["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."]);
     const restating = sources(root)
       .filter((path) => !path.endsWith("workspace/Settings.tsx"))
-      .filter((path) => /Claude Code settings|until you approve|until you choose/i.test(readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "")));
+      .filter((path) => /Claude Code settings|until you approve|until you choose/i.test(readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "")));
     expect(restating.map((p) => p.slice(root.length))).toEqual([]);
   });
 });

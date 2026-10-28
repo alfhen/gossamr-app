@@ -22,6 +22,7 @@ import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapsho
 import { speakQuietToasts, useToasts } from "./toasts";
 import { controlActions, PausedBanner } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
+import { isTypingTarget } from "../lib/keys";
 
 const STACK = "[data-workstream-needs]";
 
@@ -413,7 +414,7 @@ function NeedItem({ need, open }: { need: Need; open: boolean }) {
     if (target.closest("[data-esc-local]")) return;
     ev.preventDefault();
     // In a field, Esc leaves the field first, so a half-written answer is not lost to a second key.
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return void root.current?.focus();
+    if (isTypingTarget(target)) return void root.current?.focus();
     // A card being edited ends its edit first: closing the decision would drop what was typed.
     if (root.current && endEditing(root.current)) return void root.current.focus({ preventScroll: true });
     close();

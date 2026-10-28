@@ -209,9 +209,9 @@ test.describe("Settings", () => {
     await openApp(page, "runs=empty");
     await openAgents(page);
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agents safety");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agent settings");
     await page.keyboard.press("Enter");
-    const safety = page.getByRole("dialog", { name: "Agents safety and settings" });
+    const safety = page.getByRole("dialog", { name: "Agent settings" });
     const notifications = safety.getByRole("checkbox", { name: "Notifications" });
     await expect(notifications).toBeChecked();
     await expect(safety.getByText(/digest/i)).toHaveCount(0);
@@ -225,9 +225,9 @@ test.describe("Settings", () => {
     await page.keyboard.press("Escape");
     await expect(safety).toHaveCount(0);
     await page.keyboard.press("ControlOrMeta+k");
-    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agents safety");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agent settings");
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("dialog", { name: "Agents safety and settings" }).getByRole("checkbox", { name: "Notifications" })).not.toBeChecked();
+    await expect(page.getByRole("dialog", { name: "Agent settings" }).getByRole("checkbox", { name: "Notifications" })).not.toBeChecked();
   });
 });
 

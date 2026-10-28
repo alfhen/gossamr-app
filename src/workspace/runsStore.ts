@@ -56,7 +56,7 @@ interface RunsState {
   dismissed: ReadonlySet<string>;
   /** Ids of failed runs the person has taken the step in Terminal for, or copied its command; Retry waits for this. */
   terminalOpened: ReadonlySet<string>;
-  /** Whether the person has the explainer open. */
+  /** Stop all is under way. */
   stopping: boolean;
   /** The run a draft is being made from, so its buttons wait. */
   drafting: string | null;

@@ -28,7 +28,7 @@ export interface SettingsViewProps {
   onClose(): void;
 }
 
-/** Safety and settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
+/** Agent settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
 export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
@@ -36,13 +36,13 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
   const reach = active.length + waiting.length;
   return (
     <SheetFrame
-      label="Agents safety and settings"
+      label="Agent settings"
       title="Agents"
-      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
+      hint={<>settings · <kbd className="font-sans">esc</kbd> close</>}
       wide={false}
       onClose={onClose}
     >
-      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
+      <h2 className="m-0 text-[20px] leading-tight font-semibold">Agent settings</h2>
       <Sec title="Stop everything">
         <Box>
           <p className="m-0">Stops every agent Gossamr started, in every account. What each wrote stays in its worktree.</p>
@@ -114,7 +114,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
               <span className="text-sm text-ws-ink3">{cleanup.reason}</span>
             </div>
           ) : (
-            <p className="m-0 text-sm text-ws-ink3">Nothing to clean up.</p>
+            <p className="m-0 text-sm text-ws-ink3">Nothing old or large enough yet. Open a finished run to clean up just that one.</p>
           )}
           {cleanup?.report && (
             <p role="status" className="selectable m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">

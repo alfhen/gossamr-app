@@ -50,7 +50,7 @@ export function WorkstreamHeadExtras({ view }: { view: WorkstreamView }) {
   return (
     <>
       <StatusPill status={status} detail />
-      <WaitingForPr view={view} />
+      <WaitingForPr view={view} status={status} />
       <NeedsBadge count={mine} total={needs.length} />
     </>
   );

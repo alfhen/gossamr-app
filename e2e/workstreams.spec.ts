@@ -22,11 +22,11 @@ async function askAndWait(page: Page, question: string) {
 test("Ask Pip in the peek opens its own conversation in Pip", async ({ page }) => {
   await openApp(page);
   await startWorkstream(page, "CA-401");
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
+  await expect(pipConversation(page)).toHaveText("Workstream: CA-401 Welcome flow refresh");
   const peek = peekSheet(page);
-  await expect(peek.locator("[data-workstream] [data-status]").first()).toBeVisible();
-  await expect(peek.locator("#peek-agents").getByText(/^Workstream: CA-401 /)).toBeVisible();
-  await expect(peek.locator("#peek-agents [data-header-status] [data-status]")).toBeVisible();
+  await expect(peek.locator("[data-workstream] [data-status]").first()).toHaveText("Needs you");
+  await expect(peek.locator("#peek-agents").getByText("Workstream: CA-401 Welcome flow refresh")).toBeVisible();
+  await expect(peek.locator("#peek-agents [data-header-status] [data-status]")).toHaveText("Needs you");
   expect((await kept(page)).workstreams?.map((w) => w.itemKey)).toEqual(["CA-401"]);
 
   // Another ticket has none: the pane goes back to General.
@@ -50,7 +50,7 @@ test("Open in Pip puts the cursor in the workstream's conversation, and Close, o
   const confirm = peek.getByRole("group", { name: "Close this workstream" });
   await expect(confirm).toContainText("Its agents and drafts are kept in General.");
   await confirm.getByRole("button", { name: "Keep" }).click();
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
+  await expect(pipConversation(page)).toHaveText("Workstream: CA-401 Welcome flow refresh");
 
   await peek.getByRole("button", { name: "Close…" }).click();
   await confirm.getByRole("button", { name: "Close workstream" }).click();
@@ -104,11 +104,11 @@ test("a workstream's conversation is apart from General, and both survive a relo
   await expect(pipPane(page).getByText(WORKSTREAM_QUESTION, { exact: true })).toHaveCount(0);
 
   await peekTicket(page, "CA-401");
-  await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
+  await expect(pipConversation(page)).toHaveText("Workstream: CA-401 Welcome flow refresh");
   await expect(pipPane(page).getByText(WORKSTREAM_QUESTION, { exact: true })).toBeVisible();
   await expect(pipPane(page).getByText(ANSWER)).toBeVisible();
   await expect(pipPane(page).getByText(GENERAL_QUESTION, { exact: true })).toHaveCount(0);
-  await expect(peekSheet(page).locator("[data-workstream] [data-status]").first()).toBeVisible();
+  await expect(peekSheet(page).locator("[data-workstream] [data-status]").first()).toHaveText("Needs you");
 });
 
 type Kept = { workstreams?: { id: string; pausedReason: string | null }[]; events?: { workstreamId: string; actor: string; action: string; detail: string | null }[] };
@@ -131,7 +131,7 @@ test("a reload or a restart leaves an open workstream as it was: nothing is paus
 
   await peekTicket(again, "CA-401");
   await peekSheet(again).getByRole("button", { name: "Open in Pip" }).click();
-  await expect(pipConversation(again)).toHaveText(/^Workstream: CA-401 /);
+  await expect(pipConversation(again)).toHaveText("Workstream: CA-401 Welcome flow refresh");
   await askAndWait(again, WORKSTREAM_QUESTION);
 });
 

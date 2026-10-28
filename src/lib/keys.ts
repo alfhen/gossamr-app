@@ -18,20 +18,22 @@ export interface Shortcut {
   keys: readonly string[];
   /** Needs ⌘ (or Ctrl); keys are then compared in lower case. */
   mod?: boolean;
-  /** Fires with Shift held too (a modifier-free key never does). */
+  /** Fires with Shift held too (a modifier-free key never does). A letter key fires in either case, with Caps Lock or Shift. */
   shiftOk?: boolean;
   /** Fires while the person types in a field. Plain keys never do (rule 6). */
   inFields?: boolean;
   label: string;
   /** How the key reads on screen. A shortcut without one is not shown. */
   show?: string;
+  /** Another shortcut of the screen whose keys `show` names too, as "j k" does for next and previous. */
+  with?: string;
   /** Where it is named in a footer, and how soon it goes when the footer narrows (0 stays longest). */
   footer?: Partial<Record<FooterOn, { rank: number; text: string }>>;
 }
 
 /** In the order the footers name them. Ids are unique within a scope. */
 export const SHORTCUTS: readonly Shortcut[] = [
-  { id: "next", scope: "list", keys: ["j", "ArrowDown"], label: "Next item", show: "j k", footer: { work: { rank: 0, text: "move" } } },
+  { id: "next", scope: "list", keys: ["j", "ArrowDown"], label: "Next item", show: "j k", with: "prev", footer: { work: { rank: 0, text: "move" } } },
   { id: "prev", scope: "list", keys: ["k", "ArrowUp"], label: "Previous item" },
   { id: "open", scope: "list", keys: ["Enter", "o"], label: "Open", show: "↵", footer: { work: { rank: 0, text: "open" } } },
   { id: "approve", scope: "list", keys: ["a"], label: "Approve, allow or retry" },
@@ -49,7 +51,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { id: "ask", scope: "work", keys: ["n"], label: "Ask Pip", show: "n", footer: { work: { rank: 1, text: "ask Pip" } } },
   { id: "undo", scope: "work", keys: ["z"], mod: true, label: "Undo the newest skip or dismissal" },
 
-  { id: "reply", scope: "peek", keys: ["r"], label: "Reply to a comment" },
+  { id: "reply", scope: "peek", keys: ["r"], shiftOk: true, label: "Reply to a comment" },
 
   { id: "close", scope: "app", keys: ["Escape"], label: "Close the peek or Pip's pane", show: "Esc", footer: { canvas: { rank: 1, text: "close" }, work: { rank: 1, text: "clear" } } },
   { id: "regions", scope: "app", keys: ["F6"], shiftOk: true, inFields: true, label: "Move between the page, the peek and Pip", show: "F6", footer: { work: { rank: 2, text: "regions" } } },
@@ -87,21 +89,24 @@ export function isTypingTarget(target: unknown): boolean {
   return typeof el.closest === "function" && !!el.closest("[contenteditable]:not([contenteditable=false])");
 }
 
+const lower = (key: string) => (key.length === 1 ? key.toLowerCase() : key);
+
 /**
  * Whether `ev` is the shortcut `scope`.`id`: its key with exactly the modifiers it names, and not typed into a field
- * unless the shortcut is one that works there. The one place the typing guard is applied.
+ * unless the shortcut is one that works there. With `keyIntent` (`workspace/keyMap.ts`), the one place the typing guard
+ * (`isTypingTarget`) is applied; handlers that read neither use `isTypingTarget` itself.
  */
 export function pressed(ev: KeyLike, scope: KeyScope, id: string): boolean {
   const s = find(scope, id);
   if (!!(ev.metaKey || ev.ctrlKey) !== !!s.mod || ev.altKey || (ev.shiftKey && !s.shiftOk)) return false;
-  if (!(s.mod ? s.keys.includes(ev.key.toLowerCase()) : s.keys.includes(ev.key))) return false;
+  if (!s.keys.includes(lower(ev.key))) return false;
   return s.inFields || !isTypingTarget(ev.target);
 }
 
 /** Which of a two-key step shortcut (`j k`) `ev` is: 1 for the first key, -1 for the second, 0 for neither. */
 export function stepOf(ev: KeyLike, scope: KeyScope, id = "step"): 1 | -1 | 0 {
   if (!pressed(ev, scope, id)) return 0;
-  return ev.key === find(scope, id).keys[0] ? 1 : -1;
+  return lower(ev.key) === find(scope, id).keys[0] ? 1 : -1;
 }
 
 /** One hint of a footer: the keys, then what they do. */

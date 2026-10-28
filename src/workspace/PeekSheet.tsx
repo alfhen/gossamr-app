@@ -29,6 +29,7 @@ import { WorkDocView } from "./WorkDocView";
 import { HeaderStatus } from "./StatusPill";
 import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
+import { isTypingTarget } from "../lib/keys";
 
 /**
  * The peek's "Start a workstream": the workstream opens as `start` shows it, which over Agents is its detail, so closing the
@@ -452,14 +453,14 @@ interface WorkstreamControlProps {
 }
 
 /**
- * Beside Ask Pip: once the ticket has a workstream, its stage, a way to its conversation, and Close behind a confirm.
+ * Beside Ask Pip: once the ticket has a workstream, its status, a way to its conversation, and Close behind a confirm.
  */
 export function WorkstreamControl({ workstream, onOpen, confirmingClose = false, onAskClose, onClose }: WorkstreamControlProps) {
   if (!workstream) return null;
   return (
     <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
       <span title={workstream.workstream.title}>
-        <span aria-hidden>◆ </span>Workstream · <HeaderStatus view={workstream} />
+        <span aria-hidden>◆ </span>Workstream · <HeaderStatus view={workstream} inline />
       </span>
       <button type="button" onClick={onOpen} className="font-semibold underline">
         Open in Pip
@@ -592,7 +593,7 @@ export function focusPeekOf(key: string, root: { querySelector(selector: string)
 /** Whether Esc belongs to the field `el`, which keeps it while the person types there; Pip's input never does, so Esc from it closes the peek over it. */
 export function typingIn(el: Element | null): boolean {
   if (!(typeof HTMLElement !== "undefined" && el instanceof HTMLElement) || el.id === PIP_INPUT_ID) return false;
-  return el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+  return isTypingTarget(el);
 }
 
 /** Set as a peek gives way to the next one (j or k) with the keyboard in it, so that one takes the keyboard on. */
