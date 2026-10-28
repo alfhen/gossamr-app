@@ -1,5 +1,5 @@
 import { type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
-import { hasFailed, permissionRequest } from "../workspace/agentsLogic";
+import { permissionRequest } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
 import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
@@ -415,7 +415,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         secondary: [],
         batchable: false,
       });
-    } else if (hasFailed(run) && !dismissed.has(run.id) && latest.has(run.id)) {
+    } else if (run.state === "failed" && !dismissed.has(run.id) && latest.has(run.id)) {
       const trust = run.failure?.type === "untrustedFolder";
       const help = failureHelp(run);
       out.push({

@@ -275,12 +275,9 @@ export function stepRun(order: readonly string[], current: string | null, delta:
   return order[Math.min(order.length - 1, Math.max(0, at + delta))];
 }
 
-/** A failed run, or one whose session is lost (`unknown`), which the UI shows as failed (docs/simplification-proposal.md 5.4). */
-export const hasFailed = (run: Pick<Run, "state">) => run.state === "failed" || run.state === "unknown";
-
 /** A run that needs the person, or a failed one they haven't dismissed: the runs `yourAgents` counts as waiting on the person. */
 export const needsAttention = (run: Pick<Run, "id" | "state">, dismissed: ReadonlySet<string>) =>
-  needsPerson(run) || (hasFailed(run) && !dismissed.has(run.id));
+  needsPerson(run) || (run.state === "failed" && !dismissed.has(run.id));
 
 const AT_WORK: readonly RunState[] = ["queued", "launching", "working"];
 

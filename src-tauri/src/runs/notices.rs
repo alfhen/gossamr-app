@@ -105,7 +105,7 @@ impl Board {
     }
 }
 
-/// The failed runs (a lost session counts as failed, as proposal 5.4 has it) that are Needs you and news: the latest run of their role's work on their ticket (their repository when
+/// The failed runs that are Needs you and news: the latest run of their role's work on their ticket (their repository when
 /// they have none), not archived, ended within `FAILURE_NEWS`. A newer run in any state supersedes an older one, as
 /// `latestRuns` in `src/lib/needs.ts` does for the page's list.
 pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
@@ -121,8 +121,8 @@ pub fn stuck_runs(runs: &[Run], now: DateTime<Utc>) -> Vec<&Run> {
         }
     }
     runs.iter()
-        .filter(|r| matches!(r.state, RunState::Failed | RunState::Unknown) && r.archived_at.is_none())
-        .filter(|r| now - r.ended_at.unwrap_or(r.last_progress_at) <= FAILURE_NEWS)
+        .filter(|r| r.state == RunState::Failed && r.archived_at.is_none())
+        .filter(|r| r.ended_at.is_some_and(|at| now - at <= FAILURE_NEWS))
         .filter(|r| newest[&work(r)].1 == r.id)
         .collect()
 }

@@ -343,13 +343,9 @@ describe("needs: the runs that are never a need", () => {
     expect(only(run("r1", "build", "launching"))).toEqual([]);
   });
 
-  it("treats a run whose session is lost as a failure, as proposal 5.4 has it", () => {
-    expect(only(run("r1", "build", "unknown", { error: "This session isn't listed any more" })).map((n) => n.kind)).toEqual(["failure"]);
-    expect(only(run("r1", "build", "unknown"), { dismissed: new Set(["r1"]) })).toEqual([]);
-  });
-
-  it("leaves out a run that has been quiet and one that may have carried on elsewhere", () => {
+  it("leaves out a run that has been quiet, one whose session is not listed until the backend calls it failed, and one that may have carried on elsewhere", () => {
     expect(only(run("r1", "build", "working", { lastProgressAt: iso(300) }))).toEqual([]);
+    expect(only(run("r1", "build", "unknown", { error: "This session isn't listed any more" }))).toEqual([]);
     expect(only(run("r1", "build", "stopped", { possibleContinuations: [{ shortId: "abc12345" }] }))).toEqual([]);
   });
 });

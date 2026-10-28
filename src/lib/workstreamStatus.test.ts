@@ -59,8 +59,8 @@ describe("workstreamStatus: every state", () => {
     expect(at(view({ runs: ["r1"] }, { closedAt: ago(1) }), [], { runs: [failed], dismissed }).state).toBe("done");
   });
 
-  it("a run whose session is lost counts as failed, as proposal 5.4 has it", () => {
-    expect(at(view(), [], { runs: [run("unknown", "build")] })).toMatchObject({ state: "failed", detail: "Build" });
+  it("a run whose session is not listed is not Failed until the backend's recovery window marks it failed", () => {
+    expect(at(view(), [], { runs: [run("unknown", "build")] }).state).not.toBe("failed");
   });
 
   it("Idle: otherwise, however long nothing has happened", () => {

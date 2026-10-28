@@ -1,5 +1,4 @@
 import type { Run, WorkstreamView } from "../types";
-import { hasFailed } from "../workspace/agentsLogic";
 import { latestRuns, needsIn, type Need } from "./needs";
 import { roleLabel } from "./roles";
 
@@ -9,7 +8,7 @@ import { roleLabel } from "./roles";
  *
  * 1. `needs-you`: something in this workstream waits on the person. It outranks everything because Needs you is the one
  *    place decisions are made, and a person who has one thing to do must not be told the workstream is merely "Running".
- * 2. `failed`: an agent failed (or lost its session) and no newer run of its role has followed. A failure the person dismissed from Needs you does not count, so a closed workstream with an old failure reads "Done".
+ * 2. `failed`: an agent failed and no newer run of its role has followed. A failure the person dismissed from Needs you does not count, so a closed workstream with an old failure reads "Done".
  * 3. `running`: a run is active (or queued for a slot).
  * 4. `done`: closed, or its stage is done.
  * 5. `idle`: none of the above.
@@ -66,7 +65,7 @@ export function workstreamStatus(view: WorkstreamView, needs: readonly Pick<Need
   if (waiting > 0) return make("needs-you", `${waiting} waiting`);
   const furthest = (pick: (r: Run) => boolean) => own.filter(pick).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt)).pop();
   const last = latestRuns(runs);
-  const failed = furthest((r) => hasFailed(r) && !dismissed.has(r.id) && !r.archivedAt && last.has(r.id));
+  const failed = furthest((r) => r.state === "failed" && !dismissed.has(r.id) && !r.archivedAt && last.has(r.id));
   if (failed) return make("failed", roleLabel(failed.spec.role));
   const going = furthest((r) => RUNNING.has(r.state)) ?? furthest((r) => r.state === "queued");
   if (going) return make("running", `${roleLabel(going.spec.role)}${going.state === "queued" ? " queued" : ""}`);
