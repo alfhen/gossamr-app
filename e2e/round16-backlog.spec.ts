@@ -46,7 +46,7 @@ test.describe("Close, Pause and the posting pause (G24, G30, G33)", () => {
     const lines = `${before}\n\nPassword: hunter22secret`.split("\n").length;
     await expect(draft.locator("[data-post-pause]")).toContainText(`“hu…” (line ${lines})`);
     expect(await jiraWrites(page)).toEqual([]);
-    await draft.getByRole("button", { name: "Post it anyway" }).click();
+    await draft.locator("[data-post-pause]").getByRole("button", { name: "Post anyway" }).click();
     await expect.poll(async () => (await jiraWrites(page)).length).toBe(1);
     expect((await jiraWrites(page))[0].text).not.toMatch(/\(line \d+\)/);
   });
