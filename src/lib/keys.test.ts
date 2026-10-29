@@ -50,7 +50,10 @@ describe("the shortcut table", () => {
       const partner = s.with ? SHORTCUTS.find((x) => x.scope === s.scope && x.id === s.with) : undefined;
       if (s.with) expect(partner, `${s.scope}.${s.id} names ${s.with}`).toBeDefined();
       const own = [...s.keys, ...(partner?.keys ?? [])].map((k) => KEY_LABEL[k] ?? k);
-      for (const t of s.show!.split(" ")) expect(own, `${s.scope}.${s.id} shows ${t}`).toContain(shown(t));
+      for (const t of s.show!.split(" ")) {
+        expect(own, `${s.scope}.${s.id} shows ${t}`).toContain(shown(t));
+        expect(t.startsWith("⌘"), `${s.scope}.${s.id} shows ${t}`).toBe(Boolean(s.mod || partner?.mod));
+      }
     }
   });
 

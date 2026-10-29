@@ -117,6 +117,8 @@ test.describe("Esc at the posting pause (G14)", () => {
     await field.fill(`${await field.inputValue()}\n\ncc @everyone\nPassword: hunter2`);
     await draft.getByRole("button", { name: "Approve" }).click();
     await expect(draft.locator("[data-post-pause]")).toBeVisible();
+    // The pause moves the keyboard to Keep editing on the next frame; focusing the field before that lands is undone by it.
+    await expect(draft.getByRole("button", { name: "Keep editing" })).toBeFocused();
     await field.focus();
     await page.keyboard.press("Escape");
     await expect(draft.locator("[data-post-pause]")).toHaveCount(0);

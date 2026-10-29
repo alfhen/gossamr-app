@@ -116,7 +116,7 @@ test.describe("no overlap", () => {
     expect(row.y + row.height).toBeLessThanOrEqual(footer.y + 1);
   });
 
-  test("(e3) with the peek and the Pip pane open the canvas reflows beside the peek, tabs whole and badges uncut", async ({ page }) => {
+  test("(e3) with the peek and the Pip pane open the canvas reflows beside the peek, tabs scrolling and badges uncut", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page);
     await peekTicket(page, "CA-402");
@@ -140,59 +140,23 @@ test.describe("no overlap", () => {
     const tablist = page.getByRole("tablist", { name: "Views" });
     expect((await box(tablist)).x + (await box(tablist)).width).toBeLessThanOrEqual((await peekLeft()) + 1);
 
-    // Every tab is whole: its own text isn't cut, and the strip shows only whole tabs, left of the peek.
+    // Every tab is whole inside, and the ones that don't fit scroll in the strip, which stops left of the peek.
     for (const tab of await page.getByRole("tab").all()) {
       expect(await tab.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     }
-    expect(await tablist.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
-    const strip = await box(tablist);
-    /** How each tab sits in the strip as the app left it, nothing scrolled by the test: "in", "out" or "cut". */
-    const placed = async () => {
-      const s = await box(tablist);
-      return Promise.all(
-        (await page.getByRole("tab").all()).map(async (t) => {
-          const b = await box(t);
-          if (b.x >= s.x - 1 && b.x + b.width <= s.x + s.width + 1) return "in";
-          return b.x + b.width <= s.x + 1 || b.x >= s.x + s.width - 1 ? "out" : "cut";
-        }),
-      );
+    expect(await tablist.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    const inStrip = async () => {
+      const [strip, tab] = [await box(tablist), await box(page.getByRole("tab", { selected: true }))];
+      return tab.x >= strip.x - 1 && tab.x + tab.width <= strip.x + strip.width + 1;
     };
-    expect(await placed()).not.toContain("cut");
-    // The strip narrowed as the peek and the pane opened, and the view the person is in stayed on it.
-    const selected = page.getByRole("tab", { selected: true });
-    await expect(selected).toHaveText(/^Everything/);
-    const tab = await box(selected);
-    expect(tab.x).toBeGreaterThanOrEqual(strip.x - 1);
-    expect(tab.x + tab.width).toBeLessThanOrEqual(strip.x + strip.width + 1);
-    expect(tab.x + tab.width).toBeLessThanOrEqual((await peekLeft()) + 1);
-    // Tabs that don't fit are counted on a button either side, which shows them, still whole.
-    const hidden = (await placed()).filter((p) => p === "out").length;
-    expect(hidden).toBeGreaterThan(0);
-    const earlier = page.getByRole("button", { name: /^Show \d+ earlier tabs?$/ });
-    const later = page.getByRole("button", { name: /^Show \d+ more tabs?$/ });
-    await expect(earlier.or(later).first()).toBeVisible();
-    for (const more of [earlier, later]) {
-      if (!(await more.isVisible())) continue;
-      const b = await box(more);
-      expect(b.x + b.width).toBeLessThanOrEqual((await peekLeft()) + 1);
-    }
-    await expect(earlier).toBeVisible();
-    for (let i = 0; i < 5 && (await earlier.isVisible()); i++) {
-      await earlier.click();
-      expect(await placed()).not.toContain("cut");
-    }
-    await expect(earlier).toBeHidden();
-    await expect.poll(async () => (await placed())[0]).toBe("in");
-    expect(await placed()).not.toContain("cut");
-    // Choosing a tab from the keyboard brings the strip back to it.
+    // The view the person is in stayed on the strip as the peek and the pane opened.
+    await expect(page.getByRole("tab", { selected: true })).toHaveText(/^Everything/);
+    await expect.poll(inStrip).toBe(true);
+    // Choosing a tab from the keyboard brings the strip to it.
     await page.getByRole("tab", { name: /^Your turn/ }).click();
     await page.keyboard.press("ArrowLeft");
     await expect(page.getByRole("tab", { selected: true })).not.toHaveText(/^Your turn/);
-    const now = await box(page.getByRole("tab", { selected: true }));
-    const stripNow = await box(tablist);
-    expect(now.x).toBeGreaterThanOrEqual(stripNow.x - 1);
-    expect(now.x + now.width).toBeLessThanOrEqual(stripNow.x + stripNow.width + 1);
-    expect(await placed()).not.toContain("cut");
+    await expect.poll(inStrip).toBe(true);
 
     // Row titles end in an ellipsis rather than running on, and no badge reaches under the peek.
     const title = list.locator("[data-row-title]").first();
