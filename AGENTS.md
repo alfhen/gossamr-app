@@ -9,6 +9,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 - [README.md](README.md): what the app does and how to connect Jira.
 - [docs/product.md](docs/product.md): the product model and the draft approval gate.
 - [docs/simplification-proposal.md](docs/simplification-proposal.md): where the design is going. Section 12 is the order of work; each step lands as its own pull request.
+- [docs/connections-proposal.md](docs/connections-proposal.md): how Jira, GitHub and Linear connections become instances, and how each signs in. Section 10 is its order of work.
 - [docs/agents-cli-findings.md](docs/agents-cli-findings.md): how the `claude` CLI really behaves (background sessions, resume, MCP timeouts, permission rules). Read it before you change how agents start, stop or resume.
 
 ## Layout
