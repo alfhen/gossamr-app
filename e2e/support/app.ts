@@ -515,7 +515,7 @@ export async function foldAllNeeds(_page: Page) {}
 /** The decision open at the top of a workstream's detail. */
 export const needsPane = (page: Page) => agentsHome(page).locator("[data-needs-pane][data-open]");
 
-/** The open decision's heading: where the keyboard lands whenever a need is opened by a key or a link (G28). */
+/** The open decision's heading: where the keyboard lands whenever a need is opened by a key or a link. */
 export const needsPaneHeading = (page: Page) => needsPane(page).locator("[data-needs-pane-title]");
 
 /** The conversation, where Pip's cards are: the Pip drawer. */
@@ -670,3 +670,86 @@ export async function openTechnical(scope: Locator) {
 
 /** The `<details>` of `scope` whose own summary says `summary`: not one around it. */
 export const detailsOf = (scope: Locator, summary: string) => scope.locator(`xpath=.//details[summary[contains(., "${summary}")]]`);
+
+/** The sample with no runs, where pull requests show only when a test says (`surfacePullRequests`). */
+export const MANUAL_PRS = "runs=empty&prSurface=manual";
+
+/** `MANUAL_PRS`, with the sample Pip answering at once: nothing there is about how fast an answer streams, and a slow one outlasts a wait on a busy machine. */
+export const INSTANT_PIP = `${MANUAL_PRS}&pipPace=1`;
+
+/** From a ticket's workstream or the workspace back to the ticket list: the navigation's All projects. */
+export const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
+
+/** The toast on screen. */
+export const toast = (page: Page) => page.locator("[data-toast]");
+
+/** The rail's button named `name`. */
+export const railButton = (page: Page, name: RegExp) => page.locator("[data-rail]").getByRole("button", { name }).first();
+
+/** The agent run's sheet. */
+export const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent run" });
+
+/** Whether the focused element sits inside `selector`. */
+export const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
+
+/** A workstream on `key`, begun from its peek, and selected on Work with its conversation in the Pip pane. */
+export async function workstreamOnHome(page: Page, key = "CA-401") {
+  await startWorkstream(page, key);
+  await openAgents(page);
+  await selectWorkstream(page, key);
+  await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} `));
+}
+
+/** A workstream on `key` with a comment Pip drafted: begun from its peek, selected on Work, the comment's card in the decision pane. */
+export async function draftOn(page: Page, key: string) {
+  await allProjects(page);
+  await startWorkstream(page, key);
+  await openAgents(page);
+  await selectWorkstream(page, key);
+  return pipCommentDraft(page, key);
+}
+
+/** A fresh app with no runs and a comment on CA-408 drafted by Pip, its card in the decision pane. */
+export async function commentDraft(page: Page) {
+  await openApp(page, "runs=empty");
+  const draft = await draftOn(page, "CA-408");
+  await expect(draft).toBeVisible();
+  return draft;
+}
+
+/** The rail's Work button. */
+export const agentsButton = (page: Page) => page.getByRole("button", { name: /^Work(,|$)/ });
+
+/** The sample ticket whose description is too thin to plan from. */
+export const VAGUE_TICKET = "CA-408";
+
+/** The Needs you filter in Work's header. */
+export const needsFilter = (page: Page) => agentsHome(page).locator('[data-chip="needs"]');
+
+/** Where a box is on the page. */
+export const boxOf = async (loc: Locator) => (await loc.boundingBox())!;
+
+/** Whether the keyboard has fallen to the page. */
+export const activeIsBody = (page: Page) => page.evaluate(() => document.activeElement === document.body || document.activeElement === null);
+
+/** Work on the sample's own runs, with a workstream on CA-401 paused (a need), and CA-402 begun beside it when `calm`; the Pip drawer is closed. */
+export async function withNeeds(page: Page, calm = false) {
+  await openApp(page);
+  if (calm) await startWorkstream(page, "CA-402");
+  await startWorkstream(page, "CA-401");
+  // A pause is a need; the sample leaves CA-401's plan to approve and General's own needs.
+  await pauseAtCeiling(page, "CA-401");
+  await openAgents(page);
+  await closePipDrawer(page);
+}
+
+/** A workstream on CA-401 with a draft comment of Pip's waiting, on Work with the draft's decision open. */
+export async function draftOpen(page: Page) {
+  await openApp(page, "runs=empty");
+  await workstreamOnHome(page);
+  await askPip(page, "Draft a comment");
+  await homeSettled(page);
+  // Alone in its workstream the need is the group's own row.
+  await openNeedRow(page, /Pip drafted a comment/);
+  await expect(needsPane(page)).toHaveAttribute("data-kind", "draft");
+}
