@@ -390,7 +390,7 @@ DELETE FROM items WHERE EXISTS (SELECT 1 FROM watched_containers w WHERE w.conne
 UPDATE sync_state SET full_at = NULL WHERE connection_id IN (SELECT connection_id FROM watched_containers WHERE depth = 'whole' AND unwatched_at IS NULL);
 DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST];
+pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST];
 
 /// What Gossamr itself keeps, apart from any one connection's cache: drafts, runs and their reports, workstreams, Pip's
 /// conversations and the sessions Pip started. These are the final shapes of the tables the cache steps built up, so
@@ -509,9 +509,15 @@ const APP_STEPS: &[&str] = &[APP];
 const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
 
 /// Keys of the cache's `meta` table that are app state: the sessions Pip started.
-const APP_META_KEYS: &str = "k LIKE 'claude:%' OR k = 'pip_sessions'";
+const APP_META_KEYS: &str = "k LIKE 'claude:%'";
 
-fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
+/// How many of the cache's steps it takes to give its copies of the app tables their final shape. The copy into the
+/// app database reads them after these and before any later step, so a step that drops them cannot run first.
+pub const CACHE_STEPS_WITH_APP_STATE: usize = 18;
+
+const RETIRED_ON_COPY: &str = "Gossamr moved its drafts to a new database. Draft this again if it is still needed.";
+
+pub(crate) fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     for (i, sql) in steps.iter().enumerate().skip(applied as usize) {
         let tx = conn.transaction()?;
@@ -530,8 +536,13 @@ pub fn migrate_app(conn: &mut Connection) -> Result<()> {
     apply(conn, APP_STEPS)
 }
 
-/// Copies the app state a cache file holds into the app database, once per cache file. The cache keeps its rows: they
-/// are deleted by a later step, after a release has run on the copy. Needs the cache attached as `cache`.
+fn own_sessions(json: Option<String>) -> Vec<String> {
+    json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// Copies the app state a cache file holds into the app database, once per cache file, then retires the drafts the
+/// cache still shows as open so a release from before the move cannot post them a second time. The cache keeps its
+/// rows: a later step deletes them, after a release has run on the copy. Needs the cache attached as `cache`.
 pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<()> {
     let marker = format!("copied:{cache_file}");
     let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?;
@@ -539,14 +550,44 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<()>
         return Ok(());
     }
     let tx = conn.unchecked_transaction()?;
+    let mut held = Vec::new();
     for table in APP_TABLES {
         let mut stmt = tx.prepare(&format!("SELECT name FROM pragma_table_info('{table}', 'cache')"))?;
         let columns = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join(", ");
+        if columns.is_empty() {
+            continue;
+        }
         tx.execute_batch(&format!("INSERT OR IGNORE INTO main.{table} ({columns}) SELECT {columns} FROM cache.{table};"))?;
+        held.push(*table);
     }
-    tx.execute_batch(&format!("INSERT OR IGNORE INTO main.app_meta (k, v) SELECT k, v FROM cache.meta WHERE {APP_META_KEYS};"))?;
+    if !held.is_empty() {
+        copy_cached_meta(&tx)?;
+    }
+    if held.contains(&"proposals") {
+        tx.execute(
+            "UPDATE cache.proposals SET state = 'retired', data = json_set(data, '$.state', json_object('type', 'retired', 'reason', ?1))
+             WHERE state IN ('pending', 'applying')",
+            [RETIRED_ON_COPY],
+        )?;
+    }
     tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
     tx.commit()?;
+    Ok(())
+}
+
+fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {
+    let mine: Vec<String> = own_sessions(tx.query_row("SELECT v FROM main.app_meta WHERE k = 'pip_sessions'", [], |r| r.get(0)).optional()?);
+    let theirs: Vec<String> = own_sessions(tx.query_row("SELECT v FROM cache.meta WHERE k = 'pip_sessions'", [], |r| r.get(0)).optional()?);
+    let mut merged = mine.clone();
+    merged.extend(theirs.into_iter().filter(|s| !mine.contains(s)));
+    merged.truncate(crate::inbox::OWN_SESSIONS_KEPT);
+    if merged != mine {
+        tx.execute(
+            "INSERT INTO main.app_meta (k, v) VALUES ('pip_sessions', ?1) ON CONFLICT(k) DO UPDATE SET v = ?1",
+            [serde_json::to_string(&merged)?],
+        )?;
+    }
+    tx.execute_batch(&format!("INSERT OR IGNORE INTO main.app_meta (k, v) SELECT k, v FROM cache.meta WHERE {APP_META_KEYS};"))?;
     Ok(())
 }
 

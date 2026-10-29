@@ -176,6 +176,7 @@ impl Db {
             sql.push_str(" AND json_extract(data, '$.spec.workstream') = ?");
             args.push(Sql::Text(w.clone()));
         }
+        self.visible(&mut sql, &mut args);
         sql.push_str(" ORDER BY queued_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
@@ -224,8 +225,11 @@ impl Db {
 
     /// Ids of the runs that have a draft still waiting for the person.
     pub fn runs_with_pending_drafts(&self) -> Result<std::collections::HashSet<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT json_extract(data, '$.origin.runId') FROM proposals WHERE state = 'pending' AND json_extract(data, '$.origin.type') = 'run'")?;
-        let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+        let mut sql = String::from("SELECT DISTINCT json_extract(data, '$.origin.runId') FROM proposals WHERE state = 'pending' AND json_extract(data, '$.origin.type') = 'run'");
+        let mut args: Vec<Sql> = Vec::new();
+        self.visible(&mut sql, &mut args);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(args), |r| r.get::<_, Option<String>>(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().flatten().collect())
     }
 

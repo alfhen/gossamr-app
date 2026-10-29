@@ -52,7 +52,7 @@ const LAST_SYNC: &str = "last_sync_at";
 const CACHE_BACKFILLED: &str = "cache_backfilled";
 const EVENTS_BACKFILLED: &str = "events_backfilled";
 const PIP_SESSIONS: &str = "pip_sessions";
-const OWN_SESSIONS_KEPT: usize = 50;
+pub(crate) const OWN_SESSIONS_KEPT: usize = 50;
 const ANNOUNCED_NEEDS: &str = "announced_needs";
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
@@ -79,7 +79,8 @@ fn ago(d: Duration) -> String {
 /// Drafts, runs, workstreams and Pip's conversations, shared by every connection.
 const APP_DB: &str = "app.sqlite";
 
-/// Separate files per site and account, so two people signing in on one Mac never see each other's inbox.
+/// Separate cache files per site and account, so two people signing in on one Mac never see each other's tickets. Drafts
+/// and runs share `APP_DB`; `Db::for_connection` keeps each account's out of the other's view.
 fn db_file(connection: &Connection) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
     format!("inbox-{}-{}.sqlite", safe(&connection.workspace), safe(&connection.account))
@@ -263,7 +264,7 @@ impl Core {
         if connection.is_some() {
             match self.with_db(|db| db.clear_pip_turns()).await {
                 Ok(()) | Err(Error::SiteChanged) | Err(Error::NotSignedIn) => {}
-                // Signing out never depends on the database; the rows stay in this account's own file.
+                // Signing out never depends on the database; the conversations stay in the app database until the next sign-out.
                 Err(e) => eprintln!("couldn't forget Pip's conversations on sign-out: {e}"),
             }
         }
@@ -294,7 +295,7 @@ impl Core {
         let mut guard = self.db.lock().expect("db lock poisoned");
         let connection = self.connection(scope)?;
         if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
-            let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?;
+            let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?.for_connection(&connection.id);
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
