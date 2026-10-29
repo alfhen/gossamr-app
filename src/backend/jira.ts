@@ -287,6 +287,14 @@ export class JiraBackend implements Backend {
     return invoke<AgentSettings>("agent_settings", { settings: null });
   }
 
+  reduceTransparency() {
+    return invoke<boolean>("reduce_transparency");
+  }
+
+  onDisplayChanged(listener: () => void) {
+    return onChanged("display", () => listener());
+  }
+
   setNeedsBadge(count: number) {
     return invoke<void>("set_needs_badge", { count });
   }

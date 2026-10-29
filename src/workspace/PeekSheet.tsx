@@ -208,11 +208,11 @@ export function PeekView(p: PeekViewProps) {
                   {p.moves.length > 0 && <span aria-hidden className="text-[11px] opacity-70">▾</span>}
                 </button>
                 {p.menuOpen && (
-                  <ul role="menu" aria-label={`Draft a move for ${item.item.key}`} className="absolute top-full left-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
-                    <li className="px-2 py-1 text-xs text-ws-ink3">{p.checking ? "Checking where it can move…" : "Draft a move to"}</li>
+                  <ul role="menu" aria-label={`Draft a move for ${item.item.key}`} className="absolute top-full left-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px ws-glass ws-glass-regular rounded-lg p-1 text-sm font-medium text-ws-ink">
+                    <li className="px-2 py-1 text-xs font-medium text-ws-ink">{p.checking ? "Checking where it can move…" : "Draft a move to"}</li>
                     {p.moves.map((s) => (
                       <li key={s.id} role="none">
-                        <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded px-2 py-1 text-left hover:bg-ws-hover">
+                        <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded px-2 py-1 text-left ws-glass-item">
                           {s.name}
                         </button>
                       </li>

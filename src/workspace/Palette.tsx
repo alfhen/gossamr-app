@@ -26,7 +26,7 @@ import { showAllRuns } from "./TimelineFilterBar";
 /** Where focus lands when the palette closes and the element that opened it is gone. */
 export const MAIN_ID = "workspace-main";
 
-const KBD = "rounded border border-ws-sep2 bg-ws-win px-1 font-sans text-[11px]";
+const KBD = "rounded border border-ws-sep2 bg-ws-win px-1 font-sans text-[11px] font-medium";
 
 /** The palette's placeholder when it is a plain search, and the input's name then. */
 export const DEFAULT_PLACEHOLDER = "Switch project, change view, jump to a ticket, or ask Pip…";
@@ -99,8 +99,8 @@ export function PaletteView({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown} className="ws-pop w-[min(560px,92vw)] overflow-hidden rounded-[14px] border border-ws-sep2 bg-ws-win shadow-ws-pop">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/15 pt-[12vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
+      <div role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown} className="ws-pop ws-glass ws-glass-regular relative w-[min(560px,92vw)] overflow-hidden rounded-[14px]">
         <input
           ref={inputRef}
           role="combobox"
@@ -111,13 +111,13 @@ export function PaletteView({
           placeholder={placeholder}
           value={query}
           onChange={(ev) => onQuery(ev.target.value)}
-          className="w-full border-b border-ws-sep bg-transparent px-4 py-3.5 text-[15px] outline-none placeholder:text-ws-ink3"
+          className="w-full border-b border-ws-sep bg-ws-win px-4 py-3.5 text-[15px] outline-none placeholder:text-ws-ink2"
         />
         <ul id="palette-list" role="listbox" aria-label="Results" className="m-0 max-h-[min(380px,50vh)] list-none overflow-auto p-1.5">
           {results.map((c, i) => (
             <Fragment key={c.id}>
               {c.group !== results[i - 1]?.group && (
-                <li role="presentation" className="px-2.5 pt-2 pb-0.5 text-[11px] font-bold tracking-wide text-ws-ink3 uppercase">
+                <li role="presentation" className="px-2.5 pt-2 pb-0.5 text-[11px] font-bold tracking-wide text-ws-ink uppercase">
                   {c.group}
                 </li>
               )}
@@ -129,19 +129,19 @@ export function PaletteView({
                 // An option can't take focus; the press must not pull it off the input either, or it falls to the page.
                 onMouseDown={(ev) => ev.preventDefault()}
                 onClick={() => onRun(c)}
-                className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-[7px] ${c.group === "Ask Pip" ? "text-ws-pip" : ""} ${i === active ? "bg-ws-accent-soft" : ""}`}
+                className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-[7px] ${i === active ? "ws-glass-lens" : ""}`}
               >
-                <span aria-hidden className={`w-4 shrink-0 text-center ${c.group === "Ask Pip" ? "" : "text-ws-ink3"}`}>
+                <span aria-hidden className={`w-4 shrink-0 text-center ${c.group === "Ask Pip" ? "text-ws-pip" : "text-ws-ink2"}`}>
                   {c.icon ?? "·"}
                 </span>
-                <span className="min-w-0 flex-1 truncate">{c.label}</span>
-                {c.hint && <span className="shrink-0 text-xs text-ws-ink3">{c.hint}</span>}
+                <span className="min-w-0 flex-1 truncate font-medium">{c.label}</span>
+                {c.hint && <span className="shrink-0 text-xs font-medium text-ws-ink">{c.hint}</span>}
               </li>
             </Fragment>
           ))}
-          {!results.length && <li role="presentation" className="px-3 py-3 text-ws-ink3">{empty ?? `Nothing matches “${query}”.`}</li>}
+          {!results.length && <li role="presentation" className="px-3 py-3 font-medium text-ws-ink">{empty ?? `Nothing matches “${query}”.`}</li>}
         </ul>
-        <div className="flex gap-3.5 border-t border-ws-sep bg-ws-bar px-3.5 py-2 text-xs text-ws-ink3">
+        <div className="flex gap-3.5 border-t border-ws-sep px-3.5 py-2 text-xs font-medium text-ws-ink">
           {hints.map((h) => {
             const [key, ...label] = h.split(" ");
             return (

@@ -38,4 +38,9 @@ describe("the icon rail's names", () => {
     const tip = renderToStaticMarkup(<RailTip label="Settings" at={{ x: 60, y: 20 }} />);
     expect(tip).toContain("not-group-has-[button:hover]/btn:group-has-[button:hover]/rail:hidden");
   });
+
+  it("hides every rail tooltip while a rail popover is open, so glass never sits on glass", () => {
+    const tip = renderToStaticMarkup(<RailTip label="Settings" at={{ x: 60, y: 20 }} />);
+    expect(tip).toContain("group-has-[[role=dialog]]/rail:hidden");
+  });
 });

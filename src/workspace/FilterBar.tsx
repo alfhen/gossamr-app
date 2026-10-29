@@ -73,10 +73,10 @@ export function CodeFilterMenu({ active, onToggle }: { active: ReadonlySet<CodeF
         Pull requests <span aria-hidden className="text-xs font-normal opacity-70">▾</span>
       </button>
       {open && (
-        <ul role="menu" aria-label="Filter by pull requests" className="absolute top-full right-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
+        <ul role="menu" aria-label="Filter by pull requests" className="absolute top-full right-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px ws-glass ws-glass-regular rounded-lg p-1 text-sm font-medium text-ws-ink">
           {CODE_FILTERS.map((k) => (
             <li key={k} role="none">
-              <button type="button" role="menuitemcheckbox" aria-checked={active.has(k)} onClick={() => onToggle(k)} className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-ws-hover">
+              <button type="button" role="menuitemcheckbox" aria-checked={active.has(k)} onClick={() => onToggle(k)} className="flex w-full items-center gap-2 rounded px-2 py-1 text-left ws-glass-item">
                 <span aria-hidden className="w-3 text-ws-accent">
                   {active.has(k) ? "✓" : ""}
                 </span>

@@ -40,7 +40,7 @@ export function ContextChip({ kind, label, following, open, onToggle }: { kind: 
       aria-expanded={open}
       aria-controls="pip-seeing"
       title="What Pip can see right now"
-      className={`flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm text-ws-ink2 hover:border-ws-pip ${open || !following ? "border-ws-pip" : "border-ws-sep2"} ${following ? "" : "bg-ws-pip-soft"}`}
+      className={`flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm font-medium text-ws-ink2 hover:border-ws-pip ${open || !following ? "border-ws-pip" : "border-ws-sep2"} ${following ? "" : "bg-ws-pip-soft"}`}
     >
       <span aria-hidden className={`size-2 shrink-0 rounded-full ${following ? "bg-ws-done" : "bg-ws-ink3"}`} />
       {following ? (
@@ -198,15 +198,15 @@ export function PipPane({ onClose }: { onClose(): void }) {
         </div>
       )}
       <PipResizer />
-      <header data-tauri-drag-region className="grid gap-1.5 border-b border-ws-sep bg-ws-bar px-3 pt-[14px] pb-2.5">
+      <header data-tauri-drag-region className="ws-glass ws-glass-pip ws-glass-regular relative before:p-0 before:pb-px z-10 grid gap-1.5 px-3 pt-[14px] pb-2.5 font-medium text-ws-ink [&_[data-status-detail]]:text-ws-ink2 [&_[data-waiting-for-pr]]:text-ws-ink2">
         <div className="flex items-center gap-2">
           <PipAvatar size={26} thinking={running} />
           <div className="grid leading-tight">
             <h2 className="m-0 text-base font-semibold">Pip</h2>
-            <span className="text-xs text-ws-ink3">powered by Claude</span>
+            <span className="text-xs text-ws-ink2">powered by Claude</span>
           </div>
-          <kbd className="ml-1 rounded bg-ws-hover px-1.5 font-mono text-xs text-ws-ink3">{showOf("app", "pip")}</kbd>
-          <button type="button" aria-label="Close Pip" title="Close (Esc)" onClick={onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink3 hover:bg-ws-hover">
+          <kbd className="ml-1 rounded border border-ws-sep2 px-1.5 font-mono text-xs font-medium text-ws-ink2">{showOf("app", "pip")}</kbd>
+          <button type="button" aria-label="Close Pip" title="Close (Esc)" onClick={onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
             ×
           </button>
         </div>

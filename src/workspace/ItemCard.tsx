@@ -174,9 +174,9 @@ export function ItemCard(p: ItemCardProps) {
           aria-label={`Actions for ${item.item.key}`}
           onKeyDown={menuKey}
           onClick={(ev) => ev.stopPropagation()}
-          className="absolute right-1 top-7 z-20 min-w-44 rounded-lg border border-ws-sep2 bg-ws-win py-1 shadow-ws-pop"
+          className="absolute right-1 top-7 z-20 min-w-44 ws-glass ws-glass-regular rounded-lg p-1 text-sm font-medium text-ws-ink"
         >
-          {p.moveTargets.length === 0 && <p className="px-3 py-1 text-ws-ink3">No moves from {item.status.name}</p>}
+          {p.moveTargets.length === 0 && <p className="px-2 py-1 text-ws-ink">No moves from {item.status.name}</p>}
           {p.moveTargets.map((s) => (
             <MenuButton key={s.id} onClick={() => p.onMove(s)}>
               Move to {s.name}
@@ -197,7 +197,7 @@ export function ItemCard(p: ItemCardProps) {
 
 function MenuButton({ onClick, children }: { onClick(): void; children: React.ReactNode }) {
   return (
-    <button type="button" role="menuitem" onClick={onClick} className="block w-full px-3 py-1 text-left hover:bg-ws-hover focus-visible:bg-ws-hover">
+    <button type="button" role="menuitem" onClick={onClick} className="block w-full rounded px-2 py-1 text-left ws-glass-item">
       {children}
     </button>
   );
