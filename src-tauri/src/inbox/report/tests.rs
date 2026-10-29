@@ -6,7 +6,7 @@ use crate::inbox::testing::{fixture_watching, Fixture};
 use crate::runs::report::{new_token, token_hash, ReportStatus, ResultSource, MAX_CALLS, MAX_REJECTIONS};
 
 async fn open(fx: &Fixture) -> (Run, String) {
-    let mut run = Run::queued("report-run".into(), "p1".into(), crate::tracker::Connection::jira_id(&fx.scope), Some(fx.item("CA-1")), run_spec(), "db".into(), Utc::now());
+    let mut run = Run::queued("report-run".into(), "p1".into(), fx.scope.connection_id.clone(), Some(fx.item("CA-1")), run_spec(), "db".into(), Utc::now());
     run.state = RunState::Working;
     run.spec.report = true;
     fx.insert_run(&run).await;

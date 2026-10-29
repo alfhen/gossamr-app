@@ -18,7 +18,7 @@ use crate::tracker::Connection;
 pub use github::{DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
 #[cfg(test)]
 pub use github::MemoryStore;
-pub use atlassian::{redirect_uri, Atlassian, ClientConfig, OAuthApp, SCOPES};
+pub use atlassian::{redirect_uri, Atlassian, ClientConfig, OAuthApp, SiteScope, SCOPES};
 
 const SESSION_KEY: &str = "session";
 const REFRESH_MARGIN_SECS: u64 = 60;
@@ -110,12 +110,16 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    pub fn site_scope(&self) -> SiteScope {
+        SiteScope { cloud_id: self.site.cloud_id.clone(), account_id: self.me.account_id.clone() }
+    }
+
     pub fn scope(&self) -> Scope {
-        Scope::of(&self.site, &self.me)
+        self.site_scope().scope()
     }
 
     pub fn connection(&self) -> Connection {
-        Connection::jira(&self.scope(), &self.site.name)
+        self.site_scope().connection(&self.site.name)
     }
 }
 
@@ -142,24 +146,19 @@ pub struct AuthStatus {
     pub me: Option<Account>,
 }
 
-/// The Jira site and account a piece of work belongs to.
+/// The signed-in connection and account a piece of work belongs to. Work started for one scope is refused once the
+/// person has signed in as another.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
-    pub cloud_id: String,
+    pub connection_id: String,
     pub account_id: String,
-}
-
-impl Scope {
-    pub fn of(site: &Site, me: &Account) -> Self {
-        Self { cloud_id: site.cloud_id.clone(), account_id: me.account_id.clone() }
-    }
 }
 
 /// What the Jira client needs for one request.
 pub struct AccessToken {
     pub access_token: String,
-    pub scope: Scope,
+    pub scope: SiteScope,
 }
 
 pub struct Auth {
@@ -226,8 +225,8 @@ impl Auth {
     }
 
     /// The signed-in site and account, if any.
-    pub async fn identity(&self) -> Option<(Site, Account)> {
-        self.session.lock().await.as_ref().map(|s| (s.site.clone(), s.me.clone()))
+    pub async fn identity(&self) -> Option<(Scope, Site, Account)> {
+        self.session.lock().await.as_ref().map(|s| (s.scope(), s.site.clone(), s.me.clone()))
     }
 
     /// The signed-in connection, if any.
@@ -245,7 +244,7 @@ impl Auth {
             secrets::save(SESSION_KEY, &fresh)?;
             *session = fresh;
         }
-        Ok(AccessToken { access_token: session.tokens.access_token.clone(), scope: session.scope() })
+        Ok(AccessToken { access_token: session.tokens.access_token.clone(), scope: session.site_scope() })
     }
 }
 
@@ -301,7 +300,8 @@ mod tests {
         let connection = c.connection();
         assert_eq!(connection.id, "jira:c1:u1");
         assert_eq!(connection.display_name, "Acme");
-        assert_eq!(c.scope(), Scope { cloud_id: "c1".into(), account_id: "u1".into() });
+        assert_eq!(c.scope(), Scope { connection_id: "jira:c1:u1".into(), account_id: "u1".into() });
+        assert_eq!(c.site_scope(), SiteScope { cloud_id: "c1".into(), account_id: "u1".into() });
     }
 
     fn credentials() -> Credentials {

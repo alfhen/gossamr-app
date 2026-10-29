@@ -21,7 +21,6 @@ use crate::runs::answer;
 use crate::runs::ask::{AlreadyAsking, Outcome};
 use crate::runs::message::take_for_ask;
 use crate::runs::report::{self, token_hash, Report, ReportStatus, UNAVAILABLE};
-use crate::tracker::Connection;
 
 /// Calls a run may make to the tools that read or wait, in total. `report` counts its own, smaller, calls.
 pub(super) const CALL_CAP: u32 = 200;
@@ -145,7 +144,7 @@ impl AgentSide {
         };
         let unreadable = |e: crate::error::Error| format!("Couldn't read the workstream: {e}");
         let scope = self.core.scope().await.map_err(unreadable)?;
-        if Connection::jira_id(&scope) != run.connection_id {
+        if scope.connection_id != run.connection_id {
             return Err(NOT_AVAILABLE.into());
         }
         let Some(view) = self.core.workstream(&scope, workstream).await.map_err(unreadable)? else {

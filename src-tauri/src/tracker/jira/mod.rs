@@ -19,10 +19,10 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 
 use super::{Applied, Connection, Followed, Grouping, Move, SearchOptions, TrackerCaps, TransitionModel, WorkTracker};
-use crate::auth::{Auth, Scope};
+use crate::auth::{Auth, SiteScope};
 use crate::domain::{
-    Comment, Container, ContainerPage, ContainerQuery, ContainerRef, ContainerScope, ContainerSummary, Filter, Footprint, Intent, ItemRef, Person, Stray,
-    Transitions, Watch, WorkItem, Workflow,
+    Comment, Container, ContainerPage, ContainerQuery, ContainerRef, ContainerScope, ContainerSummary, Filter, Footprint, ItemRef, Person, Stray,
+    Transitions, Watch, WorkItem, Workflow, Write,
 };
 use crate::error::{Error, Result};
 use crate::model::{CachedTicket, Uploaded};
@@ -86,7 +86,7 @@ where
 
 pub(super) struct JiraTracker {
     client: Jira,
-    scope: Scope,
+    scope: SiteScope,
     connection_id: String,
 }
 
@@ -94,14 +94,14 @@ impl JiraTracker {
     pub(super) fn new(http: reqwest::Client, auth: Arc<Auth>, connection: &Connection) -> Self {
         Self {
             client: Jira::new(http, auth),
-            scope: Scope { cloud_id: connection.workspace.clone(), account_id: connection.account.clone() },
+            scope: SiteScope { cloud_id: connection.workspace.clone(), account_id: connection.account.clone() },
             connection_id: connection.id.clone(),
         }
     }
 
     #[cfg(test)]
     fn at(base: &str, http: reqwest::Client, auth: Arc<Auth>, connection: &Connection) -> Self {
-        Self { client: Jira::at(base, http, auth), scope: Scope { cloud_id: connection.workspace.clone(), account_id: connection.account.clone() }, connection_id: connection.id.clone() }
+        Self { client: Jira::at(base, http, auth), scope: SiteScope { cloud_id: connection.workspace.clone(), account_id: connection.account.clone() }, connection_id: connection.id.clone() }
     }
 
     fn items(&self, tickets: Vec<CachedTicket>) -> Vec<WorkItem> {
@@ -291,18 +291,18 @@ impl WorkTracker for JiraTracker {
         Ok(people.iter().map(|p| convert::person(&self.connection_id, p)).collect())
     }
 
-    async fn apply_with_files(&self, intent: &Intent, files: &[Uploaded]) -> Result<Applied> {
-        if !files.is_empty() && !matches!(intent, Intent::Comment { .. }) {
+    async fn apply_with_files(&self, write: &Write, files: &[Uploaded]) -> Result<Applied> {
+        if !files.is_empty() && !matches!(write, Write::Comment { .. }) {
             return Err(Error::Api { status: 400, message: "files can only go with a comment".into() });
         }
         let scope = &self.scope;
-        match intent {
-            Intent::Comment { item, body } => {
+        match write {
+            Write::Comment { item, body } => {
                 let doc = adf::with_files(adf::from_doc(body), files);
                 self.client.comment(scope, &item.external_id, &doc).await?;
                 Ok(Applied::default())
             }
-            Intent::Transition { item, to } => {
+            Write::Transition { item, to } => {
                 let available = self.client.transitions(scope, &item.external_id, true).await?;
                 let t = intent::transition_to(&available, to).ok_or_else(|| Error::Api {
                     status: 400,
@@ -315,31 +315,29 @@ impl WorkTracker for JiraTracker {
                 self.client.transition(scope, &item.external_id, &body).await?;
                 Ok(Applied::default())
             }
-            Intent::Update { item, patch } => {
+            Write::Update { item, patch } => {
                 if !patch.is_empty() {
                     self.client.update_issue(scope, &item.external_id, intent::update_fields(patch)).await?;
                 }
                 Ok(Applied::default())
             }
-            Intent::Rewrite { item, title, body, .. } => {
+            Write::Rewrite { item, title, body } => {
                 self.client.update_issue(scope, &item.external_id, intent::rewrite_fields(title.as_ref(), body.as_ref())).await?;
                 Ok(Applied::default())
             }
-            Intent::Link { from, to, kind } => {
+            Write::Link { from, to, kind } => {
                 let body = intent::link_body(from, to, *kind).ok_or_else(not_an_issue_link)?;
                 self.client.link_issues(scope, &body).await?;
                 Ok(Applied::default())
             }
-            Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => Err(Error::Proposal(crate::proposals::AGENTS_DIRECT.into())),
-            Intent::GithubReview { .. } => Err(Error::Proposal("a review is posted to GitHub with its own button, not applied to Jira".into())),
-            Intent::Subtasks { parent, summaries } => {
+            Write::Subtasks { parent, summaries } => {
                 let (keys, error) = self.client.create_subtasks(scope, &parent.external_id, summaries).await?;
                 let connection = self.connection_id.as_str();
                 let created = keys.into_iter().map(|key| ItemRef { connection_id: connection.into(), external_id: key.clone(), key }).collect();
                 Ok(Applied { created, error })
             }
             // The link's `from` stands for the new item, so only its `to` and kind are used.
-            Intent::Create { container, fields, link } => {
+            Write::Create { container, fields, link } => {
                 if link.as_ref().is_some_and(|l| intent::link_body(&l.from, &l.to, l.kind).is_none()) {
                     return Err(not_an_issue_link());
                 }
@@ -391,7 +389,7 @@ mod tests {
 
     fn tracker() -> JiraTracker {
         let http = reqwest::Client::new();
-        let connection = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site");
+        let connection = SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Site");
         JiraTracker::new(http.clone(), Arc::new(Auth::signed_out(http)), &connection)
     }
 
@@ -412,7 +410,7 @@ mod tests {
         let opts = SearchOptions { limit: 10, ..Default::default() };
         assert!(matches!(t.followed(30, &ContainerScope::Everything, &opts).await, Err(Error::NotSignedIn)));
         assert!(matches!(t.transitions(&item()).await, Err(Error::NotSignedIn)));
-        let comment = Intent::Comment { item: item(), body: Doc::paragraph("hi") };
+        let comment = Write::Comment { item: item(), body: Doc::paragraph("hi") };
         assert!(matches!(t.apply(&comment).await, Err(Error::NotSignedIn)));
     }
 
@@ -496,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_code_link_is_refused_before_anything_is_sent_to_jira() {
-        let link = Intent::Link { from: item(), to: item(), kind: crate::domain::LinkKind::ImplementedBy };
+        let link = Write::Link { from: item(), to: item(), kind: crate::domain::LinkKind::ImplementedBy };
         let err = tracker().apply(&link).await.unwrap_err();
         assert!(matches!(err, Error::Proposal(_)), "{err}");
     }
@@ -504,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn only_comments_take_files() {
         let files = [Uploaded { id: "1".into(), filename: "a.png".into(), mime_type: "image/png".into(), media_id: None, width: None, height: None }];
-        let update = Intent::Update { item: item(), patch: Patch::default() };
+        let update = Write::Update { item: item(), patch: Patch::default() };
         let err = tracker().apply_with_files(&update, &files).await.unwrap_err();
         assert!(matches!(err, Error::Api { status: 400, .. }));
     }

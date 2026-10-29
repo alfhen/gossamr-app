@@ -93,7 +93,7 @@ impl Core {
 
     /// What `scope`'s connection follows. Writers ask this before acting on an item.
     pub async fn watch_set_of(&self, scope: &Scope) -> Result<WatchSet> {
-        let id = Connection::jira_id(scope);
+        let id = scope.connection_id.clone();
         self.with_db_for(scope, |db| db.watch_set(&id)).await
     }
 
@@ -111,8 +111,7 @@ impl Core {
     }
 
     async fn jira_watch_state(&self) -> Result<Vec<WatchState>> {
-        let Some((site, me)) = self.auth.identity().await else { return Ok(Vec::new()) };
-        let scope = Scope::of(&site, &me);
+        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(Vec::new()) };
         let id = self.connection(&scope)?.id;
         let state = self
             .with_db_for(&scope, |db| {
@@ -216,7 +215,7 @@ impl Core {
 
     /// Containers matching `query` in the tracker's whole catalog, each with whether it is watched.
     pub async fn find_containers(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<(ContainerSummary, bool)>> {
-        let id = Connection::jira_id(scope);
+        let id = scope.connection_id.clone();
         let set = self.watch_set_of(scope).await?;
         let q = ContainerQuery { query: query.trim().into(), cursor: None, limit };
         let found = match self.tracker(scope)?.list_containers(&q).await {
@@ -297,9 +296,8 @@ impl Core {
     /// Runs the check for assigned items in unwatched containers when it is due, and returns the ones that are new
     /// since the last check. It only reads keys, and never adds a container to the watch set.
     pub async fn radar_if_due(&self) -> Result<Option<(String, Vec<Stray>)>> {
-        let Some((site, me)) = self.auth.identity().await else { return Ok(None) };
-        let scope = Scope::of(&site, &me);
-        let id = Connection::jira_id(&scope);
+        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(None) };
+        let id = scope.connection_id.clone();
         let now = Utc::now();
         {
             let mut last = self.radar.lock().expect("radar lock poisoned");
@@ -343,7 +341,7 @@ impl Core {
         if set.mode != WatchMode::Unset {
             return Ok((set, false));
         }
-        let id = Connection::jira_id(scope);
+        let id = scope.connection_id.clone();
         let due = self
             .with_db_for(scope, |db| Ok(db.meta(CATALOG_PROBED)?.and_then(|s| parse_time(&s)).is_none_or(|at| Utc::now() - at >= PROBE_EVERY)))
             .await?;

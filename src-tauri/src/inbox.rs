@@ -108,7 +108,9 @@ fn without_extra(mut item: WorkItem) -> WorkItem {
 fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
     if db.meta(CACHE_BACKFILLED)?.is_none() {
         for (ticket, synced_at) in db.legacy_tickets()? {
-            db.upsert_items(&[tracker::item_from_ticket(connection, &ticket)], &synced_at)?;
+            if let Some(item) = tracker::item_from_ticket(connection, &ticket) {
+                db.upsert_items(&[item], &synced_at)?;
+            }
         }
         db.set_meta(CACHE_BACKFILLED, &now_iso())?;
     }
@@ -222,7 +224,7 @@ impl Core {
     /// The registered connection for `scope`. Callers still hold a `Scope`, so this is the adapter between the two;
     /// a scope that isn't registered is one the person has since signed out of or replaced.
     fn connection(&self, scope: &Scope) -> Result<Connection> {
-        self.registry.connection(&Connection::jira_id(scope)).ok_or(Error::SiteChanged)
+        self.registry.connection(&scope.connection_id.clone()).ok_or(Error::SiteChanged)
     }
 
     fn tracker(&self, scope: &Scope) -> Result<Arc<dyn WorkTracker>> {
@@ -230,7 +232,7 @@ impl Core {
     }
 
     fn item(scope: &Scope, key: &str) -> ItemRef {
-        ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
+        ItemRef { connection_id: scope.connection_id.clone(), external_id: key.into(), key: key.into() }
     }
 
     pub fn data_dir(&self) -> PathBuf {
@@ -270,20 +272,20 @@ impl Core {
         Ok(())
     }
 
-    async fn identity(&self) -> Result<(Site, Account)> {
+    async fn identity(&self) -> Result<(Scope, Site, Account)> {
         self.auth.identity().await.ok_or(Error::NotSignedIn)
     }
 
     async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let (site, me) = self.identity().await?;
-        self.with_db_for(&Scope::of(&site, &me), f).await
+        let (scope, _, _) = self.identity().await?;
+        self.with_db_for(&scope, f).await
     }
 
     /// Runs `f` against `scope`'s database, but only if that site and account are still the signed-in ones. Work
     /// that fetched data before someone signed in elsewhere must not land in the new session's database.
     async fn with_db_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let (site, me) = self.identity().await?;
-        if &Scope::of(&site, &me) != scope {
+        let (current, _, _) = self.identity().await?;
+        if &current != scope {
             return Err(Error::SiteChanged);
         }
         let mut guard = self.db.lock().expect("db lock poisoned");
@@ -320,8 +322,8 @@ impl Core {
 
     /// Runs a sync if `trigger` says this connection is due one, and records how it went for the backoff.
     pub async fn sync_if_due(&self, trigger: Trigger) -> Option<Result<Synced>> {
-        let (site, me) = self.auth.identity().await?;
-        let id = Connection::jira_id(&Scope::of(&site, &me));
+        let (scope, _, _) = self.auth.identity().await?;
+        let id = scope.connection_id;
         let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
         if !due {
             return None;
@@ -341,9 +343,8 @@ impl Core {
 
     /// Fetches what changed since the last sync (or everything, when due) and stores it in the cache.
     pub async fn sync(&self) -> Result<Synced> {
-        let (site, me) = self.identity().await?;
-        let scope = Scope::of(&site, &me);
-        let connection_id = Connection::jira_id(&scope);
+        let (scope, _, me) = self.identity().await?;
+        let connection_id = scope.connection_id.clone();
         let started = Utc::now();
         let (previous, state, known_epics, watch) = self
             .with_db_for(&scope, |db| {
@@ -387,7 +388,7 @@ impl Core {
             other => other?,
         };
         let t = ticket_of(&item)?;
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         self.with_db_for(scope, |db| {
             // An item the person was handed in a container they don't watch isn't kept.
             if !db.watch_set(&item.item.connection_id)?.is_watched(&item.container.external_id) {
@@ -404,10 +405,9 @@ impl Core {
     }
 
     pub async fn snapshot(&self) -> Result<Snapshot> {
-        let (site, me) = self.identity().await?;
+        let (scope, site, me) = self.identity().await?;
         let sync_error = self.last_error.lock().expect("error lock poisoned").clone();
         // The identity above labels the snapshot, so the data must come from that same account's database.
-        let scope = Scope::of(&site, &me);
         self.with_db_for(&scope.clone(), |db| {
             let last_sync = db.meta(LAST_SYNC)?;
             // Tickets refreshed within a day of the last sync; older ones have dropped out of every query.
@@ -416,7 +416,7 @@ impl Core {
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
                 .unwrap_or_default();
-            let connection_id = Connection::jira_id(&scope);
+            let connection_id = scope.connection_id.clone();
             let visible = db.watch_set(&connection_id)?.visible();
             let cached = tickets_of(&db.items_synced_since(&connection_id, &cutoff, &visible)?)?;
             let keys = db.visible_keys(&connection_id, &visible)?;
@@ -481,8 +481,8 @@ impl Core {
 
     /// The signed-in scope, for work that starts now.
     pub async fn scope(&self) -> Result<Scope> {
-        let (site, me) = self.identity().await?;
-        Ok(Scope::of(&site, &me))
+        let (scope, _, _) = self.identity().await?;
+        Ok(scope)
     }
 
     /// The moves open to a ticket. A move's id is its target status.
@@ -530,11 +530,11 @@ impl Core {
     }
 
     async fn search_cached_with(&self, scope: &Scope, filter: &Filter, include_unwatched: bool) -> Result<Vec<WorkItem>> {
-        let (site, me) = self.identity().await?;
-        if &Scope::of(&site, &me) != scope {
+        let (current, _, me) = self.identity().await?;
+        if &current != scope {
             return Err(Error::SiteChanged);
         }
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let now = Utc::now();
         self.with_db_for(scope, |db| {
             let visible = if include_unwatched { Visible::All } else { db.watch_set(&connection_id)?.visible() };
@@ -560,7 +560,7 @@ impl Core {
     }
 
     async fn containers_with(&self, scope: &Scope, include_unwatched: bool) -> Result<Vec<Container>> {
-        let id = Connection::jira_id(scope);
+        let id = scope.connection_id.clone();
         self.with_db_for(scope, |db| {
             let visible = if include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
             Ok(db.containers(&id)?.into_iter().filter(|c| visible.allows(&c.container_ref.external_id)).collect())
@@ -574,8 +574,8 @@ impl Core {
 
     /// The signed-in person, across connections.
     pub async fn cache_me(&self) -> Result<Identity> {
-        let (site, me) = self.identity().await?;
-        Ok(identity_of(&Connection::jira_id(&Scope::of(&site, &me)), &me))
+        let (scope, _, me) = self.identity().await?;
+        Ok(identity_of(&scope.connection_id, &me))
     }
 
     /// People named on cached tickets, so views can show a name for an account id.
@@ -613,7 +613,7 @@ impl Core {
     /// The moves open to an item right now; Jira reveals them per item.
     pub async fn cache_transitions(&self, item: &ItemRef) -> Result<Vec<Move>> {
         let scope = self.scope().await?;
-        if item.connection_id != Connection::jira_id(&scope) {
+        if item.connection_id != scope.connection_id.clone() {
             return Err(Error::SiteChanged);
         }
         self.tracker(&scope)?.transitions(item).await
@@ -622,8 +622,7 @@ impl Core {
     /// The signed-in connection with how its sync is going.
     pub async fn connections(&self) -> Result<Vec<ConnectionInfo>> {
         let mut out = Vec::new();
-        if let Some((site, me)) = self.auth.identity().await {
-            let scope = Scope::of(&site, &me);
+        if let Some((scope, site, me)) = self.auth.identity().await {
             let connection = self.connection(&scope)?;
             let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
             out.push(ConnectionInfo {
@@ -830,7 +829,7 @@ mod tests {
 
     #[test]
     fn each_site_and_account_gets_its_own_database_file() {
-        let of = |cloud: &str, account: &str| Connection::jira(&Scope { cloud_id: cloud.into(), account_id: account.into() }, "Site");
+        let of = |cloud: &str, account: &str| crate::auth::SiteScope { cloud_id: cloud.into(), account_id: account.into() }.connection("Site");
         let a = of("c1", "712020:ab-cd");
         let b = of("c1", "someone-else");
         assert_eq!(db_file(&a), "inbox-c1-712020_ab-cd.sqlite");
@@ -874,7 +873,7 @@ mod tests {
             )
             .unwrap();
         }
-        let connection = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site");
+        let connection = crate::auth::SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Site");
 
         let db = Db::open(&path).unwrap();
         backfill_cache(&db, &connection).unwrap();
@@ -932,7 +931,7 @@ pub(crate) mod testing {
 
         /// Replaces the cached containers.
         pub async fn set_containers(&self, containers: &[Container]) {
-            let id = Connection::jira_id(&self.scope);
+            let id = self.scope.connection_id.clone();
             self.core.with_db_for(&self.scope, |db| db.replace_containers(&id, containers, "2026-09-29T12:00:00Z")).await.unwrap();
         }
 
@@ -941,7 +940,7 @@ pub(crate) mod testing {
             let connection = self.core.connection(&self.scope).unwrap();
             let mut ticket = sample_ticket();
             ticket.key = key.into();
-            let mut item = tracker::item_from_ticket(&connection, &ticket);
+            let mut item = tracker::item_from_ticket(&connection, &ticket).unwrap();
             item.container.external_id = container.into();
             item.title = format!("Ticket {key}");
             self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
@@ -950,7 +949,7 @@ pub(crate) mod testing {
         /// The item `key` as the tracker gives it (a copy of the sample ticket), payload and all.
         pub fn tracker_item(&self, key: &str) -> WorkItem {
             let connection = self.core.connection(&self.scope).unwrap();
-            let mut item = tracker::item_from_ticket(&connection, &sample_ticket());
+            let mut item = tracker::item_from_ticket(&connection, &sample_ticket()).unwrap();
             item.item = connection.item(key);
             item
         }
@@ -966,7 +965,7 @@ pub(crate) mod testing {
         /// Adds `CA-<n>` (a copy of the sample ticket) to the cache.
         pub async fn add_item(&self, n: u32) {
             let connection = self.core.connection(&self.scope).unwrap();
-            let mut item = tracker::item_from_ticket(&connection, &sample_ticket());
+            let mut item = tracker::item_from_ticket(&connection, &sample_ticket()).unwrap();
             let key = format!("CA-{n}");
             item.item = connection.item(&key);
             item.title = format!("Ticket {n}");
@@ -1038,8 +1037,8 @@ pub(crate) mod testing {
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
         let me = Account { account_id: "me".into(), name: "Me".into(), avatar_url: None };
-        let scope = Scope::of(&site, &me);
         let creds = Credentials { tokens: Tokens { access_token: "t".into(), refresh_token: "r".into(), expires_at: u64::MAX / 2 }, site, me };
+        let scope = creds.scope();
         let http = reqwest::Client::new();
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();

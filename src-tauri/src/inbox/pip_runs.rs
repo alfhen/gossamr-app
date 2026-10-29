@@ -10,7 +10,6 @@ use crate::auth::Scope;
 use crate::domain::{Actor, ClonePlan, CodeChangeKind, ItemRef, LegacySpec, Role, Run, RunEvent, RunQuery, RunSpec, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
-use crate::tracker::Connection;
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -34,14 +33,14 @@ pub struct PipStart<'a> {
 impl Core {
     /// The runs of `scope`'s account, newest first. Whatever `query` says, only that account's runs come back.
     pub async fn runs_in(&self, scope: &Scope, query: &RunQuery) -> Result<Vec<Run>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let query = RunQuery { connection_id: Some(connection_id.clone()), ..query.clone() };
         let found = self.with_db_for(scope, |db| db.runs(&query)).await?;
         Ok(found.into_iter().filter(|r| r.connection_id == connection_id).collect())
     }
 
     pub async fn run_in(&self, scope: &Scope, id: &str) -> Result<Option<Run>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         Ok(self.with_db_for(scope, |db| db.run(id)).await?.filter(|r| r.connection_id == connection_id))
     }
 
@@ -98,7 +97,7 @@ impl Core {
         let clone_path = self.resolve_clone(&plan.path)?;
         let item = ticket.map(|key| Self::item(scope, key));
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let mut spec = RunSpec {
             role: ask.role,
             repo,
@@ -135,7 +134,7 @@ impl Core {
     /// under `start.key` (an MCP retry of the same call) comes back instead, unchanged, and nothing is recorded again.
     /// The workstream's audit says Pip started it, in which turn kind, and as what.
     pub(crate) async fn commit_pip_run(&self, scope: &Scope, start: &PipStart<'_>, item: Option<ItemRef>, spec: RunSpec) -> Result<(Run, bool)> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let file = super::db_file(&self.connection(scope)?);
         let workstream = spec.workstream.clone();
         let role = spec.role.clone();
@@ -182,7 +181,7 @@ impl Core {
 
     /// The run already started under `key`, if any.
     pub(crate) async fn run_started_as(&self, scope: &Scope, key: &str) -> Result<Option<Run>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         Ok(self.with_db_for(scope, |db| db.run_by_start_key(key)).await?.filter(|r| r.connection_id == connection_id))
     }
 }

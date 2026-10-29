@@ -429,7 +429,7 @@ mod tests {
     fn the_real_items_merge_only_wakes_of_the_same_workstream() {
                 use crate::agent::supervisor::{WakeFact, WakeState};
         let fact = |run: &str| WakeFact { run: run.into(), role: crate::domain::Role::parse("triage").unwrap(), state: WakeState::Done, mark: String::new(), drafts: 0 };
-        let scope = Scope { cloud_id: "s".into(), account_id: "me".into() };
+        let scope = Scope { connection_id: "jira:s:me".into(), account_id: "me".into() };
         let sink: WakeSink = std::sync::Arc::new(|_, _| {});
         let mut item = QueueItem::Wake { scope: scope.clone(), facts: WakeFacts { workstream: "w1".into(), facts: vec![fact("r1")] }, sink: sink.clone() };
         assert!(item.preempted_by_user());

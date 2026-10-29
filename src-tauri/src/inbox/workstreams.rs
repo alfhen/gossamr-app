@@ -16,7 +16,6 @@ use crate::domain::workstream::{open_pip_ask, run_labels, stage, PauseReason, Pi
 use crate::domain::{has_markers, Actor, Category, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
-use crate::tracker::Connection;
 
 /// Pip's notes are kept up to this many bytes, after scrubbing.
 pub const NOTES_LIMIT: usize = 2_048;
@@ -265,7 +264,7 @@ impl Core {
 
     /// `open_workstream`, recorded as opened by `actor`.
     pub async fn open_workstream_as(&self, scope: &Scope, item: Option<ItemRef>, title: Option<String>, actor: Actor) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         if item.as_ref().is_some_and(|i| i.connection_id != connection_id) {
             return Err(refuse("that item belongs to another connection"));
         }
@@ -305,7 +304,7 @@ impl Core {
 
     /// One of `scope`'s workstreams with its stage, or `None` when it isn't one of them.
     pub async fn workstream(&self, scope: &Scope, id: &str) -> Result<Option<WorkstreamView>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let found = self
             .with_db_for(scope, |db| {
                 let Some(ws) = db.workstream(id)?.filter(|w| w.connection_id == connection_id) else { return Ok(None) };
@@ -338,7 +337,7 @@ impl Core {
 
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let (workstreams, runs, pending, mut asks) = self
             .with_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
@@ -359,7 +358,7 @@ impl Core {
 
     /// The ids of `scope`'s closed workstreams, a cheap way to tell what belongs to one.
     pub async fn closed_workstream_ids(&self, scope: &Scope) -> Result<HashSet<String>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         self.with_db_for(scope, |db| db.closed_workstream_ids(&connection_id)).await
     }
 
@@ -370,7 +369,7 @@ impl Core {
 
     /// `close_workstream`, recorded as closed by `actor`.
     pub async fn close_workstream_as(&self, scope: &Scope, id: &str, actor: Actor) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
@@ -387,7 +386,7 @@ impl Core {
     /// Reopens a closed workstream, as it stood: its pause and notes are kept, and the `reopened` line says so. Refused
     /// when its ticket has another open workstream by now; reopening an open one changes nothing.
     pub async fn reopen_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
@@ -411,7 +410,7 @@ impl Core {
     /// `adopted` line by the person says how many. Returns what moved, by id, for `WorkstreamUndo::Adopt`; refused when
     /// there is nothing to move. A run's approval digest stays what the person read; only where it is filed changes.
     pub async fn adopt_into_workstream(&self, scope: &Scope, id: &str) -> Result<Adoptable> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let ws = open(db, &connection_id, id)?;
@@ -451,7 +450,7 @@ impl Core {
         if clean.len() > NOTES_LIMIT {
             return Err(refuse(format!("notes are limited to {NOTES_LIMIT} bytes")));
         }
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
@@ -475,7 +474,7 @@ impl Core {
     /// Keeps `session` as the Pip session the conversation of `scope`'s open workstream `id` resumes. Nothing is audited:
     /// it changes nothing the person or Pip decided.
     pub async fn set_workstream_session(&self, scope: &Scope, id: &str, session: &str) -> Result<()> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_none() && ws.pip_session.as_deref() != Some(session) {
@@ -490,7 +489,7 @@ impl Core {
     /// Pauses an open workstream: Pip isn't woken in it while it is paused; its runs carry on. A workstream already
     /// paused keeps its reason.
     pub async fn pause_workstream(&self, scope: &Scope, id: &str, reason: PauseReason, actor: Actor) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
@@ -505,7 +504,7 @@ impl Core {
 
     /// The person resumes a workstream, whatever paused it. One that isn't paused records nothing.
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
@@ -526,7 +525,7 @@ impl Core {
     }
 
     async fn undo_workstream_at(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo, at: chrono::DateTime<Utc>) -> Result<Workstream> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         self.with_db_atomically_for(scope, |db| {
             let ws = open(db, &connection_id, id)?;
             let events = db.workstream_events(&ws.id)?;
@@ -561,7 +560,7 @@ impl Core {
     /// nothing is let through: the workstream is paused for `ceiling` and a supervisor `paused` line says so. Wake
     /// turns that never reached Pip don't count.
     pub async fn admit_wake(&self, scope: &Scope, id: &str, facts: &[WakeFact], at: chrono::DateTime<Utc>) -> Result<Admitted> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let midnight = at.date_naive().and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
         self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(Admitted::default()) };
@@ -600,7 +599,7 @@ impl Core {
     /// write was changing (`WorkstreamBasis::changing`), so what anyone else changed meanwhile still shows as drift.
     /// Nothing for a ticketless workstream or a ticket not cached.
     pub async fn capture_workstream_basis(&self, scope: &Scope, id: &str, after_write: bool) -> Result<Option<WorkstreamBasis>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(None) };
@@ -628,7 +627,7 @@ impl Core {
     /// (`basis_captured`), so the next change is the next line. Nothing pauses. A workstream with no basis yet has it
     /// captured and hasn't drifted. Whether it drifted; nothing for a ticketless workstream or a ticket not cached.
     pub async fn note_basis_drift(&self, scope: &Scope, id: &str) -> Result<bool> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(false) };
@@ -651,7 +650,7 @@ impl Core {
 
     /// A workstream's audit, oldest first. Only for `scope`'s own workstreams.
     pub async fn workstream_events(&self, scope: &Scope, id: &str) -> Result<Vec<WorkstreamEvent>> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         self.with_db_for(scope, |db| {
             owned(db, &connection_id, id)?;
             db.workstream_events(id)
@@ -661,7 +660,7 @@ impl Core {
 
     /// Appends `event` to the audit of one of `scope`'s workstreams; its `seq` is given here.
     pub async fn record_workstream_event(&self, scope: &Scope, event: WorkstreamEvent) -> Result<WorkstreamEvent> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         self.with_db_atomically_for(scope, |db| {
             owned(db, &connection_id, &event.workstream_id)?;
             db.append_workstream_event(&event)
@@ -674,7 +673,7 @@ impl Core {
     pub async fn record_run_action_by(&self, run: &Run, actor: Actor, action: &str, detail: Option<String>) -> Result<()> {
         let Some(id) = run.spec.workstream.as_deref() else { return Ok(()) };
         let scope = self.scope().await?;
-        if Connection::jira_id(&scope) != run.connection_id {
+        if scope.connection_id != run.connection_id {
             return Ok(());
         }
         let mut event = WorkstreamEvent::new(id, actor, action, Utc::now()).run(&run.id);
@@ -692,7 +691,7 @@ impl Core {
         if question.is_empty() {
             return Err(refuse("a question can't be empty"));
         }
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             open(db, &connection_id, id)?;
@@ -705,7 +704,7 @@ impl Core {
     /// The person answered or dismissed what Pip asked in workstream `id`; nothing is recorded when none is open.
     /// `how` is `answered` or `dismissed`. Returns whether a question was open.
     pub async fn clear_pip_ask(&self, scope: &Scope, id: &str, how: &str) -> Result<bool> {
-        let connection_id = Connection::jira_id(scope);
+        let connection_id = scope.connection_id.clone();
         let at = Utc::now();
         self.with_db_atomically_for(scope, |db| {
             owned(db, &connection_id, id)?;
@@ -732,7 +731,7 @@ mod tests {
 
     async fn insert_run(fx: &Fixture, id: &str, workstream: Option<&str>, kind: &str, state: RunState) -> Run {
         let spec = RunSpec { role: crate::domain::Role::parse(kind).unwrap(), name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
-        let mut run = Run::queued(id.into(), format!("p-{id}"), Connection::jira_id(&fx.scope), Some(fx.item("CA-1")), spec, "f".into(), Utc::now());
+        let mut run = Run::queued(id.into(), format!("p-{id}"), fx.scope.connection_id.clone(), Some(fx.item("CA-1")), spec, "f".into(), Utc::now());
         run.state = state;
         fx.core.with_db_for(&fx.scope, |db| db.insert_run(&run)).await.unwrap();
         run

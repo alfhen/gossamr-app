@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::adf;
-use crate::auth::{Auth, Scope};
+use crate::auth::{Auth, SiteScope};
 use crate::error::{Error, Result};
 use crate::domain::StatusDef;
 use crate::model::{Attachment, CachedTicket, Comment, History, HistoryItem, ParentRef, Person, Status, SubtaskRef, TicketLink, Uploaded};
@@ -106,7 +106,7 @@ impl Jira {
     async fn send(
         &self,
         client: &reqwest::Client,
-        scope: &Scope,
+        scope: &SiteScope,
         method: Method,
         path: &str,
         build: impl Fn(RequestBuilder) -> RequestBuilder,
@@ -137,7 +137,7 @@ impl Jira {
         }
     }
 
-    async fn call<T: DeserializeOwned>(&self, scope: &Scope, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
+    async fn call<T: DeserializeOwned>(&self, scope: &SiteScope, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
         let res = self
             .send(&self.http, scope, method.clone(), path, |req| match body {
                 Some(b) => req.json(b),
@@ -152,7 +152,7 @@ impl Jira {
 
     /// Runs a JQL search and returns up to `limit` matching issues. With `history_since`, each issue carries its
     /// changelog back to at least that time (RFC 3339).
-    pub(super) async fn search(&self, scope: &Scope, jql: &str, history_since: Option<&str>, limit: usize) -> Result<Vec<CachedTicket>> {
+    pub(super) async fn search(&self, scope: &SiteScope, jql: &str, history_since: Option<&str>, limit: usize) -> Result<Vec<CachedTicket>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Page {
@@ -188,7 +188,7 @@ impl Jira {
     }
 
     /// One issue, with its changelog back to at least `history_since` (RFC 3339).
-    pub(super) async fn issue(&self, scope: &Scope, key: &str, history_since: &str) -> Result<CachedTicket> {
+    pub(super) async fn issue(&self, scope: &SiteScope, key: &str, history_since: &str) -> Result<CachedTicket> {
         let raw: Value = self
             .call(scope, Method::GET, &format!("issue/{key}?fields={}&expand=changelog", FIELDS.join(",")), None)
             .await
@@ -203,7 +203,7 @@ impl Jira {
 
     /// An issue read carries a bounded number of comments. When Jira says there are more, read them all, since the
     /// newest are the ones that become events.
-    async fn with_all_comments(&self, scope: &Scope, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
+    async fn with_all_comments(&self, scope: &SiteScope, mut t: CachedTicket, raw: &Value) -> Result<CachedTicket> {
         let total = raw.pointer("/fields/comment/total").and_then(Value::as_u64).unwrap_or(0);
         if total > t.comments.len() as u64 {
             t.comments = self.comments(scope, &t.key).await?;
@@ -213,7 +213,7 @@ impl Jira {
 
     /// The changelog's length when the expanded one may not hold all of it. Jira may leave out `total`; a page that
     /// came back full then counts as cut off, and the changelog endpoint says how long it is.
-    async fn changelog_total(&self, scope: &Scope, key: &str, raw: &Value) -> Result<Option<u64>> {
+    async fn changelog_total(&self, scope: &SiteScope, key: &str, raw: &Value) -> Result<Option<u64>> {
         if let Some(total) = incomplete_changelog_total(raw) {
             return Ok(Some(total));
         }
@@ -227,7 +227,7 @@ impl Jira {
 
     /// An expanded changelog holds only its first page, which is the oldest history. When there is more, replace it
     /// with the newest pages, walking back until the history reaches `since`, since that's where new events come from.
-    async fn with_history_since(&self, scope: &Scope, mut t: CachedTicket, raw: &Value, since: &str) -> Result<CachedTicket> {
+    async fn with_history_since(&self, scope: &SiteScope, mut t: CachedTicket, raw: &Value, since: &str) -> Result<CachedTicket> {
         let Some(total) = self.changelog_total(scope, &t.key, raw).await? else { return Ok(t) };
         let mut history = Vec::new();
         let mut end = total;
@@ -249,20 +249,20 @@ impl Jira {
     }
 
     /// Each transition open to `key` with the status it leads to.
-    pub(super) async fn transitions(&self, scope: &Scope, key: &str, with_fields: bool) -> Result<Vec<RawTransition>> {
+    pub(super) async fn transitions(&self, scope: &SiteScope, key: &str, with_fields: bool) -> Result<Vec<RawTransition>> {
         let expand = if with_fields { "?expand=transitions.fields" } else { "" };
         let raw: Value = self.call(scope, Method::GET, &format!("issue/{key}/transitions{expand}"), None).await?;
         Ok(parse_transitions(&raw))
     }
 
-    pub(super) async fn transition(&self, scope: &Scope, key: &str, body: &Value) -> Result<()> {
+    pub(super) async fn transition(&self, scope: &SiteScope, key: &str, body: &Value) -> Result<()> {
         self.call::<Value>(scope, Method::POST, &format!("issue/{key}/transitions"), Some(body)).await?;
         Ok(())
     }
 
     /// Creates subtasks under `parent` using the project's first sub-task issue type, stopping at the first failure.
     /// Returns the keys created so far, in the order of `summaries`, with the error that stopped it.
-    pub(super) async fn create_subtasks(&self, scope: &Scope, parent: &str, summaries: &[String]) -> Result<(Vec<String>, Option<Error>)> {
+    pub(super) async fn create_subtasks(&self, scope: &SiteScope, parent: &str, summaries: &[String]) -> Result<(Vec<String>, Option<Error>)> {
         let project = parent.split('-').next().unwrap_or(parent);
         let subtask_type = self
             .issue_types(scope, project)
@@ -288,7 +288,7 @@ impl Jira {
     }
 
     /// People who can see `key` and match `query`, for @mention suggestions. Apps and deactivated users are left out.
-    pub(super) async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
+    pub(super) async fn mentionable(&self, scope: &SiteScope, key: &str, query: &str) -> Result<Vec<Person>> {
         let encode = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
         // Jira takes `maxResults` users first and filters that range by `query` afterwards, so a small page would
         // hide most of a site's people. 1,000 is the endpoint's ceiling.
@@ -305,13 +305,13 @@ impl Jira {
     }
 
     /// Jira's per-file upload limit in bytes, or `None` when attachments are turned off on the site.
-    pub(super) async fn attachment_limit(&self, scope: &Scope) -> Result<Option<u64>> {
+    pub(super) async fn attachment_limit(&self, scope: &SiteScope) -> Result<Option<u64>> {
         let meta: Value = self.call(scope, Method::GET, "attachment/meta", None).await?;
         Ok(if meta["enabled"] == false { None } else { meta["uploadLimit"].as_u64() })
     }
 
     /// Uploads a file to `key`, then looks up its media id so a comment can show it inline.
-    pub(super) async fn attach(&self, scope: &Scope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
+    pub(super) async fn attach(&self, scope: &SiteScope, key: &str, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded> {
         let mime_type = if Part::bytes(Vec::new()).mime_str(mime_type).is_ok() { mime_type } else { "application/octet-stream" };
         let path = format!("issue/{key}/attachments");
         let res = self
@@ -340,7 +340,7 @@ impl Jira {
 
     /// The media-service id of an attachment. Jira's API only exposes it through the redirect its content download
     /// answers with (`…/file/{mediaId}/binary`), so this reads that redirect without following it.
-    pub(super) async fn media_id(&self, scope: &Scope, attachment_id: &str) -> Result<Option<String>> {
+    pub(super) async fn media_id(&self, scope: &SiteScope, attachment_id: &str) -> Result<Option<String>> {
         let res = self.send(&self.no_redirect, scope, Method::GET, &format!("attachment/content/{attachment_id}"), |r| r).await?;
         if !res.status().is_redirection() {
             return Ok(None);
@@ -350,7 +350,7 @@ impl Jira {
 
     /// An attachment's content type and bytes. The download redirects to the media service with a signed URL;
     /// reqwest drops the bearer token when following it to another host.
-    pub(super) async fn download(&self, scope: &Scope, id: &str) -> Result<(String, Vec<u8>)> {
+    pub(super) async fn download(&self, scope: &SiteScope, id: &str) -> Result<(String, Vec<u8>)> {
         let res = self.send(&self.http, scope, Method::GET, &format!("attachment/content/{id}"), |r| r).await?;
         if !res.status().is_success() {
             return Err(failed(&Method::GET, &format!("attachment/content/{id}"), res).await);
@@ -376,12 +376,12 @@ impl Jira {
         Ok((mime, bytes))
     }
 
-    pub(super) async fn comment(&self, scope: &Scope, key: &str, body: &Value) -> Result<()> {
+    pub(super) async fn comment(&self, scope: &SiteScope, key: &str, body: &Value) -> Result<()> {
         self.call::<Value>(scope, Method::POST, &format!("issue/{key}/comment"), Some(&json!({ "body": body }))).await?;
         Ok(())
     }
 
-    pub(super) async fn comments(&self, scope: &Scope, key: &str) -> Result<Vec<Comment>> {
+    pub(super) async fn comments(&self, scope: &SiteScope, key: &str) -> Result<Vec<Comment>> {
         let mut out = Vec::new();
         let mut start = 0u64;
         loop {
@@ -396,7 +396,7 @@ impl Jira {
     }
 
     /// Projects the person can see, as `(key, name)`, up to `limit`.
-    pub(super) async fn projects(&self, scope: &Scope, limit: usize) -> Result<Vec<(String, String)>> {
+    pub(super) async fn projects(&self, scope: &SiteScope, limit: usize) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();
         let mut start = 0;
         while out.len() < limit {
@@ -414,7 +414,7 @@ impl Jira {
     }
 
     /// Matches of a JQL search with only each issue's key, project and update time, up to `cap`.
-    pub(super) async fn search_hits(&self, scope: &Scope, jql: &str, cap: usize) -> Result<Vec<Hit>> {
+    pub(super) async fn search_hits(&self, scope: &SiteScope, jql: &str, cap: usize) -> Result<Vec<Hit>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Page {
@@ -442,7 +442,7 @@ impl Jira {
     }
 
     /// One page of projects matching `query`, from `start`, and whether it was the last.
-    pub(super) async fn project_page(&self, scope: &Scope, query: &str, start: usize, limit: usize) -> Result<(Vec<ProjectInfo>, bool)> {
+    pub(super) async fn project_page(&self, scope: &SiteScope, query: &str, start: usize, limit: usize) -> Result<(Vec<ProjectInfo>, bool)> {
         let encode = |s: &str| url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
         let path = format!("project/search?startAt={start}&maxResults={}&expand=insight&query={}", limit.min(PROJECT_PAGE), encode(query));
         let page: Value = self.call(scope, Method::GET, &path, None).await?;
@@ -451,7 +451,7 @@ impl Jira {
     }
 
     /// The projects among `keys` that exist and can be read, as `(key, name)`.
-    pub(super) async fn projects_by_keys(&self, scope: &Scope, keys: &[&str]) -> Result<Vec<(String, String)>> {
+    pub(super) async fn projects_by_keys(&self, scope: &SiteScope, keys: &[&str]) -> Result<Vec<(String, String)>> {
         let mut out = Vec::new();
         for chunk in keys.chunks(PROJECT_PAGE) {
             let keys: String = chunk.iter().map(|k| format!("&keys={}", url::form_urlencoded::byte_serialize(k.as_bytes()).collect::<String>())).collect();
@@ -461,28 +461,28 @@ impl Jira {
         Ok(out)
     }
 
-    pub(super) async fn project_statuses(&self, scope: &Scope, project: &str) -> Result<Vec<StatusDef>> {
+    pub(super) async fn project_statuses(&self, scope: &SiteScope, project: &str) -> Result<Vec<StatusDef>> {
         let raw: Value = self.call(scope, Method::GET, &format!("project/{project}/statuses"), None).await?;
         Ok(parse_project_statuses(&raw))
     }
 
-    pub(super) async fn issue_types(&self, scope: &Scope, project: &str) -> Result<Vec<IssueType>> {
+    pub(super) async fn issue_types(&self, scope: &SiteScope, project: &str) -> Result<Vec<IssueType>> {
         let raw: Value = self.call(scope, Method::GET, &format!("issue/createmeta/{project}/issuetypes"), None).await?;
         Ok(parse_issue_types(&raw))
     }
 
     /// Creates an issue from a `fields` object and returns its key.
-    pub(super) async fn create_issue(&self, scope: &Scope, fields: Value) -> Result<String> {
+    pub(super) async fn create_issue(&self, scope: &SiteScope, fields: Value) -> Result<String> {
         let res: Value = self.call(scope, Method::POST, "issue", Some(&json!({ "fields": fields }))).await?;
         res["key"].as_str().map(String::from).ok_or_else(|| Error::Api { status: 200, message: "Jira didn't return the new issue's key".into() })
     }
 
-    pub(super) async fn update_issue(&self, scope: &Scope, key: &str, fields: Value) -> Result<()> {
+    pub(super) async fn update_issue(&self, scope: &SiteScope, key: &str, fields: Value) -> Result<()> {
         self.call::<Value>(scope, Method::PUT, &format!("issue/{key}"), Some(&json!({ "fields": fields }))).await?;
         Ok(())
     }
 
-    pub(super) async fn link_issues(&self, scope: &Scope, body: &Value) -> Result<()> {
+    pub(super) async fn link_issues(&self, scope: &SiteScope, body: &Value) -> Result<()> {
         self.call::<Value>(scope, Method::POST, "issueLink", Some(body)).await?;
         Ok(())
     }

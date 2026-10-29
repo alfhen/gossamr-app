@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{Auth, Scope};
+use crate::auth::Auth;
 use crate::domain::{
-    Comment, Container, ContainerPage, ContainerQuery, ContainerRef, ContainerScope, Doc, Filter, Footprint, Intent, ItemRef, Person, StatusDef, Stray,
-    WorkItem, Workflow,
+    Comment, Container, ContainerPage, ContainerQuery, ContainerRef, ContainerScope, Doc, Filter, Footprint, ItemRef, Person, StatusDef, Stray,
+    WorkItem, Workflow, Write,
 };
 use crate::error::Result;
 use crate::model::Uploaded;
@@ -41,20 +41,6 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn jira_id(scope: &Scope) -> String {
-        format!("jira:{}:{}", scope.cloud_id, scope.account_id)
-    }
-
-    pub fn jira(scope: &Scope, display_name: &str) -> Self {
-        Self {
-            id: Self::jira_id(scope),
-            kind: ConnectionKind::Jira,
-            workspace: scope.cloud_id.clone(),
-            account: scope.account_id.clone(),
-            display_name: display_name.into(),
-        }
-    }
-
     /// A GitHub account or organisation the person signed in to. `login` is the account the token belongs to.
     pub fn github(login: &str, display_name: &str) -> Self {
         Self { id: Self::github_id(login), kind: ConnectionKind::Github, workspace: login.into(), account: login.into(), display_name: display_name.into() }
@@ -186,11 +172,11 @@ pub trait WorkTracker: Send + Sync {
     /// People who can see `item` and match `query`, for @mentions.
     async fn people(&self, item: &ItemRef, query: &str) -> Result<Vec<Person>>;
 
-    /// The only write path. `files` are uploads to show in a comment; other intents reject them.
-    async fn apply_with_files(&self, intent: &Intent, files: &[Uploaded]) -> Result<Applied>;
+    /// The only write path. `files` are uploads to show in a comment; other writes reject them.
+    async fn apply_with_files(&self, write: &Write, files: &[Uploaded]) -> Result<Applied>;
 
-    async fn apply(&self, intent: &Intent) -> Result<Applied> {
-        self.apply_with_files(intent, &[]).await
+    async fn apply(&self, write: &Write) -> Result<Applied> {
+        self.apply_with_files(write, &[]).await
     }
 
     async fn attach(&self, item: &ItemRef, filename: &str, mime_type: &str, bytes: Vec<u8>) -> Result<Uploaded>;
@@ -244,11 +230,12 @@ impl Registry {
     }
 }
 
-/// A ticket stored before the cache existed, as the work item a sync of `connection` would have produced.
-pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> WorkItem {
+/// A ticket stored before the cache existed, as the work item a sync of `connection` would have produced. `None` for a
+/// connection that never stored tickets.
+pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> Option<WorkItem> {
     match connection.kind {
-        ConnectionKind::Jira => jira::item_from_ticket(&connection.id, t),
-        ConnectionKind::Github => unreachable!("GitHub connections have no stored tickets"),
+        ConnectionKind::Jira => Some(jira::item_from_ticket(&connection.id, t)),
+        ConnectionKind::Github => None,
     }
 }
 
@@ -256,7 +243,7 @@ pub fn item_from_ticket(connection: &Connection, t: &crate::model::CachedTicket)
 pub fn comments_from_ticket(connection: &Connection, t: &crate::model::CachedTicket) -> Vec<Comment> {
     match connection.kind {
         ConnectionKind::Jira => jira::comments_from_ticket(&connection.id, t),
-        ConnectionKind::Github => unreachable!("GitHub connections have no stored tickets"),
+        ConnectionKind::Github => Vec::new(),
     }
 }
 
@@ -287,7 +274,7 @@ pub(crate) mod testing {
     /// A tracker that only records what it is asked to apply and answers from a script (success when it runs out).
     #[derive(Default)]
     pub struct Recorder {
-        pub applied: Mutex<Vec<Intent>>,
+        pub applied: Mutex<Vec<Write>>,
         pub script: Mutex<VecDeque<Result<Applied>>>,
         pub moves: Mutex<Vec<Move>>,
         /// What `comments` returns; `None` fails the request, as an offline tracker would.
@@ -312,8 +299,9 @@ pub(crate) mod testing {
             self.script.lock().unwrap().push_back(outcome);
         }
 
-        pub fn intents(&self) -> Vec<Intent> {
-            self.applied.lock().unwrap().clone()
+        /// What was applied, as the drafts that produce those writes.
+        pub fn intents(&self) -> Vec<crate::domain::Intent> {
+            self.applied.lock().unwrap().iter().cloned().map(Into::into).collect()
         }
     }
 
@@ -340,7 +328,7 @@ pub(crate) mod testing {
                 return Ok(live);
             }
             let connection = Connection { id: item.connection_id.clone(), kind: ConnectionKind::Jira, workspace: "site".into(), account: "me".into(), display_name: "Site".into() };
-            let mut fresh = item_from_ticket(&connection, &sample_ticket());
+            let mut fresh = item_from_ticket(&connection, &sample_ticket()).expect("a Jira ticket");
             fresh.item = item.clone();
             Ok(fresh)
         }
@@ -375,13 +363,13 @@ pub(crate) mod testing {
         async fn people(&self, _: &ItemRef, _: &str) -> Result<Vec<Person>> {
             unimplemented!()
         }
-        async fn apply_with_files(&self, intent: &Intent, _: &[Uploaded]) -> Result<Applied> {
-            self.applied.lock().unwrap().push(intent.clone());
+        async fn apply_with_files(&self, write: &Write, _: &[Uploaded]) -> Result<Applied> {
+            self.applied.lock().unwrap().push(write.clone());
             if self.writes_live.load(std::sync::atomic::Ordering::SeqCst) {
                 if let Some(live) = self.live.lock().unwrap().as_mut() {
-                    match intent {
-                        Intent::Rewrite { body: Some(change), .. } => live.body = change.to.clone(),
-                        Intent::Transition { to, .. } => live.status.id = to.clone(),
+                    match write {
+                        Write::Rewrite { body: Some(change), .. } => live.body = change.to.clone(),
+                        Write::Transition { to, .. } => live.status.id = to.clone(),
                         _ => {}
                     }
                 }
@@ -412,6 +400,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::auth::SiteScope;
 
     #[test]
     fn a_tracker_is_created_once_per_connection() {
@@ -423,9 +412,9 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             Arc::new(jira::JiraTracker::new(http.clone(), auth.clone(), c))
         });
-        let scope = |account: &str| Scope { cloud_id: "site".into(), account_id: account.into() };
-        let a = Connection::jira(&scope("a"), "Site");
-        let b = Connection::jira(&scope("b"), "Site");
+        let scope = |account: &str| SiteScope { cloud_id: "site".into(), account_id: account.into() };
+        let a = scope("a").connection("Site");
+        let b = scope("b").connection("Site");
         registry.tracker(&a);
         registry.tracker(&a);
         registry.tracker(&b);
@@ -435,15 +424,32 @@ mod tests {
 
     #[test]
     fn item_refs_carry_the_connection_and_key() {
-        let c = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site");
+        let c = SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Site");
         let r = c.item("CA-1");
         assert_eq!((r.connection_id.as_str(), r.external_id.as_str(), r.key.as_str()), ("jira:site:me", "CA-1", "CA-1"));
     }
 
     #[test]
+    fn a_code_host_connection_has_no_stored_tickets_to_read_back() {
+        let github = Connection::github("ann", "Ann");
+        let ticket = testing::sample_ticket();
+        assert!(item_from_ticket(&github, &ticket).is_none());
+        assert!(comments_from_ticket(&github, &ticket).is_empty());
+        let jira = SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Site");
+        assert!(item_from_ticket(&jira, &ticket).is_some());
+    }
+
+    #[test]
+    fn a_jira_connection_id_keeps_the_stored_format() {
+        let scope = SiteScope { cloud_id: "c1".into(), account_id: "712020:ab".into() };
+        assert_eq!(scope.connection_id(), "jira:c1:712020:ab");
+        assert_eq!(scope.scope().connection_id, scope.connection("Acme").id);
+    }
+
+    #[test]
     fn a_registered_connection_can_be_found_and_removed() {
         let registry = Registry::new(|_| unreachable!("no tracker is built here"));
-        let c = Connection::jira(&Scope { cloud_id: "site".into(), account_id: "me".into() }, "Acme");
+        let c = SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Acme");
         assert!(registry.connection(&c.id).is_none());
         registry.register(c.clone());
         assert_eq!(registry.connection(&c.id), Some(c.clone()));
@@ -461,11 +467,11 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
             Arc::new(jira::JiraTracker::new(http.clone(), auth.clone(), c))
         });
-        let scope = Scope { cloud_id: "site".into(), account_id: "me".into() };
-        registry.register(Connection::jira(&scope, "Old name"));
+        let scope = SiteScope { cloud_id: "site".into(), account_id: "me".into() };
+        registry.register(scope.connection("Old name"));
         let c = registry.connection("jira:site:me").unwrap();
         registry.tracker(&c);
-        registry.register(Connection::jira(&scope, "New name"));
+        registry.register(scope.connection("New name"));
         registry.tracker(&registry.connection("jira:site:me").unwrap());
         assert_eq!(made.load(Ordering::SeqCst), 2);
         assert_eq!(registry.connection("jira:site:me").unwrap().display_name, "New name");

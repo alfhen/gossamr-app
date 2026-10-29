@@ -95,7 +95,7 @@ mod tests {
     async fn the_recording_helpers_refuse_to_write_into_another_scope() {
         let fx = crate::inbox::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "workspace", "q1", "Hi", &TurnMeta::default(), "running").await.unwrap();
-        let other = Scope { cloud_id: "site".into(), account_id: "someone-else".into() };
+        let other = Scope { connection_id: "jira:site:someone-else".into(), account_id: "someone-else".into() };
         let refused = |r: crate::error::Result<()>| assert!(matches!(r, Err(Error::SiteChanged)), "{r:?}");
         refused(fx.core.pip_turn_begin(&other, "workspace", "q2", "Hi", &TurnMeta::default(), "running").await);
         refused(fx.core.pip_turn_step(&other, "q1", "step").await);

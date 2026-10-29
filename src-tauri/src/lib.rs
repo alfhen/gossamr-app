@@ -28,7 +28,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use auth::{Auth, AuthStatus, DeviceStart, OAuthApp};
 use agent::{AgentService, AskOutcome, AskRequest};
-use tracker::{Connection, Move};
+use tracker::Move;
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
@@ -378,14 +378,14 @@ async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>
 #[tauri::command]
 async fn proposals_create(app: AppHandle, core: State<'_, CoreState>, intent: Intent, label: Option<String>) -> Result<Proposal> {
     let made = core.draft_as_user(intent, label).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    proposals_changed(&app, &core.scope().await?.connection_id);
     Ok(made)
 }
 
 #[tauri::command]
 async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, edit: Edit) -> Result<Proposal> {
     let edited = core.edit_proposal(&id, &edit).await?;
-    proposals_changed(&app, &Connection::jira_id(&core.scope().await?));
+    proposals_changed(&app, &core.scope().await?.connection_id);
     Ok(edited)
 }
 
@@ -394,7 +394,7 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
 #[tauri::command]
 async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, undo: bool) -> Result<Proposal> {
     let done = if undo { core.unskip_proposal(&id).await? } else { core.skip_proposal(&id).await? };
-    let connection = Connection::jira_id(&core.scope().await?);
+    let connection = core.scope().await?.connection_id;
     proposals_changed(&app, &connection);
     // A draft in a workstream is a line in its audit, which its timeline's counts read.
     if done.workstream().is_some() {
@@ -407,7 +407,7 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, 
 #[tauri::command]
 async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
     let result = core.approve_proposal(&id).await;
-    if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
+    if let Ok(connection) = core.scope().await.map(|s| s.connection_id) {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
         // Approving a draft in a workstream is a line in its audit, which its timeline's counts read.
@@ -429,7 +429,7 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
 #[tauri::command]
 async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize, post_anyway: Option<bool>) -> Result<Proposal> {
     let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
-    if let Ok(connection) = core.scope().await.map(|s| Connection::jira_id(&s)) {
+    if let Ok(connection) = core.scope().await.map(|s| s.connection_id) {
         proposals_changed(&app, &connection);
     }
     publish(&app, &core).await;
@@ -557,7 +557,7 @@ async fn workstreams_set_state(app: AppHandle, core: State<'_, CoreState>, agent
 async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<bool> {
     let scope = core.scope().await?;
     let cleared = core.clear_pip_ask(&scope, &id, "dismissed").await?;
-    workstreams_changed(&app, &Connection::jira_id(&scope));
+    workstreams_changed(&app, &scope.connection_id.clone());
     Ok(cleared)
 }
 
@@ -567,7 +567,7 @@ async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id:
 async fn workstreams_adopt(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<inbox::Adoptable> {
     let scope = core.scope().await?;
     let moved = core.adopt_into_workstream(&scope, &id).await?;
-    let connection = Connection::jira_id(&scope);
+    let connection = scope.connection_id.clone();
     workstreams_changed(&app, &connection);
     runs_changed(&app, &connection);
     proposals_changed(&app, &connection);
@@ -645,7 +645,7 @@ async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: Stat
         use_freed_slot(&runs);
     }
     agent.cancel_workstream_turns(&id).await;
-    let connection_id = Connection::jira_id(&scope);
+    let connection_id = scope.connection_id.clone();
     workstreams_changed(&app, &connection_id);
     runs_changed(&app, &connection_id);
     result
@@ -785,7 +785,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         // A pull request found here can end a workstream's wait for its build's one.
                         if synced.changed || synced.links_changed {
                             if let Ok(scope) = core.scope().await {
-                                workstreams_changed(&app, &Connection::jira_id(&scope));
+                                workstreams_changed(&app, &scope.connection_id.clone());
                             }
                         }
                     }

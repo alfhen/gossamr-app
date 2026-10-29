@@ -6,11 +6,11 @@ use serde_json::{json, Value};
 
 use super::client::Jira;
 use super::JiraTracker;
-use crate::auth::{Account, Auth, Credentials, Scope, Site, Tokens};
+use crate::auth::{Account, Auth, Credentials, SiteScope, Site, Tokens};
 use crate::codehost::github::testserver::{serve, Reply, Server};
-use crate::domain::{ContainerRef, Doc, Intent, ItemRef};
+use crate::domain::{ContainerRef, Doc, Write, ItemRef};
 use crate::error::Error;
-use crate::tracker::{Connection, WorkTracker};
+use crate::tracker::WorkTracker;
 
 const SEARCH: &str = "/ex/jira/site/rest/api/3/search/jql";
 const PAGE_1: &str = include_str!("fixtures/search_page.json");
@@ -18,8 +18,8 @@ const PAGE_2: &str = include_str!("fixtures/search_page_2.json");
 const COMMENTS: &str = include_str!("fixtures/comments_all.json");
 const TRANSITIONS: &str = include_str!("fixtures/transitions_with_fields.json");
 
-fn scope() -> Scope {
-    Scope { cloud_id: "site".into(), account_id: "me".into() }
+fn scope() -> SiteScope {
+    SiteScope { cloud_id: "site".into(), account_id: "me".into() }
 }
 
 fn auth(http: &reqwest::Client) -> Arc<Auth> {
@@ -38,7 +38,7 @@ fn client(server: &Server) -> Jira {
 
 fn tracker(server: &Server) -> JiraTracker {
     let http = reqwest::Client::new();
-    JiraTracker::at(&server.base, http.clone(), auth(&http), &Connection::jira(&scope(), "Site"))
+    JiraTracker::at(&server.base, http.clone(), auth(&http), &scope().connection("Site"))
 }
 
 fn bodies(server: &Server) -> Vec<Value> {
@@ -177,7 +177,7 @@ const TRANSITION_PATH: &str = "/ex/jira/site/rest/api/3/issue/CA-1/transitions";
 #[tokio::test]
 async fn closing_an_issue_fills_the_resolution_its_screen_requires() {
     let server = serve(vec![(TRANSITION_PATH, vec![Reply::ok(TRANSITIONS), Reply::status(204, "")])]).await;
-    let intent = Intent::Transition { item: item("CA-1"), to: "10001".into() };
+    let intent = Write::Transition { item: item("CA-1"), to: "10001".into() };
     tracker(&server).apply(&intent).await.unwrap();
     let seen = server.seen.lock().unwrap().clone();
     assert_eq!(seen[0].target, format!("{TRANSITION_PATH}?expand=transitions.fields"));
@@ -188,7 +188,7 @@ async fn closing_an_issue_fills_the_resolution_its_screen_requires() {
 #[tokio::test]
 async fn a_required_field_it_cannot_fill_is_named_and_nothing_is_sent() {
     let server = serve(vec![(TRANSITION_PATH, vec![Reply::ok(TRANSITIONS)])]).await;
-    let intent = Intent::Transition { item: item("CA-1"), to: "10002".into() };
+    let intent = Write::Transition { item: item("CA-1"), to: "10002".into() };
     let err = tracker(&server).apply(&intent).await.unwrap_err();
     let Error::Api { status: 400, message } = err else { panic!("{err}") };
     assert!(message.contains("Reason") && message.contains("CA-1") && message.contains("Rejected"), "{message}");
@@ -214,7 +214,7 @@ async fn a_project_that_lists_but_cannot_be_read_is_left_out_of_the_containers()
 #[tokio::test]
 async fn a_comment_posts_its_body_as_adf() {
     let server = serve(vec![("/ex/jira/site/rest/api/3/issue/CA-1/comment", vec![Reply::status(201, "{}")])]).await;
-    tracker(&server).apply(&Intent::Comment { item: item("CA-1"), body: Doc::paragraph("hi") }).await.unwrap();
+    tracker(&server).apply(&Write::Comment { item: item("CA-1"), body: Doc::paragraph("hi") }).await.unwrap();
     assert_eq!(bodies(&server)[0]["body"]["type"], "doc");
 }
 
@@ -223,9 +223,9 @@ async fn a_rewrite_puts_only_the_fields_it_changes_the_description_as_adf() {
     use crate::domain::{BodyChange, TitleChange};
     let server = serve(vec![("/ex/jira/site/rest/api/3/issue/CA-1", vec![Reply::status(204, ""), Reply::status(204, "")])]).await;
     let body = BodyChange { from: Doc::paragraph("old"), to: Doc::from_markdown("# Scope\n\n- one\n- two", &[]) };
-    let both = Intent::Rewrite { item: item("CA-1"), title: Some(TitleChange { from: "Old".into(), to: " New title ".into() }), body: Some(body.clone()), flattened: vec![] };
+    let both = Write::Rewrite { item: item("CA-1"), title: Some(TitleChange { from: "Old".into(), to: " New title ".into() }), body: Some(body.clone()) };
     tracker(&server).apply(&both).await.unwrap();
-    let only_title = Intent::Rewrite { item: item("CA-1"), title: Some(TitleChange { from: "Old".into(), to: "Newer".into() }), body: None, flattened: vec![] };
+    let only_title = Write::Rewrite { item: item("CA-1"), title: Some(TitleChange { from: "Old".into(), to: "Newer".into() }), body: None };
     tracker(&server).apply(&only_title).await.unwrap();
     let seen = server.seen.lock().unwrap().clone();
     assert!(seen.iter().all(|s| s.method == "PUT" && s.target == "/ex/jira/site/rest/api/3/issue/CA-1"));
@@ -275,31 +275,4 @@ async fn a_retry_after_given_as_a_past_date_retries_at_once() {
     .await;
     assert_eq!(client(&server).comments(&scope(), "CA-1").await.unwrap().len(), 3);
     assert_eq!(server.targets().len(), 2);
-}
-
-#[tokio::test]
-async fn an_answer_to_an_agent_is_refused_and_nothing_is_sent_to_jira() {
-    let server = serve(vec![]).await;
-    let answer = Intent::RunAnswer { connection_id: "jira:site:me".into(), run_id: "r1".into(), short_id: None, item: Some(item("CA-1")), message: "Use staging.".into(), question: None };
-    let err = tracker(&server).apply(&answer).await.unwrap_err();
-    assert!(matches!(&err, Error::Proposal(m) if m.contains("Pip starts and messages agents")), "{err}");
-    assert!(server.seen.lock().unwrap().is_empty(), "no request reached Jira");
-}
-
-#[tokio::test]
-async fn a_github_review_is_refused_and_nothing_is_sent_to_jira() {
-    let server = serve(vec![]).await;
-    let review = Intent::GithubReview {
-        connection_id: "github:ann".into(),
-        item: Some(item("CA-1")),
-        run_id: "r1".into(),
-        repo: "acme/webshop".into(),
-        number: 218,
-        commit_sha: "a1b2c3d4e5f6".into(),
-        summary: "Gossamr review of #218.".into(),
-        comments: vec![crate::domain::ReviewComment { path: "src/consumer/retry.ts".into(), line: 42, side: crate::domain::DiffSide::Right, body: "No backoff.".into() }],
-    };
-    let err = tracker(&server).apply(&review).await.unwrap_err();
-    assert!(matches!(&err, Error::Proposal(m) if m.contains("posted to GitHub with its own button")), "{err}");
-    assert!(server.seen.lock().unwrap().is_empty(), "no request reached Jira");
 }

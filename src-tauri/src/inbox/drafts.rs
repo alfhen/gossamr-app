@@ -155,7 +155,7 @@ impl Core {
     /// approved. Only an existing item of the signed-in connection can be the target, or a project of it for a new item.
     pub async fn draft_as_user(&self, intent: Intent, label: Option<String>) -> Result<Proposal> {
         let scope = self.scope().await?;
-        let connection_id = tracker::Connection::jira_id(&scope);
+        let connection_id = scope.connection_id.clone();
         let drafted_in = match &intent {
             Intent::Create { container, .. } => &container.connection_id,
             other => &other.target().ok_or_else(|| Error::Proposal("a draft made by hand has to be about an existing item".into()))?.connection_id,
@@ -409,8 +409,8 @@ impl Core {
 
     /// Re-judges pending drafts against the cache. Returns how many were revised or retired.
     pub async fn reconcile_proposals(&self, scope: &Scope) -> Result<usize> {
-        let (site, me) = self.identity().await?;
-        let connection_id = tracker::Connection::jira_id(&Scope::of(&site, &me));
+        let (_, _, me) = self.identity().await?;
+        let connection_id = scope.connection_id.clone();
         let identity = identity_of(&connection_id, &me);
         self.with_db_for(scope, |db| proposals::reconcile_pending(db, &identity, Utc::now())).await
     }

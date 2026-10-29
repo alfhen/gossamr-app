@@ -29,7 +29,7 @@ pub use item::{
 };
 pub use proposal::{
     reconcile, Basis, BodyChange, CreatedBy, DiffSide, Intent, MaybePosted, PostedReview, ReviewComment, TitleChange, DESCRIPTION_LIMIT, SUMMARY_LIMIT, NewItem, Origin, Patch, Proposal, ProposalQuery, ProposalState, ReconcileContext,
-    Revised, Revision, StateKind, Verdict,
+    Revised, Revision, StateKind, Verdict, Write,
 };
 pub use run::{
     agent_allow_rules, has_markers, render_prompt, valid_repo, without_markers, ClonePlan, Continuation, EarlierSession, LegacySpec, Role, Run, RunEvent, RefusedMode, RunFailure, RunQuery, RunSpec, RunState,
