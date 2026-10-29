@@ -1,27 +1,25 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { footerHints, RANK_CLASS } from "./footerHints";
+import { footerHints } from "../lib/keys";
+import { RANK_CLASS } from "./footerHints";
 import { launcherStyle } from "./PipExtras";
 import { ShortcutHint } from "./ShortcutHint";
-import { VIEW_MODES } from "./tabsStore";
 
 describe("canvas footer hints", () => {
-  it("keeps j/k first to go away last, and puts the canvas-specific lead first in the line", () => {
-    const board = footerHints("board");
-    expect(board[0].id).toBe("drag");
-    expect(footerHints("list")[0].id).toBe("move");
-    for (const view of VIEW_MODES) {
-      const hints = footerHints(view);
-      expect(hints.find((h) => h.id === "move")?.rank).toBe(0);
+  it("keeps j/k first to go away last, and names only keys the table has", () => {
+    for (const on of ["canvas", "work"] as const) {
+      const hints = footerHints(on);
+      expect(hints[0].rank).toBe(0);
       expect(hints.every((h) => h.rank in RANK_CLASS)).toBe(true);
     }
+    expect(footerHints("canvas")[0]).toMatchObject({ keys: ["j", "k"], text: "move and peek" });
   });
 
-  it("renders one left-aligned truncating line, hiding lower ranks at narrow widths", () => {
-    const out = renderToStaticMarkup(<ShortcutHint view="board" />);
+  it("renders one left-aligned truncating line, hiding lower ranks at narrow widths, and no teaching", () => {
+    const out = renderToStaticMarkup(<ShortcutHint on="canvas" />);
     expect(out).toContain("truncate");
     expect(out).not.toContain("text-center");
-    expect(out).toContain("Drag a card");
+    expect(out).not.toContain("Drag a card");
     expect(out).toContain("hidden @md:inline");
     expect(out).toContain("⌘J");
   });

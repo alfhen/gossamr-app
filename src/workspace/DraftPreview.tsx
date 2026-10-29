@@ -61,7 +61,7 @@ export function draftPreviewBody(p: Proposal, statusName: string | null): string
     case "runAnswer":
       return `${i.question ? `The agent asked: ${i.question}\n\n` : ""}${i.message}\n\nPip messages agents directly now; this draft is kept as history.`;
     case "githubReview":
-      return [plainMarkdown(i.summary), ...i.comments.map((c) => `${c.path}:${c.line}: ${plainMarkdown(c.body)}`), "Nothing is posted to GitHub until you approve it."].join("\n\n");
+      return [plainMarkdown(i.summary), ...i.comments.map((c) => `${c.path}:${c.line}: ${plainMarkdown(c.body)}`)].join("\n\n");
     default:
       return unreachable(i);
   }

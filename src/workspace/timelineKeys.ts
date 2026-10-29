@@ -33,6 +33,7 @@ export type TimelineKeyAction = { type: "move"; by: 1 | -1 } | { type: "open" };
 
 interface KeyLike {
   key: string;
+  target?: unknown;
   metaKey?: boolean;
   ctrlKey?: boolean;
   altKey?: boolean;

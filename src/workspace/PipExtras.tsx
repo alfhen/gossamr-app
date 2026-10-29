@@ -1,3 +1,4 @@
+import { showOf } from "../lib/keys";
 import { useEffect, useState } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
@@ -79,7 +80,7 @@ export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { 
           type="button"
           onClick={onOpen}
           aria-label={needs ? `Ask Pip, ${needsYouText(needs)}` : "Ask Pip"}
-          title="Ask Pip (⌘J)"
+          title={`Ask Pip (${showOf("app", "pip")})`}
           className="relative grid size-16 place-items-center [filter:drop-shadow(0_6px_8px_rgb(91_75_209/0.35))] transition-transform duration-200 hover:scale-[1.08] hover:-rotate-3"
         >
           <PipAvatar size={64} dangle thinking={thinking} />

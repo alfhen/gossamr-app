@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { isTypingTarget } from "./workKeys";
+import { isTypingTarget } from "../lib/keys";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 

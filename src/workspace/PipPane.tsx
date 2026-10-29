@@ -1,3 +1,4 @@
+import { isTypingTarget, showOf } from "../lib/keys";
 import { useEffect, useMemo, useState } from "react";
 import { SwitchRow } from "../components/Switch";
 import { developmentLine } from "../lib/devLinks";
@@ -21,7 +22,6 @@ import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
 import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
-import { stageText } from "../lib/workstreamStage";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { HeaderStatus } from "./StatusPill";
 import { composerFooter } from "./workViewLogic";
@@ -84,7 +84,7 @@ function usePaneEscape(onClose: () => void) {
       if (ev.key !== "Escape") return;
       const tabs = useTabs.getState();
       const field = document.activeElement;
-      const editable = field instanceof HTMLElement && (field.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(field.tagName));
+      const editable = isTypingTarget(field);
       const close = escapeClosesPane({
         peekOpen: tabs.selected !== null && tabs.route !== "settings",
         ticked: tabs.marked.length > 0,
@@ -146,23 +146,18 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
   return { scene, kind, label, context, words, quote, following: pinned === null };
 }
 
-/** The line naming the conversation: "General", or "Workstream: <title> · <Stage>" with only the title cut short. */
+/** The line naming the conversation: "General", or "Workstream: <title>" with the title cut short. */
 export function ConversationLine({ conversation, workstream }: { conversation: string; workstream: WorkstreamView | null }) {
   return (
-    // The status pill sits beside the line, not in it: the line's own words stay "Workstream: <title> · <Stage>".
+    // The status pill sits beside the line, not in it.
     <div className="flex min-w-0 items-baseline gap-2">
       <h2
         data-pip-conversation={conversation}
-        data-waiting-for-pr={workstream?.waitingForPr || undefined}
         title={workstream ? `This workstream's own conversation with Pip. ${conversationTitle(workstream)}` : "Pip's conversation for everything that isn't in a workstream"}
         className="m-0 flex min-w-0 text-sm font-semibold text-ws-ink2"
       >
         {workstream ? (
-          <>
-            {/* Only the title is cut: where the workstream stands is what the person most needs to see. */}
-            <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-            <span className="shrink-0 whitespace-pre">{` · ${stageText(workstream.stage, workstream.waitingForPr)}`}</span>
-          </>
+          <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
         ) : (
           <span className="truncate">{conversationTitle(null)}</span>
         )}
@@ -210,7 +205,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
             <h2 className="m-0 text-base font-semibold">Pip</h2>
             <span className="text-xs text-ws-ink3">powered by Claude</span>
           </div>
-          <kbd className="ml-1 rounded bg-ws-hover px-1.5 font-mono text-xs text-ws-ink3">⌘J</kbd>
+          <kbd className="ml-1 rounded bg-ws-hover px-1.5 font-mono text-xs text-ws-ink3">{showOf("app", "pip")}</kbd>
           <button type="button" aria-label="Close Pip" title="Close (Esc)" onClick={onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink3 hover:bg-ws-hover">
             ×
           </button>

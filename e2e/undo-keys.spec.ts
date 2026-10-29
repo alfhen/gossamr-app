@@ -309,3 +309,12 @@ test("Cmd/Ctrl+K reaches Pause for the selected workstream, and 'Approve all saf
   await agentsHome(page).getByRole("button", { name: "Yes, approve 2" }).click();
   await expect.poll(async () => (await jiraWrites(page)).map((w) => w.type)).toEqual(["comment", "comment"]);
 });
+
+test("Ctrl+Z with nothing to undo says so", async ({ page }) => {
+  test.setTimeout(120_000);
+  await openApp(page);
+  await openAgents(page);
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("[data-toast]").filter({ hasText: "Nothing to undo." })).toBeVisible();
+});

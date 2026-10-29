@@ -11,7 +11,9 @@ import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { useEscBack } from "./escBack";
-import { GITHUB_SAFETY } from "./githubSafety";
+
+/** The two facts the app states about what it does, and only here. */
+export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."] as const;
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -196,7 +198,7 @@ export function ConnectGithubCard({ connected }: { connected: boolean }) {
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-dashed border-ws-sep2 p-4">
       <div className="min-w-0 flex-1">
         <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
-        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket. {GITHUB_SAFETY}</div>
+        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</div>
       </div>
       <button type="button" onClick={() => useGithubUi.getState().openConnect()} className="shrink-0 rounded-lg bg-ws-accent px-3.5 py-1.5 font-semibold text-white">
         Connect GitHub
@@ -232,6 +234,14 @@ export function Settings() {
     <div className="h-full overflow-auto px-8 pb-10">
       <h1 className="m-0 pt-6 text-xl font-bold">Settings</h1>
       <div className="max-w-[720px]">
+        <Section title="Safety">
+          <ul data-promises className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
+            {PROMISES.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+        </Section>
+
         <Section title="Theme">
           <div role="radiogroup" aria-label="Theme" className="inline-flex rounded-lg bg-ws-sel p-0.5">
             {THEMES.map((t) => (

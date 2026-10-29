@@ -26,9 +26,10 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
-import { stageText } from "../lib/workstreamStage";
+import { HeaderStatus } from "./StatusPill";
 import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
+import { isTypingTarget } from "../lib/keys";
 
 /**
  * The peek's "Start a workstream": the workstream opens as `start` shows it, which over Agents is its detail, so closing the
@@ -427,11 +428,11 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
         onSubmit={() => void submit()}
         ticketKey={item.item.key}
         people={people}
-        placeholder={reply ? "Write your reply. It becomes a draft you approve." : "Write a comment. It becomes a draft you approve."}
+        placeholder={reply ? "Write your reply." : "Write a comment."}
       />
       <div className="flex items-center gap-2 px-2 pb-2">
         <span role="status" className="pl-1 text-sm text-ws-ink3">
-          {problem ?? (sent ? "Drafted above. Nothing is posted until you approve." : "")}
+          {problem ?? (sent ? "Drafted above." : "")}
         </span>
         <button type="button" disabled={!ready || disabled} onClick={() => void submit()} className="ml-auto rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
           {reply ? "Draft reply" : "Draft comment"}
@@ -452,14 +453,14 @@ interface WorkstreamControlProps {
 }
 
 /**
- * Beside Ask Pip: once the ticket has a workstream, its stage, a way to its conversation, and Close behind a confirm.
+ * Beside Ask Pip: once the ticket has a workstream, its status, a way to its conversation, and Close behind a confirm.
  */
 export function WorkstreamControl({ workstream, onOpen, confirmingClose = false, onAskClose, onClose }: WorkstreamControlProps) {
   if (!workstream) return null;
   return (
     <span data-workstream={workstream.workstream.id} className="inline-flex items-center gap-2 rounded-md bg-ws-pip-soft px-2.5 py-0.5 text-sm text-ws-pip">
       <span title={workstream.workstream.title}>
-        <span aria-hidden>◆ </span>Workstream · <b data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>{stageText(workstream.stage, workstream.waitingForPr)}</b>
+        <span aria-hidden>◆ </span>Workstream · <HeaderStatus view={workstream} inline />
       </span>
       <button type="button" onClick={onOpen} className="font-semibold underline">
         Open in Pip
@@ -592,7 +593,7 @@ export function focusPeekOf(key: string, root: { querySelector(selector: string)
 /** Whether Esc belongs to the field `el`, which keeps it while the person types there; Pip's input never does, so Esc from it closes the peek over it. */
 export function typingIn(el: Element | null): boolean {
   if (!(typeof HTMLElement !== "undefined" && el instanceof HTMLElement) || el.id === PIP_INPUT_ID) return false;
-  return el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+  return isTypingTarget(el);
 }
 
 /** Set as a peek gives way to the next one (j or k) with the keyboard in it, so that one takes the keyboard on. */
@@ -707,7 +708,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
     setMenuOpen(false);
     try {
       await useWorkspace.getState().draftTransition(ref, to);
-      setNotice(`Drafted ${ref.key} → ${to.name}. Nothing changes until you approve.`);
+      setNotice(`Drafted ${ref.key} → ${to.name}.`);
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e));
     }

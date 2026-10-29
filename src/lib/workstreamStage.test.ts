@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunState, WorkstreamStage } from "../types";
 import fixtures from "./workstreamStage.fixtures.json";
-import { reviewPosted, runLabels, stage, stageText, type StagedRun } from "./workstreamStage";
+import { reviewPosted, runLabels, stage, type StagedRun } from "./workstreamStage";
 
 interface Case {
   name: string;
@@ -36,15 +36,6 @@ describe("workstream stage, on the fixtures the Rust side also runs", () => {
     expect(runsOf(c).map((r) => labels.get(r.id))).toEqual(c.labels);
     const reversed = new Map(runLabels(runsOf(c).reverse()));
     expect(runsOf(c).map((r) => reversed.get(r.id))).toEqual(c.labels);
-  });
-});
-
-describe("stage text", () => {
-  it("says changes are needed only at review, and the wait for a pull request first", () => {
-    expect(stageText("review")).toBe("Review");
-    expect(stageText("review", null)).toBe("Review");
-    expect(stageText("done", null)).toBe("Done");
-    expect(stageText("build", "r1")).toBe("Build · waiting for PR");
   });
 });
 

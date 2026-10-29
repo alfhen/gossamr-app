@@ -3,19 +3,6 @@ import { stepOf } from "../lib/roles";
 import { SUMMARY_ONLY, type CodeChange, type ItemRef, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type Run, type RunOutcome, type RunState } from "../types";
 import type { IconName } from "./AgentIcons";
 
-/** What the interface says about safety: agents are not restricted by Gossamr. */
-export const COPY = {
-  runAsYou: "Agents run as you, with your own Claude Code settings. Anything your Claude can do, they can do.",
-  notALock: "They are told not to write to Jira and to send findings back through Gossamr. They run as you, so this is a request, not a lock.",
-} as const;
-
-/** The lines at the top of the safety sheet: what agents may do, and what always waits for the person. */
-export const SAFETY_SUMMARY: readonly { icon: "check" | "hand" | "lock"; text: string }[] = [
-  { icon: "check", text: "Agents run with your own Claude Code settings. Your allowed commands, MCP servers and skills apply, and a command your settings would ask about stops the run under Needs you, where you answer it in Terminal." },
-  { icon: "hand", text: "Each agent starts in its own worktree. It is asked not to write to Jira and to push only its own branch; both are requests, not locks." },
-  { icon: "lock", text: "Gossamr posts to Jira or GitHub only what you approve. An agent could reach Jira or GitHub on its own: your Claude Code settings, not Gossamr, decide that." },
-];
-
 export type Flag = "link" | "shell" | "override";
 
 export interface Span {
@@ -259,8 +246,8 @@ export function reviewThisControl(run: BuiltRun, change: Pick<CodeChange, "kind"
 /** What "Draft the plan as a comment" tells the person: the comment holds the whole plan, and says when it was cut. */
 export function planCommentMessage(made: { cut: boolean; total: number }): string {
   return made.cut
-    ? `Plan comment drafted, but the plan is ${made.total.toLocaleString("en")} characters and a Jira comment holds less, so it is cut at the end of a sentence and says so. Nothing is posted until you approve it.`
-    : "Plan comment drafted. Nothing is posted until you approve it.";
+    ? `Plan comment drafted, but the plan is ${made.total.toLocaleString("en")} characters and a Jira comment holds less, so it is cut at the end of a sentence and says so.`
+    : "Plan comment drafted.";
 }
 
 /** Drafting a ticket needs a run that finished with no ticket of its own and something the agent wrote. */

@@ -17,7 +17,7 @@ describe("Settings", () => {
     expect(html).not.toContain("Stop a run after");
     expect(html).not.toContain("Limits");
     expect(html).not.toContain("read-only");
-    expect(html).toContain("own Claude Code settings");
+    expect(html).not.toContain("Claude Code settings");
     expect(html).not.toContain("Result tool");
   });
 });

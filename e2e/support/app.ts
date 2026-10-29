@@ -41,7 +41,7 @@ export async function askPip(page: Page, text: string) {
 /** The peek sheet. */
 export const peekSheet = (page: Page) => page.locator("#peek-sheet");
 
-/** The line at the head of the Pip pane naming its conversation: "General", or "Workstream: <title> · <Stage>". */
+/** The line at the head of the Pip pane naming its conversation: "General", or "Workstream: <title>". */
 export const pipConversation = (page: Page) => pipPane(page).locator("[data-pip-conversation]");
 
 /** Opens the peek of `key` from the canvas's item list. */
@@ -57,7 +57,7 @@ export async function peekTicket(page: Page, key: string) {
 export async function startWorkstream(page: Page, key: string) {
   await peekTicket(page, key);
   await peekSheet(page).locator("[data-ask-pip]").click();
-  await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .* · Intake$`));
+  await expect(pipConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .+$`));
 }
 
 /**
@@ -416,7 +416,7 @@ export async function closeWorkstreamSheet(page: Page) {
   await expect(workstreamSheet(page)).toHaveCount(0);
 }
 
-/** The line at the head of the drawer's conversation, naming it: "General", or "Workstream: <title> · <Stage>". */
+/** The line at the head of the drawer's conversation, naming it: "General", or "Workstream: <title>". */
 export const homeConversation = (page: Page) => pipPane(page).locator("h2[data-pip-conversation]");
 
 /**

@@ -438,5 +438,5 @@ export const EMPTY_FILTER: Record<TimelineFilter, string> = {
   all: "Nothing has happened here yet.",
   runs: "No runs here yet.",
   drafts: "No drafts here yet.",
-  decisions: "Nothing decided here yet, and nothing waits on you.",
+  decisions: "Nothing decided here yet.",
 };

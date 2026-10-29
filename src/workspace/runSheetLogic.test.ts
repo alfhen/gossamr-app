@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RunState } from "../types";
-import { COPY, SAFETY_SUMMARY, canStartNow, sheetKey, flagCounts, formatBytes, highlights, stopControl, timelineTone } from "./runSheetLogic";
+import { canStartNow, sheetKey, flagCounts, formatBytes, highlights, stopControl, timelineTone } from "./runSheetLogic";
 
 describe("weak marks on ticket text", () => {
   it("marks links, commands and words aimed at the model, and nothing in plain text", () => {
@@ -52,15 +52,6 @@ describe("small helpers", () => {
     expect(timelineTone("ask")).toBe("ask");
     expect(timelineTone("error")).toBe("err");
     expect(timelineTone("read")).toBe("plain");
-  });
-
-  it("says agents run with the person's own settings, and that Jira and pushing are requests, not locks", () => {
-    expect(COPY.runAsYou).toContain("your own Claude Code settings");
-    expect(COPY.notALock).toContain("a request, not a lock");
-    const text = SAFETY_SUMMARY.map((t) => t.text).join(" ");
-    expect(text).toContain("your own Claude Code settings");
-    expect(text).toContain("requests, not locks");
-    expect(text).not.toMatch(/read-only|Investigate, Triage|a Build/i);
   });
 });
 

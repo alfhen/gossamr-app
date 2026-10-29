@@ -6,7 +6,7 @@ import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunState, 
 import { DecisionShownContext } from "./decisionShown";
 import { EDITED_ASIDE, freezeBatch } from "./workViewLogic";
 import { setLiveDraft } from "./draftLive";
-import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, NOTES_HELP, NOTES_EMPTY, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
+import { approveBatch, BATCH_CHANGED, BatchConfirm, confirmBatch, NOTES_EMPTY, EarlierStepDrafts, planResultFor, StepDrafts, StepRailView, type StepRailViewProps } from "./StepRail";
 
 const memory = () => {
   const data = new Map<string, string>();
@@ -149,18 +149,10 @@ describe("the step rail", () => {
     expect(html.indexOf("data-workstream-controls")).toBeLessThan(html.indexOf('data-step="investigate"'));
   });
 
-  it("says what Pip's notes are under their heading", () => {
-    const html = renderToStaticMarkup(<StepRailView {...props()} />);
-    expect(html).toContain("data-notes-help");
-    expect(html).toContain(NOTES_HELP);
-    expect(html.indexOf("Pip&#x27;s notes")).toBeLessThan(html.indexOf(NOTES_HELP.slice(0, 20)));
-    expect(NOTES_HELP).toContain("Nothing here goes to Jira.");
-  });
-
-  it("says what will go in Pip's notes while they are empty, and shows them once they are not (G24)", () => {
+  it("says in one line that Pip has no notes yet, and shows them once it has (G24)", () => {
     const empty = renderToStaticMarkup(<StepRailView {...props({ view: { ...view, workstream: { ...view.workstream, notes: "  " } } })} />);
     expect(empty).toContain(NOTES_EMPTY);
-    expect(NOTES_EMPTY).toMatch(/^No notes yet\. Pip writes here what it decides to remember/);
+    expect(NOTES_EMPTY).toBe("No notes yet.");
     expect(renderToStaticMarkup(<StepRailView {...props()} />)).not.toContain(NOTES_EMPTY);
   });
 

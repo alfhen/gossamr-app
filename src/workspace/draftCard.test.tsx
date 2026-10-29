@@ -192,7 +192,7 @@ describe("an edited description draft's provenance (G5)", () => {
     expect(render(rewriteDraft("rw1"))).toContain("The words are the agent&#x27;s.");
     keepEditsOfDraft("rw2", { rewrite: { title: "CA-412", text: "b @everyone" } });
     const out = render(rewriteDraft("rw2"));
-    expect(out).toContain("You edited it; read it before you approve.");
+    expect(out).toContain("You edited it.");
     expect(out).not.toContain("The words are the agent");
   });
 });

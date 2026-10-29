@@ -1,3 +1,4 @@
+import { showOf } from "../lib/keys";
 import { useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
@@ -289,7 +290,7 @@ export function Rail() {
     <aside data-rail aria-label="Workspace sidebar" className="group/rail relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
       <nav aria-label="Workspace" className="flex min-h-0 w-full flex-1 flex-col items-center gap-2">
-        <RailButton label="Search and jump" hint="⌘K" onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>
+        <RailButton label="Search and jump" hint={showOf("app", "jump")} onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>
           <Glyph name="search" className="size-[17px]" />
         </RailButton>
         <Divider />
@@ -326,7 +327,7 @@ export function Rail() {
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>
-        <RailButton label="Pip" hint="⌘J" pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
+        <RailButton label="Pip" hint={showOf("app", "pip")} pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
           <span aria-hidden>✦</span>
         </RailButton>
       </div>

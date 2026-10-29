@@ -1,5 +1,5 @@
 import { itemKey } from "../lib/filter";
-import { stageText } from "../lib/workstreamStage";
+import { HeaderStatus } from "./StatusPill";
 import type { ItemRef, Run, WorkstreamView } from "../types";
 import { RunLabel } from "./AgentCard";
 import { StateChip } from "./AgentParts";
@@ -10,7 +10,7 @@ import { openOnAgents } from "./workstreamsStore";
 export const runsOfTicket = (runs: readonly Run[], ref: ItemRef) => runs.filter((r) => r.item && itemKey(r.item) === itemKey(ref));
 
 /**
- * The workstream line at the head of "Agents on this ticket": its title and the stage its runs give it, and with
+ * The workstream line at the head of "Agents on this ticket": its title and its status pill, and with
  * `onOpen` a link to the workstream on Agents.
  */
 export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamView; onOpen?(id: string): void }) {
@@ -20,9 +20,7 @@ export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamV
         ◆
       </span>
       <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
-      <span className="shrink-0 rounded-full bg-ws-pip-soft px-2 text-xs font-semibold text-ws-pip" data-stage={workstream.stage} data-waiting-for-pr={workstream.waitingForPr || undefined}>
-        {stageText(workstream.stage, workstream.waitingForPr)}
-      </span>
+      <HeaderStatus view={workstream} />
       {onOpen && (
         <button
           type="button"

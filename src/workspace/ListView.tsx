@@ -243,7 +243,7 @@ export function ListView({ items }: CanvasProps) {
           })}
         </div>
       </div>
-      <CanvasFooter cards={cards} view="list" />
+      <CanvasFooter cards={cards} />
     </div>
   );
 }

@@ -274,11 +274,7 @@ export interface StepRailViewProps {
   reveal?: string | null;
 }
 
-/** What an empty Pip's notes will hold, so the blank is not a bug. */
-export const NOTES_EMPTY = "No notes yet. Pip writes here what it decides to remember about this workstream, such as what was settled and what it is waiting for.";
-
-/** What Pip's notes are, in a line under their heading. */
-export const NOTES_HELP = "What Pip keeps in mind about this workstream between turns. Nothing here goes to Jira.";
+export const NOTES_EMPTY = "No notes yet.";
 
 /**
  * The step rail of a workstream: Pip's notes, the workstream's controls, Pip's own drafts, then a chip for each step of
@@ -347,9 +343,6 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
     <div data-step-rail={id} className="grid content-start gap-3">
       <section aria-label="Pip's notes" className="grid gap-1">
         <h3 className="m-0 text-sm font-semibold">Pip&apos;s notes</h3>
-        <p data-notes-help className="m-0 text-xs text-ws-ink3">
-          {NOTES_HELP}
-        </p>
         <p className="selectable m-0 text-sm whitespace-pre-wrap text-ws-ink2 [overflow-wrap:anywhere]">{view.workstream.notes?.trim() || NOTES_EMPTY}</p>
       </section>
       <WorkstreamControls key={id} view={view} />

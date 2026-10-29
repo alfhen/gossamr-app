@@ -182,7 +182,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
             onKeyDown={ownKey}
-            title="The comment is a draft. Nothing is posted until you approve it."
+            title="Open the comment draft."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
             Draft ready
@@ -193,7 +193,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
               type="button"
               onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
               onKeyDown={ownKey}
-              title="Makes a draft you read and edit. Nothing is posted."
+              title="Makes a comment draft."
               aria-label={`Draft comment on ${ticketLabel(run) ?? title}`}
               className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
             >
@@ -228,7 +228,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenDescription())}
             onKeyDown={ownKey}
-            title="The ticket's description is drafted with this plan added. Nothing is written until you approve it."
+            title="The description draft with this plan added."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
             Description update ready
@@ -239,7 +239,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             type="button"
             onClick={(ev) => (ev.stopPropagation(), onOpenBreakdown())}
             onKeyDown={ownKey}
-            title="The subtasks are a draft. Nothing is created until you approve it."
+            title="The subtasks draft."
             className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
             Breakdown proposed

@@ -3,8 +3,6 @@ import { type AgentSettings, type Run } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { roleLabel } from "../lib/roles";
 import { slotWaiters, stopAllLabel, stopAllText, stoppable } from "./agentsLogic";
-import { SAFETY_SUMMARY } from "./runSheetLogic";
-import { Icon } from "./AgentIcons";
 
 export interface CleanupOffer {
   count: number;
@@ -30,7 +28,7 @@ export interface SettingsViewProps {
   onClose(): void;
 }
 
-/** Safety and settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
+/** Agent settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
 export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
@@ -38,27 +36,16 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
   const reach = active.length + waiting.length;
   return (
     <SheetFrame
-      label="Agents safety and settings"
+      label="Agent settings"
       title="Agents"
-      hint={<>safety and settings · <kbd className="font-sans">esc</kbd> close</>}
+      hint={<>settings · <kbd className="font-sans">esc</kbd> close</>}
       wide={false}
       onClose={onClose}
     >
-      <h2 className="m-0 text-[20px] leading-tight font-semibold">Safety and settings</h2>
-      <ul data-safety-summary className="m-0 grid list-none gap-1.5 p-0">
-        {SAFETY_SUMMARY.map((t) => (
-          <li key={t.text} className="grid grid-cols-[18px_minmax(0,1fr)] gap-1.5 text-ws-ink">
-            <Icon name={t.icon} className="mt-0.5 size-3.5 text-ws-ink2" />
-            <span>{t.text}</span>
-          </li>
-        ))}
-      </ul>
-
+      <h2 className="m-0 text-[20px] leading-tight font-semibold">Agent settings</h2>
       <Sec title="Stop everything">
         <Box>
-          <p className="m-0">
-            Stops every agent Gossamr started that is working or waiting, in every account. What each one already wrote stays in its worktree. Agents you started from Terminal are not touched.
-          </p>
+          <p className="m-0">Stops every agent Gossamr started, in every account. What each wrote stays in its worktree.</p>
           {asking ? (
             <div
               role="group"
@@ -113,13 +100,12 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
       <Sec title="Agents">
         <Box>
           {settings ? <AgentsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
-          <p className="m-0 text-sm text-ws-ink2">A run that has been quiet for 30 minutes shows a chip. It is not stopped, and it does not count toward the number on the sidebar.</p>
         </Box>
       </Sec>
 
       <Sec title="Clean up">
         <Box>
-          <p className="m-0 text-ws-ink2">Finished runs leave their worktree and session files behind. Clean up removes a worktree with claude rm, which refuses work that was never pushed and says why. Gossamr never forces it.</p>
+          <p className="m-0 text-ws-ink2">Removes finished runs' worktrees with claude rm, which refuses work that was never pushed.</p>
           {cleanup ? (
             <div className="flex flex-wrap items-center gap-2">
               <Btn icon="folder" disabled={cleanup.busy} onClick={onCleanup}>
@@ -128,7 +114,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
               <span className="text-sm text-ws-ink3">{cleanup.reason}</span>
             </div>
           ) : (
-            <p className="m-0 text-sm text-ws-ink3">Nothing is old or large enough to offer yet. Open a finished run to clean up just that one.</p>
+            <p className="m-0 text-sm text-ws-ink3">Nothing old or large enough yet. Open a finished run to clean up just that one.</p>
           )}
           {cleanup?.report && (
             <p role="status" className="selectable m-0 text-sm text-ws-ink2 [overflow-wrap:anywhere]">

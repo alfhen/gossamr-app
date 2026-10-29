@@ -167,11 +167,10 @@ describe("the draft ticket in the peek sheet", () => {
     expect(view(create({ revisions: [{ at: "2026-09-30T10:05:00Z", note: "Revised by Pip", intent: create().intent }] }))).toContain("Revised by Pip");
   });
 
-  it("keeps the actions in a bar of their own, with the approval shortcut shown and announced", () => {
+  it("keeps the actions in a bar of their own, with the approval shortcut shown and announced, and no restated promise", () => {
     const out = view();
-    expect(out).toMatch(/border-t-2 border-ws-pip[^"]*"><div[^>]*><p id="draft-reassure-p1"/);
-    expect(out).toContain("Nothing is created until you choose Create task.");
-    expect(out).toMatch(/<button[^>]*aria-keyshortcuts="Meta\+Enter Control\+Enter"[^>]*aria-describedby="draft-reassure-p1"[^>]*>Create task<kbd aria-hidden="true"[^>]*>⌘↵<\/kbd>/);
+    expect(out).not.toContain("Nothing is created");
+    expect(out).toMatch(/<button[^>]*aria-keyshortcuts="Meta\+Enter Control\+Enter"[^>]*>Create task<kbd aria-hidden="true"[^>]*>⌘↵<\/kbd>/);
   });
 
   it("lets the description and title grow with their text instead of scrolling inside a box", () => {
@@ -186,7 +185,7 @@ describe("the draft ticket in the peek sheet", () => {
     const out = view(p, { place: placeOf(["p0", "p1", "p2"], "p1"), onStep: vi.fn() });
     expect(out).toContain('aria-label="Drafts waiting, 2 of 3"');
     expect(out).not.toContain('disabled=""');
-    expect(out).toContain("Either way, the next draft opens.");
+    expect(out).toContain("Create or skip, the next draft opens.");
     expect(view(p, { place: placeOf(["p1", "p2"], "p1"), onStep: vi.fn() })).toMatch(/data-step="prev"[^>]*disabled=""/);
   });
 

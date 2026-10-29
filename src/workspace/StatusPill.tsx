@@ -1,4 +1,5 @@
 import { useId, useMemo } from "react";
+import { WAITING_FOR_PR } from "../lib/workstreamStage";
 import { hintFor, workstreamStatus, type StatusTone, type WorkstreamStatus } from "../lib/workstreamStatus";
 import type { WorkstreamView } from "../types";
 import { useRuns } from "./runsStore";
@@ -52,12 +53,23 @@ export function useWorkstreamStatus(view: WorkstreamView): WorkstreamStatus {
   return useMemo(() => workstreamStatus(view, needs, { runs, dismissed }), [view, needs, runs, dismissed]);
 }
 
-/** The header's pill: the word and its detail, for the workstream shown. */
-export function HeaderStatus({ view }: { view: WorkstreamView }) {
+/** Said beside the status word while a finished build's pull request hasn't been found yet; a done workstream waits for nothing. */
+export function WaitingForPr({ view, status }: { view: WorkstreamView; status: Pick<WorkstreamStatus, "state"> }) {
+  if (!view.waitingForPr || status.state === "done") return null;
+  return (
+    <span data-waiting-for-pr={view.waitingForPr} className="text-xs text-ws-ink3">
+      · {WAITING_FOR_PR}
+    </span>
+  );
+}
+
+/** The header's pill: the word and its detail, for the workstream shown. `inline` sits it in running text. */
+export function HeaderStatus({ view, inline = false }: { view: WorkstreamView; inline?: boolean }) {
   const status = useWorkstreamStatus(view);
   return (
-    <span data-header-status className="flex shrink-0 items-baseline gap-1" title={hintFor(status)}>
+    <span data-header-status className={`${inline ? "inline-flex" : "flex"} shrink-0 items-baseline gap-1`} title={hintFor(status)}>
       <StatusPill status={status} detail describe={false} />
+      <WaitingForPr view={view} status={status} />
       <span data-status-hint className="sr-only">
         {hintFor(status)}
       </span>

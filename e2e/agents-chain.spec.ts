@@ -9,7 +9,7 @@ async function homeWorkstream(page: Parameters<typeof startWorkstream>[0]) {
   await startWorkstream(page, "CA-401");
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
-  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .* · Intake$/);
+  await expect(homeConversation(page)).toHaveText(/^Workstream: CA-401 .+$/);
 }
 
 /** Asks Pip for `what` on Pip home and waits for its answer. */

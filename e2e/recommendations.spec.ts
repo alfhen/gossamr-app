@@ -116,7 +116,7 @@ test.describe("B8: one label for approving drafts together, and its preview open
     const pane = needsPane(page);
     await expect(pane).toHaveAttribute("data-kind", "batch");
     await expect(pane.locator("[data-needs-pane-title]")).toHaveText("Approve 2 safe drafts");
-    await expect(pane).toContainText("Nothing is posted until you choose.");
+    await expect(pane).toContainText("They stay here until you decide.");
     await expect(pane.locator("[data-needs-you-batch-preview] li")).toHaveCount(2);
     await expect(needsYouTray(page).locator("[data-needs-you-batch-preview]")).toHaveCount(0);
     await expect(pane.getByRole("button", { name: "Yes, approve 2" })).toBeFocused();

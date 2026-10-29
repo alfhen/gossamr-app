@@ -56,8 +56,7 @@ interface RunsState {
   dismissed: ReadonlySet<string>;
   /** Ids of failed runs the person has taken the step in Terminal for, or copied its command; Retry waits for this. */
   terminalOpened: ReadonlySet<string>;
-  /** Whether the person has the explainer open. */
-  introOpen: boolean;
+  /** Stop all is under way. */
   stopping: boolean;
   /** The run a draft is being made from, so its buttons wait. */
   drafting: string | null;
@@ -118,7 +117,6 @@ interface RunsState {
   clearFinished(filter: ClearFilter): Promise<number>;
   /** Deletes an archived run for good, and its worktree when asked. Null when the call failed, which is shown as a message. */
   deleteArchived(id: string, removeWorktree: boolean): Promise<DeleteResult | null>;
-  setIntroOpen(open: boolean): void;
 }
 
 const idle = { runs: [] as Run[], archived: [] as Run[], launching: new Set<string>() as ReadonlySet<string>, status: "idle" as const, error: null, selectedId: null, sheet: null as RunSheetTarget | null, browseOrder: null };
@@ -197,7 +195,6 @@ export const useRuns = create<RunsState>((set, get) => ({
   filters: NO_FILTERS,
   dismissed: loadDismissed(),
   terminalOpened: new Set<string>(),
-  introOpen: false,
   archivedOpen: false,
   stopping: false,
   drafting: null,
@@ -501,5 +498,4 @@ export const useRuns = create<RunsState>((set, get) => ({
       void get().reload();
     }
   },
-  setIntroOpen: (introOpen) => set({ introOpen }),
 }));

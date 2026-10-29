@@ -27,7 +27,6 @@ export function Found({ run, outcome, on }: ResultProps) {
           <Btn icon="spark" onClick={on.askPip}>Ask Pip</Btn>
           {text && <CopyButton text={text} label="Copy" what="the result" />}
         </div>
-        <p className="m-0 text-xs text-ws-ink3">Pip can draft from this report. Nothing reaches Jira or GitHub until you approve a draft.</p>
       </Box>
     </Sec>
   );

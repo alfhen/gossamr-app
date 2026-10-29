@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { needsIn } from "../lib/needs";
 import type { WorkstreamView } from "../types";
-import { StatusPill, useWorkstreamStatus } from "./StatusPill";
+import { StatusPill, WaitingForPr, useWorkstreamStatus } from "./StatusPill";
 import { DecisionShownContext, decisionShown } from "./decisionShown";
 import { groupId } from "./needsActions";
 import { useNeedsYou } from "./useNeeds";
@@ -50,6 +50,7 @@ export function WorkstreamHeadExtras({ view }: { view: WorkstreamView }) {
   return (
     <>
       <StatusPill status={status} detail />
+      <WaitingForPr view={view} status={status} />
       <NeedsBadge count={mine} total={needs.length} />
     </>
   );

@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { pressed, showOf } from "../lib/keys";
 import { relativeTime } from "../lib/views";
 import { initials, type Note, type ReplyInfo, type PeekSectionId, type SectionChip } from "./peekLogic";
 import { WorkDocView } from "./WorkDocView";
@@ -160,13 +161,10 @@ export interface CommentCardProps {
   onShow?(id: string): void;
 }
 
-export const REPLY_KEY = "r";
-
 export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
   const reply = note.reply;
   const onKey = (ev: KeyboardEvent<HTMLLIElement>) => {
-    if (!onReply || ev.key.toLowerCase() !== REPLY_KEY || ev.metaKey || ev.ctrlKey || ev.altKey || ev.defaultPrevented) return;
-    if (ev.target instanceof HTMLElement && (ev.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName))) return;
+    if (!onReply || ev.defaultPrevented || !pressed(ev, "peek", "reply")) return;
     ev.preventDefault();
     ev.stopPropagation();
     onReply(note);
@@ -193,7 +191,7 @@ export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
           <button
             type="button"
             onClick={() => onReply(note)}
-            title={`Reply to ${note.who} (press ${REPLY_KEY.toUpperCase()} on this comment)`}
+            title={`Reply to ${note.who} (press ${showOf("peek", "reply").toUpperCase()} on this comment)`}
             aria-label={`Reply to ${note.who}`}
             className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-ws-ink3 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-ws-hover hover:text-ws-ink2 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
           >

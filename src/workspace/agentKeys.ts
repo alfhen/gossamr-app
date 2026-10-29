@@ -6,6 +6,7 @@ export type AgentKey = { type: "open" } | { type: "act"; act: NeedKey } | { type
 
 interface KeyLike {
   key: string;
+  target?: unknown;
   metaKey?: boolean;
   ctrlKey?: boolean;
   altKey?: boolean;

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { GENERAL_CONVERSATION, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
-import { ofItem, runWorkstream, stageText } from "../lib/workstreamStage";
+import { ofItem, runWorkstream } from "../lib/workstreamStage";
 import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt";
 import type { ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -402,8 +402,8 @@ export function useItemWorkstream(item: ItemRef | null | undefined): WorkstreamV
   return useWorkstreams((s) => (item ? ofItem(s.list, item.key, item.connectionId) : null));
 }
 
-/** "Workstream: CA-401 Retry … · Intake", or "General", for the head of the Pip pane. */
-export const conversationTitle = (ws: WorkstreamView | null) => (ws ? `Workstream: ${ws.workstream.title} · ${stageText(ws.stage, ws.waitingForPr)}` : "General");
+/** "Workstream: CA-401 Retry …", or "General", for the head of the Pip pane. */
+export const conversationTitle = (ws: WorkstreamView | null) => (ws ? `Workstream: ${ws.workstream.title}` : "General");
 
 /** The ticket of the workstream whose conversation `conversation` is, as the workspace knows it; null for General or a ticket it hasn't loaded. */
 export function workstreamTicket(conversation: string): ItemRef | null {

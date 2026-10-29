@@ -1,5 +1,6 @@
 import { slotPosition, slotQueue, ordinal } from "../workspace/agentsLogic";
 import type { Run, WorkstreamView } from "../types";
+import { showOf } from "./keys";
 import { byRank, type Need } from "./needs";
 import { pausedText } from "./workstreamPause";
 import { roleLabel, stepOf } from "./roles";
@@ -95,7 +96,7 @@ function chain(view: WorkstreamView, runs: readonly Run[], mine: readonly Run[],
 
   const last = mine[mine.length - 1];
   if (!last) return step("idle", "nothing is running. Ask Pip, or start a step yourself.");
-  return step("idle", `nothing is running after ${nameOf(last, view)} ${last.state === "done" ? "finished" : last.state === "failed" ? "failed" : "stopped"}. Ask Pip or use ⌘K to start the next step.`);
+  return step("idle", `nothing is running after ${nameOf(last, view)} ${last.state === "done" ? "finished" : last.state === "failed" ? "failed" : "stopped"}. Ask Pip or use ${showOf("app", "jump")} to start the next step.`);
 }
 
 type Step = (kind: NextStepKind, text: string, need?: Need | null) => NextStep;

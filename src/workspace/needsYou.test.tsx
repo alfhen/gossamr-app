@@ -435,7 +435,7 @@ describe("the decision pane", () => {
     expect(html).toContain('data-needs-pane="batch:ws-1"');
     expect(html).toContain("Approve 3 safe drafts");
     expect(html).toContain('data-needs-you-chip="approve"');
-    expect(html).toContain("Nothing is posted until you choose.");
+    expect(html).toContain("They stay here until you decide.");
     expect(html.match(/<li class="\[overflow-wrap:anywhere\]">/g)).toHaveLength(3);
     expect(html).toContain(">Yes, approve 3</button>");
     expect(html).toContain('aria-label="Back to the list"');
@@ -496,7 +496,7 @@ describe("the decision pane", () => {
     expect(paused).toContain("Resume");
     const card = pane(list, "draft:c1");
     expect(card).toContain('data-draft="c1"');
-    expect(card).toContain("Nothing is written to Jira until you approve it.");
+    expect(card).toContain("It stays here until you decide.");
   });
 
   it("decides a plan with its approval note", () => {

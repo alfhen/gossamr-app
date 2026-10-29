@@ -268,7 +268,7 @@ async function draftTicket(container: WorkContainer, title: string) {
   try {
     await backend.proposalsCreate(newTicketIntent(container.ref, title));
     await useWorkspace.getState().refreshProposals();
-    useToasts.getState().push(`Drafted a new ticket in ${container.name}. Nothing is created until you approve it.`, "info");
+    useToasts.getState().push(`Drafted a new ticket in ${container.name}.`, "info");
     appActions().openDrafts();
   } catch (e) {
     useToasts.getState().push(e instanceof Error ? e.message : String(e));
@@ -371,7 +371,7 @@ export function Palette() {
       results={results}
       active={Math.min(active, Math.max(0, results.length - 1))}
       placeholder={step.type === "project" ? "Which project is the ticket for?" : step.type === "title" ? `Title of the new ${step.container.name} ticket` : undefined}
-      empty={step.type === "title" ? "Type a title, then press Enter. Pip drafts it; you approve it." : undefined}
+      empty={step.type === "title" ? "Type a title, then press Enter." : undefined}
       hints={prompting ? ["↑↓ move", "↵ select", "esc back"] : undefined}
       onQuery={(q) => (setQuery(q), setActive(0))}
       onActive={setActive}
