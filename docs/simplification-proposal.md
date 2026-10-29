@@ -547,7 +547,7 @@ Between steps 2 and 4, no chain advances on its own. Pip drafts each next agent 
    - keep the setup screen where each person pastes their own app's id and secret;
    - bundle a company app for internal builds only.
 
-   Superseded by [the connections proposal](connections-proposal.md): one Gossamr app whose secret stays in a token broker at `auth.gossamr.app`, with the setup screen kept as a fallback.
+   Superseded by [the connections proposal](connections-proposal.md): Jira signs in with a scoped API token, and Atlassian sign-in and the setup screen go.
 
 ## 14. Spikes before step 3
 
