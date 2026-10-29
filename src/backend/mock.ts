@@ -14,7 +14,6 @@ import type {
   Stray,
   WatchChange,
   WatchChanged,
-  WatchMode,
   WatchState,
   ConnectionInfo,
   Comment,
@@ -987,11 +986,6 @@ export class MockBackend implements Backend {
   async watchGet(): Promise<WatchState[]> {
     const github = this.github.watchState();
     return github ? [this.connector.watchState(), github] : [this.connector.watchState()];
-  }
-
-  async watchSetMode(connectionId: string, mode: WatchMode) {
-    if (connectionId === GITHUB_CONNECTION) return this.github.setWatchMode(mode);
-    this.connector.setWatchMode(mode);
   }
 
   async watchSetContainers(connectionId: string, changes: WatchChange[]) {

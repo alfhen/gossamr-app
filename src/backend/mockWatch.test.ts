@@ -9,7 +9,6 @@ const CONNECTION = "mock";
 const projectsOf = (items: { container: { externalId: string } }[]) => [...new Set(items.map((i) => i.container.externalId))].sort();
 
 async function selected(b: MockBackend, watched: string[]) {
-  await b.watchSetMode(CONNECTION, "selected");
   await b.watchSetContainers(CONNECTION, watched.map((containerId) => ({ containerId, watched: true })));
 }
 
@@ -18,7 +17,7 @@ describe("the mock catalog", () => {
     const b = new MockBackend();
     expect((await b.cacheContainers()).map((c) => c.key)).toEqual(["DEVOPS", "CA", "WEB", "SUP"]);
     const [state] = await b.watchGet();
-    expect([state.mode, state.needsChoice]).toEqual(["everything", false]);
+    expect([state.chosen, state.needsChoice]).toEqual([false, false]);
   });
 
   it("grows to any size with quiet projects, and a catalog over 12 waits for a choice", async () => {
@@ -28,13 +27,13 @@ describe("the mock catalog", () => {
     expect(containers[13].key).toBe("P14");
     expect(containers[13].workflow.statuses.length).toBeGreaterThan(1);
     const [state] = await b.watchGet();
-    expect([state.mode, state.needsChoice, state.catalogSize]).toEqual(["unset", true, 13]);
+    expect([state.chosen, state.needsChoice, state.catalogSize]).toEqual([false, true, 13]);
     expect(projectsOf(await b.cacheSearch(ALL))).toEqual(["CA", "DEVOPS", "SUP", "WEB"]);
 
     const twelve = await new MockBackend({ catalogSize: 12 }).watchGet();
-    expect([twelve[0].mode, twelve[0].needsChoice]).toEqual(["everything", false]);
+    expect([twelve[0].chosen, twelve[0].needsChoice]).toEqual([false, false]);
     const thirteen = await new MockBackend({ catalogSize: 13 }).watchGet();
-    expect([thirteen[0].mode, thirteen[0].needsChoice]).toEqual(["unset", true]);
+    expect([thirteen[0].chosen, thirteen[0].needsChoice]).toEqual([false, true]);
   });
 
   it("never lists fewer projects than hold sample items", async () => {
@@ -96,39 +95,45 @@ describe("scoping the mock's reads to what is watched", () => {
 });
 
 describe("the mock's watch settings", () => {
-  it("unwatching is soft, so watching again restores depth and pin", async () => {
+  it("unwatching removes the project from the list and watching again adds it back", async () => {
     const b = new MockBackend({ catalogSize: 14 });
-    await b.watchSetMode(CONNECTION, "selected");
-    await b.watchSetContainers(CONNECTION, [{ containerId: "WEB", watched: true, depth: "whole", pinned: true, source: "footprint" }]);
+    await b.watchSetContainers(CONNECTION, [{ containerId: "WEB", watched: true, pinned: true, source: "footprint" }]);
     let [state] = await b.watchGet();
-    expect(state.watches[0]).toMatchObject({ key: "WEB", name: "Webshop", depth: "whole", pinned: true, source: "footprint", unwatchedAt: null });
+    expect(state.watches[0]).toMatchObject({ key: "WEB", name: "Webshop", pinned: true, source: "footprint" });
     expect(state.watches[0].cachedItems).toBeGreaterThan(5);
 
     await b.watchSetContainers(CONNECTION, [{ containerId: "WEB", watched: false }]);
     [state] = await b.watchGet();
-    expect(state.watches[0].unwatchedAt).not.toBeNull();
+    expect(state.watches).toEqual([]);
+    expect(state.chosen).toBe(true);
     expect(await b.cacheContainers()).toEqual([]);
 
     await b.watchSetContainers(CONNECTION, [{ containerId: "WEB", watched: true }]);
     [state] = await b.watchGet();
-    expect(state.watches[0]).toMatchObject({ unwatchedAt: null, depth: "whole", pinned: true });
+    expect(state.watches[0]).toMatchObject({ key: "WEB", pinned: false });
   });
 
   it("only watches a project when asked to, not when pinning one it doesn't watch", async () => {
     const b = new MockBackend({ catalogSize: 14 });
-    await b.watchSetMode(CONNECTION, "selected");
+    await b.watchSetContainers(CONNECTION, [{ containerId: "CA", watched: true }]);
     await b.watchSetContainers(CONNECTION, [{ containerId: "WEB", pinned: true }]);
-    expect((await b.watchGet())[0].watches).toEqual([]);
+    expect((await b.watchGet())[0].watches.map((w) => w.key)).toEqual(["CA"]);
+  });
+
+  it("leaves a pin-only project unwatched when the same batch starts the list", async () => {
+    const b = new MockBackend({ catalogSize: 14 });
+    await b.watchSetContainers(CONNECTION, [{ containerId: "CA", watched: true }, { containerId: "WEB", pinned: true }]);
+    expect((await b.watchGet())[0].watches.map((w) => w.key)).toEqual(["CA"]);
   });
 
   it("announces a change", async () => {
     const b = new MockBackend();
     const seen = vi.fn();
     const off = b.onWatchChanged(seen);
-    await b.watchSetMode(CONNECTION, "selected");
+    await b.watchSetContainers(CONNECTION, [{ containerId: "CA", watched: true }]);
     expect(seen).toHaveBeenCalledWith({ connectionId: CONNECTION });
     off();
-    await b.watchSetContainers(CONNECTION, [{ containerId: "CA", watched: true }]);
+    await b.watchSetContainers(CONNECTION, [{ containerId: "WEB", watched: true }]);
     expect(seen).toHaveBeenCalledTimes(1);
   });
 

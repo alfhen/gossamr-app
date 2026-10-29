@@ -378,7 +378,19 @@ UPDATE proposals SET state = 'retired',
 const RUN_ROLES: &str = "
 ALTER TABLE runs RENAME COLUMN kind TO role;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES];
+/// The watch list is a plain list: unwatching removes the row, so those still in their grace period go. The `depth` and
+/// `unwatched_at` columns stay, unused. A project watched as `whole` now syncs like the rest (only tickets you are
+/// involved in), so its cached tickets would never refresh. Those updated within the full sync's window
+/// (`TRACKED_WINDOW_DAYS`, 30) go, and the next sync is a full one that refills the ones you are involved in. Older
+/// ones stay: no sync would refresh them for any project, and they age out. Drafts and events keep their item ids and
+/// join to items with a left join.
+const WATCH_LIST: &str = "
+DELETE FROM items WHERE EXISTS (SELECT 1 FROM watched_containers w WHERE w.connection_id = items.connection_id AND w.container_id = items.container_id AND w.depth = 'whole' AND w.unwatched_at IS NULL)
+  AND items.updated >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 days');
+UPDATE sync_state SET full_at = NULL WHERE connection_id IN (SELECT connection_id FROM watched_containers WHERE depth = 'whole' AND unwatched_at IS NULL);
+DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -886,5 +898,74 @@ mod tests {
         assert_eq!(row("comment").0, "pending");
         assert_eq!(row("sent").0, "applied");
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+    }
+
+    #[test]
+    fn a_container_in_its_grace_period_leaves_the_watch_list_and_the_rest_stay() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..17] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 17).unwrap();
+        for (id, unwatched) in [("KEEP", None), ("GONE", Some("2026-09-01T00:00:00Z"))] {
+            conn.execute(
+                "INSERT INTO watched_containers (connection_id, container_id, source, added_at, unwatched_at) VALUES ('c', ?1, 'manual', 't', ?2)",
+                rusqlite::params![id, unwatched],
+            )
+            .unwrap();
+        }
+
+        migrate(&mut conn).unwrap();
+
+        let left: Vec<String> = conn.prepare("SELECT container_id FROM watched_containers").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(left, ["KEEP"]);
+    }
+
+    #[test]
+    fn a_whole_project_loses_its_tickets_inside_the_full_sync_window_and_keeps_older_ones_and_is_due_a_full_sync() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..17] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 17).unwrap();
+        let recent = (chrono::Utc::now() - chrono::Duration::days(5)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let old = (chrono::Utc::now() - chrono::Duration::days(60)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        for (c, id, depth) in [("c", "WHOLE", "whole"), ("c", "INV", "involved"), ("d", "OTHER", "involved")] {
+            conn.execute(
+                "INSERT INTO watched_containers (connection_id, container_id, depth, source, added_at) VALUES (?1, ?2, ?3, 'manual', 't')",
+                rusqlite::params![c, id, depth],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO items (connection_id, external_id, key, container_id, kind, title, status_id, status_name, status_category,
+                   created, updated, data, synced_at) VALUES (?1, ?2, ?2, ?3, 'task', 't', '1', 'To Do', 'todo', 'a', ?4, '{}', 'a')",
+                rusqlite::params![c, format!("{id}-1"), id, recent],
+            )
+            .unwrap();
+            if id == "WHOLE" {
+                conn.execute(
+                    "INSERT INTO items (connection_id, external_id, key, container_id, kind, title, status_id, status_name, status_category,
+                       created, updated, data, synced_at) VALUES ('c', 'WHOLE-OLD', 'WHOLE-OLD', 'WHOLE', 'task', 't', '1', 'To Do', 'todo', 'a', ?1, '{}', 'a')",
+                    [&old],
+                )
+                .unwrap();
+            }
+        }
+        for c in ["c", "d"] {
+            conn.execute("INSERT INTO sync_state (connection_id, cursor, full_at) VALUES (?1, 'x', 'f')", [c]).unwrap();
+        }
+
+        migrate(&mut conn).unwrap();
+
+        let items: Vec<String> = conn.prepare("SELECT external_id FROM items ORDER BY external_id").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(items, ["INV-1", "OTHER-1", "WHOLE-OLD"]);
+        let full = |c: &str| conn.query_row("SELECT full_at FROM sync_state WHERE connection_id = ?1", [c], |r| r.get::<_, Option<String>>(0)).unwrap();
+        assert_eq!(full("c"), None);
+        assert_eq!(full("d").as_deref(), Some("f"));
+    }
+
+    #[test]
+    fn the_watch_list_step_uses_the_full_sync_window() {
+        assert!(WATCH_LIST.contains(&format!("'-{} days'", crate::sync::TRACKED_WINDOW_DAYS)));
     }
 }

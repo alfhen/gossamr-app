@@ -419,11 +419,9 @@ mod tests {
     fn watch(key: &str) -> Watch {
         Watch {
             container: ContainerRef { connection_id: "jira:site:me".into(), external_id: key.into() },
-            depth: crate::domain::Depth::Involved,
             pinned: false,
             source: crate::domain::WatchSource::Manual,
             added_at: String::new(),
-            unwatched_at: None,
             inaccessible: false,
         }
     }

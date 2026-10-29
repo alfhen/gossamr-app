@@ -37,7 +37,7 @@ pub use run::{
 };
 pub use snapshot::{ticket_snapshot, SnapComment, TicketFacts};
 pub use watch::{
-    ContainerPage, ContainerQuery, ContainerScope, ContainerSummary, Depth, Footprint, Stray, Visible, Watch, WatchChange, WatchMode, WatchSet,
+    ContainerPage, ContainerQuery, ContainerScope, ContainerSummary, Footprint, Stray, Visible, Watch, WatchChange, WatchMode, WatchSet,
     WatchSource, AUTO_EVERYTHING_MAX,
 };
 pub use workflow::{Category, StatusDef, StatusRef, Transition, Transitions, Workflow};

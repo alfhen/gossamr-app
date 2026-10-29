@@ -6,6 +6,7 @@ import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { openNeed } from "./needsActions";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
+import { unwatchWithUndo } from "./unwatch";
 import { useActivity } from "./activityStore";
 import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
@@ -185,10 +186,11 @@ export function appActions(): CommandActions {
     openSettings: () => tabs.setRoute("settings"),
     manageProjects: () => tabs.openSettings("watching"),
     watch: (target, watched) => {
+      if (!watched) return void unwatchWithUndo(target.ref, target.name);
       const ws = useWorkspace.getState();
-      ws.watchContainers(target.ref.connectionId, [{ containerId: target.ref.externalId, watched, source: "manual" }]).then(
-        () => useToasts.getState().push(watched ? `Watching ${target.name}.` : `Stopped watching ${target.name}. It stays in Settings for 14 days in case you change your mind.`, "info"),
-        (e) => ws.report(`Couldn't ${watched ? "watch" : "unwatch"} ${target.name}`, e),
+      ws.watchContainers(target.ref.connectionId, [{ containerId: target.ref.externalId, watched: true, source: "manual" }]).then(
+        () => useToasts.getState().push(`Watching ${target.name}.`, "info"),
+        (e) => ws.report(`Couldn't watch ${target.name}`, e),
       );
     },
     // A ticket opened from here takes the keyboard into its peek, not back to the board behind it.
@@ -278,7 +280,7 @@ async function draftTicket(container: WorkContainer, title: string) {
 /** Containers matching the query that the person doesn't watch, searched on the server. */
 function useUnwatchedMatches(query: string, enabled: boolean): CatalogEntry[] {
   const backend = useWorkspace((s) => s.backend);
-  const selectedModes = useWorkspace((s) => s.watch.filter((w) => w.mode === "selected").map((w) => w.connectionId).join(","));
+  const selectedModes = useWorkspace((s) => s.watch.filter((w) => w.chosen).map((w) => w.connectionId).join(","));
   const [hits, setHits] = useState<CatalogEntry[]>([]);
   const q = query.trim();
   useEffect(() => {
@@ -348,7 +350,7 @@ export function Palette() {
     const all = Object.values(items);
     const tickets = ticketCommands(all, query, actions.jumpToItem);
     // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "agents").
-    const ranked = rankCommands([...contextEntries(subject), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
+    const ranked = rankCommands([...contextEntries(subject), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.chosen), query, actions)], query);
     const order = searchOrder(tickets, ranked, query);
     const found = [
       ...order.head,

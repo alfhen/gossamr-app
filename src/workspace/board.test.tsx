@@ -1,14 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { statusId } from "../backend/mockConnector";
 import { ALL } from "../lib/filter";
 import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import { BoardView } from "./BoardView";
 import { BulkBar } from "./BulkBar";
 import { GhostCard, ItemCard, type ItemCardProps } from "./ItemCard";
-import { usePrefs } from "./prefs";
 import { useTabs, type Tab } from "./tabsStore";
 
 const s = () => useWorkspace.getState();
@@ -176,29 +174,17 @@ describe("BoardView", () => {
   describe("column order", () => {
     const devops = () => ({ type: "container" as const, container: s().containers["mock:DEVOPS"].ref });
     const groups = (out: string) => [...out.matchAll(/role="group" aria-label="([^",]+),/g)].map((m) => m[1]);
-    afterEach(() => usePrefs.getState().setColumnOrder("mock:DEVOPS", null));
 
-    it("lays out a project's columns by status category and lets each be grabbed", () => {
+    it("lays out a project's columns by status category, with nothing to drag them by", () => {
       const out = board(itemsByFilter(s(), devops()), devops());
       expect(groups(out)).toEqual(["To Do", "In Progress", "In Review", "Blocked", "Done"]);
-      expect(out).toContain("data-column-grip");
-      expect(out).toContain('aria-label="To Do column, position 1 of 5.');
+      expect(out).not.toContain("data-column-grip");
     });
 
-    it("follows the saved order, in the workflow line as well", () => {
-      const ids = ["Done", "To Do", "In Progress", "In Review", "Blocked"].map((n) => statusId("DEVOPS", n));
-      usePrefs.getState().setColumnOrder("mock:DEVOPS", ids);
-      sync();
-      Object.assign(usePrefs.getInitialState(), usePrefs.getState());
-      const out = board(itemsByFilter(s(), devops()), devops());
-      expect(groups(out)).toEqual(["Done", "To Do", "In Progress", "In Review", "Blocked"]);
-      expect(out.indexOf("workflow</li>")).toBeLessThan(out.indexOf(">Done<"));
-    });
-
-    it("offers no reordering across projects, and says why", () => {
+    it("shows the three categories across projects, and says why", () => {
       const out = board(itemsByFilter(s(), ALL));
       expect(out).not.toContain("data-column-grip");
-      expect(out).toContain("reorder them");
+      expect(out).toContain("Pick a project to see its exact columns.");
     });
   });
 

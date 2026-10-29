@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { docFromText, docText } from "../lib/docs";
 import { MockBackend } from "./mock";
+import { watchEveryRepo } from "./testWatch";
 import { mockAsk, mockPipEvents, openQuestions, scriptPip } from "./mockPip";
 import { eventLine } from "./mockSupervisor";
 import { mockPipTurns } from "./mockPipTurns";
@@ -203,7 +204,7 @@ describe("mock Pip discussing and revising a GitHub review draft, as revise_prop
   /** A backend whose review of #218 has finished, with the GitHub review draft it left. */
   async function reviewed() {
     const b = new MockBackend({ githubRepos: 14, runs: { planDescription: true } });
-    await b.watchSetMode(GH, "everything");
+    await watchEveryRepo(b, GH);
     const run = b.runs.start(spec, itemRef("CA-402"));
     for (let i = 0; i < 3; i++) b.runs.advance(run.id);
     const draft = b.proposals.list().find((p) => p.intent.type === "githubReview")!;

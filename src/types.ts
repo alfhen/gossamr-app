@@ -892,27 +892,20 @@ export interface ConnectionInfo {
 }
 
 /**
- * What a connection follows, mirroring src-tauri/src/domain/watch.rs. Only watched containers are synced, listed,
- * counted and visible to Pip. `unset` behaves like `everything` until the person chooses.
+ * What a connection follows, mirroring src-tauri/src/domain/watch.rs: a list of containers. Only watched containers are
+ * synced, listed, counted and visible to Pip. Until the person has chosen their list, every container is watched.
  */
-export type WatchMode = "unset" | "everything" | "selected";
-
-/** `involved`: items the person is on or was mentioned in. `whole`: everything in the container within the sync window. */
-export type WatchDepth = "involved" | "whole";
-
-export type WatchSource = "manual" | "footprint" | "auto" | "everything";
+export type WatchSource = "manual" | "footprint" | "auto";
 
 /** A catalog this small is watched whole without asking. */
 export const AUTO_WATCH_EVERYTHING_MAX = 12;
 
-/** One watched container. A set `unwatchedAt` means it is inside its 14-day grace period and already hidden. */
+/** One watched container. */
 export interface WatchRow {
   container: ContainerRef;
-  depth: WatchDepth;
   pinned: boolean;
   source: WatchSource;
   addedAt: string;
-  unwatchedAt: string | null;
   /** The tracker refused it (deleted, or no access); what is cached stays visible. */
   inaccessible: boolean;
   key: string;
@@ -923,7 +916,8 @@ export interface WatchRow {
 
 export interface WatchState {
   connectionId: string;
-  mode: WatchMode;
+  /** The person has picked their list; until then every container is watched. */
+  chosen: boolean;
   /** Nothing is chosen and the catalog is too big to watch whole, so the picker must be shown. */
   needsChoice: boolean;
   /** Containers seen when the catalog was last probed; 13 means "more than 12". */
@@ -931,11 +925,10 @@ export interface WatchState {
   watches: WatchRow[];
 }
 
-/** One edit to a container's watch; fields left out keep their value. */
+/** One edit to a container's watch; fields left out keep their value. `watched: false` removes it from the list. */
 export interface WatchChange {
   containerId: string;
   watched?: boolean;
-  depth?: WatchDepth;
   pinned?: boolean;
   source?: WatchSource;
 }

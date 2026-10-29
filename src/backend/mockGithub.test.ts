@@ -3,6 +3,7 @@ import { REVIEW_CHANGED, REVIEW_MAYBE_POSTED_NOTE, REVIEW_NOT_FOUND_NOTE, REVIEW
 import type { Intent, RunSpec } from "../types";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
+import { watchEveryRepo } from "./testWatch";
 import type { MockOptions } from "./mockWatch";
 
 const GH = "github:ada";
@@ -23,7 +24,7 @@ describe("the mock GitHub connection", () => {
     expect([connection.id, connection.kind, connection.workspace]).toEqual([GH, "github", "ada"]);
     expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock", GH]);
     const state = (await b.watchGet()).find((s) => s.connectionId === GH)!;
-    expect([state.mode, state.needsChoice, state.catalogSize]).toEqual(["unset", true, 13]);
+    expect([state.chosen, state.needsChoice, state.catalogSize]).toEqual([false, true, 13]);
   });
 
   it("connects through the gh import and the device flow, which must be started before it is polled", async () => {
@@ -43,10 +44,10 @@ describe("the mock GitHub connection", () => {
     const small = new MockBackend({ githubRepos: 2 });
     expect((await small.watchCatalog(GH, "")).containers).toHaveLength(6);
     const [, state] = await small.watchGet();
-    expect([state.mode, state.needsChoice]).toEqual(["everything", false]);
+    expect([state.chosen, state.needsChoice]).toEqual([false, false]);
     const twelve = await new MockBackend({ githubRepos: 12 }).watchGet();
-    expect(twelve[1].mode).toBe("everything");
-    expect((await new MockBackend({ githubRepos: 13 }).watchGet())[1].mode).toBe("unset");
+    expect(twelve[1].needsChoice).toBe(false);
+    expect((await new MockBackend({ githubRepos: 13 }).watchGet())[1].needsChoice).toBe(true);
   });
 
   it("lists repositories like GitHub does: owner/name keys, permission, archived, most recently pushed first", async () => {
@@ -69,13 +70,12 @@ describe("the mock GitHub connection", () => {
     const b = new MockBackend({ githubRepos: 14 });
     const changed = vi.fn();
     const off = b.onWatchChanged(changed);
-    await b.watchSetMode(GH, "selected");
     await b.watchSetContainers(GH, [{ containerId: "acme/gateway", watched: true, source: "footprint" }]);
-    expect(changed).toHaveBeenCalledTimes(2);
+    expect(changed).toHaveBeenCalledTimes(1);
     expect(changed.mock.calls[0][0]).toEqual({ connectionId: GH });
     const [jira, github] = await b.watchGet();
-    expect(jira.mode).toBe("everything");
-    expect([github.mode, github.watches.map((w) => [w.container.externalId, w.name, w.source])]).toEqual(["selected", [["acme/gateway", "gateway", "footprint"]]]);
+    expect(jira.chosen).toBe(false);
+    expect([github.chosen, github.watches.map((w) => [w.container.externalId, w.name, w.source])]).toEqual([true, [["acme/gateway", "gateway", "footprint"]]]);
     const page = await b.watchCatalog(GH, "");
     expect(page.containers.filter((c) => c.watched).map((c) => c.key)).toEqual(["acme/gateway"]);
     off();
@@ -107,7 +107,7 @@ describe("posting a review draft to the mock GitHub", () => {
   /** A backend whose review of #218 has finished, and the GitHub review draft it left. */
   async function reviewed(options: MockOptions = {}) {
     const backend = new MockBackend({ githubRepos: 14, ...options });
-    await backend.watchSetMode(GH, "everything");
+    await watchEveryRepo(backend, GH);
     const run = backend.runs.start(spec, itemRef("CA-402"));
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     const draft = backend.draftReview(run.id, backend.runs.get(run.id)!.spec.prSha!, "The retry loop needs a backoff.", [{ path: "src/consumer/retry.ts", line: 42, side: "RIGHT", body: "Add a growing delay between retries." }, { path: "src/consumer/retry.ts", line: 17, side: "RIGHT", body: "Name the limit MAX_ATTEMPTS." }]);
@@ -141,7 +141,7 @@ describe("posting a review draft to the mock GitHub", () => {
 
   it("can't post on a repository the sample can only read", async () => {
     const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode(GH, "everything");
+    await watchEveryRepo(backend, GH);
     expect((await backend.codeReviewAccess(GH, "acme/mobile-app")).canPost).toBe(false);
     expect((await backend.codeReviewAccess(GH, "acme/gateway")).canPost).toBe(true);
   });

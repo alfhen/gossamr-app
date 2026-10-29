@@ -36,7 +36,6 @@ import type {
   Stray,
   WatchChange,
   WatchChanged,
-  WatchMode,
   WatchState,
   WorkComment,
   WorkContainer,
@@ -231,9 +230,7 @@ export interface Backend {
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void): () => void;
   /** What each signed-in connection follows. */
   watchGet(): Promise<WatchState[]>;
-  /** Choosing `selected` with nothing watched yet syncs nothing; add containers with `watchSetContainers`. */
-  watchSetMode(connectionId: string, mode: WatchMode): Promise<void>;
-  /** Watches, unwatches (softly: hidden at once, deleted after 14 days), pins, or sets the depth of containers. */
+  /** Watches, unwatches (the row goes at once; its cached items are pruned later) or pins containers. The first one watched makes the list the person's own. */
   watchSetContainers(connectionId: string, changes: WatchChange[]): Promise<void>;
   /** One page of every container the tracker has, matching the query, each marked watched or not. */
   watchCatalog(connectionId: string, query: string, cursor?: string | null): Promise<CatalogPage>;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
+import { watchEveryRepo } from "../backend/testWatch";
 import type { Run } from "../types";
 import { pipAsks, reviewThisControl } from "./runSheetLogic";
 
@@ -10,7 +11,7 @@ beforeEach(async () => {
   const data = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) });
   backend = new MockBackend({ githubRepos: 14, runs: { epoch: Date.parse("2026-09-30T12:00:00Z"), seed: "kinds" } });
-  await backend.watchSetMode("github:ada", "everything");
+  await watchEveryRepo(backend, "github:ada");
   build = (await backend.runsList()).find((r) => r.spec.role === "builder")!;
 });
 

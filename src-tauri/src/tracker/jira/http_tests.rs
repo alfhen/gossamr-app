@@ -253,11 +253,9 @@ async fn a_search_naming_a_project_the_person_cannot_see_drops_it_and_reports_it
     let server = serve(vec![(SEARCH, vec![Reply::status(400, refused), Reply::ok(PAGE_2)])]).await;
     let watches = ["CA", "SECRET"].map(|k| crate::domain::Watch {
         container: ContainerRef { connection_id: "jira:site:me".into(), external_id: k.into() },
-        depth: crate::domain::Depth::Involved,
         pinned: false,
         source: crate::domain::WatchSource::Manual,
         added_at: String::new(),
-        unwatched_at: None,
         inaccessible: false,
     });
     let opts = crate::tracker::SearchOptions { limit: 10, ..Default::default() };

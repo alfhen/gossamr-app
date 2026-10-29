@@ -147,8 +147,8 @@ pub trait WorkTracker: Send + Sync {
     /// A query in the tracker's own language, for tools that still speak it.
     async fn search_native(&self, query: &str, opts: &SearchOptions) -> Result<Vec<WorkItem>>;
 
-    /// Items in `scope` that changed within `window_days`, newest first: in a container watched as `Involved`, those
-    /// the signed-in person is involved in; in one watched as `Whole`, all of them. A container the tracker refuses
+    /// Items in `scope` that changed within `window_days`, newest first, the ones the signed-in
+    /// person is involved in. A container the tracker refuses
     /// is left out of the read and reported, rather than failing it.
     async fn followed(&self, window_days: u32, scope: &ContainerScope, opts: &SearchOptions) -> Result<Followed>;
 

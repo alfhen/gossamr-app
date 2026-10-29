@@ -43,7 +43,6 @@ import type {
   Stray,
   WatchChange,
   WatchChanged,
-  WatchMode,
   WatchState,
   WorkEvent,
   WorkFilter,
@@ -385,10 +384,6 @@ export class JiraBackend implements Backend {
 
   watchGet() {
     return invoke<WatchState[]>("watch_get");
-  }
-
-  watchSetMode(connectionId: string, mode: WatchMode) {
-    return invoke<void>("watch_set", { connectionId, mode });
   }
 
   watchSetContainers(connectionId: string, changes: WatchChange[]) {

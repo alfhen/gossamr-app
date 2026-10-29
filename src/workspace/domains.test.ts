@@ -5,7 +5,7 @@ import { codeWatch, domainOfConnection, domainOfKind, isWorkConnection, workConn
 import { railSplit } from "./watchLogic";
 
 const container = (connectionId: string, key: string): WorkContainer => ({ ref: { connectionId, externalId: key }, key, name: key, workflow: null }) as unknown as WorkContainer;
-const state = (connectionId: string): WatchState => ({ connectionId, mode: "selected", needsChoice: false, catalogSize: null, watches: [{ container: { connectionId, externalId: "acme/webshop" }, depth: "involved", pinned: true, source: "manual", addedAt: "", unwatchedAt: null, inaccessible: false, key: "acme/webshop", name: "webshop", cachedItems: 0 }] });
+const state = (connectionId: string): WatchState => ({ connectionId, chosen: true, needsChoice: false, catalogSize: null, watches: [{ container: { connectionId, externalId: "acme/webshop" }, pinned: true, source: "manual", addedAt: "", inaccessible: false, key: "acme/webshop", name: "webshop", cachedItems: 0 }] });
 
 describe("work and code containers", () => {
   it("classifies connections by kind, and by id before they have loaded", () => {

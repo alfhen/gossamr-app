@@ -1,5 +1,5 @@
 import type { Step } from "../lib/roles";
-import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type ItemRef, type Proposal, type WatchChange, type WatchMode, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
+import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type ItemRef, type Proposal, type WatchChange, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
 import { docText } from "../lib/docs";
 import type { GithubWrite } from "./mockGithub";
 import type { ScriptedFinish } from "./mockRunResult";
@@ -21,64 +21,52 @@ export interface MockOptions {
 }
 
 interface Stored {
-  depth: WatchRow["depth"];
   pinned: boolean;
   source: WatchRow["source"];
   addedAt: string;
-  unwatchedAt: string | null;
   inaccessible: boolean;
 }
 
-/** What a connection follows, kept the way the backend keeps it: a mode and rows that are soft-unwatched rather than removed. */
+/** What a connection follows, kept the way the backend keeps it: a list that is the person's own once they watch something. */
 export class MockWatch {
-  mode: WatchMode;
+  chosen = false;
   private rows = new Map<string, Stored>();
 
   constructor(
     private readonly connectionId: string,
     readonly catalogSize: number,
-  ) {
-    this.mode = catalogSize <= AUTO_WATCH_EVERYTHING_MAX ? "everything" : "unset";
-  }
+  ) {}
 
   /** Ids of the containers that may be shown, or null when every one may. */
   visible(): Set<string> | null {
-    if (this.mode !== "selected") return null;
-    return new Set([...this.rows].filter(([, r]) => r.unwatchedAt === null).map(([id]) => id));
+    return this.chosen ? new Set(this.rows.keys()) : null;
   }
 
   isWatched(containerId: string): boolean {
     return this.visible()?.has(containerId) ?? true;
   }
 
-  setMode(mode: WatchMode) {
-    this.mode = mode;
+  /** Nothing is chosen and the catalog is too big to watch whole. */
+  get needsChoice() {
+    return !this.chosen && this.catalogSize > AUTO_WATCH_EVERYTHING_MAX;
   }
 
   apply(changes: WatchChange[], at = new Date().toISOString()) {
-    const selected = this.mode === "selected";
+    if (changes.some((c) => c.watched === true)) this.chosen = true;
     for (const c of changes) {
       const row = this.rows.get(c.containerId);
       if (c.watched === false) {
-        if (row && row.unwatchedAt === null) row.unwatchedAt = at;
+        this.rows.delete(c.containerId);
         continue;
       }
       if (!row) {
-        if (selected && c.watched !== true) continue;
-        this.rows.set(c.containerId, {
-          depth: c.depth ?? "involved",
-          pinned: c.pinned ?? false,
-          source: c.source ?? (selected ? "manual" : "everything"),
-          addedAt: at,
-          unwatchedAt: null,
-          inaccessible: false,
-        });
+        if (this.chosen && c.watched !== true) continue;
+        this.rows.set(c.containerId, { pinned: c.pinned ?? false, source: c.source ?? "manual", addedAt: at, inaccessible: false });
         continue;
       }
-      if (c.watched === true) row.unwatchedAt = null;
-      row.depth = c.depth ?? row.depth;
       row.pinned = c.pinned ?? row.pinned;
       row.source = c.source ?? row.source;
+      if (c.watched === true) row.inaccessible = false;
     }
   }
 
@@ -89,8 +77,8 @@ export class MockWatch {
     });
     return {
       connectionId: this.connectionId,
-      mode: this.mode,
-      needsChoice: this.mode === "unset" && this.catalogSize > AUTO_WATCH_EVERYTHING_MAX,
+      chosen: this.chosen,
+      needsChoice: this.needsChoice,
       catalogSize: Math.min(this.catalogSize, AUTO_WATCH_EVERYTHING_MAX + 1),
       watches,
     };

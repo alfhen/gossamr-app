@@ -1,6 +1,6 @@
 //! Translates the neutral filter into JQL.
 
-use crate::domain::{Category, Depth, Filter, Watch};
+use crate::domain::{Category, Filter, Watch};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Clause {
@@ -96,21 +96,12 @@ fn project_list(watches: &[&Watch]) -> String {
     format!("project in ({})", watches.iter().map(|w| quote(&w.container.external_id)).collect::<Vec<_>>().join(", "))
 }
 
-/// Issues in the watched containers that changed within the window: the ones the person is involved in for a
-/// container watched as `Involved` (`mentions` adds comments that mention them; Jira has no cheaper test for that),
-/// all of them for one watched as `Whole`. `None` when nothing is watched.
+/// Issues in the watched containers that changed within the window and that the person is involved in (`mentions` adds
+/// comments that mention them; Jira has no cheaper test for that). `None` when nothing is watched.
 pub(super) fn followed_in(window_days: u32, updated_since_minutes: Option<u32>, watches: &[Watch], mentions: bool) -> Option<String> {
-    let involved: Vec<&Watch> = watches.iter().filter(|w| w.depth == Depth::Involved).collect();
-    let whole: Vec<&Watch> = watches.iter().filter(|w| w.depth == Depth::Whole).collect();
     let who = if mentions { format!("{INVOLVED} OR comment ~ currentUser()") } else { INVOLVED.to_string() };
-    let mut parts = Vec::new();
-    if !involved.is_empty() {
-        parts.push(format!("({} AND ({who}))", project_list(&involved)));
-    }
-    if !whole.is_empty() {
-        parts.push(project_list(&whole));
-    }
-    (!parts.is_empty()).then(|| ordered(&format!("({}) AND {}", parts.join(" OR "), window(window_days, updated_since_minutes))))
+    let projects: Vec<&Watch> = watches.iter().collect();
+    (!projects.is_empty()).then(|| ordered(&format!("({} AND ({who})) AND {}", project_list(&projects), window(window_days, updated_since_minutes))))
 }
 
 /// The project named in a Jira 400 about a project that doesn't exist or can't be read, if it is one of `keys`.
@@ -222,27 +213,25 @@ mod tests {
         assert_eq!(children(&["CA-1"], Some(20)), "parent in (CA-1) AND updated >= -20m ORDER BY updated DESC");
     }
 
-    fn watch(key: &str, depth: Depth) -> Watch {
+    fn watch(key: &str) -> Watch {
         Watch {
             container: ContainerRef { connection_id: "c".into(), external_id: key.into() },
-            depth,
             pinned: false,
             source: crate::domain::WatchSource::Manual,
             added_at: String::new(),
-            unwatched_at: None,
             inaccessible: false,
         }
     }
 
     #[test]
-    fn a_scoped_query_limits_projects_and_separates_involved_from_whole() {
-        let w = [watch("CA", Depth::Involved), watch("WEB", Depth::Whole), watch("OPS", Depth::Involved)];
+    fn a_scoped_query_limits_projects_to_the_watched_ones_and_what_the_person_is_involved_in() {
+        let w = [watch("CA"), watch("OPS")];
         assert_eq!(
             followed_in(30, None, &w, false).unwrap(),
-            "((project in (\"CA\", \"OPS\") AND (assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())) OR project in (\"WEB\")) AND updated >= -30d ORDER BY updated DESC"
+            "(project in (\"CA\", \"OPS\") AND (assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser())) AND updated >= -30d ORDER BY updated DESC"
         );
-        assert!(followed_in(30, None, &w[..1], true).unwrap().contains("OR comment ~ currentUser()))"));
-        assert!(followed_in(30, Some(15), &w[1..2], true).unwrap().ends_with("(project in (\"WEB\")) AND updated >= -15m ORDER BY updated DESC"));
+        assert!(followed_in(30, None, &w[..1], true).unwrap().contains("OR comment ~ currentUser())"));
+        assert!(followed_in(30, Some(15), &w[1..], true).unwrap().ends_with("AND updated >= -15m ORDER BY updated DESC"));
         assert_eq!(followed_in(30, None, &[], true), None);
     }
 

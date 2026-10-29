@@ -42,12 +42,12 @@ pub struct WatchRow {
 #[serde(rename_all = "camelCase")]
 pub struct WatchState {
     pub connection_id: String,
-    pub mode: WatchMode,
+    /// The person has picked their list. Until then every container is watched.
+    pub chosen: bool,
     /// Nothing is chosen and the catalog is too big to watch whole, so the person must pick.
     pub needs_choice: bool,
     /// Containers seen when the catalog was last probed; 13 means "more than 12".
     pub catalog_size: Option<usize>,
-    /// Every row, including soft-unwatched ones (`unwatchedAt` set) that are still inside their grace period.
     pub watches: Vec<WatchRow>,
 }
 
@@ -135,7 +135,7 @@ impl Core {
                     })
                     .collect();
                 let needs_choice = set.mode == WatchMode::Unset && size.is_some_and(|n| n > AUTO_EVERYTHING_MAX);
-                Ok(WatchState { connection_id: id.clone(), mode: set.mode, needs_choice, catalog_size: size, watches })
+                Ok(WatchState { connection_id: id.clone(), chosen: set.mode == WatchMode::Selected, needs_choice, catalog_size: size, watches })
             })
             .await?;
         Ok(vec![state])
@@ -168,6 +168,7 @@ impl Core {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn watch_set_mode(&self, connection_id: &str, mode: WatchMode) -> Result<()> {
         if super::code::is_code_connection(connection_id) {
             return self.code_watch_set_mode(connection_id, mode).await;
@@ -316,7 +317,7 @@ impl Core {
             self.with_db_for(scope, |db| db.set_meta(STRAYS, "[]")).await?;
             return Ok(None);
         }
-        let refs: Vec<_> = set.watches.iter().filter(|w| w.unwatched_at.is_none()).map(|w| w.container.clone()).collect();
+        let refs: Vec<_> = set.watches.iter().map(|w| w.container.clone()).collect();
         let found = self.tracker(scope)?.assigned_outside(&refs).await?;
         self.with_db_for(scope, |db| {
             let before: Vec<Stray> = meta_json(db, STRAYS)?.unwrap_or_default();
@@ -354,17 +355,21 @@ impl Core {
         let Ok(page) = tracker.list_containers(&probe).await else { return Ok((set, false)) };
         let small = page.containers.len() <= AUTO_EVERYTHING_MAX && page.next.is_none();
         let seen = page.containers.len().min(AUTO_EVERYTHING_MAX + 1);
-        self.with_db_for(scope, |db| {
-            db.catalog_upsert(&id, &page.containers, &now_iso())?;
-            db.set_meta(CATALOG_SIZE, &seen.to_string())?;
-            db.set_meta(CATALOG_PROBED, &now_iso())?;
-            if small {
-                db.set_watch_mode(&id, WatchMode::Everything, &now_iso())?;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok((WatchSet { mode: if small { WatchMode::Everything } else { set.mode }, ..set }, small))
+        let settled = self
+            .with_db_for(scope, |db| {
+                db.catalog_upsert(&id, &page.containers, &now_iso())?;
+                db.set_meta(CATALOG_SIZE, &seen.to_string())?;
+                db.set_meta(CATALOG_PROBED, &now_iso())?;
+                if small && db.set_watch_mode_if_unset(&id, WatchMode::Everything, &now_iso())? {
+                    return Ok(None);
+                }
+                Ok(Some(db.watch_set(&id)?))
+            })
+            .await?;
+        match settled {
+            None => Ok((WatchSet { mode: WatchMode::Everything, ..set }, true)),
+            Some(current) => Ok((current, false)),
+        }
     }
 
     /// An item read live, for a container that may not be watched. Nothing is stored. `None` when the tracker says
@@ -409,7 +414,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::domain::{ContainerSummary, Depth, Filter, WatchSource};
+    use crate::domain::{ContainerSummary, Filter, WatchSource};
     use crate::inbox::testing::{fixture, Fixture};
 
     fn summary(key: &str) -> ContainerSummary {
@@ -445,7 +450,7 @@ mod tests {
         let fx = fixture().await;
         fx.add_in("OTH-1", "OTH").await;
         let state = &fx.core.watch_state().await.unwrap()[0];
-        assert_eq!((state.mode, state.needs_choice, state.watches.len()), (WatchMode::Unset, false, 0));
+        assert_eq!((state.chosen, state.needs_choice, state.watches.len()), (false, false, 0));
         assert_eq!(keys(&fx, false).await, ["CA-1", "OTH-1"]);
     }
 
@@ -465,7 +470,7 @@ mod tests {
         assert!(fx.core.cache_containers(false).await.unwrap().is_empty());
         assert_eq!(keys(&fx, false).await, Vec::<String>::new());
         fx.core.watch_set_containers("jira:site:me", &[watch("CA")]).await.unwrap();
-        assert_eq!(keys(&fx, false).await, ["CA-1"], "watching again inside the grace period needs no refetch");
+        assert_eq!(keys(&fx, false).await, ["CA-1"], "watching again soon needs no refetch");
     }
 
     #[tokio::test]
@@ -533,7 +538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watching_more_or_changing_depth_backfills_but_pinning_does_not() {
+    async fn watching_more_backfills_but_pinning_does_not() {
         let fx = fixture().await;
         let id = "jira:site:me";
         fx.core
@@ -547,7 +552,7 @@ mod tests {
         fx.core.with_db_for(&fx.scope, |db| db.save_sync_state(id, &crate::db::SyncState { cursor: Some("c".into()), full_at: Some("f".into()), containers_at: Some("k".into()) })).await.unwrap();
         fx.core.watch_set_containers(id, &[WatchChange { container_id: "CA".into(), pinned: Some(true), ..Default::default() }]).await.unwrap();
         assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.sync_state(id)).await.unwrap().full_at.as_deref(), Some("f"));
-        fx.core.watch_set_containers(id, &[WatchChange { container_id: "CA".into(), depth: Some(Depth::Whole), ..Default::default() }]).await.unwrap();
+        fx.core.watch_set_containers(id, &[watch("WEB")]).await.unwrap();
         assert_eq!(fx.core.with_db_for(&fx.scope, |db| db.sync_state(id)).await.unwrap().full_at, None);
     }
 
@@ -568,14 +573,14 @@ mod tests {
         let (set, changed) = fx.core.settle_watch_mode(&fx.scope, fx.tracker.as_ref(), set).await.unwrap();
         assert!(changed && set.mode == WatchMode::Everything);
         let state = &fx.core.watch_state().await.unwrap()[0];
-        assert_eq!((state.mode, state.needs_choice, state.catalog_size), (WatchMode::Everything, false, Some(12)));
+        assert_eq!((state.chosen, state.needs_choice, state.catalog_size), (false, false, Some(12)));
 
         let big = fixture().await;
         *big.tracker.catalog.lock().unwrap() = (0..14).map(|n| summary(&format!("P{n}"))).collect();
         let (set, changed) = big.core.settle_watch_mode(&big.scope, big.tracker.as_ref(), WatchSet::default()).await.unwrap();
         assert!(!changed && set.mode == WatchMode::Unset);
         let state = &big.core.watch_state().await.unwrap()[0];
-        assert_eq!((state.mode, state.needs_choice), (WatchMode::Unset, true));
+        assert_eq!((state.chosen, state.needs_choice), (false, true));
         assert_eq!(big.core.watch_catalog("jira:site:me", "P1", None).await.unwrap().containers.len(), 5);
     }
 

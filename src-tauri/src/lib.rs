@@ -33,7 +33,7 @@ use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, Workst
 use error::{Error, Result};
 use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
-    WatchChange, WatchMode, WorkItem, Workstream, WorkstreamEvent,
+    WatchChange, WorkItem, Workstream, WorkstreamEvent,
 };
 use model::Snapshot;
 use runs::service::CloneChoice;
@@ -242,15 +242,10 @@ async fn watch_edited(app: &AppHandle, core: &Core, connection_id: &str) {
     publish(app, core).await;
 }
 
-/// Sets what a connection watches: its mode, and the containers watched, unwatched, pinned or set to a depth.
+/// Adds containers to what a connection watches, removes them, or pins them.
 #[tauri::command]
-async fn watch_set(app: AppHandle, core: State<'_, CoreState>, connection_id: String, mode: Option<WatchMode>, changes: Option<Vec<WatchChange>>) -> Result<()> {
-    if let Some(mode) = mode {
-        core.watch_set_mode(&connection_id, mode).await?;
-    }
-    if let Some(changes) = changes {
-        core.watch_set_containers(&connection_id, &changes).await?;
-    }
+async fn watch_set(app: AppHandle, core: State<'_, CoreState>, connection_id: String, changes: Vec<WatchChange>) -> Result<()> {
+    core.watch_set_containers(&connection_id, &changes).await?;
     watch_edited(&app, &core, &connection_id).await;
     Ok(())
 }
