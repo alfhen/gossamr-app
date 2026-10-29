@@ -3,8 +3,8 @@ import { latestRuns, needsIn, type Need } from "./needs";
 import { roleLabel } from "./roles";
 
 /**
- * One status word per workstream, the first of these that applies. The order is the one docs/needs-you.md gives its
- * questions, most to least urgent, so the word is always the thing to do or know first:
+ * One status word per workstream, the first of these that applies. The order is the one docs/product.md (Needs you)
+ * gives, most to least urgent, so the word is always the thing to do or know first:
  *
  * 1. `needs-you`: something in this workstream waits on the person. It outranks everything because Needs you is the one
  *    place decisions are made, and a person who has one thing to do must not be told the workstream is merely "Running".

@@ -11,7 +11,7 @@ import { runWorkstream } from "./workstreamStage";
 /**
  * Needs you: the one place that says what waits on the person, and the only source of its count. It reads what the stores
  * pause (proposals, runs, workstreams with their pauses, and the failures the person dismissed) and decides
- * nothing. Every screen that counts or lists what needs the person counts these and lists these, as docs/needs-you.md says.
+ * nothing. Every screen that counts or lists what needs the person counts these and lists these, as docs/product.md (Needs you) says.
  */
 
 /** What the person is being asked to do: decide a direction, unblock something stuck, or approve a draft. */
