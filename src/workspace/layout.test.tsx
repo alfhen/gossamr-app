@@ -9,7 +9,6 @@ import { Header, ProjectMenu, ViewSegment } from "./Header";
 import { Rail, RailButton, RailTip } from "./Rail";
 import { ToastHost, toastPlacement } from "./ToastHost";
 import { useToasts, LIFETIME_MS, MAX_QUEUED, STALE_MS } from "./toasts";
-import { MORE_BUTTON, sameWindow, tabWindow } from "./TabBar";
 import { canvasRoom, regionTarget } from "./Workspace";
 import { RowBadges } from "./ListView";
 import { SavedViewsPanel, type SavedViewsPanelProps } from "./SavedViews";
@@ -204,32 +203,6 @@ describe("nothing covers anything", () => {
     expect(canvas.bottom).toContain("var(--ws-footer-h, 2rem)");
     expect(canvas).not.toHaveProperty("top");
     expect(toastPlacement(0).right).toBe("calc(0px + 1.25rem)");
-  });
-
-  it("shows a run of whole tabs that always holds the active one, and ends where the last whole tab does", () => {
-    // Five 100px tabs, 2px apart: 0..100, 102..202, 204..304, 306..406, 408..508.
-    const spans = [0, 1, 2, 3, 4].map((i) => ({ left: i * 102, size: 100 }));
-    expect(tabWindow(spans, 600, 0, 4)).toEqual({ start: 0, end: 4, offset: 0 });
-    // Room for two whole tabs once the 'more' buttons are in: never a third cut short.
-    const room = 2 * MORE_BUTTON + 250;
-    expect(tabWindow(spans, room, 0, 0)).toEqual({ start: 0, end: 1, offset: 0, width: 202 });
-    // The strip narrowing (the peek and the Pip pane opening) with the last tab active brings it in, not the first two.
-    expect(tabWindow(spans, room, 0, 4)).toEqual({ start: 3, end: 4, offset: 306, width: 202 });
-    expect(tabWindow(spans, room, 3, 1)).toEqual({ start: 1, end: 2, offset: 102, width: 202 });
-    // Paging on with no tab to follow keeps the start the person chose, filling back from the last tab.
-    expect(tabWindow(spans, room, 2, -1)).toEqual({ start: 2, end: 3, offset: 204, width: 202 });
-    expect(tabWindow(spans, room, 9, -1)).toEqual({ start: 3, end: 4, offset: 306, width: 202 });
-    expect(tabWindow([], 100, 0, -1)).toEqual({ start: 0, end: 0, offset: 0 });
-  });
-
-  it("squeezes the one tab shown, rather than cutting off its close button, when even it is wider than the room", () => {
-    const spans = [0, 1, 2].map((i) => ({ left: i * 202, size: 200 }));
-    const room = 2 * MORE_BUTTON + 120;
-    expect(tabWindow(spans, room, 0, 1)).toEqual({ start: 1, end: 1, offset: 202, width: 120, squeeze: 120 });
-    // A tab that fits is never squeezed.
-    expect(tabWindow(spans, 2 * MORE_BUTTON + 250, 0, 1).squeeze).toBeUndefined();
-    // A tab that grows past the room at the same width must still be squeezed: the strip doesn't keep the old window.
-    expect(sameWindow({ start: 1, end: 1, offset: 202, width: 120 }, { start: 1, end: 1, offset: 202, width: 120, squeeze: 120 })).toBe(false);
   });
 
   it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {

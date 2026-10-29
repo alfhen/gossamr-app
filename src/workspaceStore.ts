@@ -23,7 +23,6 @@ import type {
   StatusDef,
   Stray,
   WatchChange,
-  WatchMode,
   WatchState,
   WorkComment,
   WorkContainer,
@@ -74,9 +73,6 @@ interface WorkspaceState {
   refreshWatch(): Promise<void>;
   /** Changes what is watched, then re-reads everything the watch set scopes. */
   watchContainers(connectionId: string, changes: WatchChange[]): Promise<void>;
-  watchMode(connectionId: string, mode: WatchMode): Promise<void>;
-  /** Starts watching `changes` and switches the connection to selected mode. The containers go first so a failure leaves the choice still to make. */
-  chooseWatch(connectionId: string, changes: WatchChange[]): Promise<void>;
   /** Re-reads the strays of every connection; `announce` also raises a notice for them, as when the app starts. */
   refreshStrays(announce?: boolean): Promise<void>;
   dismissStray(stray: Stray): Promise<void>;
@@ -255,21 +251,6 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const backend = get().backend;
     if (!backend || !changes.length) return;
     await backend.watchSetContainers(connectionId, changes);
-    await Promise.all([get().refreshWatch(), get().refresh()]);
-  },
-
-  async watchMode(connectionId, mode) {
-    const backend = get().backend;
-    if (!backend) return;
-    await backend.watchSetMode(connectionId, mode);
-    await Promise.all([get().refreshWatch(), get().refresh()]);
-  },
-
-  async chooseWatch(connectionId, changes) {
-    const backend = get().backend;
-    if (!backend) return;
-    await backend.watchSetContainers(connectionId, changes);
-    await backend.watchSetMode(connectionId, "selected");
     await Promise.all([get().refreshWatch(), get().refresh()]);
   },
 

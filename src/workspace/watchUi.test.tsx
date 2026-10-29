@@ -8,7 +8,7 @@ import { PeekView } from "./PeekSheet";
 import { ProjectsMenuPanel } from "./Rail";
 import { PeekBanner, StrayList } from "./WatchNotices";
 import { WatchPickerView, focusPickerHeading, type WatchPickerViewProps } from "./WatchPicker";
-import { ModeConfirm, SettingsRowView, WatchCardView, type WatchCardViewProps } from "./WatchSettings";
+import { SettingsRowView, WatchCardView, type WatchCardViewProps } from "./WatchSettings";
 import { settingsRows, type SettingsRow } from "./watchLogic";
 
 const noun = { one: "project", many: "projects" };
@@ -35,7 +35,6 @@ const picker = (over: Partial<WatchPickerViewProps> = {}) =>
       onLoadMore={fn()}
       onRetry={fn()}
       onSave={fn()}
-      onEverything={fn()}
       {...over}
     />,
   );
@@ -57,10 +56,9 @@ describe("the forced picker", () => {
     expect(out.match(/WEB project/g)).toHaveLength(1);
   });
 
-  it("offers a clearly labelled watch-everything button with the cost, and no way out without choosing", () => {
+  it("has no way out without choosing, and no way to watch everything", () => {
     const out = picker();
-    expect(out).toContain("Watch everything");
-    expect(out).toContain("slower");
+    expect(out).not.toContain("Watch everything");
     expect(out).not.toContain("Cancel");
     expect(picker({ onCancel: fn() })).toContain("Cancel");
   });
@@ -85,7 +83,6 @@ describe("the forced picker", () => {
     const failed = picker({ suggested: { status: "error", list: [] }, catalog: { ...ready, entries: [], status: "error", error: "Timed out" } });
     expect(failed).toContain("Timed out");
     expect(failed).toContain("Try again");
-    expect(failed).toContain("Watch everything");
   });
 
   it("pages with a sentinel while more remain", () => {
@@ -103,32 +100,21 @@ describe("the forced picker", () => {
 });
 
 describe("settings rows", () => {
-  const base: SettingsRow = { container: containerRef("WEB"), key: "WEB", name: "Webshop", depth: "involved", pinned: false, unwatchedAt: null, inaccessible: false, cachedItems: 9 };
+  const base: SettingsRow = { container: containerRef("WEB"), key: "WEB", name: "Webshop", pinned: false, inaccessible: false, cachedItems: 9 };
   const row = (over: Partial<SettingsRow> = {}, pinOnly = false) =>
-    renderToStaticMarkup(<SettingsRowView row={{ ...base, ...over }} noun={noun} now={new Date("2026-09-30T12:00:00Z")} pinOnly={pinOnly} onDepth={fn()} onPin={fn()} onUnwatch={fn()} onUndo={fn()} />);
+    renderToStaticMarkup(<SettingsRowView row={{ ...base, ...over }} noun={noun} pinOnly={pinOnly} onPin={fn()} onUnwatch={fn()} />);
 
-  it("shows the depth, pin and unwatch controls for a watched row", () => {
+  it("shows the pin and unwatch controls for a watched row", () => {
     const out = row();
-    expect(out).toContain('aria-label="Depth for Webshop"');
-    expect(out).toContain('aria-checked="true"');
-    expect(out).toContain("Whole project");
     expect(out).toContain('aria-label="Pin Webshop to the rail"');
     expect(out).toContain('aria-label="Unwatch Webshop"');
     expect(out).toContain("9 tickets synced");
   });
 
-  it("marks a pinned row pressed and a whole-project row checked", () => {
-    const out = row({ pinned: true, depth: "whole" });
+  it("marks a pinned row pressed", () => {
+    const out = row({ pinned: true });
     expect(out).toContain('aria-label="Unpin Webshop from the rail"');
     expect(out).toContain('aria-pressed="true"');
-  });
-
-  it("says how long a row has before it is removed, with undo instead of the controls", () => {
-    const out = row({ unwatchedAt: "2026-09-27T12:00:00Z" });
-    expect(out).toContain("Unwatched, removed from sync in 11 days");
-    expect(out).toContain("Undo");
-    expect(out).not.toContain("Depth for");
-    expect(out).not.toContain("Unwatch Webshop");
   });
 
   it("warns about a container the tracker refuses", () => {
@@ -136,19 +122,18 @@ describe("settings rows", () => {
     expect(row()).not.toContain("Can&#x27;t be reached");
   });
 
-  it("offers only pinning in everything mode", () => {
+  it("offers only pinning before a list is chosen", () => {
     const out = row({}, true);
     expect(out).toContain("Pin Webshop");
-    expect(out).not.toContain("Depth for");
     expect(out).not.toContain("Unwatch Webshop");
   });
 });
 
 describe("the watching card", () => {
-  const state = (mode: WatchState["mode"]): WatchState => ({ connectionId: "mock", mode, needsChoice: false, catalogSize: 13, watches: [] });
-  const card = (mode: WatchState["mode"], over: Partial<WatchCardViewProps> = {}) => {
-    const s = state(mode);
-    const rows = settingsRows({ ...s, watches: [{ container: containerRef("WEB"), depth: "involved", pinned: true, source: "manual", addedAt: "", unwatchedAt: null, inaccessible: false, key: "WEB", name: "Webshop", cachedItems: 9 }] }, []);
+  const state = (chosen: boolean): WatchState => ({ connectionId: "mock", chosen, needsChoice: false, catalogSize: 13, watches: [] });
+  const card = (chosen: boolean, over: Partial<WatchCardViewProps> = {}) => {
+    const s = state(chosen);
+    const rows = settingsRows({ ...s, watches: [{ container: containerRef("WEB"), pinned: true, source: "manual", addedAt: "", inaccessible: false, key: "WEB", name: "Webshop", cachedItems: 9 }] }, []);
     return renderToStaticMarkup(
       <WatchCardView
         title="Acme"
@@ -161,16 +146,11 @@ describe("the watching card", () => {
         sync={{ text: "Last synced 3m ago", tone: "ok" }}
         chips={[fp("CA", { assigned: 2 })]}
         find={ready}
-        confirm={null}
         onQuery={fn()}
-        onMode={fn()}
-        onConfirm={fn()}
-        onCancelConfirm={fn()}
+        onChoose={fn()}
         onChip={fn()}
-        onDepth={fn()}
         onPin={fn()}
         onUnwatch={fn()}
-        onUndo={fn()}
         onWatch={fn()}
         onLoadMore={fn()}
         onRetry={fn()}
@@ -179,12 +159,12 @@ describe("the watching card", () => {
     );
   };
 
-  it("shows the sync line, the mode switch, suggestion chips, the watched list and what can be added", () => {
-    const out = card("selected");
+  it("shows the sync line, suggestion chips, the watched list and what can be added", () => {
+    const out = card(true);
     expect(out).toContain("Last synced 3m ago");
     // The connection's row is the live region for the sync line; the card under it shows it quietly (G31).
     expect(out).toMatch(/<div data-watch-sync="true" class="[^"]*">Last synced 3m ago<\/div>/);
-    expect(out).toContain('aria-label="What to watch"');
+    expect(out).not.toContain("Choose projects…");
     expect(out).toContain("Suggested from your last 90 days");
     expect(out).toContain('aria-label="Watch CA project"');
     expect(out).toContain("Webshop");
@@ -192,25 +172,18 @@ describe("the watching card", () => {
     expect(out).toContain("P05 project");
   });
 
-  it("hides the add list and the chips in everything mode", () => {
-    const out = card("everything");
+  it("offers to choose, and hides the add list and the chips, until a list is chosen", () => {
+    const out = card(false);
     expect(out).toContain("Watching every project you can see");
+    expect(out).toContain("Choose projects…");
     expect(out).not.toContain("Add projects");
     expect(out).not.toContain("Suggested from");
   });
 
   it("does not offer to add a container that is already listed", () => {
-    const out = card("selected", { find: { ...ready, entries: [entry("WEB"), entry("P05")] } });
+    const out = card(true, { find: { ...ready, entries: [entry("WEB"), entry("P05")] } });
     expect(out).toContain("P05 project");
     expect(out).not.toContain('aria-label="Watch WEB project"');
-  });
-
-  it("asks before switching either way", () => {
-    expect(card("selected", { confirm: "everything" })).toContain("Watch every project you can see? Syncing gets slower");
-    const toSelected = renderToStaticMarkup(<ModeConfirm to="selected" noun={noun} onConfirm={fn()} onCancel={fn()} />);
-    expect(toSelected).toContain("Choose projects…");
-    expect(toSelected).toContain("nothing changes until you save");
-    expect(card("everything")).not.toContain("alertdialog");
   });
 });
 

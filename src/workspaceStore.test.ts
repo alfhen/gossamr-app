@@ -286,9 +286,9 @@ describe("workspace store refresh", () => {
 describe("the store and what is watched", () => {
   it("loads the watch settings with everything else", () => {
     expect(s().watch).toHaveLength(1);
-    expect(s().watch[0]).toMatchObject({ connectionId: "mock", mode: "everything" });
+    expect(s().watch[0]).toMatchObject({ connectionId: "mock", chosen: false });
     expect(needsWatchChoice(s())).toBe(false);
-    expect(watchOf(s(), "mock")?.mode).toBe("everything");
+    expect(watchOf(s(), "mock")?.chosen).toBe(false);
     expect(watchOf(s(), "other")).toBeUndefined();
   });
 
@@ -302,13 +302,12 @@ describe("the store and what is watched", () => {
     const b = new MockBackend({ catalogSize: 14 });
     await s().init(b);
     const all = Object.keys(s().items).length;
-    await b.watchSetMode("mock", "selected");
     await b.watchSetContainers("mock", [{ containerId: "CA", watched: true }]);
     await flush();
     expect(Object.keys(s().items).length).toBeLessThan(all);
     expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
     expect([...s().needsMe].every((k) => k.includes("CA-"))).toBe(true);
-    expect(s().watch[0]).toMatchObject({ mode: "selected", needsChoice: false });
+    expect(s().watch[0]).toMatchObject({ chosen: true, needsChoice: false });
     expect(s().watch[0].watches.map((w) => w.key)).toEqual(["CA"]);
 
     await b.watchSetContainers("mock", [{ containerId: "WEB", watched: true }]);
@@ -319,7 +318,6 @@ describe("the store and what is watched", () => {
   it("peeks at an item in an unwatched project without adding it to the store", async () => {
     const b = new MockBackend();
     await s().init(b);
-    await b.watchSetMode("mock", "selected");
     await b.watchSetContainers("mock", [{ containerId: "CA", watched: true }]);
     await flush();
     const peeked = await s().peekItem(itemRef("WEB-101"));
@@ -336,21 +334,15 @@ describe("choosing what to watch", () => {
     return b;
   };
 
-  it("leaves the forced choice once the containers and the mode are saved, in that order", async () => {
-    const b = await big();
-    const order: string[] = [];
-    const setMode = b.watchSetMode.bind(b);
-    const setContainers = b.watchSetContainers.bind(b);
-    b.watchSetMode = async (...a) => (order.push("mode"), setMode(...a));
-    b.watchSetContainers = async (...a) => (order.push("containers"), setContainers(...a));
+  it("leaves the forced choice once the containers are saved", async () => {
+    await big();
     expect(needsWatchChoice(s())).toBe(true);
 
-    await s().chooseWatch("mock", [{ containerId: "CA", watched: true, pinned: true, source: "footprint" }]);
+    await s().watchContainers("mock", [{ containerId: "CA", watched: true, pinned: true, source: "footprint" }]);
 
-    expect(order).toEqual(["containers", "mode"]);
     expect(needsWatchChoice(s())).toBe(false);
     expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
-    expect(s().watch[0].watches[0]).toMatchObject({ key: "CA", pinned: true, source: "footprint", depth: "involved" });
+    expect(s().watch[0].watches[0]).toMatchObject({ key: "CA", pinned: true, source: "footprint" });
   });
 
   it("does not leave the choice when saving fails", async () => {
@@ -358,41 +350,33 @@ describe("choosing what to watch", () => {
     b.watchSetContainers = async () => {
       throw new Error("offline");
     };
-    await expect(s().chooseWatch("mock", [{ containerId: "CA", watched: true }])).rejects.toThrow("offline");
+    await expect(s().watchContainers("mock", [{ containerId: "CA", watched: true }])).rejects.toThrow("offline");
     expect(needsWatchChoice(s())).toBe(true);
   });
 
-  it("can choose to watch everything", async () => {
+  it("unwatches by removing the row, and watches it again", async () => {
     await big();
-    await s().watchMode("mock", "everything");
-    expect(needsWatchChoice(s())).toBe(false);
-    expect(Object.keys(s().containers)).toHaveLength(14);
-  });
-
-  it("unwatches softly, keeps the row for its grace period, and watches it again", async () => {
-    await big();
-    await s().chooseWatch("mock", [
+    await s().watchContainers("mock", [
       { containerId: "CA", watched: true },
       { containerId: "WEB", watched: true },
     ]);
     await s().watchContainers("mock", [{ containerId: "WEB", watched: false }]);
     expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
-    const row = s().watch[0].watches.find((w) => w.key === "WEB")!;
-    expect(row.unwatchedAt).not.toBeNull();
+    expect(s().watch[0].watches.map((w) => w.key)).toEqual(["CA"]);
 
     await s().watchContainers("mock", [{ containerId: "WEB", watched: true }]);
     expect(allContainers(s()).map((c) => c.key)).toEqual(["CA", "WEB"]);
-    expect(s().watch[0].watches.find((w) => w.key === "WEB")!.unwatchedAt).toBeNull();
+    expect(s().watch[0].watches.map((w) => w.key)).toEqual(["CA", "WEB"]);
   });
 
-  it("changes depth and pin without starting to watch", async () => {
+  it("pins without starting to watch", async () => {
     await big();
-    await s().chooseWatch("mock", [{ containerId: "CA", watched: true }]);
+    await s().watchContainers("mock", [{ containerId: "CA", watched: true }]);
     await s().watchContainers("mock", [
-      { containerId: "CA", depth: "whole", pinned: true },
-      { containerId: "WEB", depth: "whole", pinned: true },
+      { containerId: "CA", pinned: true },
+      { containerId: "WEB", pinned: true },
     ]);
-    expect(s().watch[0].watches.map((w) => [w.key, w.depth, w.pinned])).toEqual([["CA", "whole", true]]);
+    expect(s().watch[0].watches.map((w) => [w.key, w.pinned])).toEqual([["CA", true]]);
     expect(allContainers(s()).map((c) => c.key)).toEqual(["CA"]);
   });
 });
@@ -401,7 +385,7 @@ describe("items assigned in projects that aren't watched", () => {
   const watchOnlyCa = async () => {
     const b = new MockBackend();
     await s().init(b);
-    await s().chooseWatch("mock", [{ containerId: "CA", watched: true }]);
+    await s().watchContainers("mock", [{ containerId: "CA", watched: true }]);
     return b;
   };
 
@@ -456,7 +440,7 @@ describe("the read-only peek", () => {
   it("holds one peeked ticket apart from the synced ones and clears it", async () => {
     const b = new MockBackend();
     await s().init(b);
-    await s().chooseWatch("mock", [{ containerId: "CA", watched: true }]);
+    await s().watchContainers("mock", [{ containerId: "CA", watched: true }]);
     const item = (await s().peekItem(itemRef("WEB-101")))!;
     s().showPeeked({ item, containerName: "Webshop" });
     expect(s().peeked["mock:WEB-101"]).toMatchObject({ containerName: "Webshop" });

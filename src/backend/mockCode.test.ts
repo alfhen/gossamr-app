@@ -7,7 +7,6 @@ const ticket = (key: string): ItemRef => ({ connectionId: "mock", externalId: ke
 const backend = () => new MockBackend({ githubRepos: 14 });
 
 async function watching(b: MockBackend, repos: string[]) {
-  await b.watchSetMode(GH, "selected");
   await b.watchSetContainers(GH, repos.map((containerId) => ({ containerId, watched: true })));
 }
 

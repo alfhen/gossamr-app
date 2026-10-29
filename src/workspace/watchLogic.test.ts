@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { containerRef } from "../backend/mockConnector";
 import type { CatalogEntry, Footprint, Stray, WatchRow, WatchState, WorkContainer } from "../types";
-import { activityHint, choiceChanges, count, graceDaysLeft, graceLine, matchesQuery, mergeEntries, newStrays, nounFor, railSplit, settingsRows, strayText, suggestionChips, suggestedIds, ticketKeyOf, toggled } from "./watchLogic";
+import { activityHint, choiceChanges, count, matchesQuery, mergeEntries, newStrays, nounFor, railSplit, settingsRows, strayText, suggestionChips, suggestedIds, ticketKeyOf, toggled } from "./watchLogic";
 
 const fp = (key: string, over: Partial<Footprint> = {}): Footprint => ({ container: containerRef(key), key, name: key, assigned: 0, reported: 0, watching: 0, commented: null, mentioned: null, lastTouch: null, ...over });
 const container = (key: string): WorkContainer => ({ ref: containerRef(key), key, name: `${key} project`, workflow: { statuses: [], transitions: { kind: "any" } } });
-const row = (key: string, over: Partial<WatchRow> = {}): WatchRow => ({ container: containerRef(key), depth: "involved", pinned: false, source: "manual", addedAt: "2026-09-01T00:00:00Z", unwatchedAt: null, inaccessible: false, key, name: `${key} project`, cachedItems: 0, ...over });
-const state = (mode: WatchState["mode"], watches: WatchRow[]): WatchState => ({ connectionId: "mock", mode, needsChoice: false, catalogSize: 13, watches });
+const row = (key: string, over: Partial<WatchRow> = {}): WatchRow => ({ container: containerRef(key), pinned: false, source: "manual", addedAt: "2026-09-01T00:00:00Z", inaccessible: false, key, name: `${key} project`, cachedItems: 0, ...over });
+const state = (chosen: boolean, watches: WatchRow[]): WatchState => ({ connectionId: "mock", chosen, needsChoice: false, catalogSize: 13, watches });
 
 describe("the choice", () => {
   it("toggles one id without touching the original", () => {
@@ -47,33 +47,14 @@ describe("the choice", () => {
   });
 });
 
-describe("the grace period", () => {
-  const at = new Date("2026-09-30T12:00:00Z");
-  it("counts whole days left of fourteen", () => {
-    expect(graceDaysLeft("2026-09-30T11:00:00Z", at)).toBe(14);
-    expect(graceDaysLeft("2026-09-27T12:00:00Z", at)).toBe(11);
-    expect(graceDaysLeft("2026-09-16T12:00:00Z", at)).toBe(0);
-    expect(graceDaysLeft("2026-08-01T12:00:00Z", at)).toBe(0);
-  });
-
-  it("says when it will be removed", () => {
-    expect(graceLine(11)).toBe("Unwatched, removed from sync in 11 days");
-    expect(graceLine(1)).toBe("Unwatched, removed from sync in 1 day");
-    expect(graceLine(0)).toBe("Unwatched, removed from sync today");
-  });
-});
-
 describe("settings rows", () => {
-  it("lists watched rows by key, then those in their grace period, newest first", () => {
-    const rows = settingsRows(
-      state("selected", [row("WEB"), row("OLD", { unwatchedAt: "2026-09-20T00:00:00Z" }), row("CA"), row("NEW", { unwatchedAt: "2026-09-28T00:00:00Z" })]),
-      [],
-    );
-    expect(rows.map((r) => r.key)).toEqual(["CA", "WEB", "NEW", "OLD"]);
+  it("lists watched rows by key", () => {
+    const rows = settingsRows(state(true, [row("WEB"), row("CA")]), []);
+    expect(rows.map((r) => r.key)).toEqual(["CA", "WEB"]);
   });
 
   it("lists every watched container in everything mode, including those with no row of their own", () => {
-    const rows = settingsRows(state("everything", [row("CA", { pinned: true })]), [container("CA"), container("WEB")], () => 3);
+    const rows = settingsRows(state(false, [row("CA", { pinned: true })]), [container("CA"), container("WEB")], () => 3);
     expect(rows.map((r) => [r.key, r.pinned, r.cachedItems])).toEqual([
       ["CA", true, 0],
       ["WEB", false, 3],
@@ -81,7 +62,7 @@ describe("settings rows", () => {
   });
 
   it("does not invent rows in selected mode", () => {
-    expect(settingsRows(state("selected", []), [container("CA")])).toEqual([]);
+    expect(settingsRows(state(true, []), [container("CA")])).toEqual([]);
   });
 
   it("matches on key or name", () => {
@@ -102,24 +83,19 @@ describe("rail ordering", () => {
   const keys = (l: WorkContainer[]) => l.map((c) => c.key);
 
   it("puts pinned containers first as badges and the rest in the menu, each by key", () => {
-    const split = railSplit(all, [state("selected", [row("WEB", { pinned: true }), row("CA", { pinned: true }), row("SUP")])], null);
+    const split = railSplit(all, [state(true, [row("WEB", { pinned: true }), row("CA", { pinned: true }), row("SUP")])], null);
     expect(keys(split.badges)).toEqual(["CA", "WEB"]);
     expect(keys(split.rest)).toEqual(["DEVOPS", "SUP"]);
   });
 
-  it("ignores pins on containers in their grace period", () => {
-    const split = railSplit(all, [state("selected", [row("WEB", { pinned: true, unwatchedAt: "2026-09-29T00:00:00Z" }), row("CA", { pinned: true })])], null);
-    expect(keys(split.badges)).toEqual(["CA"]);
-  });
-
   it("stands the first few in as badges when nothing is pinned, so the rail is never empty", () => {
-    const split = railSplit(all, [state("everything", [])], null, 2);
+    const split = railSplit(all, [state(false, [])], null, 2);
     expect(keys(split.badges)).toEqual(["CA", "DEVOPS"]);
     expect(keys(split.rest)).toEqual(["SUP", "WEB"]);
   });
 
   it("always shows the container on screen", () => {
-    const split = railSplit(all, [state("selected", [row("CA", { pinned: true })])], containerRef("SUP"));
+    const split = railSplit(all, [state(true, [row("CA", { pinned: true })])], containerRef("SUP"));
     expect(keys(split.badges)).toEqual(["CA", "SUP"]);
     expect(keys(split.rest)).toEqual(["DEVOPS", "WEB"]);
   });

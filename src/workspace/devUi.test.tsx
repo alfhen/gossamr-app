@@ -189,7 +189,7 @@ describe("repositories in the pickers and settings", () => {
     expect(find).toContain("Admin");
     expect(find).toContain("pushed 3h ago");
     const row = renderToStaticMarkup(
-      <SettingsRowView row={{ container: entry.ref, key: "acme/infra", name: "infra", depth: "involved", pinned: false, unwatchedAt: null, inaccessible: false, cachedItems: 3 }} noun={code} now={NOW} pinOnly={false} onDepth={vi.fn()} onPin={vi.fn()} onUnwatch={vi.fn()} onUndo={vi.fn()} />,
+      <SettingsRowView row={{ container: entry.ref, key: "acme/infra", name: "infra", pinned: false, inaccessible: false, cachedItems: 3 }} noun={code} pinOnly={false} onPin={vi.fn()} onUnwatch={vi.fn()} />,
     );
     expect(row).toContain("3 changes synced");
     expect(row).toContain("Unwatch");
@@ -199,7 +199,7 @@ describe("repositories in the pickers and settings", () => {
 
   it("shows the GitHub account with its watch summary and a confirmed disconnect", () => {
     const c = { id: "github:ada", kind: "github" as const, workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false };
-    const watch = { mode: "selected" as const, needsChoice: false, watches: [] as never[] };
+    const watch = { chosen: true, needsChoice: false, watches: [] as never[] };
     const cardProps = { c, watch: { ...watch, connectionId: "github:ada", catalogSize: null }, now: NOW, busy: false, onSync: vi.fn(), onManage: vi.fn(), onAskDisconnect: vi.fn(), onCancel: vi.fn(), onDisconnect: vi.fn() };
     const out = renderToStaticMarkup(<GithubCardView {...cardProps} confirming={false} />);
     for (const text of ["AD", "ada", "Not watching any repositories yet", "Manage repositories", "Disconnect"]) expect(out).toContain(text);

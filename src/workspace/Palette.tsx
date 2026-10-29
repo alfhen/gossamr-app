@@ -278,7 +278,7 @@ async function draftTicket(container: WorkContainer, title: string) {
 /** Containers matching the query that the person doesn't watch, searched on the server. */
 function useUnwatchedMatches(query: string, enabled: boolean): CatalogEntry[] {
   const backend = useWorkspace((s) => s.backend);
-  const selectedModes = useWorkspace((s) => s.watch.filter((w) => w.mode === "selected").map((w) => w.connectionId).join(","));
+  const selectedModes = useWorkspace((s) => s.watch.filter((w) => w.chosen).map((w) => w.connectionId).join(","));
   const [hits, setHits] = useState<CatalogEntry[]>([]);
   const q = query.trim();
   useEffect(() => {
@@ -348,7 +348,7 @@ export function Palette() {
     const all = Object.values(items);
     const tickets = ticketCommands(all, query, actions.jumpToItem);
     // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "agents").
-    const ranked = rankCommands([...contextEntries(subject), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.mode === "selected"), query, actions)], query);
+    const ranked = rankCommands([...contextEntries(subject), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.chosen), query, actions)], query);
     const order = searchOrder(tickets, ranked, query);
     const found = [
       ...order.head,

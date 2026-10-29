@@ -16,7 +16,6 @@ import type {
   Stray,
   StatusDef,
   WatchChange,
-  WatchMode,
   WatchState,
   WorkCategory,
   WorkDoc,
@@ -428,11 +427,6 @@ export class MockConnector {
       const c = this.containers.find((x) => x.ref.externalId === id);
       return { key: c?.key ?? id, name: c?.name ?? id, cachedItems: [...this.items.values()].filter((i) => i.container.externalId === id).length };
     });
-  }
-
-  setWatchMode(mode: WatchMode) {
-    this.watch.setMode(mode);
-    this.watchChanged();
   }
 
   setWatched(changes: WatchChange[]) {

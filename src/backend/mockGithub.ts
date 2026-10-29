@@ -12,7 +12,6 @@ import type {
   ReviewComment,
   WatchChange,
   WatchChanged,
-  WatchMode,
   WatchState,
 } from "../types";
 import { MockCode } from "./mockCode";
@@ -152,11 +151,6 @@ export class MockGithub {
     return this.watch?.state((id) => ({ key: id, name: id.split("/")[1] ?? id, cachedItems: 0 })) ?? null;
   }
 
-  setWatchMode(mode: WatchMode) {
-    this.requireWatch().setMode(mode);
-    this.listeners.forEach((l) => l({ connectionId: GITHUB_CONNECTION }));
-  }
-
   setWatched(changes: WatchChange[]) {
     this.requireWatch().apply(changes);
     this.listeners.forEach((l) => l({ connectionId: GITHUB_CONNECTION }));
@@ -170,8 +164,8 @@ export class MockGithub {
   /** What the backend's `runs_repos` returns: the chosen repositories, or the whole catalog when it is small, minus archived ones in a whole-catalog watch. */
   watchedRepos(): string[] {
     const state = this.watchState();
-    if (!state || state.mode === "unset") return [];
-    const names = state.mode === "selected" ? state.watches.filter((w) => !w.unwatchedAt && !w.inaccessible).map((w) => w.container.externalId) : this.repos.filter((r) => !r.archived).map((r) => r.key);
+    if (!state || state.needsChoice) return [];
+    const names = state.chosen ? state.watches.filter((w) => !w.inaccessible).map((w) => w.container.externalId) : this.repos.filter((r) => !r.archived).map((r) => r.key);
     return names.sort((a, b) => a.localeCompare(b));
   }
 

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAccountState } from "./accountState";
 import { MockBackend } from "./backend/mock";
 import { useClaude } from "./claudeStore";
-import { loadPrefs } from "./workspace/prefs";
 import { usePip } from "./workspace/pipStore";
 import { syncLine } from "./workspace/Settings";
 import { useTabs } from "./workspace/tabsStore";
@@ -54,17 +53,6 @@ describe("per-account state", () => {
     resetAccountState("jira:site:someone-else");
     expect(usePip.getState().filtered).toBeNull();
     expect(useTabs.getState().tabs).toHaveLength(1);
-  });
-});
-
-describe("the saved board column order", () => {
-  it("is read back per project and falls back to nothing when the stored value is corrupt", () => {
-    stubStorage({ "gossamr-prefs": JSON.stringify({ columnOrder: { "mock:CA": ["a", "b"], "mock:WEB": "nope" } }) });
-    expect(loadPrefs().columnOrder).toEqual({ "mock:CA": ["a", "b"] });
-    stubStorage({ "gossamr-prefs": JSON.stringify({ columnOrder: 7 }) });
-    expect(loadPrefs().columnOrder).toEqual({});
-    stubStorage({ "gossamr-prefs": "{not json" });
-    expect(loadPrefs().columnOrder).toEqual({});
   });
 });
 

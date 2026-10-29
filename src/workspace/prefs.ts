@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import type { Collapsed, PeekSectionId } from "./peekLogic";
 import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
-import { parseColumnOrders, type ColumnOrders } from "./columnOrder";
 import { readStored, writeStored } from "./storage";
 
 export const THEMES = ["auto", "light", "dark"] as const;
@@ -18,8 +17,6 @@ interface Prefs {
   paletteSeed: string;
   /** Peek sections the person folded. Kept for the session only. */
   peekCollapsed: Collapsed;
-  /** Board column order the person chose, per project. */
-  columnOrder: ColumnOrders;
   setTheme(theme: ThemeMode): void;
   setPipOpen(open: boolean): void;
   setPeekWidth(width: number): void;
@@ -27,20 +24,17 @@ interface Prefs {
   /** Opens or closes the palette; opened with `seed`, its search starts with those words. */
   setPaletteOpen(open: boolean, seed?: string): void;
   setPeekSection(id: PeekSectionId, collapsed: boolean): void;
-  /** Saves the order of a project's columns; `null` goes back to the default. */
-  setColumnOrder(container: string, ids: string[] | null): void;
 }
 
 const KEY = "gossamr-prefs";
 
-export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth" | "columnOrder"> {
+export function loadPrefs(): Pick<Prefs, "theme" | "pipOpen" | "peekWidth" | "pipWidth"> {
   const raw = readStored(KEY) as Partial<Record<keyof Prefs, unknown>> | null;
   return {
     theme: THEMES.find((t) => t === raw?.theme) ?? "auto",
     pipOpen: false,
     peekWidth: storedWidth(raw?.peekWidth, PEEK_DEFAULT),
     pipWidth: storedWidth(raw?.pipWidth, PIP_DEFAULT),
-    columnOrder: parseColumnOrders(raw?.columnOrder),
   };
 }
 
@@ -55,14 +49,9 @@ export const usePrefs = create<Prefs>((set) => ({
   setPipWidth: (pipWidth) => set({ pipWidth }),
   setPaletteOpen: (paletteOpen, seed = "") => set({ paletteOpen, paletteSeed: paletteOpen ? seed : "" }),
   setPeekSection: (id, collapsed) => set((s) => ({ peekCollapsed: { ...s.peekCollapsed, [id]: collapsed } })),
-  setColumnOrder: (container, ids) =>
-    set((s) => {
-      const { [container]: _dropped, ...rest } = s.columnOrder;
-      return { columnOrder: ids ? { ...rest, [container]: ids } : rest };
-    }),
 }));
 
-usePrefs.subscribe(({ theme, peekWidth, pipWidth, columnOrder }) => writeStored(KEY, { theme, peekWidth, pipWidth, columnOrder }));
+usePrefs.subscribe(({ theme, peekWidth, pipWidth }) => writeStored(KEY, { theme, peekWidth, pipWidth }));
 
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {
   if (theme === "auto") root.removeAttribute("data-theme");

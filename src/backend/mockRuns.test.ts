@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ItemRef, Run, RunSpec } from "../types";
 import { MockBackend } from "./mock";
+import { watchEveryRepo } from "./testWatch";
 import { itemRef } from "./mockConnector";
 import { MockWorkstreams } from "./mockWorkstreams";
 import { AGENT_GUARD, GUARD as GUARD_TEXT, mockDigest, renderPrompt } from "./mockRuns";
@@ -260,7 +261,7 @@ describe("mock runs with every role", () => {
 
   it("stores the ticket and its text, and checks out a pull request at its head commit", async () => {
     const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode("github:ada", "everything");
+    await watchEveryRepo(backend, "github:ada");
     expect(prepared(backend, { ...storefront, role: "builder" })).toMatchObject({ ticket: "CA-412", report: true });
     expect(prepared(backend, { ...webshop, role: "reviewer", pr: 212 }, itemRef("CA-402"))).toMatchObject({ pr: 212, prSha: "sha2120000", base: "main" });
     expect(() => prepared(backend, { ...storefront, clonePath: "/nowhere" })).toThrow(/isn't a git clone/);
@@ -272,7 +273,7 @@ describe("mock runs with every role", () => {
 
   it("refuses a fork, a closed or a missing pull request", async () => {
     const backend = new MockBackend({ githubRepos: 14 });
-    await backend.watchSetMode("github:ada", "everything");
+    await watchEveryRepo(backend, "github:ada");
     const review = (pr: number) => ({ ...webshop, role: "reviewer", pr });
     expect(refusal(backend, review(215), itemRef("CA-402"))).toContain("comes from a fork");
     expect(refusal(backend, review(190), itemRef("CA-402"))).toContain("is closed");
@@ -382,7 +383,7 @@ describe("Pip's messages to an agent, as message_agent", () => {
 
   it("checks out a pull request when Pip names one, pinned to its head commit, for any role", async () => {
     const b = new MockBackend({ runs: { seed: "empty" }, githubRepos: 14 });
-    await b.watchSetMode("github:ada", "everything");
+    await watchEveryRepo(b, "github:ada");
     const ws = b.workstreams.open(itemRef("CA-402")).id;
     const ask = { workstream: ws, role: "tester", brief: "Run the tests against it.", repo: "acme/webshop", pr: 212, item: itemRef("CA-402") };
     const run = b.runs.pipStart(ask, "turn-1");

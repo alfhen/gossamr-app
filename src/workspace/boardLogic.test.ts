@@ -65,19 +65,11 @@ describe("board sections", () => {
 });
 
 describe("column order", () => {
-  it("follows a saved order for the project and leaves the others on the default", () => {
-    const ca = section("CA").columns.map((c) => c.status.id);
-    const orders = { "mock:CA": [...ca].reverse() };
-    const all = boardSections(itemsByFilter(s(), ALL), s().containers, null, orders);
-    expect(all.find((x) => x.code === "CA")!.columns.map((c) => c.status.name)).toEqual(["Sent", "Scheduled", "QA", "Design", "Copy", "Backlog"]);
+  it("puts every project's columns in the default order", () => {
+    const all = boardSections(itemsByFilter(s(), ALL), s().containers, null);
     expect(all.find((x) => x.code === "DEVOPS")!.columns.map((c) => c.status.name)).toEqual(["To Do", "In Progress", "In Review", "Blocked", "Done"]);
-  });
-
-  it("keeps the workflow's statuses in the board's order so the workflow line matches", () => {
-    const orders = { "mock:CA": ["Sent", "Backlog", "Copy", "Design", "QA", "Scheduled"].map((n) => statusId("CA", n)) };
-    const ca = boardSections(itemsByFilter(s(), ALL), s().containers, null, orders).find((x) => x.code === "CA")!;
+    const ca = all.find((x) => x.code === "CA")!;
     expect(ca.workflow.statuses.map((x) => x.name)).toEqual(ca.columns.map((c) => c.status.name));
-    expect(ca.workflow.statuses[0].name).toBe("Sent");
   });
 
   it("orders a workflow like Customer Acquisition's by category, with Won't Do after Done", () => {

@@ -184,7 +184,6 @@ export interface WatchPickerViewProps {
   onLoadMore(): void;
   onRetry(): void;
   onSave(): void;
-  onEverything(): void;
   /** Present only where the picker can be left without choosing, such as when switching modes in Settings. */
   onCancel?(): void;
 }
@@ -277,14 +276,6 @@ export function WatchPickerView(p: WatchPickerViewProps) {
           {p.saving ? "Saving…" : "Start watching"}
         </button>
       </div>
-      <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-ws-sep pt-3">
-        <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink3">
-          Prefer not to choose? Watching everything syncs every {noun.one} you can see, so the first sync is slower, {code ? `pull requests from ${noun.many} you never use show up` : `tickets from ${noun.many} you never use show up`}, and Pip can read all of it.
-        </p>
-        <button type="button" onClick={p.onEverything} disabled={p.saving} className="shrink-0 rounded-lg border border-ws-sep2 px-3 py-1.5 font-semibold hover:bg-ws-hover disabled:opacity-45">
-          Watch everything
-        </button>
-      </div>
     </div>
   );
 }
@@ -362,11 +353,10 @@ export function ChooseWatch({ backend, state, connection, onCancel, onDone }: Ch
       onRetry={() => (catalog.retry(), setAttempt((n) => n + 1))}
       onSave={() =>
         void run(
-          () => useWorkspace.getState().chooseWatch(state.connectionId, choiceChanges(selected, suggested.list)),
+          () => useWorkspace.getState().watchContainers(state.connectionId, choiceChanges(selected, suggested.list)),
           `Watching ${count(selected.size, noun)}. You can change this any time in Settings.`,
         )
       }
-      onEverything={() => void run(() => useWorkspace.getState().watchMode(state.connectionId, "everything"), `Watching every ${noun.one} you can see.`)}
       onCancel={onCancel}
     />
   );

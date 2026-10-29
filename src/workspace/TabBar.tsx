@@ -1,64 +1,10 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { ALL, describeFilter } from "../lib/filter";
 import { useItemsByFilter } from "../workspaceStore";
 import { projectOf, sameProject, scopeTo, withProject } from "./filters";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { buildTabItems, type TabItem } from "./tabItems";
 import { useTabs } from "./tabsStore";
-
-/** A tab's place in the strip: its left edge from the first tab's, and its width. */
-export interface TabSpan {
-  left: number;
-  size: number;
-}
-
-/**
- * Which tabs the strip shows: `start` to `end`, whole, `width` wide, scrolled `offset` in. No `width` when every tab fits.
- * `squeeze` is set when even the one tab shown is wider than the room: that tab is drawn that narrow, its label cut short,
- * so its count and close button stay in view.
- */
-export interface TabWindow {
-  start: number;
-  end: number;
-  offset: number;
-  width?: number;
-  squeeze?: number;
-}
-
-/** Room each 'more tabs' button and the gap beside it takes, when the tabs don't all fit. */
-export const MORE_BUTTON = 34;
-
-/**
- * The run of whole tabs a strip `room` wide shows, starting from `from`. With `active` set, that tab is always in it, moving
- * as little as it can; a run that reaches the last tab takes in as many earlier ones as still fit. A tab is never cut: the
- * strip ends where the last whole one does, and buttons either side say how many more there are.
- */
-/** Whether two windows show the same thing, so the strip keeps the one it has. */
-export const sameWindow = (a: TabWindow, b: TabWindow) => a.start === b.start && a.end === b.end && a.offset === b.offset && a.width === b.width && a.squeeze === b.squeeze;
-
-export function tabWindow(spans: TabSpan[], room: number, from: number, active: number): TabWindow {
-  const last = spans.length - 1;
-  const right = (i: number) => spans[i].left + spans[i].size;
-  if (last < 0 || right(last) - spans[0].left <= room) return { start: 0, end: Math.max(0, last), offset: 0 };
-  const fits = Math.max(0, room - 2 * MORE_BUTTON);
-  const endFrom = (s: number) => {
-    let e = s;
-    while (e < last && right(e + 1) - spans[s].left <= fits) e++;
-    return e;
-  };
-  let start = Math.min(Math.max(0, from), last);
-  if (active >= 0 && active < start) start = active;
-  let end = endFrom(start);
-  if (active > end) {
-    start = active;
-    while (start > 0 && right(active) - spans[start - 1].left <= fits) start--;
-    end = endFrom(start);
-  }
-  while (end === last && start > 0 && right(end) - spans[start - 1].left <= fits) start--;
-  const offset = spans[start].left - spans[0].left;
-  const whole = right(end) - spans[start].left;
-  return whole > fits ? { start, end, offset, width: fits, squeeze: fits } : { start, end, offset, width: whole };
-}
 
 export function TabStrip({
   items,
@@ -80,79 +26,34 @@ export function TabStrip({
   const onKeyDown = (ev: KeyboardEvent) => {
     const step = ev.key === "ArrowRight" ? 1 : ev.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
+    // The arrow would also scroll the strip by its own step, away from the tab the effect below brings into view.
+    ev.preventDefault();
     const at = Math.max(0, items.findIndex((i) => i.active));
     const next = items[(at + step + items.length) % items.length];
     onActivate(next);
     requestAnimationFrame(() => document.getElementById(`tab-${next.id}`)?.focus());
   };
 
-  // One line of whole tabs: when the canvas is narrow (the peek and Pip both open) the strip shows as many as fit, always
-  // the active one among them, and says how many more lie either side, never a tab cut mid-word.
-  const room = useRef<HTMLDivElement>(null);
+  // One line of tabs that scrolls when they don't fit, keeping the active one in view.
   const list = useRef<HTMLDivElement>(null);
-  const newTab = useRef<HTMLButtonElement>(null);
   const active = items.findIndex((i) => i.active);
-  const [view, setView] = useState<TabWindow>({ start: 0, end: Math.max(0, items.length - 1), offset: 0 });
-  const from = useRef(0);
-  /** Works out the run of tabs that fits from `start`, keeping the active tab in it when `follow`. */
-  const fit = (follow: boolean, start = from.current) => {
+  useEffect(() => {
     const el = list.current;
-    const box = room.current;
-    if (!el || !box) return;
-    const tabs = [...el.children].map((t) => t.getBoundingClientRect());
-    const spans = tabs.map((r) => ({ left: r.left - (tabs[0]?.left ?? 0), size: r.width }));
-    const next = tabWindow(spans, box.clientWidth - (newTab.current?.offsetWidth ?? 0) - 4, start, follow ? active : -1);
-    from.current = next.start;
-    setView((v) => (sameWindow(v, next) ? v : next));
-  };
-  const refit = useRef(fit);
-  // Only a committed render's `fit` may answer the observer: a discarded render could hold a different active tab.
-  useLayoutEffect(() => {
-    refit.current = fit;
-  });
-  // The canvas narrowing as the peek or the Pip pane opens, or a tab's count growing, refits the strip around the active tab.
-  useLayoutEffect(() => {
-    const box = room.current;
-    if (!box || typeof ResizeObserver === "undefined") return;
-    const watch = new ResizeObserver(() => refit.current(true));
-    watch.observe(box);
+    const show = () => (el?.children[active] as HTMLElement | undefined)?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
+    show();
+    // The peek and the Pip pane narrow the strip without changing the tab.
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(show);
+    watch.observe(el);
     return () => watch.disconnect();
-  }, []);
-  useLayoutEffect(() => fit(true), [active, items.length, counts.join()]);
-  // Scrolling is the strip's own doing: put it back if focus or the browser moves it.
-  const pin = () => {
-    if (list.current && Math.abs(list.current.scrollLeft - view.offset) > 0.5) list.current.scrollLeft = view.offset;
-  };
-  useLayoutEffect(pin, [view]);
-  const before = view.width === undefined ? 0 : view.start;
-  const after = view.width === undefined ? 0 : items.length - 1 - view.end;
-  const page = (ahead: boolean) => fit(false, ahead ? view.end + 1 : Math.max(0, view.start - (view.end - view.start + 1)));
-  const moreButton = "w-[30px] shrink-0 mb-1 rounded text-xs font-semibold text-ws-ink2 hover:bg-ws-hover disabled:invisible";
+  }, [active, items.length]);
 
   return (
     <div className="flex items-end gap-1 border-b border-ws-sep">
-      <div ref={room} className="flex min-w-0 flex-1 items-end gap-1">
-        {view.width !== undefined && (
-          <button type="button" aria-label={`Show ${before} earlier ${before === 1 ? "tab" : "tabs"}`} title={`${before} more`} disabled={!before} onClick={() => page(false)} className={moreButton}>
-            ‹ {before}
-          </button>
-        )}
-        <div
-          ref={list}
-          role="tablist"
-          aria-label="Views"
-          data-more={before || after ? `${before} ${after}` : undefined}
-          onScroll={pin}
-          style={{ width: view.width }}
-          className="relative flex min-w-0 shrink-0 items-end gap-0.5 overflow-hidden"
-          onKeyDown={onKeyDown}
-        >
+      <div className="flex min-w-0 flex-1 items-end gap-1">
+        <div ref={list} role="tablist" aria-label="Views" className="relative flex min-w-0 items-end gap-0.5 overflow-x-auto [scrollbar-width:none]" onKeyDown={onKeyDown}>
           {items.map((item, i) => (
-            <div
-              key={item.id}
-              style={view.squeeze !== undefined && i === view.start ? { maxWidth: view.squeeze } : undefined}
-              className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}
-            >
+            <div key={item.id} className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}>
               <button
                 type="button"
                 role="tab"
@@ -179,12 +80,7 @@ export function TabStrip({
             </div>
           ))}
         </div>
-        {view.width !== undefined && (
-          <button type="button" aria-label={`Show ${after} more ${after === 1 ? "tab" : "tabs"}`} title={`${after} more`} disabled={!after} onClick={() => page(true)} className={moreButton}>
-            {after} ›
-          </button>
-        )}
-        <button ref={newTab} type="button" aria-label="New tab" title="New tab" onClick={onNew} className="mb-1 shrink-0 rounded px-2 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
+        <button type="button" aria-label="New tab" title="New tab" onClick={onNew} className="mb-1 shrink-0 rounded px-2 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
           +
         </button>
       </div>

@@ -1,11 +1,9 @@
 import { containerKey } from "../lib/filter";
 import { relativeTime } from "../lib/views";
 import { domainOfKind, workContainers, type ContainerDomain } from "./domains";
-import type { CatalogEntry, ConnectionInfo, ContainerRef, Footprint, Stray, WatchChange, WatchRow, WatchState, WorkContainer } from "../types";
+import type { CatalogEntry, ConnectionInfo, ContainerRef, Footprint, Stray, WatchChange, WatchState, WorkContainer } from "../types";
 
-export const GRACE_DAYS = 14;
 export const RAIL_BADGES = 8;
-const DAY_MS = 86_400_000;
 
 export interface Noun {
   one: string;
@@ -42,11 +40,11 @@ export function agoText(iso: string, now: Date): string {
 }
 
 /** One line about what a connection follows, for its card in Settings. */
-export function watchSummary(state: Pick<WatchState, "mode" | "needsChoice" | "watches"> | undefined, noun: Noun): string {
+export function watchSummary(state: Pick<WatchState, "chosen" | "needsChoice" | "watches"> | undefined, noun: Noun): string {
   if (!state) return "Not loaded yet";
   if (state.needsChoice) return `Choose which ${noun.many} to watch`;
-  const active = state.watches.filter((w) => w.unwatchedAt === null).length;
-  if (state.mode === "selected") return active ? `Watching ${count(active, noun)}` : `Not watching any ${noun.many} yet`;
+  const active = state.watches.length;
+  if (state.chosen) return active ? `Watching ${count(active, noun)}` : `Not watching any ${noun.many} yet`;
   return `Watching every ${noun.one} you can see`;
 }
 
@@ -86,51 +84,35 @@ export function mergeEntries(have: readonly CatalogEntry[], more: readonly Catal
   return [...have, ...more.filter((e) => !seen.has(e.ref.externalId))];
 }
 
-/** Whole days left before an unwatched container's cached data is removed; 0 on the last day. */
-export function graceDaysLeft(unwatchedAt: string, now: Date): number {
-  const elapsed = (now.getTime() - new Date(unwatchedAt).getTime()) / DAY_MS;
-  return Math.min(GRACE_DAYS, Math.max(0, Math.ceil(GRACE_DAYS - elapsed)));
-}
-
-export function graceLine(days: number): string {
-  return days === 0 ? "Unwatched, removed from sync today" : `Unwatched, removed from sync in ${days} ${days === 1 ? "day" : "days"}`;
-}
-
 export interface SettingsRow {
   container: ContainerRef;
   key: string;
   name: string;
-  depth: WatchRow["depth"];
   pinned: boolean;
-  unwatchedAt: string | null;
   inaccessible: boolean;
   cachedItems: number;
 }
 
 const byKey = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key);
 
-/** The rows Settings lists: watched ones by key, then those in their grace period. In everything mode the watched containers without a row of their own are listed too. */
+/** The rows Settings lists, by key. Until the list is chosen, the watched containers without a row of their own are listed too. */
 export function settingsRows(state: WatchState, containers: readonly WorkContainer[], cachedItems: (c: ContainerRef) => number = () => 0): SettingsRow[] {
   const rows: SettingsRow[] = state.watches.map((w) => ({
     container: w.container,
     key: w.key,
     name: w.name,
-    depth: w.depth,
     pinned: w.pinned,
-    unwatchedAt: w.unwatchedAt,
     inaccessible: w.inaccessible,
     cachedItems: w.cachedItems,
   }));
-  if (state.mode !== "selected") {
+  if (!state.chosen) {
     const have = new Set(rows.map((r) => containerKey(r.container)));
     for (const c of containers) {
       if (c.ref.connectionId !== state.connectionId || have.has(containerKey(c.ref))) continue;
-      rows.push({ container: c.ref, key: c.key, name: c.name, depth: "involved", pinned: false, unwatchedAt: null, inaccessible: false, cachedItems: cachedItems(c.ref) });
+      rows.push({ container: c.ref, key: c.key, name: c.name, pinned: false, inaccessible: false, cachedItems: cachedItems(c.ref) });
     }
   }
-  const active = rows.filter((r) => r.unwatchedAt === null).sort(byKey);
-  const grace = rows.filter((r) => r.unwatchedAt !== null).sort((a, b) => b.unwatchedAt!.localeCompare(a.unwatchedAt!));
-  return [...active, ...grace];
+  return rows.sort(byKey);
 }
 
 export function matchesQuery(r: { key: string; name: string }, query: string): boolean {
@@ -154,7 +136,7 @@ export interface RailSplit {
  */
 export function railSplit(containers: readonly WorkContainer[], watch: readonly WatchState[], current: ContainerRef | null, limit = RAIL_BADGES): RailSplit {
   const sorted = workContainers(containers).sort(byKey);
-  const pinned = new Set(watch.flatMap((w) => w.watches.filter((r) => r.pinned && r.unwatchedAt === null).map((r) => containerKey(r.container))));
+  const pinned = new Set(watch.flatMap((w) => w.watches.filter((r) => r.pinned).map((r) => containerKey(r.container))));
   let badges = sorted.filter((c) => pinned.has(containerKey(c.ref)));
   if (!badges.length) badges = sorted.slice(0, limit);
   const showing = current && sorted.find((c) => containerKey(c.ref) === containerKey(current));
@@ -183,8 +165,8 @@ export const ticketKeyOf = (text: string): string | null => (KEY_PATTERN.test(te
 export function watchedReposLine(states: readonly WatchState[], shown = 4): string | null {
   if (!states.length) return null;
   const parts = states.flatMap((s) => {
-    if (s.mode !== "selected") return ["any repository you can see"];
-    return s.watches.filter((w) => w.unwatchedAt === null).map((w) => w.key);
+    if (!s.chosen) return ["any repository you can see"];
+    return s.watches.map((w) => w.key);
   });
   if (!parts.length) return "in your watched repositories (none chosen yet)";
   return `in ${parts.length > shown ? `${parts.slice(0, shown).join(", ")} and ${parts.length - shown} more` : parts.join(", ")}`;
