@@ -136,25 +136,197 @@ Keep a line of body text under about 70 characters.
 
 ## Motion
 
-Motion is quick and quiet in the interface and slow and gentle on Pip.
+Motion in Gossamr has two speeds. The interface moves **quickly and quietly**, so the person never waits for it. Pip and the cobweb spiders move **slowly and gently**, because they are alive. Nothing else in Gossamr has a personality.
 
-| Where | Duration | Easing |
+### Principles
+
+1. **Motion explains where things are.** The peek slides in from the right because it lives on the right. A menu drops from the button that opened it. If a movement doesn't say where something came from or went, leave it out.
+2. **Quick for the interface, slow for life.** Interface motion finishes within 220 ms. Pip and the spiders take seconds.
+3. **One thing moves at a time.** Don't stagger lists, cascade cards or animate several regions together.
+4. **A loop means working.** Only work in progress loops: the ring on a running agent's dot, Pip bobbing while it answers, a pending switch's spinner, "Reading what happened…" while Pip reads. When the work stops, so does the motion. Pip's idle life (dangle, blink, twitch) is the one exception, and it is slow and irregular on purpose.
+5. **No bounce in the interface.** Overshoot and swing belong to Pip and the spiders only.
+6. **Never move what the person is reading.** New entries don't push the timeline under the reader's eyes, and counts change without animation.
+7. **Motion is never the only signal.** Every state it shows is also shown in words or colour, so turning motion off loses nothing.
+
+### Tokens
+
+The app sets these values directly in its CSS today. On gossamr.app, and in new app CSS, use these names:
+
+| Token | Value | For |
 | --- | --- | --- |
-| A sheet slides in | 220 ms | `cubic-bezier(0.2, 0.8, 0.2, 1)` |
-| A sheet slides out | 160 ms | ease-in |
-| A popover appears | 150 ms | ease-out |
-| Hover and focus colours | 120 ms | linear |
+| `--motion-instant` | 120 ms | Hover, focus, colour changes, Pip's gaze |
+| `--motion-quick` | 150 ms | Popovers, menus, the palette |
+| `--motion-standard` | 220 ms | Sheets and panes entering |
+| `--motion-exit` | 160 ms | Sheets and panes leaving: exits are shorter than entrances |
+| `--motion-settle` | 500 ms | Slow fades: a cobweb clearing, the wither tint changing (600 ms) |
+| `--ease-enter` | `cubic-bezier(0.2, 0.8, 0.2, 1)` | Things arriving: fast start, soft landing |
+| `--ease-exit` | `ease-in` | Things leaving: they accelerate away |
+| `--ease-out` | `ease-out` | Small things appearing: popovers, the ring |
+| `--ease-life` | `ease-in-out` | Pip and the spiders |
 
-Pip's own vocabulary, in `src/workspace/pip.css`:
+Distances stay small: 40 px for a sheet, 6 px and a 0.98 scale for a popover, 1 px for a hover lift, 5 to 7 px for Pip and the spiders.
 
-- **Dangle:** the launcher sways 5 px down and back over 5 s.
-- **Bob:** while Pip works on an answer, it bobs 6 px every 0.6 s and its legs scuttle.
-- **Blink** about every 5 s, and an occasional leg twitch every 7 to 9 s.
-- **Gaze:** the eyes follow the pointer.
+### Patterns
 
-Cobwebs gather on cards in stages as a ticket goes untouched (after 2, 3, 5, 7 and 10 days; sooner for tickets waiting on someone). They are the one place Gossamr comments on the work, and only with a picture.
+| Element | In | Out | Notes |
+| --- | --- | --- | --- |
+| Peek sheet | Slides 40 px from the right and fades in, 220 ms, enter easing | Slides 40 px right and fades, 160 ms, ease-in | `ws-peek-in`, `ws-peek-out` |
+| Popover, menu, palette, dialog | Drops 6 px, scales from 0.98, fades in, 150 ms, ease-out | Disappears at once | `ws-pop` |
+| Card or agent card hover | Lifts 1 px and gains a soft shadow, 120 ms | Settles back, 120 ms | Not on rows in a list |
+| Selection, hover row, focus ring | Colour change, 120 ms, or none | | Focus rings appear at once |
+| Resize handle | The indigo line fades in, 120 ms | | |
+| Running agent | A ring grows from the status dot and fades, 1.8 s, ease-out, looping | Stops when the run stops | The only motion on a working run |
+| Pending control | A small spinner inside the control | Replaced by the result | Only inside the switch or button that is waiting |
+| Pip reading | The "Reading what happened…" line pulses | Replaced by Pip's answer | |
+| Cobweb on hover or selection | | Shrinks to 0.4, turns −10° and fades, 500 ms | It clears the card for the person to read |
+| Wither tint | Deepens across 600 ms as a stage is reached | | |
 
-Every animation stops for `prefers-reduced-motion`, and Pip pauses while the window is hidden. Nothing important is said only through motion.
+### Pip
+
+Pip's motion, in `src/workspace/pip.css`, is what makes Pip a character rather than an icon.
+
+| Motion | Timing | When |
+| --- | --- | --- |
+| Dangle | 5 px down and back over 5 s, ease-in-out | The launcher, while idle |
+| Bob | 6 px up and back every 0.6 s | While Pip works on an answer |
+| Scuttle | Legs squash and stretch every 0.3 s | With the bob |
+| Blink | A quick close at the end of each 5 s cycle | Always |
+| Twitch | One leg turns 8° at the end of a 7 s cycle, another at the end of a 9 s cycle | Always |
+| Gaze | The pupils follow the pointer, 120 ms | Always |
+
+The blink and the two twitches run on different periods, so Pip never repeats exactly. Pip reacts to the person but never asks for attention: no waving, no jumping, no motion on new messages. Pip freezes while the window is hidden.
+
+### Cobweb spiders
+
+The spiders on a stale card's web, in `src/components/Cobweb.tsx`, rest for 5 to 18 s at random, then make one move:
+
+| Move | Duration |
+| --- | --- |
+| Drop down the thread | 2.4 s |
+| Climb up the thread | 2 s |
+| Swing on the thread | 2.2 s |
+| Turn | 1.6 s |
+| Twitch the legs | 0.7 s |
+| Crawl to another spot (45% of moves) | Climb up the thread in 500 ms, walk at 150 ms per unit (at least 900 ms), drop back in 500 ms |
+
+The cobweb is the one place Gossamr comments on the work, and only with a picture. Cobwebs gather in stages as a ticket goes untouched: after 2, 3, 5, 7 and 10 days, or after 1, 3, 5, 7 and 10 days for a ticket waiting on someone.
+
+### Reduced motion
+
+With `prefers-reduced-motion`, every animation and transition in the app stops, and each one becomes a still state:
+
+| Motion | Becomes |
+| --- | --- |
+| Sheets, popovers | Appear and disappear in place |
+| Running agent's ring | A plain dot in the state's colour |
+| Spinners | A still ring |
+| Pip | Sits still with open eyes; while it works, its pane still says what it is doing ("Reading what happened…") |
+| Cobweb spiders | Stay at their perch |
+
+Pip and the spiders also pause whenever the window is hidden, whatever the setting.
+
+### On gossamr.app
+
+- **Loading:** the mark and the wordmark fade in over 400 ms. Then Pip drops into the G once: the thread grows from the top of the G as Pip lowers 40 px over 900 ms with `--ease-enter`, followed by one small swing (as `rig-swing`, at half its angles). After that, only the blink.
+- **Scrolling:** nothing moves on scroll. No parallax, no fade-ups, no pinned animations.
+- **Hover:** links and buttons change colour in `--motion-instant`. Buttons may lift 1 px; nothing larger.
+- **Video:** screen recordings of the real app at real speed, at most 15 s, muted, looping, with a poster frame. Never speed up a recording or add a fake cursor.
+- **Reduced motion:** Pip is already in the G when the page loads, and videos show their poster with a play button.
+
+## Proposal: dew and silk glass
+
+**Not built yet.** Everything above describes Gossamr as it is. This section proposes how its motion and surfaces could become more fluid, inspired by dew on a spider's web and by Apple's Liquid Glass. It keeps the principles above; where it changes one, it says so.
+
+### The idea
+
+A web at dawn is the calmest moving thing there is. Dew gathers on the threads, each bead pulled round by surface tension. When a bead grows heavy enough, it lets go and falls, and the thread springs back. Gossamr's work moves the same way: drafts gather, and when the person approves one it lets go and goes out to Jira or GitHub.
+
+Liquid Glass adds the material: floating controls made of a clear, slightly thick glass that bends the content beneath it, catches light on its edge, and flows into new shapes rather than cutting between them.
+
+### 1. Springs instead of curves
+
+Replace the fixed durations and Bézier curves with springs. A spring has no fixed end time, keeps its speed when it is interrupted, and comes to rest the way real things do. CSS can express a spring as a `linear()` easing sampled from the spring's curve:
+
+| Spring | Feel | Settles in | Overshoot | Use |
+| --- | --- | --- | --- | --- |
+| `--spring-dew` | Firm, no bounce | 340 ms (98% by 220 ms) | None | Sheets, popovers, the palette, hover |
+| `--spring-silk` | Soft, a breath of give | 770 ms | 4% | Floating glass layers, Pip's pane, toasts |
+| `--spring-drop` | Elastic, alive | 1.07 s | 12.5% | Pip, a bead forming, a thread springing back |
+
+```css
+:root {
+  --spring-dew: linear(0, 0.12, 0.333, 0.531, 0.686, 0.796, 0.87, 0.919, 0.95, 0.97, 0.982, 0.989, 0.993, 0.996, 0.998, 1);
+  --spring-dew-ms: 340ms;
+  --spring-silk: linear(0, 0.071, 0.231, 0.418, 0.596, 0.745, 0.86, 0.941, 0.993, 1.023, 1.036, 1.038, 1.035, 1.028, 1.021, 1.014, 1.009, 1.005, 1.002, 1, 0.999, 0.999, 0.999, 1);
+  --spring-silk-ms: 770ms;
+  --spring-drop: linear(0, 0.086, 0.283, 0.517, 0.736, 0.91, 1.031, 1.099, 1.125, 1.121, 1.099, 1.07, 1.041, 1.017, 1, 0.989, 0.985, 0.984, 0.986, 0.99, 0.994, 0.997, 0.999, 1.001, 1.002, 1.002, 1.002, 1);
+  --spring-drop-ms: 1070ms;
+  --fall: cubic-bezier(0.11, 0, 0.5, 0); /* gravity: slow to let go, then faster and faster */
+}
+```
+
+The values are sampled from damped springs: dew is critically damped with a 0.24 s response, silk is damped to 0.72 with a 0.5 s response, and drop to 0.55 with a 0.55 s response. This keeps principle 5 for the interface, since dew has no overshoot. Silk's 4% is a give you feel rather than see, and only drop visibly bounces, which keeps that for living things.
+
+### 2. Dew interactions
+
+| Moment | Today | Proposed |
+| --- | --- | --- |
+| **Approving a draft** | The card leaves the list | The card **beads**: it draws in to 96% with rounder corners over 120 ms (surface tension). Then it **falls**: 16 px down and fading over 260 ms on `--fall`. The cards below close the gap with `--spring-dew`. The approval reads as a drop letting go. |
+| **Skipping or dismissing** | The card leaves the list | The card **evaporates**: it fades and blurs to 4 px over 200 ms, without falling. Nothing was sent, so nothing falls. |
+| **Pip makes a draft** | The draft appears | A hairline **thread** draws from Pip's pane to the new card over 400 ms, and a bead forms on the card with `--spring-drop` (scale 0.9 to 1). The thread then fades. Each draft shows where it came from, once. |
+| **A new need** | The count changes | The Needs you badge **swells** once, 1 to 1.12 and back on `--spring-drop`, like a bead taking on water. The number itself doesn't animate. |
+| **A running agent** | A ring grows from the dot every 1.8 s | A **ripple**: two thin rings, 0.6 s apart, spread and fade over 2.4 s, like a drop landing on still water. Slower and calmer than the ring. |
+| **Pip's launcher on hover** | It scales to 108% and tilts | The thread **stretches**: Pip lowers 3 px on `--spring-silk`, as if the person's attention weighs on the silk, and rises again on leave. |
+| **Opening a menu or the palette** | Drops 6 px and scales from 0.98 | It **flows from its source**: it starts as a pill the size of the button that opened it and grows into the menu on `--spring-dew`, with the corners settling last. This is Liquid Glass's morph, for the one moment it explains something. |
+| **Peek sheet** | Slides 40 px | It slides on `--spring-dew`, and its content follows 30 ms behind the frame, a small **follow-through** that makes the sheet feel like one liquid body rather than a moving box. |
+
+Principle 3 holds: each of these is one element moving, and the follow-through and the closing gap are parts of the same movement.
+
+### 3. Silk glass
+
+A material for the things that float above the work: the palette, menus, popovers, toasts, the Pip launcher and pane header, and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never for content.
+
+| Layer | Light | Dark |
+| --- | --- | --- |
+| Body | `ws-win` at 72% | `ws-win` at 64% |
+| Backdrop | `blur(20px) saturate(1.6)` | `blur(24px) saturate(1.4)` |
+| Edge light | 1 px inner highlight along the top, white at 60% | 1 px inner highlight, lavender `#c8c2ff` at 18% |
+| Rim | 1 px `ws-sep2` hairline | 1 px lavender at 12% |
+| Depth | `shadow-ws-pop` | `shadow-ws-pop` |
+| Tint (optional) | Teal at 6% for Pip's surfaces only | Teal at 8% for Pip's surfaces only |
+
+```css
+.silk-glass {
+  background: color-mix(in srgb, var(--color-ws-win) 72%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--color-ws-sep2);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), var(--shadow-ws-pop);
+}
+```
+
+Liquid Glass also refracts: the content behind its edges bends like it does through a lens. On the web that takes an SVG displacement filter, which is too costly for the app's lists. Keep refraction to the site's hero and to Pip's launcher, where there is one element and time to render it.
+
+**Rules for glass**
+
+- Text on glass must still reach 4.5:1 against the worst content that can sit behind it. If it can't, the layer goes solid.
+- When the person turns on Reduce transparency (macOS, or `prefers-reduced-transparency` where the browser reports it), glass becomes the solid `ws-win` with its rim and shadow.
+- Never stack glass on glass.
+- Teal tint only on Pip's surfaces, so "teal means Pip" still holds.
+
+### 4. Reduced motion, still
+
+Under `prefers-reduced-motion`, none of the above moves. A bead doesn't fall; the card is simply gone, and the Undo toast says what happened. The ripple is a still dot, and the morph is an instant appearance. Glass stays, because it doesn't move.
+
+### 5. How to get there
+
+1. **Tokens:** add the springs and `--fall` to `theme.css`, and move `ws-pop` and `ws-peek-*` onto `--spring-dew`. This is the smallest step, and the whole app already feels more fluid after it.
+2. **Dew:** approve as a falling bead, skip as evaporation, the badge swell and the ripple. One PR, with an e2e check that each still ends in the same state with reduced motion on.
+3. **Silk glass:** the palette and menus first, then toasts and the Pip launcher. Measure the scroll frame rate on a long list with a menu open before going further.
+4. **Threads:** the line from Pip to a new draft, and the morph from source.
+5. **gossamr.app:** the hero's Pip drop on `--spring-drop`, refraction on the launcher-style glass, and the site's navigation in silk glass.
+
+Each step can be stopped without leaving the app half fluid: every step stands on its own.
 
 ## Pip
 
@@ -207,7 +379,7 @@ The site is the app's front door, so it uses the app's colours, type and voice, 
 - **One teal thing per screen**, and it is Pip. Calls to action are indigo.
 - **Real screenshots** of the app, in both themes, never mock-ups that the app doesn't match. Crop to one idea each: a draft card, Needs you, Pip's pane.
 - **Claims must be true** and plain: drafts are the gate, the cache works offline, agents use your own Claude Code setup, it's for Jira and GitHub on macOS. Linear only once it ships.
-- **Motion:** Pip may bob once on its thread as the page loads. The rest of the page does not move on scroll. Respect reduced motion.
+- **Motion:** as set out under [Motion, on gossamr.app](#on-gossamrapp-1): Pip drops into the G once as the page loads, and nothing moves on scroll.
 - **Layout:** content at most 1120 px wide, text columns at most 680 px, 16 px side gutters on phones and no sideways scrolling.
 - **Favicon:** the small mark (`gossamr-icon-small.svg`). The social image is the full mark on ink with the wordmark beside it.
 - **Accessibility:** AA contrast for all text, a visible indigo focus ring, alt text that says what a screenshot shows, and every action reachable by keyboard.

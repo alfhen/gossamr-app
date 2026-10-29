@@ -193,6 +193,102 @@
     .stage .hang, .lids { animation: none !important; }
   }
 
+  /* Motion and the fluid proposal */
+  :root {
+    --spring-dew: linear(0, 0.12, 0.333, 0.531, 0.686, 0.796, 0.87, 0.919, 0.95, 0.97, 0.982, 0.989, 0.993, 0.996, 0.998, 1);
+    --spring-silk: linear(0, 0.071, 0.231, 0.418, 0.596, 0.745, 0.86, 0.941, 0.993, 1.023, 1.036, 1.038, 1.035, 1.028, 1.021, 1.014, 1.009, 1.005, 1.002, 1, 0.999, 0.999, 0.999, 1);
+    --spring-drop: linear(0, 0.086, 0.283, 0.517, 0.736, 0.91, 1.031, 1.099, 1.125, 1.121, 1.099, 1.07, 1.041, 1.017, 1, 0.989, 0.985, 0.984, 0.986, 0.99, 0.994, 0.997, 0.999, 1.001, 1.002, 1.002, 1.002, 1);
+    --fall: cubic-bezier(0.11, 0, 0.5, 0);
+  }
+  .principles { counter-reset: p; list-style: none; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); max-width: none; }
+  .principles li { counter-increment: p; background: var(--bar); border: 1px solid var(--sep); border-radius: 10px; padding: 14px 16px 14px 48px; position: relative; font-size: 15px; line-height: 22px; margin: 0; }
+  .principles li::before { content: counter(p); position: absolute; left: 16px; top: 14px; font: 600 13px/22px var(--mono); color: var(--accent); }
+  .principles b { display: block; }
+  .proposal-tag { display: inline-block; font: 600 12px/18px var(--sans); color: var(--pip); background: var(--pip-soft); border-radius: 999px; padding: 2px 10px; margin-bottom: 12px; }
+
+  .demos { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+  .demo { background: var(--bar); border: 1px solid var(--sep); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .demo h4 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; }
+  .demo p { margin: 0; font-size: 13px; line-height: 19px; color: var(--ink2); }
+  .demo .pad { position: relative; background: var(--win); border: 1px solid var(--sep); border-radius: 8px; min-height: 150px; padding: 14px; overflow: hidden; }
+  .demo .acts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .demo button { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); cursor: pointer; }
+  .demo button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .curves svg { width: 100%; height: auto; display: block; }
+  .curves .track { position: relative; height: 18px; margin: 6px 0; }
+  .curves .track i { position: absolute; left: 0; top: 4px; width: 10px; height: 10px; border-radius: 50%; }
+  .curves .track span { position: absolute; right: 0; top: 0; font: 11px/18px var(--mono); color: var(--ink3); }
+  .curves.go .track i { transform: translateX(var(--run, 200px)); }
+  .curves .t-dew i { background: var(--accent); transition: transform 340ms var(--spring-dew); }
+  .curves .t-silk i { background: var(--pip2); transition: transform 770ms var(--spring-silk); }
+  .curves .t-drop i { background: var(--pip); transition: transform 1070ms var(--spring-drop); }
+
+  .dlist { display: grid; gap: 0; }
+  .dlist .slot { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 340ms var(--spring-dew); }
+  .dlist .slot > div { min-height: 0; overflow: visible; }
+  .dlist .slot.gone { grid-template-rows: 0fr; }
+  .dcard { margin-bottom: 8px; border: 1.5px dashed var(--pip); background: var(--pip-soft); border-radius: 10px; padding: 9px 12px; font-size: 12px; line-height: 17px; transform-origin: center top; }
+  .dcard.plain { border: 1px solid var(--sep2); background: var(--win); }
+  .dcard.bead { transform: scale(0.96); border-radius: 18px; transition: transform 120ms ease-out, border-radius 120ms ease-out; }
+  .dcard.fall { transform: translateY(16px) scale(0.96); border-radius: 18px; opacity: 0; transition: transform 260ms var(--fall), opacity 260ms var(--fall); }
+  .dcard.evap { opacity: 0; filter: blur(4px); transition: opacity 200ms ease, filter 200ms ease; }
+
+  .badge-demo { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  .nbadge { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font: 700 12px var(--sans); transition: transform 1070ms var(--spring-drop); }
+  .nbadge.swell { transform: scale(1.12); transition: transform 120ms ease-out; }
+
+  .rings { display: flex; gap: 40px; justify-content: center; align-items: center; height: 100%; min-height: 120px; }
+  .rings figure { margin: 0; text-align: center; }
+  .rings figcaption { font-size: 11px; color: var(--ink3); margin-top: 18px; }
+  .dot { position: relative; width: 10px; height: 10px; border-radius: 50%; background: var(--pip); margin: 0 auto; }
+  .dot.ring::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: currentColor; color: var(--pip); animation: ring 1.8s ease-out infinite; }
+  .dot.ripple::before, .dot.ripple::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--pip); animation: ripple 2.4s ease-out infinite; }
+  .dot.ripple::after { animation-delay: 0.6s; }
+  @keyframes ring { from { transform: scale(1); opacity: 0.55; } to { transform: scale(2.6); opacity: 0; } }
+  @keyframes ripple { from { transform: scale(1); opacity: 0.8; } to { transform: scale(4.2); opacity: 0; } }
+
+  .morph-wrap { position: relative; }
+  .morph-btn { position: relative; z-index: 2; }
+  .morph-menu { position: absolute; top: 0; left: 0; z-index: 1; width: 180px; padding: 36px 6px 6px; margin: 0; list-style: none; font-size: 12px; line-height: 18px;
+    background: var(--win); border: 1px solid var(--sep2); box-shadow: var(--shadow);
+    transform-origin: 0 0; transform: scale(0.42, 0.2); border-radius: 40px / 85px; opacity: 0; pointer-events: none;
+    transition: transform 340ms var(--spring-dew), border-radius 300ms ease-out 40ms, opacity 100ms linear; }
+  .morph-menu li { padding: 5px 8px; border-radius: 6px; opacity: 0; transition: opacity 160ms ease-out 90ms; }
+  .morph-menu li:hover { background: var(--accent-soft); }
+  .morph-wrap.open .morph-menu { transform: none; border-radius: 10px; opacity: 1; pointer-events: auto; }
+  .morph-wrap.open .morph-menu li { opacity: 1; }
+
+  .hover-pip { display: grid; place-items: start center; height: 130px; cursor: pointer; }
+  .hover-pip .hang2 { position: relative; transition: transform 770ms var(--spring-silk); }
+  .hover-pip .silk { display: block; width: 1.5px; height: 56px; margin: 0 auto; background: linear-gradient(transparent, var(--ink3)); transform-origin: top; transition: transform 770ms var(--spring-silk); }
+  .hover-pip:hover .hang2 { transform: translateY(3px); }
+
+  .glass-stage { position: relative; border-radius: 10px; overflow: hidden; min-height: 300px; padding: 18px; border: 1px solid var(--sep);
+    background:
+      radial-gradient(circle at 18% 30%, rgb(55 208 192 / 0.55), transparent 32%),
+      radial-gradient(circle at 80% 70%, rgb(106 130 255 / 0.55), transparent 36%),
+      radial-gradient(circle at 60% 15%, rgb(180 138 240 / 0.45), transparent 30%),
+      var(--win); }
+  .glass-stage .under { display: grid; gap: 8px; }
+  .glass-stage .under div { height: 30px; border-radius: 6px; background: var(--bar); border: 1px solid var(--sep); display: flex; align-items: center; padding: 0 10px; font-size: 12px; color: var(--ink2); }
+  .silk-glass { position: absolute; left: 50%; top: 50%; width: min(420px, 86%); transform: translate(-50%, -50%); border-radius: 14px; overflow: hidden;
+    background: color-mix(in srgb, var(--win) 72%, transparent);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid var(--sep2);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), var(--shadow); }
+  :root[data-theme="dark"] .silk-glass { background: color-mix(in srgb, var(--win) 64%, transparent); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border-color: rgb(200 194 255 / 0.12); box-shadow: inset 0 1px 0 rgb(200 194 255 / 0.18), var(--shadow); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .silk-glass { background: color-mix(in srgb, var(--win) 64%, transparent); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border-color: rgb(200 194 255 / 0.12); box-shadow: inset 0 1px 0 rgb(200 194 255 / 0.18), var(--shadow); } }
+  .silk-glass.solid { background: var(--win); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .silk-glass .q { padding: 12px 14px; border-bottom: 1px solid var(--sep); font-size: 14px; color: var(--ink3); }
+  .silk-glass .r { padding: 8px 14px; font-size: 13px; display: flex; justify-content: space-between; }
+  .silk-glass .r.on { background: var(--accent-soft); }
+  .silk-glass .r kbd { font-size: 11px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fluid *, .fluid *::before, .fluid *::after { transition: none !important; animation: none !important; }
+  }
+
   footer { padding: 48px 0 64px; border-top: 1px solid var(--sep); color: var(--ink3); font-size: 14px; }
 </style>
 </head>
@@ -240,7 +336,7 @@
     <p class="lead">How Gossamr looks, moves and speaks, in the app and on gossamr.app.</p>
     <nav aria-label="Sections">
       <a href="#idea">Idea</a><a href="#logo">Logo</a><a href="#colour">Colour</a><a href="#type">Type</a>
-      <a href="#shape">Shape</a><a href="#motion">Motion</a><a href="#pip-section">Pip</a><a href="#voice">Voice</a>
+      <a href="#shape">Shape</a><a href="#motion">Motion</a><a href="#fluid">Dew &amp; glass</a><a href="#pip-section">Pip</a><a href="#voice">Voice</a>
       <a href="#keys">Keyboard</a><a href="#site">gossamr.app</a>
     </nav>
   </div>
@@ -393,16 +489,46 @@
 
 <section id="motion"><div class="wrap">
   <h2>Motion</h2>
-  <p>Quick and quiet in the interface; slow and gentle on Pip. Everything stops for reduced motion, and Pip pauses while the window is hidden.</p>
+  <p class="lead">Two speeds. The interface moves quickly and quietly, so you never wait for it. Pip and the cobweb spiders move slowly and gently, because they are alive.</p>
+  <h3>Principles</h3>
+  <ol class="principles">
+    <li><b>Motion explains where things are.</b>The peek slides in from the right because it lives there. A menu drops from its button.</li>
+    <li><b>Quick for the interface, slow for life.</b>Interface motion is done within 220 ms. Pip and the spiders take seconds.</li>
+    <li><b>One thing moves at a time.</b>No staggered lists, no cascades, no several regions at once.</li>
+    <li><b>A loop means working.</b>Only work in progress loops. When the work stops, the motion stops. Pip's slow idle life is the one exception.</li>
+    <li><b>No bounce in the interface.</b>Overshoot and swing belong to Pip and the spiders.</li>
+    <li><b>Never move what someone is reading.</b>The timeline holds its place, and counts change without animating.</li>
+    <li><b>Motion is never the only signal.</b>Every state is also in words or colour, so turning motion off loses nothing.</li>
+  </ol>
+
+  <h3>Tokens</h3>
   <div class="scroll"><table>
-    <thead><tr><th>Where</th><th>Duration</th><th>Easing</th></tr></thead>
+    <thead><tr><th>Token</th><th>Value</th><th>For</th></tr></thead>
     <tbody>
-      <tr><td>A sheet slides in</td><td>220 ms</td><td><code>cubic-bezier(0.2, 0.8, 0.2, 1)</code></td></tr>
-      <tr><td>A sheet slides out</td><td>160 ms</td><td>ease-in</td></tr>
-      <tr><td>A popover appears</td><td>150 ms</td><td>ease-out</td></tr>
-      <tr><td>Hover and focus colours</td><td>120 ms</td><td>linear</td></tr>
+      <tr><td><code>--motion-instant</code></td><td>120 ms</td><td>Hover, focus, colour, Pip's gaze</td></tr>
+      <tr><td><code>--motion-quick</code></td><td>150 ms</td><td>Popovers, menus, the palette</td></tr>
+      <tr><td><code>--motion-standard</code></td><td>220 ms</td><td>Sheets and panes entering</td></tr>
+      <tr><td><code>--motion-exit</code></td><td>160 ms</td><td>Sheets and panes leaving</td></tr>
+      <tr><td><code>--motion-settle</code></td><td>500 ms</td><td>Slow fades: a cobweb clearing</td></tr>
+      <tr><td><code>--ease-enter</code></td><td><code>cubic-bezier(0.2, 0.8, 0.2, 1)</code></td><td>Arriving</td></tr>
+      <tr><td><code>--ease-exit</code></td><td><code>ease-in</code></td><td>Leaving</td></tr>
+      <tr><td><code>--ease-life</code></td><td><code>ease-in-out</code></td><td>Pip and the spiders</td></tr>
     </tbody>
   </table></div>
+
+  <h3>Patterns</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>Element</th><th>In</th><th>Out</th></tr></thead>
+    <tbody>
+      <tr><td>Peek sheet</td><td>40 px from the right and fade, 220 ms, enter</td><td>40 px right and fade, 160 ms, ease-in</td></tr>
+      <tr><td>Popover, menu, palette</td><td>Drop 6 px, scale from 0.98, fade, 150 ms</td><td>Gone at once</td></tr>
+      <tr><td>Card hover</td><td>Lift 1 px, soft shadow, 120 ms</td><td>Settle, 120 ms</td></tr>
+      <tr><td>Running agent</td><td>Ring grows from the dot and fades, 1.8 s loop</td><td>Stops with the run</td></tr>
+      <tr><td>Pending control</td><td>Small spinner inside the control</td><td>Replaced by the result</td></tr>
+      <tr><td>Cobweb on hover</td><td></td><td>Shrink to 0.4, turn −10°, fade, 500 ms</td></tr>
+    </tbody>
+  </table></div>
+
   <h3>Pip's vocabulary</h3>
   <div class="motion">
     <figure style="margin:0"><div class="stage dangle"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
@@ -429,14 +555,129 @@
       </g></svg></div></div><figcaption class="meta">Bob while working · 0.6 s</figcaption></figure>
     <div style="flex:1;min-width:240px">
       <ul>
-        <li>Blinks about every 5 s; a leg twitches every 7 to 9 s.</li>
-        <li>Eyes follow the pointer.</li>
-        <li>Cobwebs gather on untouched tickets after 2, 3, 5, 7 and 10 days. They are the only comment Gossamr makes on the work, and only as a picture.</li>
-        <li>Nothing important is said only through motion.</li>
+        <li>Blink at the end of each 5 s cycle; leg twitches on 7 s and 9 s cycles, so Pip never repeats exactly.</li>
+        <li>Eyes follow the pointer in 120 ms. No waving, no jumping, no motion on new messages.</li>
+        <li>Cobweb spiders rest 5 to 18 s, then drop (2.4 s), climb (2 s), swing (2.2 s), turn (1.6 s), twitch (0.7 s) or crawl to another spot.</li>
+        <li>With reduced motion everything stands still, and Pip pauses whenever the window is hidden.</li>
       </ul>
     </div>
   </div>
 </div></section>
+
+<section id="fluid" class="fluid"><div class="wrap">
+  <span class="proposal-tag">Proposal · not built yet</span>
+  <h2>Dew and silk glass</h2>
+  <p class="lead">Dew gathers on the threads, each bead pulled round by surface tension. When a bead grows heavy it lets go, and the thread springs back. Gossamr's drafts could move the same way, on surfaces of clear silk glass inspired by Liquid Glass.</p>
+
+  <h3>1. Springs instead of curves</h3>
+  <p>A spring keeps its speed when it is interrupted and comes to rest the way real things do. Each is written as a CSS <code>linear()</code> easing sampled from the spring.</p>
+  <div class="demos">
+    <div class="demo curves" id="curves">
+      <svg viewBox="0 0 200 112" aria-label="Spring curves">
+        <line x1="8" y1="24" x2="192" y2="24" stroke="var(--sep2)" stroke-dasharray="3 3"/>
+        <polyline fill="none" stroke="var(--accent)" stroke-width="2" points="8.0,104 20.3,94.4 32.5,77.4 44.8,61.5 57.1,49.1 69.3,40.3 81.6,34.4 93.9,30.5 106.1,28.0 118.4,26.4 130.7,25.4 142.9,24.9 155.2,24.6 167.5,24.3 179.7,24.2 192.0,24"/>
+        <polyline fill="none" stroke="var(--pip2)" stroke-width="2" points="8.0,104 16.0,98.3 24.0,85.5 32.0,70.6 40.0,56.3 48.0,44.4 56.0,35.2 64.0,28.7 72.0,24.6 80.0,22.2 88.0,21.1 96.0,21.0 104.0,21.2 112.0,21.8 120.0,22.3 128.0,22.9 136.0,23.3 144.0,23.6 152.0,23.8 160.0,24 168.0,24.1 176.0,24.1 184.0,24.1 192.0,24"/>
+        <polyline fill="none" stroke="var(--pip)" stroke-width="2" points="8.0,104 14.8,97.1 21.6,81.4 28.4,62.6 35.3,45.1 42.1,31.2 48.9,21.5 55.7,16.1 62.5,14.0 69.3,14.3 76.1,16.1 83.0,18.4 89.8,20.7 96.6,22.6 103.4,24 110.2,24.9 117.0,25.2 123.9,25.3 130.7,25.1 137.5,24.8 144.3,24.5 151.1,24.2 157.9,24.1 164.7,23.9 171.6,23.8 178.4,23.8 185.2,23.8 192.0,24"/>
+      </svg>
+      <div class="track t-dew"><i></i><span>dew · 340 ms · no overshoot</span></div>
+      <div class="track t-silk"><i></i><span>silk · 770 ms · 4%</span></div>
+      <div class="track t-drop"><i></i><span>drop · 1.07 s · 12.5%</span></div>
+      <div class="acts"><button type="button" data-act="curves">Play</button></div>
+    </div>
+    <div class="demo">
+      <h4>Which spring where</h4>
+      <p><b>Dew</b>: sheets, popovers, the palette, hover. It is done by 220 ms and never bounces, so the interface rules hold.</p>
+      <p><b>Silk</b>: floating glass, Pip's pane, toasts. A give you feel more than see.</p>
+      <p><b>Drop</b>: Pip, a bead forming, a thread springing back. The only visible bounce, kept for living things.</p>
+      <p><b>Fall</b>: <code>cubic-bezier(0.11, 0, 0.5, 0)</code>, gravity. Slow to let go, then faster and faster.</p>
+    </div>
+  </div>
+
+  <h3>2. Dew interactions</h3>
+  <div class="demos">
+    <div class="demo">
+      <h4>Approve: the bead falls</h4>
+      <p>The draft draws in with rounder corners (surface tension), then falls 16 px and fades. The list closes the gap on dew. Skip evaporates instead: nothing was sent, so nothing falls.</p>
+      <div class="pad"><div class="dlist" id="dlist">
+        <div class="slot"><div><div class="dcard" id="dcard">Pip's draft · comment<br>The planner found the timeout in the SSO callback.</div></div></div>
+        <div class="slot"><div><div class="dcard plain">CA-388 · Cache invalidation</div></div></div>
+        <div class="slot"><div><div class="dcard plain">CA-371 · Flaky export test</div></div></div>
+      </div></div>
+      <div class="acts"><button type="button" class="primary" data-act="approve">Approve</button><button type="button" data-act="skip">Skip</button><button type="button" data-act="reset">Reset</button></div>
+    </div>
+    <div class="demo">
+      <h4>A new need: the badge swells</h4>
+      <p>One swell, like a bead taking on water. The number itself doesn't animate.</p>
+      <div class="pad"><div class="badge-demo">Needs you <span class="nbadge" id="nbadge">3</span></div></div>
+      <div class="acts"><button type="button" data-act="need">Add a need</button></div>
+    </div>
+    <div class="demo">
+      <h4>Running: ripple, not ring</h4>
+      <p>Two thin rings 0.6 s apart, spreading over 2.4 s, like a drop landing on still water.</p>
+      <div class="pad"><div class="rings">
+        <figure><div class="dot ring"></div><figcaption>Today · ring</figcaption></figure>
+        <figure><div class="dot ripple"></div><figcaption>Proposed · ripple</figcaption></figure>
+      </div></div>
+    </div>
+    <div class="demo">
+      <h4>A menu flows from its button</h4>
+      <p>It starts as a pill the size of its button and grows into the menu on dew; the corners settle last.</p>
+      <div class="pad" style="min-height:200px"><div class="morph-wrap" id="morph">
+        <button type="button" class="morph-btn" data-act="morph">Status ▾</button>
+        <ul class="morph-menu"><li>To do</li><li>In progress</li><li>In review</li><li>Done</li></ul>
+      </div></div>
+    </div>
+    <div class="demo">
+      <h4>Pip feels your attention</h4>
+      <p>Hover Pip: it lowers 3 px on silk, as if your attention weighs on the thread, and rises when you leave.</p>
+      <div class="pad"><div class="hover-pip"><div class="hang2"><i class="silk"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+        <path d="M 384 489 C 311 457 252 492 242 562"/>
+        <path d="M 390 570 C 321 573 302 642 340 686"/>
+        <path d="M 640 489 C 713 457 772 492 782 562"/>
+        <path d="M 634 570 C 703 573 722 642 684 686"/>
+      </g>
+      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <g class="lids">
+        <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
+        <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
+      </g></svg></div></div></div>
+    </div>
+  </div>
+
+  <h3>3. Silk glass</h3>
+  <p>For what floats above the work: the palette, menus, toasts, the Pip launcher and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never content.</p>
+  <div class="glass-stage">
+    <div class="under">
+      <div>CA-402 · Login times out on SSO</div><div>CA-388 · Cache invalidation</div><div>CA-371 · Flaky export test</div>
+      <div>CA-350 · Rename settings</div><div>CA-344 · Audit log</div><div>CA-331 · Webhook retries</div><div>CA-320 · Billing export</div>
+    </div>
+    <div class="silk-glass" id="glass">
+      <div class="q">Search and jump</div>
+      <div class="r on"><span>Ask Pip to plan CA-402</span><kbd>↵</kbd></div>
+      <div class="r"><span>Open the workstream on CA-388</span></div>
+      <div class="r"><span>Go to Work</span></div>
+    </div>
+  </div>
+  <div class="acts" style="margin-top:12px"><button type="button" class="btn" data-act="solid" style="cursor:pointer">Show as solid</button></div>
+  <ul style="margin-top:16px">
+    <li>Body: the window colour at 72% (64% in dark), with <code>blur(20px) saturate(1.6)</code> behind it.</li>
+    <li>A 1 px light along the top edge, a hairline rim, and the pop shadow.</li>
+    <li>Text on glass keeps 4.5:1 against the worst content behind it, or the layer goes solid.</li>
+    <li>Reduce transparency makes glass solid. Never stack glass on glass. Teal tint only on Pip's surfaces.</li>
+    <li>Refraction (content bending at the edges) only on the site's hero and Pip's launcher, where there is one element to render.</li>
+  </ul>
+
+  <h3>4. How to get there</h3>
+  <ol>
+    <li><b>Tokens:</b> add the springs and the fall to <code>theme.css</code>, and move the popover and peek motions onto dew.</li>
+    <li><b>Dew:</b> approve as a falling bead, skip as evaporation, the badge swell, the ripple.</li>
+    <li><b>Silk glass:</b> the palette and menus, then toasts and the launcher. Measure scrolling with a menu open first.</li>
+    <li><b>Threads:</b> a hairline from Pip to each new draft, and menus that flow from their buttons.</li>
+    <li><b>gossamr.app:</b> Pip drops into the G on the drop spring, glass navigation, refraction in the hero.</li>
+  </ol>
+  <p class="meta">With reduced motion, none of this moves: a bead doesn't fall, the card is simply gone and Undo says so. Glass stays, because it doesn't move.</p>
+</div></section>
+
 
 <section id="pip-section"><div class="wrap">
   <h2>Pip</h2>
@@ -519,6 +760,46 @@
     }
     apply(order.indexOf(current) >= 0 ? current : "auto");
     btn.addEventListener("click", function () { apply(order[(order.indexOf(current) + 1) % order.length]); });
+  })();
+  (function () {
+    var root = document.getElementById("fluid");
+    if (!root) return;
+    var curves = document.getElementById("curves");
+    var card = document.getElementById("dcard");
+    var slot = card.closest(".slot");
+    var badge = document.getElementById("nbadge");
+    var morph = document.getElementById("morph");
+    var glass = document.getElementById("glass");
+    function reset() { slot.classList.remove("gone"); card.className = "dcard"; }
+    document.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-act]");
+      if (!b) return;
+      var act = b.getAttribute("data-act");
+      if (act === "curves") {
+        var run = Math.max(80, curves.querySelector(".track").clientWidth - 10) + "px";
+        curves.style.setProperty("--run", run);
+        curves.classList.remove("go"); void curves.offsetWidth; curves.classList.add("go");
+      } else if (act === "approve") {
+        reset(); void card.offsetWidth;
+        card.classList.add("bead");
+        setTimeout(function () { card.classList.add("fall"); setTimeout(function () { slot.classList.add("gone"); }, 240); }, 120);
+      } else if (act === "skip") {
+        reset(); void card.offsetWidth;
+        card.classList.add("evap");
+        setTimeout(function () { slot.classList.add("gone"); }, 180);
+      } else if (act === "reset") {
+        reset();
+      } else if (act === "need") {
+        badge.textContent = String(Number(badge.textContent) + 1);
+        badge.classList.add("swell");
+        setTimeout(function () { badge.classList.remove("swell"); }, 120);
+      } else if (act === "morph") {
+        morph.classList.toggle("open");
+      } else if (act === "solid") {
+        var solid = glass.classList.toggle("solid");
+        b.textContent = solid ? "Show as glass" : "Show as solid";
+      }
+    });
   })();
 </script>
 </body>
