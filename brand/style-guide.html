@@ -291,9 +291,10 @@
   @keyframes ripple { from { transform: scale(1); opacity: 0.8; } to { transform: scale(4.2); opacity: 0; } }
 
   .morph-wrap { position: relative; }
-  .morph-btn { position: relative; z-index: 2; }
+  .morph-btn { position: relative; z-index: 2; transition: border-color 120ms, background-color 120ms, box-shadow 120ms; }
+  .morph-wrap.open .morph-btn { border-color: transparent; background: transparent; }
   .morph-menu { position: absolute; top: 0; left: 0; z-index: 1; width: 180px; padding: 36px 6px 6px; margin: 0; list-style: none; font-size: 12px; line-height: 18px;
-    background: var(--win); border: 1px solid var(--sep2); box-shadow: var(--shadow);
+    background: linear-gradient(var(--sep2), var(--sep2)) 6px 33px / calc(100% - 12px) 1px no-repeat, var(--win); border: 1px solid var(--sep2); box-shadow: var(--shadow);
     transform-origin: 0 0; transform: scale(0.42, 0.2); border-radius: 40px / 85px; opacity: 0; pointer-events: none;
     transition: transform 340ms var(--spring-dew), border-radius 300ms ease-out 40ms, opacity 100ms linear; }
   .morph-menu li { padding: 5px 8px; border-radius: 6px; opacity: 0; transition: opacity 160ms ease-out 90ms; }
@@ -745,7 +746,7 @@
     </div>
     <div class="demo">
       <h4>A menu flows from its button</h4>
-      <p>It starts as a pill the size of its button and grows into the menu on dew; the corners settle last.</p>
+      <p>It starts as a pill the size of its button and grows into the menu on dew; the corners settle last. The button becomes the menu's header.</p>
       <div class="pad" style="min-height:200px"><div class="morph-wrap" id="morph">
         <button type="button" class="morph-btn" data-act="morph">Status ▾</button>
         <ul class="morph-menu"><li>To do</li><li>In progress</li><li>In review</li><li>Done</li></ul>
