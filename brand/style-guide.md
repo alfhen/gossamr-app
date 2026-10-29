@@ -114,15 +114,18 @@ Two weights: regular and semibold (600). Bold is for counts in badges. Sentence 
 
 ### On gossamr.app
 
-The same family, so the site and the app feel like one thing. A larger scale for reading at a distance:
+Headings are set in SF Pro Rounded (`ui-rounded`), the Mac's rounded system face. Its round strokes and terminals match the silk G and Pip, and it is still the system family, so the site and the app feel like one thing. Body text stays in SF Pro Text. Safari and the app's WebKit have `ui-rounded`; other browsers fall back to the regular system face, which is fine.
 
-| Use | Size / line height | Weight |
+The scale is a perfect fourth (×1.333) from 17 px:
+
+| Use | Size / line height | Face and weight |
 | --- | --- | --- |
-| Hero heading | 56 / 60 px (36 / 40 on phones) | 600, letter-spacing −0.02em |
-| Section heading | 32 / 38 px (26 / 32) | 600, −0.01em |
-| Lead paragraph | 21 / 32 px (18 / 28) | 400 |
-| Body | 17 / 28 px | 400 |
-| Small | 14 / 20 px | 400 |
+| Hero heading | 71 / 72 px (53 / 56 on phones) | Rounded, 600, letter-spacing −0.03em |
+| Section heading | 40 / 48 px (30 / 38) | Rounded, 600, −0.015em |
+| Subheading | 23 / 30 px (21 / 28) | Rounded, 600 |
+| Lead paragraph | 23 / 34 px (19 / 29) | Text, 400 |
+| Body | 17 / 28 px | Text, 400 |
+| Small | 13 / 20 px | Text, 400 |
 
 Keep a line of body text under about 70 characters.
 
@@ -227,7 +230,7 @@ Pip and the spiders also pause whenever the window is hidden, whatever the setti
 
 ### On gossamr.app
 
-- **Loading:** the mark and the wordmark fade in over 400 ms. Then Pip drops into the G once: the thread grows from the top of the G as Pip lowers 40 px over 900 ms with `--ease-enter`, followed by one small swing (as `rig-swing`, at half its angles). After that, only the blink.
+- **Loading:** one orchestrated moment. The web's threads draw in from the corner over 1.6 s with `--ease-enter`, each starting 60 ms after the last. The dew beads appear as it finishes. Then Pip drops into the G: the thread unspools as Pip lowers 150 px over 1.07 s on `--spring-drop`. After that, only the blink.
 - **Scrolling:** nothing moves on scroll. No parallax, no fade-ups, no pinned animations.
 - **Hover:** links and buttons change colour in `--motion-instant`. Buttons may lift 1 px; nothing larger.
 - **Video:** screen recordings of the real app at real speed, at most 15 s, muted, looping, with a poster frame. Never speed up a recording or add a fake cursor.
@@ -395,11 +398,12 @@ Gossamr is keyboard-first, and the site should show it.
 
 The site is the app's front door, so it uses the app's colours, type and voice, and shows the real app.
 
-- **Dark first.** The hero sits on ink `#14131d`, with the mark and the wordmark. Pip, inside the mark, is the hero's one teal thing. Light sections follow for reading, on `#fcfbfe`.
+- **Dark first.** The hero sits on ink `#14131d`: a silk web drawn in from the top-right corner, with glass dew beads on its threads, and the mark and the wordmark set left. Pip, inside the mark, is the hero's one teal thing. Light sections follow for reading, on `#fcfbfe`. The style guide's own page shows this hero.
+- **Not cards.** Prose is set as prose and definition lists. Boxes are for things a person can touch: demos, screenshots, controls.
 - **One teal thing per screen**, and it is Pip. Calls to action are indigo.
 - **Real screenshots** of the app, in both themes, never mock-ups that the app doesn't match. Crop to one idea each: a draft card, Needs you, Pip's pane.
 - **Claims must be true** and plain: drafts are the gate, the cache works offline, agents use your own Claude Code setup, it's for Jira and GitHub on macOS. Linear only once it ships.
-- **Motion:** as set out under [Motion, on gossamr.app](#on-gossamrapp-1): Pip drops into the G once as the page loads, and nothing moves on scroll.
+- **Motion:** as set out under [Motion, on gossamr.app](#on-gossamrapp-1). The web draws in, then Pip drops into the G once, and nothing moves on scroll.
 - **Layout:** content at most 1120 px wide, text columns at most 680 px, 16 px side gutters on phones and no sideways scrolling.
 - **Favicon:** the small mark (`gossamr-icon-small.svg`). The social image is the full mark on ink with the wordmark beside it.
 - **Accessibility:** AA contrast for all text, a visible indigo focus ring, alt text that says what a screenshot shows, and every action reachable by keyboard.
