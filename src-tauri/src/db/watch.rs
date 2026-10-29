@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{params, OptionalExtension};
 
 use super::Db;
-use crate::domain::{ContainerRef, ContainerSummary, Depth, Visible, Watch, WatchChange, WatchMode, WatchSet, WatchSource};
+use crate::domain::{ContainerRef, ContainerSummary, Visible, Watch, WatchChange, WatchMode, WatchSet, WatchSource};
 use crate::error::Result;
 
 /// `col IN (?, ?, …)` over `n` ids, or a clause that never matches when there are none.
@@ -34,29 +34,30 @@ impl Db {
 
     pub fn watch_set(&self, connection_id: &str) -> Result<WatchSet> {
         let mut stmt = self.conn.prepare(
-            "SELECT container_id, depth, pinned, source, added_at, unwatched_at, inaccessible FROM watched_containers
+            "SELECT container_id, pinned, source, added_at, inaccessible FROM watched_containers
              WHERE connection_id = ?1 ORDER BY container_id",
         )?;
         let rows = stmt.query_map(params![connection_id], |r| {
             Ok(Watch {
                 container: ContainerRef { connection_id: connection_id.into(), external_id: r.get(0)? },
-                depth: Depth::parse(&r.get::<_, String>(1)?),
-                pinned: r.get(2)?,
-                source: WatchSource::parse(&r.get::<_, String>(3)?),
-                added_at: r.get(4)?,
-                unwatched_at: r.get(5)?,
-                inaccessible: r.get(6)?,
+                pinned: r.get(1)?,
+                source: WatchSource::parse(&r.get::<_, String>(2)?),
+                added_at: r.get(3)?,
+                inaccessible: r.get(4)?,
             })
         })?;
         Ok(WatchSet { mode: self.watch_mode(connection_id)?, watches: rows.collect::<rusqlite::Result<_>>()? })
     }
 
-    /// Applies the edits in one transaction. Stopping to watch keeps the row and its data until the grace period
-    /// ends; watching again clears that. Outside `selected` mode every container is watched already, so a pin or a
-    /// depth only records a row.
+    /// Applies the edits in one transaction. Unwatching removes the row; the container's items stay until
+    /// `prune_unwatched` removes them, so watching again soon needs no refetch. The first container watched makes the
+    /// list the person's own. Before that every container is watched already, so a pin only records a row.
     pub fn apply_watch_changes(&self, connection_id: &str, changes: &[WatchChange], at: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let selected = self.watch_mode(connection_id)? == WatchMode::Selected;
+        if !selected && changes.iter().any(|c| c.watched == Some(true)) {
+            self.set_watch_mode(connection_id, WatchMode::Selected, at)?;
+        }
         for c in changes {
             let exists: bool = tx
                 .query_row(
@@ -67,34 +68,21 @@ impl Db {
                 .optional()?
                 .unwrap_or(false);
             if c.watched == Some(false) {
-                tx.execute(
-                    "UPDATE watched_containers SET unwatched_at = COALESCE(unwatched_at, ?3) WHERE connection_id = ?1 AND container_id = ?2",
-                    params![connection_id, c.container_id, at],
-                )?;
+                tx.execute("DELETE FROM watched_containers WHERE connection_id = ?1 AND container_id = ?2", params![connection_id, c.container_id])?;
                 continue;
             }
             if !exists {
                 if selected && c.watched != Some(true) {
                     continue;
                 }
-                let source = c.source.unwrap_or(if selected { WatchSource::Manual } else { WatchSource::Everything });
                 tx.execute(
-                    "INSERT INTO watched_containers (connection_id, container_id, depth, pinned, source, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![connection_id, c.container_id, c.depth.unwrap_or_default().as_str(), c.pinned.unwrap_or(false), source.as_str(), at],
+                    "INSERT INTO watched_containers (connection_id, container_id, pinned, source, added_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![connection_id, c.container_id, c.pinned.unwrap_or(false), c.source.unwrap_or_default().as_str(), at],
                 )?;
                 continue;
             }
             if c.watched == Some(true) {
-                tx.execute(
-                    "UPDATE watched_containers SET unwatched_at = NULL, inaccessible = 0 WHERE connection_id = ?1 AND container_id = ?2",
-                    params![connection_id, c.container_id],
-                )?;
-            }
-            if let Some(d) = c.depth {
-                tx.execute(
-                    "UPDATE watched_containers SET depth = ?3 WHERE connection_id = ?1 AND container_id = ?2",
-                    params![connection_id, c.container_id, d.as_str()],
-                )?;
+                tx.execute("UPDATE watched_containers SET inaccessible = 0 WHERE connection_id = ?1 AND container_id = ?2", params![connection_id, c.container_id])?;
             }
             if let Some(p) = c.pinned {
                 tx.execute(
@@ -123,14 +111,12 @@ impl Db {
         Ok(())
     }
 
-    /// Deletes items of containers that aren't watched and whose grace period is over: the container was unwatched
-    /// before `cutoff`, or was never given a row (it only came in while everything was synced) and the item hasn't
-    /// been refreshed since `cutoff`. Events, activity and drafts are kept, so watching again brings the history back.
+    /// Deletes items of containers that aren't watched and haven't been refreshed since `cutoff`. Events, activity and
+    /// drafts are kept, so watching again brings the history back.
     pub fn prune_unwatched(&self, connection_id: &str, cutoff: &str) -> Result<usize> {
         Ok(self.conn.execute(
             "DELETE FROM items WHERE connection_id = ?1 AND synced_at < ?2 AND container_id NOT IN (
-               SELECT container_id FROM watched_containers
-               WHERE connection_id = ?1 AND (unwatched_at IS NULL OR unwatched_at >= ?2))",
+               SELECT container_id FROM watched_containers WHERE connection_id = ?1)",
             params![connection_id, cutoff],
         )?)
     }
@@ -214,24 +200,34 @@ mod tests {
     }
 
     #[test]
-    fn watching_pinning_and_changing_depth_persist_and_unwatching_is_soft() {
+    fn watching_and_pinning_persist_and_unwatching_removes_the_row() {
         let db = Db::in_memory().unwrap();
         selected(&db);
-        db.apply_watch_changes(C, &[WatchChange { pinned: Some(true), depth: Some(Depth::Whole), ..watch("A") }, watch("B")], "t1").unwrap();
+        db.apply_watch_changes(C, &[WatchChange { pinned: Some(true), ..watch("A") }, watch("B")], "t1").unwrap();
         let s = db.watch_set(C).unwrap();
         let a = s.watch("A").unwrap();
-        assert!(a.pinned && a.depth == Depth::Whole && a.source == WatchSource::Manual && a.unwatched_at.is_none());
+        assert!(a.pinned && a.source == WatchSource::Manual);
         assert_eq!(s.visible(), Visible::Only(vec!["A".into(), "B".into()]));
 
         db.apply_watch_changes(C, &[WatchChange { watched: Some(false), ..change("A") }], "t2").unwrap();
         let s = db.watch_set(C).unwrap();
-        assert_eq!(s.watch("A").unwrap().unwatched_at.as_deref(), Some("t2"));
-        assert!(s.watch("A").unwrap().pinned, "the choices survive so watching again is an undo");
+        assert!(s.watch("A").is_none());
         assert_eq!(s.visible(), Visible::Only(vec!["B".into()]));
 
         db.apply_watch_changes(C, &[watch("A")], "t3").unwrap();
+        assert!(db.watch_set(C).unwrap().is_watched("A"));
+    }
+
+    #[test]
+    fn the_first_container_watched_makes_the_list_the_persons_own() {
+        let db = Db::in_memory().unwrap();
+        assert_eq!(db.watch_mode(C).unwrap(), WatchMode::Unset);
+        db.apply_watch_changes(C, &[WatchChange { pinned: Some(true), ..change("P") }], "t1").unwrap();
+        assert_eq!(db.watch_mode(C).unwrap(), WatchMode::Unset, "a pin is not a choice");
+        db.apply_watch_changes(C, &[watch("A")], "t2").unwrap();
         let s = db.watch_set(C).unwrap();
-        assert!(s.is_watched("A") && s.watch("A").unwrap().depth == Depth::Whole);
+        assert_eq!(s.mode, WatchMode::Selected);
+        assert!(s.is_watched("A") && s.is_watched("P") && !s.is_watched("Z"));
     }
 
     #[test]
@@ -248,7 +244,7 @@ mod tests {
         db.set_watch_mode(C, WatchMode::Everything, "t0").unwrap();
         db.apply_watch_changes(C, &[WatchChange { pinned: Some(true), ..change("Z") }], "t1").unwrap();
         let s = db.watch_set(C).unwrap();
-        assert_eq!(s.watch("Z").unwrap().source, WatchSource::Everything);
+        assert_eq!(s.watch("Z").unwrap().source, WatchSource::Manual);
         assert!(s.is_watched("Q"), "everything is still everything");
     }
 
@@ -268,23 +264,21 @@ mod tests {
     }
 
     #[test]
-    fn pruning_waits_out_the_grace_period_and_leaves_watched_items_and_history_alone() {
+    fn pruning_removes_stale_items_of_unwatched_containers_and_leaves_watched_items_and_history_alone() {
         let db = Db::in_memory().unwrap();
         selected(&db);
-        db.apply_watch_changes(C, &[watch("KEEP"), watch("GONE"), watch("FRESH")], "t1").unwrap();
-        db.apply_watch_changes(C, &[WatchChange { watched: Some(false), ..change("GONE") }], "2026-09-01T00:00:00Z").unwrap();
-        db.apply_watch_changes(C, &[WatchChange { watched: Some(false), ..change("FRESH") }], "2026-09-20T00:00:00Z").unwrap();
-        for (id, container) in [("1", "KEEP"), ("2", "GONE"), ("3", "FRESH"), ("4", "NEVER")] {
-            item_in(&db, id, container, "2026-08-01T00:00:00Z");
+        db.apply_watch_changes(C, &[watch("KEEP")], "t1").unwrap();
+        for (id, container, synced) in [("1", "KEEP", "2026-08-01T00:00:00Z"), ("2", "GONE", "2026-08-01T00:00:00Z"), ("3", "GONE", "2026-09-20T00:00:00Z")] {
+            item_in(&db, id, container, synced);
         }
-        item_in(&db, "5", "NEVER", "2026-09-25T00:00:00Z");
         db.insert_activity(&[("a1".into(), crate::model::MyAction { ticket_key: "ENG-2".into(), at: "2026-08-02T00:00:00Z".into(), kind: "transition".into(), text: "x".into() })]).unwrap();
 
         let removed = db.prune_unwatched(C, "2026-09-15T00:00:00Z").unwrap();
 
-        assert_eq!(removed, 2);
-        let left: Vec<String> = db.items_synced_since(C, "", &Visible::All).unwrap().into_iter().map(|i| i.item.external_id).collect();
-        assert_eq!(left.iter().filter(|k| ["1", "3", "5"].contains(&k.as_str())).count(), 3, "{left:?}");
+        assert_eq!(removed, 1);
+        let mut left: Vec<String> = db.items_synced_since(C, "", &Visible::All).unwrap().into_iter().map(|i| i.item.external_id).collect();
+        left.sort();
+        assert_eq!(left, ["1", "3"]);
         assert_eq!(db.activity("").unwrap().len(), 1, "the person's own history stays");
     }
 

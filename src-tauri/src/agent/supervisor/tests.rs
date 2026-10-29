@@ -763,6 +763,18 @@ async fn a_wake_that_hits_the_quota_gives_its_facts_back_and_holds_wakes_off_for
     assert_eq!(t.wake_turns().await.len(), 3, "nothing is left to wake for");
 }
 
+#[tokio::test]
+async fn a_sweep_tells_pip_about_the_oldest_run_first_whatever_the_ids() {
+    let t = setup().await;
+    let first = Utc::now() - chrono::Duration::minutes(5);
+    t.run("z-old", "investigate", RunState::Done, |run| run.queued_at = first).await;
+    t.run("a-new", "triage", RunState::Done, |run| run.queued_at = first + chrono::Duration::minutes(1)).await;
+    t.sweep().await;
+    let turns = t.wake_turns().await;
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].prompt, "[Event] run z-old (investigate) Done\n[Event] run a-new (triage) Done");
+}
+
 /// A wake that hits the quota, with the backoff running.
 async fn quota_missed(t: &T) -> Run {
     *t.fake.0.fail.lock().unwrap() = Some("Claude AI usage limit reached".into());

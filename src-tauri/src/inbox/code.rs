@@ -292,12 +292,13 @@ impl Core {
                     })
                     .collect();
                 let needs_choice = set.mode == WatchMode::Unset && size.is_some_and(|n| n > AUTO_EVERYTHING_MAX);
-                Ok(WatchState { connection_id: id.clone(), mode: set.mode, needs_choice, catalog_size: size, watches })
+                Ok(WatchState { connection_id: id.clone(), chosen: set.mode == WatchMode::Selected, needs_choice, catalog_size: size, watches })
             })?);
         }
         Ok(out)
     }
 
+    #[cfg(test)]
     pub(super) async fn code_watch_set_mode(&self, id: &str, mode: WatchMode) -> Result<()> {
         self.code.session(id)?;
         self.with_code_db(id, |db| db.set_watch_mode(id, mode, &now_iso()))?;
@@ -394,7 +395,7 @@ impl Core {
             let catalog = || -> Result<Vec<String>> { Ok(db.catalog_search(id, "", usize::MAX >> 1)?.into_iter().filter(|c| !c.archived).map(|c| c.container_ref.external_id).collect()) };
             let size: Option<usize> = db.meta(CATALOG_SIZE)?.and_then(|s| s.parse().ok());
             Ok(match set.mode {
-                WatchMode::Selected => set.watches.iter().filter(|w| w.unwatched_at.is_none() && !w.inaccessible).map(|w| w.container.external_id.clone()).collect(),
+                WatchMode::Selected => set.watches.iter().filter(|w| !w.inaccessible).map(|w| w.container.external_id.clone()).collect(),
                 WatchMode::Everything => catalog()?,
                 WatchMode::Unset if size.is_some_and(|n| n <= AUTO_EVERYTHING_MAX) => catalog()?,
                 WatchMode::Unset => Vec::new(),
@@ -1091,7 +1092,7 @@ pub(crate) mod tests {
         let fx = fixture(REPOS).await;
         fx.core.github_connect_token("ghp_x").await.unwrap();
         let [state] = fx.core.watch_state().await.unwrap().try_into().unwrap();
-        assert_eq!((state.mode, state.needs_choice, state.catalog_size), (WatchMode::Everything, false, Some(3)));
+        assert_eq!((state.chosen, state.needs_choice, state.catalog_size), (false, false, Some(3)));
     }
 
     #[tokio::test]
@@ -1099,13 +1100,13 @@ pub(crate) mod tests {
         let fx = fixture(&many(13)).await;
         fx.core.github_connect_token("ghp_x").await.unwrap();
         let [state] = fx.core.watch_state().await.unwrap().try_into().unwrap();
-        assert_eq!((state.mode, state.needs_choice, state.catalog_size), (WatchMode::Unset, true, Some(13)));
+        assert_eq!((state.chosen, state.needs_choice, state.catalog_size), (false, true, Some(13)));
 
         fx.core.watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
         let change = WatchChange { container_id: "acme/r2".into(), watched: Some(true), source: Some(WatchSource::Footprint), ..Default::default() };
         fx.core.watch_set_containers("github:ann", &[change]).await.unwrap();
         let [state] = fx.core.watch_state().await.unwrap().try_into().unwrap();
-        assert_eq!((state.mode, state.needs_choice), (WatchMode::Selected, false));
+        assert_eq!((state.chosen, state.needs_choice), (true, false));
         assert_eq!((state.watches[0].watch.container.external_id.as_str(), state.watches[0].name.as_str(), state.watches[0].watch.source), ("acme/r2", "r2", WatchSource::Footprint));
         let set = fx.core.with_code_db("github:ann", |db| db.watch_set("github:ann")).unwrap();
         assert!(set.is_watched("acme/r2") && !set.is_watched("acme/r3"));

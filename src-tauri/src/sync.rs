@@ -31,7 +31,8 @@ const FULL_REFRESH: Duration = Duration::hours(6);
 const CONTAINERS_REFRESH: Duration = Duration::hours(12);
 /// Items not refreshed for this long are deleted from the cache.
 const KEEP_DAYS: i64 = 90;
-/// How long an unwatched container's items stay on disk, so watching it again needs no refetch.
+/// How long an unwatched container's items stay on disk after they were last refreshed, so watching it again soon
+/// needs no refetch.
 pub const UNWATCH_GRACE_DAYS: i64 = 14;
 
 /// What one sync asks the tracker for.
@@ -111,7 +112,7 @@ pub async fn pull(
     // Containers are context for the views; a failure to list them must not fail the sync of the items.
     // Every watched container is looked up, including ones the search left out as refused, so one that is readable
     // again is noticed.
-    let watched: Vec<ContainerRef> = watch.watches.iter().filter(|w| w.unwatched_at.is_none()).map(|w| w.container.clone()).collect();
+    let watched: Vec<ContainerRef> = watch.watches.iter().map(|w| w.container.clone()).collect();
     let containers = match (containers_due, scope) {
         (false, _) => None,
         (true, ContainerScope::Everything) => tracker.containers().await.ok(),
@@ -165,7 +166,6 @@ pub fn store(
             let (found, missing): (Vec<_>, Vec<_>) = watch
                 .watches
                 .iter()
-                .filter(|w| w.unwatched_at.is_none())
                 .map(|w| w.container.external_id.clone())
                 .partition(|id| containers.iter().any(|c| &c.container_ref.external_id == id));
             db.set_inaccessible(connection_id, &found, false)?;
@@ -277,7 +277,7 @@ mod tests {
     use crate::error::Error;
     use crate::model::Uploaded;
     use crate::tracker::testing::sample_ticket;
-    use crate::domain::{ContainerPage, ContainerQuery, Depth, WatchChange};
+    use crate::domain::{ContainerPage, ContainerQuery, WatchChange};
     use crate::tracker::{item_from_ticket, Applied, Connection, Followed, Move, TrackerCaps};
 
     fn at(s: &str) -> DateTime<Utc> {
@@ -526,7 +526,7 @@ mod tests {
     #[tokio::test]
     async fn a_scoped_pull_asks_for_the_watched_set_and_refreshes_only_those_containers() {
         let db = Db::in_memory().unwrap();
-        selected(&db, &[watching("CA"), WatchChange { depth: Some(Depth::Whole), ..watching("WEB") }]);
+        selected(&db, &[watching("CA"), watching("WEB")]);
         let scope = db.watch_set(CONNECTION).unwrap();
         let fake = Fake {
             followed: vec![in_container(item("CA-1", true), "CA"), in_container(item("OTH-1", false), "OTH")],
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(keys(&pulled.context), ["CA-5"], "children in an unwatched container are not fetched for this one");
         assert_eq!(*fake.calls.lock().unwrap(), ["followed", "children CA-1", "containers_of CA,WEB"]);
         let ContainerScope::Only(asked) = fake.scopes.lock().unwrap()[0].clone() else { panic!("scoped") };
-        assert_eq!(asked.iter().map(|w| (w.container.external_id.as_str(), w.depth)).collect::<Vec<_>>(), [("CA", Depth::Involved), ("WEB", Depth::Whole)]);
+        assert_eq!(asked.iter().map(|w| w.container.external_id.as_str()).collect::<Vec<_>>(), ["CA", "WEB"]);
     }
 
     #[tokio::test]
@@ -566,37 +566,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_container_unwatched_and_watched_again_inside_the_grace_period_is_asked_for_again() {
+    async fn a_container_unwatched_and_watched_again_is_asked_for_again() {
         let db = Db::in_memory().unwrap();
         selected(&db, &[watching("CA"), watching("WEB")]);
         db.apply_watch_changes(CONNECTION, &[WatchChange { container_id: "WEB".into(), watched: Some(false), ..Default::default() }], "2026-09-28T00:00:00Z").unwrap();
-        let fake = Fake::default();
-        let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &db.watch_set(CONNECTION).unwrap()).await.unwrap();
-        store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
-        let set = db.watch_set(CONNECTION).unwrap();
-        assert!(!set.watch("WEB").unwrap().inaccessible, "it wasn't looked up, so it wasn't found missing");
+        assert!(!db.watch_set(CONNECTION).unwrap().sync_scope().allows("WEB"));
 
-        db.set_inaccessible(CONNECTION, &["WEB".to_string()], true).unwrap();
         db.apply_watch_changes(CONNECTION, &[watching("WEB")], "2026-09-29T00:00:00Z").unwrap();
-        let set = db.watch_set(CONNECTION).unwrap();
-        assert!(!set.watch("WEB").unwrap().inaccessible && set.sync_scope().allows("WEB"));
+        assert!(db.watch_set(CONNECTION).unwrap().sync_scope().allows("WEB"));
     }
 
     #[tokio::test]
-    async fn a_full_sync_in_selected_mode_honours_the_grace_period_for_unwatched_containers() {
+    async fn a_full_sync_in_selected_mode_removes_items_of_unwatched_containers_not_refreshed_for_the_grace_period() {
         let db = Db::in_memory().unwrap();
-        selected(&db, &[watching("CA"), watching("OLD"), watching("RECENT")]);
-        db.apply_watch_changes(CONNECTION, &[WatchChange { container_id: "OLD".into(), watched: Some(false), ..Default::default() }], "2026-09-01T00:00:00Z").unwrap();
-        db.apply_watch_changes(CONNECTION, &[WatchChange { container_id: "RECENT".into(), watched: Some(false), ..Default::default() }], "2026-09-25T00:00:00Z").unwrap();
-        let stale = "2026-09-10T00:00:00Z";
-        db.upsert_items(&[in_container(item("OLD-1", false), "OLD"), in_container(item("RECENT-1", false), "RECENT"), in_container(item("NEW-1", false), "NEW")], stale).unwrap();
+        selected(&db, &[watching("CA")]);
+        db.upsert_items(&[in_container(item("OLD-1", false), "OLD")], "2026-09-10T00:00:00Z").unwrap();
+        db.upsert_items(&[in_container(item("RECENT-1", false), "RECENT")], "2026-09-25T00:00:00Z").unwrap();
         let scope = db.watch_set(CONNECTION).unwrap();
         let fake = Fake { followed: vec![in_container(item("CA-1", false), "CA")], ..Default::default() };
         let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &scope).await.unwrap();
         store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();
         let mut left: Vec<String> = db.items_synced_since(CONNECTION, "", &Visible::All).unwrap().into_iter().map(|i| i.item.key).collect();
         left.sort();
-        assert_eq!(left, ["CA-1", "RECENT-1"], "unwatched long ago and never watched go; unwatched this week stays");
+        assert_eq!(left, ["CA-1", "RECENT-1"], "unrefreshed for longer than the grace period goes; refreshed this week stays");
     }
 
     #[tokio::test]

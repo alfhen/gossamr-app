@@ -378,7 +378,12 @@ UPDATE proposals SET state = 'retired',
 const RUN_ROLES: &str = "
 ALTER TABLE runs RENAME COLUMN kind TO role;";
 
-const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES];
+/// The watch list is a plain list: unwatching removes the row, so those still in their grace period go. The `depth` and
+/// `unwatched_at` columns stay, unused.
+const WATCH_LIST: &str = "
+DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
+
+const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST];
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -886,5 +891,26 @@ mod tests {
         assert_eq!(row("comment").0, "pending");
         assert_eq!(row("sent").0, "applied");
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+    }
+
+    #[test]
+    fn a_container_in_its_grace_period_leaves_the_watch_list_and_the_rest_stay() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for step in &STEPS[..17] {
+            conn.execute_batch(step).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 17).unwrap();
+        for (id, unwatched) in [("KEEP", None), ("GONE", Some("2026-09-01T00:00:00Z"))] {
+            conn.execute(
+                "INSERT INTO watched_containers (connection_id, container_id, source, added_at, unwatched_at) VALUES ('c', ?1, 'manual', 't', ?2)",
+                rusqlite::params![id, unwatched],
+            )
+            .unwrap();
+        }
+
+        migrate(&mut conn).unwrap();
+
+        let left: Vec<String> = conn.prepare("SELECT container_id FROM watched_containers").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(left, ["KEEP"]);
     }
 }
