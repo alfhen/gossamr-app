@@ -137,7 +137,7 @@ mod tests {
         fx.core.sign_out().await.unwrap();
         assert!(fx.core.pip_turn_finish(&fx.scope, "q1", "late", true, None, None, None).await.is_err());
 
-        let rows = crate::db::Db::open(&fx.dir.join("inbox-site-me.sqlite")).unwrap();
+        let rows = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
         assert!(rows.pip_turns("workspace").unwrap().is_empty() && rows.pip_turns("CA-1").unwrap().is_empty());
     }
 

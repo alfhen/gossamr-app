@@ -76,6 +76,9 @@ fn ago(d: Duration) -> String {
     (Utc::now() - d).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// Drafts, runs, workstreams and Pip's conversations, shared by every connection.
+const APP_DB: &str = "app.sqlite";
+
 /// Separate files per site and account, so two people signing in on one Mac never see each other's inbox.
 fn db_file(connection: &Connection) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
@@ -291,7 +294,7 @@ impl Core {
         let mut guard = self.db.lock().expect("db lock poisoned");
         let connection = self.connection(scope)?;
         if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
-            let db = Db::open(&self.data_dir.join(db_file(&connection)))?;
+            let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?;
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
@@ -678,14 +681,14 @@ impl Core {
     pub async fn remember_claude_session(&self, key: Option<&str>, session_id: &str) -> Result<()> {
         self.with_db(|db| {
             if let Some(key) = key {
-                db.set_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
+                db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
             }
             let mut own: Vec<String> =
-                db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             own.retain(|s| s != session_id);
             own.insert(0, session_id.to_string());
             own.truncate(OWN_SESSIONS_KEPT);
-            db.set_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
+            db.set_app_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
         })
         .await
     }
@@ -694,7 +697,7 @@ impl Core {
     /// last sessions it started, or the session of an open workstream, which stays resumable however long it runs.
     pub async fn is_pip_session(&self, session_id: &str) -> Result<bool> {
         self.with_db(|db| {
-            let own: Vec<String> = db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            let own: Vec<String> = db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             Ok(own.iter().any(|s| s == session_id) || db.is_open_workstream_session(session_id)?)
         })
         .await
@@ -725,7 +728,7 @@ mod tests {
     async fn only_sessions_started_in_the_sandbox_can_be_resumed() {
         let fx = super::testing::fixture().await;
         fx.core
-            .with_db(|db| db.set_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
+            .with_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
             .await
             .unwrap();
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());

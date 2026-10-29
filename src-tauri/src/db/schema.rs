@@ -1,7 +1,7 @@
 //! Versioned schema. `PRAGMA user_version` counts the steps applied, so a file from any earlier release is brought
 //! forward in place and never rebuilt.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
 
@@ -392,14 +392,161 @@ DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
 
 const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST];
 
-pub fn migrate(conn: &mut Connection) -> Result<()> {
+/// What Gossamr itself keeps, apart from any one connection's cache: drafts, runs and their reports, workstreams, Pip's
+/// conversations and the sessions Pip started. These are the final shapes of the tables the cache steps built up, so
+/// the rows of an existing cache copy across column for column. The cache files keep their own, now unused, copies of
+/// these tables until a later step drops them.
+const APP: &str = "
+CREATE TABLE proposals (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  item_id TEXT,
+  state TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  data TEXT NOT NULL,
+  origin_kind TEXT,
+  workstream TEXT
+) WITHOUT ROWID;
+CREATE INDEX proposals_state ON proposals(state, created_at);
+CREATE INDEX proposals_item ON proposals(connection_id, item_id);
+CREATE INDEX proposals_workstream ON proposals(workstream, state);
+CREATE TABLE runs (
+  id TEXT PRIMARY KEY,
+  proposal_id TEXT,
+  start_key TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  item_id TEXT, item_key TEXT,
+  role TEXT NOT NULL, repo TEXT NOT NULL,
+  expected_worktree TEXT NOT NULL,
+  short_id TEXT, session_id TEXT,
+  state TEXT NOT NULL,
+  queued_at TEXT NOT NULL, last_progress_at TEXT NOT NULL, ended_at TEXT,
+  data TEXT NOT NULL,
+  archived_at TEXT
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX runs_start ON runs(start_key);
+CREATE UNIQUE INDEX runs_proposal ON runs(proposal_id) WHERE proposal_id IS NOT NULL;
+CREATE UNIQUE INDEX runs_worktree ON runs(expected_worktree);
+CREATE UNIQUE INDEX runs_short ON runs(short_id) WHERE short_id IS NOT NULL;
+CREATE INDEX runs_state ON runs(state, queued_at);
+CREATE INDEX runs_item ON runs(connection_id, item_id);
+CREATE INDEX runs_archived ON runs(archived_at);
+CREATE TABLE run_events (
+  run_id TEXT NOT NULL, seq INTEGER NOT NULL, at TEXT NOT NULL,
+  kind TEXT NOT NULL, text TEXT NOT NULL, detail TEXT,
+  PRIMARY KEY (run_id, seq)
+) WITHOUT ROWID;
+CREATE TABLE run_messages (
+  run_id TEXT PRIMARY KEY,
+  text TEXT NOT NULL,
+  queued_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE TABLE run_reports (
+  run_id TEXT PRIMARY KEY,
+  report TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
+  calls INTEGER NOT NULL DEFAULT 0,
+  rejections INTEGER NOT NULL DEFAULT 0,
+  stale INTEGER NOT NULL DEFAULT 0,
+  first_at TEXT, last_at TEXT
+) WITHOUT ROWID;
+CREATE TABLE run_report_tokens (
+  token_hash TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  tool_version INTEGER NOT NULL,
+  minted_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX run_report_tokens_run ON run_report_tokens(run_id);
+CREATE TABLE pip_turns (
+  conversation TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL DEFAULT '',
+  steps TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL,
+  error TEXT,
+  session_id TEXT,
+  meta TEXT,
+  usage TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (request_id, role)
+) WITHOUT ROWID;
+CREATE INDEX pip_turns_conversation ON pip_turns(conversation, created_at);
+CREATE TABLE workstreams (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  item_key TEXT,
+  repo TEXT,
+  title TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  held_reason TEXT,
+  created_at TEXT NOT NULL,
+  closed_at TEXT,
+  data TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX workstreams_open ON workstreams(connection_id, closed_at);
+CREATE UNIQUE INDEX workstreams_open_item ON workstreams(connection_id, item_key) WHERE closed_at IS NULL AND item_key IS NOT NULL;
+CREATE TABLE workstream_events (
+  workstream_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  at TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  run_id TEXT,
+  proposal_id TEXT,
+  digest TEXT,
+  detail TEXT,
+  PRIMARY KEY (workstream_id, seq)
+) WITHOUT ROWID;
+CREATE TABLE app_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);";
+// The app database is the main schema with a cache attached, so an unqualified table name finds the app's table first.
+// That is why its key-value table is `app_meta`: a `meta` here would hide every cache's.
+
+const APP_STEPS: &[&str] = &[APP];
+
+const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
+
+/// Keys of the cache's `meta` table that are app state: the sessions Pip started.
+const APP_META_KEYS: &str = "k LIKE 'claude:%' OR k = 'pip_sessions'";
+
+fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    for (i, sql) in STEPS.iter().enumerate().skip(applied as usize) {
+    for (i, sql) in steps.iter().enumerate().skip(applied as usize) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         tx.pragma_update(None, "user_version", (i + 1) as i64)?;
         tx.commit()?;
     }
+    Ok(())
+}
+
+pub fn migrate(conn: &mut Connection) -> Result<()> {
+    apply(conn, STEPS)
+}
+
+pub fn migrate_app(conn: &mut Connection) -> Result<()> {
+    apply(conn, APP_STEPS)
+}
+
+/// Copies the app state a cache file holds into the app database, once per cache file. The cache keeps its rows: they
+/// are deleted by a later step, after a release has run on the copy. Needs the cache attached as `cache`.
+pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<()> {
+    let marker = format!("copied:{cache_file}");
+    let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?;
+    if copied.is_some() {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    for table in APP_TABLES {
+        let mut stmt = tx.prepare(&format!("SELECT name FROM pragma_table_info('{table}', 'cache')"))?;
+        let columns = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join(", ");
+        tx.execute_batch(&format!("INSERT OR IGNORE INTO main.{table} ({columns}) SELECT {columns} FROM cache.{table};"))?;
+    }
+    tx.execute_batch(&format!("INSERT OR IGNORE INTO main.app_meta (k, v) SELECT k, v FROM cache.meta WHERE {APP_META_KEYS};"))?;
+    tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -410,6 +557,22 @@ mod tests {
     fn tables(conn: &Connection) -> Vec<String> {
         let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").unwrap();
         stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+    }
+
+    #[test]
+    fn the_app_tables_have_the_columns_the_cache_steps_end_with() {
+        let columns = |conn: &Connection, table: &str| -> Vec<(String, String, bool)> {
+            let mut stmt = conn.prepare(&format!("SELECT name, type, \"notnull\" FROM pragma_table_info('{table}')")).unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        let mut cache = Connection::open_in_memory().unwrap();
+        migrate(&mut cache).unwrap();
+        let mut app = Connection::open_in_memory().unwrap();
+        migrate_app(&mut app).unwrap();
+        for table in APP_TABLES {
+            assert_eq!(columns(&app, table), columns(&cache, table), "{table}");
+        }
+        assert_eq!(app.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), APP_STEPS.len() as i64);
     }
 
     #[test]
