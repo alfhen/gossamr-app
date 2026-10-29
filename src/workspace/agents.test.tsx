@@ -466,6 +466,7 @@ describe("motion", () => {
   it("keeps the running dot's ring apart from the flash on an item you jump to", () => {
     const board = readFileSync(new URL("./board.css", import.meta.url), "utf8");
     const both = css + board;
+    expect(css).toMatch(/\.ws-live::after\s*{[^}]*animation:\s*ws-ring\b/);
     expect(css).not.toMatch(/\.ws-pulse\b/);
     expect(board).not.toMatch(/\.ws-live\b/);
     for (const name of new Set([...both.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]))) {
