@@ -679,8 +679,8 @@ impl Core {
 
     /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.
     /// Sessions recorded by earlier versions, which ran in a user-chosen folder, never enter this list.
-    pub async fn remember_claude_session(&self, key: Option<&str>, session_id: &str) -> Result<()> {
-        self.with_db(|db| {
+    pub async fn remember_claude_session(&self, scope: &Scope, key: Option<&str>, session_id: &str) -> Result<()> {
+        self.with_db_for(scope, |db| {
             if let Some(key) = key {
                 db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
             }
@@ -734,8 +734,8 @@ mod tests {
             .unwrap();
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
 
-        fx.core.remember_claude_session(Some("CA-1"), "new-1").await.unwrap();
-        fx.core.remember_claude_session(None, "ws-1").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "new-1").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "ws-1").await.unwrap();
         assert!(fx.core.is_pip_session("new-1").await.unwrap() && fx.core.is_pip_session("ws-1").await.unwrap());
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
     }
@@ -744,11 +744,11 @@ mod tests {
     async fn a_workstream_s_session_stays_resumable_however_many_others_are_remembered() {
         let fx = super::testing::fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.remember_claude_session(None, "ws-session").await.unwrap();
-        fx.core.remember_claude_session(None, "loose-session").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "ws-session").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "loose-session").await.unwrap();
         fx.core.set_workstream_session(&fx.scope, &ws.id, "ws-session").await.unwrap();
         for n in 0..60 {
-            fx.core.remember_claude_session(None, &format!("other-{n}")).await.unwrap();
+            fx.core.remember_claude_session(&fx.scope, None, &format!("other-{n}")).await.unwrap();
         }
         assert!(fx.core.is_pip_session("ws-session").await.unwrap(), "pinned by its workstream");
         assert!(!fx.core.is_pip_session("loose-session").await.unwrap(), "the list itself still keeps only the last 50");

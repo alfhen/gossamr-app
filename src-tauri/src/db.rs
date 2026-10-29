@@ -58,6 +58,7 @@ impl Db {
     }
 
     fn open_with_app_steps(cache: &Path, app: &Path, steps: &[&str]) -> Result<Self> {
+        let cache_str = cache.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("cache path is not valid UTF-8: {}", cache.display())))?;
         let through = schema::CACHE_STEPS_WITH_APP_STATE.min(steps.len());
         let mut file = Self::open_file(cache)?;
         schema::apply(&mut file, &steps[..through])?;
@@ -65,7 +66,7 @@ impl Db {
         if let Some(dir) = app.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let db = Self::attach(Connection::open(app)?, &cache.to_string_lossy())?;
+        let db = Self::attach(Connection::open(app)?, cache_str)?;
         schema::adopt_cached_app_state(&db.conn, &cache.file_name().unwrap_or_default().to_string_lossy())?;
         let mut file = Self::open_file(cache)?;
         schema::apply(&mut file, steps)?;
