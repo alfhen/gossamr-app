@@ -10,6 +10,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 - [docs/product.md](docs/product.md): the product model and the draft approval gate.
 - [docs/simplification-proposal.md](docs/simplification-proposal.md): where the design is going. Section 12 is the order of work; each step lands as its own pull request.
 - [docs/agents-cli-findings.md](docs/agents-cli-findings.md): how the `claude` CLI really behaves (background sessions, resume, MCP timeouts, permission rules). Read it before you change how agents start, stop or resume.
+- [brand/style-guide.md](brand/style-guide.md): colour, type, motion, Pip and voice, for the app and gossamr.app. Read it before you change anything a person sees.
 
 ## Layout
 
@@ -78,5 +79,5 @@ pnpm e2e
 - Match the code around you: its naming, idiom and how much it comments.
 - Write few comments. A comment says why, a hidden constraint, or a property that a future edit could break. Never narrate what the code does or how the change came about.
 - Test names are sentences that say the behaviour (`an_answer_clears_what_the_run_said_while_it_asked_and_records_you_answered`).
-- UI text is short and plain. It calls the user "you" and the assistant "Pip", and it uses the app's words: workstream, agent, draft.
+- UI text is short and plain. It calls the user "you" and the assistant "Pip", and it uses the app's words: workstream, agent, draft. The full rules for words, colour and motion are in `brand/style-guide.md`; when you change a token in `src/workspace/theme.css`, change the guide with it.
 - Pull requests: one step of work each, branched from `main`. The description says what changed, why, and how you checked it. The person merges.
