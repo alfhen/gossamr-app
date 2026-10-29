@@ -273,12 +273,12 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::domain::{Comment, Filter, Intent, Person, Visible, Workflow};
+    use crate::domain::{Comment, Filter, Person, Visible, Workflow};
     use crate::error::Error;
     use crate::model::Uploaded;
     use crate::tracker::testing::sample_ticket;
     use crate::domain::{ContainerPage, ContainerQuery, WatchChange};
-    use crate::tracker::{item_from_ticket, Applied, Connection, Followed, Move, TrackerCaps};
+    use crate::tracker::{item_from_ticket, Applied, Followed, Move, TrackerCaps};
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
@@ -386,7 +386,7 @@ mod tests {
         async fn people(&self, _: &ItemRef, _: &str) -> Result<Vec<Person>> {
             unimplemented!()
         }
-        async fn apply_with_files(&self, _: &Intent, _: &[Uploaded]) -> Result<Applied> {
+        async fn apply_with_files(&self, _: &crate::domain::Write, _: &[Uploaded]) -> Result<Applied> {
             unimplemented!()
         }
         async fn attach(&self, _: &ItemRef, _: &str, _: &str, _: Vec<u8>) -> Result<Uploaded> {
@@ -409,7 +409,7 @@ mod tests {
         let mut t = sample_ticket();
         t.key = key.into();
         t.is_epic = epic;
-        item_from_ticket(&Connection::jira(&crate::auth::Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site"), &t)
+        item_from_ticket(&crate::auth::SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Site"), &t).unwrap()
     }
 
     const NOW: &str = "2026-09-29T12:00:00Z";
@@ -634,7 +634,7 @@ mod tests {
         let db = Db::in_memory().unwrap();
         let mut t = sample_ticket();
         t.history[0].items.push(crate::model::HistoryItem { field: "labels".into(), from: Some("a".into()), to: Some("a b".into()), to_id: None });
-        let fake = Fake { followed: vec![crate::tracker::item_from_ticket(&Connection::jira(&crate::auth::Scope { cloud_id: "site".into(), account_id: "me".into() }, "Site"), &t)], ..Default::default() };
+        let fake = Fake { followed: vec![crate::tracker::item_from_ticket(&crate::auth::SiteScope { cloud_id: "site".into(), account_id: "me".into() }.connection("Site"), &t).unwrap()], ..Default::default() };
         let run = async {
             let pulled = pull(&fake, CONNECTION, Plan::Full, &SyncState::default(), &[], "h", at(NOW), &WatchSet::default()).await.unwrap();
             store(&db, CONNECTION, "me", &pulled, Plan::Full, at(NOW), "2000-01-01T00:00:00Z").unwrap();

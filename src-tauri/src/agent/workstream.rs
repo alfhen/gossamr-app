@@ -420,7 +420,6 @@ mod tests {
     use crate::domain::{CreatedBy, Doc, Intent, Origin, Role, RunSpec, RunState};
     use crate::inbox::testing::{fixture, Fixture};
     use crate::proposals::Draft;
-    use crate::tracker::Connection;
     use chrono::Utc;
 
     struct Rig {
@@ -461,7 +460,7 @@ mod tests {
         async fn run(&self, id: &str, workstream: Option<&str>, kind: &str, state: RunState, minutes: i64) -> Run {
             let spec = RunSpec { role: Role::parse(kind).unwrap(), name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
             let at = Utc::now() + chrono::Duration::minutes(minutes);
-            let mut run = Run::queued(id.into(), format!("p-{id}"), Connection::jira_id(&self.fx.scope), Some(self.fx.item("CA-1")), spec, "f".into(), at);
+            let mut run = Run::queued(id.into(), format!("p-{id}"), self.fx.scope.connection_id.clone(), Some(self.fx.item("CA-1")), spec, "f".into(), at);
             run.state = state;
             self.fx.insert_run(&run).await;
             run

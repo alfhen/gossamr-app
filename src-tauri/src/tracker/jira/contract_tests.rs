@@ -7,13 +7,13 @@ use serde_json::{json, Value};
 
 use super::client::Jira;
 use super::{adf, JiraTracker};
-use crate::auth::{Account, Auth, Credentials, Scope, Site, Tokens};
+use crate::auth::{Account, Auth, Credentials, SiteScope, Site, Tokens};
 use crate::codehost::github::testserver::{serve, Reply, Server};
 use crate::domain::{
-    Block, BodyChange, Category, ContainerRef, Doc, Inline, Intent, ItemKind, ItemRef, Link, LinkKind, Mark, NewItem, Patch, PersonRef, Priority, TitleChange,
+    Block, BodyChange, Category, ContainerRef, Doc, Inline, Write, ItemKind, ItemRef, Link, LinkKind, Mark, NewItem, Patch, PersonRef, Priority, TitleChange,
 };
 use crate::error::Error;
-use crate::tracker::{Connection, WorkTracker};
+use crate::tracker::WorkTracker;
 
 /// `GET /rest/api/3/issue/createmeta/{projectIdOrKey}/issuetypes` ("Get create metadata issue types for a project").
 const ISSUE_TYPES: &str = include_str!("fixtures/doc_createmeta_issuetypes.json");
@@ -32,8 +32,8 @@ const ISSUE: &str = include_str!("fixtures/doc_issue_get.json");
 
 const API: &str = "/ex/jira/site/rest/api/3";
 
-fn scope() -> Scope {
-    Scope { cloud_id: "site".into(), account_id: "me".into() }
+fn scope() -> SiteScope {
+    SiteScope { cloud_id: "site".into(), account_id: "me".into() }
 }
 
 fn auth(http: &reqwest::Client) -> Arc<Auth> {
@@ -52,7 +52,7 @@ fn client(server: &Server) -> Jira {
 
 fn tracker(server: &Server) -> JiraTracker {
     let http = reqwest::Client::new();
-    JiraTracker::at(&server.base, http.clone(), auth(&http), &Connection::jira(&scope(), "Site"))
+    JiraTracker::at(&server.base, http.clone(), auth(&http), &scope().connection("Site"))
 }
 
 fn item(key: &str) -> ItemRef {
@@ -102,7 +102,7 @@ async fn creating_an_issue_sends_the_project_type_id_and_adf_and_reads_the_new_k
         labels: vec!["checkout".into()],
     };
     let link = Link { from: item("NEW"), to: item("EX-7"), kind: LinkKind::Blocks };
-    let intent = Intent::Create { container: ContainerRef { connection_id: "jira:site:me".into(), external_id: "EX".into() }, fields, link: Some(link) };
+    let intent = Write::Create { container: ContainerRef { connection_id: "jira:site:me".into(), external_id: "EX".into() }, fields, link: Some(link) };
     let applied = tracker(&server).apply(&intent).await.unwrap();
     assert_eq!(applied.created[0].key, "ED-24");
     assert!(applied.error.is_none());
@@ -142,7 +142,7 @@ async fn a_failed_link_after_a_create_keeps_the_new_issue_and_carries_jiras_word
     .await;
     let fields = NewItem { title: "t".into(), body: Doc::default(), kind: ItemKind::Task, assignee: None, parent: None, priority: None, labels: vec![] };
     let link = Link { from: item("NEW"), to: item("EX-7"), kind: LinkKind::Blocks };
-    let intent = Intent::Create { container: ContainerRef { connection_id: "jira:site:me".into(), external_id: "EX".into() }, fields, link: Some(link) };
+    let intent = Write::Create { container: ContainerRef { connection_id: "jira:site:me".into(), external_id: "EX".into() }, fields, link: Some(link) };
     let applied = tracker(&server).apply(&intent).await.unwrap();
     assert_eq!(applied.created[0].key, "ED-24");
     assert_eq!(applied.error.unwrap().to_string(), "Jira returned 404: POST issueLink: No issue link type with name 'Blocks' found.");
@@ -157,7 +157,7 @@ async fn sub_tasks_are_created_under_the_parent_with_the_sub_task_type_id() {
         (&format!("POST {API}/issue"), vec![Reply::status(201, CREATED), Reply::status(400, r#"{"errorMessages":[],"errors":{"summary":"Summary is too long."}}"#)]),
     ])
     .await;
-    let intent = Intent::Subtasks { parent: item("EX-1"), summaries: vec!["Reproduce".into(), "Fix".into(), "Never reached".into()] };
+    let intent = Write::Subtasks { parent: item("EX-1"), summaries: vec!["Reproduce".into(), "Fix".into(), "Never reached".into()] };
     let applied = tracker(&server).apply(&intent).await.unwrap();
     assert_eq!(applied.created.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["ED-24"]);
     assert_eq!(applied.error.unwrap().to_string(), "Jira returned 400: POST issue: summary: Summary is too long.");
@@ -170,7 +170,7 @@ async fn sub_tasks_are_created_under_the_parent_with_the_sub_task_type_id() {
 async fn a_project_without_a_sub_task_type_says_so_before_anything_is_created() {
     let only_tasks = json!({ "maxResults": 50, "startAt": 0, "total": 1, "issueTypes": [{ "id": "1", "name": "Task", "subtask": false }] }).to_string();
     let server = serve(vec![(&format!("{API}/issue/createmeta/EX/issuetypes"), vec![Reply::ok(&only_tasks)])]).await;
-    let err = tracker(&server).apply(&Intent::Subtasks { parent: item("EX-1"), summaries: vec!["a".into()] }).await.unwrap_err();
+    let err = tracker(&server).apply(&Write::Subtasks { parent: item("EX-1"), summaries: vec!["a".into()] }).await.unwrap_err();
     assert_eq!(err.to_string(), "Jira returned 400: project EX has no sub-task issue type");
     assert!(sent(&server, "POST").is_empty());
 }
@@ -179,12 +179,12 @@ async fn a_project_without_a_sub_task_type_says_so_before_anything_is_created() 
 async fn links_name_the_type_and_put_the_blocker_in_the_inward_end() {
     let server = serve(vec![(&format!("POST {API}/issueLink"), vec![Reply::status(201, "")])]).await;
     for (kind, name) in [(LinkKind::Blocks, "Blocks"), (LinkKind::Relates, "Relates"), (LinkKind::Duplicates, "Duplicate")] {
-        tracker(&server).apply(&Intent::Link { from: item("EX-1"), to: item("EX-2"), kind }).await.unwrap();
+        tracker(&server).apply(&Write::Link { from: item("EX-1"), to: item("EX-2"), kind }).await.unwrap();
         let (target, body) = sent(&server, "POST").pop().unwrap();
         assert_eq!(target, format!("{API}/issueLink"));
         assert_eq!(body, json!({ "type": { "name": name }, "inwardIssue": { "key": "EX-1" }, "outwardIssue": { "key": "EX-2" } }));
     }
-    let err = tracker(&server).apply(&Intent::Link { from: item("EX-1"), to: item("pr"), kind: LinkKind::ImplementedBy }).await.unwrap_err();
+    let err = tracker(&server).apply(&Write::Link { from: item("EX-1"), to: item("pr"), kind: LinkKind::ImplementedBy }).await.unwrap_err();
     assert!(matches!(err, Error::Proposal(_)));
     assert_eq!(sent(&server, "POST").len(), 3, "a code change is never sent to Jira as a link");
 }
@@ -193,9 +193,9 @@ async fn links_name_the_type_and_put_the_blocker_in_the_inward_end() {
 async fn an_update_sends_only_the_fields_in_the_patch() {
     let server = serve(vec![(&format!("PUT {API}/issue/EX-1"), vec![Reply::status(204, "")])]).await;
     let patch = Patch { assignee: Some(person("5b10a2844c20165700ede21g")), parent: Some(item("EX-100")), priority: Some(Priority::Lowest) };
-    tracker(&server).apply(&Intent::Update { item: item("EX-1"), patch }).await.unwrap();
-    tracker(&server).apply(&Intent::Update { item: item("EX-1"), patch: Patch { priority: Some(Priority::Highest), ..Default::default() } }).await.unwrap();
-    tracker(&server).apply(&Intent::Update { item: item("EX-1"), patch: Patch::default() }).await.unwrap();
+    tracker(&server).apply(&Write::Update { item: item("EX-1"), patch }).await.unwrap();
+    tracker(&server).apply(&Write::Update { item: item("EX-1"), patch: Patch { priority: Some(Priority::Highest), ..Default::default() } }).await.unwrap();
+    tracker(&server).apply(&Write::Update { item: item("EX-1"), patch: Patch::default() }).await.unwrap();
     let puts = sent(&server, "PUT");
     assert_eq!(puts.len(), 2, "an empty patch sends nothing");
     assert_eq!(puts[0].1, json!({ "fields": { "assignee": { "accountId": "5b10a2844c20165700ede21g" }, "parent": { "key": "EX-100" }, "priority": { "name": "Lowest" } } }));
@@ -207,7 +207,7 @@ async fn an_approved_plan_rewrite_sends_the_plan_as_one_adf_expand_titled_gossam
     let server = serve(vec![(&format!("PUT {API}/issue/EX-1"), vec![Reply::status(204, "")])]).await;
     let from = Doc::paragraph("Cart total is wrong.");
     let to = from.with_plan_section("Drafted by an agent.", &Doc::from_markdown("## Steps\n\n1. Fix it", &[]));
-    let change = Intent::Rewrite { item: item("EX-1"), title: None, body: Some(BodyChange { from, to }), flattened: vec![] };
+    let change = Write::Rewrite { item: item("EX-1"), title: None, body: Some(BodyChange { from, to }) };
     tracker(&server).apply(&change).await.unwrap();
     let (_, body) = sent(&server, "PUT").remove(0);
     let content = &body["fields"]["description"]["content"];
@@ -242,11 +242,10 @@ async fn a_rewrite_sends_the_description_as_adf_with_marks_mentions_links_code_a
             Block::Rule,
         ],
     };
-    let change = Intent::Rewrite {
+    let change = Write::Rewrite {
         item: item("EX-1"),
         title: Some(TitleChange { from: "Old".into(), to: "New".into() }),
         body: Some(BodyChange { from: Doc::paragraph("old"), to }),
-        flattened: vec![],
     };
     tracker(&server).apply(&change).await.unwrap();
     let (target, body) = sent(&server, "PUT").remove(0);
@@ -290,13 +289,13 @@ fn inline_code_is_sent_without_other_formatting_marks() {
 async fn a_refused_write_reaches_the_person_with_status_method_path_and_jiras_text() {
     let refused = r#"{"errorMessages":[],"errors":{"description":"Operation value must be an Atlassian Document Format document."}}"#;
     let server = serve(vec![(&format!("PUT {API}/issue/EX-1"), vec![Reply::status(400, refused)])]).await;
-    let change = Intent::Rewrite { item: item("EX-1"), title: None, body: Some(BodyChange { from: Doc::default(), to: Doc::paragraph("x") }), flattened: vec![] };
+    let change = Write::Rewrite { item: item("EX-1"), title: None, body: Some(BodyChange { from: Doc::default(), to: Doc::paragraph("x") }) };
     let err = tracker(&server).apply(&change).await.unwrap_err().to_string();
     assert_eq!(err, "Jira returned 400: PUT issue/EX-1: description: Operation value must be an Atlassian Document Format document.");
     assert!(!err.contains("tok-secret") && !err.to_lowercase().contains("authorization"));
 
     let server = serve(vec![(&format!("POST {API}/issue/EX-1/comment"), vec![Reply::status(403, r#"{"errorMessages":["You do not have permission to comment on this issue."],"errors":{}}"#)])]).await;
-    let err = tracker(&server).apply(&Intent::Comment { item: item("EX-1"), body: Doc::paragraph("hi") }).await.unwrap_err();
+    let err = tracker(&server).apply(&Write::Comment { item: item("EX-1"), body: Doc::paragraph("hi") }).await.unwrap_err();
     assert_eq!(err.to_string(), "Jira returned 403: POST issue/EX-1/comment: You do not have permission to comment on this issue.");
 }
 
@@ -335,18 +334,18 @@ async fn transitions_are_read_with_their_screens_and_the_right_one_is_posted_at_
     assert_eq!(all[1].required[0].allowed, [("10112".to_string(), "Red".to_string()), ("10113".into(), "Blue".into())], "custom options carry `value`, not `name`");
 
     // Closing: the first transition that reaches the status, as long as it needs nothing.
-    tracker(&server).apply(&Intent::Transition { item: item("EX-1"), to: "10000".into() }).await.unwrap();
+    tracker(&server).apply(&Write::Transition { item: item("EX-1"), to: "10000".into() }).await.unwrap();
     // Resolving: the screen insists on a resolution, so Done is sent by id, in `fields`.
-    tracker(&server).apply(&Intent::Transition { item: item("EX-1"), to: "6".into() }).await.unwrap();
+    tracker(&server).apply(&Write::Transition { item: item("EX-1"), to: "6".into() }).await.unwrap();
     let posts = sent(&server, "POST");
     assert_eq!(posts[0].1, json!({ "transition": { "id": "2" } }));
     assert_eq!(posts[1].1, json!({ "transition": { "id": "713" }, "fields": { "resolution": { "id": "10000" } } }));
 
     // A required custom field can't be guessed: it is named, and nothing is posted.
-    let err = tracker(&server).apply(&Intent::Transition { item: item("EX-1"), to: "5".into() }).await.unwrap_err();
+    let err = tracker(&server).apply(&Write::Transition { item: item("EX-1"), to: "5".into() }).await.unwrap_err();
     assert_eq!(err.to_string(), "Jira returned 400: Jira needs Colour to move EX-1 to In QA; set it in Jira.");
     // A status no transition reaches.
-    let err = tracker(&server).apply(&Intent::Transition { item: item("EX-1"), to: "99".into() }).await.unwrap_err();
+    let err = tracker(&server).apply(&Write::Transition { item: item("EX-1"), to: "99".into() }).await.unwrap_err();
     assert!(err.to_string().contains("can't move to that status"), "{err}");
     assert_eq!(sent(&server, "POST").len(), 2);
 }
@@ -356,7 +355,7 @@ async fn a_refused_transition_names_the_workflow_rule_jira_gave() {
     let path = format!("{API}/issue/EX-1/transitions");
     let refused = r#"{"errorMessages":["Transition id '2' is not valid for this issue."],"errors":{}}"#;
     let server = serve(vec![(&path, vec![Reply::ok(TRANSITIONS)]), (&format!("POST {path}"), vec![Reply::status(400, refused)])]).await;
-    let err = tracker(&server).apply(&Intent::Transition { item: item("EX-1"), to: "10000".into() }).await.unwrap_err();
+    let err = tracker(&server).apply(&Write::Transition { item: item("EX-1"), to: "10000".into() }).await.unwrap_err();
     assert_eq!(err.to_string(), "Jira returned 400: POST issue/EX-1/transitions: Transition id '2' is not valid for this issue.");
 }
 

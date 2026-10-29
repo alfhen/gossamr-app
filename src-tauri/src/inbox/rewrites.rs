@@ -7,7 +7,7 @@ use crate::domain::{BodyChange, Doc, Intent, TitleChange};
 use crate::error::{Error, Result};
 use crate::model::CachedTicket;
 use crate::runs::result::scrub;
-use crate::tracker::{self, Connection};
+use crate::tracker;
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())
@@ -58,7 +58,7 @@ impl Core {
             return Err(refuse(format!("that is already how {key} reads, so there is nothing to draft")));
         }
         let flattened = match &body {
-            Some(_) => tracker::flattened_by_rewrite(&Connection::jira(scope, ""), &ticket),
+            Some(_) => tracker::flattened_by_rewrite(&self.connection(scope)?, &ticket),
             None => Vec::new(),
         };
         Ok(Intent::Rewrite { item: item.item, title, body, flattened })
@@ -75,7 +75,7 @@ mod tests {
         let mut item = fx.core.with_db_for(&fx.scope, |db| db.item(&key)).await.unwrap().unwrap();
         let mut ticket: CachedTicket = serde_json::from_value(item.extra.clone()).unwrap();
         ticket.description_doc = Some(doc.clone());
-        item.body = crate::tracker::item_from_ticket(&fx.core.connection(&fx.scope).unwrap(), &ticket).body;
+        item.body = crate::tracker::item_from_ticket(&fx.core.connection(&fx.scope).unwrap(), &ticket).unwrap().body;
         item.extra = serde_json::to_value(&ticket).unwrap();
         fx.core.with_db_for(&fx.scope, |db| db.upsert_items(&[item], "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
     }

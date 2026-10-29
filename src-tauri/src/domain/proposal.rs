@@ -70,7 +70,8 @@ impl Serialize for BodyChange {
     }
 }
 
-/// A write, described neutrally. Only the approval layer hands one to a connector.
+/// A draft, described neutrally: a write to a tracker, or one of the things Gossamr does itself (a review for GitHub,
+/// and the legacy agent drafts). Only the approval layer acts on one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Intent {
@@ -163,7 +164,48 @@ pub struct MaybePosted {
     pub checked_at: Option<DateTime<Utc>>,
 }
 
+/// What a tracker can be asked to do. The tracker-bound draft kinds of `Intent`, and nothing Gossamr does itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Write {
+    Comment { item: ItemRef, body: Doc },
+    Transition { item: ItemRef, to: String },
+    Create { container: ContainerRef, fields: NewItem, link: Option<Link> },
+    Update { item: ItemRef, patch: Patch },
+    Link { from: ItemRef, to: ItemRef, kind: LinkKind },
+    Subtasks { parent: ItemRef, summaries: Vec<String> },
+    Rewrite { item: ItemRef, title: Option<TitleChange>, body: Option<BodyChange> },
+}
+
+impl From<Write> for Intent {
+    fn from(write: Write) -> Self {
+        match write {
+            Write::Comment { item, body } => Intent::Comment { item, body },
+            Write::Transition { item, to } => Intent::Transition { item, to },
+            Write::Create { container, fields, link } => Intent::Create { container, fields, link },
+            Write::Update { item, patch } => Intent::Update { item, patch },
+            Write::Link { from, to, kind } => Intent::Link { from, to, kind },
+            Write::Subtasks { parent, summaries } => Intent::Subtasks { parent, summaries },
+            Write::Rewrite { item, title, body } => Intent::Rewrite { item, title, body, flattened: Vec::new() },
+        }
+    }
+}
+
 impl Intent {
+    /// The write a tracker applies for this draft. `None` for what Gossamr does itself: a review goes to GitHub with
+    /// its own button, and the legacy agent drafts are history.
+    pub fn write(&self) -> Option<Write> {
+        Some(match self.clone() {
+            Intent::Comment { item, body } => Write::Comment { item, body },
+            Intent::Transition { item, to } => Write::Transition { item, to },
+            Intent::Create { container, fields, link } => Write::Create { container, fields, link },
+            Intent::Update { item, patch } => Write::Update { item, patch },
+            Intent::Link { from, to, kind } => Write::Link { from, to, kind },
+            Intent::Subtasks { parent, summaries } => Write::Subtasks { parent, summaries },
+            Intent::Rewrite { item, title, body, .. } => Write::Rewrite { item, title, body },
+            Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } | Intent::GithubReview { .. } => return None,
+        })
+    }
+
     /// The existing item the intent was drafted against, if any.
     pub fn target(&self) -> Option<&ItemRef> {
         match self {

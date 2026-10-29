@@ -6,10 +6,11 @@ use url::Url;
 
 use super::callback::Loopback;
 use super::{
-    json_or_error, unix_now, Account, AuthChallenge, AuthMethod, Authenticator, ClientSource, Credentials, Site, Tokens,
+    json_or_error, unix_now, Account, AuthChallenge, AuthMethod, Authenticator, ClientSource, Credentials, Scope, Site, Tokens,
 };
 use crate::error::{Error, Result};
 use crate::secrets;
+use crate::tracker::{Connection, ConnectionKind};
 
 /// Must match the callback URL registered on the Atlassian developer console exactly.
 const CALLBACK_PORT: u16 = 8723;
@@ -20,6 +21,35 @@ const ENV_CLIENT_ID: &str = "GOSSAMR_ATLASSIAN_CLIENT_ID";
 const ENV_CLIENT_SECRET: &str = "GOSSAMR_ATLASSIAN_CLIENT_SECRET";
 const BUNDLED_CLIENT_ID: Option<&str> = option_env!("GOSSAMR_ATLASSIAN_CLIENT_ID");
 const BUNDLED_CLIENT_SECRET: Option<&str> = option_env!("GOSSAMR_ATLASSIAN_CLIENT_SECRET");
+
+/// The Atlassian site and account behind a Jira connection. Only the Jira adapter and this sign-in read the parts; the
+/// rest of Gossamr holds the `Scope` it makes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteScope {
+    pub cloud_id: String,
+    pub account_id: String,
+}
+
+impl SiteScope {
+    /// Stored in every row and database file name of a Jira account, so the format must not change.
+    pub fn connection_id(&self) -> String {
+        format!("jira:{}:{}", self.cloud_id, self.account_id)
+    }
+
+    pub fn scope(&self) -> Scope {
+        Scope { connection_id: self.connection_id(), account_id: self.account_id.clone() }
+    }
+
+    pub fn connection(&self, display_name: &str) -> Connection {
+        Connection {
+            id: self.connection_id(),
+            kind: ConnectionKind::Jira,
+            workspace: self.cloud_id.clone(),
+            account: self.account_id.clone(),
+            display_name: display_name.into(),
+        }
+    }
+}
 
 pub fn redirect_uri() -> String {
     format!("http://localhost:{CALLBACK_PORT}/callback")

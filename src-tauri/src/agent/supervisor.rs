@@ -26,7 +26,6 @@ use crate::domain::{Actor, Origin, ProposalQuery, Role, Run, RunState, StateKind
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 use crate::runs::tracker::{Attention, RunNotifier};
-use crate::tracker::Connection;
 
 /// How often the sweep looks over the runs of open workstreams.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
@@ -400,7 +399,7 @@ impl Supervisor {
     async fn on_run(self: Arc<Self>, run: Run, why: Attention) {
         let Some(ws) = run.spec.workstream.clone() else { return };
         let Ok(scope) = self.core.scope().await else { return };
-        if Connection::jira_id(&scope) != run.connection_id {
+        if scope.connection_id != run.connection_id {
             return;
         }
         let state = WakeState::of_attention(&run, why);
@@ -470,7 +469,7 @@ impl Supervisor {
         let mut fresh: Vec<WakeFact> = Vec::new();
         for f in facts {
             let Some(run) = runs.iter().find(|run| run.id == f.run) else { continue };
-            if Connection::jira_id(&scope) != run.connection_id
+            if scope.connection_id != run.connection_id
                 || run.spec.workstream.as_deref() != Some(ws_id)
                 || WakeState::of_run(run) != Some(f.state)
                 || WakeFact::new(run, f.state).key() != f.key()

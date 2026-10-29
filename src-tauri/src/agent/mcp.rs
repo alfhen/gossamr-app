@@ -28,7 +28,6 @@ use crate::model::CachedTicket;
 use crate::proposals::{self, Draft};
 use crate::runs::agent_config::AgentChannel;
 use crate::runs::report::well_formed;
-use crate::tracker::Connection;
 
 const SEARCH_LIMIT: usize = 50;
 const SEARCH_DEFAULT: usize = 20;
@@ -509,7 +508,7 @@ fn summaries_of(args: &Value) -> std::result::Result<Vec<String>, String> {
 }
 
 pub(super) fn item_ref(scope: &Scope, key: &str) -> ItemRef {
-    ItemRef { connection_id: Connection::jira_id(scope), external_id: key.into(), key: key.into() }
+    ItemRef { connection_id: scope.connection_id.clone(), external_id: key.into(), key: key.into() }
 }
 
 fn open_states() -> Vec<StateKind> {
@@ -572,7 +571,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                 };
                 let origin = Origin::Chat { request_id: run_id.into(), workstream: run.workstream.clone() };
                 let made = core.draft_review(scope, origin, input).await.map_err(|e| e.to_string())?;
-                (st.sink)(&Connection::jira_id(scope));
+                (st.sink)(&scope.connection_id.clone());
                 return Ok(saved("for the pull request", "in your open drafts", &made.id));
             }
             _ => return Err("kind must name one of the eight write kinds".into()),
@@ -592,11 +591,11 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             let patch: Patch = serde_json::from_value(structured(args, "patch")).map_err(|e| format!("patch isn't valid: {e}"))?;
             if let Some(parent) = &patch.parent {
                 reachable(st, run, &parent.key).await?;
-                if parent.connection_id != Connection::jira_id(scope) {
+                if parent.connection_id != scope.connection_id.clone() {
                     return Err("the parent belongs to another connection".into());
                 }
             }
-            if patch.assignee.as_ref().is_some_and(|person| person.connection_id != Connection::jira_id(scope)) {
+            if patch.assignee.as_ref().is_some_and(|person| person.connection_id != scope.connection_id.clone()) {
                 return Err("the assignee belongs to another connection".into());
             }
             propose(st, run, run_id, Intent::Update { item: item_ref(scope, key), patch }, None).await
@@ -671,7 +670,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             Ok(all.iter().map(|c| format!("{} · {} · {}", c.container_ref.external_id, c.key, c.name)).collect::<Vec<_>>().join("\n"))
         }
         "get_workflow" => {
-            let container = ContainerRef { connection_id: Connection::jira_id(scope), external_id: required(args, "container")?.into() };
+            let container = ContainerRef { connection_id: scope.connection_id.clone(), external_id: required(args, "container")?.into() };
             let watched = core.containers_in(scope).await.map_err(|e| e.to_string())?;
             if !watched.iter().any(|c| c.container_ref == container) {
                 return Err("no such container among the watched ones; call list_containers".into());
@@ -795,7 +794,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                     None => return Err("body (the new summary) or comments (the complete new list) is required".into()),
                 };
                 let revised = core.revise_review_as_pip(scope, run.workstream.as_deref(), id, summary, comments).await.map_err(|e| e.to_string())?;
-                (st.sink)(&Connection::jira_id(scope));
+                (st.sink)(&scope.connection_id.clone());
                 return Ok(format!("Draft {} updated. It has not been posted; the user still has to approve it.", revised.id));
             }
             let intent = match &p.intent {
@@ -825,14 +824,14 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, run.workstream.as_deref(), id, intent).await.map_err(|e| e.to_string())?;
-            (st.sink)(&Connection::jira_id(scope));
+            (st.sink)(&scope.connection_id.clone());
             Ok(format!("Draft {} updated. It has not been applied; the user still has to approve it.", revised.id))
         }
         "retire_proposal" => {
             let id = required(args, "id")?;
             let reason = format!("withdrawn by Pip: {}", opt(args, "reason").unwrap_or("no longer needed"));
             let retired = core.retire_as_pip(scope, run.workstream.as_deref(), id, &reason).await.map_err(|e| e.to_string())?;
-            (st.sink)(&Connection::jira_id(scope));
+            (st.sink)(&scope.connection_id.clone());
             Ok(format!("Draft {} withdrawn.", retired.id))
         }
         other => match super::github::run(st, run, other, args).await {
@@ -896,7 +895,7 @@ async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, labe
         },
     };
     let made = st.core.propose(scope, Draft::from_pip(run_id, workstream, intent, label)).await.map_err(|e| format!("Couldn't save the draft: {e}"))?;
-    (st.sink)(&Connection::jira_id(scope));
+    (st.sink)(&scope.connection_id.clone());
     let mut reply = saved(&target, &place, &made.id);
     let replaced: Vec<String> = match similar.is_empty() {
         true => Vec::new(),
@@ -1322,7 +1321,7 @@ mod tests {
             json!({ "kind": "comment", "key": "CA-1", "body": "A report summary" }),
             json!({ "kind": "transition", "key": "CA-1", "status_id": "10001" }),
             json!({ "kind": "subtasks", "key": "CA-1", "summaries": ["First step"] }),
-            json!({ "kind": "update", "key": "CA-1", "patch": { "assignee": { "connectionId": Connection::jira_id(&r.fx.scope), "accountId": "ann" } } }),
+            json!({ "kind": "update", "key": "CA-1", "patch": { "assignee": { "connectionId": r.fx.scope.connection_id.clone(), "accountId": "ann" } } }),
             json!({ "kind": "link", "key": "CA-1", "to": "CA-2", "link_kind": "blocks" }),
         ] {
             r.ok("draft", args).await;

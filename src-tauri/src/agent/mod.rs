@@ -607,7 +607,7 @@ impl AgentService {
             ws.event = req.event.clone();
         }
 
-        let mut context = req.context.in_connection(&crate::tracker::Connection::jira_id(&scope));
+        let mut context = req.context.in_connection(&scope.connection_id.clone());
         let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
         if let Some(key) = workstream.as_ref().and_then(|w| w.workstream.item_key.as_ref()) {
             handed.insert(key.to_uppercase());

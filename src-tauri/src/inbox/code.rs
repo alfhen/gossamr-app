@@ -413,8 +413,8 @@ impl Core {
 
     /// The project keys of the signed-in tracker, which are what a key in a branch or title may name.
     async fn known_keys(&self) -> KnownKeys {
-        let Some((site, me)) = self.auth.identity().await else { return KnownKeys::default() };
-        let connection = Connection::jira_id(&Scope::of(&site, &me));
+        let Some((scope, _, _)) = self.auth.identity().await else { return KnownKeys::default() };
+        let connection = scope.connection_id;
         let keys = self.with_db(|db| db.project_keys(&connection)).await.unwrap_or_default();
         KnownKeys::new(keys.iter().map(|k| (k.as_str(), connection.as_str())))
     }

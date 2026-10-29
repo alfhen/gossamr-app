@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use crate::db::Db;
 use crate::domain::{
     reconcile, without_markers, Actor, Basis, BodyChange, ContainerRef, CreatedBy, Identity, Intent, ItemRef, Origin, Proposal, ProposalQuery,
-    ProposalState, ReconcileContext, Revision, StateKind, TitleChange, Transitions, Workflow, WorkstreamEvent, DESCRIPTION_LIMIT,
+    ProposalState, ReconcileContext, Revision, StateKind, TitleChange, Transitions, Workflow, WorkstreamEvent, Write, DESCRIPTION_LIMIT,
     SUMMARY_LIMIT,
 };
 use crate::error::{Error, Result};
@@ -579,17 +579,24 @@ pub async fn execute(tracker: &dyn WorkTracker, p: &Proposal) -> Outcome {
             return Outcome { created: vec![], error: Some(error) };
         }
     }
-    let intent = match &p.intent {
+    let write = match &p.intent {
         Intent::Subtasks { parent, summaries } => {
             let rest = &summaries[p.created.len().min(summaries.len())..];
             if rest.is_empty() {
                 return Outcome::default();
             }
-            Intent::Subtasks { parent: parent.clone(), summaries: rest.to_vec() }
+            Some(Write::Subtasks { parent: parent.clone(), summaries: rest.to_vec() })
         }
-        other => other.clone(),
+        other => other.write(),
     };
-    match tracker.apply(&intent).await {
+    let Some(write) = write else {
+        let reason = match &p.intent {
+            Intent::GithubReview { .. } => "a review is posted to GitHub with its own button, not applied to Jira",
+            _ => AGENTS_DIRECT,
+        };
+        return Outcome { created: vec![], error: Some(Error::Proposal(reason.into())) };
+    };
+    match tracker.apply(&write).await {
         Ok(applied) => Outcome { created: applied.created, error: applied.error },
         Err(error) => Outcome { created: vec![], error: Some(error) },
     }
@@ -1045,6 +1052,26 @@ mod tests {
         db.save_proposal(&stored).unwrap();
         assert!(begin(&db, &stored.id, now()).unwrap_err().to_string().contains(AGENTS_DIRECT));
         assert_eq!(load(&db, &stored.id).unwrap().state, ProposalState::Pending, "the claim was rolled back");
+    }
+
+    #[tokio::test]
+    async fn a_review_or_an_agent_draft_is_never_handed_to_a_tracker() {
+        let db = Db::in_memory().unwrap();
+        let tracker = Recorder::default();
+        let mut stored = made(&db, comment_draft("1"));
+        for (intent, reason) in [
+            (Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "Use staging.".into(), question: None }, AGENTS_DIRECT),
+            (
+                Intent::GithubReview { connection_id: "github:ann".into(), item: None, run_id: "r1".into(), repo: "acme/webshop".into(), number: 218, commit_sha: "a1b2c3d4e5f6".into(), summary: "Review.".into(), comments: vec![] },
+                "posted to GitHub with its own button",
+            ),
+        ] {
+            assert!(intent.write().is_none());
+            stored.intent = intent;
+            let outcome = execute(&tracker, &stored).await;
+            assert!(outcome.error.unwrap().to_string().contains(reason));
+        }
+        assert!(tracker.intents().is_empty());
     }
 
     #[test]
