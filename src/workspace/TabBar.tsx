@@ -46,12 +46,12 @@ export function TabStrip({
     const watch = new ResizeObserver(show);
     watch.observe(el);
     return () => watch.disconnect();
-  }, [active, items.length, counts.join()]);
+  }, [active, items.length, items.map((i) => i.label).join("\n"), counts.join()]);
 
   return (
     <div className="flex items-end gap-1 border-b border-ws-sep">
       <div className="flex min-w-0 flex-1 items-end gap-1">
-        <div ref={list} role="tablist" aria-label="Views" className="relative flex min-w-0 items-end gap-0.5 overflow-x-auto [scrollbar-width:none]" onKeyDown={onKeyDown}>
+        <div ref={list} role="tablist" aria-label="Views" className="relative flex min-w-0 items-end gap-0.5 overflow-x-auto [scrollbar-width:thin]" onKeyDown={onKeyDown}>
           {items.map((item, i) => (
             <div key={item.id} className={`-mb-px flex shrink-0 items-center border-b-2 ${item.active ? "border-ws-pip" : "border-transparent"}`}>
               <button

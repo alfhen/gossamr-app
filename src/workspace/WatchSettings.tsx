@@ -4,6 +4,7 @@ import { useBackend } from "../backend/useBackend";
 import type { CatalogEntry, ConnectionInfo, Footprint, WatchChange, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { ArchivedBadge, Badge, CatalogError, ChooseWatch, OfflineNote, PermissionBadge, RepoName, ScrollSentinel, SearchBox } from "./WatchPicker";
+import { unwatchWithUndo } from "./unwatch";
 import { useCatalog, type Catalog } from "./useCatalog";
 import { codeWatch, workWatch } from "./domains";
 import { activityHint, agoText, count, matchesQuery, nounFor, repoParts, settingsRows, suggestionChips, type Noun, type SettingsRow } from "./watchLogic";
@@ -287,7 +288,7 @@ function WatchCard({ backend, state, connection, syncLine }: { backend: Backend;
         onChoose={() => setChoosing(true)}
         onChip={(f) => void apply([{ containerId: f.container.externalId, watched: true, source: "footprint" }], `Couldn't watch ${f.name}`)}
         onPin={(r, pinned) => void apply([{ containerId: r.container.externalId, pinned }], `Couldn't pin ${r.name}`)}
-        onUnwatch={(r) => void apply([{ containerId: r.container.externalId, watched: false }], `Couldn't unwatch ${r.name}`)}
+        onUnwatch={(r) => void unwatchWithUndo(r.container, r.name)}
         onWatch={(e) => void apply([{ containerId: e.ref.externalId, watched: true, source: "manual" }], `Couldn't watch ${e.name}`)}
         onLoadMore={find.loadMore}
         onRetry={find.retry}

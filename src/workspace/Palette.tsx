@@ -6,6 +6,7 @@ import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { openNeed } from "./needsActions";
 import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
+import { unwatchWithUndo } from "./unwatch";
 import { useActivity } from "./activityStore";
 import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
@@ -185,17 +186,11 @@ export function appActions(): CommandActions {
     openSettings: () => tabs.setRoute("settings"),
     manageProjects: () => tabs.openSettings("watching"),
     watch: (target, watched) => {
+      if (!watched) return void unwatchWithUndo(target.ref, target.name);
       const ws = useWorkspace.getState();
-      const { connectionId, externalId } = target.ref;
-      const pinned = ws.watch.find((w) => w.connectionId === connectionId)?.watches.find((r) => r.container.externalId === externalId)?.pinned ?? false;
-      ws.watchContainers(connectionId, [{ containerId: externalId, watched, source: "manual" }]).then(
-        () => {
-          if (watched) return useToasts.getState().push(`Watching ${target.name}.`, "info");
-          const undo = () =>
-            useWorkspace.getState().watchContainers(connectionId, [{ containerId: externalId, watched: true, source: "manual", ...(pinned ? { pinned: true } : {}) }]).catch((e) => ws.report(`Couldn't watch ${target.name}`, e));
-          useToasts.getState().push(`Stopped watching ${target.name}.`, "info", { label: "Undo", run: () => void undo() });
-        },
-        (e) => ws.report(`Couldn't ${watched ? "watch" : "unwatch"} ${target.name}`, e),
+      ws.watchContainers(target.ref.connectionId, [{ containerId: target.ref.externalId, watched: true, source: "manual" }]).then(
+        () => useToasts.getState().push(`Watching ${target.name}.`, "info"),
+        (e) => ws.report(`Couldn't watch ${target.name}`, e),
       );
     },
     // A ticket opened from here takes the keyboard into its peek, not back to the board behind it.

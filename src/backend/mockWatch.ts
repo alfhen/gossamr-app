@@ -52,7 +52,6 @@ export class MockWatch {
   }
 
   apply(changes: WatchChange[], at = new Date().toISOString()) {
-    const was = this.chosen;
     if (changes.some((c) => c.watched === true)) this.chosen = true;
     for (const c of changes) {
       const row = this.rows.get(c.containerId);
@@ -61,7 +60,7 @@ export class MockWatch {
         continue;
       }
       if (!row) {
-        if (was && c.watched !== true) continue;
+        if (this.chosen && c.watched !== true) continue;
         this.rows.set(c.containerId, { pinned: c.pinned ?? false, source: c.source ?? "manual", addedAt: at, inaccessible: false });
         continue;
       }

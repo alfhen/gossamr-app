@@ -120,6 +120,12 @@ describe("the mock's watch settings", () => {
     expect((await b.watchGet())[0].watches.map((w) => w.key)).toEqual(["CA"]);
   });
 
+  it("leaves a pin-only project unwatched when the same batch starts the list", async () => {
+    const b = new MockBackend({ catalogSize: 14 });
+    await b.watchSetContainers(CONNECTION, [{ containerId: "CA", watched: true }, { containerId: "WEB", pinned: true }]);
+    expect((await b.watchGet())[0].watches.map((w) => w.key)).toEqual(["CA"]);
+  });
+
   it("announces a change", async () => {
     const b = new MockBackend();
     const seen = vi.fn();
