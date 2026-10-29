@@ -286,33 +286,53 @@ Principle 3 holds: each of these is one element moving, and the follow-through a
 
 A material for the things that float above the work: the palette, menus, popovers, toasts, the Pip launcher and pane header, and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never for content.
 
+Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs only lightly (6 to 8 px) so shapes still show through, and catches light on its rim. Silk glass follows that, with one brand touch: a faint lavender tint, the colour of the silk G.
+
 | Layer | Light | Dark |
 | --- | --- | --- |
-| Body | `ws-win` at 72% | `ws-win` at 64% |
-| Backdrop | `blur(20px) saturate(1.6)` | `blur(24px) saturate(1.4)` |
-| Edge light | 1 px inner highlight along the top, white at 60% | 1 px inner highlight, lavender `#c8c2ff` at 18% |
-| Rim | 1 px `ws-sep2` hairline | 1 px lavender at 12% |
-| Depth | `shadow-ws-pop` | `shadow-ws-pop` |
-| Tint (optional) | Teal at 6% for Pip's surfaces only | Teal at 8% for Pip's surfaces only |
+| Body | White at 22%, with lavender `#c8c2ff` at 10% over it | Ink `#14131d` at 38%, with lavender at 6% over it |
+| Backdrop | `blur(6px) saturate(1.8) brightness(1.06)` | `blur(8px) saturate(1.6) brightness(0.9)` |
+| Rim | A 1 px light that is brightest at the top-left corner (white at 95%), fades to 5% along the sides, and glows again at the bottom-right (55%) | The same in lavender: 60%, 2%, 30% |
+| Inner light | `inset 0 1px 1px` white at 70%, `inset 0 -1px 1px` ink at 6% | `inset 0 1px 1px` lavender at 25% |
+| Depth | `0 10px 30px` ink at 18% | `0 12px 40px` black at 50% |
+| Selection inside | A clear lens: white at 38% with its own rim | Lavender at 10% with its own rim |
+| Pip's surfaces | Teal `#37d0c0` instead of lavender, at the same strengths | Teal instead of lavender |
 
 ```css
 .silk-glass {
-  background: color-mix(in srgb, var(--color-ws-win) 72%, transparent);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid var(--color-ws-sep2);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), var(--shadow-ws-pop);
+  position: relative;
+  background: linear-gradient(rgb(200 194 255 / 0.1), rgb(200 194 255 / 0.1)), rgb(255 255 255 / 0.22);
+  -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
+  backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
+  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.7), inset 0 -1px 1px rgb(20 19 29 / 0.06), 0 10px 30px rgb(20 19 29 / 0.18);
+}
+/* The rim: a 1 px gradient ring, brightest where the light falls. */
+.silk-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.25) 35%, rgb(255 255 255 / 0.05) 60%, rgb(255 255 255 / 0.55));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
 }
 ```
 
-Liquid Glass also refracts: the content behind its edges bends like it does through a lens. On the web that takes an SVG displacement filter, which is too costly for the app's lists. Keep refraction to the site's hero and to Pip's launcher, where there is one element and time to render it.
+**Text on glass** is full-strength: `ws-ink` for labels, `ws-ink2` for hints, never `ws-ink3`, and at least medium weight below 14 px.
+
+**Glass needs something behind it.** Over a plain window it reads as a clean, light panel, which is fine. It comes alive over content: the board's cards, the coloured status pills, the dark theme's ink, and on the site, screenshots and the hero's glow. Don't add colour behind glass just to show it off.
+
+**Refraction:** Liquid Glass also bends the content behind its edges like a lens. On the web that takes an SVG filter in `backdrop-filter`, which WebKit, the engine the macOS app runs on, doesn't apply at the time of writing. So in the app, silk glass is tint, blur and light, with no lens. On gossamr.app, refraction can be an enhancement for browsers that support it, on the hero and the navigation only.
 
 **Rules for glass**
 
-- Text on glass must still reach 4.5:1 against the worst content that can sit behind it. If it can't, the layer goes solid.
-- When the person turns on Reduce transparency (macOS, or `prefers-reduced-transparency` where the browser reports it), glass becomes the solid `ws-win` with its rim and shadow.
+- Text on glass must still reach 4.5:1 against the worst content that can sit behind it. If it can't, raise the body to the "regular" strength (white at 55%, ink at 60%) or make the layer solid.
+- When the person turns on Reduce transparency (macOS, or `prefers-reduced-transparency` where the browser reports it), glass becomes solid `ws-win` and keeps its rim and depth.
 - Never stack glass on glass.
-- Teal tint only on Pip's surfaces, so "teal means Pip" still holds.
+- Teal only on Pip's surfaces, so "teal means Pip" still holds.
 
 ### 4. Reduced motion, still
 

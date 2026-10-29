@@ -264,26 +264,50 @@
   .hover-pip .silk { display: block; width: 1.5px; height: 56px; margin: 0 auto; background: linear-gradient(transparent, var(--ink3)); transform-origin: top; transition: transform 770ms var(--spring-silk); }
   .hover-pip:hover .hang2 { transform: translateY(3px); }
 
-  .glass-stage { position: relative; border-radius: 10px; overflow: hidden; min-height: 300px; padding: 18px; border: 1px solid var(--sep);
-    background:
-      radial-gradient(circle at 18% 30%, rgb(55 208 192 / 0.55), transparent 32%),
-      radial-gradient(circle at 80% 70%, rgb(106 130 255 / 0.55), transparent 36%),
-      radial-gradient(circle at 60% 15%, rgb(180 138 240 / 0.45), transparent 30%),
-      var(--win); }
-  .glass-stage .under { display: grid; gap: 8px; }
-  .glass-stage .under div { height: 30px; border-radius: 6px; background: var(--bar); border: 1px solid var(--sep); display: flex; align-items: center; padding: 0 10px; font-size: 12px; color: var(--ink2); }
-  .silk-glass { position: absolute; left: 50%; top: 50%; width: min(420px, 86%); transform: translate(-50%, -50%); border-radius: 14px; overflow: hidden;
-    background: color-mix(in srgb, var(--win) 72%, transparent);
-    -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
-    border: 1px solid var(--sep2);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6), var(--shadow); }
-  :root[data-theme="dark"] .silk-glass { background: color-mix(in srgb, var(--win) 64%, transparent); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border-color: rgb(200 194 255 / 0.12); box-shadow: inset 0 1px 0 rgb(200 194 255 / 0.18), var(--shadow); }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .silk-glass { background: color-mix(in srgb, var(--win) 64%, transparent); -webkit-backdrop-filter: blur(24px) saturate(1.4); backdrop-filter: blur(24px) saturate(1.4); border-color: rgb(200 194 255 / 0.12); box-shadow: inset 0 1px 0 rgb(200 194 255 / 0.18), var(--shadow); } }
-  .silk-glass.solid { background: var(--win); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .silk-glass .q { padding: 12px 14px; border-bottom: 1px solid var(--sep); font-size: 14px; color: var(--ink3); }
-  .silk-glass .r { padding: 8px 14px; font-size: 13px; display: flex; justify-content: space-between; }
-  .silk-glass .r.on { background: var(--accent-soft); }
-  .silk-glass .r kbd { font-size: 11px; }
+  .glass-duo { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+  .gstage { --a: 0.22; position: relative; border-radius: 12px; overflow: hidden; min-height: 320px; padding: 16px; }
+  .gstage.l { background: #fcfbfe; border: 1px solid rgb(50 40 110 / 0.1); color: #1b1a2b; }
+  .gstage.d { background: #14131d; border: 1px solid rgb(190 180 255 / 0.12); color: #eeedf8; }
+  .gstage .glow { position: absolute; border-radius: 50%; filter: blur(30px); pointer-events: none; }
+  .gstage .g1 { width: 220px; height: 220px; left: -40px; top: 40px; background: #37d0c0; opacity: 0.5; }
+  .gstage .g2 { width: 260px; height: 220px; right: -60px; bottom: -40px; background: #6a82ff; opacity: 0.55; }
+  .gstage .g3 { width: 180px; height: 160px; left: 45%; top: -50px; background: #b48af0; opacity: 0.45; }
+  .gstage .board { position: relative; display: grid; gap: 8px; }
+  .gstage .row { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; font-size: 12px; }
+  .gstage.l .row { background: #ffffff; border: 1px solid rgb(50 40 110 / 0.1); }
+  .gstage.d .row { background: #1c1b2a; border: 1px solid rgb(190 180 255 / 0.1); }
+  .gstage .row b { font-weight: 600; }
+  .gstage .row span:nth-child(2) { flex: 1; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gstage .pl { font: 600 10px/16px var(--sans); padding: 0 7px; border-radius: 999px; }
+  .pl.n { color: #fff; background: #4a5be0; } .pl.r { color: #04302c; background: #37d0c0; } .pl.f { color: #fff; background: #e0475b; } .pl.v { color: #fff; background: #8a55d6; } .pl.o { color: #04302c; background: #1f9d6a; }
+  .gstage .cap { position: absolute; left: 16px; bottom: 10px; font-size: 11px; opacity: 0.6; }
+
+  .silk-glass { position: absolute; left: 50%; top: 46%; width: min(380px, 84%); transform: translate(-50%, -50%); border-radius: 16px; isolation: isolate; }
+  .silk-glass::before { content: ""; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+  .l .silk-glass { color: #1b1a2b;
+    background: linear-gradient(rgb(200 194 255 / 0.1), rgb(200 194 255 / 0.1)), rgb(255 255 255 / var(--a));
+    -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06); backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
+    box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.7), inset 0 -1px 1px rgb(20 19 29 / 0.06), 0 10px 30px rgb(20 19 29 / 0.18); }
+  .l .silk-glass::before { background: linear-gradient(135deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.25) 35%, rgb(255 255 255 / 0.05) 60%, rgb(255 255 255 / 0.55)); }
+  .d .silk-glass { color: #eeedf8;
+    background: linear-gradient(rgb(200 194 255 / 0.06), rgb(200 194 255 / 0.06)), rgb(20 19 29 / calc(var(--a) + 0.16));
+    -webkit-backdrop-filter: blur(8px) saturate(1.6) brightness(0.9); backdrop-filter: blur(8px) saturate(1.6) brightness(0.9);
+    box-shadow: inset 0 1px 1px rgb(200 194 255 / 0.25), 0 12px 40px rgb(0 0 0 / 0.5); }
+  .d .silk-glass::before { background: linear-gradient(135deg, rgb(200 194 255 / 0.6), rgb(200 194 255 / 0.12) 35%, rgb(200 194 255 / 0.02) 60%, rgb(200 194 255 / 0.3)); }
+  .silk-glass .q { padding: 13px 16px 11px; font-size: 14px; font-weight: 500; opacity: 0.72; }
+  .silk-glass .r { position: relative; margin: 0 6px; padding: 8px 10px; border-radius: 10px; font-size: 13px; font-weight: 500; display: flex; justify-content: space-between; align-items: center; }
+  .silk-glass .r:last-child { margin-bottom: 6px; }
+  .l .silk-glass .r.on { background: rgb(255 255 255 / 0.38); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.7), 0 1px 3px rgb(20 19 29 / 0.08); }
+  .d .silk-glass .r.on { background: rgb(200 194 255 / 0.1); box-shadow: inset 0 0 0 1px rgb(200 194 255 / 0.18); }
+  .silk-glass .r .k { font: 11px var(--mono); opacity: 0.6; }
+  .silk-glass .pipline { display: flex; align-items: center; gap: 8px; }
+  .silk-glass .pipline i { width: 8px; height: 8px; border-radius: 50%; background: #37d0c0; box-shadow: 0 0 8px #37d0c0; }
+  .glass-duo.solid .l .silk-glass { background: #fcfbfe; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-duo.solid .d .silk-glass { background: #1c1b2a; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-top: 12px; font-size: 13px; color: var(--ink2); }
+  .glass-ctl input[type=range] { width: 180px; accent-color: var(--accent); }
+  .glass-ctl button { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); cursor: pointer; }
 
   @media (prefers-reduced-motion: reduce) {
     .fluid *, .fluid *::before, .fluid *::after { transition: none !important; animation: none !important; }
@@ -646,25 +670,57 @@
 
   <h3>3. Silk glass</h3>
   <p>For what floats above the work: the palette, menus, toasts, the Pip launcher and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never content.</p>
-  <div class="glass-stage">
-    <div class="under">
-      <div>CA-402 · Login times out on SSO</div><div>CA-388 · Cache invalidation</div><div>CA-371 · Flaky export test</div>
-      <div>CA-350 · Rename settings</div><div>CA-344 · Audit log</div><div>CA-331 · Webhook retries</div><div>CA-320 · Billing export</div>
+  <p>Like Liquid Glass, it is mostly clear: it takes its colour from what's behind it, blurs lightly so shapes show through, and catches light on its rim. The brand touch is a faint lavender tint, the colour of the silk G.</p>
+  <div class="glass-duo" id="glassduo">
+    <div class="gstage l">
+      <i class="glow g1"></i><i class="glow g2"></i><i class="glow g3"></i>
+      <div class="board">
+        <div class="row"><b>CA-402</b><span>Login times out on SSO</span><span class="pl n">Needs you</span></div>
+        <div class="row"><b>CA-388</b><span>Cache invalidation</span><span class="pl r">Running</span></div>
+        <div class="row"><b>CA-371</b><span>Flaky export test</span><span class="pl f">Failed</span></div>
+        <div class="row"><b>CA-365</b><span>Retry webhooks</span><span class="pl v">In review</span></div>
+        <div class="row"><b>CA-350</b><span>Rename settings</span><span class="pl o">Done</span></div>
+        <div class="row"><b>CA-344</b><span>Audit log export</span><span class="pl r">Running</span></div>
+        <div class="row"><b>CA-331</b><span>Billing export</span><span class="pl n">Needs you</span></div>
+      </div>
+      <div class="silk-glass">
+        <div class="q">Search and jump</div>
+        <div class="r on"><span class="pipline"><i></i>Ask Pip to plan CA-402</span><span class="k">↵</span></div>
+        <div class="r"><span>Open the workstream on CA-388</span></div>
+        <div class="r"><span>Go to Work</span><span class="k">⌘K</span></div>
+      </div>
+      <span class="cap">Light</span>
     </div>
-    <div class="silk-glass" id="glass">
-      <div class="q">Search and jump</div>
-      <div class="r on"><span>Ask Pip to plan CA-402</span><kbd>↵</kbd></div>
-      <div class="r"><span>Open the workstream on CA-388</span></div>
-      <div class="r"><span>Go to Work</span></div>
+    <div class="gstage d">
+      <i class="glow g1"></i><i class="glow g2"></i><i class="glow g3"></i>
+      <div class="board">
+        <div class="row"><b>CA-402</b><span>Login times out on SSO</span><span class="pl n">Needs you</span></div>
+        <div class="row"><b>CA-388</b><span>Cache invalidation</span><span class="pl r">Running</span></div>
+        <div class="row"><b>CA-371</b><span>Flaky export test</span><span class="pl f">Failed</span></div>
+        <div class="row"><b>CA-365</b><span>Retry webhooks</span><span class="pl v">In review</span></div>
+        <div class="row"><b>CA-350</b><span>Rename settings</span><span class="pl o">Done</span></div>
+        <div class="row"><b>CA-344</b><span>Audit log export</span><span class="pl r">Running</span></div>
+        <div class="row"><b>CA-331</b><span>Billing export</span><span class="pl n">Needs you</span></div>
+      </div>
+      <div class="silk-glass">
+        <div class="q">Search and jump</div>
+        <div class="r on"><span class="pipline"><i></i>Ask Pip to plan CA-402</span><span class="k">↵</span></div>
+        <div class="r"><span>Open the workstream on CA-388</span></div>
+        <div class="r"><span>Go to Work</span><span class="k">⌘K</span></div>
+      </div>
+      <span class="cap">Dark</span>
     </div>
   </div>
-  <div class="acts" style="margin-top:12px"><button type="button" class="btn" data-act="solid" style="cursor:pointer">Show as solid</button></div>
+  <div class="glass-ctl">
+    <label>Clarity <input type="range" id="clarity" min="0" max="60" value="22" aria-label="Glass body strength, percent"> <span id="clarity-v">22%</span></label>
+    <button type="button" data-act="solid">Show as solid</button>
+  </div>
   <ul style="margin-top:16px">
-    <li>Body: the window colour at 72% (64% in dark), with <code>blur(20px) saturate(1.6)</code> behind it.</li>
-    <li>A 1 px light along the top edge, a hairline rim, and the pop shadow.</li>
-    <li>Text on glass keeps 4.5:1 against the worst content behind it, or the layer goes solid.</li>
-    <li>Reduce transparency makes glass solid. Never stack glass on glass. Teal tint only on Pip's surfaces.</li>
-    <li>Refraction (content bending at the edges) only on the site's hero and Pip's launcher, where there is one element to render.</li>
+    <li>Body: white at 22% (ink at 38% in dark) with a faint lavender tint. Blur 6 to 8 px, saturation up, so shapes and colour come through.</li>
+    <li>Rim: a 1 px light, brightest at the top-left corner, fading along the sides, glowing again at the bottom-right. Plus a soft inner light along the top.</li>
+    <li>Selection is a clearer lens inside the glass, with its own rim. Text is full-strength ink, medium weight.</li>
+    <li>If text can't keep 4.5:1 over the worst content behind it, raise the body (white 55%, ink 60%) or go solid. Reduce transparency makes it solid.</li>
+    <li>No refraction in the app: WebKit doesn't apply SVG filters in <code>backdrop-filter</code>. On the site, refraction is an enhancement for browsers that do, on the hero and navigation only.</li>
   </ul>
 
   <h3>4. How to get there</h3>
@@ -769,7 +825,12 @@
     var slot = card.closest(".slot");
     var badge = document.getElementById("nbadge");
     var morph = document.getElementById("morph");
-    var glass = document.getElementById("glass");
+    var duo = document.getElementById("glassduo");
+    var clarity = document.getElementById("clarity");
+    clarity.addEventListener("input", function () {
+      duo.querySelectorAll(".gstage").forEach(function (g) { g.style.setProperty("--a", clarity.value / 100); });
+      document.getElementById("clarity-v").textContent = clarity.value + "%";
+    });
     var timers = [];
     function later(fn, ms) { timers.push(setTimeout(fn, ms)); }
     function reset() { timers.forEach(clearTimeout); timers = []; slot.classList.remove("gone"); card.className = "dcard"; }
@@ -803,7 +864,7 @@
       } else if (act === "morph") {
         morph.classList.toggle("open");
       } else if (act === "solid") {
-        var solid = glass.classList.toggle("solid");
+        var solid = duo.classList.toggle("solid");
         b.textContent = solid ? "Show as glass" : "Show as solid";
       }
     });
