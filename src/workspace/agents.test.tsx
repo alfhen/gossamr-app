@@ -459,8 +459,18 @@ describe("motion", () => {
 
   it("turns the pulse into a plain dot and stops card movement for reduced motion", () => {
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(reduced).toMatch(/\.ws-pulse::after\s*{\s*display:\s*none/);
+    expect(reduced).toMatch(/\.ws-live::after\s*{\s*display:\s*none/);
     expect(reduced).toMatch(/\.ws-agent-card:hover\s*{\s*transform:\s*none/);
+  });
+
+  it("keeps the running dot's ring apart from the flash on an item you jump to", () => {
+    const board = readFileSync(new URL("./board.css", import.meta.url), "utf8");
+    const both = css + board;
+    expect(css).not.toMatch(/\.ws-pulse\b/);
+    expect(board).not.toMatch(/\.ws-live\b/);
+    for (const name of new Set([...both.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]))) {
+      expect(both.match(new RegExp(`@keyframes\\s+${name}\\s*{`, "g"))?.length, name).toBe(1);
+    }
   });
 });
 
