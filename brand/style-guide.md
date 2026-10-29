@@ -71,7 +71,7 @@ Gossamr is ink-indigo with one teal character. Every colour below is a token in 
 | `ws-review` | `#8a55d6` | `#b48af0` | In review |
 | `ws-warn` | `#c98a1b` | `#c98a1b` | Needs attention |
 
-Each state colour has a `-soft` fill (10 to 22% of it) for backgrounds behind its text.
+`ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. `ws-warn` has no soft fill.
 
 ### Rules
 
