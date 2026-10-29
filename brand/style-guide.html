@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gossamr Style Guide</title>
+<style>
+  :root {
+    color-scheme: light;
+    --win: #fcfbfe;
+    --side: #ecebf4;
+    --bar: #f4f3f9;
+    --sep: rgb(50 40 110 / 0.1);
+    --sep2: rgb(50 40 110 / 0.18);
+    --ink: #1b1a2b;
+    --ink2: #575672;
+    --ink3: #8c8ba6;
+    --accent: #4a5be0;
+    --accent-soft: rgb(74 91 224 / 0.1);
+    --pip: #0b8a86;
+    --pip-soft: rgb(11 138 134 / 0.1);
+    --pip2: #5b4bd1;
+    --done: #1f9d6a;
+    --blocked: #e0475b;
+    --review: #8a55d6;
+    --warn: #c98a1b;
+    --shadow: 0 12px 40px rgb(30 20 80 / 0.2);
+    --sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --win: #14131d;
+      --side: #1c1b2a;
+      --bar: #191826;
+      --sep: rgb(190 180 255 / 0.1);
+      --sep2: rgb(190 180 255 / 0.18);
+      --ink: #eeedf8;
+      --ink2: #b1b0c8;
+      --ink3: #7b7a96;
+      --accent: #6a82ff;
+      --accent-soft: rgb(106 130 255 / 0.16);
+      --pip: #37d0c0;
+      --pip-soft: rgb(55 208 192 / 0.13);
+      --pip2: #9a8bff;
+      --review: #b48af0;
+      --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --win: #14131d;
+    --side: #1c1b2a;
+    --bar: #191826;
+    --sep: rgb(190 180 255 / 0.1);
+    --sep2: rgb(190 180 255 / 0.18);
+    --ink: #eeedf8;
+    --ink2: #b1b0c8;
+    --ink3: #7b7a96;
+    --accent: #6a82ff;
+    --accent-soft: rgb(106 130 255 / 0.16);
+    --pip: #37d0c0;
+    --pip-soft: rgb(55 208 192 / 0.13);
+    --pip2: #9a8bff;
+    --review: #b48af0;
+    --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--win);
+    color: var(--ink);
+    font: 17px/28px var(--sans);
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  code, kbd { font-family: var(--mono); font-size: 0.82em; }
+  code { background: var(--bar); border: 1px solid var(--sep); border-radius: 4px; padding: 1px 5px; }
+  kbd {
+    display: inline-block; min-width: 1.9em; padding: 2px 7px; text-align: center;
+    background: var(--bar); border: 1px solid var(--sep2); border-bottom-width: 2px; border-radius: 6px; color: var(--ink);
+  }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 32px; } }
+  section { padding: 72px 0; border-top: 1px solid var(--sep); }
+  h1, h2, h3 { font-weight: 600; margin: 0; }
+  h2 { font-size: 32px; line-height: 38px; letter-spacing: -0.01em; margin-bottom: 12px; }
+  h3 { font-size: 17px; line-height: 24px; margin: 32px 0 12px; }
+  p { margin: 0 0 16px; max-width: 680px; }
+  .lead { font-size: 21px; line-height: 32px; color: var(--ink2); }
+  .meta { font-size: 14px; line-height: 20px; color: var(--ink3); }
+  ul { margin: 0 0 16px; padding-left: 20px; max-width: 680px; }
+  li { margin-bottom: 6px; }
+
+  /* Hero: always ink, whatever the theme, as the site's will be. */
+  .hero {
+    background: #14131d; color: #eeedf8; position: relative; overflow: hidden;
+    padding: 112px 0 96px;
+  }
+  .hero-inner { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 24px; }
+  .lockup { display: flex; align-items: center; gap: 20px; }
+  .lockup svg { width: 72px; height: 72px; }
+  .wordmark { font-size: 56px; line-height: 60px; font-weight: 600; letter-spacing: -0.02em; }
+  .hero .lead { color: #b1b0c8; max-width: 560px; margin: 0; }
+  .hero nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 20px; font-size: 14px; }
+  .hero nav a { color: #b1b0c8; text-decoration: none; }
+  .hero nav a:hover { color: #eeedf8; }
+  @media (max-width: 600px) {
+    .wordmark { font-size: 36px; line-height: 40px; }
+    .lockup svg { width: 48px; height: 48px; }
+    h2 { font-size: 26px; line-height: 32px; }
+    .lead { font-size: 18px; line-height: 28px; }
+  }
+
+  .theme-toggle {
+    position: absolute; top: 16px; right: 16px; font: 13px var(--sans);
+    background: rgb(238 237 248 / 0.08); color: #eeedf8; border: 1px solid rgb(238 237 248 / 0.18);
+    border-radius: 999px; padding: 6px 12px; cursor: pointer;
+  }
+
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); }
+  .card { background: var(--bar); border: 1px solid var(--sep); border-radius: 10px; padding: 20px; }
+  .card h4 { margin: 12px 0 2px; font-size: 15px; line-height: 20px; font-weight: 600; }
+  .card p { font-size: 14px; line-height: 20px; color: var(--ink2); margin: 0; }
+
+  .marks { display: flex; flex-wrap: wrap; align-items: end; gap: 28px; }
+  .marks figure { margin: 0; text-align: center; }
+  .marks figcaption { font-size: 12px; color: var(--ink3); margin-top: 6px; }
+  .on-light { background: #fcfbfe; border: 1px solid rgb(50 40 110 / 0.1); border-radius: 10px; padding: 24px; }
+  .on-dark { background: #14131d; border: 1px solid rgb(238 237 248 / 0.12); border-radius: 10px; padding: 24px; }
+
+  .swatches { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); }
+  .sw { border: 1px solid var(--sep); border-radius: 10px; overflow: hidden; background: var(--win); }
+  .sw .chip { height: 72px; }
+  .sw .chip.split { display: flex; }
+  .sw .chip.split span { flex: 1; }
+  .sw div.t { padding: 10px 12px; font-size: 13px; line-height: 18px; }
+  .sw b { display: block; font-weight: 600; }
+  .sw code { background: none; border: 0; padding: 0; color: var(--ink2); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 20px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--sep); vertical-align: top; }
+  th { font-weight: 600; color: var(--ink2); }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  .type-row { display: grid; grid-template-columns: 120px 1fr; gap: 16px; align-items: baseline; padding: 12px 0; border-bottom: 1px solid var(--sep); }
+  .type-row .meta { font-family: var(--mono); font-size: 12px; }
+  @media (max-width: 600px) { .type-row { grid-template-columns: 1fr; gap: 4px; } }
+
+  .ui { background: var(--win); border: 1px solid var(--sep2); border-radius: 10px; font-size: 12px; line-height: 18px; overflow: hidden; }
+  .ui .row { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--sep); }
+  .ui .row:last-child { border-bottom: 0; }
+  .ui .row.sel { background: var(--accent-soft); box-shadow: inset 2px 0 var(--accent); }
+  .ui .key { font-family: var(--mono); font-size: 11px; color: var(--ink3); }
+  .pill { font-size: 11px; line-height: 16px; font-weight: 600; padding: 1px 8px; border-radius: 999px; }
+  .p-needs { color: var(--accent); background: var(--accent-soft); }
+  .p-run { color: var(--pip); background: var(--pip-soft); }
+  .p-fail { color: var(--blocked); background: rgb(224 71 91 / 0.12); }
+  .p-done { color: var(--done); background: rgb(31 157 106 / 0.14); }
+  .p-idle { color: var(--ink3); background: var(--bar); }
+  .draft { margin: 12px; border: 1.5px dashed var(--pip); background: var(--pip-soft); border-radius: 10px; padding: 12px; }
+  .draft .who { font-size: 11px; color: var(--pip); font-weight: 600; }
+  .btns { display: flex; gap: 8px; margin-top: 10px; }
+  .btn { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ask { font: 600 12px var(--sans); border: 0; border-radius: 14px; padding: 3px 10px; color: #fff; background: linear-gradient(135deg, #0b8a86, #5b4bd1); }
+
+  .dos { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  @media (max-width: 600px) { .dos { grid-template-columns: 1fr; } }
+  .say { border-radius: 10px; padding: 16px 18px; font-size: 15px; line-height: 22px; border: 1px solid var(--sep); }
+  .say small { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+  .say.no small { color: var(--blocked); }
+  .say.yes small { color: var(--done); }
+  .say.no { color: var(--ink2); }
+  .say.no s { text-decoration-color: rgb(224 71 91 / 0.5); }
+
+  .motion { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
+  .stage { position: relative; width: 120px; height: 150px; background: var(--bar); border: 1px solid var(--sep); border-radius: 10px; overflow: hidden; }
+  .stage .line { position: absolute; top: 0; left: 50%; width: 1.5px; height: 64px; background: linear-gradient(transparent, var(--ink3)); }
+  .stage svg { position: absolute; top: 56px; left: 50%; width: 52px; margin-left: -26px; }
+  .stage.dangle .hang { animation: dangle 5s ease-in-out infinite; }
+  .stage.bob .hang { animation: bob 0.6s ease-in-out infinite; }
+  .hang { position: absolute; inset: 0; }
+  @keyframes dangle { 50% { transform: translateY(5px); } }
+  @keyframes bob { 50% { transform: translateY(-6px); } }
+  .lids { transform-box: fill-box; transform-origin: center; animation: blink 5s infinite; }
+  @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
+  @media (prefers-reduced-motion: reduce) {
+    .stage .hang, .lids { animation: none !important; }
+  }
+
+  footer { padding: 48px 0 64px; border-top: 1px solid var(--sep); color: var(--ink3); font-size: 14px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="silk" x1="250" y1="270" x2="790" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eeedf8"/>
+      <stop offset="0.55" stop-color="#eeedf8"/>
+      <stop offset="1" stop-color="#c8c2ff"/>
+    </linearGradient>
+    <symbol id="mark" viewBox="100 100 824 824">
+      <g transform="translate(100 100) scale(0.8046875)">
+        <rect width="1024" height="1024" rx="225" fill="#14131d"/>
+        <path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="url(#silk)" stroke-width="102" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="538" y1="233" x2="538" y2="369" stroke="#eeedf8" stroke-opacity="0.6" stroke-width="6"/>
+        <g fill="none" stroke="#37d0c0" stroke-width="17" stroke-linecap="round">
+          <path d="M 480 429 C 448 415 417 432 413 468"/>
+          <path d="M 483 472 C 449 473 444 511 463 531"/>
+          <path d="M 596 429 C 628 415 659 432 663 468"/>
+          <path d="M 593 472 C 627 473 632 511 613 531"/>
+        </g>
+        <circle cx="538" cy="441" r="72" fill="#37d0c0"/>
+        <circle cx="517" cy="446" r="9" fill="#eeedf8"/>
+        <circle cx="559" cy="446" r="9" fill="#eeedf8"/>
+      </g>
+    </symbol>
+    <symbol id="mark-small" viewBox="100 100 824 824">
+      <g transform="translate(100 100) scale(0.8046875)">
+        <rect width="1024" height="1024" rx="225" fill="#14131d"/>
+        <path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="#eeedf8" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="538" cy="466" r="74" fill="#37d0c0"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="hero">
+  <button class="theme-toggle" type="button" id="theme">Theme: auto</button>
+  <div class="wrap hero-inner">
+    <div class="lockup">
+      <svg role="img" aria-label="Gossamr mark"><use href="#mark"/></svg>
+      <span class="wordmark">Gossamr</span>
+    </div>
+    <p class="lead">How Gossamr looks, moves and speaks, in the app and on gossamr.app.</p>
+    <nav aria-label="Sections">
+      <a href="#idea">Idea</a><a href="#logo">Logo</a><a href="#colour">Colour</a><a href="#type">Type</a>
+      <a href="#shape">Shape</a><a href="#motion">Motion</a><a href="#pip-section">Pip</a><a href="#voice">Voice</a>
+      <a href="#keys">Keyboard</a><a href="#site">gossamr.app</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section id="idea"><div class="wrap">
+  <h2>The idea</h2>
+  <p class="lead">Gossamer is the fine silk of a spider's web. Gossamr holds the many fine threads of a person's work (tickets, branches, agents, pull requests) in one light, strong web, with Pip at the centre.</p>
+  <div class="grid">
+    <div class="card"><h4>Calm</h4><p>A tool a person lives in all day. Nothing shouts, blinks red or begs for attention.</p></div>
+    <div class="card"><h4>Quiet</h4><p>One line where one line will do. Pip explains the rest when asked.</p></div>
+    <div class="card"><h4>Precise</h4><p>Exact words, the same word for the same thing, and claims that are true.</p></div>
+    <div class="card"><h4>A little playful</h4><p>Small and earned: Pip blinks, and cobwebs gather on tickets nobody has touched.</p></div>
+  </div>
+</div></section>
+
+<section id="logo"><div class="wrap">
+  <h2>Logo</h2>
+  <p>A silk <b>G</b>, with <b>Pip</b>, a small teal spider, hanging into it on a hairline thread. Pip is the only bright point. Below 64 px, use the small version: the G with Pip as a single dot.</p>
+  <div class="marks">
+    <figure><svg width="128" height="128" role="img" aria-label="Full mark"><use href="#mark"/></svg><figcaption>Full · 64 px and up</figcaption></figure>
+    <figure><svg width="64" height="64" role="img" aria-label="Full mark at 64 px"><use href="#mark"/></svg><figcaption>64</figcaption></figure>
+    <figure><svg width="32" height="32" role="img" aria-label="Small mark at 32 px"><use href="#mark-small"/></svg><figcaption>32 · small</figcaption></figure>
+    <figure><svg width="16" height="16" role="img" aria-label="Small mark at 16 px"><use href="#mark-small"/></svg><figcaption>16 · small</figcaption></figure>
+    <figure><svg width="96" height="62" viewBox="226 340 572 372" role="img" aria-label="Pip mark"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+        <path d="M 384 489 C 311 457 252 492 242 562"/>
+        <path d="M 390 570 C 321 573 302 642 340 686"/>
+        <path d="M 640 489 C 713 457 772 492 782 562"/>
+        <path d="M 634 570 C 703 573 722 642 684 686"/>
+      </g>
+      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <g class="lids">
+        <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
+        <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
+      </g></svg><figcaption>Pip alone</figcaption></figure>
+  </div>
+
+  <h3>Wordmark</h3>
+  <p>"Gossamr": one word, capital G, no "e" before the final r. System sans, semibold, the mark to its left.</p>
+  <div class="grid">
+    <div class="on-light"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#1b1a2b">Gossamr</span></div></div>
+    <div class="on-dark"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#eeedf8">Gossamr</span></div></div>
+  </div>
+
+  <h3>Don't</h3>
+  <ul>
+    <li>Recolour the G or Pip, add gloss, outlines or shadows, or rotate the mark.</li>
+    <li>Use the full mark below 64 px: Pip's legs and thread blur.</li>
+    <li>Separate Pip from its thread, or hang Pip anywhere but inside the G.</li>
+    <li>Use gold or amber anywhere in the brand. Amber is the app's warning colour.</li>
+    <li>Replace the wordmark's G with the mark.</li>
+  </ul>
+  <p class="meta">Sources: <code>brand/gossamr-icon.svg</code>, <code>brand/gossamr-icon-small.svg</code>, <code>brand/pip.svg</code>. App icons are generated with <code>./scripts/app-icon.sh</code>.</p>
+</div></section>
+
+<section id="colour"><div class="wrap">
+  <h2>Colour</h2>
+  <p>Ink-indigo, with one teal character. <b>Teal means Pip. Indigo means you.</b> State colours mean state, never decoration.</p>
+  <h3>Brand core</h3>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#14131d"></div><div class="t"><b>Ink</b><code>#14131d</code></div></div>
+    <div class="sw"><div class="chip" style="background:#eeedf8;border-bottom:1px solid var(--sep)"></div><div class="t"><b>Silk</b><code>#eeedf8</code></div></div>
+    <div class="sw"><div class="chip" style="background:#c8c2ff"></div><div class="t"><b>Lavender</b><code>#c8c2ff</code></div></div>
+    <div class="sw"><div class="chip split"><span style="background:#37d0c0"></span><span style="background:#0b8a86"></span></div><div class="t"><b>Pip teal</b><code>#37d0c0 · #0b8a86</code></div></div>
+    <div class="sw"><div class="chip split"><span style="background:#6a82ff"></span><span style="background:#4a5be0"></span></div><div class="t"><b>Indigo</b><code>#6a82ff · #4a5be0</code></div></div>
+    <div class="sw"><div class="chip split"><span style="background:#9a8bff"></span><span style="background:#5b4bd1"></span></div><div class="t"><b>Violet</b><code>#9a8bff · #5b4bd1</code></div></div>
+  </div>
+  <p class="meta" style="margin-top:12px">Split swatches: dark-theme value on the left, light-theme value on the right.</p>
+
+  <h3>Interface tokens</h3>
+  <div class="scroll"><table>
+    <thead><tr><th>Token</th><th>Light</th><th>Dark</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><code>ws-win</code></td><td>#fcfbfe</td><td>#14131d</td><td>Window and page</td></tr>
+      <tr><td><code>ws-side</code></td><td>#ecebf4</td><td>#1c1b2a</td><td>Sidebar and rail</td></tr>
+      <tr><td><code>ws-bar</code></td><td>#f4f3f9</td><td>#191826</td><td>Bars, footers, quiet panels</td></tr>
+      <tr><td><code>ws-ink</code></td><td>#1b1a2b</td><td>#eeedf8</td><td>Body text</td></tr>
+      <tr><td><code>ws-ink2</code></td><td>#575672</td><td>#b1b0c8</td><td>Secondary text</td></tr>
+      <tr><td><code>ws-ink3</code></td><td>#8c8ba6</td><td>#7b7a96</td><td>Meta: times, counts, hints</td></tr>
+      <tr><td><code>ws-accent</code></td><td>#4a5be0</td><td>#6a82ff</td><td>Your actions, focus, selection</td></tr>
+      <tr><td><code>ws-pip</code> · <code>ws-pip2</code></td><td>#0b8a86 · #5b4bd1</td><td>#37d0c0 · #9a8bff</td><td>Pip and Pip's drafts</td></tr>
+      <tr><td><code>ws-done</code></td><td>#1f9d6a</td><td>#1f9d6a</td><td>Done</td></tr>
+      <tr><td><code>ws-blocked</code></td><td>#e0475b</td><td>#e0475b</td><td>Failed, blocked</td></tr>
+      <tr><td><code>ws-review</code></td><td>#8a55d6</td><td>#b48af0</td><td>In review</td></tr>
+      <tr><td><code>ws-warn</code></td><td>#c98a1b</td><td>#c98a1b</td><td>Needs attention (icons and fills only)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>In use</h3>
+  <div class="grid">
+    <div class="ui" aria-label="Example list">
+      <div class="row sel"><b>CA-402</b><span style="flex:1;color:var(--ink2)">Login times out on SSO</span><span class="pill p-needs">Needs you</span></div>
+      <div class="row"><b>CA-388</b><span style="flex:1;color:var(--ink2)">Cache invalidation</span><span class="pill p-run">Running</span></div>
+      <div class="row"><b>CA-371</b><span style="flex:1;color:var(--ink2)">Flaky export test</span><span class="pill p-fail">Failed</span></div>
+      <div class="row"><b>CA-350</b><span style="flex:1;color:var(--ink2)">Rename settings</span><span class="pill p-done">Done</span></div>
+      <div class="row"><b>CA-344</b><span style="flex:1;color:var(--ink2)">Audit log</span><span class="pill p-idle">Idle</span></div>
+    </div>
+    <div class="ui" aria-label="Example draft">
+      <div class="draft">
+        <div class="who">Pip's draft · comment</div>
+        <div style="margin-top:4px">The planner found the timeout in the SSO callback. Fix is in a draft PR.</div>
+        <div class="btns"><span class="btn primary">Approve</span><span class="btn">Edit</span><span class="btn">Skip</span></div>
+      </div>
+      <div class="row"><span style="flex:1;color:var(--ink3)">Nothing is posted until you approve it.</span><span class="ask">Ask Pip</span></div>
+    </div>
+  </div>
+
+  <h3>Contrast against the window</h3>
+  <div class="scroll"><table>
+    <thead><tr><th></th><th>Light</th><th>Dark</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td><code>ws-ink</code></td><td>16.6</td><td>15.9</td><td rowspan="2">Any text</td></tr>
+      <tr><td><code>ws-ink2</code></td><td>6.8</td><td>8.7</td></tr>
+      <tr><td><code>ws-accent</code></td><td>5.3</td><td>5.5</td><td>Links and buttons</td></tr>
+      <tr><td><code>ws-ink3</code></td><td>3.2</td><td>4.4</td><td>Meta, icons, large or bold text only</td></tr>
+      <tr><td><code>ws-pip</code></td><td>4.1</td><td>9.6</td><td>In light mode: icons, borders, bold labels</td></tr>
+      <tr><td><code>ws-warn</code></td><td>2.9</td><td></td><td>Icons and fills; the words stay in ink</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section id="type"><div class="wrap">
+  <h2>Type</h2>
+  <p>The system font, in the app and on the site: <code>system-ui, -apple-system, "SF Pro Text"</code>, and <code>ui-monospace, "SF Mono"</code> for code, keys and ids. Regular and semibold. Sentence case everywhere, no all-caps labels.</p>
+  <h3>App</h3>
+  <div class="type-row"><span class="meta">xl · 21</span><span style="font-size:21px;line-height:28px;font-weight:600">Work</span></div>
+  <div class="type-row"><span class="meta">lg · 15</span><span style="font-size:15px;line-height:20px;font-weight:600">CA-402 · Login times out on SSO</span></div>
+  <div class="type-row"><span class="meta">base · 13</span><span style="font-size:13px;line-height:20px">The planner found the timeout in the SSO callback and opened a draft PR.</span></div>
+  <div class="type-row"><span class="meta">sm · 12</span><span style="font-size:12px;line-height:18px">Approve · Edit · Skip · Open in Terminal</span></div>
+  <div class="type-row"><span class="meta">xs · 11</span><span style="font-size:11px;line-height:16px;color:var(--ink3)">2 min ago · reviewer · 3 drafts</span></div>
+  <h3>gossamr.app</h3>
+  <div class="type-row"><span class="meta">hero · 56/60</span><span style="font-size:clamp(36px,7vw,56px);line-height:1.08;font-weight:600;letter-spacing:-0.02em">Tell Pip what you want done.</span></div>
+  <div class="type-row"><span class="meta">section · 32/38</span><span style="font-size:clamp(26px,5vw,32px);line-height:1.2;font-weight:600;letter-spacing:-0.01em">Nothing is posted until you approve it.</span></div>
+  <div class="type-row"><span class="meta">lead · 21/32</span><span style="font-size:clamp(18px,3vw,21px);line-height:1.5;color:var(--ink2)">Your tickets and pull requests in one calm place, with an assistant that does the legwork.</span></div>
+  <div class="type-row"><span class="meta">body · 17/28</span><span>Keep a line of body text under about 70 characters.</span></div>
+  <div class="type-row"><span class="meta">small · 14/20</span><span style="font-size:14px;line-height:20px;color:var(--ink3)">macOS · Jira and GitHub</span></div>
+</div></section>
+
+<section id="shape"><div class="wrap">
+  <h2>Space, shape and depth</h2>
+  <div class="grid">
+    <div class="card"><h4>4 px step</h4><p>Rows and controls mostly use 8 px gaps and 8 to 12 px side padding.</p></div>
+    <div class="card"><h4>Corners</h4><p>4 to 6 px on controls and rows, 6 to 10 px on cards and sheets, round on pills and avatars.</p></div>
+    <div class="card"><h4>Lines, not boxes</h4><p>Hairline separators. A border only where something is a distinct object: a card, a field, a draft.</p></div>
+    <div class="card" style="box-shadow:var(--shadow)"><h4>Shadow floats</h4><p>Only popovers, the palette, toasts and Pip's launcher cast a shadow. Lists and cards lie flat.</p></div>
+  </div>
+  <p style="margin-top:20px">The app is compact, like a Mac utility. The site breathes: 96 to 128 px between sections on desktop, 64 px on phones.</p>
+</div></section>
+
+<section id="motion"><div class="wrap">
+  <h2>Motion</h2>
+  <p>Quick and quiet in the interface; slow and gentle on Pip. Everything stops for reduced motion, and Pip pauses while the window is hidden.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Where</th><th>Duration</th><th>Easing</th></tr></thead>
+    <tbody>
+      <tr><td>A sheet slides in</td><td>220 ms</td><td><code>cubic-bezier(0.2, 0.8, 0.2, 1)</code></td></tr>
+      <tr><td>A sheet slides out</td><td>160 ms</td><td>ease-in</td></tr>
+      <tr><td>A popover appears</td><td>150 ms</td><td>ease-out</td></tr>
+      <tr><td>Hover and focus colours</td><td>120 ms</td><td>linear</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Pip's vocabulary</h3>
+  <div class="motion">
+    <figure style="margin:0"><div class="stage dangle"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+        <path d="M 384 489 C 311 457 252 492 242 562"/>
+        <path d="M 390 570 C 321 573 302 642 340 686"/>
+        <path d="M 640 489 C 713 457 772 492 782 562"/>
+        <path d="M 634 570 C 703 573 722 642 684 686"/>
+      </g>
+      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <g class="lids">
+        <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
+        <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
+      </g></svg></div></div><figcaption class="meta">Dangle · 5 px over 5 s</figcaption></figure>
+    <figure style="margin:0"><div class="stage bob"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+        <path d="M 384 489 C 311 457 252 492 242 562"/>
+        <path d="M 390 570 C 321 573 302 642 340 686"/>
+        <path d="M 640 489 C 713 457 772 492 782 562"/>
+        <path d="M 634 570 C 703 573 722 642 684 686"/>
+      </g>
+      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <g class="lids">
+        <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
+        <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
+      </g></svg></div></div><figcaption class="meta">Bob while working · 0.6 s</figcaption></figure>
+    <div style="flex:1;min-width:240px">
+      <ul>
+        <li>Blinks about every 5 s; a leg twitches every 7 to 9 s.</li>
+        <li>Eyes follow the pointer.</li>
+        <li>Cobwebs gather on untouched tickets after 2, 3, 5, 7 and 10 days. They are the only comment Gossamr makes on the work, and only as a picture.</li>
+        <li>Nothing important is said only through motion.</li>
+      </ul>
+    </div>
+  </div>
+</div></section>
+
+<section id="pip-section"><div class="wrap">
+  <h2>Pip</h2>
+  <p>Gossamr's one character: a round teal spider with two eyes, friendly rather than insect-like.</p>
+  <ul>
+    <li><b>In the app</b>, Pip is the animated avatar: a teal-to-violet body, eight legs, eyes that blink and follow the pointer.</li>
+    <li><b>In the brand</b>, Pip is the flat mark: flat teal, two eyes, four legs.</li>
+    <li>Pip appears where Pip acts or speaks: the launcher, the pane, Pip's drafts. Never as decoration, and never on errors as a joke.</li>
+    <li>Pip is "Pip": never "the AI", "the bot" or "the assistant" in the interface.</li>
+  </ul>
+</div></section>
+
+<section id="voice"><div class="wrap">
+  <h2>Voice</h2>
+  <p>A careful colleague: plain, short and exact. Address the person as "you". Use the app's own words the same way every time: workstream, agent, draft, Needs you, Inbox, Work, Board, List.</p>
+  <ul>
+    <li>One idea per sentence, in the active voice.</li>
+    <li>One line per empty state. No explainers, no glossary.</li>
+    <li>Two facts are said once, in Settings: Gossamr posts nothing to Jira or GitHub until you approve it, and agents run with your own Claude Code settings.</li>
+    <li>One status word per workstream: Needs you, Failed, Running, Done or Idle.</li>
+    <li>Buttons are verbs that name the result. Errors say what failed and what to do next.</li>
+    <li>Avoid "magic", "supercharge", "seamless", "effortless", "AI-powered", exclamation marks, and emoji in the interface.</li>
+  </ul>
+  <div class="dos">
+    <div class="say no"><small>Not this</small><s>Oops! Something went wrong 😕</s></div>
+    <div class="say yes"><small>This</small>Couldn't reach Jira. Check your connection, then Sync now.</div>
+    <div class="say no"><small>Not this</small><s>Let our AI supercharge your workflow</s></div>
+    <div class="say yes"><small>This</small>Tell Pip what you want done.</div>
+    <div class="say no"><small>Not this</small><s>You have no items in this view yet. Items will appear here once…</s></div>
+    <div class="say yes"><small>This</small>Nothing needs you.</div>
+  </div>
+</div></section>
+
+<section id="keys"><div class="wrap">
+  <h2>Keyboard</h2>
+  <p>Gossamr is keyboard-first. Every shortcut lives in one table, <code>src/lib/keys.ts</code>, and plain keys never fire while you type. Show a key where its action is.</p>
+  <div class="scroll"><table>
+    <tbody>
+      <tr><td><kbd>⌘J</kbd></td><td>Open or close Pip</td></tr>
+      <tr><td><kbd>⌘K</kbd></td><td>Search and jump</td></tr>
+      <tr><td><kbd>j</kbd> <kbd>k</kbd></td><td>Next or previous</td></tr>
+      <tr><td><kbd>↵</kbd></td><td>Open</td></tr>
+      <tr><td><kbd>a</kbd> <kbd>e</kbd> <kbd>s</kbd> <kbd>d</kbd></td><td>Approve, edit, skip, dismiss</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Close the peek or Pip's pane</td></tr>
+      <tr><td><kbd>F6</kbd></td><td>Move between the page, the peek and Pip</td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section id="site"><div class="wrap">
+  <h2>gossamr.app</h2>
+  <p>The app's front door: the app's colours, type and voice, and the real app. The top of this page shows the hero.</p>
+  <ul>
+    <li><b>Dark first.</b> The hero sits on ink, with the mark and the wordmark, as at the top of this page. Pip, inside the mark, is the hero's one teal thing. Light sections follow for reading.</li>
+    <li><b>One teal thing per screen</b>, and it is Pip. Calls to action are indigo.</li>
+    <li><b>Real screenshots</b> in both themes, each cropped to one idea: a draft card, Needs you, Pip's pane.</li>
+    <li><b>True, plain claims:</b> drafts are the gate, the cache works offline, agents use your own Claude Code setup, Jira and GitHub on macOS. Linear only once it ships.</li>
+    <li><b>Motion:</b> Pip may bob once on its thread as the page loads. Nothing else moves on scroll. Respect reduced motion.</li>
+    <li><b>Layout:</b> content at most 1120 px, text at most 680 px, 16 px gutters on phones, no sideways scrolling.</li>
+    <li><b>Favicon:</b> the small mark. <b>Social image:</b> the full mark on ink beside the wordmark.</li>
+    <li><b>Accessibility:</b> AA contrast for all text, a visible indigo focus ring, alt text that says what a screenshot shows.</li>
+  </ul>
+</div></section>
+</main>
+
+<footer><div class="wrap">Gossamr style guide · source of truth: <code>brand/style-guide.md</code> and <code>src/workspace/theme.css</code></div></footer>
+
+<script>
+  (function () {
+    var order = ["auto", "light", "dark"];
+    var btn = document.getElementById("theme");
+    var current = "auto";
+    try { current = localStorage.getItem("gossamr-guide-theme") || "auto"; } catch (e) {}
+    function apply(t) {
+      current = t;
+      if (t === "auto") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", t);
+      btn.textContent = "Theme: " + t;
+      try { localStorage.setItem("gossamr-guide-theme", t); } catch (e) {}
+    }
+    apply(order.indexOf(current) >= 0 ? current : "auto");
+    btn.addEventListener("click", function () { apply(order[(order.indexOf(current) + 1) % order.length]); });
+  })();
+</script>
+</body>
+</html>
