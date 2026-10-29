@@ -32,6 +32,17 @@ impl Db {
         Ok(())
     }
 
+    /// Sets the mode only while the connection has not chosen, so a choice made during a slow probe stands.
+    /// Returns whether it was set.
+    pub fn set_watch_mode_if_unset(&self, connection_id: &str, mode: WatchMode, at: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "INSERT INTO watch_settings (connection_id, mode, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(connection_id) DO UPDATE SET mode = ?2, updated_at = ?3 WHERE watch_settings.mode = 'unset'",
+            params![connection_id, mode.as_str(), at],
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn watch_set(&self, connection_id: &str) -> Result<WatchSet> {
         let mut stmt = self.conn.prepare(
             "SELECT container_id, pinned, source, added_at, inaccessible FROM watched_containers
@@ -54,10 +65,10 @@ impl Db {
     /// list the person's own. Before that every container is watched already, so a pin only records a row.
     pub fn apply_watch_changes(&self, connection_id: &str, changes: &[WatchChange], at: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        let selected = self.watch_mode(connection_id)? == WatchMode::Selected;
-        if !selected && changes.iter().any(|c| c.watched == Some(true)) {
+        if self.watch_mode(connection_id)? != WatchMode::Selected && changes.iter().any(|c| c.watched == Some(true)) {
             self.set_watch_mode(connection_id, WatchMode::Selected, at)?;
         }
+        let selected = self.watch_mode(connection_id)? == WatchMode::Selected;
         for c in changes {
             let exists: bool = tx
                 .query_row(
@@ -216,6 +227,27 @@ mod tests {
 
         db.apply_watch_changes(C, &[watch("A")], "t3").unwrap();
         assert!(db.watch_set(C).unwrap().is_watched("A"));
+    }
+
+    #[test]
+    fn a_pin_beside_the_first_watch_is_not_watched() {
+        let db = Db::in_memory().unwrap();
+        db.apply_watch_changes(C, &[watch("A"), WatchChange { pinned: Some(true), ..change("B") }], "t1").unwrap();
+        let s = db.watch_set(C).unwrap();
+        assert_eq!(s.mode, WatchMode::Selected);
+        assert!(s.is_watched("A") && !s.is_watched("B"));
+    }
+
+    #[test]
+    fn a_probe_settles_the_mode_only_while_it_is_unset() {
+        let db = Db::in_memory().unwrap();
+        assert!(db.set_watch_mode_if_unset(C, WatchMode::Everything, "t1").unwrap());
+        assert_eq!(db.watch_mode(C).unwrap(), WatchMode::Everything);
+
+        let db = Db::in_memory().unwrap();
+        db.apply_watch_changes(C, &[watch("A")], "t1").unwrap();
+        assert!(!db.set_watch_mode_if_unset(C, WatchMode::Everything, "t2").unwrap());
+        assert_eq!(db.watch_mode(C).unwrap(), WatchMode::Selected);
     }
 
     #[test]

@@ -266,7 +266,7 @@ impl Core {
             db.set_meta(CATALOG_SIZE, &page.containers.len().min(AUTO_EVERYTHING_MAX + 1).to_string())?;
             db.set_meta(CATALOG_PROBED, &now_iso())?;
             if small && mode == WatchMode::Unset {
-                db.set_watch_mode(id, WatchMode::Everything, &now_iso())?;
+                db.set_watch_mode_if_unset(id, WatchMode::Everything, &now_iso())?;
             }
             Ok(())
         })

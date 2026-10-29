@@ -230,7 +230,7 @@ export interface Backend {
   onWorkstreamsChanged(listener: (change: WorkstreamsChanged) => void): () => void;
   /** What each signed-in connection follows. */
   watchGet(): Promise<WatchState[]>;
-  /** Watches, unwatches (hidden at once, its cached items deleted after 14 days) or pins containers. The first one watched makes the list the person's own. */
+  /** Watches, unwatches (the row goes at once; its cached items are pruned later) or pins containers. The first one watched makes the list the person's own. */
   watchSetContainers(connectionId: string, changes: WatchChange[]): Promise<void>;
   /** One page of every container the tracker has, matching the query, each marked watched or not. */
   watchCatalog(connectionId: string, query: string, cursor?: string | null): Promise<CatalogPage>;

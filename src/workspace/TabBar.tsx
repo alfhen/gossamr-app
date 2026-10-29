@@ -46,7 +46,7 @@ export function TabStrip({
     const watch = new ResizeObserver(show);
     watch.observe(el);
     return () => watch.disconnect();
-  }, [active, items.length]);
+  }, [active, items.length, counts.join()]);
 
   return (
     <div className="flex items-end gap-1 border-b border-ws-sep">

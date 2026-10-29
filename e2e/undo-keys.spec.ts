@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPermission, askPip, expectToast, mockAttached, homeComposer, homeConversationRegion, homeSettled, jiraWrites, keepComments, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipCommentDraft, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, openNeedOfKind, workstreamSheet } from "./support/app";
+import { advanceRuns, agentsHome, askPermission, askPip, expectToast, mockAttached, homeComposer, homeConversationRegion, homeSettled, jiraWrites, keepComments, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipCommentDraft, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, workstreamOpen, openNeedOfKind, workstreamSheet } from "./support/app";
 
 // Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure) act at once and
 // offer Undo for about 8 seconds, instead of asking first; what reaches
@@ -338,10 +338,10 @@ test.describe("Undo offers, Reopen and the paused banner (G3, G4, G5, G10)", () 
     await expect(page.locator("[data-toast]").filter({ hasText: "Closed the workstream on CA-401" })).toHaveCount(0);
     await openAgents(page);
     const showClosed = agentsHome(page).locator("[data-show-closed]");
-    await expect(async () => {
-      if ((await showClosed.getAttribute("aria-pressed")) !== "true") await showClosed.click({ timeout: 1_000 });
-      await expect(agentsHome(page).locator("[data-closed-workstreams]")).toBeVisible({ timeout: 1_000 });
-    }).toPass({ timeout: 10_000 });
+    await expect(workstreamOpen(page, "CA-401")).toBeVisible();
+    await showClosed.click();
+    await expect(showClosed).toHaveAttribute("aria-pressed", "true");
+    await expect(agentsHome(page).locator("[data-closed-workstreams]")).toBeVisible();
     const reopen = agentsHome(page).locator("[data-reopen-workstream]").first();
     await expect(reopen).toHaveAttribute("aria-disabled", "true");
     await expect(agentsHome(page).locator("[data-reopen-blocked]").first()).toHaveText("CA-401 already has an open workstream");

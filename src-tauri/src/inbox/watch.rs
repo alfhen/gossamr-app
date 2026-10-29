@@ -355,17 +355,21 @@ impl Core {
         let Ok(page) = tracker.list_containers(&probe).await else { return Ok((set, false)) };
         let small = page.containers.len() <= AUTO_EVERYTHING_MAX && page.next.is_none();
         let seen = page.containers.len().min(AUTO_EVERYTHING_MAX + 1);
-        self.with_db_for(scope, |db| {
-            db.catalog_upsert(&id, &page.containers, &now_iso())?;
-            db.set_meta(CATALOG_SIZE, &seen.to_string())?;
-            db.set_meta(CATALOG_PROBED, &now_iso())?;
-            if small {
-                db.set_watch_mode(&id, WatchMode::Everything, &now_iso())?;
-            }
-            Ok(())
-        })
-        .await?;
-        Ok((WatchSet { mode: if small { WatchMode::Everything } else { set.mode }, ..set }, small))
+        let settled = self
+            .with_db_for(scope, |db| {
+                db.catalog_upsert(&id, &page.containers, &now_iso())?;
+                db.set_meta(CATALOG_SIZE, &seen.to_string())?;
+                db.set_meta(CATALOG_PROBED, &now_iso())?;
+                if small && db.set_watch_mode_if_unset(&id, WatchMode::Everything, &now_iso())? {
+                    return Ok(None);
+                }
+                Ok(Some(db.watch_set(&id)?))
+            })
+            .await?;
+        match settled {
+            None => Ok((WatchSet { mode: WatchMode::Everything, ..set }, true)),
+            Some(current) => Ok((current, false)),
+        }
     }
 
     /// An item read live, for a container that may not be watched. Nothing is stored. `None` when the tracker says

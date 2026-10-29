@@ -186,8 +186,15 @@ export function appActions(): CommandActions {
     manageProjects: () => tabs.openSettings("watching"),
     watch: (target, watched) => {
       const ws = useWorkspace.getState();
-      ws.watchContainers(target.ref.connectionId, [{ containerId: target.ref.externalId, watched, source: "manual" }]).then(
-        () => useToasts.getState().push(watched ? `Watching ${target.name}.` : `Stopped watching ${target.name}. It stays in Settings for 14 days in case you change your mind.`, "info"),
+      const { connectionId, externalId } = target.ref;
+      const pinned = ws.watch.find((w) => w.connectionId === connectionId)?.watches.find((r) => r.container.externalId === externalId)?.pinned ?? false;
+      ws.watchContainers(connectionId, [{ containerId: externalId, watched, source: "manual" }]).then(
+        () => {
+          if (watched) return useToasts.getState().push(`Watching ${target.name}.`, "info");
+          const undo = () =>
+            useWorkspace.getState().watchContainers(connectionId, [{ containerId: externalId, watched: true, source: "manual", ...(pinned ? { pinned: true } : {}) }]).catch((e) => ws.report(`Couldn't watch ${target.name}`, e));
+          useToasts.getState().push(`Stopped watching ${target.name}.`, "info", { label: "Undo", run: () => void undo() });
+        },
         (e) => ws.report(`Couldn't ${watched ? "watch" : "unwatch"} ${target.name}`, e),
       );
     },

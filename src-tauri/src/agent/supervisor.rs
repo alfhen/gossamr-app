@@ -361,7 +361,7 @@ impl Supervisor {
                 continue;
             }
             let Ok(mut runs) = self.linked(&scope, &ws.id).await else { continue };
-            // `runs_in` lists newest first; Pip reads what happened oldest first.
+            // `runs_in` lists newest first; Pip reads runs oldest first.
             runs.sort_by(|a, b| a.queued_at.cmp(&b.queued_at).then_with(|| a.id.cmp(&b.id)));
             let Ok(events) = self.core.workstream_events(&scope, &ws.id).await else { continue };
             let woken = woken_in(&events);
