@@ -770,7 +770,9 @@
     var badge = document.getElementById("nbadge");
     var morph = document.getElementById("morph");
     var glass = document.getElementById("glass");
-    function reset() { slot.classList.remove("gone"); card.className = "dcard"; }
+    var timers = [];
+    function later(fn, ms) { timers.push(setTimeout(fn, ms)); }
+    function reset() { timers.forEach(clearTimeout); timers = []; slot.classList.remove("gone"); card.className = "dcard"; }
     document.addEventListener("click", function (e) {
       var b = e.target.closest("[data-act]");
       if (!b) return;
@@ -778,15 +780,20 @@
       if (act === "curves") {
         var run = Math.max(80, curves.querySelector(".track").clientWidth - 10) + "px";
         curves.style.setProperty("--run", run);
-        curves.classList.remove("go"); void curves.offsetWidth; curves.classList.add("go");
+        var dots = curves.querySelectorAll(".track i");
+        curves.classList.remove("go");
+        dots.forEach(function (d) { d.style.transition = "none"; });
+        void curves.offsetWidth;
+        dots.forEach(function (d) { d.style.transition = ""; });
+        curves.classList.add("go");
       } else if (act === "approve") {
         reset(); void card.offsetWidth;
         card.classList.add("bead");
-        setTimeout(function () { card.classList.add("fall"); setTimeout(function () { slot.classList.add("gone"); }, 240); }, 120);
+        later(function () { card.classList.add("fall"); later(function () { slot.classList.add("gone"); }, 240); }, 120);
       } else if (act === "skip") {
         reset(); void card.offsetWidth;
         card.classList.add("evap");
-        setTimeout(function () { slot.classList.add("gone"); }, 180);
+        later(function () { slot.classList.add("gone"); }, 180);
       } else if (act === "reset") {
         reset();
       } else if (act === "need") {
