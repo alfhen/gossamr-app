@@ -1,24 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { AGENTS_ON_GITHUB, GITHUB_SAFETY } from "./githubSafety";
+import { AGENTS_ON_GITHUB, FACTS } from "./githubSafety";
 import { GENERAL_INTRO } from "./PipConversation";
 
 const source = (name: string) => readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
 
-describe("what the app says it does on GitHub (G5, G6)", () => {
-  it("admits the review it posts, and says it never merges and that agents run with the person's settings", () => {
-    expect(GITHUB_SAFETY).toContain("posts a review only when you approve a review draft");
-    expect(GITHUB_SAFETY).toContain("never merges");
-    expect(GITHUB_SAFETY).not.toContain("never comments");
-    expect(GITHUB_SAFETY).toContain("Agents run with your own Claude Code settings");
+describe("what the app says about safety", () => {
+  it("states two facts, that nothing is posted without approval and that agents run with the person's settings", () => {
+    expect(FACTS[0]).toContain("posts nothing to Jira or GitHub until you approve it");
+    expect(FACTS[0]).toContain("never merges");
+    expect(FACTS[1]).toContain("your own Claude Code settings");
   });
 
-  it("is the one line Settings, WatchSettings and ConnectGithub use, with no claim of its own that nothing is commented", () => {
-    for (const f of ["Settings.tsx", "WatchSettings.tsx", "ConnectGithub.tsx"]) {
-      const text = source(f);
-      expect(text).toContain("GITHUB_SAFETY");
-      expect(text).not.toContain("never comments, merges or pushes");
-    }
+  it("states them in Settings only, and the connection screens say nothing of their own", () => {
+    expect(source("Settings.tsx")).toContain("FACTS");
+    for (const f of ["WatchSettings.tsx", "ConnectGithub.tsx"]) expect(source(f)).not.toMatch(/GITHUB_SAFETY|FACTS/);
   });
 
   it("says agents run with the person's settings, in Pip's intro", () => {

@@ -11,7 +11,7 @@ import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { useEscBack } from "./escBack";
-import { GITHUB_SAFETY } from "./githubSafety";
+import { FACTS } from "./githubSafety";
 
 export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
   const counts = new Map<string, number>();
@@ -196,7 +196,7 @@ export function ConnectGithubCard({ connected }: { connected: boolean }) {
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-dashed border-ws-sep2 p-4">
       <div className="min-w-0 flex-1">
         <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
-        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket. {GITHUB_SAFETY}</div>
+        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</div>
       </div>
       <button type="button" onClick={() => useGithubUi.getState().openConnect()} className="shrink-0 rounded-lg bg-ws-accent px-3.5 py-1.5 font-semibold text-white">
         Connect GitHub
@@ -258,6 +258,14 @@ export function Settings() {
 
         <Section title="Watching" id="settings-watching">
           <WatchingSection syncLine={syncLine} />
+        </Section>
+
+        <Section title="What to know">
+          <ul aria-label="What to know" className="m-0 grid list-disc gap-1.5 pl-5 text-ws-ink2">
+            {FACTS.map((f) => (
+              <li key={f}>{f}</li>
+            ))}
+          </ul>
         </Section>
       </div>
     </div>
