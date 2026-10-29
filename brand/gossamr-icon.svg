@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="silk" x1="250" y1="270" x2="790" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eeedf8"/>
+      <stop offset="0.55" stop-color="#eeedf8"/>
+      <stop offset="1" stop-color="#c8c2ff"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS icon grid: an 824 px body inside the 1024 px canvas. -->
+  <g transform="translate(100 100) scale(0.8046875)">
+    <rect width="1024" height="1024" rx="225" fill="#14131d"/>
+    <g id="g">
+      <path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617"
+            fill="none" stroke="url(#silk)" stroke-width="102" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <line id="thread" x1="538" y1="233" x2="538" y2="369" stroke="#eeedf8" stroke-opacity="0.6" stroke-width="6"/>
+    <g id="pip">
+      <path d="M 480 429 C 448 415 417 432 413 468" fill="none" stroke="#37d0c0" stroke-width="17" stroke-linecap="round"/>
+      <path d="M 483 472 C 449 473 444 511 463 531" fill="none" stroke="#37d0c0" stroke-width="17" stroke-linecap="round"/>
+      <path d="M 596 429 C 628 415 659 432 663 468" fill="none" stroke="#37d0c0" stroke-width="17" stroke-linecap="round"/>
+      <path d="M 593 472 C 627 473 632 511 613 531" fill="none" stroke="#37d0c0" stroke-width="17" stroke-linecap="round"/>
+      <circle cx="538" cy="441" r="72" fill="#37d0c0"/>
+      <circle cx="517" cy="446" r="9" fill="#eeedf8"/>
+      <circle cx="559" cy="446" r="9" fill="#eeedf8"/>
+    </g>
+  </g>
+</svg>
