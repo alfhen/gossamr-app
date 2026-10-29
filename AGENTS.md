@@ -72,6 +72,7 @@ pnpm e2e
 - **A schema change:** add a new step to the end of `STEPS` in `src-tauri/src/db/schema.rs`. Never edit a step that has shipped, because `PRAGMA user_version` counts the steps applied.
 - **Types across the boundary:** Rust structs sent to the front end use `#[serde(rename_all = "camelCase")]` and match the TypeScript types field for field.
 - **Agent behaviour:** check it against `docs/agents-cli-findings.md`. If the CLI behaves differently, write down what you saw there.
+- **The app icon:** edit the SVGs in `brand/`, then run `./scripts/app-icon.sh`. Do not edit `src-tauri/icons/` by hand, and do not run `tauri icon` alone: it would put the full artwork in the 16 and 32 pt slots.
 
 ## Style
 

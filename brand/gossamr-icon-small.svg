@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- The icon for 16 and 32 pt, where Pip's legs and thread blur: Pip is just the dot. -->
+  <g transform="translate(100 100) scale(0.8046875)">
+    <rect width="1024" height="1024" rx="225" fill="#14131d"/>
+    <path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617"
+          fill="none" stroke="#eeedf8" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="538" cy="466" r="74" fill="#37d0c0"/>
+  </g>
+</svg>
