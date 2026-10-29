@@ -3,6 +3,7 @@ mod auth;
 mod claude;
 mod codehost;
 mod config;
+mod connections;
 mod db;
 mod domain;
 mod error;
@@ -867,6 +868,7 @@ pub fn run() {
             let code = inbox::CodeService::new(http.clone(), inbox::CodeService::default_store());
             let core: CoreState = Arc::new(Core::new(auth, registry, data_dir).with_code(code));
             tauri::async_runtime::block_on(core.restore());
+            tauri::async_runtime::block_on(core.adopt_instances());
             app.manage(core.clone());
 
             let config = config::AppConfig::load(&core.data_dir());

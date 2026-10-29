@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use super::watch::{CatalogEntry, CatalogPage, WatchRow, WatchState};
 use super::{now_iso, Core};
 use crate::auth::Scope;
+use crate::connections::Binding;
 use crate::auth::{DeviceStart, GithubAuth, GithubSession, KeychainStore, TokenStore};
 use crate::codehost::diff::{commentable, relative_path};
 use crate::codehost::events::{derive, from_notice, recent};
@@ -124,6 +125,9 @@ fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<(St
     };
     super::ConnectionInfo {
         id: session.connection().id,
+        instance_id: session.connection().id,
+        display_name: session.login.clone(),
+        enabled: true,
         kind: ConnectionKind::Github,
         workspace: session.login.clone(),
         url: format!("https://github.com/{}", session.login),
@@ -187,6 +191,7 @@ impl Core {
 
     async fn connected(&self, session: GithubSession) -> Result<super::ConnectionInfo> {
         let connection = self.code.remember(session.clone());
+        self.bind_instance(Binding::github(&session.login));
         self.registry.register(connection.clone());
         // So the catalog is known before the first sync, which a search of the watched repositories depends on.
         let _ = self.probe_code_catalog(&connection.id).await;
@@ -227,6 +232,7 @@ impl Core {
         self.code.hosts.lock().expect("host lock poisoned").remove(connection_id);
         self.code.dbs.lock().expect("db map lock poisoned").remove(connection_id);
         self.registry.remove(connection_id);
+        self.unbind_instance(connection_id);
         let path = self.data_dir.join(db_file(&session.login));
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
@@ -1085,6 +1091,71 @@ pub(crate) mod tests {
         let ids: Vec<String> = other.core.connections().await.unwrap().into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["github:acme-bot", "github:ann"]);
         assert_ne!(db_file("ann"), db_file("acme-bot"));
+    }
+
+    fn instance_ids(fx: &Fx) -> Vec<(String, String)> {
+        let config = crate::config::AppConfig::load(&fx.dir);
+        config.connections.into_iter().map(|i| (i.id, i.bound_to.unwrap_or_default())).collect()
+    }
+
+    #[tokio::test]
+    async fn existing_github_sign_ins_become_instances_in_the_order_they_were_saved_and_list_under_them() {
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        let other = fixture(REPOS).await;
+        let mut bot = fx.store.load("ann").unwrap().unwrap();
+        other.store.save(&bot).unwrap();
+        bot.login = "acme-bot".into();
+        other.store.save(&bot).unwrap();
+        other.core.restore().await;
+        other.core.adopt_instances().await;
+        assert_eq!(instance_ids(&other), [("github".to_string(), "github:ann".to_string()), ("github_2".to_string(), "github:acme-bot".to_string())]);
+        let listed: Vec<_> = other.core.connections().await.unwrap().into_iter().map(|c| (c.id, c.instance_id, c.display_name, c.enabled)).collect();
+        assert_eq!(
+            listed,
+            [
+                ("github:acme-bot".into(), "github_2".into(), "GitHub (acme-bot)".into(), true),
+                ("github:ann".into(), "github".into(), "GitHub".into(), true)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_adopted_while_the_keychain_cant_be_read_and_it_is_adopted_on_a_later_launch() {
+        let fake = crate::secrets::fake::Fake::default();
+        fake.deny_reads_of("vault");
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.adopt_instances().await;
+        assert_eq!(crate::config::AppConfig::load(&fx.dir).version, 0);
+        assert!(instance_ids(&fx).is_empty());
+
+        let readable = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&readable);
+        fx.core.adopt_instances().await;
+        assert_eq!(instance_ids(&fx), [("github".to_string(), "github:ann".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn connecting_and_disconnecting_accounts_keeps_the_instances_and_never_reuses_an_id() {
+        let fx = fixture(REPOS).await;
+        fx.core.adopt_instances().await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        assert_eq!(instance_ids(&fx), [("github".to_string(), "github:ann".to_string())]);
+        fx.core.github_disconnect("github:ann").await.unwrap();
+        assert!(instance_ids(&fx).is_empty());
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        assert_eq!(instance_ids(&fx), [("github_2".to_string(), "github:ann".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn a_connection_without_an_instance_lists_as_its_own() {
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        let listed = fx.core.connections().await.unwrap();
+        assert_eq!((listed[0].instance_id.as_str(), listed[0].display_name.as_str(), listed[0].enabled), ("github:ann", "ann", true));
+        assert!(instance_ids(&fx).is_empty(), "before the sign-ins are adopted nothing is written");
     }
 
     #[tokio::test]
