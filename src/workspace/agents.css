@@ -10,10 +10,10 @@
 }
 
 /* The ring is the only motion on a working run; with reduced motion it is a plain dot. */
-.ws-pulse {
+.ws-live {
   position: relative;
 }
-.ws-pulse::after {
+.ws-live::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -39,7 +39,7 @@
   .ws-agent-card:hover {
     transform: none;
   }
-  .ws-pulse::after {
+  .ws-live::after {
     display: none;
   }
 }

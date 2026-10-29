@@ -33,7 +33,7 @@ export function StateChip({ run, now }: { run: Run; now: number }) {
 }
 
 export function Dot({ tone, live }: { tone: Tone; live: boolean }) {
-  return <span aria-hidden className={`size-2 shrink-0 rounded-full bg-current ${TONE[tone].text} ${live ? "ws-pulse" : ""}`} />;
+  return <span aria-hidden className={`size-2 shrink-0 rounded-full bg-current ${TONE[tone].text} ${live ? "ws-live" : ""}`} />;
 }
 
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-px text-sm leading-normal whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45";
