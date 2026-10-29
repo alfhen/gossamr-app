@@ -122,6 +122,17 @@ fn refuse(message: impl Into<String>) -> Error {
 /// Why a draft to start, message or answer an agent is refused: Pip does those itself.
 pub const AGENTS_DIRECT: &str = "Pip starts and messages agents directly now";
 
+pub const REVIEW_OWN_BUTTON: &str = "a review is posted to GitHub with its own button";
+
+/// Why approving this draft never reaches a tracker, or `None` when it is a tracker write.
+pub(crate) fn untracked_reason(intent: &Intent) -> Option<&'static str> {
+    match intent {
+        Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } => Some(AGENTS_DIRECT),
+        Intent::GithubReview { .. } => Some(REVIEW_OWN_BUTTON),
+        _ => None,
+    }
+}
+
 pub(crate) fn new_id() -> Result<String> {
     let mut bytes = [0u8; 12];
     getrandom::fill(&mut bytes).map_err(|e| refuse(format!("no randomness available: {e}")))?;
@@ -590,10 +601,7 @@ pub async fn execute(tracker: &dyn WorkTracker, p: &Proposal) -> Outcome {
         other => other.write(),
     };
     let Some(write) = write else {
-        let reason = match &p.intent {
-            Intent::GithubReview { .. } => "a review is posted to GitHub with its own button, not applied to Jira",
-            _ => AGENTS_DIRECT,
-        };
+        let reason = untracked_reason(&p.intent).unwrap_or("this draft has nothing for a tracker to apply");
         return Outcome { created: vec![], error: Some(Error::Proposal(reason.into())) };
     };
     match tracker.apply(&write).await {
@@ -1060,10 +1068,12 @@ mod tests {
         let tracker = Recorder::default();
         let mut stored = made(&db, comment_draft("1"));
         for (intent, reason) in [
+            (Intent::StartRun { connection_id: "c".into(), item: Some(item_ref("1")), spec: crate::domain::fixtures::run_spec().into() }, AGENTS_DIRECT),
+            (Intent::FollowUp { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "More.".into(), reason: "open questions".into() }, AGENTS_DIRECT),
             (Intent::RunAnswer { connection_id: "c".into(), run_id: "run-1".into(), short_id: None, item: Some(item_ref("1")), message: "Use staging.".into(), question: None }, AGENTS_DIRECT),
             (
                 Intent::GithubReview { connection_id: "github:ann".into(), item: None, run_id: "r1".into(), repo: "acme/webshop".into(), number: 218, commit_sha: "a1b2c3d4e5f6".into(), summary: "Review.".into(), comments: vec![] },
-                "posted to GitHub with its own button",
+                REVIEW_OWN_BUTTON,
             ),
         ] {
             assert!(intent.write().is_none());
@@ -1645,7 +1655,7 @@ mod tests {
     fn a_review_is_never_applied_through_a_tracker_and_once_the_person_edits_it_pip_can_t_revise_it() {
         let db = Db::in_memory().unwrap();
         let p = made(&db, review_draft(with_review(|_| {})));
-        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains("posted to GitHub with its own button"));
+        assert!(begin(&db, &p.id, now()).unwrap_err().to_string().contains(REVIEW_OWN_BUTTON));
         assert_eq!(load(&db, &p.id).unwrap().state, ProposalState::Pending, "the refused claim leaves it pending");
         assert!(left_by_run(&p));
         assert!(require_pip_may_revise(&p, None).is_ok(), "what a run left is Pip's to revise");

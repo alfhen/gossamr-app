@@ -194,14 +194,14 @@ impl Intent {
     /// The write a tracker applies for this draft. `None` for what Gossamr does itself: a review goes to GitHub with
     /// its own button, and the legacy agent drafts are history.
     pub fn write(&self) -> Option<Write> {
-        Some(match self.clone() {
-            Intent::Comment { item, body } => Write::Comment { item, body },
-            Intent::Transition { item, to } => Write::Transition { item, to },
-            Intent::Create { container, fields, link } => Write::Create { container, fields, link },
-            Intent::Update { item, patch } => Write::Update { item, patch },
-            Intent::Link { from, to, kind } => Write::Link { from, to, kind },
-            Intent::Subtasks { parent, summaries } => Write::Subtasks { parent, summaries },
-            Intent::Rewrite { item, title, body, .. } => Write::Rewrite { item, title, body },
+        Some(match self {
+            Intent::Comment { item, body } => Write::Comment { item: item.clone(), body: body.clone() },
+            Intent::Transition { item, to } => Write::Transition { item: item.clone(), to: to.clone() },
+            Intent::Create { container, fields, link } => Write::Create { container: container.clone(), fields: fields.clone(), link: link.clone() },
+            Intent::Update { item, patch } => Write::Update { item: item.clone(), patch: patch.clone() },
+            Intent::Link { from, to, kind } => Write::Link { from: from.clone(), to: to.clone(), kind: *kind },
+            Intent::Subtasks { parent, summaries } => Write::Subtasks { parent: parent.clone(), summaries: summaries.clone() },
+            Intent::Rewrite { item, title, body, .. } => Write::Rewrite { item: item.clone(), title: title.clone(), body: body.clone() },
             Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. } | Intent::GithubReview { .. } => return None,
         })
     }

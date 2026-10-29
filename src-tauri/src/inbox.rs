@@ -224,7 +224,7 @@ impl Core {
     /// The registered connection for `scope`. Callers still hold a `Scope`, so this is the adapter between the two;
     /// a scope that isn't registered is one the person has since signed out of or replaced.
     fn connection(&self, scope: &Scope) -> Result<Connection> {
-        self.registry.connection(&scope.connection_id.clone()).ok_or(Error::SiteChanged)
+        self.registry.connection(&scope.connection_id).ok_or(Error::SiteChanged)
     }
 
     fn tracker(&self, scope: &Scope) -> Result<Arc<dyn WorkTracker>> {
@@ -613,7 +613,7 @@ impl Core {
     /// The moves open to an item right now; Jira reveals them per item.
     pub async fn cache_transitions(&self, item: &ItemRef) -> Result<Vec<Move>> {
         let scope = self.scope().await?;
-        if item.connection_id != scope.connection_id.clone() {
+        if item.connection_id != scope.connection_id {
             return Err(Error::SiteChanged);
         }
         self.tracker(&scope)?.transitions(item).await
