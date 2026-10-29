@@ -400,9 +400,14 @@ impl GithubAuth {
         self.store.delete(login)
     }
 
-    /// The saved logins, in the order they were first signed in.
+    /// The saved logins, in the order they were first signed in. An unreadable index is an error, not an empty list.
+    pub fn try_logins(&self) -> Result<Vec<String>> {
+        self.store.logins()
+    }
+
+    /// The saved logins, or none when the index can't be read.
     pub fn logins(&self) -> Vec<String> {
-        self.store.logins().unwrap_or_else(|e| {
+        self.try_logins().unwrap_or_else(|e| {
             eprintln!("couldn't read the saved GitHub sign-ins: {e}");
             Vec::new()
         })

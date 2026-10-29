@@ -88,7 +88,6 @@ pub struct RunService {
     pub(super) notices: Mutex<super::notices::Board>,
     pub(super) terminal: Arc<dyn Terminal>,
     pub(super) home: Option<PathBuf>,
-    /// Held across a read-modify-write of `config.json`, so a settings change and a picked clone can't undo each other.
     pub(super) settings: Mutex<AgentSettings>,
     /// Where Gossamr's tools are served for agents; absent when the server couldn't start.
     pub(super) agents: Option<Arc<super::agent_config::AgentChannel>>,

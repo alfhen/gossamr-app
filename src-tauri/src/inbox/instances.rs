@@ -8,20 +8,30 @@ use crate::secrets;
 use crate::tracker::Connection;
 
 impl Core {
-    /// Creates the instances for the Jira and GitHub sign-ins restored from the Keychain, once.
+    /// Creates the instances for the Jira and GitHub sign-ins restored from the Keychain, once. It leaves `config.json`
+    /// alone unless there is something to adopt, and does nothing while any of the sign-ins it reads failed to load.
     pub async fn adopt_instances(&self) {
+        let config = AppConfig::load(&self.data_dir);
+        if let Some(problem) = &config.connections_error {
+            eprintln!("{problem}");
+            return;
+        }
+        if config.version >= connections::VERSION {
+            return;
+        }
         let jira = match (self.auth.connection().await, self.auth.identity().await) {
             (Some(Connection { id, .. }), Some((_, site, _))) => Some(Binding::jira(&id, &site.name, &site.url)),
             _ => None,
         };
-        let github = self.code.auth.logins().iter().map(|login| Binding::github(login)).collect();
-        let vault_ready = secrets::is_ready();
-        let adopted = AppConfig::update(&self.data_dir, |config| connections::adopt(config, vault_ready, jira, github));
+        let logins = self.code.auth.try_logins();
+        if let Err(e) = &logins {
+            eprintln!("couldn't read the saved GitHub sign-ins, so the connections aren't adopted yet: {e}");
+        }
+        let readable = secrets::is_ready() && !self.auth.restore_failed() && logins.is_ok();
+        let github = logins.unwrap_or_default().iter().map(|login| Binding::github(login)).collect();
+        let adopted = AppConfig::update_if(&self.data_dir, |config| connections::adopt(config, readable, jira, github));
         if let Err(e) = adopted {
             eprintln!("couldn't save the connections to config.json: {e}");
-        }
-        if let Some(problem) = AppConfig::load(&self.data_dir).connections_error {
-            eprintln!("{problem}");
         }
     }
 
@@ -34,10 +44,12 @@ impl Core {
     }
 
     fn change_instances(&self, change: impl FnOnce(&mut AppConfig)) {
-        let saved = AppConfig::update(&self.data_dir, |config| {
-            if connections::is_live(config) {
+        let saved = AppConfig::update_if(&self.data_dir, |config| {
+            let live = connections::is_live(config);
+            if live {
                 change(config);
             }
+            live
         });
         if let Err(e) = saved {
             eprintln!("couldn't save the connections to config.json: {e}");

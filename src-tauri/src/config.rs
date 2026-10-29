@@ -76,6 +76,9 @@ pub struct AppConfig {
     pub connections_error: Option<String>,
     #[serde(skip)]
     unreadable_connections: Option<Map<String, Value>>,
+    /// The file couldn't be read as a whole, so anything saved would replace what is really there. Saving is refused.
+    #[serde(skip)]
+    file_unreadable: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -89,12 +92,21 @@ struct Roster {
 impl AppConfig {
     /// A missing file gives the defaults, and so do unreadable preferences, so a bad edit can't stop the app from starting.
     /// The instance list is stricter: when it can't be read the file is copied to `config.json.bak`, `connections_error`
-    /// says so, and saving writes the list back as it was.
+    /// says so, and saving writes the list back as it was. A file that can't be read at all, or isn't JSON, is never
+    /// replaced: `save` and `update` fail while `connections_error` is set.
     pub fn load(dir: &Path) -> Self {
-        let Ok(text) = std::fs::read_to_string(dir.join(FILE)) else { return Self::default() };
+        let bytes = match std::fs::read(dir.join(FILE)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => return Self::locked(format!("{FILE} can't be read ({e}); it was left as it is")),
+        };
+        let Ok(text) = String::from_utf8(bytes.clone()) else {
+            back_up(dir, &bytes);
+            return Self::locked(format!("{FILE} isn't valid UTF-8; a copy is in {BACKUP} and the file was left as it is"));
+        };
         let Ok(Value::Object(file)) = serde_json::from_str::<Value>(&text) else {
-            back_up(dir, &text);
-            return Self { connections_error: Some(format!("{FILE} isn't valid JSON; a copy is in {BACKUP}")), ..Self::default() };
+            back_up(dir, &bytes);
+            return Self::locked(format!("{FILE} isn't valid JSON; a copy is in {BACKUP} and the file was left as it is"));
         };
         let mut config: Self = serde_json::from_value(Value::Object(file.clone())).unwrap_or_default();
         config.agents = config.agents.clamped();
@@ -108,22 +120,45 @@ impl AppConfig {
             Err(e) => Some(format!("the connections in {FILE} can't be read ({e}); a copy is in {BACKUP}")),
         };
         if let Some(problem) = problem {
-            back_up(dir, &text);
+            back_up(dir, &bytes);
             config.connections_error = Some(problem);
             config.unreadable_connections = Some(block);
         }
         config
     }
 
+    fn locked(problem: String) -> Self {
+        Self { connections_error: Some(problem), file_unreadable: true, ..Self::default() }
+    }
+
     /// Loads, changes and saves under one lock, so two writers don't undo each other.
     pub fn update(dir: &Path, change: impl FnOnce(&mut Self)) -> Result<()> {
+        Self::update_if(dir, |config| {
+            change(config);
+            true
+        })
+    }
+
+    /// Like `update`, but the file is written only when `change` returns true.
+    pub fn update_if(dir: &Path, change: impl FnOnce(&mut Self) -> bool) -> Result<()> {
         let _only_writer = WRITER.lock().unwrap_or_else(|e| e.into_inner());
         let mut config = Self::load(dir);
-        change(&mut config);
-        config.save(dir)
+        config.refuse_if_locked()?;
+        if change(&mut config) {
+            config.save(dir)?;
+        }
+        Ok(())
+    }
+
+    fn refuse_if_locked(&self) -> Result<()> {
+        match (&self.connections_error, self.file_unreadable) {
+            (Some(problem), true) => Err(std::io::Error::other(problem.clone()).into()),
+            _ => Ok(()),
+        }
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
+        self.refuse_if_locked()?;
         std::fs::create_dir_all(dir)?;
         let (temp, file) = (dir.join(format!("{FILE}.tmp")), dir.join(FILE));
         let mut value = serde_json::to_value(self)?;
@@ -141,12 +176,12 @@ impl AppConfig {
     }
 }
 
-fn back_up(dir: &Path, text: &str) {
+fn back_up(dir: &Path, bytes: &[u8]) {
     let backup = dir.join(BACKUP);
-    if std::fs::read_to_string(&backup).is_ok_and(|kept| kept == text) {
+    if std::fs::read(&backup).is_ok_and(|kept| kept == bytes) {
         return;
     }
-    if let Err(e) = std::fs::write(&backup, text) {
+    if let Err(e) = std::fs::write(&backup, bytes) {
         eprintln!("couldn't copy {FILE} to {BACKUP}: {e}");
     }
 }
@@ -166,7 +201,7 @@ mod tests {
         assert_eq!(AppConfig::load(&dir), saved, "a key no longer read is skipped");
         std::fs::write(dir.join(FILE), "{ nope").unwrap();
         let broken = AppConfig::load(&dir);
-        assert_eq!(AppConfig { connections_error: None, ..broken.clone() }, AppConfig::default());
+        assert_eq!(AppConfig { connections_error: None, file_unreadable: false, ..broken.clone() }, AppConfig::default());
         assert!(broken.connections_error.is_some());
         std::fs::write(dir.join(FILE), "{}").unwrap();
         assert_eq!(AppConfig::load(&dir), AppConfig::default());
@@ -316,12 +351,54 @@ mod tests {
     }
 
     #[test]
-    fn a_file_that_isnt_json_is_copied_before_the_defaults_replace_it() {
+    fn a_file_that_isnt_json_is_copied_and_never_replaced() {
         let dir = scratch("garbage");
         std::fs::write(dir.join(FILE), "{ nope").unwrap();
         let loaded = AppConfig::load(&dir);
         assert!(loaded.connections_error.is_some());
         assert_eq!(std::fs::read_to_string(dir.join(BACKUP)).unwrap(), "{ nope");
+        assert!(loaded.save(&dir).is_err());
+        assert!(AppConfig::update(&dir, |c| c.agents.max_runs = 5).is_err());
+        assert!(AppConfig::update_if(&dir, |_| true).is_err());
+        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "{ nope");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_isnt_utf8_is_copied_byte_for_byte_and_never_replaced() {
+        let dir = scratch("latin1");
+        let bytes = b"{\"version\":1,\"connections\":[{\"displayName\":\"Caf\xe9\"}]}".to_vec();
+        std::fs::write(dir.join(FILE), &bytes).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert!(loaded.connections_error.is_some());
+        assert_eq!(std::fs::read(dir.join(BACKUP)).unwrap(), bytes);
+        assert!(AppConfig::update(&dir, |c| c.agents.max_runs = 5).is_err());
+        assert_eq!(std::fs::read(dir.join(FILE)).unwrap(), bytes);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_is_not_taken_for_a_missing_one() {
+        let dir = scratch("unreadable");
+        std::fs::create_dir(dir.join(FILE)).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert!(loaded.connections_error.is_some());
+        assert!(AppConfig::update(&dir, |c| c.agents.max_runs = 5).is_err());
+        assert!(dir.join(FILE).is_dir());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn update_if_writes_only_when_the_change_says_so() {
+        let dir = scratch("update-if");
+        AppConfig::update_if(&dir, |_| false).unwrap();
+        assert!(!dir.join(FILE).exists());
+        AppConfig::update_if(&dir, |c| {
+            c.agents.max_runs = 2;
+            true
+        })
+        .unwrap();
+        assert_eq!(AppConfig::load(&dir).agents.max_runs, 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -120,16 +120,17 @@ pub fn is_live(config: &AppConfig) -> bool {
     config.version == VERSION && config.connections_error.is_none()
 }
 
-/// Creates the instances for the sign-ins already there. It does nothing unless `vault_ready`: a Keychain that could not
-/// be read looks like no accounts, and would record an empty list.
-pub fn adopt(config: &mut AppConfig, vault_ready: bool, jira: Option<Binding>, github: Vec<Binding>) {
-    if !vault_ready || config.connections_error.is_some() || config.version >= VERSION {
-        return;
+/// Creates the instances for the sign-ins already there, and says whether it changed `config`. It does nothing unless
+/// `sources_readable`: a Keychain item that could not be read looks like no account, and would record a list without it.
+pub fn adopt(config: &mut AppConfig, sources_readable: bool, jira: Option<Binding>, github: Vec<Binding>) -> bool {
+    if !sources_readable || config.connections_error.is_some() || config.version >= VERSION {
+        return false;
     }
     for binding in jira.into_iter().chain(github) {
         bind(config, binding);
     }
     config.version = VERSION;
+    true
 }
 
 #[cfg(test)]
@@ -156,9 +157,9 @@ mod tests {
     #[test]
     fn nothing_is_adopted_while_the_vault_could_not_be_read() {
         let mut config = AppConfig::default();
-        adopt(&mut config, false, None, Vec::new());
+        assert!(!adopt(&mut config, false, None, Vec::new()));
         assert_eq!((config.version, config.connections.len()), (0, 0), "an unreadable Keychain must not record an empty list");
-        adopt(&mut config, true, None, vec![Binding::github("ann")]);
+        assert!(adopt(&mut config, true, None, vec![Binding::github("ann")]));
         assert_eq!(ids(&config), ["github"]);
     }
 
@@ -166,7 +167,7 @@ mod tests {
     fn adopting_runs_once() {
         let mut config = AppConfig::default();
         adopt(&mut config, true, None, vec![Binding::github("ann")]);
-        adopt(&mut config, true, None, vec![Binding::github("ann"), Binding::github("bob")]);
+        assert!(!adopt(&mut config, true, None, vec![Binding::github("ann"), Binding::github("bob")]));
         assert_eq!(ids(&config), ["github"]);
     }
 

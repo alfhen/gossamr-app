@@ -196,7 +196,9 @@ impl Core {
         // So the catalog is known before the first sync, which a search of the watched repositories depends on.
         let _ = self.probe_code_catalog(&connection.id).await;
         self.wake.notify_one();
-        Ok(info(&session, None, None))
+        let mut connected = info(&session, None, None);
+        self.name_instances(std::slice::from_mut(&mut connected));
+        Ok(connected)
     }
 
     pub async fn github_connect_token(&self, token: &str) -> Result<super::ConnectionInfo> {
@@ -1147,6 +1149,63 @@ pub(crate) mod tests {
         assert!(instance_ids(&fx).is_empty());
         fx.core.github_connect_token("ghp_x").await.unwrap();
         assert_eq!(instance_ids(&fx), [("github_2".to_string(), "github:ann".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn connecting_returns_the_instance_the_account_is_listed_under() {
+        let fx = fixture(REPOS).await;
+        fx.core.adopt_instances().await;
+        let connected = fx.core.github_connect_token("ghp_x").await.unwrap();
+        assert_eq!((connected.id.as_str(), connected.instance_id.as_str(), connected.display_name.as_str()), ("github:ann", "github", "GitHub"));
+        let listed = fx.core.connections().await.unwrap();
+        assert_eq!((listed[0].instance_id.as_str(), listed[0].display_name.as_str()), ("github", "GitHub"));
+    }
+
+    #[tokio::test]
+    async fn a_config_file_that_isnt_json_is_not_replaced_at_launch_and_nothing_is_adopted_from_it() {
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
+        fx.core.adopt_instances().await;
+        fx.core.adopt_instances().await;
+        assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope", "signing in doesn't replace it either");
+    }
+
+    #[tokio::test]
+    async fn adopting_leaves_config_json_byte_for_byte_once_it_has_run() {
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect_token("ghp_x").await.unwrap();
+        let text = r#"{"version":1,"connections":[],"retiredIds":[],"agents":{"maxRuns":"2"},"futureKey":true}"#;
+        std::fs::write(fx.dir.join("config.json"), text).unwrap();
+        fx.core.adopt_instances().await;
+        assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), text);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_adopted_while_the_github_index_cant_be_read_though_the_vault_can() {
+        let fake = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        let keychain = GithubAuth::for_test(reqwest::Client::new(), Arc::new(crate::auth::KeychainStore), &fx.server.base, None, vec![]);
+        let code = CodeService::with_factory(keychain, Box::new(|_, _| unreachable!("no host is built")));
+        let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker")), fx.dir.clone()).with_code(code);
+        fake.deny_reads_of("github-logins");
+        core.adopt_instances().await;
+        assert_eq!(crate::config::AppConfig::load(&fx.dir).version, 0);
+        assert!(instance_ids(&fx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn nothing_is_adopted_while_the_saved_jira_session_cant_be_read_though_the_vault_can() {
+        let fake = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        fake.deny_reads_of("session");
+        let core = Core::new(Arc::new(Auth::load(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker")), fx.dir.clone());
+        core.adopt_instances().await;
+        assert_eq!(crate::config::AppConfig::load(&fx.dir).version, 0);
     }
 
     #[tokio::test]
