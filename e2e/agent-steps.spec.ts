@@ -4,19 +4,9 @@ import {
   githubWrites, homeConversation, homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, MANUAL_PRS, mockRuns,
   needRow, needsPane, needsYouTray, openAgents, openApp, openNeedRow, paneSettled, peekSheet, peekTicket,
   pipConversation, pipPane, runSheet, scriptNextRun, selectWorkstream, showWorkspace, startAgent, startWorkstream,
-  stepChip, stepOf, stepRail, surfacePullRequests, wakes, workstreamGroup, workstreamOnHome,
+  ask, stepChip, stepOf, stepRail, surfacePullRequests, wakes, WITH_REPOS, workstreamGroup, workstreamOnHome,
 } from "./support/app";
-import { finishRun, newest, startStep } from "./support/steps";
-
-// Where the sample is given a repository to watch, as the real app needs before it reads a pull request there or drafts a review of one.
-const WITH_REPOS = `${MANUAL_PRS}&mockRepos=12`;
-
-/** Asks Pip for `what` on Work and waits for its answer. */
-async function askOnWork(page: Page, what: string) {
-  await askPip(page, what);
-  await expect(homeConversationRegion(page).getByText(what, { exact: true }).last()).toBeVisible();
-  await homeSettled(page);
-}
+import { finishRun, newest, slowPaneSettled, startStep } from "./support/steps";
 
 /** Moves run `id` on to done, once Pip has answered on Work. */
 const finishOnWork = (page: Page, id: string) => finishRun(page, id, homeSettled);
@@ -174,7 +164,7 @@ async function nth(page: Page, kind: string, n: number) {
 test("asking Pip to investigate starts the agent: no review, and the rail shows R1 running", async ({ page }) => {
   await openApp(page, MANUAL_PRS);
   await workstreamOnHome(page);
-  await askOnWork(page, "investigate this");
+  await ask(page, "investigate this");
   // Nothing opened, and the person is still on Pip home with the workstream selected.
   await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
   await expect(agentsHome(page)).toBeVisible();
@@ -199,9 +189,9 @@ test("a build follows the approved plan once Pip is asked, and starts with nothi
   await openApp(page, MANUAL_PRS);
   await workstreamOnHome(page);
 
-  await askOnWork(page, "investigate this");
+  await ask(page, "investigate this");
   await finishOnWork(page, (await newest(page, "investigate"))!.id);
-  await askOnWork(page, "plan this");
+  await ask(page, "plan this");
   await finishOnWork(page, (await newest(page, "plan"))!.id);
   await expect(stepChip(page, "plan").locator("[data-step-state]")).toHaveText("Ready to review");
 
@@ -217,7 +207,7 @@ test("a build follows the approved plan once Pip is asked, and starts with nothi
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
 
-  await askOnWork(page, "build it");
+  await ask(page, "build it");
   await expect(page.getByRole("dialog", { name: "Start an agent" })).toHaveCount(0);
   const build = (await newest(page, "build"))!;
   expect(build.state).toBe("queued");
@@ -537,8 +527,8 @@ test.describe("a plan's step", () => {
     await openApp(page, MANUAL_PRS);
     await startWorkstream(page, "CA-401");
     for (const [what, kind] of [["investigate this", "investigate"], ["triage this", "triage"], ["plan this", "plan"]] as const) {
-      await startStep(page, what);
-      await finishRun(page, (await newest(page, kind))!.id);
+      await startStep(page, what, slowPaneSettled);
+      await finishRun(page, (await newest(page, kind))!.id, slowPaneSettled);
     }
     await openAgents(page);
     await selectWorkstream(page, "CA-401");

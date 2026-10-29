@@ -7,8 +7,8 @@ const url = `http://localhost:${port}`;
 
 export default defineConfig({
   testDir: ".",
-  // The mock paces its answers on timers; one worker keeps those timings steady.
-  fullyParallel: false,
+  // The mock paces its answers on timers; one worker keeps those timings steady. Parallel only lets --shard split by test rather than by file.
+  fullyParallel: true,
   workers: 1,
   retries: 0,
   forbidOnly: !!process.env.CI,

@@ -2,19 +2,10 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   advanceRuns, agentsButton, agentsHome, allProjects, askPermission, askPip, expectToast, homeComposer,
   homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, keepComments, mockAttached, mockRuns, needOfKind,
-  needsPane, openAgents, openApp, openNeedOfKind, openPip, paneSettled, peekSheet, PIP_INPUT, pipConversation, pipPane,
-  selectWorkstream, startWorkstream, stepRail, toast, workstreamEvents, workstreamGroup, workstreamOnHome,
+  needsPane, openAgents, openApp, openNeedOfKind, openPip, peekSheet, PIP_INPUT, pipConversation, pipPane,
+  selectWorkstream, startInvestigationAfterWake, startWorkstream, stepRail, toast, workstreamEvents, workstreamGroup, workstreamOnHome,
   workstreamSheet,
 } from "./support/app";
-
-/** Asks Pip for an investigation of `key`, which starts it. */
-async function startInvestigation(page: Page) {
-  // The wake the last finish queued is answered first: asked while it runs, the question sets it aside and it is answered
-  // again behind the question, two turns instead of one.
-  await paneSettled(page);
-  await askPip(page, "investigate this");
-  await paneSettled(page);
-}
 
 const NUDGE_DRAFT = "Draft a comment";
 
@@ -115,7 +106,7 @@ test("Esc closes only the menu or confirmation that is open: the pane, the peek 
   await expect(more).toBeFocused();
 
   // With no peek, where Esc would otherwise close the pane.
-  await startInvestigation(page);
+  await startInvestigationAfterWake(page);
   await openAgents(page);
   await selectWorkstream(page, "CA-401");
   await expect(peekSheet(page)).toHaveCount(0);

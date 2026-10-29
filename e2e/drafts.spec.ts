@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import {
-  agentsHome, allProjects, askPip, commentDraft, draftOn, expandAllNeeds, expandNeedsYou, finishOnHome, homeComposer,
+  agentsHome, allProjects, ask, askPip, commentDraft, draftOn, expandAllNeeds, expandNeedsYou, finishOnHome, homeComposer,
   homeConversation, homeConversationRegion, homeSettled, jiraWrites, keepComments, MANUAL_PRS, needRow, needsPane,
   needsStack, needsYouCount, needsYouRow, needsYouTray, openAgents, openApp, openNeedRow, openPip, paneSettled,
   peekSheet, peekTicket, PIP_INPUT, pipCommentDraft, pipPane, reviewedDraft, selectWorkstream, startWorkstream, toast,
@@ -18,13 +18,6 @@ const box = async (locator: Locator) => (await locator.boundingBox())!;
 
 /** Pip's and the person's move drafts of CA-401 in Pip home's conversation, as cards still open or decided. */
 const moveCards = (page: Page) => homeConversationRegion(page).getByRole("article", { name: "Move CA-401", exact: true });
-
-/** Asks Pip for `what` on Pip home and waits for its answer. */
-async function ask(page: Page, what: string) {
-  await askPip(page, what);
-  await expect(homeConversationRegion(page).getByText(what, { exact: true }).last()).toBeVisible();
-  await homeSettled(page);
-}
 
 // The comment the sample Pip drafts when asked for one on the open ticket (scriptPip in src/backend/mockPip.ts).
 const NUDGE = "Checking in on this one. Is it still on track, or does anything need to move?";
@@ -429,8 +422,6 @@ test("a second draft reached with the arrows is skipped with s, at once", async 
 
 test.describe("draft action bar", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
-
-  const box = async (l: Locator) => (await l.boundingBox())!;
 
   const scroller = (page: Page) => peekSheet(page).locator("[data-peek-scroll]");
 

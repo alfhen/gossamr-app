@@ -3,7 +3,7 @@ import {
   activeIsBody, advanceRuns, agentsHome, allProjects, askPermission, askPip, editTicket, expectToast, homeComposer,
   homeConversation, homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, MANUAL_PRS, mockRuns, needsPane,
   needsYouCount, openAgents, openApp, openPip, paneSettled, pausedBanner, peekSheet, peekTicket, pipConversation,
-  pipPane, selectWorkstream, showWorkspace, startWorkstream, stepRail, surfacePullRequests, toast, VAGUE_TICKET, wakes,
+  pipPane, selectWorkstream, showWorkspace, startInvestigationAfterWake, startWorkstream, stepRail, surfacePullRequests, toast, VAGUE_TICKET, wakes,
   wakeTurns, workstreamEvents, workstreamGroup, workstreamOpen,
 } from "./support/app";
 import { finishRun, newest } from "./support/steps";
@@ -15,15 +15,6 @@ const nextLine = (page: Page) => pipPane(page).locator("[data-next-step]");
 async function startInvestigation(page: Page) {
   await askPip(page, "investigate this");
   await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-}
-
-/** Asks Pip for an investigation of `key`, which starts it. */
-async function startInvestigationAfterWake(page: Page) {
-  // The wake the last finish queued is answered first: asked while it runs, the question sets it aside and it is answered
-  // again behind the question, two turns instead of one.
-  await paneSettled(page);
-  await askPip(page, "investigate this");
-  await paneSettled(page);
 }
 
 const actions = async (page: Page, action: string) => (await workstreamEvents(page)).filter((e) => e.action === action);

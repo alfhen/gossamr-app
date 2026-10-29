@@ -674,6 +674,9 @@ export const detailsOf = (scope: Locator, summary: string) => scope.locator(`xpa
 /** The sample with no runs, where pull requests show only when a test says (`surfacePullRequests`). */
 export const MANUAL_PRS = "runs=empty&prSurface=manual";
 
+/** `MANUAL_PRS`, with GitHub signed in on a catalog small enough to be watched whole, as the real app needs before it reads a pull request or drafts a review of one. */
+export const WITH_REPOS = `${MANUAL_PRS}&mockRepos=12`;
+
 /** `MANUAL_PRS`, with the sample Pip answering at once: nothing there is about how fast an answer streams, and a slow one outlasts a wait on a busy machine. */
 export const INSTANT_PIP = `${MANUAL_PRS}&pipPace=1`;
 
@@ -692,12 +695,27 @@ export const runSheet = (page: Page) => page.getByRole("dialog", { name: "Agent 
 /** Whether the focused element sits inside `selector`. */
 export const focusIn = (page: Page, selector: string) => page.evaluate((s) => !!document.activeElement?.closest(s), selector);
 
+/** Asks Pip for `what` on Work and waits for its answer. */
+export async function ask(page: Page, what: string) {
+  await askPip(page, what);
+  await expect(homeConversationRegion(page).getByText(what, { exact: true }).last()).toBeVisible();
+  await homeSettled(page);
+}
+
+/** Asks Pip for an investigation of CA-401, which starts it, once the wake the last finish queued is answered. */
+export async function startInvestigationAfterWake(page: Page) {
+  // Asked while the wake runs, the question sets it aside and it is answered again behind the question, two turns instead of one.
+  await paneSettled(page);
+  await askPip(page, "investigate this");
+  await paneSettled(page);
+}
+
 /** A workstream on `key`, begun from its peek, and selected on Work with its conversation in the Pip pane. */
 export async function workstreamOnHome(page: Page, key = "CA-401") {
   await startWorkstream(page, key);
   await openAgents(page);
   await selectWorkstream(page, key);
-  await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} `));
+  await expect(homeConversation(page)).toHaveText(new RegExp(`^Workstream: ${key} .+$`));
 }
 
 /** A workstream on `key` with a comment Pip drafted: begun from its peek, selected on Work, the comment's card in the decision pane. */

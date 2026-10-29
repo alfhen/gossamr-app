@@ -5,14 +5,9 @@ import {
   homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, keepComments, loseRun, MANUAL_PRS, mockAttached,
   mockRuns, needOfKind, needRow, needsFilter, needsPane, needsPaneHeading, needsStack, needsYouCount, needsYouTray,
   openAgents, openApp, openNeedOfKind, openNeedRow, openRunOf, pauseAtCeiling, pipPane, railButton, runSheet,
-  selectWorkstream, startWorkstream, stepRail, VAGUE_TICKET, withNeeds, workstreamGroup, workstreamOnHome,
+  selectWorkstream, startWorkstream, stepRail, VAGUE_TICKET, withNeeds, WITH_REPOS, workstreamGroup, workstreamOnHome,
   workstreamSheet,
 } from "./support/app";
-
-// Pull requests are shown only when a test says: the setting the phase's scenarios share.
-// GitHub is signed in with a catalog small enough to be watched whole, so the agents' repository is watched, as the
-// real app needs before it reads a pull request there or drafts a review of one.
-const WITH_REPOS = `${MANUAL_PRS}&mockRepos=12`;
 
 /** The rail's Work button. */
 const homeButton = (page: Page) => page.locator("[data-rail]").getByRole("button", { name: /^Work(,|$)/ });

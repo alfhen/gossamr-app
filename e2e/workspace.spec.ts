@@ -173,9 +173,6 @@ test.describe("no overlap", () => {
 
   const intersects = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-  /** The left rail: the aside that holds the Workspace navigation (Rail.tsx). */
-  const rail = (page: Page) => page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) });
-
   test("the last row of the list scrolls clear of the floating Pip button", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page);
