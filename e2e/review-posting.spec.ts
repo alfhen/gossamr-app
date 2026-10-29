@@ -1,6 +1,54 @@
 import { expect, test } from "@playwright/test";
 import { githubPostsTried, githubWrites, jiraWrites, loseNextReviewAnswer, movePullHead, peekSheet, reviewedDraft } from "./support/app";
 
+test.describe("posting a review with risky words", () => {
+  test("pauses on @everyone in the summary, posts nothing until Post it anyway, and Esc keeps the edit", async ({ page }) => {
+    test.setTimeout(90_000);
+    const review = await reviewedDraft(page);
+    const summary = review.locator("[data-review-summary]");
+    await summary.fill(`${await summary.inputValue()} cc @everyone`);
+    await review.getByRole("button", { name: "Approve" }).click();
+    const pause = review.locator("[data-post-pause]");
+    await expect(pause).toContainText("Your edit mentions everyone at “@everyone” (line 5). Everyone on the pull request would see it once it is posted.");
+    await expect(pause.getByRole("button", { name: "Keep editing" })).toBeFocused();
+    expect(await githubWrites(page)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(pause).toHaveCount(0);
+    await expect(summary).toHaveValue(/cc @everyone/);
+    expect(await githubWrites(page)).toEqual([]);
+    await review.getByRole("button", { name: "Approve" }).click();
+    await expect(pause).toBeVisible();
+    await review.getByRole("button", { name: "Post it anyway" }).click();
+    await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
+    expect((await githubWrites(page))[0].body).toContain("cc @everyone");
+  });
+
+  test("pauses on a secret in an inline comment, masked in the note", async ({ page }) => {
+    test.setTimeout(90_000);
+    const review = await reviewedDraft(page);
+    const comment = review.getByRole("textbox", { name: /^Comment on src\/consumer\/retry\.ts:42/ });
+    await comment.fill(`${await comment.inputValue()} password: hunter22x`);
+    await review.getByRole("button", { name: "Approve" }).click();
+    const pause = review.locator("[data-post-pause]");
+    await expect(pause).toContainText("like a password, key or token at “hu…”");
+    await expect(pause).not.toContainText("hunter22x");
+    expect(await githubWrites(page)).toEqual([]);
+    await pause.getByRole("button", { name: "Keep editing" }).click();
+    await expect(pause).toHaveCount(0);
+    expect(await githubWrites(page)).toEqual([]);
+  });
+
+  test("does not pause a review with no risky words", async ({ page }) => {
+    test.setTimeout(90_000);
+    const review = await reviewedDraft(page);
+    const summary = review.locator("[data-review-summary]");
+    await summary.fill(`${await summary.inputValue()} Thanks, @mette.`);
+    await review.getByRole("button", { name: "Approve" }).click();
+    await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
+    await expect(peekSheet(page).locator("[data-post-pause]")).toHaveCount(0);
+  });
+});
+
 test("approving a finished review's GitHub draft posts exactly one comment review with its inline comments, and nothing else", async ({ page }) => {
   const review = await reviewedDraft(page);
   await expect(peekSheet(page).getByRole("article", { name: "Comment on CA-402" })).toHaveCount(1);

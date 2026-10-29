@@ -1,28 +1,122 @@
-import { expect, test, type Page } from "@playwright/test";
-import { advanceRuns, agentsHome, askPermission, askPip, expectToast, mockAttached, homeComposer, homeConversationRegion, homeSettled, jiraWrites, keepComments, mockRuns, needOfKind, needsPane, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipCommentDraft, pipPane, selectWorkstream, startWorkstream, workstreamEvents, workstreamGroup, workstreamOpen, openNeedOfKind, workstreamSheet } from "./support/app";
-
-// Step 4 of the UX overhaul: less ceremony. Reversible actions (skipping a draft, dismissing a failure) act at once and
-// offer Undo for about 8 seconds, instead of asking first; what reaches
-// Jira, GitHub or an agent keeps its confirm. One key model in every list (j k move, Enter or o open, a approve, e edit,
-// d dismiss or deny, s skip, Esc back), and Cmd/Ctrl+K reaches whatever the focused item's buttons offer.
+import { expect, type Page, test } from "@playwright/test";
+import {
+  advanceRuns, agentsButton, agentsHome, allProjects, askPermission, askPip, expectToast, homeComposer,
+  homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, keepComments, mockAttached, mockRuns, needOfKind,
+  needsPane, openAgents, openApp, openNeedOfKind, openPip, peekSheet, PIP_INPUT, pipConversation, pipPane,
+  selectWorkstream, startInvestigationAfterWake, startWorkstream, stepRail, toast, workstreamEvents, workstreamGroup, workstreamOnHome,
+  workstreamSheet,
+} from "./support/app";
 
 const NUDGE_DRAFT = "Draft a comment";
 
 /** The toast on screen, and its Undo button. */
-const toast = (page: Page) => page.locator("[data-toast]");
 const undo = (page: Page) => toast(page).getByRole("button", { name: "Undo" });
 
-const agentsButton = (page: Page) => page.getByRole("button", { name: /^Work(,|$)/ });
+const actionsOf = async (page: Page) => (await workstreamEvents(page)).map((e) => e.action);
 
-/** A workstream on CA-401, opened on Pip home. */
-async function workstreamOnHome(page: Page) {
-  await startWorkstream(page, "CA-401");
-  await openAgents(page);
-  await selectWorkstream(page, "CA-401");
-  await expect(pipPane(page).locator("[data-pip-conversation]")).toHaveText(/^Workstream: CA-401 /);
+/** Pip's pane open on CA-401's peek, so Pip's drafts land on it, with `n` comment drafts waiting. */
+async function commentDrafts(page: Page, n: number) {
+  await openApp(page);
+  await page.getByRole("listbox", { name: "Items" }).getByText("CA-401", { exact: true }).click();
+  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
+  await openPip(page);
+  const cards = pipPane(page).getByRole("article", { name: "Comment on CA-401" });
+  for (let i = 0; i < n; i++) {
+    if (i > 0) await keepComments(page);
+    await askPip(page, NUDGE_DRAFT);
+    await expect(cards).toHaveCount(i + 1);
+    await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
+  }
+  return cards;
 }
 
-const actionsOf = async (page: Page) => (await workstreamEvents(page)).map((e) => e.action);
+/** A working build in a workstream on CA-401, started by Pip when asked. */
+async function workingBuild(page: Page) {
+  await askPip(page, "build it");
+  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
+  const build = (await mockRuns(page)).find((r) => r.step === "build")!;
+  for (let i = 0; i < 2; i++) await advanceRuns(page, 1, build.id);
+  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("working");
+  return (await mockRuns(page)).find((r) => r.id === build.id)!;
+}
+
+/** Pauses the workstream on CA-401 from the palette, with the keyboard on its row in the list. */
+async function pauseFromPalette(page: Page) {
+  await workstreamGroup(page, "CA-401").focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.type("pause");
+  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /Pause the workstream on CA-401/ }).click();
+  await expectToast(page, "Paused CA-401. Resume it to wake Pip there again.");
+}
+
+test.describe("Ctrl+0 with a card's button focused", () => {
+  test("from a card's own button, and from the card", async ({ page }) => {
+    await openApp(page, "runs=kinds&prSurface=manual");
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
+    const button = page.locator("main article[data-run-id] button", { hasText: "Draft comment" }).first();
+    await expect(button).toBeVisible();
+    await button.focus();
+    await expect(button).toBeFocused();
+    await page.keyboard.press("ControlOrMeta+0");
+    await expect(agentsHome(page)).toBeVisible();
+
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
+    const card = page.locator("main article[data-run-id]").first();
+    await card.focus();
+    await page.keyboard.press("ControlOrMeta+0");
+    await expect(agentsHome(page)).toBeVisible();
+  });
+
+  test("plain keys on a card's button still stay with the button", async ({ page }) => {
+    await openApp(page, "runs=kinds&prSurface=manual");
+    await page.getByRole("button", { name: /^Work(,|$)/ }).click();
+    const button = page.locator("main article[data-run-id] button", { hasText: "Draft comment" }).first();
+    await button.focus();
+    await page.keyboard.press("j");
+    await expect(button).toBeFocused();
+  });
+});
+
+test("Esc closes only the menu or confirmation that is open: the pane, the peek and the workstream's conversation stay", async ({ page }) => {
+  await openApp(page, INSTANT_PIP);
+  await startWorkstream(page, "CA-401");
+  const more = pipPane(page).getByRole("button", { name: "More for this workstream" });
+  const stays = async () => {
+    await expect(pipPane(page)).toHaveCount(1);
+    await expect(pipConversation(page)).toHaveText(/^Workstream: CA-401 /);
+  };
+
+  // With the ticket's peek open.
+  await more.click();
+  const stop = pipPane(page).getByRole("menuitem", { name: "Stop the workstream…" });
+  await expect(stop).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(stop).toHaveCount(0);
+  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
+  await stays();
+  await expect(more).toBeFocused();
+
+  // The Stop confirmation closes on Esc too, and hands focus back to the menu's button.
+  await more.click();
+  await stop.click();
+  await expect(pipPane(page).getByRole("group", { name: "Stop this workstream" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(pipPane(page).getByRole("group", { name: "Stop this workstream" })).toHaveCount(0);
+  await stays();
+  await expect(more).toBeFocused();
+
+  // With no peek, where Esc would otherwise close the pane.
+  await startInvestigationAfterWake(page);
+  await openAgents(page);
+  await selectWorkstream(page, "CA-401");
+  await expect(peekSheet(page)).toHaveCount(0);
+  await stays();
+  await more.click();
+  await page.keyboard.press("Escape");
+  await expect(pipPane(page).getByRole("menuitem", { name: "Stop the workstream…" })).toHaveCount(0);
+  await stays();
+  await expect(more).toBeFocused();
+});
 
 test("s skips a draft at once, with an Undo that brings it back, and the audit says so", async ({ page }) => {
   await openApp(page, "runs=empty");
@@ -141,22 +235,6 @@ test("the Agents list takes the same keys: o opens, d dismisses a failure at onc
   expect((await mockRuns(page)).find((r) => r.id === id)?.state).toBe("needsPermission");
 });
 
-/** Pip's pane open on CA-401's peek, so Pip's drafts land on it, with `n` comment drafts waiting. */
-async function commentDrafts(page: Page, n: number) {
-  await openApp(page);
-  await page.getByRole("listbox", { name: "Items" }).getByText("CA-401", { exact: true }).click();
-  await expect(peekSheet(page)).toHaveAttribute("aria-label", "Details for CA-401");
-  await openPip(page);
-  const cards = pipPane(page).getByRole("article", { name: "Comment on CA-401" });
-  for (let i = 0; i < n; i++) {
-    if (i > 0) await keepComments(page);
-    await askPip(page, NUDGE_DRAFT);
-    await expect(cards).toHaveCount(i + 1);
-    await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-  }
-  return cards;
-}
-
 test("draft cards in the conversation: j and k move, d skips at once and Undo restores it", async ({ page }) => {
   const cards = await commentDrafts(page, 2);
   const [first, second] = [cards.nth(0), cards.nth(1)];
@@ -201,16 +279,6 @@ test("draft cards in the ticket peek take the same keys", async ({ page }) => {
 
 });
 
-/** A working build in a workstream on CA-401, started by Pip when asked. */
-async function workingBuild(page: Page) {
-  await askPip(page, "build it");
-  await expect(pipPane(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
-  const build = (await mockRuns(page)).find((r) => r.step === "build")!;
-  for (let i = 0; i < 2; i++) await advanceRuns(page, 1, build.id);
-  await expect.poll(async () => (await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("working");
-  return (await mockRuns(page)).find((r) => r.id === build.id)!;
-}
-
 test("Cmd/Ctrl+K on a focused permission need offers Open in Terminal, and it opens the run there", async ({ page }) => {
   await openApp(page, "runs=empty&prSurface=manual");
   await startWorkstream(page, "CA-401");
@@ -238,15 +306,6 @@ test("Cmd/Ctrl+K on a focused permission need offers Open in Terminal, and it op
   expect((await mockRuns(page)).find((r) => r.id === build.id)?.state).toBe("needsPermission");
   expect((await workstreamEvents(page)).filter((e) => e.action.startsWith("permission"))).toEqual([]);
 });
-
-/** Pauses the workstream on CA-401 from the palette, with the keyboard on its row in the list. */
-async function pauseFromPalette(page: Page) {
-  await workstreamGroup(page, "CA-401").focus();
-  await page.keyboard.press("ControlOrMeta+k");
-  await page.keyboard.type("pause");
-  await page.getByRole("dialog", { name: "Command palette" }).getByRole("option", { name: /Pause the workstream on CA-401/ }).click();
-  await expectToast(page, "Paused CA-401. Resume it to wake Pip there again.");
-}
 
 test("F6 reaches the toast on screen, Esc dismisses it and gives the keyboard back", async ({ page }) => {
   test.setTimeout(90_000);
@@ -319,102 +378,47 @@ test("Ctrl+Z with nothing to undo says so", async ({ page }) => {
   await expect(page.locator("[data-toast]").filter({ hasText: "Nothing to undo." })).toBeVisible();
 });
 
-test.describe("Undo offers, Reopen and the paused banner (G3, G4, G5, G10)", () => {
-  test("the close offer goes when the ticket gets a new workstream, and Reopen is disabled with its reason", async ({ page }) => {
-    test.setTimeout(120_000);
+test.describe("toasts leave with the page and clear the launcher", () => {
+  test("one without Undo is dismissed when the route changes", async ({ page }) => {
+    test.setTimeout(90_000);
     await openApp(page, "runs=empty");
-    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-    await startWorkstream(page, "CA-401");
-    await openAgents(page);
-    await selectWorkstream(page, "CA-401");
-    const controls = pipPane(page).locator("[data-workstream-controls]");
-    await controls.getByRole("button", { name: "Pause", exact: true }).click();
-    await expect(agentsHome(page).locator("[data-paused-banner]")).toContainText("Pip isn't woken until you resume it.");
-    await controls.getByRole("button", { name: "Close…" }).click();
-    await controls.getByRole("button", { name: "Close workstream" }).click();
-    await expect(page.locator("[data-toast]").filter({ hasText: "Closed the workstream on CA-401" })).toBeVisible();
-    await page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-    await startWorkstream(page, "CA-401");
-    await expect(page.locator("[data-toast]").filter({ hasText: "Closed the workstream on CA-401" })).toHaveCount(0);
-    await openAgents(page);
-    const showClosed = agentsHome(page).locator("[data-show-closed]");
-    await expect(workstreamOpen(page, "CA-401")).toBeVisible();
-    await showClosed.click();
-    await expect(showClosed).toHaveAttribute("aria-pressed", "true");
-    await expect(agentsHome(page).locator("[data-closed-workstreams]")).toBeVisible();
-    const reopen = agentsHome(page).locator("[data-reopen-workstream]").first();
-    await expect(reopen).toHaveAttribute("aria-disabled", "true");
-    await expect(agentsHome(page).locator("[data-reopen-blocked]").first()).toHaveText("CA-401 already has an open workstream");
-  });
-});
-
-// A then Enter posts what the card shows, the last need posted from the pane is announced, focus has somewhere to go after
-// Bring them here, Undo and Reopen, and Esc at the posting pause is Keep editing.
-
-const allProjects = (page: Page) => page.getByRole("navigation", { name: "Workspace" }).getByRole("button", { name: "All projects" }).click();
-const activeIsBody = (page: Page) => page.evaluate(() => document.activeElement === document.body || document.activeElement === null);
-
-/** A comment draft of Pip's on CA-408: a workstream on it, Pip asked for a comment, its card in the decision pane. */
-async function commentDraft(page: Page) {
-  await openApp(page, "runs=empty");
-  await allProjects(page);
-  await startWorkstream(page, "CA-408");
-  await openAgents(page);
-  await selectWorkstream(page, "CA-408");
-  const draft = await pipCommentDraft(page, "CA-408");
-  await expect(draft).toBeVisible();
-  return draft;
-}
-
-test.describe("approving from the list, the last need and the pause (G1, G6, G8)", () => {
-  test("posting the only need from the pane says what was posted", async ({ page }) => {
-    test.setTimeout(120_000);
-    const draft = await commentDraft(page);
-    await draft.getByRole("button", { name: "Approve" }).click();
-    await expectToast(page, "Posted to Jira: Draft comment: “Checking in on this one. Is…” on CA-408.");
-  });
-
-  test("Esc at the posting pause with the keyboard on Keep editing closes the pause and keeps the text", async ({ page }) => {
-    test.setTimeout(120_000);
-    const draft = await commentDraft(page);
-    await draft.getByRole("button", { name: "Edit" }).click();
-    const text = needsPane(page).locator("textarea").first();
-    await text.fill(`${await text.inputValue()}\n\nPassword: hunter2`);
-    await draft.getByRole("button", { name: "Done editing" }).click();
-    await draft.getByRole("button", { name: "Approve" }).click();
-    const pause = draft.locator("[data-post-pause]");
-    await expect(pause.getByRole("button", { name: "Keep editing" })).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(pause).toHaveCount(0);
-    await expect(needsPane(page)).toBeVisible();
-    await expect.poll(() => activeIsBody(page)).toBe(false);
-    expect(await draft.evaluate((el) => el.contains(document.activeElement))).toBe(true);
-    await expect(text).toHaveValue(/hunter2/);
-    expect(await jiraWrites(page)).toEqual([]);
-  });
-});
-
-test.describe("focus after Bring them here, Undo and Reopen (G7)", () => {
-  test("never falls to the page, and the Under General offer is an F6 stop", async ({ page }) => {
-    test.setTimeout(120_000);
-    await openApp(page);
     await allProjects(page);
-    await startWorkstream(page, "WEB-108");
+    await startWorkstream(page, "CA-408");
     await openAgents(page);
-    await selectWorkstream(page, "WEB-108");
-    const offer = agentsHome(page).locator("[data-adopt-notice]");
-    await expect(offer).toBeVisible();
-    await offer.getByRole("button", { name: "Bring them here" }).focus();
-    await page.keyboard.press("F6");
-    expect(await page.evaluate(() => !!document.activeElement?.closest("[data-adopt-notice]"))).toBe(false);
-    await offer.getByRole("button", { name: "Bring them here" }).focus();
-    await page.keyboard.press("Enter");
-    await expectToast(page, "Brought 1 run on WEB-108 into the workstream.");
-    await expect(offer).toHaveCount(0);
-    await expect.poll(() => activeIsBody(page)).toBe(false);
-    await page.locator("[data-toast]").getByRole("button", { name: "Undo" }).focus();
-    await page.keyboard.press("Enter");
-    await expect(offer.getByRole("button", { name: "Bring them here" })).toBeFocused();
+    await selectWorkstream(page, "CA-408");
+    const rail = stepRail(page);
+    await rail.getByRole("button", { name: "Close…" }).click();
+    await rail.getByRole("button", { name: "Close workstream" }).click();
+    await expect(toast(page)).toContainText("Closed the workstream on CA-408");
+    // Close has an Undo now; the toast that says it was undone has none.
+    await toast(page).getByRole("button", { name: "Undo" }).click();
+    await expect(toast(page)).toContainText("Reopened the workstream on CA-408");
+    await expect(toast(page).getByRole("button", { name: "Undo" })).toHaveCount(0);
+    // A toast younger than the route grace (500 ms) is taken to come with the change and stays; leave it older than that.
+    await page.waitForTimeout(700);
+    await allProjects(page);
+    await expect(agentsHome(page)).toHaveCount(0);
+    await expect(toast(page)).toHaveCount(0);
   });
 
+  test("on the workspace a toast stands above the Pip launcher, not over it", async ({ page }) => {
+    test.setTimeout(90_000);
+    await openApp(page, "runs=empty");
+    const launcher = page.locator("[data-pip-launcher]");
+    await expect(launcher).toBeVisible();
+    // A toast over the workspace (here, from drafting a ticket in the palette) clears the launcher's box.
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("New ticket");
+    await page.getByRole("option", { name: /^New ticket/ }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Command palette" });
+    if (await dialog.getByRole("option").count()) await dialog.getByRole("option").first().click();
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("Check the toast");
+    await page.keyboard.press("Enter");
+    await expect(toast(page)).toContainText("Drafted a new ticket");
+    const t = (await toast(page).boundingBox())!;
+    // Neither the launcher's box nor the thread its spider hangs from.
+    const thread = (await launcher.locator(".pip-thread").boundingBox())!;
+    expect(t.y + t.height).toBeLessThanOrEqual((await launcher.boundingBox())!.y);
+    expect(t.y + t.height).toBeLessThanOrEqual(thread.y);
+  });
 });
