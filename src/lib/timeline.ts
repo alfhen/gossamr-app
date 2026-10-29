@@ -5,7 +5,7 @@ import { targetOf, workstreamOf } from "./proposals";
 import { roleLabel } from "./roles";
 
 /**
- * One timeline per workstream (docs/needs-you.md, step 3): what Pip said, what the person said, each run from start to end
+ * One timeline per workstream: what Pip said, what the person said, each run from start to end
  * with its verdict, the drafts made and decided, pauses and undos, in one list, oldest first.
  * It reads what the stores already hold (the conversation's turns, the runs, the drafts, the workstream's audit and Needs
  * you) and decides nothing. A run is one entry, updated in place as it moves; a draft is one entry, which says how it was

@@ -1,4 +1,4 @@
-//! Notices for new items in Needs you (docs/needs-you.md): one per item, once, while it stays open. Pure: the caller says what
+//! Notices for new items in Needs you (docs/product.md): one per item, once, while it stays open. Pure: the caller says what
 //! waits, and gets back the notices to show.
 
 use std::collections::{BTreeMap, BTreeSet};
