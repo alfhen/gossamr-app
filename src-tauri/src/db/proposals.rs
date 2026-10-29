@@ -104,11 +104,8 @@ impl Db {
         }
         let data: String = tx.query_row("SELECT data FROM proposals WHERE id = ?1", params![id], |r| r.get(0))?;
         let mut p: Proposal = serde_json::from_str(&data)?;
-        if matches!(p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. }) {
-            return Err(Error::Proposal(crate::proposals::AGENTS_DIRECT.into()));
-        }
-        if matches!(p.intent, Intent::GithubReview { .. }) {
-            return Err(Error::Proposal("a review is posted to GitHub with its own button".into()));
+        if let Some(reason) = crate::proposals::untracked_reason(&p.intent) {
+            return Err(Error::Proposal(reason.into()));
         }
         p.state = ProposalState::Applying;
         p.updated_at = at;

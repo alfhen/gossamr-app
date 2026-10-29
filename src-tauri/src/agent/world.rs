@@ -226,7 +226,7 @@ async fn a_workstream_the_person_drives_writes_jira_once() -> std::result::Resul
     live.title = core.cache_item(&fx.item("CA-1")).await.unwrap().ok_or("CA-1 isn't cached")?.title;
     *fx.tracker.live.lock().unwrap() = Some(live);
     fx.tracker.writes_live.store(true, Ordering::SeqCst);
-    core.watch_set_mode(&fx.scope.connection_id.clone(), crate::domain::WatchMode::Everything).await.unwrap();
+    core.watch_set_mode(&fx.scope.connection_id, crate::domain::WatchMode::Everything).await.unwrap();
     let approved = core.approve_proposal(&draft.id).await.map_err(|e| e.to_string())?;
     if approved.state != crate::domain::ProposalState::Applied {
         return Err(format!("the plan draft wasn't applied: {:?}", approved.error));

@@ -975,7 +975,7 @@ async fn an_approved_description_draft_in_the_workstream_takes_the_basis_again_a
     // Jira holds the new description once it is written; the refresh after the approval reads it.
     *t.fx.tracker.live.lock().unwrap() = Some(item.clone());
     t.fx.tracker.writes_live.store(true, Ordering::SeqCst);
-    t.fx.core.watch_set_mode(&t.fx.scope.connection_id.clone(), crate::domain::WatchMode::Everything).await.unwrap();
+    t.fx.core.watch_set_mode(&t.fx.scope.connection_id, crate::domain::WatchMode::Everything).await.unwrap();
     let before = t.workstream().await.basis.unwrap();
     let done = t.fx.core.approve_proposal(&p.id).await.unwrap();
     assert_eq!(done.state, crate::domain::ProposalState::Applied, "{:?}", done.error);
@@ -996,7 +996,7 @@ async fn approving_a_comment_or_a_move_takes_back_only_what_it_wrote_and_someone
     let mut theirs = t.fx.tracker_item("CA-1");
     theirs.body = Doc::paragraph("Someone rewrote the ticket");
     *t.fx.tracker.live.lock().unwrap() = Some(theirs);
-    t.fx.core.watch_set_mode(&t.fx.scope.connection_id.clone(), crate::domain::WatchMode::Everything).await.unwrap();
+    t.fx.core.watch_set_mode(&t.fx.scope.connection_id, crate::domain::WatchMode::Everything).await.unwrap();
     let draft = crate::proposals::Draft::from_pip("q1", Some(&t.ws), Intent::Comment { item: t.fx.item("CA-1"), body: Doc::paragraph("Noted.") }, None);
     let p = t.fx.core.propose(&t.fx.scope, draft).await.unwrap();
     let done = t.fx.core.approve_proposal(&p.id).await.unwrap();

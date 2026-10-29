@@ -557,7 +557,7 @@ async fn workstreams_set_state(app: AppHandle, core: State<'_, CoreState>, agent
 async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<bool> {
     let scope = core.scope().await?;
     let cleared = core.clear_pip_ask(&scope, &id, "dismissed").await?;
-    workstreams_changed(&app, &scope.connection_id.clone());
+    workstreams_changed(&app, &scope.connection_id);
     Ok(cleared)
 }
 
@@ -785,7 +785,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         // A pull request found here can end a workstream's wait for its build's one.
                         if synced.changed || synced.links_changed {
                             if let Ok(scope) = core.scope().await {
-                                workstreams_changed(&app, &scope.connection_id.clone());
+                                workstreams_changed(&app, &scope.connection_id);
                             }
                         }
                     }

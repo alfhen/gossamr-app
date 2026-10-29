@@ -571,7 +571,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                 };
                 let origin = Origin::Chat { request_id: run_id.into(), workstream: run.workstream.clone() };
                 let made = core.draft_review(scope, origin, input).await.map_err(|e| e.to_string())?;
-                (st.sink)(&scope.connection_id.clone());
+                (st.sink)(&scope.connection_id);
                 return Ok(saved("for the pull request", "in your open drafts", &made.id));
             }
             _ => return Err("kind must name one of the eight write kinds".into()),
@@ -591,11 +591,11 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             let patch: Patch = serde_json::from_value(structured(args, "patch")).map_err(|e| format!("patch isn't valid: {e}"))?;
             if let Some(parent) = &patch.parent {
                 reachable(st, run, &parent.key).await?;
-                if parent.connection_id != scope.connection_id.clone() {
+                if parent.connection_id != scope.connection_id {
                     return Err("the parent belongs to another connection".into());
                 }
             }
-            if patch.assignee.as_ref().is_some_and(|person| person.connection_id != scope.connection_id.clone()) {
+            if patch.assignee.as_ref().is_some_and(|person| person.connection_id != scope.connection_id) {
                 return Err("the assignee belongs to another connection".into());
             }
             propose(st, run, run_id, Intent::Update { item: item_ref(scope, key), patch }, None).await
@@ -794,7 +794,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                     None => return Err("body (the new summary) or comments (the complete new list) is required".into()),
                 };
                 let revised = core.revise_review_as_pip(scope, run.workstream.as_deref(), id, summary, comments).await.map_err(|e| e.to_string())?;
-                (st.sink)(&scope.connection_id.clone());
+                (st.sink)(&scope.connection_id);
                 return Ok(format!("Draft {} updated. It has not been posted; the user still has to approve it.", revised.id));
             }
             let intent = match &p.intent {
@@ -824,14 +824,14 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
                 _ => return Err("this kind of draft can't be revised".into()),
             };
             let revised = core.revise_as_pip(scope, run.workstream.as_deref(), id, intent).await.map_err(|e| e.to_string())?;
-            (st.sink)(&scope.connection_id.clone());
+            (st.sink)(&scope.connection_id);
             Ok(format!("Draft {} updated. It has not been applied; the user still has to approve it.", revised.id))
         }
         "retire_proposal" => {
             let id = required(args, "id")?;
             let reason = format!("withdrawn by Pip: {}", opt(args, "reason").unwrap_or("no longer needed"));
             let retired = core.retire_as_pip(scope, run.workstream.as_deref(), id, &reason).await.map_err(|e| e.to_string())?;
-            (st.sink)(&scope.connection_id.clone());
+            (st.sink)(&scope.connection_id);
             Ok(format!("Draft {} withdrawn.", retired.id))
         }
         other => match super::github::run(st, run, other, args).await {
@@ -895,7 +895,7 @@ async fn propose(st: &McpState, run: &PipRun, run_id: &str, intent: Intent, labe
         },
     };
     let made = st.core.propose(scope, Draft::from_pip(run_id, workstream, intent, label)).await.map_err(|e| format!("Couldn't save the draft: {e}"))?;
-    (st.sink)(&scope.connection_id.clone());
+    (st.sink)(&scope.connection_id);
     let mut reply = saved(&target, &place, &made.id);
     let replaced: Vec<String> = match similar.is_empty() {
         true => Vec::new(),
