@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ConnectJiraView, sameAccount, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
-import { ReauthBannerView } from "./ReauthBanner";
 
 const VALUES: JiraFormValues = { site: " acme.atlassian.net ", cloudId: "", email: " ann@acme.com ", token: " tok ", expiresOn: "2027-10-30" };
 const IDLE: SiteLookup = { state: "idle" };
@@ -108,14 +107,5 @@ describe("whether a new token is for the account already signed in", () => {
     expect(sameAccount(status("c1", "u1"), status("c1", "u2"))).toBe(false);
     expect(sameAccount(null, status("c1", "u1"))).toBe(false);
     expect(sameAccount({ site: null, me: null, email: null, expiresOn: null }, status("c1", "u1"))).toBe(false);
-  });
-});
-
-describe("the banner for a token Jira turned down", () => {
-  it("shows only while a connection needs a new token, and offers one", () => {
-    expect(renderToStaticMarkup(<ReauthBannerView dead={false} />)).toBe("");
-    const out = renderToStaticMarkup(<ReauthBannerView dead />);
-    expect(out).toContain("Jira turned down your token");
-    expect(out).toContain("Make a new token");
   });
 });

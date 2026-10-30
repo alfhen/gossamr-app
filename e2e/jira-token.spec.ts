@@ -111,10 +111,12 @@ test.describe("connecting with a new token", () => {
 test.describe("a Jira token close to its expiry", () => {
   test("says how long is left in Settings, without a banner", async ({ page }) => {
     await openApp(page, "runs=empty&mockJiraToken=expiring");
+    await expect(page.getByRole("alert").filter({ hasText: "Jira turned down your token" })).toHaveCount(0);
     await openSettings(page);
-    const sample = page.getByRole("listitem", { name: "Sample data connection" });
-    await expect(sample.locator("[data-probe]")).toHaveAttribute("data-probe", "expiresSoon");
-    await expect(sample).toContainText("Token expires in 9 days");
-    await expect(page.getByRole("button", { name: "Make a new token" })).toHaveCount(0);
+    await expect(page.getByRole("listitem", { name: "Sample data connection" })).toContainText("Token expires in 9 days");
+    const detail = page.getByRole("region", { name: "Sample data details" });
+    await expect(detail.locator("[data-probe]")).toHaveAttribute("data-probe", "expiresSoon");
+    await detail.getByRole("button", { name: "Make a new token" }).click();
+    await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
   });
 });

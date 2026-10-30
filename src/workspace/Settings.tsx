@@ -1,41 +1,14 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Button } from "../components/Button";
-import { announceSignedOut } from "../accountEvents";
-import { auth } from "../backend/auth";
-import type { ConnectionInfo, WatchState } from "../types";
-import { useWorkspace } from "../workspaceStore";
+import { useEffect, useState, type ReactNode } from "react";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
-import { agoText, count, nounFor, watchSummary } from "./watchLogic";
-import { keyInitials } from "./projects";
-import { disconnectGithub, useGithubUi } from "./githubUi";
-import { useJiraUi } from "./jiraUi";
-import { workContainers } from "./domains";
+import { syncLine } from "./connectionsLogic";
+import { ConnectionsSection } from "./Connections";
 import { WatchingSection } from "./WatchSettings";
-import { ProbeStatus } from "./ProbeStatus";
 import { useEscBack } from "./escBack";
 import { Segmented } from "../components/Segmented";
 
 /** The two facts the app states about what it does, and only here. */
 export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."] as const;
-
-export function connectionsOf(containers: { ref: { connectionId: string } }[]): { id: string; name: string; projects: number }[] {
-  const counts = new Map<string, number>();
-  for (const c of containers) counts.set(c.ref.connectionId, (counts.get(c.ref.connectionId) ?? 0) + 1);
-  return [...counts].map(([id, projects]) => ({ id, name: id === "mock" ? "Sample data" : id, projects }));
-}
-
-/** What the connection row says about the sync. */
-export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "error"> & { transient?: boolean }, now: Date): { text: string; tone: "ok" | "busy" | "error" } {
-  if (c.syncing) return { text: "Syncing…", tone: "busy" };
-  const last = c.lastSyncAt ? `Last synced ${agoText(c.lastSyncAt, now)}` : "Not synced yet";
-  if (c.error && c.transient) return { text: `${last}. Network trouble, trying again soon: ${c.error}`, tone: "busy" };
-  return c.error ? { text: `${last}. Couldn't sync: ${c.error}`, tone: "error" } : { text: last, tone: "ok" };
-}
-
-const DOT = { ok: "bg-ws-done", busy: "bg-ws-accent", error: "bg-ws-blocked" } as const;
-
-const CARD = "grid gap-1.5 border-b border-ws-sep py-3 first:pt-0";
 
 function useNow() {
   const [now, setNow] = useState(() => new Date());
@@ -44,178 +17,6 @@ function useNow() {
     return () => clearInterval(t);
   }, []);
   return now;
-}
-
-/** The sync line, as the connection's row and the watch card under it show it: a live region only while syncing or failing, so "Last synced 3 minutes ago" ticking over is not read out, and only the connection's row speaks (`WatchSettings` shows the same line quietly). */
-function SyncStatus({ line }: { line: ReturnType<typeof syncLine> }) {
-  return (
-    <p role={line.tone === "ok" ? undefined : "status"} className={`m-0 text-sm [overflow-wrap:anywhere] ${line.tone === "error" ? "text-ws-blocked" : "text-ws-ink3"}`}>
-      {line.text}
-    </p>
-  );
-}
-
-function KindBadge({ children, round = false }: { children: ReactNode; round?: boolean }) {
-  return (
-    <span aria-hidden className={`grid size-8 shrink-0 place-items-center bg-ws-sel text-xs font-bold text-ws-ink2 ${round ? "rounded-full" : "rounded-lg"}`}>
-      {children}
-    </span>
-  );
-}
-
-function SyncNow({ c }: { c: ConnectionInfo }) {
-  return (
-    <Button variant="quiet" size="sm" disabled={c.syncing} onClick={() => void useWorkspace.getState().syncNow()}>
-      Sync now
-    </Button>
-  );
-}
-
-function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number }) {
-  const now = useNow();
-  const [signingOut, setSigningOut] = useState(false);
-  const line = syncLine(c, now);
-  const sample = c.kind === "mock";
-  const signOut = async () => {
-    setSigningOut(true);
-    try {
-      await auth.signOut();
-      announceSignedOut();
-    } catch (e) {
-      useWorkspace.getState().report("Couldn't sign out", e);
-      setSigningOut(false);
-    }
-  };
-  return (
-    <li className={CARD} aria-label={`${c.workspace} connection`}>
-      <div className="flex items-center gap-3">
-        <KindBadge>{sample ? "SD" : "JI"}</KindBadge>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className={`size-2 shrink-0 rounded-full ${DOT[line.tone]}`} aria-hidden />
-            <span className="truncate font-semibold">{c.workspace}</span>
-            {/* A sample connection is already named "Sample data": the badge is not read as it again. */}
-            <span aria-hidden={sample && c.workspace === "Sample data" ? true : undefined} className="rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink2">{sample ? "Sample data" : "Jira"}</span>
-          </div>
-          <div className="truncate text-sm text-ws-ink3">{sample ? "Built-in sample tickets. Nothing is sent anywhere." : c.account}</div>
-        </div>
-        <span className="shrink-0 text-ws-ink3">{count(projects, nounFor(c.kind))}</span>
-      </div>
-      <SyncStatus line={line} />
-      {c.status && <ProbeStatus status={c.status} now={now} />}
-      <div className="flex gap-3 text-sm">
-        <SyncNow c={c} />
-        {c.kind === "jira" && (
-          <>
-            <Button variant="quiet" size="sm" onClick={() => useJiraUi.getState().openConnect()}>
-              New token
-            </Button>
-            <Button variant="quiet" size="sm" disabled={signingOut} onClick={() => void signOut()}>
-              Sign out
-            </Button>
-          </>
-        )}
-      </div>
-    </li>
-  );
-}
-
-export function GithubCardView({ c, watch, now, confirming, busy, onSync, onManage, onAskDisconnect, onCancel, onDisconnect }: {
-  c: ConnectionInfo;
-  watch: WatchState | undefined;
-  now: Date;
-  confirming: boolean;
-  busy: boolean;
-  onSync(): void;
-  onManage(): void;
-  onAskDisconnect(): void;
-  onCancel(): void;
-  onDisconnect(): void;
-}) {
-  const line = syncLine(c, now);
-  return (
-    <li className={CARD} aria-label={`GitHub account ${c.workspace}`}>
-      <div className="flex items-center gap-3">
-        <KindBadge round>{keyInitials(c.workspace)}</KindBadge>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className={`size-2 shrink-0 rounded-full ${DOT[line.tone]}`} aria-hidden />
-            <span className="truncate font-semibold">{c.workspace}</span>
-            <span className="rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink2">GitHub</span>
-          </div>
-          <div className="truncate text-sm text-ws-ink3">{c.account}</div>
-        </div>
-      </div>
-      <p className="m-0 text-sm text-ws-ink2">{watchSummary(watch, nounFor("github"))}</p>
-      <SyncStatus line={line} />
-      {c.status && <ProbeStatus status={c.status} now={now} advisory />}
-      <div className="flex flex-wrap gap-3 text-sm">
-        <Button variant="quiet" size="sm" disabled={c.syncing} onClick={onSync}>
-          Sync now
-        </Button>
-        <Button variant="quiet" size="sm" onClick={onManage}>
-          Manage repositories
-        </Button>
-        <Button variant="quiet" size="sm" disabled={busy} onClick={onAskDisconnect}>
-          Disconnect
-        </Button>
-      </div>
-      {confirming && (
-        <div role="alertdialog" aria-label={`Disconnect ${c.workspace}`} className="mt-1 grid gap-2 rounded-lg border border-ws-warn bg-ws-bar px-3 py-2.5 text-sm">
-          <p className="m-0 text-ws-ink">Disconnect {c.workspace}? Gossamr forgets its token and deletes the pull requests and branches it cached. Nothing on GitHub changes, and you can connect again any time.</p>
-          <div className="flex gap-2">
-            <Button variant="danger" disabled={busy} onClick={onDisconnect}>
-              {busy ? "Disconnecting…" : "Disconnect"}
-            </Button>
-            <Button variant="quiet" disabled={busy} onClick={onCancel}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      )}
-    </li>
-  );
-}
-
-function GithubCard({ c }: { c: ConnectionInfo }) {
-  const now = useNow();
-  const watch = useWorkspace((s) => s.watch.find((w) => w.connectionId === c.id));
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
-  return (
-    <GithubCardView
-      c={c}
-      watch={watch}
-      now={now}
-      confirming={confirming}
-      busy={busy}
-      onSync={() => void useWorkspace.getState().syncNow()}
-      onManage={() => useTabs.getState().openSettings("watching")}
-      onAskDisconnect={() => setConfirming(true)}
-      onCancel={() => setConfirming(false)}
-      onDisconnect={() => {
-        setBusy(true);
-        void disconnectGithub(c.id, c.workspace).then((ok) => {
-          setBusy(false);
-          if (ok) setConfirming(false);
-        });
-      }}
-    />
-  );
-}
-
-export function ConnectGithubCard({ connected }: { connected: boolean }) {
-  return (
-    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
-        <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</div>
-      </div>
-      <Button variant="primary" className="shrink-0" onClick={() => useGithubUi.getState().openConnect()}>
-        Connect GitHub
-      </Button>
-    </li>
-  );
 }
 
 function Section({ title, id, children }: { title: string; id?: string; children: ReactNode }) {
@@ -231,15 +32,13 @@ export function Settings() {
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
   useEscBack();
-  const containers = useWorkspace((s) => s.containers);
-  const connections = useWorkspace((s) => s.connections);
+  const now = useNow();
   const section = useTabs((s) => s.settingsSection);
   useEffect(() => {
     if (!section) return;
     document.getElementById(`settings-${section}`)?.scrollIntoView({ block: "start" });
     useTabs.setState({ settingsSection: null });
   }, [section]);
-  const projects = useMemo(() => new Map(connectionsOf(workContainers(Object.values(containers))).map((c) => [c.id, c.projects])), [containers]);
 
   return (
     <div className="h-full overflow-auto px-8 pb-10">
@@ -257,11 +56,8 @@ export function Settings() {
           <Segmented kind="radio" label="Theme" value={theme} onChange={setTheme} options={THEMES.map((t) => ({ value: t, label: THEME_LABEL[t] }))} />
         </Section>
 
-        <Section title="Connections">
-          <ul aria-label="Connections" className="m-0 grid list-none gap-0 p-0">
-            {connections.map((c) => (c.kind === "github" ? <GithubCard key={c.id} c={c} /> : <ConnectionRow key={c.id} c={c} projects={projects.get(c.id) ?? 0} />))}
-            <ConnectGithubCard connected={connections.some((c) => c.kind === "github")} />
-          </ul>
+        <Section title="Connections" id="settings-connections">
+          <ConnectionsSection now={now} />
         </Section>
 
         <Section title="Watching" id="settings-watching">
