@@ -223,7 +223,7 @@ export function ListView({ items }: CanvasProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div data-bar-scroll className="min-h-0 flex-1 overflow-auto px-6 pt-[var(--ws-bar-h,0px)] pb-[calc(var(--ws-launcher-clear,0px)+24px)]">
+      <div data-bar-scroll className="min-h-0 flex-1 overflow-auto px-6 pt-[var(--ws-bar-h,0px)] scroll-pt-[var(--ws-bar-h,0px)] pb-[calc(var(--ws-launcher-clear,0px)+24px)]">
         <div
           role="listbox"
           tabIndex={0}

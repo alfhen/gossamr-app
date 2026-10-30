@@ -351,4 +351,25 @@ test.describe("the screen header", () => {
     await scroller.evaluate((el) => (el.scrollTop = 0));
     await expect(bar).not.toHaveAttribute("data-under", "");
   });
+
+  test("keeps the row you reach with j below the bar", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    await expect(page.locator("[data-bar-scroll]")).toBeVisible();
+    await page.locator("body").click({ position: { x: 1, y: 1 } });
+    for (let i = 0; i < 40; i++) await page.keyboard.press("j");
+    const bar = await page.locator(".ws-bar").boundingBox();
+    const row = await page.locator('[role="option"][aria-selected="true"]').first().boundingBox();
+    expect(row!.y).toBeGreaterThanOrEqual(bar!.y + bar!.height - 1);
+  });
+
+  test("recomputes the fade when the view switches while scrolled", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    const bar = page.locator(".ws-bar");
+    await page.locator("[data-bar-scroll]").evaluate((el) => (el.scrollTop = 200));
+    await expect(bar).toHaveAttribute("data-under", "");
+    await page.getByRole("button", { name: "Board", exact: true }).click();
+    await expect(bar).not.toHaveAttribute("data-under", "");
+  });
 });

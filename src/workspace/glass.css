@@ -99,7 +99,7 @@
   }
 
   .ws-bar[data-under] {
-    background: color-mix(in srgb, var(--color-ws-win) 96%, transparent);
+    background: color-mix(in srgb, var(--color-ws-win) 98%, transparent);
   }
 
   .ws-bar[data-under]::after {
@@ -107,7 +107,7 @@
     position: absolute;
     inset: 100% 0 auto;
     height: 16px;
-    background: linear-gradient(color-mix(in srgb, var(--color-ws-win) 96%, transparent), transparent);
+    background: linear-gradient(color-mix(in srgb, var(--color-ws-win) 98%, transparent), transparent);
     pointer-events: none;
   }
 
@@ -121,17 +121,15 @@
       --glass-filter: none;
       background: var(--color-ws-win);
     }
+
+    .ws-bar[data-under]::after {
+      display: none;
+    }
   }
 
   :root[data-transparency="reduce"] .ws-bar[data-under] {
     --glass-filter: none;
     background: var(--color-ws-win);
-  }
-
-  @media (prefers-reduced-transparency: reduce) {
-    .ws-bar[data-under]::after {
-      display: none;
-    }
   }
 
   :root[data-transparency="reduce"] .ws-bar[data-under]::after {

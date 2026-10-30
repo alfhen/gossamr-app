@@ -109,7 +109,7 @@ export function BoardView({ tab, items }: CanvasProps) {
 
   return (
     <div className="flex h-full flex-col" onKeyDown={onKeyDown}>
-      <div data-bar-scroll className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-[var(--ws-bar-h,0px)] pb-2">
+      <div data-bar-scroll className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-[var(--ws-bar-h,0px)] scroll-pt-[var(--ws-bar-h,0px)] pb-2">
         <div className="shrink-0 pb-2">
           <WorkflowLine section={byCategory ? null : (sections[0] ?? null)} />
         </div>

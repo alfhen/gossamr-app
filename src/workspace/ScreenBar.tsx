@@ -2,10 +2,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 const SCROLLER = "[data-bar-scroll]";
 
-/**
- * A screen's header laid over its content. The scroller marked `data-bar-scroll` pads its top with `--ws-bar-h`,
- * so at rest the bar is solid and nothing sits beneath it; once the content scrolls the bar fades and its controls blur what passes.
- */
+/** A screen's header laid over its content: solid at rest, fading once the `data-bar-scroll` scroller moves under it. */
 export function ScreenBar({ bar, resetKey, children }: { bar: ReactNode; resetKey: string; children: ReactNode }) {
   const frame = useRef<HTMLDivElement>(null);
   const barEl = useRef<HTMLDivElement>(null);
@@ -22,7 +19,8 @@ export function ScreenBar({ bar, resetKey, children }: { bar: ReactNode; resetKe
   }, []);
 
   useEffect(() => {
-    barEl.current?.removeAttribute("data-under");
+    const scroller = frame.current?.querySelector<HTMLElement>(SCROLLER);
+    barEl.current?.toggleAttribute("data-under", (scroller?.scrollTop ?? 0) > 2);
   }, [resetKey]);
 
   return (
