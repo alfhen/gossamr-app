@@ -178,6 +178,9 @@ export interface Backend {
   runsSettings(): Promise<AgentSettings>;
   /** Sets the Dock badge from the same Needs you list the page shows. */
   setNeedsBadge(count: number): Promise<void>;
+  /** Whether macOS Reduce transparency is on, which WebKit doesn't report to the page. */
+  reduceTransparency(): Promise<boolean>;
+  onDisplayChanged(listener: () => void): () => void;
   /** Saves the limits, clamped by the backend, and returns what was saved. */
   runsSetSettings(settings: AgentSettings): Promise<AgentSettings>;
   /** Removes a finished run's worktree with `claude rm`. Never forces: Claude refuses unpushed work and says so. */

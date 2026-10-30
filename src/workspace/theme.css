@@ -25,6 +25,23 @@
   --shadow-ws-pop: 0 12px 40px rgb(30 20 80 / 0.2);
 }
 
+:root {
+  --glass-tint: rgb(200 194 255 / 0.1);
+  --glass-tint-pip: rgb(55 208 192 / 0.1);
+  --glass-body: rgb(255 255 255 / 0.22);
+  --glass-body-regular: rgb(255 255 255 / 0.55);
+  --glass-filter: blur(6px) saturate(1.8) brightness(1.06);
+  --glass-rim: linear-gradient(135deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.25) 35%, rgb(255 255 255 / 0.05) 60%, rgb(255 255 255 / 0.55));
+  --glass-rim-pip: var(--glass-rim);
+  --glass-inner: inset 0 1px 1px rgb(255 255 255 / 0.7), inset 0 -1px 1px rgb(20 19 29 / 0.06);
+  --glass-depth: 0 10px 30px rgb(20 19 29 / 0.18);
+  --glass-lens: rgb(255 255 255 / 0.38);
+  --glass-lens-rim: rgb(255 255 255 / 0.8);
+  --glass-inner-pip: var(--glass-inner);
+  --glass-lens-pip: var(--glass-lens);
+  --glass-lens-rim-pip: var(--glass-lens-rim);
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --color-ws-win: #14131d;
@@ -48,6 +65,20 @@
     --color-ws-review: #b48af0;
     --color-ws-review-soft: rgb(160 90 220 / 0.22);
     --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
+    --glass-tint: rgb(200 194 255 / 0.06);
+    --glass-tint-pip: rgb(55 208 192 / 0.06);
+    --glass-body: rgb(20 19 29 / 0.38);
+    --glass-body-regular: rgb(20 19 29 / 0.6);
+    --glass-filter: blur(8px) saturate(1.6) brightness(0.9);
+    --glass-rim: linear-gradient(135deg, rgb(200 194 255 / 0.6), rgb(200 194 255 / 0.2) 35%, rgb(200 194 255 / 0.02) 60%, rgb(200 194 255 / 0.3));
+    --glass-rim-pip: linear-gradient(135deg, rgb(55 208 192 / 0.6), rgb(55 208 192 / 0.2) 35%, rgb(55 208 192 / 0.02) 60%, rgb(55 208 192 / 0.3));
+    --glass-inner: inset 0 1px 1px rgb(200 194 255 / 0.25);
+    --glass-depth: 0 12px 40px rgb(0 0 0 / 0.5);
+    --glass-lens: rgb(200 194 255 / 0.1);
+    --glass-lens-rim: rgb(200 194 255 / 0.35);
+    --glass-inner-pip: inset 0 1px 1px rgb(55 208 192 / 0.25);
+    --glass-lens-pip: rgb(55 208 192 / 0.1);
+    --glass-lens-rim-pip: rgb(55 208 192 / 0.35);
   }
 }
 
@@ -78,6 +109,20 @@
   --color-ws-review: #b48af0;
   --color-ws-review-soft: rgb(160 90 220 / 0.22);
   --shadow-ws-pop: 0 12px 40px rgb(0 0 0 / 0.6);
+  --glass-tint: rgb(200 194 255 / 0.06);
+  --glass-tint-pip: rgb(55 208 192 / 0.06);
+  --glass-body: rgb(20 19 29 / 0.38);
+  --glass-body-regular: rgb(20 19 29 / 0.6);
+  --glass-filter: blur(8px) saturate(1.6) brightness(0.9);
+  --glass-rim: linear-gradient(135deg, rgb(200 194 255 / 0.6), rgb(200 194 255 / 0.2) 35%, rgb(200 194 255 / 0.02) 60%, rgb(200 194 255 / 0.3));
+  --glass-rim-pip: linear-gradient(135deg, rgb(55 208 192 / 0.6), rgb(55 208 192 / 0.2) 35%, rgb(55 208 192 / 0.02) 60%, rgb(55 208 192 / 0.3));
+  --glass-inner: inset 0 1px 1px rgb(200 194 255 / 0.25);
+  --glass-depth: 0 12px 40px rgb(0 0 0 / 0.5);
+  --glass-lens: rgb(200 194 255 / 0.1);
+  --glass-lens-rim: rgb(200 194 255 / 0.35);
+  --glass-inner-pip: inset 0 1px 1px rgb(55 208 192 / 0.25);
+  --glass-lens-pip: rgb(55 208 192 / 0.1);
+  --glass-lens-rim-pip: rgb(55 208 192 / 0.35);
 }
 
 .ws-root,

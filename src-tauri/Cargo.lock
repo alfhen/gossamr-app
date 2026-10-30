@@ -1505,10 +1505,13 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "block2",
  "chrono",
  "dirs",
  "getrandom 0.4.3",
  "keyring",
+ "objc2-app-kit",
+ "objc2-foundation",
  "reqwest",
  "rusqlite",
  "serde",

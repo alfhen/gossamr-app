@@ -70,6 +70,14 @@ Gossamr is ink-indigo with one teal character. Every colour below is a token in 
 | `ws-blocked` | `#e0475b` | `#e0475b` | Failed, blocked |
 | `ws-review` | `#8a55d6` | `#b48af0` | In review |
 | `ws-warn` | `#c98a1b` | `#c98a1b` | Needs attention |
+| `glass-tint` | lavender at 10% | lavender at 6% | The faint colour over glass |
+| `glass-tint-pip` | teal at 10% | teal at 6% | The same, on Pip's surfaces |
+| `glass-body`, `glass-body-regular` | white at 22% and 55% | ink at 38% and 60% | Clear and regular glass body |
+| `glass-filter` | `blur(6px) saturate(1.8) brightness(1.06)` | `blur(8px) saturate(1.6) brightness(0.9)` | What the glass does to the backdrop |
+| `glass-rim`, `glass-rim-pip` | white ring, 95% to 5% to 55% | lavender ring, 60% to 2% to 30%; teal on Pip | The 1 px edge light |
+| `glass-inner`, `glass-inner-pip` | white at 70% above, ink at 6% below | lavender at 25% above; teal on Pip | Light inside the edge |
+| `glass-depth` | `0 10px 30px` ink at 18% | `0 12px 40px` black at 50% | The shadow |
+| `glass-lens`, `glass-lens-rim` (and `-pip`) | white at 38%, rim white at 80% | lavender at 10%, rim at 35%; teal on Pip | Selection inside glass |
 
 `ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. `ws-warn` has no soft fill.
 
@@ -238,7 +246,7 @@ Pip and the spiders also pause whenever the window is hidden, whatever the setti
 
 ## Proposal: dew and silk glass
 
-**Not built yet.** Everything above describes Gossamr as it is. This section proposes how its motion and surfaces could become more fluid, inspired by dew on a spider's web and by Apple's Liquid Glass. It keeps the principles above; where it changes one, it says so.
+**Silk glass (step 3) is built; the rest is not.** Springs, dew interactions, reduced-motion handling and threads are still a proposal, so the motion above describes Gossamr as it is. Silk glass is described below as it ships. This section proposes how its motion and surfaces could become more fluid, inspired by dew on a spider's web and by Apple's Liquid Glass. It keeps the principles above; where it changes one, it says so.
 
 ### The idea
 
@@ -301,28 +309,28 @@ Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs 
 | Selection inside | A clear lens: white at 38% with its own rim | Lavender at 10% with its own rim |
 | Pip's surfaces | Teal `#37d0c0` instead of lavender, at the same strengths | Teal instead of lavender |
 
-```css
-.silk-glass {
-  position: relative;
-  background: linear-gradient(rgb(200 194 255 / 0.1), rgb(200 194 255 / 0.1)), rgb(255 255 255 / 0.22);
-  -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
-  backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
-  box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.7), inset 0 -1px 1px rgb(20 19 29 / 0.06), 0 10px 30px rgb(20 19 29 / 0.18);
-}
-/* The rim: a 1 px gradient ring, brightest where the light falls. */
-.silk-glass::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  padding: 1px;
-  border-radius: inherit;
-  background: linear-gradient(135deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.25) 35%, rgb(255 255 255 / 0.05) 60%, rgb(255 255 255 / 0.55));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-}
-```
+**How to use it.** The classes are in `src/workspace/glass.css`, and the colours are the `glass-*` tokens in `theme.css`.
+
+- `ws-glass` is the material. Put it on the floating layer itself, never on the element that scrolls.
+- `ws-glass-regular` raises the body to white at 55% or ink at 60%. Use it on any layer that holds `ws-ink2` text, because `ws-ink2` on clear glass misses 4.5:1 over accent and status fills.
+- `ws-glass-pip` turns the tint, rim and light teal. Add it to `ws-glass` on Pip's surfaces only.
+- `ws-glass-lens` is the selection lens. Put it on the active or selected row.
+- `ws-glass-item` gives a row inside glass the lens on hover and keyboard focus.
+
+`ws-glass` does not set `position`, so menus keep their `absolute` or `fixed` utility. A static element needs Tailwind's `relative` added, so the rim has something to sit in. Because `backdrop-filter` makes the panel the anchor for fixed descendants, don't put a fixed child inside glass.
+
+Where it is used:
+
+| Surface | Classes |
+| --- | --- |
+| Command palette | `ws-glass ws-glass-regular`, rows `ws-glass-lens` |
+| Menus: card actions, filter, project list, rail menu, move menu | `ws-glass ws-glass-regular`, rows `ws-glass-item` |
+| Rail watched-list popover | `ws-glass ws-glass-regular` |
+| Rail tooltips | `ws-glass ws-glass-regular` |
+| Toasts | `ws-glass ws-glass-regular` |
+| Pip launcher | `ws-glass ws-glass-pip` |
+| Ask Pip chip | `ws-glass ws-glass-pip ws-glass-regular` |
+| Pip pane header | `ws-glass ws-glass-pip ws-glass-regular` |
 
 **Text on glass** is full-strength: `ws-ink` for labels, `ws-ink2` for hints, never `ws-ink3`, and at least medium weight below 14 px.
 
@@ -333,7 +341,7 @@ Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs 
 **Rules for glass**
 
 - Text on glass must still reach 4.5:1 against the worst content that can sit behind it. If it can't, raise the body to the "regular" strength (white at 55%, ink at 60%) or make the layer solid.
-- When the person turns on Reduce transparency (macOS, or `prefers-reduced-transparency` where the browser reports it), glass becomes solid `ws-win` and keeps its rim and depth.
+- When the person turns on Reduce transparency, glass becomes solid `ws-win` and keeps its rim and depth. The app reads the macOS setting itself and follows it as it changes, because WebKit doesn't report `prefers-reduced-transparency`; the site uses that media query where the browser reports it. Glass is solid where `backdrop-filter` is not supported too.
 - Never stack glass on glass.
 - Teal only on Pip's surfaces, so "teal means Pip" still holds.
 
@@ -345,7 +353,7 @@ Under `prefers-reduced-motion`, none of the above moves. A bead doesn't fall; th
 
 1. **Tokens:** add the springs and `--fall` to `theme.css`, and move `ws-pop` and `ws-peek-*` onto `--spring-dew`. This is the smallest step, and the whole app already feels more fluid after it.
 2. **Dew:** approve as a falling bead, skip as evaporation, the badge swell and the ripple. One PR, with an e2e check that each still ends in the same state with reduced motion on.
-3. **Silk glass:** the palette and menus first, then toasts and the Pip launcher. Measure the scroll frame rate on a long list with a menu open before going further.
+3. **Silk glass (done):** the palette and menus first, then toasts and the Pip launcher. Measure the scroll frame rate on a long list with a menu open before going further.
 4. **Threads:** the line from Pip to a new draft, and the morph from source.
 5. **gossamr.app:** the hero's Pip drop on `--spring-drop`, refraction on the launcher-style glass, and the site's navigation in silk glass.
 

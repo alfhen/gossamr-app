@@ -4,6 +4,7 @@ mod claude;
 mod codehost;
 mod config;
 mod db;
+mod display;
 mod domain;
 mod error;
 mod events;
@@ -53,6 +54,11 @@ type RunsState = Arc<runs::service::RunService>;
 async fn publish(app: &AppHandle, core: &Core) {
     let Ok(snap) = core.snapshot().await else { return };
     wire::snapshot(app, snap);
+}
+
+#[tauri::command]
+fn reduce_transparency() -> bool {
+    display::reduce_transparency()
 }
 
 #[tauri::command]
@@ -857,6 +863,7 @@ pub fn run() {
         })
         .setup(|app| {
             add_reload_menu(app)?;
+            display::watch(app.handle().clone());
             let http = net::client();
             let auth = Arc::new(Auth::load(http.clone()));
             let registry = tracker::Registry::jira(http.clone(), auth.clone());
@@ -922,6 +929,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             set_needs_badge,
+            reduce_transparency,
             auth_status,
             save_oauth_app,
             sign_in,

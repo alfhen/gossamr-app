@@ -99,14 +99,19 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
         onDismiss();
         leaveToast();
       }}
-      className={`pointer-events-auto flex flex-wrap items-start gap-x-2 gap-y-1 rounded-lg border bg-ws-win px-3 py-2 text-sm shadow-ws-pop outline-none focus-visible:outline-2 focus-visible:outline-ws-pip ${t.tone === "error" ? "border-ws-blocked text-ws-blocked" : "border-ws-sep2 text-ws-ink2"}`}
+      className="pointer-events-auto relative flex flex-wrap items-start gap-x-2 gap-y-1 rounded-lg ws-glass ws-glass-regular px-3 py-2 text-sm font-medium text-ws-ink outline-none focus-visible:outline-2 focus-visible:outline-ws-pip"
     >
+      {t.tone === "error" && (
+        <span aria-hidden className="mt-px grid size-4 shrink-0 place-items-center rounded-full bg-ws-blocked text-[10px] leading-none font-bold text-white">
+          !
+        </span>
+      )}
       {/* A floor of 14rem to grow from: the badge, Undo and the x wrap under the text rather than squeezing it into a column. */}
       <span data-toast-text className="min-w-0 flex-1 basis-56 [overflow-wrap:anywhere]">
         {t.text}
       </span>
       {waiting > 0 && (
-        <span className="shrink-0 rounded-full bg-ws-sel px-1.5 text-xs font-semibold text-ws-ink3" title={`${waiting} more after this one`}>
+        <span className="shrink-0 rounded-full bg-ws-sel px-1.5 text-xs font-semibold text-ws-ink" title={`${waiting} more after this one`}>
           +{waiting} more
         </span>
       )}
@@ -122,7 +127,7 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
           }}
           data-toast-action={t.action.label}
           aria-label={`${actionName(t.action)}: ${t.text}`}
-          className="shrink-0 font-semibold text-ws-accent underline"
+          className="shrink-0 font-semibold text-ws-ink underline decoration-ws-accent decoration-2 underline-offset-2"
         >
           {actionName(t.action)}
         </button>
@@ -136,7 +141,7 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
           // Reached with F6 then Tab, the button hands the keyboard back as Esc does; a click that never came through F6 leaves focus alone.
           if (before) leaveToast();
         }}
-        className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
+        className="shrink-0 rounded px-1 text-lg leading-none text-ws-ink2 hover:text-ws-ink">
         ×
       </button>
     </div>

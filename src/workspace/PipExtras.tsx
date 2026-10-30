@@ -81,9 +81,9 @@ export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { 
           onClick={onOpen}
           aria-label={needs ? `Ask Pip, ${needsYouText(needs)}` : "Ask Pip"}
           title={`Ask Pip (${showOf("app", "pip")})`}
-          className="relative grid size-16 place-items-center [filter:drop-shadow(0_6px_8px_rgb(91_75_209/0.35))] transition-transform duration-200 hover:scale-[1.08] hover:-rotate-3"
+          className="ws-glass ws-glass-pip relative grid size-16 place-items-center rounded-full transition-transform duration-200 hover:scale-[1.08] hover:-rotate-3"
         >
-          <PipAvatar size={64} dangle thinking={thinking} />
+          <PipAvatar size={48} dangle thinking={thinking} />
           {needs > 0 && (
             <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-ws-accent px-1 text-xs font-bold text-white">{needs}</span>
           )}
@@ -124,9 +124,9 @@ export function AskPipButton({ x, y, onAsk }: { x: number; y: number; onAsk(): v
         onAsk();
       }}
       style={{ left: x, top: y }}
-      className="fixed z-40 rounded-[14px] bg-gradient-to-br from-ws-pip to-ws-pip2 px-2.5 py-0.5 text-sm font-semibold text-ws-on-pip shadow-ws-pop"
+      className="ws-glass ws-glass-pip ws-glass-regular fixed z-40 rounded-[14px] px-2.5 py-0.5 text-sm font-semibold text-ws-ink"
     >
-      ✦ Ask Pip
+      <span aria-hidden className="text-ws-pip">✦</span> Ask Pip
     </button>
   );
 }

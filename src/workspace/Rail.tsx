@@ -25,12 +25,12 @@ export function RailTip({ label, hint, note, at }: { label: string; hint?: strin
     <span
       role="tooltip"
       style={{ left: at.x, top: at.y }}
-      // While the pointer is on any rail button, only the hovered button's tip shows, so a focused one gives way to it.
-      className="pointer-events-none fixed z-40 -translate-y-1/2 not-group-has-[button:hover]/btn:group-has-[button:hover]/rail:hidden rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm font-semibold whitespace-nowrap text-ws-ink shadow-ws-pop"
+      // While the pointer is on any rail button, only the hovered button's tip shows, so a focused one gives way to it, and none shows while a rail popover is open, so glass never stacks.
+      className="pointer-events-none fixed z-40 -translate-y-1/2 not-group-has-[button:hover]/btn:group-has-[button:hover]/rail:hidden group-has-[[role=dialog]]/rail:hidden ws-glass ws-glass-regular rounded-md px-2 py-1 text-sm font-semibold whitespace-nowrap text-ws-ink"
     >
       {label}
       {hint && <kbd className="ml-1.5">{hint}</kbd>}
-      {note && <span className="block text-xs font-normal text-ws-ink3">{note}</span>}
+      {note && <span className="block text-xs font-medium text-ws-ink">{note}</span>}
     </span>
   );
 }
@@ -160,22 +160,22 @@ export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick
       <ul role="menu" aria-label={`Watched ${noun.many}`} className="m-0 max-h-[min(320px,50vh)] list-none overflow-y-auto p-0 pb-1">
         {shown.map((c) => (
           <li key={containerKey(c.ref)} role="none">
-            <button type="button" role="menuitem" onClick={() => onPick(c)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-ws-hover">
+            <button type="button" role="menuitem" onClick={() => onPick(c)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-medium ws-glass-item">
               <span aria-hidden style={{ background: colourOf(c) }} className="grid size-6 shrink-0 place-items-center rounded-[7px] text-[10px] font-bold text-white">
                 {projectInitials(c)}
               </span>
               <span className="min-w-0 flex-1 truncate">{c.name}</span>
-              <span className="shrink-0 text-xs text-ws-ink3">{c.key}</span>
+              <span className="shrink-0 text-xs font-medium text-ws-ink">{c.key}</span>
             </button>
           </li>
         ))}
         {shown.length === 0 && (
-          <li role="presentation" className="px-3 py-2 text-ws-ink3">
+          <li role="presentation" className="px-3 py-2 font-medium text-ws-ink">
             {query.trim() ? `No watched ${noun.one} matches.` : `Every ${noun.one} you watch is pinned.`}
           </li>
         )}
       </ul>
-      <button type="button" onClick={onManage} className="border-t border-ws-sep px-3 py-2 text-left font-semibold text-ws-accent hover:bg-ws-hover">
+      <button type="button" onClick={onManage} className="border-t border-ws-sep px-3 py-2 text-left font-semibold text-ws-ink ws-glass-item">
         Manage {noun.many}…
       </button>
     </div>
@@ -191,7 +191,7 @@ function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProp
         <span aria-hidden>⋯</span>
       </RailButton>
       {open && (
-        <div role="dialog" aria-label={`Watched ${noun.many}`} className="absolute bottom-0 left-full z-40 ml-2 w-[280px] overflow-hidden rounded-xl border border-ws-sep2 bg-ws-win text-ws-ink shadow-ws-pop">
+        <div role="dialog" aria-label={`Watched ${noun.many}`} className="absolute bottom-0 left-full z-40 ml-2 w-[280px] overflow-hidden ws-glass ws-glass-regular rounded-xl text-ws-ink">
           <ProjectsMenuPanel
             rest={rest}
             colourOf={colourOf}

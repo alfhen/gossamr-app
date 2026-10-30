@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./workspace/theme.css";
+@import "./workspace/glass.css";
 @import "./workspace/board.css";
 @import "./workspace/pip.css";
 @import "./workspace/motion.css";

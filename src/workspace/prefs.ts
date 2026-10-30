@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { Backend } from "../backend/types";
 import type { Collapsed, PeekSectionId } from "./peekLogic";
 import { PEEK_DEFAULT, PIP_DEFAULT, storedWidth } from "./paneSizes";
 import { readStored, writeStored } from "./storage";
@@ -56,4 +57,29 @@ usePrefs.subscribe(({ theme, peekWidth, pipWidth }) => writeStored(KEY, { theme,
 export function applyTheme(theme: ThemeMode, root: HTMLElement = document.documentElement) {
   if (theme === "auto") root.removeAttribute("data-theme");
   else root.dataset.theme = theme;
+}
+
+export function applyTransparency(reduce: boolean, root: HTMLElement = document.documentElement) {
+  if (reduce) root.dataset.transparency = "reduce";
+  else root.removeAttribute("data-transparency");
+}
+
+/** Keeps `data-transparency` in step with the system's Reduce transparency. Returns a function that stops and clears it. */
+export function followTransparency(backend: Pick<Backend, "reduceTransparency" | "onDisplayChanged">, root: HTMLElement = document.documentElement) {
+  let latest = 0;
+  let stopped = false;
+  const read = () => {
+    const asked = ++latest;
+    backend.reduceTransparency().then(
+      (reduce) => !stopped && asked === latest && applyTransparency(reduce, root),
+      () => {},
+    );
+  };
+  const off = backend.onDisplayChanged(read);
+  read();
+  return () => {
+    stopped = true;
+    off();
+    applyTransparency(false, root);
+  };
 }

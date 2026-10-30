@@ -21,7 +21,7 @@ import { PeekSheet } from "./PeekSheet";
 import { FilterNote, LAUNCHER_CLEAR, LAUNCHER_GUTTER, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
-import { applyTheme, usePrefs } from "./prefs";
+import { applyTheme, followTransparency, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
@@ -231,6 +231,8 @@ export function Workspace({ backend }: { backend: Backend }) {
     applyTheme(theme);
     return () => applyTheme("auto");
   }, [theme]);
+
+  useEffect(() => followTransparency(backend), [backend]);
 
   useEffect(() => {
     useWorkspace.getState().init(backend).catch(() => {});
