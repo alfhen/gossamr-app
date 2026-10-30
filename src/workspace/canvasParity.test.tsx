@@ -261,6 +261,6 @@ describe("markers on the other canvases", () => {
     expect(renderToStaticMarkup(<AttentionDot needsMe={false} unread={false} />)).toBe("");
     expect(renderToStaticMarkup(<AttentionDot needsMe unread />)).toContain("bg-ws-pip");
     expect(renderToStaticMarkup(<AgeChip days={12} />)).toContain("text-ws-blocked");
-    expect(renderToStaticMarkup(<StatusPill status={status("In Review", "active")} />)).toContain("bg-ws-review-soft");
+    expect(renderToStaticMarkup(<StatusPill status={status("In Review", "active")} />)).toContain("--color-ws-review");
   });
 });

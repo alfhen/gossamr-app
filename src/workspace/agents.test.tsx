@@ -416,7 +416,7 @@ describe("the rail", () => {
     expect(label).toBe("Work, 3 things need you");
     expect(inner).toContain('aria-label="3 things need you" title="3 things need you"');
     expect(inner).toContain(">3<");
-    expect(inner).toContain("bg-ws-pip");
+    expect(inner).toContain("bg-ws-accent");
   });
 
   it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
@@ -433,7 +433,7 @@ describe("the rail", () => {
     set([run("working", { lastProgressAt: new Date(NOW + 4 * 60_000).toISOString() }), run("done", { id: "d" })]);
     const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Work/);
     expect(label).toBe("Work");
-    expect(inner).not.toContain("bg-ws-pip");
+    expect(inner).not.toContain("bg-ws-accent");
   });
 
   it("names what the one badge counts", () => {
@@ -447,7 +447,7 @@ describe("the rail", () => {
     const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Inbox/);
     useActivity.getInitialState().unread = 0;
     expect(label).toBe("Inbox");
-    expect(inner).not.toContain("bg-ws-pip");
+    expect(inner).not.toContain("bg-ws-accent");
     expect(inner).not.toMatch(/>\d+</);
   });
 

@@ -5,16 +5,21 @@ import { useWorkspace } from "../workspaceStore";
 import { useActivity } from "./activityStore";
 import { AGE_TEXT, ageLevel, initials, statusTone, unreadItems, type StatusTone } from "./canvasShared";
 
-const PILL: Record<StatusTone, string> = {
-  todo: "bg-ws-sel text-ws-ink2",
-  active: "bg-ws-accent-soft text-ws-accent",
-  done: "bg-ws-done-soft text-ws-done",
-  review: "bg-ws-review-soft text-ws-review",
-  blocked: "bg-ws-blocked-soft text-ws-blocked",
+export const BEAD: Record<StatusTone, string> = {
+  todo: "[--c:var(--color-ws-ink3)]",
+  active: "[--c:var(--color-ws-accent)]",
+  done: "[--c:var(--color-ws-done)]",
+  review: "[--c:var(--color-ws-review)]",
+  blocked: "[--c:var(--color-ws-blocked)]",
 };
 
 export function StatusPill({ status, title }: { status: StatusDef; title?: string }) {
-  return <span title={title} className={`inline-block max-w-full truncate rounded-full px-2 py-px text-xs font-semibold ${PILL[statusTone(status)]}`}>{status.name}</span>;
+  return (
+    <span title={title} className="inline-flex max-w-full items-center gap-[7px] text-xs font-medium text-ws-ink2">
+      <i aria-hidden className={`ws-bead ${BEAD[statusTone(status)]}`} />
+      <span className="truncate">{status.name}</span>
+    </span>
+  );
 }
 
 export function Avatar({ name }: { name: string }) {
