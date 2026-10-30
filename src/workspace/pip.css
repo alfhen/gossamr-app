@@ -35,6 +35,16 @@
 .pip-thread {
   background: linear-gradient(transparent, var(--color-ws-ink3));
 }
+/* Zoom Pip inside the SVG, not the button: scaling the button stretches a cached bitmap of the dangling, filtered layer, so Pip blurs. */
+.pip-av .pip-body {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  transition: transform 0.2s;
+}
+.pip-launch:hover .pip-body,
+.pip-launch:focus-visible .pip-body {
+  transform: scale(1.08) rotate(-3deg);
+}
 
 @keyframes pip-dangle {
   0%,

@@ -81,9 +81,9 @@ export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { 
           onClick={onOpen}
           aria-label={needs ? `Ask Pip, ${needsYouText(needs)}` : "Ask Pip"}
           title={`Ask Pip (${showOf("app", "pip")})`}
-          className="ws-glass ws-glass-pip relative grid size-16 place-items-center rounded-full transition-transform duration-200 hover:scale-[1.08] hover:-rotate-3"
+          className="pip-launch relative grid size-16 place-items-center [filter:drop-shadow(0_6px_8px_rgb(91_75_209/0.35))]"
         >
-          <PipAvatar size={48} dangle thinking={thinking} />
+          <PipAvatar size={64} dangle thinking={thinking} />
           {needs > 0 && (
             <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-ws-accent px-1 text-xs font-bold text-white">{needs}</span>
           )}
