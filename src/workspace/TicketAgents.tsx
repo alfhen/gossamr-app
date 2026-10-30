@@ -38,7 +38,7 @@ export function TicketAgentRows({ runs, now, title, labels = {}, onOpen }: { run
     <ul className="m-0 grid list-none gap-1.5 p-0">
       {runs.map((r) => (
         <li key={r.id}>
-          <button type="button" onClick={() => onOpen(r.id)} data-state={r.state} className="grid w-full gap-1 rounded-[10px] border border-ws-sep bg-ws-win px-3 py-2 text-left hover:border-ws-sep2">
+          <button type="button" onClick={() => onOpen(r.id)} data-state={r.state} className="grid w-full gap-1 border-b border-ws-sep py-2 text-left hover:bg-ws-hover">
             <span className="flex min-w-0 items-center gap-2">
               <RunLabel label={labels[r.id]} />
               <b className="min-w-0 truncate font-semibold">{runTitle(r, title)}</b>

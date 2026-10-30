@@ -200,10 +200,10 @@ export function ChangeRow({ link, now, expanded, detail, onToggle, onOpen, onRet
       </span>
     </>
   );
-  const box = "grid min-w-0 rounded-lg border border-ws-sep";
+  const box = "grid min-w-0 border-b border-ws-sep last:border-b-0";
   if (!pull) {
     return (
-      <li title={provenanceHint(link.provenance)} className={`${box} grid-cols-[minmax(0,1fr)_auto] items-start gap-2 p-2.5`}>
+      <li title={provenanceHint(link.provenance)} className={`${box} grid-cols-[minmax(0,1fr)_auto] items-start gap-2 py-2.5`}>
         <div className="flex min-w-0 gap-2.5">{body}</div>
         <Button size="sm" className="shrink-0" onClick={() => onOpen(c.url)}>
           Open on GitHub
@@ -212,8 +212,8 @@ export function ChangeRow({ link, now, expanded, detail, onToggle, onOpen, onRet
     );
   }
   return (
-    <li title={provenanceHint(link.provenance)} className={`${box} overflow-hidden ${expanded ? "border-ws-sep2" : ""}`}>
-      <button type="button" aria-expanded={expanded} onClick={onToggle} className="flex min-w-0 gap-2.5 p-2.5 text-left hover:bg-ws-hover">
+    <li title={provenanceHint(link.provenance)} className={`${box} overflow-hidden`}>
+      <button type="button" aria-expanded={expanded} onClick={onToggle} className="flex min-w-0 gap-2.5 py-2.5 text-left hover:bg-ws-hover">
         {body}
         <svg aria-hidden viewBox="0 0 16 16" className={`mt-1 size-3.5 shrink-0 text-ws-ink3 transition-transform ${expanded ? "" : "-rotate-90"}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <path d="M4 6l4 4 4-4" />
@@ -279,7 +279,7 @@ export function DevelopmentView(p: DevelopmentViewProps) {
         </div>
       )}
       {links.length > 0 && (
-        <ul aria-label="Linked code" className="m-0 grid list-none gap-2 p-0">
+        <ul aria-label="Linked code" className="m-0 grid list-none gap-0 p-0">
           {links.map((l) => (
             <ChangeRow
               key={l.change.externalId}

@@ -5,6 +5,7 @@ import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, RunLabel, onActivate } from "./AgentCard";
 import { FailureNext, OpenInTerminal } from "./AgentParts";
+import { NeedsBadge } from "./AgentsHome";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
 
@@ -170,6 +171,28 @@ describe("the Work screen groups agents by workstream", () => {
     expect(articles(out)).toHaveLength(9);
     expect(out).toContain('aria-setsize="9"');
   });
+
+  it("heads a group with a hairline and no coloured bar down its side", () => {
+    const out = screen({ runs: [...eight(), linked()], workstreams: [ws] });
+    const group = out.match(/<section[^>]*data-workstream-group="ws-1"[^>]*>/)![0];
+    expect(group).not.toMatch(/border-l/);
+    expect(out).toContain("1 agent<");
+  });
+
+  it("counts what needs you in an indigo bead", () => {
+    const out = renderToStaticMarkup(<NeedsBadge count={3} total={5} />);
+    expect(out).toContain("bg-(--prominent)");
+    expect(out).toContain(">3</i>");
+    expect(out).toContain("need you");
+    expect(renderToStaticMarkup(<NeedsBadge count={0} total={5} />)).toBe("");
+  });
+
+  it("draws a row's beads once, in the indigo that means it needs you", () => {
+    const out = renderToStaticMarkup(<AgentCard run={run("needsAnswer")} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(out.match(/size-2 shrink-0 rounded-full/g)).toHaveLength(1);
+    expect(out).toContain("text-(--prominent)");
+    expect(out).not.toContain("text-ws-pip");
+  });
 });
 
 describe("the Agents screen as the operations view", () => {
@@ -272,13 +295,14 @@ describe("cards", () => {
     expect(card(run("needsAnswer", { shortId: null }))).toMatch(/<button[^>]* disabled=""/);
   });
 
-  it("gives every state an icon and a word", () => {
+  it("gives every state a bead and a word", () => {
     const states: RunState[] = ["queued", "launching", "working", "needsAnswer", "needsPermission", "systemBlocked", "done", "failed", "stopped", "unknown"];
     const words = ["Queued", "Launching", "Working", "Needs an answer", "Needs permission", "Sign-in needed", "Ready to review", "Failed", "Stopped", "Unknown"];
     states.forEach((s, i) => {
       const html = card(run(s));
       expect(html).toContain(`>${words[i]}<`);
-      expect(html).toMatch(/<span[^>]*data-state="[a-zA-Z]+"[^>]*><svg/);
+      expect(html).toMatch(/<span aria-hidden="true" class="size-2[^"]*rounded-full[^"]*"><\/span>/);
+      expect(html).toMatch(new RegExp(`<span data-state="${s}"[^>]*>${words[i]}</span>`));
     });
   });
 
@@ -458,10 +482,10 @@ describe("a run in Needs you", () => {
 describe("motion", () => {
   const css = readFileSync(new URL("./agents.css", import.meta.url), "utf8");
 
-  it("turns the pulse into a plain dot and stops card movement for reduced motion", () => {
+  it("turns the pulse into a plain dot and stops the row fade for reduced motion", () => {
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
     expect(reduced).toMatch(/\.ws-live::after\s*{\s*display:\s*none/);
-    expect(reduced).toMatch(/\.ws-agent-card:hover\s*{\s*transform:\s*none/);
+    expect(reduced).toMatch(/\.ws-agent-card\s*{\s*transition:\s*none/);
   });
 
   it("keeps the running dot's ring apart from the flash on an item you jump to", () => {

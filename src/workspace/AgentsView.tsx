@@ -157,10 +157,10 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
   const title = group.itemKey ? rowTitle({ itemKey: group.itemKey, title: group.title }) : group.title;
   const name = group.itemKey ? `${group.itemKey} ${title}` : title;
   return (
-    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className={`relative grid gap-2.5 ${mine ? "-ml-3 rounded-sm border-l-[3px] border-ws-pip pl-2.5" : ""}`}>
-      <div className="flex min-w-0 items-center gap-2">
+    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className="relative grid">
+      <div className="flex min-w-0 items-center gap-2 border-b border-ws-sep pb-2">
         {group.id && (
-          <span aria-hidden className="text-ws-pip">
+          <span aria-hidden className={mine ? "text-(--prominent)" : "text-ws-ink3"}>
             ◆
           </span>
         )}
@@ -175,7 +175,7 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
           )}
         </h3>
         {view ? <WorkstreamHeadExtras view={view} /> : <NeedsBadge count={mine} total={needs.length} />}
-        <span className="text-xs text-ws-ink3">{group.runs.length}</span>
+        <span className="text-xs text-ws-ink3">· {group.runs.length} {group.runs.length === 1 ? "agent" : "agents"}</span>
         {openId && onOpen && (
           <Button variant="plain" size="sm" className="ml-auto shrink-0" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)}>
             Open
@@ -287,7 +287,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
   let position = 0;
   /** A workstream's runs as rows. */
   const items = (title: string, list: readonly Run[], labels: Record<string, string> = {}) => (
-    <div role="group" aria-label={title} className="grid gap-2">
+    <div role="group" aria-label={title} className="grid">
       {list.map((r) => (
         <AgentCard key={r.id} {...props(r, ++position, labels[r.id])} />
       ))}
@@ -333,7 +333,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
             onPointerLeave={() => setHovered(false)}
             onFocus={() => setFocused(true)}
             onBlur={(ev) => setFocused(!!ev.relatedTarget && ev.currentTarget.contains(ev.relatedTarget as Node))}
-            className="grid gap-5.5"
+            className="grid gap-6"
           >
             <AgentsBanners loadError={status === "error" ? error : null} onRetry={on.retry} />
             {waiting ? (

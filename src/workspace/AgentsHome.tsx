@@ -37,8 +37,9 @@ export function DecisionScope({ children }: { children: ReactNode }) {
 export function NeedsBadge({ count, total }: { count: number; total: number }) {
   if (!count) return null;
   return (
-    <span data-needs-you-badge title={`${count} of the ${total} in Needs you ${count === 1 ? "is" : "are"} here`} className="shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">
-      {count} {count === 1 ? "needs" : "need"} you
+    <span data-needs-you-badge title={`${count} of the ${total} in Needs you ${count === 1 ? "is" : "are"} here`} className="inline-flex shrink-0 items-center gap-1.5 text-xs text-ws-ink2">
+      <i className="grid h-4 min-w-4 place-items-center rounded-full bg-(--prominent) px-1 text-[10px] leading-none font-semibold text-white not-italic tabular-nums">{count}</i>{" "}
+      {count === 1 ? "needs" : "need"} you
     </span>
   );
 }

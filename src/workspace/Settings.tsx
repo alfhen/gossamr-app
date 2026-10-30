@@ -33,7 +33,7 @@ export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "err
 
 const DOT = { ok: "bg-ws-done", busy: "bg-ws-accent", error: "bg-ws-blocked" } as const;
 
-const CARD = "grid gap-1.5 rounded-xl border border-ws-sep2 bg-ws-win p-4";
+const CARD = "grid gap-1.5 border-b border-ws-sep py-3 first:pt-0";
 
 function useNow() {
   const [now, setNow] = useState(() => new Date());
@@ -197,7 +197,7 @@ function GithubCard({ c }: { c: ConnectionInfo }) {
 
 export function ConnectGithubCard({ connected }: { connected: boolean }) {
   return (
-    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-dashed border-ws-sep2 p-4">
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
       <div className="min-w-0 flex-1">
         <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
         <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</div>
@@ -249,7 +249,7 @@ export function Settings() {
         </Section>
 
         <Section title="Connections">
-          <ul aria-label="Connections" className="m-0 grid list-none gap-3 p-0">
+          <ul aria-label="Connections" className="m-0 grid list-none gap-0 p-0">
             {connections.map((c) => (c.kind === "github" ? <GithubCard key={c.id} c={c} /> : <ConnectionRow key={c.id} c={c} projects={projects.get(c.id) ?? 0} />))}
             <ConnectGithubCard connected={connections.some((c) => c.kind === "github")} />
           </ul>

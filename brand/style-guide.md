@@ -156,6 +156,9 @@ Keep a line of body text under about 70 characters.
 - **Spacing** steps by 4 px. Rows and controls mostly use 8 px gaps and 8 to 12 px side padding.
 - **Corners:** full rounding on controls, pills, badges and avatars; 6 to 7 px (`rounded-md`) on rows and menu items; 10 px on cards; 14 to 16 px on sheets. The app icon's square uses the macOS shape.
 - **Lines, not boxes.** Separate with `ws-sep` hairlines. Use a border only where something is a distinct object (a card, a field, a draft).
+  - The peek's sections (Description, Links, Development, Comments, History) are not boxes: a hairline above each, a sentence-case 12px header with a count bead, and the content below. Comments are rows divided by hairlines. The comment field stays a sunken well.
+  - Agents are rows, on Work and in Pip's pane: one state bead (indigo where the agent needs you, never teal), role and key, title, branch or last line, plain row actions (Open in Terminal, Stop, Archive) on one wrapping line, and tokens and age at the end. Work's groups are headed by their name with a hairline under it. A group's header ends with its agent count ("3 agents"). A group that holds something for you says "N need you" in its header, with the count in an indigo bead; it has no coloured bar down its side.
+  - Settings groups (connections, watched projects) are hairline groups. Fields, and lists that scroll, keep their box.
 - **Shadow** on things that float: popovers, the palette, toasts, Pip's launcher (`shadow-ws-pop`). Controls sit just above their surface and cast a small one (`ctl-depth`). Lists and cards lie flat.
 - **Density:** the app is compact, like a Mac utility. The site can breathe: section padding of 96 to 128 px on desktop, 64 px on phones.
 
@@ -197,7 +200,7 @@ Distances stay small: 40 px for a sheet, 6 px and a 0.98 scale for a popover, 1 
 | --- | --- | --- | --- |
 | Peek sheet | Slides 40 px from the right and fades in, 220 ms, enter easing | Slides 40 px right and fades, 160 ms, ease-in | `ws-peek-in`, `ws-peek-out` |
 | Popover, menu, palette, dialog | Drops 6 px, scales from 0.98, fades in, 150 ms, ease-out | Disappears at once | `ws-pop` |
-| Card or agent card hover | Lifts 1 px and gains a soft shadow, 120 ms | Settles back, 120 ms | Not on rows in a list |
+| Card hover | Lifts 1 px and gains a soft shadow, 120 ms | Settles back, 120 ms | Not on rows in a list, which include agent rows (they only tint) |
 | Selection, hover row, focus ring | Colour change, 120 ms, or none | | Focus rings appear at once |
 | Resize handle | The indigo line fades in, 120 ms | | |
 | Running agent | A ring grows from the status dot and fades, 1.8 s, ease-out, looping | Stops when the run stops | The only motion on a working run |

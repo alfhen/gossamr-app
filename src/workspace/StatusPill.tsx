@@ -7,7 +7,7 @@ import { useNeedsYou } from "./useNeeds";
 
 /** The pill's colours, from the theme's tokens: filled for what is the person's, soft for the rest, grey for what asks nothing. */
 const TONE: Record<StatusTone, string> = {
-  pip: "bg-ws-pip text-ws-on-pip",
+  pip: "bg-(--prominent) text-white",
   warn: "border border-ws-warn/50 bg-ws-warn/10 text-ws-ink",
   accent: "bg-ws-accent-soft text-ws-accent",
   ink: "bg-ws-hover text-ws-ink2",
