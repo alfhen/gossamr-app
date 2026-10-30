@@ -38,8 +38,8 @@ export function WorkflowLine({ section }: { section: BoardSection | null }) {
           return (
             <li key={s.id} title={moveHint(section.workflow, s)} style={{ ["--n" as string]: Math.min(n, 5) }} className={BEAD[statusTone(s)]}>
               <i aria-hidden />
-              <span className="text-xs font-medium whitespace-nowrap text-ws-ink2">
-                <span>{s.name}</span> <b className="font-semibold text-ws-ink tabular-nums">{n}</b>
+              <span className="text-xs leading-tight font-medium text-ws-ink2">
+                <span>{s.name}</span> <b className="font-semibold whitespace-nowrap text-ws-ink tabular-nums">{n}</b>
               </span>
             </li>
           );
