@@ -23,6 +23,7 @@ import { speakQuietToasts, useToasts } from "./toasts";
 import { controlActions, PausedBanner } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
 import { isTypingTarget } from "../lib/keys";
+import { PipGlyph } from "../components/PipGlyph";
 
 const STACK = "[data-workstream-needs]";
 
@@ -310,14 +311,15 @@ function DraftBody({ need, proposal: p }: { need: Need; proposal: Proposal }) {
 function PipAskBody({ need, view }: { need: Need; view: WorkstreamView }) {
   return (
     <Box tone="needs" label="Pip asks you">
-      <BoxTitle icon="spark" tone="needs">
+      <BoxTitle icon="pip" tone="needs">
         Pip asks you
       </BoxTitle>
       <p data-pip-ask className="selectable m-0 whitespace-pre-wrap text-ws-ink [overflow-wrap:anywhere]">
         {view.pipAsk?.question}
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        <Btn tone="primary" icon="spark" onClick={() => openPipAsk(need)}>
+        <Btn tone="primary" onClick={() => openPipAsk(need)}>
+          <PipGlyph />
           Answer in Pip
         </Btn>
         <Btn tone="plain" icon="x" onClick={() => void useWorkstreams.getState().dismissAsk(view.workstream.id)} title="Takes it out of Needs you. Pip carries on without an answer.">

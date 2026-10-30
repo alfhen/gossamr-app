@@ -188,7 +188,8 @@ describe("ListRow", () => {
     expect(out).not.toContain("Needs you");
     expect(out).toContain("blocked");
     expect(out).toContain("draft → Done");
-    expect(out).toContain("✦ 2");
+    expect(out).toContain("data-pip-glyph");
+    expect(out).toContain("</svg> 2");
     expect(renderToStaticMarkup(<ListRow {...rowProps({ unread: true })} />)).toContain('aria-label="Unread updates"');
     expect(renderToStaticMarkup(<ListRow {...rowProps()} />)).not.toContain("role=\"img\"");
   });

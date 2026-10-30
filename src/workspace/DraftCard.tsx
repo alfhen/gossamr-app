@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
+import { PipGlyph } from "../components/PipGlyph";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
 import { isRunDraft as isAgentDraft, targetOf, unreachable } from "../lib/proposals";
@@ -421,7 +422,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
       className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
-        <span aria-hidden>✦</span>
+        <PipGlyph />
         {/* The card is named by this heading, so a screen reader says the title once. */}
         <Title id={titleId} className="m-0 text-sm font-semibold">
           {draftTitle(p)}

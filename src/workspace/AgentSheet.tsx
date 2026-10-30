@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./AgentIcons";
 import { usePaneWidths } from "./PaneResizers";
+import { PipGlyph } from "../components/PipGlyph";
 
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm leading-normal whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45";
 const TONES = {
@@ -135,11 +136,11 @@ export function Box({ tone = "plain", label, children }: { tone?: keyof typeof B
   );
 }
 
-export function BoxTitle({ icon, tone, children }: { icon: IconName; tone: "needs" | "warn" | "failed" | "plain"; children: ReactNode }) {
+export function BoxTitle({ icon, tone, children }: { icon: IconName | "pip"; tone: "needs" | "warn" | "failed" | "plain"; children: ReactNode }) {
   const color = { needs: "text-ws-pip", warn: "text-ws-warn", failed: "text-ws-blocked", plain: "text-ws-ink" }[tone];
   return (
     <h4 className={`m-0 flex items-center gap-1.5 text-[13px] font-semibold ${color}`}>
-      <Icon name={icon} className="size-[15px]" />
+      {icon === "pip" ? <PipGlyph className="size-[15px]" /> : <Icon name={icon} className="size-[15px]" />}
       {children}
     </h4>
   );

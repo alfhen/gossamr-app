@@ -11,6 +11,7 @@ import { projectColour, projectInitials } from "./projects";
 import { usePrefs } from "./prefs";
 import { Icon } from "./AgentIcons";
 import { Icon as Glyph } from "../components/icons";
+import { PipGlyph } from "../components/PipGlyph";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
@@ -328,7 +329,7 @@ export function Rail() {
           <span aria-hidden>⚙</span>
         </RailButton>
         <RailButton label="Pip" hint={showOf("app", "pip")} pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
-          <span aria-hidden>✦</span>
+          <PipGlyph />
         </RailButton>
       </div>
     </aside>

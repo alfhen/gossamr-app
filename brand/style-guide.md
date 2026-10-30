@@ -367,7 +367,8 @@ Each step can be stopped without leaving the app half fluid: every step stands o
 
 Pip is Gossamr's one character: a round teal spider with two eyes, friendly rather than insect-like.
 
-- **In the app**, Pip is the animated avatar (`PipAvatar.tsx`): a teal-to-violet body, eight legs, eyes that blink and follow the pointer.
+- **In the app**, Pip is the animated avatar (`PipAvatar.tsx`), drawn as a dew bead: a teal-to-violet body with a soft highlight and a white rim that catches light, a smaller bead for a head, a small smile, eight thin legs, and eyes whose pupils carry a catchlight and follow the pointer. Gloss belongs to Pip's bead and the app icon only; the flat mark stays flat.
+- **In text**, Pip has its own glyph (`PipGlyph.tsx`): a spider on its thread, with a bead and two eyes cut out of it. It takes the colour of the text around it and is 1em tall, so it stands where a symbol would: the Pip button in the rail, Pip's drafts and their badges, "Ask Pip" in the palette, on a text selection, on the Work and ticket buttons and in a run result, and the "Pip asks you" box. The four-point spark stays only for a run that is working. It replaced the four-point star (✦), which says "AI" on every product that uses it. Gossamr never sells itself as AI, so what marks Pip's work is Pip.
 - **In the brand**, Pip is the flat mark (`brand/pip.svg`): a flat teal body, two eyes, four legs.
 - Pip appears where Pip acts or speaks: the launcher, the pane, Pip's drafts. It is not decoration, and it never appears on errors as a joke.
 - Pip is "Pip", never "the AI", "the bot" or "the assistant" in the interface.

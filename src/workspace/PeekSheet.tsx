@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
+import { PipGlyph } from "../components/PipGlyph";
 import { docFromText } from "../lib/docs";
 import { itemKey } from "../lib/filter";
 import { liveMentions, type Mention } from "../lib/mentions";
@@ -18,7 +19,6 @@ import { PEEK_DEFAULT } from "./paneSizes";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
-import { Icon } from "./AgentIcons";
 import { TicketAgents, runsOfTicket } from "./TicketAgents";
 import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
 import { Development } from "./DevelopmentSection";
@@ -761,7 +761,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
               title={`Ask Pip about ${ref.key}: it can start agents, and they stay with the ticket`}
               className="inline-flex items-center gap-1.5 rounded-md border border-ws-pip px-2.5 py-0.5 text-sm font-semibold text-ws-pip hover:bg-ws-pip-soft"
             >
-              <Icon name="spark" />
+              <PipGlyph />
               Ask Pip
             </button>
             <WorkstreamControl

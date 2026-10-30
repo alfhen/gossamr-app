@@ -32,6 +32,7 @@ import { undoLatest } from "./undo";
 import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { needsIn } from "../lib/needs";
+import { PipGlyph } from "../components/PipGlyph";
 
 const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
 
@@ -308,7 +309,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
           <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
           <span className="flex-1" />
           <button type="button" onClick={on.askPip} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
-            <Icon name="spark" />
+            <PipGlyph />
             Ask Pip
           </button>
           <button type="button" onClick={on.openSafety} className={BUTTON}>

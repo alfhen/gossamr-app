@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { PipGlyph } from "../components/PipGlyph";
 import { itemKey, YOUR_TURN, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { AgeChip, AttentionDot, Avatar, StatusPill, TurnPill } from "./CanvasBits";
@@ -107,7 +108,7 @@ function useCompactBadges(cell: RefObject<HTMLElement | null>, badges: RefObject
 export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "moreDrafts"> & { compact: boolean }) {
   const more = p.moreDrafts > 0 ? `${p.moreDrafts} more ${p.moreDrafts === 1 ? "draft" : "drafts"} waiting` : "";
   if (p.compact) {
-    const icon = (label: string, className: string, glyph: string, tip = label) => (
+    const icon = (label: string, className: string, glyph: ReactNode, tip = label) => (
       <span role="img" aria-label={label} title={tip} className={`grid h-4 min-w-4 place-items-center rounded-full px-0.5 text-[11px] leading-none font-semibold ${className}`}>
         {glyph}
       </span>
@@ -116,7 +117,7 @@ export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "m
       <>
         {p.needsMe && icon(YOUR_TURN, "bg-ws-pip-soft text-ws-pip", "!", YOUR_TURN_WHY)}
         {p.blocked && icon("Blocked", "bg-ws-blocked-soft text-ws-blocked", "⛓")}
-        {p.draft && icon(`A draft waits for approval: ${p.draft.to}`, "bg-ws-pip-soft text-ws-pip", "✦")}
+        {p.draft && icon(`A draft waits for approval: ${p.draft.to}`, "bg-ws-pip-soft text-ws-pip", <PipGlyph />)}
         {more && icon(more, "text-ws-pip", `+${p.moreDrafts}`)}
       </>
     );
@@ -127,12 +128,12 @@ export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "m
       {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
       {p.draft && (
         <span className="rounded-full bg-ws-pip-soft px-2 py-px text-xs font-semibold text-ws-pip" title="A draft is waiting for approval">
-          ✦ draft → {p.draft.to}
+          <PipGlyph /> draft → {p.draft.to}
         </span>
       )}
       {more && (
         <span className="text-xs text-ws-pip" title={more}>
-          ✦ {p.moreDrafts}
+          <PipGlyph /> {p.moreDrafts}
         </span>
       )}
     </>
