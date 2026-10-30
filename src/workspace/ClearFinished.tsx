@@ -35,7 +35,7 @@ export function ClearFinishedView({ open, onToggle, filter, preview, busy, onAge
       {open && (
         <div role="dialog" aria-label="Clear finished runs" className="absolute top-full right-0 z-30 mt-1 grid w-[340px] max-w-[90vw] gap-3 rounded-lg border border-ws-sep2 bg-ws-win p-3 text-sm shadow-lg">
           <label className="grid gap-1">
-            <span className="text-xs font-semibold tracking-[0.05em] text-ws-ink3 uppercase">Which runs</span>
+            <span className="text-sm font-semibold text-ws-ink2">Which runs</span>
             <select aria-label="Age" value={String(filter.olderThanDays)} onChange={(ev) => onAge(ev.target.value === "null" ? null : Number(ev.target.value))} className="ws-select">
               {CLEAR_AGES.map((d) => (
                 <option key={String(d)} value={String(d)}>

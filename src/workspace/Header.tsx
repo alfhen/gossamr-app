@@ -38,7 +38,7 @@ export function ProjectMenu({ containers, value, onChange }: { containers: WorkC
         aria-label={`Project: ${current?.name ?? "All projects"}`}
         title={`Switch project (${showOf("app", "jump")})`}
         onClick={() => setOpen(!open)}
-        className="-ml-1.5 flex items-center gap-2 rounded-md px-1.5 text-[22px] leading-tight font-bold hover:bg-ws-hover"
+        className="-ml-1.5 flex items-center gap-2 font-display rounded-md px-1.5 text-[22px] leading-tight font-bold hover:bg-ws-hover"
       >
         {current?.name ?? "All projects"}
         <span aria-hidden className="text-xs font-normal text-ws-ink3">

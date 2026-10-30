@@ -337,7 +337,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
       <WorkstreamControls key={id} view={view} />
       {(drafts.pip || retired.pip) && (
         <section aria-label="Pip's drafts" className="grid gap-1.5">
-          <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">Pip&apos;s drafts</h3>
+          <h3 className="m-0 text-sm font-semibold text-ws-ink2">Pip&apos;s drafts</h3>
           <StepDrafts step="pip" drafts={drafts.pip ?? []} inPane={inPane.pip} approve={approve} />
           <EarlierStepDrafts step="pip" drafts={retired.pip ?? []} />
         </section>

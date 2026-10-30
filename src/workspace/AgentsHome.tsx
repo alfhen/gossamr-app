@@ -73,7 +73,7 @@ export function WorkstreamTools({ showClosed, onShowClosed }: { showClosed: bool
 export function ClosedWorkstreams({ closed, open }: { closed: readonly WorkstreamView[]; open: readonly WorkstreamView[] }) {
   return (
     <section aria-label="Closed workstreams" data-closed-workstreams className="grid gap-2">
-      <h3 className="m-0 text-xs font-semibold tracking-[0.05em] text-ws-ink2 uppercase">Closed workstreams</h3>
+      <h3 className="m-0 text-sm font-semibold text-ws-ink2">Closed workstreams</h3>
       <ul className="m-0 grid list-none gap-0.5 p-0">
         {closed.map((v) => {
           const key = v.workstream.itemKey;

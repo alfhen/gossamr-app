@@ -84,7 +84,7 @@ export function FeedRow({ entry: e, actor, title, now, selected, openable, posit
 
 export function DayHeading({ label, level = 3 }: { label: string; level?: 2 | 3 }) {
   const H = `h${level}` as const;
-  return <H className="sticky top-0 z-10 m-0 bg-ws-win px-2 pt-4 pb-1 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{label}</H>;
+  return <H className="sticky top-0 z-10 m-0 bg-ws-win px-2 pt-4 pb-1 text-sm font-semibold text-ws-ink2">{label}</H>;
 }
 
 /** The Inbox's one filter, a toggle: only what mentions you. */
@@ -167,7 +167,7 @@ export function ActivityView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ws-sep px-6 py-2.5">
-        <h1 className="m-0 text-base font-semibold">Inbox</h1>
+        <h1 className="font-display m-0 text-base font-semibold">Inbox</h1>
         <MentionsFilter filter={filter} onChange={(f) => useActivity.getState().setFilter(f)} />
         <Button variant="quiet" size="sm" className="ml-auto" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead()}>
           Mark all read

@@ -118,7 +118,7 @@ export function PaletteView({
           {results.map((c, i) => (
             <Fragment key={c.id}>
               {c.group !== results[i - 1]?.group && (
-                <li role="presentation" className="px-2.5 pt-2 pb-0.5 text-[11px] font-bold tracking-wide text-ws-ink uppercase">
+                <li role="presentation" className="px-2.5 pt-2 pb-0.5 text-sm font-semibold text-ws-ink2">
                   {c.group}
                 </li>
               )}

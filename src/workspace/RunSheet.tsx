@@ -308,7 +308,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
           </span>
           <RunRef run={run} />
         </div>
-        <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
+        <h2 className="font-display m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
         {answerSent && <AnswerSent />}
       </div>

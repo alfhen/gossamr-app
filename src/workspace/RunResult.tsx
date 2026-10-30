@@ -45,7 +45,7 @@ export function Changes({ change, on }: { change: CodeChange; on: Pick<ResultAct
     <Sec title="Changes">
       <Box>
         <p className="m-0 flex flex-wrap items-baseline gap-x-2 font-semibold">
-          <span className="text-xs font-semibold text-ws-ink3 uppercase">{KIND_NAME[change.kind]}</span>
+          <span className="text-sm font-semibold text-ws-ink2">{KIND_NAME[change.kind]}</span>
           <span className="min-w-0 [overflow-wrap:anywhere]">{change.kind === "pullRequest" ? `#${change.number} ${change.title}` : change.headRef}</span>
         </p>
         <p className="m-0 flex flex-wrap gap-x-3 text-sm text-ws-ink2">

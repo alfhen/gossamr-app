@@ -9,6 +9,7 @@
 
 @theme {
   --font-sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-display: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --text-xs: 11px;
   --text-sm: 12px;

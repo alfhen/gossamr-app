@@ -188,7 +188,7 @@ export function PeekView(p: PeekViewProps) {
               {item.item.key}
             </p>
           )}
-          {draft ? draft.title : <h2 className="m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{item.title}</h2>}
+          {draft ? draft.title : <h2 className="font-display m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{item.title}</h2>}
           {draft ? (
             draft.meta
           ) : (

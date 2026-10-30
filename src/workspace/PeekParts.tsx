@@ -47,7 +47,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
   const label = (
     <>
       {icon}
-      <h3 className="m-0 text-xs font-bold tracking-wide text-ws-ink uppercase">{title}</h3>
+      <h3 className="m-0 text-sm font-semibold text-ws-ink2">{title}</h3>
       {count !== undefined && <CountBadge count={count} accent={tone === "discussion"} />}
     </>
   );

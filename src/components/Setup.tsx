@@ -51,14 +51,14 @@ export function Setup({
     <div data-tauri-drag-region className="grid h-full place-items-center overflow-auto bg-win px-6 py-10">
       <div className="grid w-full max-w-[520px] gap-6">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Connect Jira</h1>
+          <h1 className="font-display text-xl font-bold tracking-tight">Connect Jira</h1>
           <p className="mt-1 text-ink-2">
             Gossamr signs in with your own Atlassian OAuth app, so it acts as you with your permissions. Tokens are kept in the macOS Keychain.
           </p>
         </div>
 
         <section className="grid gap-3">
-          <h2 className="text-xs font-semibold tracking-wide text-ink-3 uppercase">1 · Register an OAuth app</h2>
+          <h2 className="text-sm font-semibold text-ink-2">1 · Register an OAuth app</h2>
           <ol className="selectable grid list-decimal gap-1.5 pl-5 text-ink-2">
             <li>
               Open <b className="text-ink">developer.atlassian.com/console/myapps</b> and create an <b className="text-ink">OAuth 2.0 integration</b>.
@@ -103,7 +103,7 @@ export function Setup({
         </section>
 
         <section className="grid gap-3">
-          <h2 className="text-xs font-semibold tracking-wide text-ink-3 uppercase">2 · Sign in</h2>
+          <h2 className="text-sm font-semibold text-ink-2">2 · Sign in</h2>
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="primary" disabled={!configured || busy !== null} onClick={() => void signIn()}>
               {busy === "signin" ? "Waiting for the browser…" : "Sign in with Atlassian"}

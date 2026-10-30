@@ -244,7 +244,7 @@ export function ConnectView(p: ConnectViewProps) {
   return (
     <div className="grid gap-3.5">
       <div>
-        <h2 className="m-0 text-lg font-semibold">{state.step === "connected" ? `Connected as ${state.connection.workspace}` : "Connect GitHub"}</h2>
+        <h2 className="font-display m-0 text-lg font-semibold">{state.step === "connected" ? `Connected as ${state.connection.workspace}` : "Connect GitHub"}</h2>
         {SUBTITLE[state.step] && <p className="mt-1 mb-0 text-ws-ink2">{SUBTITLE[state.step]}</p>}
       </div>
       {state.step === "choose" && <Choose options={p.options} onPick={p.onPick} />}

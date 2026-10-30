@@ -90,10 +90,10 @@ export function PipRunStripView({ runs, now, workstream = null, dismissed, title
   const more = shown.length < listed.length;
   return (
     <section aria-label="Your agents" className="grid gap-1.5">
-      <h3 className="m-0 flex items-baseline gap-1.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+      <h3 className="m-0 flex items-baseline gap-1.5 text-sm font-semibold text-ws-ink2">
         Your agents <span data-strip-count className="font-normal">{more ? `${shown.length} of ${listed.length}` : shown.length}</span>
         {more && onSeeAll && (
-          <button type="button" onClick={onSeeAll} className="ml-auto font-semibold tracking-normal text-ws-accent normal-case hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+          <button type="button" onClick={onSeeAll} className="ml-auto font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
             See all in Agents
           </button>
         )}

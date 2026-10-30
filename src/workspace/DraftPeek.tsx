@@ -67,7 +67,7 @@ function TitleField({ value, disabled, onChange, onBlur }: { value: string; disa
       onChange={(e) => onChange(e.target.value.replace(/\s*\n\s*/g, " "))}
       onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && e.preventDefault()}
       onBlur={onBlur}
-      className={`${field} block w-full resize-none overflow-hidden text-[20px] leading-tight font-semibold`}
+      className={`${field} block w-full font-display resize-none overflow-hidden text-[20px] leading-tight font-semibold`}
     />
   );
 }
