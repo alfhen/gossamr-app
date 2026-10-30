@@ -137,7 +137,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                       void drop(section, column);
                     }}
                     className={`relative flex min-h-0 min-w-0 flex-col gap-2 rounded-xl border-2 p-2 transition-colors ${
-                      verdict === "ok" ? `border-dashed border-ws-pip ${over === id ? "bg-ws-pip-soft" : "ws-lane"}` : "ws-lane border-transparent"
+                      verdict === "ok" ? `border-dashed border-ws-pip ${over === id ? "bg-ws-pip-soft shadow-[var(--well-shade)]" : "ws-lane"}` : "ws-lane border-transparent"
                     } ${verdict === "invalid" ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-center text-sm font-bold text-ws-ink2">
