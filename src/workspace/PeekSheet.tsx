@@ -28,6 +28,7 @@ import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
 import { HeaderStatus } from "./StatusPill";
 import { Button } from "../components/Button";
+import { ButtonGroup } from "../components/ButtonGroup";
 import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
 import { isTypingTarget } from "../lib/keys";
@@ -130,52 +131,41 @@ export function PeekView(p: PeekViewProps) {
   const section = (id: PeekSectionId) => ({ collapsed: isCollapsed(folded, id), onToggle: p.onToggleSection ? () => p.onToggleSection!(id) : undefined });
   const commentCount = p.commentsLoading ? item.commentCount : p.comments.length;
   const draft = p.draft;
+  const [under, setUnder] = useState(false);
   return (
     <aside
       id="peek-sheet"
       aria-label={draft ? "Details for a new ticket draft" : `Details for ${item.item.key}`}
       onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
       tabIndex={draft ? -1 : undefined}
-      className={`selectable ws-legacy absolute inset-y-0 right-0 z-20 flex flex-col border-l border-ws-sep2 bg-ws-win shadow-[-14px_0_40px_rgb(0_0_0/0.16)] max-w-full motion-safe:transition-[width] motion-safe:duration-200 ws-sized ${
+      className={`selectable ws-legacy pointer-events-none absolute inset-y-0 right-0 z-20 max-w-full p-2 outline-none motion-safe:transition-[width] motion-safe:duration-200 ws-sized ${
         p.wide ? "w-full" : ""
-      } ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""} ${MOTION[p.motion ?? "none"]}`}
+      } ${MOTION[p.motion ?? "none"]}`}
       style={p.wide ? undefined : { width: p.width ?? PEEK_DEFAULT }}
     >
-      {!p.wide && p.onWide && <PeekResizer />}
-      <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
-        <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{item.item.key}</span>
-        <span className="min-w-0 truncate text-xs text-ws-ink3">
-          {draft ? (
-            <>
-              draft · <kbd className="font-sans">esc</kbd> close
-            </>
-          ) : (
-            <>
-              peek · <kbd className="font-sans">j</kbd> <kbd className="font-sans">k</kbd> browse · <kbd className="font-sans">esc</kbd> close
-            </>
-          )}
-        </span>
+      {!p.wide && p.onWide && (
+        <div className="pointer-events-auto">
+          <PeekResizer />
+        </div>
+      )}
+      <div className={`ws-sheet pointer-events-auto flex h-full min-h-0 flex-col ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}>
+      <div data-peek-head data-under={under || undefined} className="ws-sheet-head z-10 flex shrink-0 items-center gap-2 px-3 py-2.5">
+        <span title={draft ? undefined : "j and k browse, esc closes"} className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{item.item.key}</span>
         {draft?.nav}
-        {p.onWide && (
-          <Button
-            variant="quiet"
-            size="sm"
-            iconOnly
-            aria-label={p.wide ? "Shrink details" : "Expand details"}
-            aria-pressed={!!p.wide}
-            title={p.wide ? "Shrink" : "Expand"}
-            onClick={p.onWide}
-            className={draft?.nav ? "" : "ml-auto"}
-          >
-            {p.wide ? "⤡" : "⤢"}
-          </Button>
-        )}
-        <Button variant="quiet" size="sm" iconOnly aria-label="Close details" onClick={p.onClose} className={p.onWide || draft?.nav ? "" : "ml-auto"}>
-          ×
-        </Button>
-      </div>
-      <div data-peek-scroll className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4" : "grid content-start scroll-pt-11"}`}>
+        <span className="min-w-0 flex-1" />
         {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
+        <ButtonGroup label="Peek" className="shrink-0">
+          {p.onWide && (
+            <Button variant="quiet" size="sm" iconOnly aria-label={p.wide ? "Shrink details" : "Expand details"} aria-pressed={!!p.wide} title={p.wide ? "Shrink" : "Expand"} onClick={p.onWide}>
+              {p.wide ? "⤡" : "⤢"}
+            </Button>
+          )}
+          <Button variant="quiet" size="sm" iconOnly aria-label="Close details" onClick={p.onClose}>
+            ×
+          </Button>
+        </ButtonGroup>
+      </div>
+      <div data-peek-scroll onScroll={(ev) => setUnder(ev.currentTarget.scrollTop > 2)} className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4" : "grid content-start pt-3"}`}>
         <div className="grid gap-2.5">
           {draft?.banner}
           {p.banner}
@@ -346,6 +336,7 @@ export function PeekView(p: PeekViewProps) {
         <div aria-hidden data-peek-end className={`-mt-5 shrink-0 ${draft ? "h-5" : "h-24"}`} />
       </div>
       {draft && <div className="flex shrink-0 flex-wrap items-center justify-end gap-x-4 gap-y-2.5 border-t-2 border-ws-pip bg-ws-pip-soft px-[22px] py-3 shadow-[0_-6px_16px_rgb(0_0_0/0.06)]">{draft.actions}</div>}
+      </div>
     </aside>
   );
 }
@@ -403,7 +394,7 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
   };
 
   return (
-    <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-win focus-within:border-ws-pip">
+    <div className="min-w-0 rounded-md border border-ws-sep2 bg-ws-sheet focus-within:border-ws-pip">
       {reply && (
         <div className="flex min-w-0 items-center gap-1.5 px-3 pt-2.5 text-xs text-ws-ink3">
           <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-ws-hover py-0.5 pr-1 pl-2">

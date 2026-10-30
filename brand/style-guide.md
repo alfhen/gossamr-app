@@ -61,7 +61,7 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `ws-win` | `#faf7f2` | `#1c1a17` | Window and page background |
 | `ws-side` | `#efe9e0` | `#24211d` | Sidebar and rail |
 | `ws-card` | `#fffdf9` | `#2b2723` | Board cards: a step above the lane they sit in |
-| `ws-sheet` | `#fffdf9` | `#24211d` | The peek and Pip's pane bodies (in use from step 11; defined now) |
+| `ws-sheet` | `#fffdf9` | `#24211d` | The peek and Pip's pane bodies |
 | `ws-bar` | `#f5f0e8` | `#201d1a` | Bars, footers, quiet panels |
 | `ws-ink` | `#2b2621` | `#e9e2d6` | Body text |
 | `ws-ink2` | `#5e564c` | `#b6ad9f` | Secondary text |
@@ -160,6 +160,8 @@ Keep a line of body text under about 70 characters.
 - **Corners:** full rounding on controls, pills, badges and avatars; 6 to 7 px (`rounded-md`) on rows and menu items; 10 px on cards; 14 to 16 px on sheets. The app icon's square uses the macOS shape.
 - **Lines, not boxes.** Separate with `ws-sep` hairlines. Use a border only where something is a distinct object (a card, a field, a draft).
   - The peek's sections (Description, Links, Development, Comments, History) are not boxes: a hairline above each, a sentence-case 12px header with a count bead, and the content below. Comments are rows divided by hairlines. The comment field stays a sunken well.
+  - The peek and Pip's pane are floating sheets: 8 px in from the window's edges, 16 px corners, a `ws-sheet` body, the glass rim and the glass depth. Their headers stay put while the content scrolls under a 16 px fade. The peek's header holds the ticket key alone, a Segmented control that jumps between sections and a ButtonGroup that expands or closes it; the parent ticket is in the body. Pip's header stays teal glass and its chips use the lens.
+  - In Pip's pane your messages sit in an indigo lens bubble. Pip's answers are plain text beside a small Pip, with no bubble. The composer stays pinned at the bottom, with the input in a sunken well.
   - Agents are rows, on Work and in Pip's pane: one state bead (indigo where the agent needs you, never teal), role and key, title, branch or last line, plain row actions (Open in Terminal, Stop, Archive) on one wrapping line, and tokens and age at the end. Work's groups are headed by their name with a hairline under it. A group's header ends with its agent count ("3 agents"). A group that holds something for you says "N need you" in its header, with the count in an indigo bead; it has no coloured bar down its side.
   - A selected list row is an indigo lens: `ws-accent-soft` fill, an inset 1px ring of `ws-accent` at 30%, and `silk-top`. A selected card takes the indigo ring. Selection is yours, so it is never teal.
   - State is a bead and a word: an 8 px glossy bead in the state's colour (grey to do, indigo active or needs you, green done, purple review, red blocked, amber failed), then its name in `ws-ink2` at 12px. Status shows this way in list rows, cards, board columns and workstream headings; the tint behind the word is gone, and a count that needs you stays a filled indigo bead.

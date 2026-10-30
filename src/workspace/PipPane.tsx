@@ -41,7 +41,7 @@ export function ContextChip({ kind, label, following, open, onToggle }: { kind: 
       aria-expanded={open}
       aria-controls="pip-seeing"
       title="What Pip can see right now"
-      className={`flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-sm font-medium text-ws-ink2 hover:border-ws-pip ${open || !following ? "border-ws-pip" : "border-ws-sep2"} ${following ? "" : "bg-ws-pip-soft"}`}
+      className={`flex w-fit max-w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-sm font-medium text-ws-ink2 ws-glass-lens ${open || !following ? "outline-1 outline-ws-pip" : ""}`}
     >
       <span aria-hidden className={`size-2 shrink-0 rounded-full ${following ? "bg-ws-done" : "bg-ws-ink3"}`} />
       {following ? (
@@ -192,14 +192,15 @@ export function PipPane({ onClose }: { onClose(): void }) {
   usePaneEscape(onClose);
 
   return (
-    <aside aria-label="Pip" data-pip-root {...drop.handlers} className="ws-legacy relative flex min-h-0 flex-col border-l border-ws-sep bg-ws-win">
+    <aside aria-label="Pip" data-pip-root {...drop.handlers} className="ws-legacy relative flex min-h-0 flex-col p-2">
+      <PipResizer />
+      <div className="ws-sheet flex min-h-0 flex-1 flex-col">
       {drop.over && (
-        <div aria-hidden className="pointer-events-none absolute inset-2 z-10 grid place-items-center rounded-xl border-2 border-dashed border-ws-pip bg-ws-pip-soft text-center font-semibold text-ws-pip">
+        <div aria-hidden className="pointer-events-none absolute inset-2 z-50 grid place-items-center rounded-xl border-2 border-dashed border-ws-pip bg-ws-pip-soft text-center font-semibold text-ws-pip">
           Drop an image to show Pip
         </div>
       )}
-      <PipResizer />
-      <header data-tauri-drag-region className="ws-glass ws-glass-pip ws-glass-regular relative before:p-0 before:pb-px z-10 grid gap-1.5 px-3 pt-[14px] pb-2.5 font-medium text-ws-ink [&_[data-status-detail]]:text-ws-ink2 [&_[data-waiting-for-pr]]:text-ws-ink2">
+      <header data-tauri-drag-region className="ws-glass ws-glass-pip ws-glass-regular ws-sheet-fade relative [box-shadow:var(--glass-inner-pip)] before:p-0 before:pb-px z-10 grid gap-1.5 px-3 pt-[14px] pb-2.5 font-medium text-ws-ink [&_[data-status-detail]]:text-ws-ink2 [&_[data-waiting-for-pr]]:text-ws-ink2">
         <div className="flex items-center gap-2">
           <PipAvatar size={26} thinking={running} />
           <div className="grid leading-tight">
@@ -223,6 +224,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <PipConversation key={conversation} conversation={conversation} proposals={proposalList} ticket={context.item} />
       )}
       <Composer conversation={conversation} attached={attached} looking={label} scene={scene} footer={footer} />
+      </div>
     </aside>
   );
 }

@@ -21,6 +21,7 @@ import { useTabs, type Route } from "./tabsStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { maskSecrets } from "../lib/riskyText";
 import { Button } from "../components/Button";
+import { PipAvatar } from "./PipAvatar";
 
 export { PIP_INPUT_ID };
 /** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
@@ -194,9 +195,9 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
           {turn.imageCount === 1 ? "1 image was sent with this; it isn't kept." : `${turn.imageCount} images were sent with this; they aren't kept.`}
         </p>
       )}
-      <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
+      <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent-soft px-3 py-1.5 whitespace-pre-wrap text-ws-ink shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-ws-accent)_26%,transparent)] [overflow-wrap:anywhere]">
         {maskSecrets(turn.shown ?? turn.prompt)}
-        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{maskSecrets(turn.quote)}</blockquote>}
+        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-ws-accent/40 pl-2 text-sm text-ws-ink2">{maskSecrets(turn.quote)}</blockquote>}
       </div>
       {turn.status === "queued" && (
         <div className="flex items-center justify-end gap-1.5 text-sm text-ws-ink3">
@@ -218,8 +219,13 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
         </ul>
       )}
       {turn.text && (
-        <div data-pip-answer className="ws-legacy">
-          <Markdown text={turn.text} />
+        <div className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
+          <span aria-hidden className="pt-0.5">
+            <PipAvatar size={22} />
+          </span>
+          <div data-pip-answer className="ws-legacy min-w-0">
+            <Markdown text={turn.text} />
+          </div>
         </div>
       )}
       <LiveApplied requestId={turn.requestId} />
@@ -464,7 +470,7 @@ export function Composer({ conversation, attached, looking, scene, footer = null
         </div>
       )}
       <AttachedThumbs images={attached.images} onRemove={attached.remove} />
-      <form onSubmit={submit} className={`flex gap-2 p-3 ${attached.images.length ? "" : "border-t border-ws-sep"}`}>
+      <form onSubmit={submit} className="flex items-center gap-2 p-3">
         <AttachButton disabled={attached.images.length >= MAX_IMAGES} onFiles={(files) => void attached.add(files)} />
         <input
           id={PIP_INPUT_ID}
@@ -480,7 +486,7 @@ export function Composer({ conversation, attached, looking, scene, footer = null
           aria-label="Ask Pip"
           placeholder={placeholderFor({ ...scene, images: attached.images.length > 0, quote: !!quote })}
           autoComplete="off"
-          className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+          className="min-w-0 flex-1 rounded-full bg-ws-side px-3 py-1.5 shadow-[var(--well-shade),inset_0_0_0_1px_var(--color-ws-sep)] focus:shadow-[var(--well-shade),inset_0_0_0_1px_var(--color-ws-pip)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
         {running && (
           <Button onClick={() => useClaude.getState().cancel(conversation)}>

@@ -4,6 +4,7 @@ import { relativeTime } from "../lib/views";
 import { initials, type Note, type ReplyInfo, type PeekSectionId, type SectionChip } from "./peekLogic";
 import { WorkDocView } from "./WorkDocView";
 import { Button } from "../components/Button";
+import { Segmented } from "../components/Segmented";
 
 const ICON: Record<PeekSectionId, ReactNode> = {
   description: <path d="M3 4h10M3 8h10M3 12h6" />,
@@ -43,7 +44,7 @@ export interface SectionCardProps {
 /** A titled region with a header bar that stays under the section nav while its body scrolls. */
 export function SectionCard({ id, title, count, collapsed = false, onToggle, tone = "plain", fill = false, children }: SectionCardProps) {
   const icon = id in ICON ? <SectionIcon id={id as PeekSectionId} /> : null;
-  const bar = "sticky top-9 z-[5] flex w-full items-center gap-2 bg-ws-win py-2 text-left text-ws-ink2";
+  const bar = "sticky top-0 z-[5] flex w-full items-center gap-2 bg-ws-sheet py-2 text-left text-ws-ink2";
   const label = (
     <>
       {icon}
@@ -79,16 +80,27 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
 }
 
 export function SectionNav({ chips, onJump }: { chips: SectionChip[]; onJump?(id: PeekSectionId): void }) {
+  const [at, setAt] = useState<PeekSectionId>("description");
+  const options = chips.map((c) => ({
+    value: c.id,
+    label: (
+      <>
+        {c.title}
+        {c.count !== undefined && <CountBadge count={c.count} />}
+      </>
+    ),
+  }));
   return (
-    <nav aria-label="Sections" className="sticky top-0 z-10 -mx-[22px] flex h-9 items-center gap-1.5 overflow-x-auto border-b border-ws-sep2 bg-ws-win px-[22px]">
-      {chips.map((c) => (
-        <Button key={c.id} variant="plain" size="sm" onClick={() => onJump?.(c.id)} className={`shrink-0 font-semibold ${c.id === "comments" ? "text-ws-accent" : ""}`}>
-          <SectionIcon id={c.id} />
-          {c.title}
-          {c.count !== undefined && <CountBadge count={c.count} />}
-        </Button>
-      ))}
-    </nav>
+    <Segmented
+      label="Sections"
+      options={options}
+      value={chips.some((c) => c.id === at) ? at : null}
+      onChange={(id) => {
+        setAt(id);
+        onJump?.(id);
+      }}
+      className="min-w-0 max-w-full overflow-x-auto"
+    />
   );
 }
 

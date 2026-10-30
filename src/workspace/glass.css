@@ -40,6 +40,51 @@
     --glass-lens-rim: var(--glass-lens-rim-pip);
   }
 
+  /* A floating sheet: a solid body on the glass rim and depth. It clips to its corners; the rim sits above the content. */
+  .ws-sheet {
+    position: relative;
+    overflow: clip;
+    border-radius: 16px;
+    background: var(--color-ws-sheet);
+    box-shadow: var(--glass-depth);
+  }
+
+  .ws-sheet::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--glass-rim);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* A sheet's header stays put while the content scrolls under the fade below it. */
+  .ws-sheet-head {
+    position: relative;
+    background: var(--color-ws-sheet);
+    box-shadow: inset 0 -1px 0 var(--color-ws-sep);
+    transition: box-shadow 160ms;
+  }
+
+  .ws-sheet-head[data-under] {
+    box-shadow: none;
+  }
+
+  .ws-sheet-head::after,
+  .ws-sheet-fade::after {
+    content: "";
+    position: absolute;
+    inset: 100% 0 auto;
+    height: 16px;
+    background: linear-gradient(var(--color-ws-sheet), transparent);
+    pointer-events: none;
+  }
+
   /* Selection inside glass: put it on the hovered, active or aria-selected row. */
   .ws-glass-lens {
     background: var(--glass-lens);
