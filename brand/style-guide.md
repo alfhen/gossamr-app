@@ -18,9 +18,11 @@ A silk **G**, with **Pip**, a small teal spider, hanging into the G on a hairlin
 
 | File | Use |
 | --- | --- |
-| `brand/gossamr-icon.svg` | The app icon and the mark at 64 px and up |
-| `brand/gossamr-icon-small.svg` | 16 to 32 px: the G with Pip as a single teal dot, no legs, no thread |
+| `brand/gossamr-icon.svg` | The app icon: ink square, a silk-glass G and Pip as a dew bead |
+| `brand/gossamr-icon-small.svg` | 16 to 32 px: the same icon with Pip as a single dew bead, no legs, no thread |
 | `brand/pip.svg` | Pip alone, for places that are about Pip rather than about Gossamr |
+
+The app icon is the one place the mark takes gloss: the G is frosted silk with a bright edge and a soft shadow, and the ink square carries a faint teal glow behind Pip. It uses plain gradients and no SVG filters, because WebKit renders filters at low resolution. Where the mark appears in one colour or on a page, it stays flat.
 
 The app icons in `src-tauri/icons/` are generated from these with `./scripts/app-icon.sh`. Never edit the PNGs.
 
@@ -29,7 +31,7 @@ The app icons in `src-tauri/icons/` are generated from these with `./scripts/app
 - Use the small version below 64 px, the favicon included. Pip's legs and thread blur at those sizes.
 - Keep the mark on its ink square (`#14131d`). On a light page, the square itself gives the contrast; do not draw the G in dark ink on white.
 - Clear space around the mark is at least a quarter of its width.
-- Do not recolour the G or Pip, add gloss, gradients beyond the G's faint lavender, outlines or shadows, or rotate the mark.
+- Do not recolour the G or Pip, add gloss, gradients beyond the G's faint lavender, outlines or shadows, or rotate the mark. The app icon is the only exception to the gloss rule.
 - Do not separate Pip from its thread, or hang Pip anywhere but inside the G.
 - Do not use gold or amber in the brand. Amber is the app's warning colour.
 
