@@ -5,6 +5,7 @@ import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, RunLabel, onActivate } from "./AgentCard";
 import { FailureNext, OpenInTerminal } from "./AgentParts";
+import { NeedsBadge } from "./AgentsHome";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
 
@@ -169,6 +170,28 @@ describe("the Work screen groups agents by workstream", () => {
     // Every run is reachable; nothing folds.
     expect(articles(out)).toHaveLength(9);
     expect(out).toContain('aria-setsize="9"');
+  });
+
+  it("heads a group with a hairline and no coloured bar down its side", () => {
+    const out = screen({ runs: [...eight(), linked()], workstreams: [ws] });
+    const group = out.match(/<section[^>]*data-workstream-group="ws-1"[^>]*>/)![0];
+    expect(group).not.toMatch(/border-l/);
+    expect(out).toContain("1 agent<");
+  });
+
+  it("counts what needs you in an indigo bead", () => {
+    const out = renderToStaticMarkup(<NeedsBadge count={3} total={5} />);
+    expect(out).toContain("bg-(--prominent)");
+    expect(out).toContain(">3</i>");
+    expect(out).toContain("need you");
+    expect(renderToStaticMarkup(<NeedsBadge count={0} total={5} />)).toBe("");
+  });
+
+  it("draws a row's beads once, in the indigo that means it needs you", () => {
+    const out = renderToStaticMarkup(<AgentCard run={run("needsAnswer")} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+    expect(out.match(/size-2 shrink-0 rounded-full/g)).toHaveLength(1);
+    expect(out).toContain("text-(--prominent)");
+    expect(out).not.toContain("text-ws-pip");
   });
 });
 

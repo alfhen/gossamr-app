@@ -160,7 +160,7 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
     <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className="relative grid">
       <div className="flex min-w-0 items-center gap-2 border-b border-ws-sep pb-2">
         {group.id && (
-          <span aria-hidden className="text-ws-pip">
+          <span aria-hidden className={mine ? "text-(--prominent)" : "text-ws-ink3"}>
             ◆
           </span>
         )}
@@ -175,7 +175,7 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
           )}
         </h3>
         {view ? <WorkstreamHeadExtras view={view} /> : <NeedsBadge count={mine} total={needs.length} />}
-        <span className="text-xs text-ws-ink3">{group.runs.length}</span>
+        <span className="text-xs text-ws-ink3">· {group.runs.length} {group.runs.length === 1 ? "agent" : "agents"}</span>
         {openId && onOpen && (
           <Button variant="plain" size="sm" className="ml-auto shrink-0" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)}>
             Open

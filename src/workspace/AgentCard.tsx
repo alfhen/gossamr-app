@@ -169,8 +169,8 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       </p>
       <KeyAsking text={asking} />
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
-      {onStop && <RowActions run={run} now={now} onAttach={onAttach} onStop={onStop} />}
-      <div className="flex flex-wrap items-center gap-2 empty:hidden">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {onStop && <RowActions run={run} now={now} onAttach={onAttach} onStop={onStop} />}
         {draftReady && onOpenDraft ? (
           <Button
             variant="pip"
@@ -242,15 +242,13 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
             Breakdown proposed
           </Button>
         )}
-      </div>
-      <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
-        {tokens && <span>{tokens}</span>}
+        {tokens && <span className="text-sm text-ws-ink3 tabular-nums">{tokens}</span>}
         {onArchive && (
           <Button variant="plain" size="sm" data-archive onClick={(ev) => (ev.stopPropagation(), onArchive())} onKeyDown={ownKey} title={archiveControl(run).title}>
             Archive
           </Button>
         )}
-        <time dateTime={ageSince(run)} className="ml-auto" title={run.endedAt ? "Ended" : "Started"}>
+        <time dateTime={ageSince(run)} className="ml-auto text-sm text-ws-ink3 tabular-nums" title={run.endedAt ? "Ended" : "Started"}>
           {ageText(run, now)}
         </time>
       </div>

@@ -10,11 +10,11 @@ import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { PermissionAsk } from "./PermissionAsk";
 import { useStateView } from "./useStateView";
-import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stateView, stoppedText, type Tone } from "./agentsLogic";
+import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, type Tone } from "./agentsLogic";
 import { Button } from "../components/Button";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
-  pip: { text: "text-ws-pip", soft: "bg-ws-pip-soft", color: "var(--color-ws-pip)" },
+  pip: { text: "text-(--prominent)", soft: "bg-(--prominent)/12", color: "var(--prominent)" },
   accent: { text: "text-ws-accent", soft: "bg-ws-accent-soft", color: "var(--color-ws-accent)" },
   done: { text: "text-ws-done", soft: "bg-ws-done-soft", color: "var(--color-ws-done)" },
   warn: { text: "text-ws-warn", soft: "bg-ws-warn/15", color: "var(--color-ws-warn)" },
@@ -48,7 +48,7 @@ export function Dot({ tone, live }: { tone: Tone; live: boolean }) {
 export function OpenInTerminal({ run, onOpen, filled = true }: { run: Run; onOpen(): void; filled?: boolean }) {
   return (
     <Button
-      variant={filled ? "primary" : "secondary"}
+      variant={filled ? "primary" : "plain"}
       size="sm"
       disabled={!run.shortId}
       title={run.shortId ? undefined : "There is no session to open yet"}
@@ -70,7 +70,7 @@ export function RowActions({ run, now, onAttach, onStop }: { run: Run; now: numb
   const terminal = !BODY_HAS_TERMINAL.includes(run.state) && quietMinutes(run, now) === null;
   if (!terminal && !stop.shown) return null;
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <>
       {terminal && <OpenInTerminal run={run} onOpen={onAttach} filled={false} />}
       {stop.shown &&
         (asking ? (
@@ -89,17 +89,17 @@ export function RowActions({ run, now, onAttach, onStop }: { run: Run; now: numb
             <Button variant="danger" size="sm" autoFocus onClick={() => (setAsking(false), onStop())}>
               {stop.yes ?? "Yes, stop"}
             </Button>
-            <Button size="sm" onClick={() => setAsking(false)}>
+            <Button variant="plain" size="sm" onClick={() => setAsking(false)}>
               {stop.label === "Cancel" ? "Keep it" : "Keep going"}
             </Button>
           </span>
         ) : (
-          <Button size="sm" destructive disabled={!stop.enabled} title={stop.title} onClick={(ev) => (ev.stopPropagation(), setAsking(true))} onKeyDown={ownKey}>
+          <Button variant="plain" size="sm" destructive disabled={!stop.enabled} title={stop.title} onClick={(ev) => (ev.stopPropagation(), setAsking(true))} onKeyDown={ownKey}>
             <Icon name="stop" />
             {stop.label}
           </Button>
         ))}
-    </div>
+    </>
   );
 }
 
@@ -211,20 +211,13 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
     }
     case "done":
       return (
-        <p className="m-0 flex items-start gap-2 text-ws-ink2">
-          <Dot tone="done" live={false} />
-          <span className={`${clamp(2)} -mt-0.5 min-w-0 [overflow-wrap:anywhere]`}>{createdFrom(run) ?? resultHeadline(run.summary ?? run.result) ?? "Finished"}</span>
-        </p>
+        <p className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>{createdFrom(run) ?? resultHeadline(run.summary ?? run.result) ?? "Finished"}</p>
       );
     case "stopped":
       return (
-        <p className="m-0 flex items-start gap-2 text-ws-ink3">
-          <Dot tone="muted" live={false} />
-          <span className={`${clamp(2)} -mt-0.5 min-w-0`}>{stoppedText(run)}</span>
-        </p>
+        <p className={`${clamp(2)} m-0 min-w-0 text-ws-ink3`}>{stoppedText(run)}</p>
       );
     default: {
-      const v = stateView(run, now);
       return (
         <div className="grid gap-2">
           {quiet !== null && (
@@ -233,11 +226,8 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
               {quietText(quiet)}
             </p>
           )}
-          <p className="m-0 flex items-start gap-2 text-ws-ink2">
-            <Dot tone={v.tone} live={v.live} />
-            <span data-slot-wait={run.slotWaitSince ? "" : undefined} className={`${clamp(2)} -mt-0.5 min-w-0 [overflow-wrap:anywhere]`}>
-              {progressText(run, runs)}
-            </span>
+          <p data-slot-wait={run.slotWaitSince ? "" : undefined} className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>
+            {progressText(run, runs)}
           </p>
           {quiet !== null && (
             <div className="flex flex-wrap items-center gap-2">

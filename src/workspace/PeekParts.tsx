@@ -47,7 +47,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
   const label = (
     <>
       {icon}
-      <h3 className="m-0 text-sm font-semibold text-ws-ink">{title}</h3>
+      <h3 className="m-0 text-xs font-semibold text-ws-ink">{title}</h3>
       {count !== undefined && <CountBadge count={count} accent={tone === "discussion"} />}
     </>
   );
@@ -58,7 +58,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
       className={`grid border-t border-ws-sep ${fill ? "min-h-64 shrink-0 grow grid-rows-[auto_1fr]" : ""}`}
     >
       {onToggle ? (
-        <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={`${bar} hover:brightness-95`}>
+        <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={bar}>
           {label}
           <svg aria-hidden viewBox="0 0 16 16" className={`ml-auto size-3.5 shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 6l4 4 4-4" />
@@ -172,7 +172,7 @@ export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
       data-reply={reply ? "true" : undefined}
       tabIndex={onReply ? 0 : undefined}
       onKeyDown={onKey}
-      className={`group grid min-w-0 scroll-mt-24 gap-2 rounded-md border-b border-ws-sep py-3 transition-shadow outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
+      className={`group grid min-w-0 scroll-mt-24 gap-2 border-b border-ws-sep py-3 outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
         reply ? "border-l-2 border-l-ws-accent/50 pl-3" : ""
       }`}
     >
