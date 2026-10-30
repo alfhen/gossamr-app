@@ -1,6 +1,7 @@
 //! Signing in to GitHub: a pasted token, the token the GitHub CLI holds, or the device flow. Tokens stay on the Rust
 //! side, in the Keychain under the app's service, one entry per account.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -192,7 +193,7 @@ fn path_dirs() -> Vec<PathBuf> {
 }
 
 pub fn find_gh_in(dirs: &[PathBuf]) -> Option<PathBuf> {
-    dirs.iter().map(|d| d.join("gh")).find(|p| p.is_file())
+    dirs.iter().map(|d| d.join("gh")).find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
 impl GithubAuth {

@@ -9,7 +9,7 @@ const checked = "2026-10-30T11:57:00Z";
 describe("a connection's probe status", () => {
   it("says what was found and when, with a way to look again", () => {
     const out = renderToStaticMarkup(<ProbeStatus status={githubSnapshot("ready", "ada", checked)} now={NOW} />);
-    expect(out).toContain("Signed in as ada on github.com");
+    expect(out).toContain("gh is signed in as ada on github.com");
     expect(out).toContain("Checked 3m ago");
     expect(out).toContain("Check again");
     expect(out).not.toContain("Run ");

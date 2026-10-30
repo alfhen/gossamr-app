@@ -155,7 +155,7 @@ pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Durat
                 let entry = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).find(|e| e.login.eq_ignore_ascii_case(login));
                 match entry {
                     None => Snapshot::new(State::NotSignedIn, format!("gh has no login for {login} on {host}.")).fix(login_command),
-                    Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("Signed in as {} on {host}", e.login)) },
+                    Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("gh is signed in as {} on {host}", e.login)) },
                     Some(e) if e.state == "timeout" => Snapshot::new(State::Error, format!("gh couldn't reach {host}.")),
                     Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
                     Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its token for {login} on {host}.")),
@@ -278,6 +278,15 @@ mod tests {
         assert_eq!((refused.state, refused.fix), (State::NotSignedIn, None));
         assert_eq!(github_token("ann", Some(Err(Error::Api { status: 503, message: "down".into() }))).state, State::Error);
         assert_eq!(github_token("ann", None).state, State::Error);
+    }
+
+    #[test]
+    fn a_gh_file_that_cannot_run_does_not_hide_one_that_can() {
+        let blocked = gh_dir("blocked", "exit 1");
+        std::fs::set_permissions(blocked[0].join("gh"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        let working = gh_dir("working", "exit 0");
+        let dirs = [blocked[0].clone(), working[0].clone()];
+        assert_eq!(find_gh_in(&dirs), Some(working[0].join("gh")));
     }
 
     fn me() -> Account {
