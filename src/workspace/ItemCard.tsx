@@ -9,6 +9,7 @@ import { daysQuiet } from "./boardLogic";
 import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
 import { selectHow, showsAge } from "./canvasShared";
+import { Button } from "../components/Button";
 
 export interface CardDraft {
   id: string;
@@ -129,19 +130,9 @@ export function ItemCard(p: ItemCardProps) {
             {priority.glyph}
           </span>
         )}
-        <button
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded={p.menuOpen}
-          aria-label={`Actions for ${item.item.key}`}
-          onClick={(ev) => {
-            ev.stopPropagation();
-            p.onMenu(!p.menuOpen);
-          }}
-          className="ml-auto rounded px-1 text-ws-ink3 opacity-0 hover:bg-ws-hover hover:text-ws-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-        >
+        <Button variant="plain" size="sm" iconOnly className="ml-auto opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100" aria-haspopup="menu" aria-expanded={p.menuOpen} aria-label={`Actions for ${item.item.key}`} onClick={(ev) => { ev.stopPropagation(); p.onMenu(!p.menuOpen); }}>
           ⋯
-        </button>
+        </Button>
       </div>
       <p className="my-1 font-medium [overflow-wrap:anywhere]">{item.title}</p>
       {item.labels.length > 0 && (
@@ -198,7 +189,7 @@ export function ItemCard(p: ItemCardProps) {
 
 function MenuButton({ onClick, children }: { onClick(): void; children: React.ReactNode }) {
   return (
-    <button type="button" role="menuitem" onClick={onClick} className="block w-full rounded px-2 py-1 text-left ws-glass-item">
+    <button type="button" role="menuitem" onClick={onClick} className="block w-full rounded-md px-2 py-1 text-left ws-glass-item">
       {children}
     </button>
   );
@@ -209,12 +200,12 @@ export function DraftLine({ draft, onApprove, onSkip }: { draft: CardDraft; onAp
     <div className="mt-1.5 flex items-center text-sm font-semibold text-ws-pip" onClick={(ev) => ev.stopPropagation()}>
       <span>→ {draft.to} (draft)</span>
       <span className="ml-auto flex gap-1">
-        <button type="button" aria-label={`Approve move to ${draft.to}`} title="Approve" onClick={() => onApprove(draft.id)} className="rounded border border-ws-pip px-1.5 hover:bg-ws-pip hover:text-ws-on-pip">
+        <Button variant="pip" size="sm" iconOnly aria-label={`Approve move to ${draft.to}`} title="Approve" onClick={() => onApprove(draft.id)}>
           ✓
-        </button>
-        <button type="button" aria-label={`Skip move to ${draft.to}`} title="Skip" onClick={() => onSkip(draft.id)} className="rounded border border-ws-pip px-1.5 hover:bg-ws-pip hover:text-ws-on-pip">
+        </Button>
+        <Button variant="pip" size="sm" iconOnly aria-label={`Skip move to ${draft.to}`} title="Skip" onClick={() => onSkip(draft.id)}>
           ✕
-        </button>
+        </Button>
       </span>
     </div>
   );

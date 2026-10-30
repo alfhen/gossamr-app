@@ -130,9 +130,9 @@ export function ScrollSentinel({ busy, onVisible }: { busy: boolean; onVisible()
   }, [busy]);
   return (
     <li ref={el} role="presentation" className="grid place-items-center py-2">
-      <button type="button" disabled={busy} onClick={onVisible} className="rounded-md px-3 py-1 text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-60">
+      <Button variant="plain" size="sm" disabled={busy} onClick={onVisible}>
         {busy ? "Loading more…" : "Load more"}
-      </button>
+      </Button>
     </li>
   );
 }
@@ -155,9 +155,9 @@ export function CatalogError({ error, onRetry }: { error: string | null; onRetry
   return (
     <div role="alert" className="grid justify-items-center gap-2 px-4 py-8 text-center text-ws-blocked">
       <p className="m-0 [overflow-wrap:anywhere]">{error ?? "Couldn't load the list."}</p>
-      <button type="button" onClick={onRetry} className="rounded-md border border-ws-sep2 px-3 py-1 text-ws-ink hover:bg-ws-hover">
+      <Button onClick={onRetry}>
         Try again
-      </button>
+      </Button>
     </div>
   );
 }
@@ -220,12 +220,12 @@ export function WatchPickerView(p: WatchPickerViewProps) {
       </p>
       <SearchBox value={p.query} label={`Search ${noun.many}`} placeholder={code ? `Search ${noun.many} by name or owner` : `Search ${noun.many} by name or key`} onChange={p.onQuery} />
       <div className="my-2.5 flex flex-wrap items-center gap-1.5">
-        <button type="button" onClick={p.onSelectNone} disabled={n === 0} className="rounded-full border border-ws-sep2 px-2.5 py-px text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+        <Button size="sm" onClick={p.onSelectNone} disabled={n === 0}>
           Select none
-        </button>
-        <button type="button" onClick={p.onSelectSuggested} disabled={!p.suggested.list.length} className="rounded-full border border-ws-sep2 px-2.5 py-px text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+        </Button>
+        <Button size="sm" onClick={p.onSelectSuggested} disabled={!p.suggested.list.length}>
           Select suggested
-        </button>
+        </Button>
         {catalog.offline && <OfflineNote />}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto rounded-[10px] border border-ws-sep">
@@ -263,9 +263,9 @@ export function WatchPickerView(p: WatchPickerViewProps) {
           {n} selected
         </span>
         {p.onCancel && (
-          <button type="button" onClick={p.onCancel} disabled={p.saving} className="rounded-lg px-3 py-1.5 text-ws-ink2 hover:bg-ws-hover">
+          <Button variant="quiet" onClick={p.onCancel} disabled={p.saving}>
             Cancel
-          </button>
+          </Button>
         )}
         <Button variant="primary" onClick={p.onSave} disabled={n === 0 || p.saving}>
           {p.saving ? "Saving…" : "Start watching"}

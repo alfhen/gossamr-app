@@ -7,6 +7,7 @@ import { useDraftsRev } from "./draftLive";
 import { groupId, openNeed, showGroup } from "./needsActions";
 import { BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
+import { Button } from "../components/Button";
 
 const CHIP: Record<NeedGroupKind, string> = {
   decide: "bg-ws-pip text-ws-on-pip",
@@ -73,15 +74,9 @@ function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
       {count >= 2 && (
         <div>
-          <button
-            type="button"
-            aria-current={open ? "true" : undefined}
-            title={BATCH_TITLE}
-            onClick={() => (showGroup(needs[0]?.workstreamId ?? null), useWorkView.getState().previewBatch(gid))}
-            className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-          >
+          <Button size="sm" aria-current={open ? "true" : undefined} title={BATCH_TITLE} onClick={() => (showGroup(needs[0]?.workstreamId ?? null), useWorkView.getState().previewBatch(gid))}>
             {batchLabel(count)}
-          </button>
+          </Button>
         </div>
       )}
       {editedNote && (
@@ -219,7 +214,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
             aria-controls={list}
             aria-label={expanded ? `Show less of what needs you in ${g.title}` : `+${g.count - 1} more that need you in ${g.title}`}
             onClick={() => useWorkView.getState().setExpanded(gid, !expanded)}
-            className="rounded px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
+            className="rounded-md px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
           >
             {expanded ? "Show less" : `+${g.count - 1} more`}
           </button>

@@ -13,6 +13,7 @@ import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { focusedConversation } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
 export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFiltered; onUndo(): void; onDismiss(): void }) {
@@ -23,12 +24,12 @@ export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFi
         <b>Pip filtered this view</b>
         {filtered.note && <span className="text-ws-ink2"> · {filtered.note}</span>}
       </span>
-      <button type="button" onClick={onUndo} className="ml-auto shrink-0 font-semibold underline">
+      <Button variant="quiet" size="sm" className="ml-auto shrink-0" onClick={onUndo}>
         Undo
-      </button>
-      <button type="button" aria-label="Dismiss" onClick={onDismiss} className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
+      </Button>
+      <Button variant="quiet" size="sm" iconOnly className="shrink-0" aria-label="Dismiss" onClick={onDismiss}>
         ×
-      </button>
+      </Button>
     </div>
   );
 }

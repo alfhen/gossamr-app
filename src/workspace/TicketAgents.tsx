@@ -6,6 +6,7 @@ import { StateChip } from "./AgentParts";
 import { progressText, runTitle } from "./agentsLogic";
 import { useRuns } from "./runsStore";
 import { openOnAgents } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 export const runsOfTicket = (runs: readonly Run[], ref: ItemRef) => runs.filter((r) => r.item && itemKey(r.item) === itemKey(ref));
 
@@ -22,14 +23,9 @@ export function WorkstreamLine({ workstream, onOpen }: { workstream: WorkstreamV
       <span className="min-w-0 truncate">Workstream: {workstream.workstream.title}</span>
       <HeaderStatus view={workstream} />
       {onOpen && (
-        <button
-          type="button"
-          data-open-workstream
-          onClick={() => onOpen(workstream.workstream.id)}
-          className="ml-auto shrink-0 rounded text-sm font-semibold text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-        >
+        <Button variant="plain" pip size="sm" className="ml-auto shrink-0" data-open-workstream onClick={() => onOpen(workstream.workstream.id)}>
           Open in Agents
-        </button>
+        </Button>
       )}
     </p>
   );

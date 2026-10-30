@@ -29,6 +29,7 @@ import { useWorkView } from "./workViewStore";
 import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./AgentsView";
+import { Button } from "../components/Button";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -206,9 +207,9 @@ export function PipPane({ onClose }: { onClose(): void }) {
             <span className="text-xs text-ws-ink2">powered by Claude</span>
           </div>
           <kbd className="ml-1 rounded border border-ws-sep2 px-1.5 font-mono text-xs font-medium text-ws-ink2">{showOf("app", "pip")}</kbd>
-          <button type="button" aria-label="Close Pip" title="Close (Esc)" onClick={onClose} className="ml-auto rounded px-1.5 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
+          <Button variant="quiet" size="sm" iconOnly className="ml-auto" aria-label="Close Pip" title="Close (Esc)" onClick={onClose}>
             ×
-          </button>
+          </Button>
         </div>
         <ConversationLine conversation={conversation} workstream={workstream} />
         {workstream && <WorkstreamControls key={workstream.workstream.id} view={workstream} />}

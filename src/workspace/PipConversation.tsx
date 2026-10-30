@@ -20,6 +20,7 @@ import { useRuns } from "./runsStore";
 import { useTabs, type Route } from "./tabsStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { maskSecrets } from "../lib/riskyText";
+import { Button } from "../components/Button";
 
 export { PIP_INPUT_ID };
 /** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
@@ -43,9 +44,9 @@ export function AppliedCard({ note, state, onAct }: { note: string; state: Appli
         <span className="truncate text-sm font-normal text-ws-ink2">{state === "changed" ? `${note} · You changed it since` : note}</span>
       </div>
       {action && (
-        <button type="button" onClick={onAct} className="ml-auto shrink-0 rounded-md border border-ws-pip px-2.5 py-px font-semibold hover:bg-ws-pip hover:text-ws-on-pip">
+        <Button variant="pip" size="sm" className="ml-auto shrink-0" onClick={onAct}>
           {action}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -113,7 +114,7 @@ function WakeHeader({ turn }: { turn: Turn }) {
         <span>
           Pip picked this up:{" "}
           {runId && runs.some((r) => r.id === runId) ? (
-            <button type="button" data-wake-run={runId} title="Show this run" onClick={() => openWakeRun(runId)} className="rounded text-ws-ink2 underline-offset-2 hover:text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip">
+            <button type="button" data-wake-run={runId} title="Show this run" onClick={() => openWakeRun(runId)} className="rounded-md text-ws-ink2 underline-offset-2 hover:text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip">
               {who}
             </button>
           ) : (
@@ -142,7 +143,7 @@ function WakeText({ id, text }: { id: string; text: string }) {
         <Markdown text={text} />
       </div>
       {long && (
-        <button type="button" aria-expanded={open} aria-controls={panel} aria-label={open ? "Show less of Pip's answer" : "Show more of Pip's answer"} onClick={() => setOpen(!open)} className="justify-self-start rounded text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
+        <button type="button" aria-expanded={open} aria-controls={panel} aria-label={open ? "Show less of Pip's answer" : "Show more of Pip's answer"} onClick={() => setOpen(!open)} className="justify-self-start rounded-md text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
           {open ? "Show less" : "Show more"}
         </button>
       )}
@@ -200,15 +201,9 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
       {turn.status === "queued" && (
         <div className="flex items-center justify-end gap-1.5 text-sm text-ws-ink3">
           <span>{afterQueued ? "Queued, runs after the question before it" : "Queued, runs after the current answer"}</span>
-          <button
-            type="button"
-            aria-label="Remove this question"
-            title="Remove this question"
-            onClick={() => useClaude.getState().remove(turn.requestId)}
-            className="rounded px-1 text-lg leading-none hover:text-ws-ink"
-          >
+          <Button variant="quiet" size="sm" iconOnly aria-label="Remove this question" title="Remove this question" onClick={() => useClaude.getState().remove(turn.requestId)}>
             ×
-          </button>
+          </Button>
         </div>
       )}
       {(turn.steps.length > 0 || working) && (
@@ -284,16 +279,10 @@ export function EarlierDrafts({ proposals, turns, ticket = null }: { proposals: 
         <LiveDraftPreview key={p.id} proposal={p} />
       ))}
       {others.length > 0 && (
-        <button
-          type="button"
-          data-other-tickets
-          aria-expanded={unfolded}
-          onClick={() => setUnfolded(!unfolded)}
-          className="justify-self-start rounded-md px-1.5 py-0.5 text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-        >
+        <Button variant="plain" size="sm" className="justify-self-start" data-other-tickets aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)}>
           <span aria-hidden>{unfolded ? "▾ " : "▸ "}</span>
           {otherTicketsRow(others.length)}
-        </button>
+        </Button>
       )}
       {unfolded &&
         others.map((p) => (
@@ -469,9 +458,9 @@ export function Composer({ conversation, attached, looking, scene, footer = null
       {quote && (
         <div className="mx-3 mb-2 flex items-start gap-2 rounded-md border border-ws-pip bg-ws-pip-soft px-2.5 py-1 text-sm text-ws-ink2">
           <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">“{quote}”</span>
-          <button type="button" aria-label="Forget the selected text" onClick={() => usePip.getState().clearQuote()} className="shrink-0 text-lg leading-none text-ws-ink3">
+          <Button variant="quiet" size="sm" iconOnly className="shrink-0" aria-label="Forget the selected text" onClick={() => usePip.getState().clearQuote()}>
             ×
-          </button>
+          </Button>
         </div>
       )}
       <AttachedThumbs images={attached.images} onRemove={attached.remove} />
@@ -494,13 +483,13 @@ export function Composer({ conversation, attached, looking, scene, footer = null
           className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
         {running && (
-          <button type="button" onClick={() => useClaude.getState().cancel(conversation)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
+          <Button onClick={() => useClaude.getState().cancel(conversation)}>
             Stop
-          </button>
+          </Button>
         )}
-        <button type="submit" disabled={!input.trim() && !attached.images.length} className="rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 font-semibold text-ws-on-pip disabled:opacity-45">
+        <Button variant="pipSolid" type="submit" disabled={!input.trim() && !attached.images.length}>
           Ask
-        </button>
+        </Button>
       </form>
       {footer && <ComposerFooter text={footer} />}
     </>

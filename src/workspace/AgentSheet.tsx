@@ -91,13 +91,13 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
         <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{title}</span>
         <span className="min-w-0 truncate text-xs text-ws-ink3">{hint}</span>
         {onWide && (
-          <button type="button" aria-label={wide ? "Shrink" : "Expand"} aria-pressed={wide} title={wide ? "Shrink" : "Expand"} onClick={onWide} className="ml-auto grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover">
+          <Button variant="quiet" size="sm" iconOnly className="ml-auto" aria-label={wide ? "Shrink" : "Expand"} aria-pressed={wide} title={wide ? "Shrink" : "Expand"} onClick={onWide}>
             {wide ? "⤡" : "⤢"}
-          </button>
+          </Button>
         )}
-        <button type="button" aria-label="Close" onClick={onClose} className={`${onWide ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}>
+        <Button variant="quiet" size="sm" iconOnly aria-label="Close" onClick={onClose} className={onWide ? "" : "ml-auto"}>
           ×
-        </button>
+        </Button>
       </div>
       <div ref={body} data-sheet-body className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">
         {children}
@@ -161,22 +161,10 @@ export function CopyButton({ text, label = "Copy", what, onCopied }: { text: str
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
   return (
-    <button
-      type="button"
-      data-copy={text}
-      aria-label={what ? `Copy ${what}` : label}
-      onClick={async () => {
-        const copied = await copyText(text);
-        setState(copied ? "copied" : "failed");
-        if (copied) onCopied?.();
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setState("idle"), 1600);
-      }}
-      className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-px text-xs text-ws-ink2 hover:bg-ws-hover"
-    >
+    <Button variant="plain" size="sm" className="shrink-0" data-copy={text} aria-label={what ? `Copy ${what}` : label} onClick={async () => { const copied = await copyText(text); setState(copied ? "copied" : "failed"); if (copied) onCopied?.(); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setState("idle"), 1600); }}>
       <Icon name={state === "copied" ? "check" : "copy"} className="size-3" />
       <span aria-live="polite">{state === "copied" ? "Copied" : state === "failed" ? "Couldn't copy" : label}</span>
-    </button>
+    </Button>
   );
 }
 

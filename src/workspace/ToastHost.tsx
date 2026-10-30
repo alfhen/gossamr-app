@@ -1,6 +1,7 @@
 import { useEffect, type CSSProperties } from "react";
 import { useTabs } from "./tabsStore";
 import { actionName, useToasts, type Toast } from "./toasts";
+import { Button } from "../components/Button";
 
 /**
  * Where toasts sit: the bottom right of the canvas, above the footer and stacked over Pip's launcher, left of the peek.
@@ -132,8 +133,10 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
           {actionName(t.action)}
         </button>
       )}
-      <button
-        type="button"
+      <Button
+        variant="quiet"
+        size="sm"
+        iconOnly
         aria-label="Dismiss"
         title="Dismiss (Esc when the toast has the keyboard)"
         onClick={() => {
@@ -141,9 +144,10 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
           // Reached with F6 then Tab, the button hands the keyboard back as Esc does; a click that never came through F6 leaves focus alone.
           if (before) leaveToast();
         }}
-        className="shrink-0 rounded px-1 text-lg leading-none text-ws-ink2 hover:text-ws-ink">
+        className="shrink-0"
+      >
         ×
-      </button>
+      </Button>
     </div>
   );
 }

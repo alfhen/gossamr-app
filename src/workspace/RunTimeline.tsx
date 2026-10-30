@@ -50,7 +50,7 @@ export function RunTimeline({ events, live }: { events: readonly RunEvent[] | nu
             </span>
             <div className="min-w-0">
               {e.detail ? (
-                <button type="button" aria-expanded={expanded} onClick={() => toggle(e.seq)} className="block w-full rounded text-left outline-offset-2">
+                <button type="button" aria-expanded={expanded} onClick={() => toggle(e.seq)} className="block w-full rounded-md text-left outline-offset-2">
                   {body}
                 </button>
               ) : (

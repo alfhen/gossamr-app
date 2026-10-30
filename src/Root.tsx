@@ -64,9 +64,9 @@ export function Root() {
               <Button variant="primary" onClick={checkAuth}>
                 Try again
               </Button>
-              <button type="button" className="text-accent" onClick={() => start(null)}>
+              <Button variant="quiet" onClick={() => start(null)}>
                 Use sample data
-              </button>
+              </Button>
             </div>
           </div>
         </div>

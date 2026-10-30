@@ -86,18 +86,18 @@ export function Setup({
                   {busy === "save" ? "Saving…" : "Save to Keychain"}
                 </Button>
                 {configured && (
-                  <button type="button" className="px-2 text-ink-2" onClick={() => setEditing(false)}>
+                  <Button variant="quiet" onClick={() => setEditing(false)}>
                     Cancel
-                  </button>
+                  </Button>
                 )}
               </div>
             </form>
           ) : (
             <div className="flex items-center gap-2 text-ink-2">
               <span className="text-done">✓</span> App credentials saved in the Keychain.
-              <button type="button" className="text-accent" onClick={() => setEditing(true)}>
+              <Button variant="quiet" size="sm" onClick={() => setEditing(true)}>
                 Replace
-              </button>
+              </Button>
             </div>
           )}
         </section>
@@ -108,9 +108,9 @@ export function Setup({
             <Button variant="primary" disabled={!configured || busy !== null} onClick={() => void signIn()}>
               {busy === "signin" ? "Waiting for the browser…" : "Sign in with Atlassian"}
             </Button>
-            <button type="button" className="text-accent disabled:opacity-45" disabled={busy === "signin"} onClick={onUseSampleData}>
+            <Button variant="quiet" disabled={busy === "signin"} onClick={onUseSampleData}>
               Try it with sample data
-            </button>
+            </Button>
           </div>
           {busy === "signin" && <p className="text-sm text-ink-3">Approve access in the browser tab that just opened, then come back here.</p>}
         </section>

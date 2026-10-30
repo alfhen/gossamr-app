@@ -87,17 +87,18 @@ export function ClosedWorkstreams({ closed, open }: { closed: readonly Workstrea
               </span>
               <span className="flex flex-wrap items-baseline gap-x-2 text-xs">
                 Closed
-                <button
-                  type="button"
+                <Button
+                  variant="quiet"
+                  size="sm"
                   data-reopen-workstream={v.workstream.id}
                   aria-label={`Reopen ${key ?? rowTitle(v.workstream)}`}
                   aria-disabled={blocked || undefined}
                   aria-describedby={blocked ? `reopen-blocked-${v.workstream.id}` : undefined}
                   onClick={() => !blocked && void useWorkstreams.getState().reopen(v.workstream.id)}
-                  className={`rounded px-1 font-medium underline focus-visible:outline-2 focus-visible:outline-ws-pip ${blocked ? "cursor-not-allowed text-ws-ink3" : "text-ws-ink2 hover:bg-ws-hover"}`}
+                  className={blocked ? "cursor-not-allowed text-ws-ink3" : ""}
                 >
                   Reopen
-                </button>
+                </Button>
                 {blocked && (
                   <span id={`reopen-blocked-${v.workstream.id}`} data-reopen-blocked>
                     {key} already has an open workstream

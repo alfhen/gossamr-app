@@ -157,25 +157,22 @@ export function PeekView(p: PeekViewProps) {
         </span>
         {draft?.nav}
         {p.onWide && (
-          <button
-            type="button"
+          <Button
+            variant="quiet"
+            size="sm"
+            iconOnly
             aria-label={p.wide ? "Shrink details" : "Expand details"}
             aria-pressed={!!p.wide}
             title={p.wide ? "Shrink" : "Expand"}
             onClick={p.onWide}
-            className={`${draft?.nav ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}
+            className={draft?.nav ? "" : "ml-auto"}
           >
             {p.wide ? "⤡" : "⤢"}
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          aria-label="Close details"
-          onClick={p.onClose}
-          className={`${p.onWide || draft?.nav ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}
-        >
+        <Button variant="quiet" size="sm" iconOnly aria-label="Close details" onClick={p.onClose} className={p.onWide || draft?.nav ? "" : "ml-auto"}>
           ×
-        </button>
+        </Button>
       </div>
       <div data-peek-scroll className={`min-h-0 flex-1 gap-5 overflow-auto px-[22px] ${draft ? "flex flex-col pt-4" : "grid content-start scroll-pt-11"}`}>
         {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
@@ -213,7 +210,7 @@ export function PeekView(p: PeekViewProps) {
                     <li className="px-2 py-1 text-xs font-medium text-ws-ink">{p.checking ? "Checking where it can move…" : "Draft a move to"}</li>
                     {p.moves.map((s) => (
                       <li key={s.id} role="none">
-                        <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded px-2 py-1 text-left ws-glass-item">
+                        <button type="button" role="menuitem" onClick={() => p.onMove(s)} className="w-full rounded-md px-2 py-1 text-left ws-glass-item">
                           {s.name}
                         </button>
                       </li>
@@ -435,9 +432,9 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
         <span role="status" className="pl-1 text-sm text-ws-ink3">
           {problem ?? (sent ? "Drafted above." : "")}
         </span>
-        <button type="button" disabled={!ready || disabled} onClick={() => void submit()} className="ml-auto rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip disabled:opacity-45">
+        <Button variant="pip" size="sm" className="ml-auto" disabled={!ready || disabled} onClick={() => void submit()}>
           {reply ? "Draft reply" : "Draft comment"}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -463,9 +460,9 @@ export function WorkstreamControl({ workstream, onOpen, confirmingClose = false,
       <span title={workstream.workstream.title}>
         <span aria-hidden>◆ </span>Workstream · <HeaderStatus view={workstream} inline />
       </span>
-      <button type="button" onClick={onOpen} className="font-semibold underline">
+      <Button variant="quiet" size="sm" onClick={onOpen}>
         Open in Pip
-      </button>
+      </Button>
       {onAskClose &&
         (confirmingClose ? (
           <span
@@ -478,17 +475,17 @@ export function WorkstreamControl({ workstream, onOpen, confirmingClose = false,
             }}
           >
             Close it? Its agents and drafts are kept in General. {CLOSE_RUNS_NOTE}
-            <button type="button" autoFocus onClick={onClose} className="font-semibold text-ws-pip underline">
+            <Button variant="pip" size="sm" autoFocus onClick={onClose}>
               Close workstream
-            </button>
-            <button type="button" onClick={() => onAskClose(false)} className="underline">
+            </Button>
+            <Button variant="quiet" size="sm" onClick={() => onAskClose(false)}>
               Keep
-            </button>
+            </Button>
           </span>
         ) : (
-          <button type="button" onClick={() => onAskClose(true)} title={`Close ${workstream.workstream.itemKey ?? "this"} workstream; its conversation goes back to General, and its agents and drafts are kept in General`} className="text-ws-ink2 underline">
+          <Button variant="quiet" size="sm" onClick={() => onAskClose(true)} title={`Close ${workstream.workstream.itemKey ?? "this"} workstream; its conversation goes back to General, and its agents and drafts are kept in General`}>
             Close…
-          </button>
+          </Button>
         ))}
     </span>
   );
