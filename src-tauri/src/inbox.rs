@@ -193,6 +193,8 @@ pub struct Core {
     asks: Asks,
     /// Ask for a sync now, whatever the schedule says.
     pub wake: Notify,
+    /// Held across a whole connect or sign-out, so a slow connect can't land after a sign-out or beside another connect.
+    sign_in: tokio::sync::Mutex<()>,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
     pub focus: Notify,
 }
@@ -225,6 +227,7 @@ impl Core {
             radar: Mutex::new(HashMap::new()),
             asks: Asks::default(),
             wake: Notify::new(),
+            sign_in: tokio::sync::Mutex::new(()),
             focus: Notify::new(),
         }
     }
@@ -265,6 +268,7 @@ impl Core {
 
     /// Signs in with an API token and registers the resulting connection.
     pub async fn connect_jira(&self, input: &TokenSignIn) -> Result<AuthStatus> {
+        let _alone = self.sign_in.lock().await;
         let previous = self.auth.connection().await;
         let connection = self.auth.connect(input).await?;
         if let Some((_, site, _)) = self.auth.identity().await {
@@ -292,6 +296,7 @@ impl Core {
     }
 
     pub async fn sign_out(&self) -> Result<()> {
+        let _alone = self.sign_in.lock().await;
         let connection = self.auth.connection().await;
         // While the identity still resolves: Pip's conversations are the person's own and go with them.
         if connection.is_some() {
@@ -878,6 +883,81 @@ mod tests {
         let begun = fx.core.pip_turn_begin(&creds.scope(), "general", "q2", "Hi", &crate::agent::TurnMeta::default(), "running").await;
         assert!(begun.is_ok(), "{begun:?}");
         assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].text, "");
+    }
+
+    /// Connects as whoever `email` names; a connect with the token `slow` waits until `release` after saying it has begun.
+    struct Gated {
+        begun: Notify,
+        release: Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::auth::Authenticator for Gated {
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn connect(&self, input: &TokenSignIn) -> Result<crate::auth::Credentials> {
+            if input.token == "slow" {
+                self.begun.notify_one();
+                self.release.notified().await;
+            }
+            let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
+            let me = Account { account_id: input.email.clone(), name: input.email.clone(), avatar_url: None };
+            Ok(crate::auth::Credentials { email: input.email.clone(), token: input.token.clone(), expires_on: "2999-01-01".into(), site, me })
+        }
+        async fn whoami(&self, _: &crate::auth::AccessToken) -> Result<Account> {
+            unimplemented!()
+        }
+    }
+
+    fn token_for(email: &str, token: &str) -> TokenSignIn {
+        TokenSignIn { site: "acme".into(), cloud_id: None, email: email.into(), token: token.into(), expires_on: "2999-01-01".into() }
+    }
+
+    #[tokio::test]
+    async fn a_connect_still_waiting_on_jira_cannot_undo_a_sign_out_pressed_meanwhile() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated.clone())).await;
+
+        let core = fx.core.clone();
+        let connecting = tokio::spawn(async move { core.connect_jira(&token_for("b", "slow")).await });
+        gated.begun.notified().await;
+        let core = fx.core.clone();
+        let signing_out = tokio::spawn(async move { core.sign_out().await });
+        tokio::task::yield_now().await;
+        gated.release.notify_one();
+        connecting.await.unwrap().unwrap();
+        signing_out.await.unwrap().unwrap();
+
+        assert!(fx.core.auth.identity().await.is_none());
+        assert!(fx.core.connection(&Scope { connection_id: "jira:site:b".into(), account_id: "b".into() }).is_err());
+        assert_eq!(vault.get("jira-token"), None);
+    }
+
+    #[tokio::test]
+    async fn two_connects_end_as_the_one_that_began_last_with_the_other_gone_from_the_registry() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated.clone())).await;
+
+        let core = fx.core.clone();
+        let first = tokio::spawn(async move { core.connect_jira(&token_for("a", "slow")).await });
+        gated.begun.notified().await;
+        let core = fx.core.clone();
+        let second = tokio::spawn(async move { core.connect_jira(&token_for("b", "fast")).await });
+        tokio::task::yield_now().await;
+        gated.release.notify_one();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+
+        let (scope, _, _) = fx.core.auth.identity().await.unwrap();
+        assert_eq!(scope.account_id, "b");
+        assert!(fx.core.connection(&scope).is_ok());
+        assert!(fx.core.connection(&Scope { connection_id: "jira:site:a".into(), account_id: "a".into() }).is_err());
+        assert!(fx.core.connection(&fx.scope).is_err());
     }
 
     #[tokio::test]

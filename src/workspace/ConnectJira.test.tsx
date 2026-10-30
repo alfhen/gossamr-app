@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ConnectJiraView, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
+import { ConnectJiraView, sameAccount, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
 import { ReauthBannerView } from "./ReauthBanner";
 
 const VALUES: JiraFormValues = { site: " acme.atlassian.net ", cloudId: "", email: " ann@acme.com ", token: " tok ", expiresOn: "2027-10-30" };
@@ -32,8 +32,14 @@ describe("what the Connect Jira sheet sends", () => {
   });
 
   it("sends the cloud id the site gave, or else the one typed", () => {
-    expect(signInFrom({ ...VALUES, cloudId: "typed" }, { state: "found", cloudId: "found" })?.cloudId).toBe("found");
+    expect(signInFrom({ ...VALUES, cloudId: "typed" }, { state: "found", cloudId: "found", site: "acme.atlassian.net" })?.cloudId).toBe("found");
     expect(signInFrom({ ...VALUES, cloudId: " typed " }, { state: "missing" })?.cloudId).toBe("typed");
+  });
+
+  it("ignores a cloud id that was found for another site than the one in the field", () => {
+    const other: SiteLookup = { state: "found", cloudId: "acme-id", site: "acme.atlassian.net" };
+    expect(signInFrom({ ...VALUES, site: "acme-eu" }, other)).toEqual({ site: "acme-eu", email: "ann@acme.com", token: "tok", expiresOn: "2027-10-30" });
+    expect(signInFrom({ ...VALUES, site: "acme-eu", cloudId: "typed" }, other)?.cloudId).toBe("typed");
   });
 
   it("sends nothing while a field is empty", () => {
@@ -44,14 +50,21 @@ describe("what the Connect Jira sheet sends", () => {
 describe("the Connect Jira sheet", () => {
   it("asks for the site, the token and its expiry, and offers to open Atlassian's token page", () => {
     const out = view();
-    for (const text of ["Your Jira site", "Create token", "Your Atlassian email", "API token", "Token expires", "2027-10-30", "It warns you 14 days before this date", "Connect Jira"]) expect(out).toContain(text);
+    for (const text of ["Your Jira site", "Create token", "Your Atlassian email", "API token", "Token expires", "2027-10-30", "warns you 14 days before this date", "Connect Jira"]) expect(out).toContain(text);
     expect(out).toContain('type="password"');
     expect(out).not.toContain("Cloud id");
   });
 
   it("asks for the cloud id only when the site wouldn't give it", () => {
     expect(view({ lookup: { state: "missing" } })).toContain("Cloud id");
-    expect(view({ lookup: { state: "found", cloudId: "c1" } })).not.toContain("Cloud id");
+    expect(view({ lookup: { state: "found", cloudId: "c1", site: "acme.atlassian.net" } })).not.toContain("Cloud id");
+  });
+
+  it("says why a site couldn't be looked up instead of asking for a cloud id", () => {
+    const out = view({ lookup: { state: "failed", message: "Gossamr couldn't reach acme.atlasian.net. Check the site." } });
+    expect(out).toContain("couldn&#x27;t reach acme.atlasian.net");
+    expect(out).toContain('role="alert"');
+    expect(out).not.toContain("Cloud id");
   });
 
   it("lists the scopes to tick, with a way to copy them, when the page didn't fill in", () => {
@@ -75,6 +88,26 @@ describe("the Connect Jira sheet", () => {
     expect(view()).not.toContain('role="alert"');
     expect(view()).not.toContain("Cancel");
     expect(view({ onCancel: vi.fn() })).toContain("Cancel");
+  });
+});
+
+describe("whether a new token is for the account already signed in", () => {
+  const status = (cloudId: string, accountId: string, name = "acme.atlassian.net") => ({
+    site: { cloudId, name, url: `https://${name}` },
+    me: { accountId, name: "Ann", avatarUrl: null },
+    email: "ann@acme.com",
+    expiresOn: "2027-10-30",
+  });
+
+  it("is the same when the site and the account are, whatever the address was typed as", () => {
+    expect(sameAccount(status("c1", "u1"), status("c1", "u1", "acme.example.com"))).toBe(true);
+  });
+
+  it("is another when either differs, and when nobody was signed in", () => {
+    expect(sameAccount(status("c1", "u1"), status("c2", "u1"))).toBe(false);
+    expect(sameAccount(status("c1", "u1"), status("c1", "u2"))).toBe(false);
+    expect(sameAccount(null, status("c1", "u1"))).toBe(false);
+    expect(sameAccount({ site: null, me: null, email: null, expiresOn: null }, status("c1", "u1"))).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { AuthStatus, TokenSignIn } from "./auth";
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import type {
   Adoptable,
@@ -250,5 +251,11 @@ export interface Backend {
   /** Called when a periodic check finds newly assigned items in unwatched containers. */
   onAssignedElsewhere(listener: (found: AssignedElsewhere) => void): () => void;
   syncNow(): Promise<void>;
+  /** The Jira site and account signed in now, with the email and token expiry the person gave. */
+  jiraStatus(): Promise<AuthStatus>;
+  /** The cloud id a Jira site reports about itself, or null when the person has to give it. Rejects when the site can't be reached. */
+  jiraCloudId(site: string): Promise<string | null>;
+  /** Checks the token against Jira and, only if it works, keeps it in place of the earlier one. */
+  jiraConnect(input: TokenSignIn): Promise<AuthStatus>;
   openUrl(url: string): Promise<void>;
 }

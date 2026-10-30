@@ -52,7 +52,6 @@ interface WorkspaceState {
   moves: Record<string, { statusId: string; to: StatusDef[] }>;
   /** The signed-in connections and how their sync is going. */
   connections: ConnectionInfo[];
-  /** Where signing in to Jira again stands after Atlassian ended the sign-in: `declined` once the person left the flow unfinished. */
   /** Jira turned down the token, so only a new one restores the connection. */
   reauth: boolean;
   /** What each connection follows. Items, containers, counts and Pip's view are already limited to it. */
@@ -88,7 +87,6 @@ interface WorkspaceState {
   loadMoves(item: WorkItem): Promise<StatusDef[] | null>;
   /** Re-reads the connections; with `refresh`, every instance is probed first. */
   refreshConnections(refresh?: boolean): Promise<void>;
-  /** Starts the Jira sign-in again; does nothing while one is already open. */
   syncNow(): Promise<void>;
   /** Shows a failure without blocking anything. */
   report(what: string, e: unknown): void;

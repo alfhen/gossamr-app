@@ -1,7 +1,9 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { announceSignedOut } from "../accountEvents";
-import { auth, type AuthStatus, type TokenSignIn } from "../backend/auth";
+import type { AuthStatus, TokenSignIn } from "../backend/auth";
+import type { Backend } from "../backend/types";
+import { useBackend } from "../backend/useBackend";
 import { Button } from "../components/Button";
 import { CREATE_TOKEN_URL, EXPIRY_WARNING_DAYS, JIRA_SCOPES, TOKEN_PAGE_URL, defaultExpiry } from "../lib/jiraToken";
 import { useWorkspace } from "../workspaceStore";
@@ -11,7 +13,15 @@ import { messageOf, useToasts } from "./toasts";
 
 const FIELD = "rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 font-normal outline-none placeholder:text-ws-ink3 focus:border-ws-accent";
 
-export type SiteLookup = { state: "idle" } | { state: "looking" } | { state: "found"; cloudId: string } | { state: "missing" };
+export type JiraConnectApi = Pick<Backend, "jiraCloudId" | "jiraConnect">;
+
+/** `found` names the site it was for, so an answer for a site since edited is never used. `failed` is a site that couldn't be reached. */
+export type SiteLookup =
+  | { state: "idle" }
+  | { state: "looking" }
+  | { state: "found"; cloudId: string; site: string }
+  | { state: "missing" }
+  | { state: "failed"; message: string };
 
 export interface JiraFormValues {
   site: string;
@@ -21,11 +31,11 @@ export interface JiraFormValues {
   expiresOn: string;
 }
 
-/** What to send, or null while a field is empty. A cloud id the site gave wins over one typed before it did. */
+/** What to send, or null while a field is empty. A cloud id the site gave for this site wins over one typed. */
 export function signInFrom(values: JiraFormValues, lookup: SiteLookup): TokenSignIn | null {
   const { site, email, token, expiresOn } = values;
   if (![site, email, token, expiresOn].every((v) => v.trim())) return null;
-  const cloudId = lookup.state === "found" ? lookup.cloudId : values.cloudId.trim();
+  const cloudId = lookup.state === "found" && lookup.site === site.trim() ? lookup.cloudId : values.cloudId.trim();
   return { site: site.trim(), email: email.trim(), token: token.trim(), expiresOn, ...(cloudId ? { cloudId } : {}) };
 }
 
@@ -76,6 +86,11 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
         </label>
         {lookup.state === "looking" && <p role="status" className="m-0 text-sm text-ws-ink3">Looking up the site…</p>}
         {lookup.state === "missing" && <p className="m-0 text-sm text-ws-ink3">Gossamr couldn't look up this site's cloud id. Ask your Jira admin for it and enter it below.</p>}
+        {lookup.state === "failed" && (
+          <p role="alert" className="selectable m-0 text-sm text-ws-blocked [overflow-wrap:anywhere]">
+            {lookup.message}
+          </p>
+        )}
       </div>
       {lookup.state === "missing" && (
         <label className="grid gap-1 text-sm font-semibold">
@@ -122,7 +137,9 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
         <label className="grid gap-1 text-sm font-semibold">
           Token expires
           <input type="date" value={values.expiresOn} disabled={p.busy} onChange={(ev) => p.onChange({ expiresOn: ev.target.value })} className={`${FIELD} justify-self-start`} />
-          <span className="text-sm font-normal text-ws-ink3">Atlassian doesn't tell Gossamr. It warns you {EXPIRY_WARNING_DAYS} days before this date.</span>
+          <span className="text-sm font-normal text-ws-ink3">
+            Atlassian doesn't tell Gossamr, so use the date on the token page if it's sooner. Gossamr warns you {EXPIRY_WARNING_DAYS} days before this date.
+          </span>
         </label>
       </div>
 
@@ -155,49 +172,85 @@ async function open(url: string) {
 }
 
 /** The Connect Jira form: looks the site up, opens Atlassian's token page and checks the token before it is kept. */
-export function ConnectJiraForm({ initial, onConnected, onCancel }: { initial?: Partial<JiraFormValues>; onConnected(status: AuthStatus): void; onCancel?(): void }) {
+export function ConnectJiraForm({
+  api,
+  initial,
+  onConnected,
+  onCancel,
+  onBusy,
+}: {
+  api: JiraConnectApi;
+  initial?: Partial<JiraFormValues>;
+  onConnected(status: AuthStatus): void;
+  onCancel?(): void;
+  onBusy?(busy: boolean): void;
+}) {
   const [values, setValues] = useState<JiraFormValues>({ site: "", cloudId: "", email: "", token: "", expiresOn: defaultExpiry(), ...initial });
   const [lookup, setLookup] = useState<SiteLookup>({ state: "idle" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scopesShown, setScopesShown] = useState(false);
   const [copied, setCopied] = useState(false);
+  const site = useRef(values.site);
+  const pending = useRef<{ site: string; answer: Promise<SiteLookup> } | null>(null);
 
-  const change = (patch: Partial<JiraFormValues>) => {
-    setValues((v) => ({ ...v, ...patch }));
-    if (patch.site !== undefined) setLookup({ state: "idle" });
+  useEffect(() => () => onBusy?.(false), []);
+
+  const working = (now: boolean) => {
+    setBusy(now);
+    onBusy?.(now);
   };
 
-  const lookUp = async (): Promise<SiteLookup> => {
-    if (!values.site.trim() || lookup.state === "found" || lookup.state === "looking") return lookup;
-    setLookup({ state: "looking" });
-    let found: SiteLookup = { state: "missing" };
-    try {
-      const cloudId = await auth.cloudId(values.site);
-      if (cloudId) found = { state: "found", cloudId };
-    } catch (e) {
-      setError(messageOf(e));
-      found = { state: "idle" };
+  const change = (patch: Partial<JiraFormValues>) => {
+    if (patch.site === undefined) {
+      setValues((v) => ({ ...v, ...patch }));
+      return;
     }
-    setLookup(found);
-    return found;
+    site.current = patch.site;
+    pending.current = null;
+    setLookup({ state: "idle" });
+    setValues((v) => ({ ...v, ...patch, cloudId: "" }));
+  };
+
+  const lookUp = (): Promise<SiteLookup> => {
+    const asked = site.current.trim();
+    if (!asked) return Promise.resolve(lookup);
+    if (lookup.state === "found" && lookup.site === asked) return Promise.resolve(lookup);
+    if (pending.current?.site === asked) return pending.current.answer;
+    setLookup({ state: "looking" });
+    const answer = (async (): Promise<SiteLookup> => {
+      let found: SiteLookup;
+      try {
+        const cloudId = await api.jiraCloudId(asked);
+        found = cloudId ? { state: "found", cloudId, site: asked } : { state: "missing" };
+      } catch (e) {
+        found = { state: "failed", message: messageOf(e) };
+      }
+      if (site.current.trim() !== asked) return { state: "idle" };
+      pending.current = null;
+      setLookup(found);
+      return found;
+    })();
+    pending.current = { site: asked, answer };
+    return answer;
   };
 
   const submit = async () => {
     setError(null);
-    const known = lookup.state === "idle" && !values.cloudId.trim() ? await lookUp() : lookup;
-    const input = signInFrom(values, known);
-    if (!input) return;
-    if (!input.cloudId) {
-      setError("Enter the site's cloud id.");
-      return;
-    }
-    setBusy(true);
+    working(true);
     try {
-      onConnected(await auth.connect(input));
+      const known = values.cloudId.trim() ? lookup : await lookUp();
+      if (known.state === "failed" || known.state === "idle") return working(false);
+      const input = signInFrom(values, known);
+      if (!input) return working(false);
+      if (!input.cloudId) {
+        setError("Enter the site's cloud id.");
+        return working(false);
+      }
+      onConnected(await api.jiraConnect(input));
     } catch (e) {
       setError(messageOf(e));
-      setBusy(false);
+      working(false);
     }
   };
 
@@ -235,32 +288,37 @@ export function ConnectJiraForm({ initial, onConnected, onCancel }: { initial?: 
 export function ConnectJiraDialog() {
   const shown = useJiraUi((s) => s.connectOpen);
   const close = useJiraUi((s) => s.closeConnect);
+  const backend = useBackend();
   const [current, setCurrent] = useState<AuthStatus | null>(null);
+  const busy = useRef(false);
+  const dismiss = () => {
+    if (!busy.current) close();
+  };
   useEffect(() => {
-    if (!shown) return;
+    if (!shown || !backend) return;
     let live = true;
-    auth.status().then((s) => live && setCurrent(s), () => {});
+    backend.jiraStatus().then((s) => live && setCurrent(s), () => {});
     return () => {
       live = false;
     };
-  }, [shown]);
+  }, [shown, backend]);
   useEffect(() => {
     if (!shown) return;
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "Escape" || ev.defaultPrevented) return;
       ev.preventDefault();
-      close();
+      if (!busy.current) close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [shown, close]);
-  if (!shown) return null;
+  if (!shown || !backend) return null;
 
   const connected = (next: AuthStatus) => {
+    busy.current = false;
     close();
     useToasts.getState().push(`Connected to Jira as ${next.me?.name ?? "you"}.`, "info");
-    const same = current?.site?.cloudId === next.site?.cloudId && current?.me?.accountId === next.me?.accountId;
-    if (same) {
+    if (sameAccount(current, next)) {
       const ws = useWorkspace.getState();
       void Promise.all([ws.refreshConnections(true), ws.refresh()]);
     } else {
@@ -269,11 +327,23 @@ export function ConnectJiraDialog() {
   };
 
   return (
-    <ConnectFrame label="Connect Jira" onClose={close}>
+    <ConnectFrame label="Connect Jira" onClose={dismiss}>
       <div className="grid gap-4">
         <h2 className="font-display m-0 text-lg font-semibold">Connect Jira</h2>
-        <ConnectJiraForm key={current?.site?.name ?? "new"} initial={{ site: current?.site?.name ?? "", email: current?.email ?? "" }} onConnected={connected} onCancel={close} />
+        <ConnectJiraForm
+          key={current?.site?.name ?? "new"}
+          api={backend}
+          initial={{ site: current?.site?.name ?? "", email: current?.email ?? "" }}
+          onConnected={connected}
+          onCancel={close}
+          onBusy={(now) => (busy.current = now)}
+        />
       </div>
     </ConnectFrame>
   );
+}
+
+/** A new token for the account already signed in keeps the workspace as it is; another site or account starts it over. */
+export function sameAccount(before: AuthStatus | null, after: AuthStatus): boolean {
+  return !!before?.site && before.site.cloudId === after.site?.cloudId && before.me?.accountId === after.me?.accountId;
 }

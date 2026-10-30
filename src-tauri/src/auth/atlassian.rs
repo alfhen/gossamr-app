@@ -108,9 +108,10 @@ impl Authenticator for Atlassian {
         struct Tenant {
             cloud_id: String,
         }
-        let base = self.endpoints.tenant.clone().unwrap_or_else(|| format!("https://{}", normalize_site(site).unwrap_or_default()));
-        let found = async { json_or_error::<Tenant>(self.http.get(format!("{base}/_edge/tenant_info")).send().await?).await }.await;
-        Ok(found.ok().map(|t| t.cloud_id).filter(|id| valid_cloud_id(id)))
+        let host = normalize_site(site)?;
+        let base = self.endpoints.tenant.clone().unwrap_or_else(|| format!("https://{host}"));
+        let res = self.http.get(format!("{base}/_edge/tenant_info")).send().await.map_err(|_| Error::Input(format!("Gossamr couldn't reach {host}. Check the site.")))?;
+        Ok(json_or_error::<Tenant>(res).await.ok().map(|t| t.cloud_id).filter(|id| valid_cloud_id(id)))
     }
 
     async fn connect(&self, input: &TokenSignIn) -> Result<Credentials> {
@@ -120,9 +121,19 @@ impl Authenticator for Atlassian {
         if email.is_empty() || token.is_empty() {
             return Err(Error::Input("Enter your email and the token.".into()));
         }
-        let cloud_id = match input.cloud_id.as_deref().map(str::trim).filter(|id| !id.is_empty()) {
-            Some(id) => id.to_string(),
-            None => self.find_cloud_id(&host).await?.ok_or_else(|| Error::Input(format!("Gossamr couldn't find the cloud id of {host}. Enter it yourself.")))?,
+        let given = input.cloud_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+        let reported = match self.find_cloud_id(&host).await {
+            Ok(found) => found,
+            Err(e) if given.is_none() => return Err(e),
+            Err(_) => None,
+        };
+        let cloud_id = match (given, reported) {
+            (Some(given), Some(reported)) if !given.eq_ignore_ascii_case(&reported) => {
+                return Err(Error::Input(format!("That cloud id isn't the one {host} reports. Check the site.")));
+            }
+            (_, Some(reported)) => reported,
+            (Some(given), None) => given.to_string(),
+            (None, None) => return Err(Error::Input(format!("Gossamr couldn't find the cloud id of {host}. Enter it yourself."))),
         };
         if !valid_cloud_id(&cloud_id) {
             return Err(Error::Input("That cloud id doesn't look right.".into()));
@@ -241,6 +252,7 @@ mod tests {
         let c = a.connect(&sign_in(None)).await.unwrap();
         assert_eq!((c.email.as_str(), c.token.as_str(), c.site.name.as_str(), c.site.url.as_str()), ("ann@acme.com", "secret-token", "acme.atlassian.net", "https://acme.atlassian.net"));
         assert_eq!(c.connection().id, "jira:c1-uuid:u1");
+        assert_eq!(c.expires_on, sign_in(None).expires_on);
         assert_eq!(c.me.avatar_url.as_deref(), Some("https://a/48.png"));
         let myself = seen.lock().unwrap().iter().find(|h| h.contains("/myself")).cloned().unwrap();
         let basic = myself.lines().find_map(|l| l.strip_prefix("authorization: Basic ")).expect("Basic auth");
@@ -248,10 +260,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cloud_id_the_person_gives_is_used_without_asking_the_site() {
-        let (a, seen) = atlassian(vec![("/ex/jira/given-1/rest/api/3/myself", ME)]).await;
+    async fn a_cloud_id_the_person_gives_is_used_when_the_site_does_not_say_otherwise() {
+        let (a, _) = atlassian(vec![("/ex/jira/given-1/rest/api/3/myself", ME)]).await;
         assert_eq!(a.connect(&sign_in(Some("given-1"))).await.unwrap().site.cloud_id, "given-1");
-        assert!(seen.lock().unwrap().iter().all(|h| !h.contains("tenant_info")));
+        let (a, _) = atlassian(vec![("/_edge/tenant_info", TENANT), ("/ex/jira/c1-uuid/rest/api/3/myself", ME)]).await;
+        assert_eq!(a.connect(&sign_in(Some("C1-UUID"))).await.unwrap().site.cloud_id, "c1-uuid");
+    }
+
+    #[tokio::test]
+    async fn a_cloud_id_that_is_not_the_one_the_site_reports_is_refused_before_any_token_is_sent() {
+        let (a, seen) = atlassian(vec![("/_edge/tenant_info", TENANT), ("/ex/jira/other/rest/api/3/myself", ME)]).await;
+        let message = a.connect(&sign_in(Some("other"))).await.err().unwrap().to_string();
+        assert!(message.contains("acme.atlassian.net") && message.contains("cloud id"), "{message}");
+        assert!(seen.lock().unwrap().iter().all(|h| !h.contains("/myself")));
+    }
+
+    #[tokio::test]
+    async fn a_site_that_cannot_be_reached_says_so_and_does_not_ask_for_a_cloud_id() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let closed = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let a = Atlassian { http: reqwest::Client::new(), endpoints: Endpoints { tenant: Some(closed), api: "http://unused.invalid".into() } };
+        let message = a.find_cloud_id("acme").await.err().unwrap().to_string();
+        assert!(message.contains("couldn't reach acme.atlassian.net"), "{message}");
+        assert!(a.connect(&sign_in(None)).await.err().unwrap().to_string().contains("couldn't reach"));
+        assert!(a.find_cloud_id("not a site").await.is_err());
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 import type { ProbeSnapshot, ProbeState } from "../types";
+import type { AuthStatus } from "./auth";
 
 /** `gh` has no expiry to warn about. */
 export type GithubProbeState = Exclude<ProbeState, "expiresSoon">;
@@ -30,4 +31,23 @@ export function jiraSnapshot(state: "expiresSoon" | "notSignedIn", checkedAt: st
   return state === "expiresSoon"
     ? { ...found, message: "Token expires in 9 days" }
     : { ...found, account: null, message: "Jira turned down your token. Make a new one and paste it here." };
+}
+
+/** `acme`, `acme.atlassian.net` and a pasted address all mean the host `acme.atlassian.net`, as the desktop app reads them. */
+export function mockJiraHost(site: string): string {
+  const typed = site.trim().toLowerCase();
+  const host = (typed.split("://").pop() ?? "").split(/[/?#]/)[0];
+  return host.includes(".") ? host : `${host}.atlassian.net`;
+}
+
+export const mockCloudId = (host: string) => `cloud-${host}`;
+
+/** Who the sample Jira token signs in as: always Alf, on whichever site was given. */
+export function mockJiraStatus(host: string, email: string, expiresOn: string, cloudId?: string): AuthStatus {
+  return {
+    site: { cloudId: cloudId ?? mockCloudId(host), name: host, url: `https://${host}` },
+    me: { accountId: "mock-me", name: "Alf Henderson", avatarUrl: null },
+    email,
+    expiresOn,
+  };
 }

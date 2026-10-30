@@ -557,7 +557,6 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     Ok(serde_json::from_slice(bytes)?)
 }
 
-/// How long Jira wants us to wait, when the response is a rate limit: a 429, or a 503 that carries `Retry-After`.
 /// A 401 means the token was revoked or has expired, unless Atlassian says the token lacks a scope: a new sign-in
 /// would not fix that, so the sync error says what to do instead of raising the banner.
 async fn unauthorized(res: reqwest::Response) -> Error {
@@ -568,6 +567,7 @@ async fn unauthorized(res: reqwest::Response) -> Error {
     Error::ReauthRequired
 }
 
+/// How long Jira wants us to wait, when the response is a rate limit: a 429, or a 503 that carries `Retry-After`.
 /// Without the header the wait doubles per attempt, as Atlassian advises.
 fn rate_limit_wait(res: &reqwest::Response, attempt: u32) -> Option<u64> {
     let asked = res.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| retry_after_secs(v, Utc::now()));

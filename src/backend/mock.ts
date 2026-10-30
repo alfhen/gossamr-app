@@ -62,7 +62,8 @@ import { MockRuns, STOPPABLE } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
-import { jiraSnapshot } from "./mockProbes";
+import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
+import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
 
 export type { MockOptions };
@@ -358,7 +359,8 @@ export class MockBackend implements Backend {
 
   /** The multi-project tracker behind the cache reads. */
   readonly connector: MockConnector;
-  private readonly jiraToken: MockOptions["jiraToken"];
+  private jiraToken: MockOptions["jiraToken"];
+  private jiraAccount: AuthStatus;
 
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
@@ -369,6 +371,7 @@ export class MockBackend implements Backend {
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
     this.jiraToken = options.jiraToken;
+    this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
@@ -1189,6 +1192,27 @@ export class MockBackend implements Backend {
   async setUnread(eventId: string, unread: boolean) {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
+  }
+
+  async jiraStatus() {
+    return this.jiraAccount;
+  }
+
+  async jiraCloudId(site: string) {
+    const host = mockJiraHost(site);
+    if (host.startsWith("slow")) await new Promise((r) => setTimeout(r, 300));
+    return host.startsWith("unknown") ? null : mockCloudId(host);
+  }
+
+  async jiraConnect(input: TokenSignIn) {
+    const host = mockJiraHost(input.site);
+    if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
+    if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
+    if (input.cloudId && !host.startsWith("unknown") && input.cloudId !== mockCloudId(host)) throw new Error(`That cloud id isn't the one ${host} reports. Check the site.`);
+    this.jiraAccount = mockJiraStatus(host, input.email.trim(), input.expiresOn, input.cloudId);
+    this.jiraToken = undefined;
+    this.connectionsListeners.forEach((l) => l());
+    return this.jiraAccount;
   }
 
   async syncNow() {
