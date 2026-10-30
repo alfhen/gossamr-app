@@ -34,6 +34,7 @@ import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { needsIn } from "../lib/needs";
 import { PipGlyph } from "../components/PipGlyph";
 import { Button } from "../components/Button";
+import { ScreenBar } from "./ScreenBar";
 import { Segmented } from "../components/Segmented";
 
 
@@ -307,25 +308,32 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
   return (
     <div ref={root} data-agents-home className="flex h-full min-h-0">
     <div className="@container flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
-          <h1 ref={title} tabIndex={-1} className="font-display m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
-            Work
-          </h1>
-          <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
-          <span className="flex-1" />
-          <Button variant="pip" onClick={on.askPip}>
-            <PipGlyph />
-            Ask Pip
-          </Button>
-          <Button onClick={on.openSafety}>
-            <Icon name="shield" />
-            Agent settings
-          </Button>
-          {clear}
-          <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
-        </header>
-        {tools && <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">{tools}</div>}
-        <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
+        <ScreenBar
+          resetKey="work"
+          bar={
+            <>
+              <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 py-2.5">
+                <h1 ref={title} tabIndex={-1} className="font-display m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
+                  Work
+                </h1>
+                <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
+                <span className="flex-1" />
+                <Button variant="pip" onClick={on.askPip}>
+                  <PipGlyph />
+                  Ask Pip
+                </Button>
+                <Button onClick={on.openSafety}>
+                  <Icon name="shield" />
+                  Agent settings
+                </Button>
+                {clear}
+                <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
+              </header>
+              {tools && <div className="flex flex-wrap items-center gap-2 px-6 pb-1.5">{tools}</div>}
+            </>
+          }
+        >
+        <div data-bar-scroll className="h-full overflow-y-auto scroll-pt-[var(--ws-bar-h,0px)] pt-[calc(var(--ws-bar-h,0px)+12px)] pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
           <div
             data-agents-list
             data-frozen={frozen || undefined}
@@ -355,6 +363,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
             {!waiting && archivedSection}
           </div>
         </div>
+        </ScreenBar>
         <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
           <ShortcutHint on="work" />
         </footer>
