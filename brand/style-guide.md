@@ -48,9 +48,9 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | Ink | `#14131d` | The icon's square and the site's dark sections |
 | Silk | `#eeedf8` | The G, and text on ink |
 | Lavender | `#c8c2ff` | The faint end of the G's gradient; never on its own as text |
-| Pip teal | `#37d0c0` dark, `#0b8a86` light | Pip, and only Pip |
+| Pip teal | `#76c8cb` dark, `#16737a` light | Dew teal: Pip, and only Pip |
 | Indigo | `#8f98f0` dark, `#4b55c0` light | The person's own actions: focus, selection, primary buttons, links |
-| Violet | `#9a8bff` dark, `#5b4bd1` light | Pip's second colour: the end of its gradient and its legs |
+| Violet | `#a99cf0` dark, `#5f54b8` light | Pip's second colour: the end of its gradient and its legs |
 
 ### Interface tokens
 
@@ -65,13 +65,13 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `ws-sep`, `ws-sep2` | brown at 11% and 19% | cream at 9% and 16% | Hairlines and borders |
 | `ws-hover`, `ws-sel` | brown at 5% and 8% | cream at 5% and 8% | Hover and selected rows |
 | `ws-accent` | `#4b55c0` | `#8f98f0` | The person's actions |
-| `ws-pip`, `ws-pip2` | `#0b8a86`, `#5b4bd1` | `#37d0c0`, `#9a8bff` | Pip and Pip's drafts |
-| `ws-done` | `#1f9d6a` | `#1f9d6a` | Done |
+| `ws-pip`, `ws-pip2` | `#16737a`, `#5f54b8` | `#76c8cb`, `#a99cf0` | Pip and Pip's drafts |
+| `ws-done` | `#2e7d4f` | `#6dbf8b` | Done |
 | `ws-blocked` | `#bf4339` | `#e77d72` | Failed, blocked |
 | `ws-review` | `#7d4cb8` | `#bf9cec` | In review |
 | `ws-warn` | `#b07614` | `#d6a04a` | Needs attention |
 | `glass-tint` | silk `#f6e2c4` at 14% | silk `#ffe4be` at 5% | The faint colour over glass |
-| `glass-tint-pip` | teal at 10% | teal at 6% | The same, on Pip's surfaces |
+| `glass-tint-pip` | Dew teal `#76c8cb` at 12% | Dew teal at 6% | The same, on Pip's surfaces |
 | `glass-body`, `glass-body-regular` | ivory at 22% and 58% | warm charcoal at 38% and 60% | Clear and regular glass body |
 | `glass-filter` | `blur(6px) saturate(1.5) brightness(1.04)` | `blur(8px) saturate(1.4) brightness(0.92)` | What the glass does to the backdrop |
 | `glass-rim`, `glass-rim-pip` | warm white ring, 95% to 5% to 55% | cream ring, 45% to 2% to 22%; teal on Pip | The 1 px edge light |
@@ -79,7 +79,7 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `glass-depth` | `0 10px 30px` brown at 16% | `0 12px 40px` black at 50% | The shadow |
 | `glass-lens`, `glass-lens-rim` (and `-pip`) | ivory at 45%, rim warm white at 85% | cream at 8%, rim at 28%; teal on Pip | Selection inside glass |
 
-`ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. `ws-warn` has no soft fill.
+`ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. Done sits at 145 degrees of hue, a leaf green, because Pip's Dew teal sits near 183 degrees and the old Done green at 155 was too close to tell apart at a glance. `ws-warn` has no soft fill.
 
 ### Rules
 
@@ -99,12 +99,13 @@ Measured against the window colour (`ws-win`):
 | `ws-ink2` | 6.7 | 7.8 |
 | `ws-ink3` | 4.7 | 4.9 |
 | `ws-accent` | 5.8 | 6.5 |
-| `ws-pip` | 3.9 | 9.1 |
+| `ws-pip` | 5.2 | 9.0 |
+| `ws-done` | 4.7 | 7.8 |
 | `ws-blocked` | 4.8 | 6.3 |
 | `ws-review` | 5.5 | 7.6 |
 | `ws-warn` | 3.6 | 7.4 |
 
-So: against the window, body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-ink3` on `ws-side` and `ws-bar` is about 4.2, so in the sidebar and rail it stays for short meta only. Light-mode `ws-pip` is below 4.5, so use it for icons, borders and bold or large text, never for a sentence a person must read. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
+So: against the window, body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-ink3` on `ws-side` and `ws-bar` is about 4.2, so in the sidebar and rail it stays for short meta only. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
 
 ## Type
 
@@ -311,7 +312,7 @@ Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs 
 | Inner light | `inset 0 1px 1px` warm white at 75%, `inset 0 -1px 1px` ink at 6% | `inset 0 1px 1px` cream at 16% |
 | Depth | `0 10px 30px` brown at 16% | `0 12px 40px` black at 50% |
 | Selection inside | A clear lens: ivory at 45% with its own rim | Cream at 8% with its own rim |
-| Pip's surfaces | Teal `#37d0c0` instead of silk, at the same strengths | Teal instead of silk |
+| Pip's surfaces | Dew teal `#76c8cb` instead of silk, at the same strengths | Teal instead of silk |
 
 **How to use it.** The classes are in `src/workspace/glass.css`, and the colours are the `glass-*` tokens in `theme.css`.
 
