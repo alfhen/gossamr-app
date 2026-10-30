@@ -304,6 +304,16 @@ describe("PipConversation", () => {
       expect(renderToStaticMarkup(<ComposerFooter text="No agents working · nothing needs you" />)).toContain("No agents working");
     });
 
+    it("shows the web with a hidden word and a polite line of what Pip is doing while it answers", () => {
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running")] } });
+      const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
+      expect(html).toMatch(/data-pip-working[^>]*role="status" aria-live="polite"/);
+      expect(html).toMatch(/aria-hidden="true" data-pip-word/);
+      expect(html).toContain("Looking at the screen");
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [{ ...at("r1", "First", "running"), text: "Here" }] } });
+      expect(renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />)).not.toContain("data-pip-working");
+    });
+
     it("shows a queued question with when it runs and a way to remove it", () => {
       setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running"), at("r2", "Second", "queued")] } });
       const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);

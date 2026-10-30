@@ -7,6 +7,7 @@ import { PipGlyph } from "../components/PipGlyph";
 import { needsYouText, useNeedsYou } from "./useNeeds";
 import { useActiveTab } from "./hooks";
 import { PipAvatar } from "./PipAvatar";
+import { PipWorkChip } from "./PipWork";
 import { usePaneWidths } from "./PaneResizers";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
@@ -76,6 +77,7 @@ export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px
 export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { needs: number; onOpen(): void; thinking?: boolean; clearRight?: number }) {
   return (
     <div data-pip-launcher style={launcherStyle(clearRight)} className="absolute z-30 flex max-w-[calc(100%-2.5rem)] items-center gap-2.5">
+      {thinking && <PipWorkChip />}
       <div className="relative">
         <i aria-hidden className="pip-thread pointer-events-none absolute bottom-full left-1/2 h-[46px] w-[1.5px] -translate-x-1/2 opacity-60" />
         <button

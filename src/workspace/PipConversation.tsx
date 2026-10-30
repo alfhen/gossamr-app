@@ -22,6 +22,7 @@ import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { maskSecrets } from "../lib/riskyText";
 import { Button } from "../components/Button";
 import { PipAvatar } from "./PipAvatar";
+import { PipWorkSlot } from "./PipWork";
 
 export { PIP_INPUT_ID };
 /** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
@@ -163,7 +164,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
     return (
       <div data-turn-kind="wake" data-turn-status={turn.status} className="grid gap-1">
         <WakeHeader turn={turn} />
-        {(turn.steps.length > 0 || working) && (
+        {turn.steps.length > 0 && (
           <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
             {turn.steps.map((s, i) => (
               <li key={i} className="flex items-center gap-1.5">
@@ -171,9 +172,9 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
                 {s}
               </li>
             ))}
-            {working && <li className="animate-pulse text-ws-ink3">Reading what happened…</li>}
           </ul>
         )}
+        <PipWorkSlot working={working} line="Reading what happened" since={turn.at} />
         {turn.text && <WakeText id={turn.requestId} text={turn.text} />}
         {drafts.map((p) => (
           <LiveDraftPreview key={p.id} proposal={p} />
@@ -207,7 +208,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
           </Button>
         </div>
       )}
-      {(turn.steps.length > 0 || working) && (
+      {turn.steps.length > 0 && (
         <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
           {turn.steps.map((s, i) => (
             <li key={i} className="flex items-center gap-1.5">
@@ -215,9 +216,9 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
               {s}
             </li>
           ))}
-          {working && <li className="animate-pulse text-ws-ink3">Looking at {turn.looking ?? "the screen"}…</li>}
         </ul>
       )}
+      <PipWorkSlot working={working} line={`Looking at ${turn.looking ?? "the screen"}`} since={turn.at} />
       {turn.text && (
         <div className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
           <span aria-hidden className="pt-0.5">

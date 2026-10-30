@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import {
   askPip, closeWorkstreamSheet, draftOpen, finishOnHome, homeConversation, homeConversationRegion, homeSettled,
-  INSTANT_PIP, MANUAL_PRS, mockRuns, openAgents, openApp, openPip, peekSheet, PIP_INPUT, pipIdle, pipPane,
+  INSTANT_PIP, MANUAL_PRS, mockRuns, openAgents, closePipDrawer, openApp, openPip, peekSheet, PIP_INPUT, pipIdle, pipPane,
   reviewedDraft, seedWorkstreamEvent, selectWorkstream, showWorkspace, startWorkstream, VAGUE_TICKET,
 } from "./support/app";
 import { newest } from "./support/steps";
@@ -502,5 +502,38 @@ test.describe("dates in the timeline", () => {
     await page.clock.runFor(5 * 60_000);
     await expect(timeline.locator("[data-timeline-day]").first()).toHaveText("Yesterday");
     expect(await timeline.locator("[data-timeline-entry]").count()).toBe(entries);
+  });
+});
+
+test.describe("Pip at work", () => {
+  test("a web stands where the answer will be, a silk word shows, and both go when the answer lands", async ({ page }) => {
+    await openApp(page, "pipPace=400");
+    await openPip(page);
+    await askPip(page, QUESTION);
+    const pane = pipPane(page);
+    const working = pane.locator("[data-pip-working]");
+    await expect(working).toHaveAttribute("role", "status");
+    await expect(working.locator("[data-pip-word]")).toHaveAttribute("aria-hidden", "true");
+    await expect(pane.getByText(ANSWER)).toBeVisible({ timeout: 20_000 });
+    await expect(working).toHaveCount(0);
+  });
+
+  test("with the pane closed, a chip by the launcher shows while Pip works and goes with the answer", async ({ page }) => {
+    await openApp(page, "pipPace=400");
+    await openPip(page);
+    await askPip(page, QUESTION);
+    await closePipDrawer(page);
+    await expect(page.locator("[data-pip-chip]")).toBeVisible();
+    await expect(page.locator("[data-pip-chip]")).toHaveCount(0, { timeout: 20_000 });
+  });
+
+  test("with reduced motion the web is still", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await openApp(page, "pipPace=400");
+    await openPip(page);
+    await askPip(page, QUESTION);
+    const spiral = pipPane(page).locator(".pip-web-spiral");
+    await expect(spiral).toBeVisible();
+    expect(await spiral.evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
   });
 });
