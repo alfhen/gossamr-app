@@ -92,7 +92,7 @@ test("the pane keeps its header and input", async ({ page }) => {
   await expect(page.locator(PIP_INPUT)).toHaveAttribute("aria-label", "Ask Pip");
   await expect(pane.getByRole("button", { name: "Ask" })).toBeDisabled();
   // Order inside the pane: header, conversation, then the form, with the status line under it.
-  const order = await pane.evaluate((el) => [...el.children].map((c) => c.tagName.toLowerCase()));
+  const order = await pane.evaluate((el) => [...el.querySelector(".ws-sheet")!.children].map((c) => c.tagName.toLowerCase()));
   expect(order.slice(-2)).toEqual(["form", "p"]);
   expect(order.indexOf("header")).toBeLessThan(order.indexOf("form"));
 });

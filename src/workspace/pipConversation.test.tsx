@@ -124,7 +124,7 @@ describe("PipConversation", () => {
     expect(html).toMatch(/<button type="button" data-wake-run="run-2"[^>]*>run R2<\/button> finished/);
     expect(html).toContain("I drafted a plan for you to start.");
     expect(html).not.toContain("[Event]");
-    expect(html.match(/bg-ws-accent px-3/g)).toHaveLength(1);
+    expect(html.match(/bg-ws-accent-soft px-3/g)).toHaveLength(1);
   });
 
   it("keeps a wake turn compact: a long answer is clamped to about three lines behind Show more, then its cards", () => {

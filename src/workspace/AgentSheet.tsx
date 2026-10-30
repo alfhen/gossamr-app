@@ -59,7 +59,7 @@ export function sheetFocusTarget<T extends { isConnected: boolean }>(opener: T |
   return opener?.isConnected ? opener : tray();
 }
 
-/** The frame the agent sheets share with the ticket peek: it slides over the screen from the right. */
+/** The frame the agent sheets share with the ticket peek: a floating sheet that slides over the screen from the right. */
 export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min = 520, draft = false, docked = false, onWide, onClose, children, footer, topOn }: FrameProps) {
   const peek = usePaneWidths().peek;
   const frame = useRef<HTMLElement>(null);
@@ -77,17 +77,10 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
       sheetFocusTarget(opener, lost, () => document.querySelector<HTMLElement>("[data-needs-you-group], [data-needs-you-need], [data-needs-you-title]"))?.focus({ preventScroll: true });
     };
   }, [opener]);
-  return (
-    <aside
-      ref={frame}
-      tabIndex={-1}
-      id={id}
-      role="dialog"
-      aria-label={label}
-      className={`selectable ws-legacy outline-none flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win ${docked ? "relative h-full shrink-0" : "ws-peek-in absolute inset-y-0 right-0 z-30 shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"} ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
-      style={{ width: wide && !docked ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
-    >
-      <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
+  const [under, setUnder] = useState(false);
+  const inner = (
+    <>
+      <div data-sheet-head data-under={docked ? undefined : under || undefined} className={`flex shrink-0 items-center gap-2 px-3.5 py-2 ${docked ? "border-b border-ws-sep" : "ws-sheet-head z-10"}`}>
         <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{title}</span>
         <span className="min-w-0 truncate text-xs text-ws-ink3">{hint}</span>
         {onWide && (
@@ -99,10 +92,25 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
           ×
         </Button>
       </div>
-      <div ref={body} data-sheet-body className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">
+      <div ref={body} data-sheet-body onScroll={(ev) => setUnder(ev.currentTarget.scrollTop > 2)} className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">
         {children}
       </div>
-      {footer && <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-ws-sep bg-ws-win px-[22px] py-2.5">{footer}</div>}
+      {footer && <div className={`flex shrink-0 flex-wrap items-center gap-2 border-t border-ws-sep px-[22px] py-2.5 ${docked ? "bg-ws-win" : "bg-ws-sheet"}`}>{footer}</div>}
+    </>
+  );
+  return (
+    <aside
+      ref={frame}
+      tabIndex={-1}
+      id={id}
+      role="dialog"
+      aria-label={label}
+      className={`selectable ws-legacy outline-none max-w-full ${
+        docked ? "relative flex h-full shrink-0 flex-col border-l border-ws-sep2 bg-ws-win" : "ws-peek-in pointer-events-none absolute inset-y-0 right-0 z-30 p-2"
+      } ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
+      style={{ width: wide && !docked ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
+    >
+      {docked ? inner : <div className="ws-sheet pointer-events-auto flex h-full min-h-0 flex-col">{inner}</div>}
     </aside>
   );
 }

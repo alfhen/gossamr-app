@@ -171,15 +171,22 @@ describe("PeekView", () => {
   it("keeps the room under the last section as an element, not as the scroller's padding a sticky bar would stop above", () => {
     const out = view();
     const scroller = out.match(/<div data-peek-scroll[^>]*>/)![0];
-    expect(scroller).toContain("scroll-pt-11");
     expect(scroller).not.toMatch(/\bpb-/);
-    expect(out).toMatch(/<div aria-hidden="true" data-peek-end="true" class="[^"]*h-24[^"]*"><\/div><\/div><\/aside>/);
+    expect(out).toMatch(/<div aria-hidden="true" data-peek-end="true" class="[^"]*h-24[^"]*"><\/div><\/div><\/div><\/aside>/);
   });
 
-  it("tells the person how to browse", () => {
+  it("tells the person how to browse from the ticket key", () => {
+    expect(view()).toContain('title="j and k browse, esc closes"');
+  });
+
+  it("floats as a sheet whose header holds the key, the section jumps and the expand and close group", () => {
     const out = view();
-    expect(out).toContain("browse");
-    expect(out).toContain(">esc<");
+    expect(out).toContain("pointer-events-none");
+    expect(out).toMatch(/class="ws-sheet [^"]*"/);
+    const head = out.match(/<div data-peek-head[\s\S]*?<div data-peek-scroll/)![0];
+    expect(head).toContain('aria-label="Sections"');
+    expect(head).toContain('aria-label="Peek"');
+    expect(head).not.toContain("browse ·");
   });
 
   it("offers the valid moves in a menu, as drafts", () => {
