@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PipGlyph } from "../components/PipGlyph";
 import { useAutoHeight } from "../components/autoHeight";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
@@ -102,7 +103,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
     banner: (
       <div className="grid gap-1">
         <div role="note" className="flex items-center gap-2 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm font-semibold text-ws-pip">
-          <span aria-hidden>✦</span>
+          <PipGlyph />
           <span>New ticket draft</span>
           {p.origin.type === "run" && (
             <span className="font-normal">

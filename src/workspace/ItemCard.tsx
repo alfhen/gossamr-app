@@ -1,4 +1,5 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
+import { PipGlyph } from "../components/PipGlyph";
 import { Cobweb } from "../components/Cobweb";
 import { pressed } from "../lib/keys";
 import { witherClass, type WitherLevel } from "../lib/views";
@@ -159,7 +160,7 @@ export function ItemCard(p: ItemCardProps) {
         {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
         {p.moreDrafts > 0 && (
           <span className="text-xs text-ws-pip" title="Drafts waiting on this ticket">
-            ✦ {p.moreDrafts}
+            <PipGlyph /> {p.moreDrafts}
           </span>
         )}
         <PrBadge summary={p.code} />
@@ -225,7 +226,7 @@ export function GhostCard({ item, draft, onApprove, onSkip }: { item: WorkItem; 
     <article aria-label={`Draft: ${item.item.key} moves here`} className="rounded-[10px] border-[1.5px] border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-2">
       <div className="flex items-center gap-1.5">
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
-        <span className="ml-auto text-xs font-semibold text-ws-pip">✦ draft move</span>
+        <span className="ml-auto text-xs font-semibold text-ws-pip"><PipGlyph /> draft move</span>
       </div>
       <p className="my-1 truncate text-ws-ink2">{item.title}</p>
       <DraftLine draft={draft} onApprove={onApprove} onSkip={onSkip} />

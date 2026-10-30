@@ -19,7 +19,7 @@ import { useTabs } from "./tabsStore";
 import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
 
-const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✦", rewrite: "✎", link: "✦", startRun: "▶", followUp: "↺", runAnswer: "↩", githubReview: "◎" };
+const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✐", rewrite: "✎", link: "↔", startRun: "▶", followUp: "↺", runAnswer: "↩", githubReview: "◎" };
 
 const STATE: Record<Proposal["state"]["type"], string> = { pending: "Draft", applying: "Working…", applied: "Done", skipped: "Skipped", retired: "Out of date" };
 

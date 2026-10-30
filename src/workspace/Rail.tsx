@@ -1,4 +1,5 @@
 import { showOf } from "../lib/keys";
+import { PipGlyph } from "../components/PipGlyph";
 import { useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
@@ -328,7 +329,7 @@ export function Rail() {
           <span aria-hidden>⚙</span>
         </RailButton>
         <RailButton label="Pip" hint={showOf("app", "pip")} pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
-          <span aria-hidden>✦</span>
+          <PipGlyph />
         </RailButton>
       </div>
     </aside>

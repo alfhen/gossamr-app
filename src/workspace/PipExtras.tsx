@@ -1,4 +1,5 @@
 import { showOf } from "../lib/keys";
+import { PipGlyph } from "../components/PipGlyph";
 import { useEffect, useState } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
@@ -17,7 +18,7 @@ import { focusedConversation } from "./workstreamsStore";
 export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFiltered; onUndo(): void; onDismiss(): void }) {
   return (
     <div role="status" className="mx-6 mb-1 flex items-center gap-2 rounded-md bg-ws-pip-soft px-3 py-1 text-sm text-ws-pip">
-      <span aria-hidden>✦</span>
+      <PipGlyph />
       <span className="min-w-0 truncate">
         <b>Pip filtered this view</b>
         {filtered.note && <span className="text-ws-ink2"> · {filtered.note}</span>}
@@ -126,7 +127,7 @@ export function AskPipButton({ x, y, onAsk }: { x: number; y: number; onAsk(): v
       style={{ left: x, top: y }}
       className="ws-glass ws-glass-pip ws-glass-regular fixed z-40 rounded-[14px] px-2.5 py-0.5 text-sm font-semibold text-ws-ink"
     >
-      <span aria-hidden className="text-ws-pip">✦</span> Ask Pip
+      <PipGlyph className="text-ws-pip" /> Ask Pip
     </button>
   );
 }

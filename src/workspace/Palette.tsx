@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { PipGlyph } from "../components/PipGlyph";
 import { ALL, containerKey, itemKey } from "../lib/filter";
 import type { CatalogEntry, ContainerRef, WorkContainer, WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
@@ -8,7 +9,7 @@ import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { unwatchWithUndo } from "./unwatch";
 import { useActivity } from "./activityStore";
-import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type Command, type CommandActions, type CommandContext } from "./commands";
+import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, PIP_ICON, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
 import { usePrefs } from "./prefs";
@@ -132,7 +133,7 @@ export function PaletteView({
                 className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-[7px] ${i === active ? "ws-glass-lens" : ""}`}
               >
                 <span aria-hidden className={`w-4 shrink-0 text-center ${c.group === "Ask Pip" ? "text-ws-pip" : "text-ws-ink2"}`}>
-                  {c.icon ?? "·"}
+                  {c.icon === PIP_ICON ? <PipGlyph /> : (c.icon ?? "·")}
                 </span>
                 <span className="min-w-0 flex-1 truncate font-medium">{c.label}</span>
                 {c.hint && <span className="shrink-0 text-xs font-medium text-ws-ink">{c.hint}</span>}

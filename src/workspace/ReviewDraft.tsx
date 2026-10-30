@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from "react";
+import { PipGlyph } from "../components/PipGlyph";
 import { Link } from "../components/Adf";
 import { Markdown } from "../components/Markdown";
 import { useAutoHeight } from "../components/autoHeight";
@@ -330,7 +331,7 @@ export function ReviewDraft({
       className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
-        <span aria-hidden>✦</span>
+        <PipGlyph />
         {title}
         <span className="ml-auto font-normal text-ws-ink3">{BADGE[state]}</span>
       </div>

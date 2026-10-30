@@ -208,7 +208,7 @@ describe("nothing covers anything", () => {
   it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {
     const all = { needsMe: true, blocked: true, draft: { id: "d1", to: "Done" }, moreDrafts: 2 } as const;
     const full = renderToStaticMarkup(<RowBadges {...all} compact={false} />);
-    for (const words of [">Your turn<", "⛓ blocked", "✦ draft → ", "Done"]) expect(full).toContain(words);
+    for (const words of [">Your turn<", "⛓ blocked", "</svg> draft → ", "Done"]) expect(full).toContain(words);
     const compact = renderToStaticMarkup(<RowBadges {...all} compact />);
     const icons = [...compact.matchAll(/<span role="img" aria-label="([^"]+)" title="([^"]+)"/g)].map((m) => [m[1], m[2]]);
     expect(icons).toEqual([
