@@ -47,9 +47,9 @@ export function PipAvatar({ size = 28, thinking = false, dangle = false }: Props
     >
       <defs>
         <radialGradient id={id} cx=".35" cy=".3" r=".9">
-          <stop offset="0" stopColor="#b9fbf0" />
-          <stop offset=".5" stopColor="#34c6b9" />
-          <stop offset="1" stopColor="#5b4bd1" />
+          <stop offset="0" stopColor="#d6f5ef" />
+          <stop offset=".5" stopColor="#4fb9b4" />
+          <stop offset="1" stopColor="#5f54b8" />
         </radialGradient>
       </defs>
       <g className="pip-body">
@@ -64,7 +64,7 @@ export function PipAvatar({ size = 28, thinking = false, dangle = false }: Props
           <path d="M6 9 Q16 17 21 28" />
         </g>
         <ellipse cx="0" cy="7" rx="13.5" ry="15" fill={`url(#${id})`} />
-        <ellipse cx="0" cy="7" rx="5" ry="7" fill="#2a1f7a" opacity=".22" />
+        <ellipse cx="0" cy="7" rx="5" ry="7" fill="#2a2560" opacity=".22" />
         <ellipse cx="-4.5" cy="2" rx="3.6" ry="6" fill="#fff" opacity=".28" />
         <circle cx="0" cy="-10" r="10" fill={`url(#${id})`} />
         <ellipse cx="-4" cy="-15" rx="4" ry="2.2" fill="#fff" opacity=".45" />
