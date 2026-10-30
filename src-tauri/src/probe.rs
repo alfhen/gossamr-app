@@ -93,6 +93,16 @@ pub fn jira(outcome: Option<crate::error::Result<crate::auth::Account>>, expires
     }
 }
 
+/// A GitHub account connected by token or browser sign-in, judged by whether GitHub accepts the stored token.
+pub fn github_token(login: &str, outcome: Option<crate::error::Result<crate::codehost::CodeAccount>>) -> Snapshot {
+    match outcome {
+        None => Snapshot::new(State::Error, "GitHub didn't answer in time."),
+        Some(Ok(me)) => Snapshot { account: Some(me.login.clone()), ..Snapshot::new(State::Ready, format!("Signed in as {}", me.login)) },
+        Some(Err(e)) if e.is_unauthorized() => Snapshot::new(State::NotSignedIn, format!("GitHub no longer accepts the token for {login}.")),
+        Some(Err(e)) => Snapshot::new(State::Error, e.to_string()),
+    }
+}
+
 #[derive(Deserialize)]
 struct Status {
     #[serde(default)]
@@ -158,7 +168,7 @@ pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Durat
                 let entry = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).find(|e| e.login.eq_ignore_ascii_case(login));
                 match entry {
                     None => Snapshot::new(State::NotSignedIn, format!("gh has no login for {login} on {host}.")).fix(login_command),
-                    Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("Signed in as {} on {host}", e.login)) },
+                    Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("gh is signed in as {} on {host}", e.login)) },
                     Some(e) if e.state == "timeout" => Snapshot::new(State::Error, format!("gh couldn't reach {host}.")),
                     Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
                     Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its token for {login} on {host}.")),
@@ -271,6 +281,25 @@ mod tests {
         let seen = probe(&dirs, "alfhen").await;
         std::env::remove_var("GH_TOKEN");
         assert_eq!(seen.state, State::Ready);
+    }
+
+    #[test]
+    fn a_token_account_is_judged_by_github_not_by_gh() {
+        let ok = crate::codehost::CodeAccount { login: "ann".into(), name: None, avatar_url: None, scopes: None };
+        assert_eq!(github_token("ann", Some(Ok(ok))).account.as_deref(), Some("ann"));
+        let refused = github_token("ann", Some(Err(Error::CodeHost { status: 401, message: "Bad credentials".into() })));
+        assert_eq!((refused.state, refused.fix), (State::NotSignedIn, None));
+        assert_eq!(github_token("ann", Some(Err(Error::Api { status: 503, message: "down".into() }))).state, State::Error);
+        assert_eq!(github_token("ann", None).state, State::Error);
+    }
+
+    #[test]
+    fn a_gh_file_that_cannot_run_does_not_hide_one_that_can() {
+        let blocked = gh_dir("blocked", "exit 1");
+        std::fs::set_permissions(blocked[0].join("gh"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        let working = gh_dir("working", "exit 0");
+        let dirs = [blocked[0].clone(), working[0].clone()];
+        assert_eq!(find_gh_in(&dirs), Some(working[0].join("gh")));
     }
 
     fn me() -> Account {
