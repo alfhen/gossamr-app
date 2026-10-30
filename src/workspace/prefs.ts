@@ -66,10 +66,19 @@ export function applyTransparency(reduce: boolean, root: HTMLElement = document.
 
 /** Keeps `data-transparency` in step with the system's Reduce transparency. Returns a function that stops and clears it. */
 export function followTransparency(backend: Pick<Backend, "reduceTransparency" | "onDisplayChanged">, root: HTMLElement = document.documentElement) {
-  const read = () => void backend.reduceTransparency().then((reduce) => applyTransparency(reduce, root), () => {});
-  read();
+  let latest = 0;
+  let stopped = false;
+  const read = () => {
+    const asked = ++latest;
+    backend.reduceTransparency().then(
+      (reduce) => !stopped && asked === latest && applyTransparency(reduce, root),
+      () => {},
+    );
+  };
   const off = backend.onDisplayChanged(read);
+  read();
   return () => {
+    stopped = true;
     off();
     applyTransparency(false, root);
   };

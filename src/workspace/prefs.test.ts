@@ -35,6 +35,29 @@ describe("following Reduce transparency", () => {
     expect(root.dataset.transparency).toBeUndefined();
   });
 
+  it("keeps the newest answer when an older one arrives late", async () => {
+    const root = fakeRoot();
+    const answers: ((reduce: boolean) => void)[] = [];
+    const system = { ...fakeSystem(false), reduceTransparency: () => new Promise<boolean>((resolve) => answers.push(resolve)) };
+    followTransparency(system, root);
+    system.listeners.forEach((l) => l());
+    answers[1](true);
+    answers[0](false);
+    await settle();
+    expect(root.dataset.transparency).toBe("reduce");
+  });
+
+  it("ignores an answer that arrives after it stops", async () => {
+    const root = fakeRoot();
+    let answer: (reduce: boolean) => void = () => {};
+    const system = { ...fakeSystem(false), reduceTransparency: () => new Promise<boolean>((resolve) => (answer = resolve)) };
+    const stop = followTransparency(system, root);
+    stop();
+    answer(true);
+    await settle();
+    expect(root.dataset.transparency).toBeUndefined();
+  });
+
   it("stops listening and clears the mark when it stops", async () => {
     const root = fakeRoot();
     const system = fakeSystem(true);
