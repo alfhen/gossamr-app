@@ -128,12 +128,15 @@ The system font: `system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", san
 | `text-base` | 13 px | Reading text: ticket bodies, Pip's answers |
 | `text-lg` | 15 px | Section and sheet titles |
 | `text-xl` | 21 px | Screen titles, rarely |
+| Label | 12 px (`text-sm`), semibold, `ws-ink2` | Section and group labels above lists and fields |
 
-Two weights: regular and semibold (600). Bold is for counts in badges. Sentence case everywhere: titles, buttons, menus. No all-caps labels.
+Two weights: regular and semibold (600). Bold is for counts in badges. Sentence case everywhere: titles, buttons, menus, labels. No all-caps and no letter-spacing on labels.
+
+Screen and sheet titles (Settings, Inbox, Work, the peek's ticket title, Pip's name in the pane) are set in SF Pro Rounded through `font-display` (`--font-display`), at the sizes above. Everything else stays in the system text face.
 
 ### On gossamr.app
 
-Headings are set in SF Pro Rounded (`ui-rounded`), the Mac's rounded system face. Its round strokes and terminals match the silk G and Pip, and it is still the system family, so the site and the app feel like one thing. Body text stays in SF Pro Text. Safari and the app's WebKit have `ui-rounded`; other browsers fall back to the regular system face, which is fine.
+Headings, like the app's titles, are set in SF Pro Rounded (`ui-rounded`), the Mac's rounded system face. Its round strokes and terminals match the silk G and Pip, and it is still the system family, so the site and the app feel like one thing. Body text stays in SF Pro Text. Safari and the app's WebKit have `ui-rounded`; other browsers fall back to the regular system face, which is fine.
 
 The scale is a perfect fourth (×1.333) from 17 px:
 

@@ -234,7 +234,7 @@ export function Settings() {
 
   return (
     <div className="h-full overflow-auto px-8 pb-10">
-      <h1 className="m-0 pt-6 text-xl font-bold">Settings</h1>
+      <h1 className="font-display m-0 pt-6 text-xl font-bold">Settings</h1>
       <div className="max-w-[720px]">
         <Section title="Safety">
           <ul data-promises className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">

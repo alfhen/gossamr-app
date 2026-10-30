@@ -60,7 +60,7 @@ export interface DetailState {
 function DetailBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="grid gap-1">
-      <h4 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{title}</h4>
+      <h4 className="m-0 text-sm font-semibold text-ws-ink2">{title}</h4>
       {children}
     </div>
   );

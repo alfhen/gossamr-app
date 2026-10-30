@@ -203,7 +203,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <div className="flex items-center gap-2">
           <PipAvatar size={26} thinking={running} />
           <div className="grid leading-tight">
-            <h2 className="m-0 text-base font-semibold">Pip</h2>
+            <h2 className="font-display m-0 text-base font-semibold">Pip</h2>
             <span className="text-xs text-ws-ink2">powered by Claude</span>
           </div>
           <kbd className="ml-1 rounded border border-ws-sep2 px-1.5 font-mono text-xs font-medium text-ws-ink2">{showOf("app", "pip")}</kbd>

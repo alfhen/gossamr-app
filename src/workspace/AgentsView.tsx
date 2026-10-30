@@ -308,7 +308,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
     <div ref={root} data-agents-home className="flex h-full min-h-0">
     <div className="@container flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
-          <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
+          <h1 ref={title} tabIndex={-1} className="font-display m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
             Work
           </h1>
           <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />

@@ -74,7 +74,7 @@ export function ArchivedSectionView({ runs, open, now, ticketTitle, asking, onTo
   return (
     <section aria-label="Archived" data-archived className="grid gap-2.5">
       <div className="flex items-center gap-2">
-        <h3 className="m-0 text-xs font-semibold tracking-[0.05em] uppercase text-ws-ink2">Archived</h3>
+        <h3 className="m-0 text-sm font-semibold text-ws-ink2">Archived</h3>
         <span data-archived-count className="text-xs text-ws-ink3">
           {runs.length}
         </span>

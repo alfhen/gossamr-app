@@ -654,7 +654,7 @@ export function WorkstreamNeeds({ needs, workstreamId }: { needs: readonly Need[
   if (!mine.length && !showBatch) return null;
   return (
     <section data-workstream-needs={gid} aria-label="Needs you" className="grid gap-2">
-      <h3 data-workstream-needs-title tabIndex={-1} className="m-0 flex items-center gap-2 rounded text-xs font-semibold tracking-[0.05em] text-ws-ink2 uppercase focus-visible:outline-2 focus-visible:outline-ws-pip">
+      <h3 data-workstream-needs-title tabIndex={-1} className="m-0 flex items-center gap-2 rounded text-sm font-semibold text-ws-ink2 focus-visible:outline-2 focus-visible:outline-ws-pip">
         Needs you
         <span data-workstream-needs-count className="rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 text-ws-on-pip">
           {mine.length}

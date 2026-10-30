@@ -272,7 +272,7 @@ export function EarlierDrafts({ proposals, turns, ticket = null }: { proposals: 
   const { shown: listed, others } = draftsForTicket([...waiting, ...retired], ticket);
   return (
     <section aria-label="Drafts" className="grid gap-1.5">
-      <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+      <h3 className="m-0 text-sm font-semibold text-ws-ink2">
         Drafts waiting <span className="font-normal">{waiting.length}</span>
       </h3>
       {listed.map((p) => (

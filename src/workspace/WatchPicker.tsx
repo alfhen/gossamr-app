@@ -212,7 +212,7 @@ export function WatchPickerView(p: WatchPickerViewProps) {
   );
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-[780px] flex-col px-8 pt-12 pb-6">
-      <h1 ref={heading} tabIndex={-1} className="m-0 text-2xl font-bold outline-none">
+      <h1 ref={heading} tabIndex={-1} className="font-display m-0 text-2xl font-bold outline-none">
         Choose what to watch
       </h1>
       <p className="mt-1 mb-4 max-w-[620px] text-ws-ink2">

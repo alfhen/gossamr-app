@@ -110,7 +110,7 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
 export function Sec({ title, count, aside, id, children }: { title: string; count?: ReactNode; aside?: ReactNode; id?: string; children: ReactNode }) {
   return (
     <section id={id} className="grid gap-2">
-      <h3 className="m-0 flex items-center gap-2 text-xs font-semibold tracking-[0.05em] text-ws-ink3 uppercase">
+      <h3 className="m-0 flex items-center gap-2 text-sm font-semibold text-ws-ink2">
         {title}
         {count !== undefined && <span className="font-normal normal-case">{count}</span>}
         {aside && <span className="ml-auto font-normal normal-case">{aside}</span>}

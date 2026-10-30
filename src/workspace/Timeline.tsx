@@ -329,7 +329,7 @@ export function TimelineView({
             {shown.map((e) => (
               <Fragment key={e.key}>
               {days.has(e.key) && (
-                <li data-timeline-day={days.get(e.key)} className="m-0 -mb-2 border-b border-ws-sep/60 pb-0.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+                <li data-timeline-day={days.get(e.key)} className="m-0 -mb-2 border-b border-ws-sep/60 pb-0.5 text-sm font-semibold text-ws-ink2">
                   <h3 className="m-0 text-xs font-semibold">{days.get(e.key)}</h3>
                 </li>
               )}
