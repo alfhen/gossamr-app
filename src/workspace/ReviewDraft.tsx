@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from "react";
-import { PipGlyph } from "../components/PipGlyph";
 import { Link } from "../components/Adf";
 import { Markdown } from "../components/Markdown";
 import { useAutoHeight } from "../components/autoHeight";
+import { PipGlyph } from "../components/PipGlyph";
 import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";

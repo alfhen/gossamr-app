@@ -62,6 +62,7 @@ describe("ItemCard", () => {
   it("marks a blocked card and counts the drafts it doesn't show", () => {
     const out = render(card({ blocked: true, moreDrafts: 2 }));
     expect(out).toContain("blocked");
+    expect(out).toContain("data-pip-glyph");
     expect(out).toContain("</svg> 2");
     expect(render(card())).not.toContain("⛓");
   });

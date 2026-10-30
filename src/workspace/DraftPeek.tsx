@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PipGlyph } from "../components/PipGlyph";
 import { useAutoHeight } from "../components/autoHeight";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
+import { PipGlyph } from "../components/PipGlyph";
 import { containerKey } from "../lib/filter";
 import { leftByRun } from "../lib/proposals";
 import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";

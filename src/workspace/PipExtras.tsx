@@ -1,9 +1,9 @@
 import { showOf } from "../lib/keys";
-import { PipGlyph } from "../components/PipGlyph";
 import { useEffect, useState } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
 import { isPaneConversation } from "../lib/conversations";
+import { PipGlyph } from "../components/PipGlyph";
 import { needsYouText, useNeedsYou } from "./useNeeds";
 import { useActiveTab } from "./hooks";
 import { PipAvatar } from "./PipAvatar";

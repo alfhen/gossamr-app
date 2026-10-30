@@ -4,7 +4,7 @@ import { useId } from "react";
 export function PipGlyph({ className = "" }: { className?: string }) {
   const mask = `pip-glyph-eyes-${useId().replace(/:/g, "")}`;
   return (
-    <svg viewBox="0 0 16 16" aria-hidden="true" className={`inline-block size-[1em] shrink-0 align-[-0.125em] ${className}`}>
+    <svg viewBox="0 0 16 16" data-pip-glyph aria-hidden="true" className={`inline-block size-[1em] shrink-0 align-[-0.125em] ${className}`}>
       <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="16" height="16">
         <rect width="16" height="16" fill="#fff" />
         <circle cx="6.5" cy="10.2" r=".95" fill="#000" />

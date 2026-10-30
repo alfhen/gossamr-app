@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { PipGlyph } from "../components/PipGlyph";
 import { MentionTextarea } from "../components/MentionTextarea";
+import { PipGlyph } from "../components/PipGlyph";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
 import { isRunDraft as isAgentDraft, targetOf, unreachable } from "../lib/proposals";

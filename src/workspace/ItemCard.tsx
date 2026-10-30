@@ -1,6 +1,6 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
-import { PipGlyph } from "../components/PipGlyph";
 import { Cobweb } from "../components/Cobweb";
+import { PipGlyph } from "../components/PipGlyph";
 import { pressed } from "../lib/keys";
 import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";

@@ -1,5 +1,4 @@
 import { showOf } from "../lib/keys";
-import { PipGlyph } from "../components/PipGlyph";
 import { useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
@@ -12,6 +11,7 @@ import { projectColour, projectInitials } from "./projects";
 import { usePrefs } from "./prefs";
 import { Icon } from "./AgentIcons";
 import { Icon as Glyph } from "../components/icons";
+import { PipGlyph } from "../components/PipGlyph";
 import { SavedViewsPanel } from "./SavedViews";
 import { useTabs } from "./tabsStore";
 import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watchLogic";
