@@ -15,6 +15,7 @@ interface Word {
 let word: Word = { text: "Spinning", swapping: false };
 let deck: string[] = [];
 let timer: ReturnType<typeof setInterval> | undefined;
+let swapTimer: ReturnType<typeof setTimeout> | undefined;
 const listeners = new Set<() => void>();
 
 const publish = (next: Word) => {
@@ -26,7 +27,7 @@ function advance() {
   if (!deck.length) deck = shuffledWords(word.text);
   const next = deck.shift()!;
   publish({ ...word, swapping: true });
-  setTimeout(() => publish({ text: next, swapping: false }), SWAP_MS);
+  swapTimer = setTimeout(() => publish({ text: next, swapping: false }), SWAP_MS);
 }
 
 // One word at a time for the whole page, so the chip and the pane say the same one; the clock runs only while one is on screen.
@@ -39,19 +40,25 @@ function subscribe(listener: () => void) {
   }
   return () => {
     listeners.delete(listener);
-    if (!listeners.size) clearInterval(timer);
+    if (!listeners.size) {
+      clearInterval(timer);
+      clearTimeout(swapTimer);
+    }
   };
 }
 
 const usePipWord = () => useSyncExternalStore(subscribe, () => word, () => word);
 
-function useElapsed() {
-  const since = useRef(Date.now());
+function useElapsed(since: string | undefined) {
   const [text, setText] = useState("");
   useEffect(() => {
-    const id = setInterval(() => setText(elapsedText(Date.now() - since.current)), 1000);
+    const parsed = since ? Date.parse(since) : NaN;
+    const start = Number.isNaN(parsed) ? Date.now() : parsed;
+    const tick = () => setText(elapsedText(Date.now() - start));
+    tick();
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [since]);
   return text;
 }
 
@@ -78,9 +85,9 @@ function Web() {
 }
 
 /** Pip spinning a web where its answer will appear: a word for the mood, and under it a plain line of what Pip is doing. */
-function PipWorking({ line, leaving }: { line: string; leaving: boolean }) {
+function PipWorking({ line, leaving, since }: { line: string; leaving: boolean; since?: string }) {
   const w = usePipWord();
-  const elapsed = useElapsed();
+  const elapsed = useElapsed(since);
   return (
     <div data-pip-working data-leaving={leaving ? "" : undefined} role="status" aria-live="polite" className="pip-work">
       <Web />
@@ -91,7 +98,7 @@ function PipWorking({ line, leaving }: { line: string; leaving: boolean }) {
         <span className="text-xs text-ws-ink2">
           {line}
           {elapsed && (
-            <span aria-hidden className="tabular-nums">
+            <span className="tabular-nums">
               {" · "}
               {elapsed}
             </span>
@@ -103,7 +110,7 @@ function PipWorking({ line, leaving }: { line: string; leaving: boolean }) {
 }
 
 /** Shows the web while `working`, then lifts it away for half a second as the answer arrives. */
-export function PipWorkSlot({ working, line }: { working: boolean; line: string }) {
+export function PipWorkSlot({ working, line, since }: { working: boolean; line: string; since?: string }) {
   const [leaving, setLeaving] = useState(false);
   const was = useRef(working);
   useEffect(() => {
@@ -115,7 +122,7 @@ export function PipWorkSlot({ working, line }: { working: boolean; line: string 
     return () => clearTimeout(id);
   }, [working]);
   if (!working && !leaving) return null;
-  return <PipWorking line={line} leaving={!working} />;
+  return <PipWorking line={line} leaving={!working} since={since} />;
 }
 
 /** Beside the launcher while the pane is closed and Pip works, so Pip is seen busy from anywhere. */

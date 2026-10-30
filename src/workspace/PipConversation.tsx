@@ -174,7 +174,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
             ))}
           </ul>
         )}
-        <PipWorkSlot working={working} line="Reading what happened" />
+        <PipWorkSlot working={working} line="Reading what happened" since={turn.at} />
         {turn.text && <WakeText id={turn.requestId} text={turn.text} />}
         {drafts.map((p) => (
           <LiveDraftPreview key={p.id} proposal={p} />
@@ -218,7 +218,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
           ))}
         </ul>
       )}
-      <PipWorkSlot working={working} line={`Looking at ${turn.looking ?? "the screen"}`} />
+      <PipWorkSlot working={working} line={`Looking at ${turn.looking ?? "the screen"}`} since={turn.at} />
       {turn.text && (
         <div className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
           <span aria-hidden className="pt-0.5">
