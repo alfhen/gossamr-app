@@ -542,15 +542,17 @@ fn own_sessions(json: Option<String>) -> Vec<String> {
 
 /// Copies the app state a cache file holds into the app database, once per cache file, then retires the drafts the
 /// cache still shows as open so a release from before the move cannot post them a second time. The cache keeps its
-/// rows: a later step deletes them, after a release has run on the copy. Needs the cache attached as `cache`.
-pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<()> {
+/// rows: a later step deletes them, after a release has run on the copy. Needs the cache attached as `cache`. Returns
+/// the ids of the copied drafts that were mid-post when the cache was last written.
+pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Vec<String>> {
     let marker = format!("copied:{cache_file}");
     let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?;
     if copied.is_some() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let tx = conn.unchecked_transaction()?;
     let mut held = Vec::new();
+    let mut interrupted = Vec::new();
     for table in APP_TABLES {
         let mut stmt = tx.prepare(&format!("SELECT name FROM pragma_table_info('{table}', 'cache')"))?;
         let columns = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join(", ");
@@ -564,6 +566,9 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<()>
         copy_cached_meta(&tx)?;
     }
     if held.contains(&"proposals") {
+        let mut stmt = tx.prepare("SELECT id FROM cache.proposals WHERE state = 'applying'")?;
+        interrupted = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        drop(stmt);
         tx.execute(
             "UPDATE cache.proposals SET state = 'retired', data = json_set(data, '$.state', json_object('type', 'retired', 'reason', ?1))
              WHERE state IN ('pending', 'applying')",
@@ -572,7 +577,7 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<()>
     }
     tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
     tx.commit()?;
-    Ok(())
+    Ok(interrupted)
 }
 
 fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {

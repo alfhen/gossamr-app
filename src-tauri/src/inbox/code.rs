@@ -804,7 +804,7 @@ impl Core {
         if !(7..=40).contains(&reviewed_sha.len()) || !reviewed_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(Error::Proposal("a review needs reviewed_sha as 7 to 40 hex characters".into()));
         }
-        let run = self.with_db_for(scope, |db| db.run(&run_id)).await?
+        let run = self.with_app_db_for(scope, |db| db.run(&run_id)).await?
             .ok_or_else(|| Error::Proposal("the reviewer run no longer exists".into()))?;
         if !run.spec.repo.eq_ignore_ascii_case(&repo) || run.spec.pr != Some(number) {
             return Err(Error::Proposal("the reviewer run must belong to this pull request".into()));
@@ -872,7 +872,7 @@ impl Core {
     pub async fn post_review_draft(&self, id: &str, seen: usize, post_anyway: bool) -> Result<Proposal> {
         let scope = self.scope().await?;
         let (claimed, look_for) = self
-            .with_db_for(&scope, |db| {
+            .with_app_db_for(&scope, |db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if current.state == ProposalState::Pending && current.revisions.len() != seen {
                     return Err(Error::Proposal(REVIEW_CHANGED.into()));
@@ -904,7 +904,7 @@ impl Core {
             (Err(e), None) => Err(e),
         };
         let label = format!("{repo}#{number}");
-        self.with_db_for(&scope, |db| {
+        self.with_app_db_for(&scope, |db| {
             let at = Utc::now();
             let mut p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             p.updated_at = at;

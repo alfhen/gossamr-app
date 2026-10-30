@@ -160,6 +160,15 @@ pub struct ConnectionInfo {
     pub reauth: bool,
 }
 
+#[derive(Default)]
+struct Open {
+    /// `app.sqlite` alone, opened on first use and kept for the life of the app.
+    app: Option<Db>,
+    /// One cache per connection, opened for whichever is signed in. A connection is a site and an account, so two
+    /// people signing in to the same site on one Mac never see each other's tickets or inbox.
+    cache: Option<(String, Db)>,
+}
+
 pub struct Core {
     pub auth: Arc<Auth>,
     registry: Registry,
@@ -167,9 +176,8 @@ pub struct Core {
     data_dir: PathBuf,
     /// Clones a run may use have to be under this folder.
     home: Option<PathBuf>,
-    /// One database per connection, opened for whichever is signed in. A connection is a site and an account, so two
-    /// people signing in to the same site on one Mac never see each other's tickets or inbox.
-    db: Mutex<Option<(String, Db)>>,
+    /// The databases, behind one lock so the app database is never written from two handles at once.
+    db: Mutex<Open>,
     last_error: Mutex<Option<String>>,
     reauth_needed: AtomicBool,
     syncing: AtomicBool,
@@ -203,7 +211,7 @@ impl Core {
             code: CodeService::new(crate::net::client(), CodeService::default_store()),
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
-            db: Mutex::new(None),
+            db: Mutex::new(Open::default()),
             last_error: Mutex::new(None),
             reauth_needed: AtomicBool::new(false),
             syncing: AtomicBool::new(false),
@@ -301,16 +309,45 @@ impl Core {
         if &current != scope {
             return Err(Error::SiteChanged);
         }
-        let mut guard = self.db.lock().expect("db lock poisoned");
         let connection = self.connection(scope)?;
-        if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
+        let mut open = self.db.lock().expect("db lock poisoned");
+        self.open_app(&mut open)?;
+        if open.cache.as_ref().map(|(id, _)| *id != connection.id).unwrap_or(true) {
             let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?.for_connection(&connection.id);
             backfill_cache(&db, &connection)?;
+            open.cache = Some((connection.id.clone(), db));
+        }
+        f(&open.cache.as_ref().expect("opened above").1)
+    }
+
+    /// The app database, opened on first use, which is also when what a closed app left half done is settled. That must
+    /// stay once per launch: a draft this launch is posting would otherwise be reset to pending.
+    fn open_app<'a>(&self, open: &'a mut Open) -> Result<&'a mut Db> {
+        if open.app.is_none() {
+            let db = Db::open_app(&self.data_dir.join(APP_DB))?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
-            *guard = Some((connection.id.clone(), db));
+            open.app = Some(db);
         }
-        f(&guard.as_ref().expect("opened above").1)
+        Ok(open.app.as_mut().expect("opened above"))
+    }
+
+    /// Runs `f` against the app database, for work that touches only app tables and needs no one signed in. Drafts and
+    /// runs of every connection are visible; `with_app_db_for` limits them to one.
+    async fn with_app_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        let mut open = self.db.lock().expect("db lock poisoned");
+        f(self.open_app(&mut open)?)
+    }
+
+    /// `with_app_db` limited to `scope`'s drafts and runs, and only while its connection is still registered.
+    async fn with_app_db_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        self.connection(scope)?;
+        let mut open = self.db.lock().expect("db lock poisoned");
+        self.open_app(&mut open)?.homed(&scope.connection_id, f)
+    }
+
+    async fn with_app_db_atomically_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+        self.with_app_db_for(scope, |db| db.atomically(f)).await
     }
 
     /// `with_db_for` as one transaction: everything `f` writes (a change and its audit line) lands together, or nothing does.
@@ -318,8 +355,15 @@ impl Core {
         self.with_db_for(scope, |db| db.atomically(f)).await
     }
 
+    /// Lets go of the signed-in connection's cache. The app database stays open: recovery runs once per launch.
     pub fn close_db(&self) {
-        *self.db.lock().expect("db lock poisoned") = None;
+        self.db.lock().expect("db lock poisoned").cache = None;
+    }
+
+    /// What quitting and opening the app does to the databases.
+    #[cfg(test)]
+    pub fn restart(&self) {
+        *self.db.lock().expect("db lock poisoned") = Open::default();
     }
 
     pub fn set_error(&self, e: Option<String>) {
@@ -693,7 +737,7 @@ impl Core {
     /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.
     /// Sessions recorded by earlier versions, which ran in a user-chosen folder, never enter this list.
     pub async fn remember_claude_session(&self, scope: &Scope, key: Option<&str>, session_id: &str) -> Result<()> {
-        self.with_db_for(scope, |db| {
+        self.with_app_db_for(scope, |db| {
             if let Some(key) = key {
                 db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
             }
@@ -710,7 +754,7 @@ impl Core {
     /// Whether Pip started `session_id` in its sandbox folder, which is the only place it can be resumed from: one of the
     /// last sessions it started, or the session of an open workstream, which stays resumable however long it runs.
     pub async fn is_pip_session(&self, session_id: &str) -> Result<bool> {
-        self.with_db(|db| {
+        self.with_app_db(|db| {
             let own: Vec<String> = db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             Ok(own.iter().any(|s| s == session_id) || db.is_open_workstream_session(session_id)?)
         })
@@ -769,6 +813,53 @@ mod tests {
 
         fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
         assert!(!fx.core.is_pip_session("ws-session").await.unwrap(), "closing the workstream lets it go");
+    }
+
+    #[tokio::test]
+    async fn the_app_database_opens_with_no_one_signed_in_and_touches_no_cache() {
+        let dir = std::env::temp_dir().join(format!("gossamr-app-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), dir.clone());
+
+        core.with_app_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"s-1"}"#)).await.unwrap();
+        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["s-1"]"#)).await.unwrap();
+        assert!(core.is_pip_session("s-1").await.unwrap());
+        assert!(core.pip_turns("general").await.unwrap().is_empty());
+        assert!(core.with_db(|_| Ok(())).await.is_err(), "a cache still needs the sign-in");
+
+        let files: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| !n.starts_with("app.sqlite")).collect();
+        assert!(files.is_empty(), "{files:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn changing_the_signed_in_connection_does_not_run_recovery_again() {
+        let fx = super::testing::fixture().await;
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
+        fx.core.close_db();
+        fx.core.with_db_for(&fx.scope, |_| Ok(())).await.unwrap();
+        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "running", "the app is still open, so nothing was cut off");
+
+        fx.core.restart();
+        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "failed");
+    }
+
+    #[tokio::test]
+    async fn the_app_database_shows_a_scope_only_its_own_drafts_and_resets_afterwards() {
+        use crate::domain::{ItemRef, Intent, ProposalQuery};
+        use crate::proposals::Draft;
+
+        let fx = super::testing::fixture().await;
+        let comment = |connection: &str| Draft::from_pip("q", None, Intent::Comment { item: ItemRef { connection_id: connection.into(), external_id: "1".into(), key: "CA-1".into() }, body: Doc::paragraph("hi") }, None);
+        let mine = fx.core.propose(&fx.scope, comment(&fx.scope.connection_id)).await.unwrap();
+        let theirs = fx.core.with_app_db(|db| proposals::create(db, comment("jira:site:other"), Utc::now())).await.unwrap();
+
+        let seen_by = |ps: Vec<crate::domain::Proposal>| ps.into_iter().map(|p| p.id).collect::<Vec<_>>();
+        let own = seen_by(fx.core.proposals_in(&fx.scope, &ProposalQuery::default()).await.unwrap());
+        assert!(own.len() == 1 && own[0] == mine.id, "{own:?}");
+        assert!(fx.core.proposal_in(&fx.scope, &theirs.id).await.unwrap().is_none());
+        let all = seen_by(fx.core.with_app_db(|db| db.proposals(&ProposalQuery::default())).await.unwrap());
+        assert!(all.contains(&mine.id) && all.contains(&theirs.id), "the filter is the call's, not the handle's");
     }
 
     #[tokio::test]

@@ -306,7 +306,7 @@ impl Core {
     pub async fn workstream(&self, scope: &Scope, id: &str) -> Result<Option<WorkstreamView>> {
         let connection_id = scope.connection_id.clone();
         let found = self
-            .with_db_for(scope, |db| {
+            .with_app_db_for(scope, |db| {
                 let Some(ws) = db.workstream(id)?.filter(|w| w.connection_id == connection_id) else { return Ok(None) };
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), workstream: Some(ws.id.clone()), ..Default::default() })?;
                 let adoptable = match ws.item_key.as_deref() {
@@ -339,7 +339,7 @@ impl Core {
     pub async fn workstreams(&self, scope: &Scope, include_closed: bool) -> Result<Vec<WorkstreamView>> {
         let connection_id = scope.connection_id.clone();
         let (workstreams, runs, pending, mut asks) = self
-            .with_db_for(scope, |db| {
+            .with_app_db_for(scope, |db| {
                 let runs = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?;
                 Ok((db.workstreams(&connection_id, include_closed)?, runs, pending_drafts(db)?, db.pip_asks(&connection_id)?))
             })
@@ -359,7 +359,7 @@ impl Core {
     /// The ids of `scope`'s closed workstreams, a cheap way to tell what belongs to one.
     pub async fn closed_workstream_ids(&self, scope: &Scope) -> Result<HashSet<String>> {
         let connection_id = scope.connection_id.clone();
-        self.with_db_for(scope, |db| db.closed_workstream_ids(&connection_id)).await
+        self.with_app_db_for(scope, |db| db.closed_workstream_ids(&connection_id)).await
     }
 
     /// Closes a workstream. Its runs and drafts are left as they are; closing it again changes nothing.
@@ -371,7 +371,7 @@ impl Core {
     pub async fn close_workstream_as(&self, scope: &Scope, id: &str, actor: Actor) -> Result<Workstream> {
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_none() {
                 ws.closed_at = Some(at);
@@ -388,7 +388,7 @@ impl Core {
     pub async fn reopen_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_some() {
                 if let Some(key) = ws.item_key.as_deref() {
@@ -412,7 +412,7 @@ impl Core {
     pub async fn adopt_into_workstream(&self, scope: &Scope, id: &str) -> Result<Adoptable> {
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let ws = open(db, &connection_id, id)?;
             let key = ws.item_key.clone().ok_or_else(|| refuse("a workstream with no ticket has nothing to bring in"))?;
             let runs: Vec<Run> = db.runs(&RunQuery { connection_id: Some(connection_id.clone()), ..Default::default() })?.into_iter().filter(|r| r.item.as_ref().is_some_and(|i| i.key == key)).collect();
@@ -452,7 +452,7 @@ impl Core {
         }
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_some() {
                 return Err(refuse(format!("workstream {id} is closed")));
@@ -475,7 +475,7 @@ impl Core {
     /// it changes nothing the person or Pip decided.
     pub async fn set_workstream_session(&self, scope: &Scope, id: &str, session: &str) -> Result<()> {
         let connection_id = scope.connection_id.clone();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
             if ws.closed_at.is_none() && ws.pip_session.as_deref() != Some(session) {
                 ws.pip_session = Some(session.to_string());
@@ -491,7 +491,7 @@ impl Core {
     pub async fn pause_workstream(&self, scope: &Scope, id: &str, reason: PauseReason, actor: Actor) -> Result<Workstream> {
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             if pause(&mut ws, reason) {
                 db.save_workstream(&ws)?;
@@ -506,7 +506,7 @@ impl Core {
     pub async fn resume_workstream(&self, scope: &Scope, id: &str) -> Result<Workstream> {
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let mut ws = open(db, &connection_id, id)?;
             let Some(reason) = ws.paused_reason.take() else { return Ok(ws) };
             db.save_workstream(&ws)?;
@@ -526,7 +526,7 @@ impl Core {
 
     async fn undo_workstream_at(&self, scope: &Scope, id: &str, undo: &WorkstreamUndo, at: chrono::DateTime<Utc>) -> Result<Workstream> {
         let connection_id = scope.connection_id.clone();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let ws = open(db, &connection_id, id)?;
             let events = db.workstream_events(&ws.id)?;
             let last = events.last().filter(|e| e.actor == Actor::Person);
@@ -562,7 +562,7 @@ impl Core {
     pub async fn admit_wake(&self, scope: &Scope, id: &str, facts: &[WakeFact], at: chrono::DateTime<Utc>) -> Result<Admitted> {
         let connection_id = scope.connection_id.clone();
         let midnight = at.date_naive().and_hms_opt(0, 0, 0).expect("midnight exists").and_utc();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             let Ok(mut ws) = open(db, &connection_id, id) else { return Ok(Admitted::default()) };
             if ws.paused_reason.is_some() {
                 return Ok(Admitted::default());
@@ -651,7 +651,7 @@ impl Core {
     /// A workstream's audit, oldest first. Only for `scope`'s own workstreams.
     pub async fn workstream_events(&self, scope: &Scope, id: &str) -> Result<Vec<WorkstreamEvent>> {
         let connection_id = scope.connection_id.clone();
-        self.with_db_for(scope, |db| {
+        self.with_app_db_for(scope, |db| {
             owned(db, &connection_id, id)?;
             db.workstream_events(id)
         })
@@ -661,7 +661,7 @@ impl Core {
     /// Appends `event` to the audit of one of `scope`'s workstreams; its `seq` is given here.
     pub async fn record_workstream_event(&self, scope: &Scope, event: WorkstreamEvent) -> Result<WorkstreamEvent> {
         let connection_id = scope.connection_id.clone();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             owned(db, &connection_id, &event.workstream_id)?;
             db.append_workstream_event(&event)
         })
@@ -693,7 +693,7 @@ impl Core {
         }
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             open(db, &connection_id, id)?;
             db.append_workstream_event(&WorkstreamEvent::new(id, Actor::Pip, PIP_ASKED, at).detail(&question))?;
             Ok(PipAsk { question, at })
@@ -706,7 +706,7 @@ impl Core {
     pub async fn clear_pip_ask(&self, scope: &Scope, id: &str, how: &str) -> Result<bool> {
         let connection_id = scope.connection_id.clone();
         let at = Utc::now();
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             owned(db, &connection_id, id)?;
             if open_pip_ask(&db.workstream_events(id)?).is_none() {
                 return Ok(false);

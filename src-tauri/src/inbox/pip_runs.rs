@@ -35,17 +35,17 @@ impl Core {
     pub async fn runs_in(&self, scope: &Scope, query: &RunQuery) -> Result<Vec<Run>> {
         let connection_id = scope.connection_id.clone();
         let query = RunQuery { connection_id: Some(connection_id.clone()), ..query.clone() };
-        let found = self.with_db_for(scope, |db| db.runs(&query)).await?;
+        let found = self.with_app_db_for(scope, |db| db.runs(&query)).await?;
         Ok(found.into_iter().filter(|r| r.connection_id == connection_id).collect())
     }
 
     pub async fn run_in(&self, scope: &Scope, id: &str) -> Result<Option<Run>> {
         let connection_id = scope.connection_id.clone();
-        Ok(self.with_db_for(scope, |db| db.run(id)).await?.filter(|r| r.connection_id == connection_id))
+        Ok(self.with_app_db_for(scope, |db| db.run(id)).await?.filter(|r| r.connection_id == connection_id))
     }
 
     pub async fn run_events_in(&self, scope: &Scope, run_id: &str) -> Result<Vec<RunEvent>> {
-        self.with_db_for(scope, |db| db.run_events(run_id)).await
+        self.with_app_db_for(scope, |db| db.run_events(run_id)).await
     }
 
     /// The repository an agent on `key` would work in, and the ticket's title: the one repository its linked pull
@@ -140,7 +140,7 @@ impl Core {
         let role = spec.role.clone();
         let id = proposals::new_id()?;
         let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, file, start.request_id, Utc::now());
-        self.with_db_atomically_for(scope, |db| {
+        self.with_app_db_atomically_for(scope, |db| {
             if let Some(ws) = workstream.as_deref() {
                 super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;
             }
@@ -182,7 +182,7 @@ impl Core {
     /// The run already started under `key`, if any.
     pub(crate) async fn run_started_as(&self, scope: &Scope, key: &str) -> Result<Option<Run>> {
         let connection_id = scope.connection_id.clone();
-        Ok(self.with_db_for(scope, |db| db.run_by_start_key(key)).await?.filter(|r| r.connection_id == connection_id))
+        Ok(self.with_app_db_for(scope, |db| db.run_by_start_key(key)).await?.filter(|r| r.connection_id == connection_id))
     }
 }
 
