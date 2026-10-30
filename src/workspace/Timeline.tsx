@@ -29,6 +29,7 @@ import { ENTRY_FOCUS, TIMELINE_ENTRY, anchoredScrollTop, firstShowing, followsEn
 import { PipRunCard } from "./PipRunCard";
 import { TimelineFilterBar, showAllRuns } from "./TimelineFilterBar";
 import { useWorkstreams } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 const NO_TURNS: Turn[] = [];
 const NO_EVENTS: readonly WorkstreamEvent[] = [];
@@ -135,9 +136,9 @@ function Line({ entry, onOpen, children }: { entry: TimelineEntry; onOpen?: () =
         <span className="min-w-0">{entry.text}</span>
       )}
       {waiting && (
-        <button type="button" tabIndex={-1} data-timeline-need={entry.needKey} onClick={onOpen} className="rounded-full border border-ws-pip/50 bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip">
+        <Button variant="plain" pip size="sm" tabIndex={-1} data-timeline-need={entry.needKey} onClick={onOpen}>
           In Needs you
-        </button>
+        </Button>
       )}
       {entry.detail && (
         <span data-timeline-detail className="line-clamp-3 basis-full min-w-0 pl-3 text-xs whitespace-pre-line text-ws-ink3 [overflow-wrap:anywhere]">
@@ -328,8 +329,8 @@ export function TimelineView({
             {shown.map((e) => (
               <Fragment key={e.key}>
               {days.has(e.key) && (
-                <li data-timeline-day={days.get(e.key)} className="m-0 -mb-2 border-b border-ws-sep/60 pb-0.5 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
-                  <h3 className="m-0 text-xs font-semibold">{days.get(e.key)}</h3>
+                <li data-timeline-day={days.get(e.key)} className="m-0 -mb-2 border-b border-ws-sep/60 pb-0.5 text-sm font-semibold text-ws-ink2">
+                  <h3 className="m-0 font-semibold">{days.get(e.key)}</h3>
                 </li>
               )}
               <li

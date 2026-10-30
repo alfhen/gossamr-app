@@ -7,6 +7,7 @@ import { useDraftsRev } from "./draftLive";
 import { groupId, openNeed, showGroup } from "./needsActions";
 import { BATCH_TITLE, EDITED_ASIDE, batchLabel, draftEdited } from "./workViewLogic";
 import { useWorkView } from "./workViewStore";
+import { Button } from "../components/Button";
 
 const CHIP: Record<NeedGroupKind, string> = {
   decide: "bg-ws-pip text-ws-on-pip",
@@ -73,15 +74,9 @@ function SafeBatch({ needs, gid }: { needs: readonly Need[]; gid: string }) {
     <li data-needs-you-batch className="grid gap-1.5 px-2 py-1">
       {count >= 2 && (
         <div>
-          <button
-            type="button"
-            aria-current={open ? "true" : undefined}
-            title={BATCH_TITLE}
-            onClick={() => (showGroup(needs[0]?.workstreamId ?? null), useWorkView.getState().previewBatch(gid))}
-            className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-          >
+          <Button size="sm" aria-current={open ? "true" : undefined} title={BATCH_TITLE} onClick={() => (showGroup(needs[0]?.workstreamId ?? null), useWorkView.getState().previewBatch(gid))}>
             {batchLabel(count)}
-          </button>
+          </Button>
         </div>
       )}
       {editedNote && (
@@ -219,7 +214,7 @@ function GroupRow({ group: g, now, onPick, openByDefault }: { group: NeedGroup; 
             aria-controls={list}
             aria-label={expanded ? `Show less of what needs you in ${g.title}` : `+${g.count - 1} more that need you in ${g.title}`}
             onClick={() => useWorkView.getState().setExpanded(gid, !expanded)}
-            className="rounded px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
+            className="rounded-md px-1 font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip"
           >
             {expanded ? "Show less" : `+${g.count - 1} more`}
           </button>
@@ -280,7 +275,7 @@ export function NeedsYouList({ needs, compact = false, main = false, onPick, now
   const moreBelow = useMoreBelow(box);
   return (
     <section ref={box} aria-label="Needs you" data-needs-you className={`grid min-h-0 content-start gap-1 overflow-y-auto ${compact ? "max-h-[min(400px,60vh)] p-2" : main ? "max-h-[min(36vh,20rem)] shrink-0 px-2 pb-2" : "max-h-[38vh] border-t border-ws-sep pt-2"}`}>
-      <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold tracking-wide uppercase ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-xs text-ws-ink3"}`}>
+      <h2 data-needs-you-title tabIndex={-1} className={`sticky top-0 z-10 m-0 flex items-center gap-1.5 px-1 outline-none font-semibold ${main ? "bg-ws-bar pt-2 pb-1 text-sm text-ws-ink2" : "bg-ws-win text-sm text-ws-ink2"}`}>
         Needs you
         <span data-needs-you-count aria-label={`${needs.length} waiting`} className={`rounded-full px-1.5 text-[10px] ${needs.length ? "bg-ws-pip text-ws-on-pip" : "bg-ws-hover text-ws-ink3"}`}>
           {needs.length}

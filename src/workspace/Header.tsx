@@ -8,25 +8,14 @@ import { usePopover } from "./Popover";
 import { projectColour } from "./projects";
 import { TabBar } from "./TabBar";
 import { useTabs, VIEW_LABEL, type ViewMode } from "./tabsStore";
+import { Segmented } from "../components/Segmented";
 
 /** The order the prototype shows the canvases in. */
 export const SEGMENT_ORDER: readonly ViewMode[] = ["board", "list"];
 
 export function ViewSegment({ view, onChange }: { view: ViewMode; onChange(view: ViewMode): void }) {
   return (
-    <div role="group" aria-label="View" className="ml-auto flex shrink-0 rounded-[9px] bg-ws-sel p-0.5">
-      {SEGMENT_ORDER.map((v) => (
-        <button
-          key={v}
-          type="button"
-          aria-pressed={view === v}
-          onClick={() => onChange(v)}
-          className={`rounded-[7px] px-3 py-[3px] font-semibold ${view === v ? "bg-ws-win text-ws-ink shadow-[0_1px_3px_rgb(0_0_0/0.18)]" : "text-ws-ink2 hover:text-ws-ink"}`}
-        >
-          {VIEW_LABEL[v]}
-        </button>
-      ))}
-    </div>
+    <Segmented label="View" className="ml-auto shrink-0" value={view} onChange={onChange} options={SEGMENT_ORDER.map((v) => ({ value: v, label: VIEW_LABEL[v] }))} />
   );
 }
 
@@ -37,7 +26,8 @@ export function ProjectMenu({ containers, value, onChange }: { containers: WorkC
     onChange(project);
     setOpen(false);
   };
-  const row = "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-ws-hover";
+  const row = "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left ws-glass-item";
+  const selected = "[background:linear-gradient(var(--color-ws-sel),var(--color-ws-sel)),var(--glass-lens)] font-semibold";
   return (
     <div ref={root} className="relative">
       <button
@@ -48,7 +38,7 @@ export function ProjectMenu({ containers, value, onChange }: { containers: WorkC
         aria-label={`Project: ${current?.name ?? "All projects"}`}
         title={`Switch project (${showOf("app", "jump")})`}
         onClick={() => setOpen(!open)}
-        className="-ml-1.5 flex items-center gap-2 rounded-lg px-1.5 text-[22px] leading-tight font-bold hover:bg-ws-hover"
+        className="-ml-1.5 flex items-center gap-2 font-display rounded-md px-1.5 text-[22px] leading-tight font-bold hover:bg-ws-hover"
       >
         {current?.name ?? "All projects"}
         <span aria-hidden className="text-xs font-normal text-ws-ink3">
@@ -56,19 +46,19 @@ export function ProjectMenu({ containers, value, onChange }: { containers: WorkC
         </span>
       </button>
       {open && (
-        <ul role="listbox" aria-label="Projects" className="absolute top-full left-0 z-40 mt-1 m-0 w-[240px] list-none rounded-xl border border-ws-sep2 bg-ws-win p-1.5 shadow-ws-pop">
+        <ul role="listbox" aria-label="Projects" className="absolute top-full left-0 z-40 mt-1 m-0 w-[240px] list-none ws-glass ws-glass-regular rounded-xl text-ws-ink p-1.5 text-sm font-medium">
           <li role="option" aria-selected={!value}>
-            <button type="button" className={row} onClick={() => pick(null)}>
+            <button type="button" className={`${row} ${!value ? selected : ""}`} onClick={() => pick(null)}>
               <span className="size-2.5 rounded-[3px] bg-ws-ink3" aria-hidden />
               All projects
             </button>
           </li>
           {containers.map((c) => (
             <li key={containerKey(c.ref)} role="option" aria-selected={sameProject(c.ref, value)}>
-              <button type="button" className={`${row} ${sameProject(c.ref, value) ? "bg-ws-sel font-semibold" : ""}`} onClick={() => pick(c.ref)}>
+              <button type="button" className={`${row} ${sameProject(c.ref, value) ? selected : ""}`} onClick={() => pick(c.ref)}>
                 <span className="size-2.5 rounded-[3px]" style={{ background: projectColour(containers, c.ref) }} aria-hidden />
                 {c.name}
-                <span className="ml-auto font-mono text-xs text-ws-ink3">{c.key}</span>
+                <span className="ml-auto font-mono text-xs text-ws-ink">{c.key}</span>
               </button>
             </li>
           ))}

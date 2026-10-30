@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type TextareaHTMLAttribut
 import { Link } from "../components/Adf";
 import { Markdown } from "../components/Markdown";
 import { useAutoHeight } from "../components/autoHeight";
+import { PipGlyph } from "../components/PipGlyph";
 import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
 import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
@@ -16,13 +17,12 @@ import { openOnGithub } from "./githubUi";
 import { takesBackendText } from "./RewriteDiff";
 import { FromRun } from "./RunProvenance";
 import { useWorkspace } from "../workspaceStore";
+import { Button } from "../components/Button";
 
 type Review = Extract<Proposal["intent"], { type: "githubReview" }>;
 
 const BADGE: Record<Proposal["state"]["type"], string> = { pending: "Needs your approval", applying: "Posting…", applied: "Posted", skipped: "Discarded", retired: "Out of date" };
 
-const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip";
-const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip";
 
 /** A comment as the card holds it while the person edits: its words, and whether they dropped it. */
 export interface Held extends ReviewComment {
@@ -330,7 +330,7 @@ export function ReviewDraft({
       className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
-        <span aria-hidden>✦</span>
+        <PipGlyph />
         {title}
         <span className="ml-auto font-normal text-ws-ink3">{BADGE[state]}</span>
       </div>
@@ -409,9 +409,9 @@ export function ReviewDraft({
                       {c.side === "LEFT" && <span className="font-sans font-normal text-ws-ink3"> (old side)</span>}
                     </span>
                     {open && (
-                      <button type="button" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (edited.current = true, setComments((was) => toggleDropped(was, i)))} className={`${button} ml-auto shrink-0 py-0.5 text-xs`}>
+                      <Button size="sm" className="ml-auto shrink-0" disabled={working} aria-label={`${c.dropped ? "Restore" : "Drop"} comment on ${place}`} onClick={() => (edited.current = true, setComments((was) => toggleDropped(was, i)))}>
                         {c.dropped ? "Restore" : "Drop comment"}
-                      </button>
+                      </Button>
                     )}
                   </span>
                   {c.dropped ? (
@@ -487,28 +487,28 @@ export function ReviewDraft({
         )}
         {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} where="the pull request" subject="Your edit" anyway="Post it anyway" working={working || state === "applying" || !!problem} onKeep={keepEditing} onPost={() => post()} />}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
-          <button type="button" onClick={() => void openOnGithub(`https://github.com/${review.repo}/pull/${review.number}`)} className={`${button} mr-auto`}>Open on GitHub</button>
+          <Button className="mr-auto" onClick={() => void openOnGithub(`https://github.com/${review.repo}/pull/${review.number}`)}>Open on GitHub</Button>
           {open && (
             <>
-              <button type="button" data-draft-edit disabled={working} onClick={() => card.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus()} className={button}>Edit</button>
+              <Button data-draft-edit disabled={working} onClick={() => card.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus()}>Edit</Button>
               {onDiscuss && (
-                <button type="button" disabled={working || !!problem} title={problem ?? "Pip reads this review and the pull request's comments, and changes the draft if you ask. Your edit is saved first."} onClick={() => onDiscuss(edit)} className={button}>
+                <Button disabled={working || !!problem} title={problem ?? "Pip reads this review and the pull request's comments, and changes the draft if you ask. Your edit is saved first."} onClick={() => onDiscuss(edit)}>
                   Discuss with Pip
-                </button>
+                </Button>
               )}
-              <button type="button" disabled={working} onClick={onSkip} className={button}>
+              <Button disabled={working} onClick={onSkip}>
                 Skip
-              </button>
+              </Button>
               {canPost && p.maybePosted?.checkedAt && (
-                <button type="button" data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => post({ postAnyway: true })} className={button}>
+                <Button data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => post({ postAnyway: true })}>
                   Post again
-                </button>
+                </Button>
               )}
               {/* While the pause shows, its own Post it anyway stands in for this button, beside Keep editing. */}
               {canPost && !pause && (
-                <button type="button" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => post()} className={primary}>
+                <Button variant="primary" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => post()}>
                   {working || state === "applying" ? "Posting…" : "Approve"}
-                </button>
+                </Button>
               )}
             </>
           )}

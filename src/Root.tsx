@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { Button } from "./components/Button";
 import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
 import { useEffect, useState } from "react";
 import { Workspace } from "./workspace/Workspace";
@@ -60,12 +61,12 @@ export function Root() {
           <div className="grid max-w-[480px] gap-3 text-center">
             <p className="selectable text-blocked">{phase.message}</p>
             <div className="flex justify-center gap-3">
-              <button type="button" className="rounded-md bg-accent px-3.5 py-1.5 font-semibold text-white" onClick={checkAuth}>
+              <Button variant="primary" onClick={checkAuth}>
                 Try again
-              </button>
-              <button type="button" className="text-accent" onClick={() => start(null)}>
+              </Button>
+              <Button variant="quiet" onClick={() => start(null)}>
                 Use sample data
-              </button>
+              </Button>
             </div>
           </div>
         </div>

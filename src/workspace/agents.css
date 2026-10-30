@@ -1,12 +1,5 @@
 .ws-agent-card {
-  transition:
-    transform 0.12s,
-    box-shadow 0.12s,
-    border-color 0.12s;
-}
-.ws-agent-card:hover {
-  border-color: var(--color-ws-sep2);
-  transform: translateY(-1px);
+  transition: background-color 0.12s;
 }
 
 /* The ring is the only motion on a working run; with reduced motion it is a plain dot. */
@@ -35,9 +28,6 @@
 @media (prefers-reduced-motion: reduce) {
   .ws-agent-card {
     transition: none;
-  }
-  .ws-agent-card:hover {
-    transform: none;
   }
   .ws-live::after {
     display: none;

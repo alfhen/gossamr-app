@@ -278,7 +278,7 @@ describe("a new-ticket draft in the Pip pane", () => {
     const out = card(long);
     expect(out).toContain("Rotate the keys");
     expect(out).toContain("Task · Parent CA-114 · in DEVOPS");
-    expect(out).toMatch(/<button[^>]*bg-ws-pip[^>]*>Review draft →<\/button>/);
+    expect(out).toMatch(/<button[^>]*ws-btn--pip-solid[^>]*>Review draft →<\/button>/);
   });
 
   it("folds a long description behind a Show more that says what it controls", () => {

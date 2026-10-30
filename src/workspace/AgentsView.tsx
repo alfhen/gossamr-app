@@ -32,8 +32,11 @@ import { undoLatest } from "./undo";
 import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { needsIn } from "../lib/needs";
+import { PipGlyph } from "../components/PipGlyph";
+import { Button } from "../components/Button";
+import { ScreenBar } from "./ScreenBar";
+import { Segmented } from "../components/Segmented";
 
-const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
 
 export { useNow };
 
@@ -63,10 +66,10 @@ export function StopAll({ count, waiting = 0, busy, onStop }: { count: number; w
   }, [none]);
   if (!asking) {
     return (
-      <button type="button" disabled={none || busy} title="Stop every agent that is working or waiting" onClick={() => setAsking(true)} className={`${BUTTON} border-ws-blocked text-ws-blocked hover:bg-ws-blocked hover:text-white`}>
+      <Button destructive disabled={none || busy} title="Stop every agent that is working or waiting" onClick={() => setAsking(true)}>
         <Icon name="stop" />
         Stop all
-      </button>
+      </Button>
     );
   }
   return (
@@ -84,12 +87,10 @@ export function StopAll({ count, waiting = 0, busy, onStop }: { count: number; w
       <span className="text-sm text-ws-ink2">
         Stop {stopAllText(count, waiting)}? Their work is kept. Agents from Terminal are not touched.
       </span>
-      <button type="button" autoFocus onClick={() => (setAsking(false), onStop())} className={`${BUTTON} border-ws-blocked bg-ws-blocked font-semibold text-white`}>
+      <Button variant="danger" autoFocus onClick={() => (setAsking(false), onStop())}>
         Yes, stop all
-      </button>
-      <button type="button" onClick={() => setAsking(false)} className={BUTTON}>
-        Keep going
-      </button>
+      </Button>
+      <Button onClick={() => setAsking(false)}>Keep going</Button>
     </span>
   );
 }
@@ -125,21 +126,27 @@ export interface AgentsActions {
 /** The Work screen's one filter: Needs you, with the same count as the rail badge. */
 function NeedsFilter({ needsYou, filters, on }: { needsYou: number; filters: AgentFilters; on: AgentsActions }) {
   return (
-    <div role="group" aria-label="Show" data-summary-chips>
-      <button
-        type="button"
-        data-chip="needs"
-        aria-pressed={filters.needs}
-        onClick={() => on.filter({ needs: !filters.needs })}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-px text-sm leading-normal font-semibold whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ws-pip ${filters.needs ? "border-ws-pip bg-ws-pip text-ws-on-pip" : "border-ws-pip text-ws-ink hover:bg-ws-hover"}`}
-      >
-        Needs you
-        <span data-chip-count data-needs-you-count>
-          {needsYou}
-        </span>
-        {needsYou === 0 && <span className="sr-only">Nothing needs you.</span>}
-      </button>
-    </div>
+    <Segmented
+      label="Show"
+      attrs={{ "data-summary-chips": true }}
+      value={filters.needs ? "needs" : null}
+      onChange={() => on.filter({ needs: !filters.needs })}
+      options={[
+        {
+          value: "needs",
+          attrs: { "data-chip": "needs" },
+          label: (
+            <>
+              Needs you
+              <span data-chip-count data-needs-you-count>
+                {needsYou}
+              </span>
+              {needsYou === 0 && <span className="sr-only">Nothing needs you.</span>}
+            </>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -151,10 +158,10 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
   const title = group.itemKey ? rowTitle({ itemKey: group.itemKey, title: group.title }) : group.title;
   const name = group.itemKey ? `${group.itemKey} ${title}` : title;
   return (
-    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className={`relative grid gap-2.5 ${mine ? "-ml-3 rounded-sm border-l-[3px] border-ws-pip pl-2.5" : ""}`}>
-      <div className="flex min-w-0 items-center gap-2">
+    <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className="relative grid">
+      <div className="flex min-w-0 items-center gap-2 border-b border-ws-sep pb-2">
         {group.id && (
-          <span aria-hidden className="text-ws-pip">
+          <span aria-hidden className={mine ? "text-ws-accent" : "text-ws-ink3"}>
             ◆
           </span>
         )}
@@ -169,11 +176,11 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
           )}
         </h3>
         {view ? <WorkstreamHeadExtras view={view} /> : <NeedsBadge count={mine} total={needs.length} />}
-        <span className="text-xs text-ws-ink3">{group.runs.length}</span>
+        <span className="text-xs text-ws-ink3">· {group.runs.length} {group.runs.length === 1 ? "agent" : "agents"}</span>
         {openId && onOpen && (
-          <button type="button" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)} className="ml-auto shrink-0 rounded-md px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+          <Button variant="plain" size="sm" className="ml-auto shrink-0" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)}>
             Open
-          </button>
+          </Button>
         )}
       </div>
       {children}
@@ -281,7 +288,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
   let position = 0;
   /** A workstream's runs as rows. */
   const items = (title: string, list: readonly Run[], labels: Record<string, string> = {}) => (
-    <div role="group" aria-label={title} className="grid gap-2">
+    <div role="group" aria-label={title} className="grid">
       {list.map((r) => (
         <AgentCard key={r.id} {...props(r, ++position, labels[r.id])} />
       ))}
@@ -301,25 +308,32 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
   return (
     <div ref={root} data-agents-home className="flex h-full min-h-0">
     <div className="@container flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ws-sep bg-ws-bar px-6 py-2.5">
-          <h1 ref={title} tabIndex={-1} className="m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
-            Work
-          </h1>
-          <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
-          <span className="flex-1" />
-          <button type="button" onClick={on.askPip} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
-            <Icon name="spark" />
-            Ask Pip
-          </button>
-          <button type="button" onClick={on.openSafety} className={BUTTON}>
-            <Icon name="shield" />
-            Agent settings
-          </button>
-          {clear}
-          <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
-        </header>
-        {tools && <div className="flex flex-wrap items-center gap-2 border-b border-ws-sep px-6 py-1.5">{tools}</div>}
-        <div className="min-h-0 flex-1 overflow-y-auto pt-5 pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
+        <ScreenBar
+          resetKey="work"
+          bar={
+            <>
+              <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-6 py-2.5">
+                <h1 ref={title} tabIndex={-1} className="font-display m-0 rounded text-base font-semibold focus-visible:outline-2 focus-visible:outline-ws-pip">
+                  Work
+                </h1>
+                <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
+                <span className="flex-1" />
+                <Button variant="pip" onClick={on.askPip}>
+                  <PipGlyph />
+                  Ask Pip
+                </Button>
+                <Button onClick={on.openSafety}>
+                  <Icon name="shield" />
+                  Agent settings
+                </Button>
+                {clear}
+                <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
+              </header>
+              {tools && <div className="flex flex-wrap items-center gap-2 px-6 pb-1.5">{tools}</div>}
+            </>
+          }
+        >
+        <div data-bar-scroll className="h-full overflow-y-auto scroll-pt-[var(--ws-bar-h,0px)] pt-[calc(var(--ws-bar-h,0px)+12px)] pr-[max(24px,var(--ws-launcher-gutter,0px))] pb-[max(80px,var(--ws-launcher-clear,0px))] pl-6">
           <div
             data-agents-list
             data-frozen={frozen || undefined}
@@ -327,7 +341,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
             onPointerLeave={() => setHovered(false)}
             onFocus={() => setFocused(true)}
             onBlur={(ev) => setFocused(!!ev.relatedTarget && ev.currentTarget.contains(ev.relatedTarget as Node))}
-            className="grid gap-5.5"
+            className="grid gap-6"
           >
             <AgentsBanners loadError={status === "error" ? error : null} onRetry={on.retry} />
             {waiting ? (
@@ -349,6 +363,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
             {!waiting && archivedSection}
           </div>
         </div>
+        </ScreenBar>
         <footer ref={footer} className="@container flex h-8 shrink-0 items-center gap-4 border-t border-ws-sep bg-ws-win px-6 text-xs text-ws-ink3">
           <ShortcutHint on="work" />
         </footer>

@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="181 76 662 662">
   <line id="thread" x1="512" y1="100" x2="512" y2="374" stroke="#8c8ba6" stroke-opacity="0.7" stroke-width="9"/>
   <g id="pip">
-    <path d="M 384 489 C 311 457 252 492 242 562" fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"/>
-    <path d="M 390 570 C 321 573 302 642 340 686" fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"/>
-    <path d="M 640 489 C 713 457 772 492 782 562" fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"/>
-    <path d="M 634 570 C 703 573 722 642 684 686" fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"/>
-    <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+    <path d="M 384 489 C 311 457 252 492 242 562" fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round"/>
+    <path d="M 390 570 C 321 573 302 642 340 686" fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round"/>
+    <path d="M 640 489 C 713 457 772 492 782 562" fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round"/>
+    <path d="M 634 570 C 703 573 722 642 684 686" fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round"/>
+    <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
     <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
     <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
   </g>

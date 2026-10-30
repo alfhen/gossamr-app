@@ -11,10 +11,13 @@ import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
 export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
 
+export const PIP_ICON = "pip";
+
 export interface Command {
   id: string;
   group: CommandGroup;
   label: string;
+  /** A glyph, or `PIP_ICON` for Pip's mark. */
   icon?: string;
   hint?: string;
   /** Runs without closing the palette, for commands that ask a follow-up question. */
@@ -160,7 +163,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
         ]
       : []),
     { id: "app:tab", group: "App", icon: "▫", label: "New tab", hint: "Workspace", run: a.newTab },
-    { id: "app:pip", group: "App", icon: "✦", label: "Toggle Pip", hint: showOf("app", "pip"), keywords: "assistant chat claude", run: a.togglePip },
+    { id: "app:pip", group: "App", icon: PIP_ICON, label: "Toggle Pip", hint: showOf("app", "pip"), keywords: "assistant chat claude", run: a.togglePip },
   ];
 }
 
@@ -259,7 +262,7 @@ export function askToPlanCommands(items: readonly WorkItem[], query: string, a: 
   const byKey = new Map(items.map((i) => [itemKey(i.item), i]));
   return found.flatMap((id) => {
     const item = byKey.get(id);
-    return item ? [{ id: `askplan:${id}`, group: "Ask Pip" as const, icon: "✦", label: `Ask Pip to plan ${item.item.key}`, hint: "Pip starts it", keywords: "pip plan workstream", run: () => a.askPipToPlan(item) }] : [];
+    return item ? [{ id: `askplan:${id}`, group: "Ask Pip" as const, icon: PIP_ICON, label: `Ask Pip to plan ${item.item.key}`, hint: "Pip starts it", keywords: "pip plan workstream", run: () => a.askPipToPlan(item) }] : [];
   });
 }
 
@@ -305,7 +308,7 @@ export function pullCommand(query: string, open: (ref: PullRef) => void): Comman
 export function withAskPip(results: readonly Command[], query: string, ask: (query: string) => void): Command[] {
   const q = query.trim();
   if (!q) return [...results];
-  return [...results, { id: "ask:pip", group: "Ask Pip", icon: "✦", label: `Ask Pip: “${q}”`, hint: "↵", run: () => ask(q) }];
+  return [...results, { id: "ask:pip", group: "Ask Pip", icon: PIP_ICON, label: `Ask Pip: “${q}”`, hint: "↵", run: () => ask(q) }];
 }
 
 /** One entry per project for the new-ticket prompt, the one on screen first. */

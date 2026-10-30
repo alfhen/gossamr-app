@@ -27,6 +27,8 @@ export interface Turn {
   kind?: "user" | "wake";
   /** When it was asked, or when Pip woke for it, as an ISO time: where it stands on the workstream's timeline. */
   at?: string;
+  /** When Pip began on it after it waited in the queue, as an ISO time. */
+  startedAt?: string;
 }
 
 export interface Conversation {
@@ -79,7 +81,7 @@ export function applyEvent(conv: Conversation, requestId: string, e: ClaudeEvent
       case "queued":
         return t.status === "running" ? { ...t, status: "queued" as const } : t;
       case "running":
-        return t.status === "queued" ? { ...t, status: "running" as const } : t;
+        return t.status === "queued" ? { ...t, status: "running" as const, startedAt: new Date().toISOString() } : t;
       default:
         return t;
     }

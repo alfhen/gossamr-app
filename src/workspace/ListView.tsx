@@ -1,4 +1,5 @@
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { PipGlyph } from "../components/PipGlyph";
 import { itemKey, YOUR_TURN, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { AgeChip, AttentionDot, Avatar, StatusPill, TurnPill } from "./CanvasBits";
@@ -107,7 +108,7 @@ function useCompactBadges(cell: RefObject<HTMLElement | null>, badges: RefObject
 export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "moreDrafts"> & { compact: boolean }) {
   const more = p.moreDrafts > 0 ? `${p.moreDrafts} more ${p.moreDrafts === 1 ? "draft" : "drafts"} waiting` : "";
   if (p.compact) {
-    const icon = (label: string, className: string, glyph: string, tip = label) => (
+    const icon = (label: string, className: string, glyph: ReactNode, tip = label) => (
       <span role="img" aria-label={label} title={tip} className={`grid h-4 min-w-4 place-items-center rounded-full px-0.5 text-[11px] leading-none font-semibold ${className}`}>
         {glyph}
       </span>
@@ -116,7 +117,7 @@ export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "m
       <>
         {p.needsMe && icon(YOUR_TURN, "bg-ws-pip-soft text-ws-pip", "!", YOUR_TURN_WHY)}
         {p.blocked && icon("Blocked", "bg-ws-blocked-soft text-ws-blocked", "⛓")}
-        {p.draft && icon(`A draft waits for approval: ${p.draft.to}`, "bg-ws-pip-soft text-ws-pip", "✦")}
+        {p.draft && icon(`A draft waits for approval: ${p.draft.to}`, "bg-ws-pip-soft text-ws-pip", <PipGlyph />)}
         {more && icon(more, "text-ws-pip", `+${p.moreDrafts}`)}
       </>
     );
@@ -127,12 +128,12 @@ export function RowBadges(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "m
       {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
       {p.draft && (
         <span className="rounded-full bg-ws-pip-soft px-2 py-px text-xs font-semibold text-ws-pip" title="A draft is waiting for approval">
-          ✦ draft → {p.draft.to}
+          <PipGlyph /> draft → {p.draft.to}
         </span>
       )}
       {more && (
         <span className="text-xs text-ws-pip" title={more}>
-          ✦ {p.moreDrafts}
+          <PipGlyph /> {p.moreDrafts}
         </span>
       )}
     </>
@@ -145,7 +146,7 @@ export function ListRow(p: RowProps) {
   const badges = useRef<HTMLSpanElement>(null);
   const compact = useCompactBadges(cell, badges, `${p.needsMe}|${p.blocked}|${p.draft?.to ?? ""}|${p.moreDrafts}`);
   const days = daysQuiet(item, p.now);
-  const lit = p.marked ? "bg-ws-accent-soft shadow-[inset_3px_0_0_var(--color-ws-accent)]" : p.selected ? "bg-ws-pip-soft shadow-[inset_3px_0_0_var(--color-ws-pip)]" : "hover:bg-ws-hover";
+  const lit = p.marked ? "bg-ws-accent-soft shadow-[inset_3px_0_0_var(--color-ws-accent)]" : p.selected ? "ws-lens-row border-t-transparent" : "hover:bg-ws-hover";
   return (
     <div
       id={rowId(itemKey(item.item))}
@@ -218,11 +219,11 @@ export function ListView({ items }: CanvasProps) {
     }
   };
 
-  if (!items.length) return <p className="p-10 text-center text-ws-ink3">Nothing matches this filter.</p>;
+  if (!items.length) return <p className="p-10 pt-[calc(var(--ws-bar-h,0px)+40px)] text-center text-ws-ink3">Nothing matches this filter.</p>;
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-auto px-6 pb-[calc(var(--ws-launcher-clear,0px)+24px)]">
+      <div data-bar-scroll className="min-h-0 flex-1 overflow-auto px-6 pt-[var(--ws-bar-h,0px)] scroll-pt-[var(--ws-bar-h,0px)] pb-[calc(var(--ws-launcher-clear,0px)+24px)]">
         <div
           role="listbox"
           tabIndex={0}

@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "./AgentIcons";
+import { Button } from "../components/Button";
 
 const TONES = {
   bad: { box: "border-ws-blocked/40 bg-ws-blocked-soft", head: "text-ws-blocked" },
 } as const;
-
-const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover";
 
 function Banner({ icon, title, children, actions }: { icon: IconName; title: string; children: ReactNode; actions?: ReactNode }) {
   return (
@@ -33,10 +32,10 @@ export function AgentsBanners({ loadError, onRetry }: AgentsBannersProps) {
       icon="alert"
       title="Couldn't load your agents"
       actions={
-        <button type="button" onClick={onRetry} className={BUTTON}>
+        <Button size="sm" onClick={onRetry}>
           <Icon name="retry" />
           Retry
-        </button>
+        </Button>
       }
     >
       <span className="selectable [overflow-wrap:anywhere]">{loadError}</span>

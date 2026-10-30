@@ -47,6 +47,8 @@ pub enum Topic {
     DevLinks,
     /// Open items assigned to the person in containers they don't watch; the payload carries them as `strays`.
     AssignedElsewhere,
+    /// A macOS display option the page follows, such as Reduce transparency.
+    Display,
 }
 
 #[derive(Clone, Serialize)]

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { messageOf, useToasts } from "../workspace/toasts";
+import { Button } from "./Button";
 
 const COPIED_MS = 1500;
 
@@ -63,11 +64,12 @@ export function CodeBlock({ text, lang }: { text: string; lang?: string }) {
   };
 
   const button = (
-    <button
-      type="button"
+    <Button
+      variant="plain"
+      size="sm"
       aria-label="Copy code"
       onClick={() => void copy()}
-      className={`flex items-center gap-1 rounded-md border border-ws-sep2 bg-ws-win px-1.5 py-0.5 text-xs font-medium text-ws-ink2 opacity-0 transition-opacity hover:text-ws-ink focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ws-accent group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100`}
+      className="opacity-0 transition-opacity focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
     >
       <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
         {copied ? (
@@ -80,7 +82,7 @@ export function CodeBlock({ text, lang }: { text: string; lang?: string }) {
         )}
       </svg>
       {copied ? "Copied" : "Copy"}
-    </button>
+    </Button>
   );
 
   return (

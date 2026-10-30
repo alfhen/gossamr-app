@@ -11,6 +11,14 @@ const conv = (): Conversation => ({
 });
 
 describe("applyEvent", () => {
+  it("records when a queued turn starts running, so Pip's clock leaves out the wait", () => {
+    const queued = applyEvent(conv(), "r1", { type: "queued", ahead: 1 });
+    expect(queued.turns[0].startedAt).toBeUndefined();
+    const running = applyEvent(queued, "r1", { type: "running" });
+    expect(running.turns[0].status).toBe("running");
+    expect(Date.parse(running.turns[0].startedAt ?? "")).not.toBeNaN();
+  });
+
   it("streams text and steps into the matching turn only", () => {
     let c = applyEvent(conv(), "r1", { type: "text", text: "Hel" });
     c = applyEvent(c, "r1", { type: "text", text: "lo" });

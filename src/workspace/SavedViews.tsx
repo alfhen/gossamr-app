@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import type { SavedView } from "./filters";
+import { Button } from "../components/Button";
 
 /** A one-line name field: Enter commits, Escape cancels. */
 export function NameField({ initial, label, onCommit, onCancel }: { initial: string; label: string; onCommit(name: string): void; onCancel(): void }) {
@@ -29,9 +30,9 @@ export function SaveViewInline({ suggested, onSave }: { suggested: string; onSav
   const [editing, setEditing] = useState(false);
   if (!editing)
     return (
-      <button type="button" className="shrink-0 text-sm text-ws-ink3 underline hover:text-ws-ink" onClick={() => setEditing(true)}>
+      <Button variant="quiet" size="sm" className="shrink-0" onClick={() => setEditing(true)}>
         Save view
-      </button>
+      </Button>
     );
   return (
     <span className="flex w-[300px] shrink-0 items-center gap-1.5">
@@ -49,7 +50,6 @@ export function SaveViewInline({ suggested, onSave }: { suggested: string; onSav
   );
 }
 
-const small = "grid size-[22px] shrink-0 place-items-center rounded text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink disabled:opacity-30 disabled:hover:bg-transparent";
 
 export interface SavedViewsPanelProps {
   builtIn: SavedView[];
@@ -103,28 +103,30 @@ export function SavedViewsPanel(p: SavedViewsPanelProps) {
                   {v.name}
                 </button>
                 <span className="flex items-center opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
-                  <button type="button" aria-label={`Move ${v.name} up`} disabled={i === 0} onClick={() => p.onMove(v.id, -1)} className={small}>
+                  <Button variant="plain" size="sm" iconOnly aria-label={`Move ${v.name} up`} disabled={i === 0} onClick={() => p.onMove(v.id, -1)}>
                     <span aria-hidden>↑</span>
-                  </button>
-                  <button type="button" aria-label={`Move ${v.name} down`} disabled={i === p.saved.length - 1} onClick={() => p.onMove(v.id, 1)} className={small}>
+                  </Button>
+                  <Button variant="plain" size="sm" iconOnly aria-label={`Move ${v.name} down`} disabled={i === p.saved.length - 1} onClick={() => p.onMove(v.id, 1)}>
                     <span aria-hidden>↓</span>
-                  </button>
-                  <button type="button" aria-label={`Rename ${v.name}`} onClick={() => setRenaming(v.id)} className={small}>
+                  </Button>
+                  <Button variant="plain" size="sm" iconOnly aria-label={`Rename ${v.name}`} onClick={() => setRenaming(v.id)}>
                     <span aria-hidden>✎</span>
-                  </button>
-                  <button type="button" aria-label={`Remove saved view ${v.name}`} onClick={() => p.onRemove(v.id)} className={small}>
+                  </Button>
+                  <Button variant="plain" size="sm" iconOnly aria-label={`Remove saved view ${v.name}`} onClick={() => p.onRemove(v.id)}>
                     <span aria-hidden>×</span>
-                  </button>
+                  </Button>
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="plain"
+                  size="sm"
+                  iconOnly
+                  pip={v.pinned === true}
                   aria-pressed={v.pinned === true}
                   aria-label={v.pinned ? `Unpin ${v.name} from the tabs` : `Pin ${v.name} as a tab`}
                   onClick={() => p.onPin(v.id, !v.pinned)}
-                  className={`${small} ${v.pinned ? "text-ws-pip" : ""}`}
                 >
                   <span aria-hidden>{v.pinned ? "★" : "☆"}</span>
-                </button>
+                </Button>
               </>
             )}
           </li>
@@ -145,14 +147,9 @@ export function SavedViewsPanel(p: SavedViewsPanelProps) {
             />
           </div>
         ) : (
-          <button
-            type="button"
-            disabled={p.suggested === null}
-            onClick={() => setSaving(true)}
-            className="w-full rounded-md px-1 py-1 text-left font-semibold text-ws-pip hover:bg-ws-hover disabled:text-ws-ink3 disabled:hover:bg-transparent"
-          >
+          <Button variant="plain" pip size="sm" className="w-full justify-start" disabled={p.suggested === null} onClick={() => setSaving(true)}>
             Save current filter as a view
-          </button>
+          </Button>
         )}
       </div>
     </div>

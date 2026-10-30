@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { Proposal } from "../types";
+import { Button } from "../components/Button";
 
 /** Brings the draft `id` into view and gives it the keyboard, wherever it shows on screen. */
 export function showNewerDraft(id: string) {
@@ -24,7 +25,7 @@ export function RetiredDraft({ proposal: p, title, state, children, initialOpen 
           aria-expanded={open}
           aria-controls={body}
           onClick={() => setOpen(!open)}
-          className="flex min-w-0 items-center gap-1.5 rounded text-left hover:text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+          className="flex min-w-0 items-center gap-1.5 rounded-md text-left hover:text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         >
           <span aria-hidden className="text-xs">
             {open ? "▾" : "▸"}
@@ -35,9 +36,9 @@ export function RetiredDraft({ proposal: p, title, state, children, initialOpen 
           </span>
         </button>
         {p.supersededBy && (
-          <button type="button" onClick={() => showNewerDraft(p.supersededBy!)} className="ml-auto shrink-0 rounded font-semibold text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+          <Button variant="plain" pip size="sm" className="ml-auto shrink-0" onClick={() => showNewerDraft(p.supersededBy!)}>
             Show the newer draft
-          </button>
+          </Button>
         )}
       </div>
       <div id={body} hidden={!open}>

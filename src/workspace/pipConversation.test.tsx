@@ -124,7 +124,7 @@ describe("PipConversation", () => {
     expect(html).toMatch(/<button type="button" data-wake-run="run-2"[^>]*>run R2<\/button> finished/);
     expect(html).toContain("I drafted a plan for you to start.");
     expect(html).not.toContain("[Event]");
-    expect(html.match(/bg-ws-accent px-3/g)).toHaveLength(1);
+    expect(html.match(/bg-ws-accent-soft px-3/g)).toHaveLength(1);
   });
 
   it("keeps a wake turn compact: a long answer is clamped to about three lines behind Show more, then its cards", () => {
@@ -302,6 +302,16 @@ describe("PipConversation", () => {
       expect(html).toMatch(/<p data-composer-footer="true" class="[^"]*text-ws-ink3[^"]*">4 agents working · 2 need you<\/p>/);
       expect(html.indexOf("data-composer-footer")).toBeGreaterThan(html.indexOf('id="pip-input"'));
       expect(renderToStaticMarkup(<ComposerFooter text="No agents working · nothing needs you" />)).toContain("No agents working");
+    });
+
+    it("shows the web with a hidden word and a polite line of what Pip is doing while it answers", () => {
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [at("r1", "First", "running")] } });
+      const html = renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />);
+      expect(html).toMatch(/data-pip-working[^>]*role="status" aria-live="polite"/);
+      expect(html).toMatch(/aria-hidden="true" data-pip-word/);
+      expect(html).toContain("Looking at the screen");
+      setTurns({ [GENERAL_CONVERSATION]: { sessionId: null, turns: [{ ...at("r1", "First", "running"), text: "Here" }] } });
+      expect(renderToStaticMarkup(<PipConversation conversation={GENERAL_CONVERSATION} proposals={[]} />)).not.toContain("data-pip-working");
     });
 
     it("shows a queued question with when it runs and a way to remove it", () => {

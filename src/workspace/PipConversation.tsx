@@ -20,6 +20,9 @@ import { useRuns } from "./runsStore";
 import { useTabs, type Route } from "./tabsStore";
 import { contextFor, useWorkstreams } from "./workstreamsStore";
 import { maskSecrets } from "../lib/riskyText";
+import { Button } from "../components/Button";
+import { PipAvatar } from "./PipAvatar";
+import { PipWorkSlot } from "./PipWork";
 
 export { PIP_INPUT_ID };
 /** The Pip pane's conversation when no workstream is in focus, and each workstream's own (`ws:<id>`). */
@@ -43,9 +46,9 @@ export function AppliedCard({ note, state, onAct }: { note: string; state: Appli
         <span className="truncate text-sm font-normal text-ws-ink2">{state === "changed" ? `${note} · You changed it since` : note}</span>
       </div>
       {action && (
-        <button type="button" onClick={onAct} className="ml-auto shrink-0 rounded-md border border-ws-pip px-2.5 py-px font-semibold hover:bg-ws-pip hover:text-ws-on-pip">
+        <Button variant="pip" size="sm" className="ml-auto shrink-0" onClick={onAct}>
           {action}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -113,7 +116,7 @@ function WakeHeader({ turn }: { turn: Turn }) {
         <span>
           Pip picked this up:{" "}
           {runId && runs.some((r) => r.id === runId) ? (
-            <button type="button" data-wake-run={runId} title="Show this run" onClick={() => openWakeRun(runId)} className="rounded text-ws-ink2 underline-offset-2 hover:text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip">
+            <button type="button" data-wake-run={runId} title="Show this run" onClick={() => openWakeRun(runId)} className="rounded-md text-ws-ink2 underline-offset-2 hover:text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ws-pip">
               {who}
             </button>
           ) : (
@@ -142,7 +145,7 @@ function WakeText({ id, text }: { id: string; text: string }) {
         <Markdown text={text} />
       </div>
       {long && (
-        <button type="button" aria-expanded={open} aria-controls={panel} aria-label={open ? "Show less of Pip's answer" : "Show more of Pip's answer"} onClick={() => setOpen(!open)} className="justify-self-start rounded text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
+        <button type="button" aria-expanded={open} aria-controls={panel} aria-label={open ? "Show less of Pip's answer" : "Show more of Pip's answer"} onClick={() => setOpen(!open)} className="justify-self-start rounded-md text-xs font-semibold text-ws-ink2 hover:underline focus-visible:outline-2 focus-visible:outline-ws-pip">
           {open ? "Show less" : "Show more"}
         </button>
       )}
@@ -161,7 +164,7 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
     return (
       <div data-turn-kind="wake" data-turn-status={turn.status} className="grid gap-1">
         <WakeHeader turn={turn} />
-        {(turn.steps.length > 0 || working) && (
+        {turn.steps.length > 0 && (
           <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
             {turn.steps.map((s, i) => (
               <li key={i} className="flex items-center gap-1.5">
@@ -169,9 +172,9 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
                 {s}
               </li>
             ))}
-            {working && <li className="animate-pulse text-ws-ink3">Reading what happened…</li>}
           </ul>
         )}
+        <PipWorkSlot working={working} line="Reading what happened" since={turn.startedAt ?? turn.at} />
         {turn.text && <WakeText id={turn.requestId} text={turn.text} />}
         {drafts.map((p) => (
           <LiveDraftPreview key={p.id} proposal={p} />
@@ -193,25 +196,19 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
           {turn.imageCount === 1 ? "1 image was sent with this; it isn't kept." : `${turn.imageCount} images were sent with this; they aren't kept.`}
         </p>
       )}
-      <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent px-3 py-1.5 whitespace-pre-wrap text-white [overflow-wrap:anywhere]">
+      <div data-user-bubble className="max-w-[85%] justify-self-end rounded-[14px_14px_4px_14px] bg-ws-accent-soft px-3 py-1.5 whitespace-pre-wrap text-ws-ink shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-ws-accent)_26%,transparent)] [overflow-wrap:anywhere]">
         {maskSecrets(turn.shown ?? turn.prompt)}
-        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-white/50 pl-2 text-sm text-white/85">{maskSecrets(turn.quote)}</blockquote>}
+        {turn.quote && <blockquote className="m-0 mt-1 line-clamp-2 border-l-2 border-ws-accent/40 pl-2 text-sm text-ws-ink2">{maskSecrets(turn.quote)}</blockquote>}
       </div>
       {turn.status === "queued" && (
         <div className="flex items-center justify-end gap-1.5 text-sm text-ws-ink3">
           <span>{afterQueued ? "Queued, runs after the question before it" : "Queued, runs after the current answer"}</span>
-          <button
-            type="button"
-            aria-label="Remove this question"
-            title="Remove this question"
-            onClick={() => useClaude.getState().remove(turn.requestId)}
-            className="rounded px-1 text-lg leading-none hover:text-ws-ink"
-          >
+          <Button variant="quiet" size="sm" iconOnly aria-label="Remove this question" title="Remove this question" onClick={() => useClaude.getState().remove(turn.requestId)}>
             ×
-          </button>
+          </Button>
         </div>
       )}
-      {(turn.steps.length > 0 || working) && (
+      {turn.steps.length > 0 && (
         <ul className="m-0 grid list-none gap-1 p-0 text-sm text-ws-ink2">
           {turn.steps.map((s, i) => (
             <li key={i} className="flex items-center gap-1.5">
@@ -219,12 +216,17 @@ export function TurnView({ turn, proposals, afterQueued = false }: { turn: Turn;
               {s}
             </li>
           ))}
-          {working && <li className="animate-pulse text-ws-ink3">Looking at {turn.looking ?? "the screen"}…</li>}
         </ul>
       )}
+      <PipWorkSlot working={working} line={`Looking at ${turn.looking ?? "the screen"}`} since={turn.startedAt ?? turn.at} />
       {turn.text && (
-        <div data-pip-answer className="ws-legacy">
-          <Markdown text={turn.text} />
+        <div className="grid grid-cols-[22px_minmax(0,1fr)] gap-2">
+          <span aria-hidden className="pt-0.5">
+            <PipAvatar size={22} />
+          </span>
+          <div data-pip-answer className="ws-legacy min-w-0">
+            <Markdown text={turn.text} />
+          </div>
         </div>
       )}
       <LiveApplied requestId={turn.requestId} />
@@ -277,23 +279,17 @@ export function EarlierDrafts({ proposals, turns, ticket = null }: { proposals: 
   const { shown: listed, others } = draftsForTicket([...waiting, ...retired], ticket);
   return (
     <section aria-label="Drafts" className="grid gap-1.5">
-      <h3 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">
+      <h3 className="m-0 text-sm font-semibold text-ws-ink2">
         Drafts waiting <span className="font-normal">{waiting.length}</span>
       </h3>
       {listed.map((p) => (
         <LiveDraftPreview key={p.id} proposal={p} />
       ))}
       {others.length > 0 && (
-        <button
-          type="button"
-          data-other-tickets
-          aria-expanded={unfolded}
-          onClick={() => setUnfolded(!unfolded)}
-          className="justify-self-start rounded-md px-1.5 py-0.5 text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-        >
+        <Button variant="plain" size="sm" className="justify-self-start" data-other-tickets aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)}>
           <span aria-hidden>{unfolded ? "▾ " : "▸ "}</span>
           {otherTicketsRow(others.length)}
-        </button>
+        </Button>
       )}
       {unfolded &&
         others.map((p) => (
@@ -469,13 +465,13 @@ export function Composer({ conversation, attached, looking, scene, footer = null
       {quote && (
         <div className="mx-3 mb-2 flex items-start gap-2 rounded-md border border-ws-pip bg-ws-pip-soft px-2.5 py-1 text-sm text-ws-ink2">
           <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere]">“{quote}”</span>
-          <button type="button" aria-label="Forget the selected text" onClick={() => usePip.getState().clearQuote()} className="shrink-0 text-lg leading-none text-ws-ink3">
+          <Button variant="quiet" size="sm" iconOnly className="shrink-0" aria-label="Forget the selected text" onClick={() => usePip.getState().clearQuote()}>
             ×
-          </button>
+          </Button>
         </div>
       )}
       <AttachedThumbs images={attached.images} onRemove={attached.remove} />
-      <form onSubmit={submit} className={`flex gap-2 p-3 ${attached.images.length ? "" : "border-t border-ws-sep"}`}>
+      <form onSubmit={submit} className="flex items-center gap-2 p-3">
         <AttachButton disabled={attached.images.length >= MAX_IMAGES} onFiles={(files) => void attached.add(files)} />
         <input
           id={PIP_INPUT_ID}
@@ -491,16 +487,16 @@ export function Composer({ conversation, attached, looking, scene, footer = null
           aria-label="Ask Pip"
           placeholder={placeholderFor({ ...scene, images: attached.images.length > 0, quote: !!quote })}
           autoComplete="off"
-          className="min-w-0 flex-1 rounded-[10px] border border-ws-sep2 bg-ws-bar px-2.5 py-1.5 focus:border-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+          className="min-w-0 flex-1 rounded-full bg-ws-side px-3 py-1.5 shadow-[var(--well-shade),inset_0_0_0_1px_var(--color-ws-sep)] focus:shadow-[var(--well-shade),inset_0_0_0_1px_var(--color-ws-pip)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
         />
         {running && (
-          <button type="button" onClick={() => useClaude.getState().cancel(conversation)} className="rounded-md border border-ws-sep2 px-3 font-semibold">
+          <Button onClick={() => useClaude.getState().cancel(conversation)}>
             Stop
-          </button>
+          </Button>
         )}
-        <button type="submit" disabled={!input.trim() && !attached.images.length} className="rounded-md bg-gradient-to-br from-ws-pip to-ws-pip2 px-3 font-semibold text-ws-on-pip disabled:opacity-45">
+        <Button variant="pipSolid" type="submit" disabled={!input.trim() && !attached.images.length}>
           Ask
-        </button>
+        </Button>
       </form>
       {footer && <ComposerFooter text={footer} />}
     </>

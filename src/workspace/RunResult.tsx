@@ -1,4 +1,5 @@
 import { SUMMARY_ONLY, type CodeChange, type Run, type RunOutcome } from "../types";
+import { PipGlyph } from "../components/PipGlyph";
 import { Box, Btn, CopyButton, Sec } from "./AgentSheet";
 import { changeSummary, reportNotes, SOURCE_CHIP } from "./runSheetLogic";
 
@@ -24,7 +25,10 @@ export function Found({ run, outcome, on }: ResultProps) {
         <p data-run-report className="selectable m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{text || "It finished without a written answer."}</p>
         {reportNotes(outcome).map((note) => <p key={note} className="m-0 text-sm text-ws-ink3">{note}</p>)}
         <div className="flex flex-wrap items-center gap-2">
-          <Btn icon="spark" onClick={on.askPip}>Ask Pip</Btn>
+          <Btn tone="teal" onClick={on.askPip}>
+            <PipGlyph />
+            Ask Pip
+          </Btn>
           {text && <CopyButton text={text} label="Copy" what="the result" />}
         </div>
       </Box>
@@ -41,7 +45,7 @@ export function Changes({ change, on }: { change: CodeChange; on: Pick<ResultAct
     <Sec title="Changes">
       <Box>
         <p className="m-0 flex flex-wrap items-baseline gap-x-2 font-semibold">
-          <span className="text-xs font-semibold text-ws-ink3 uppercase">{KIND_NAME[change.kind]}</span>
+          <span className="text-sm font-semibold text-ws-ink2">{KIND_NAME[change.kind]}</span>
           <span className="min-w-0 [overflow-wrap:anywhere]">{change.kind === "pullRequest" ? `#${change.number} ${change.title}` : change.headRef}</span>
         </p>
         <p className="m-0 flex flex-wrap gap-x-3 text-sm text-ws-ink2">

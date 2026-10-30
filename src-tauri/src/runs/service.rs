@@ -88,8 +88,6 @@ pub struct RunService {
     pub(super) notices: Mutex<super::notices::Board>,
     pub(super) terminal: Arc<dyn Terminal>,
     pub(super) home: Option<PathBuf>,
-    /// Held across a read-modify-write of `config.json`, so a settings change and a picked clone can't undo each other.
-    pub(super) config_lock: Mutex<()>,
     pub(super) settings: Mutex<AgentSettings>,
     /// Where Gossamr's tools are served for agents; absent when the server couldn't start.
     pub(super) agents: Option<Arc<super::agent_config::AgentChannel>>,
@@ -181,7 +179,6 @@ impl RunService {
             notices: Mutex::new(Default::default()),
             terminal: Arc::new(MacTerminal),
             home: dirs::home_dir(),
-            config_lock: Mutex::new(()),
             settings: Mutex::new(AgentSettings { max_runs: MAX_CONCURRENT, ..AgentSettings::default() }),
             agents: None,
             timing: Timing::default(),
@@ -250,11 +247,7 @@ impl RunService {
     }
 
     pub(super) fn update_config(&self, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
-        let _only_writer = self.config_lock.lock().expect("config lock poisoned");
-        let dir = self.core.data_dir();
-        let mut config = AppConfig::load(&dir);
-        change(&mut config);
-        config.save(&dir)
+        AppConfig::update(&self.core.data_dir(), change)
     }
 
     pub(super) async fn load(&self, id: &str) -> Result<Run> {

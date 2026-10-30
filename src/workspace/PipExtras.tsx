@@ -3,31 +3,34 @@ import { useEffect, useState } from "react";
 import { claude, type PipView } from "../backend/claude";
 import { useClaude } from "../claudeStore";
 import { isPaneConversation } from "../lib/conversations";
+import { PipGlyph } from "../components/PipGlyph";
 import { needsYouText, useNeedsYou } from "./useNeeds";
 import { useActiveTab } from "./hooks";
 import { PipAvatar } from "./PipAvatar";
+import { PipWorkChip } from "./PipWork";
 import { usePaneWidths } from "./PaneResizers";
 import { isStillFiltered, usePip, type PipFiltered } from "./pipStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { focusedConversation } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 /** The line under the filter bar after Pip narrowed the view; hidden once the person edits the filter themselves. */
 export function PipFilterNote({ filtered, onUndo, onDismiss }: { filtered: PipFiltered; onUndo(): void; onDismiss(): void }) {
   return (
     <div role="status" className="mx-6 mb-1 flex items-center gap-2 rounded-md bg-ws-pip-soft px-3 py-1 text-sm text-ws-pip">
-      <span aria-hidden>✦</span>
+      <PipGlyph />
       <span className="min-w-0 truncate">
         <b>Pip filtered this view</b>
         {filtered.note && <span className="text-ws-ink2"> · {filtered.note}</span>}
       </span>
-      <button type="button" onClick={onUndo} className="ml-auto shrink-0 font-semibold underline">
+      <Button variant="quiet" size="sm" className="ml-auto shrink-0" onClick={onUndo}>
         Undo
-      </button>
-      <button type="button" aria-label="Dismiss" onClick={onDismiss} className="shrink-0 rounded px-1 text-lg leading-none opacity-70 hover:opacity-100">
+      </Button>
+      <Button variant="quiet" size="sm" iconOnly className="shrink-0" aria-label="Dismiss" onClick={onDismiss}>
         ×
-      </button>
+      </Button>
     </div>
   );
 }
@@ -74,6 +77,7 @@ export const launcherStyle = (clearRight = 0) => ({ right: `calc(${clearRight}px
 export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { needs: number; onOpen(): void; thinking?: boolean; clearRight?: number }) {
   return (
     <div data-pip-launcher style={launcherStyle(clearRight)} className="absolute z-30 flex max-w-[calc(100%-2.5rem)] items-center gap-2.5">
+      {thinking && <PipWorkChip />}
       <div className="relative">
         <i aria-hidden className="pip-thread pointer-events-none absolute bottom-full left-1/2 h-[46px] w-[1.5px] -translate-x-1/2 opacity-60" />
         <button
@@ -81,11 +85,11 @@ export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { 
           onClick={onOpen}
           aria-label={needs ? `Ask Pip, ${needsYouText(needs)}` : "Ask Pip"}
           title={`Ask Pip (${showOf("app", "pip")})`}
-          className="relative grid size-16 place-items-center [filter:drop-shadow(0_6px_8px_rgb(91_75_209/0.35))] transition-transform duration-200 hover:scale-[1.08] hover:-rotate-3"
+          className="pip-launch relative grid size-16 place-items-center [filter:drop-shadow(0_6px_8px_rgb(95_84_184/0.3))]"
         >
           <PipAvatar size={64} dangle thinking={thinking} />
           {needs > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-ws-accent px-1 text-xs font-bold text-white">{needs}</span>
+            <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-(--prominent) px-1 text-xs font-bold text-white">{needs}</span>
           )}
         </button>
       </div>
@@ -124,9 +128,9 @@ export function AskPipButton({ x, y, onAsk }: { x: number; y: number; onAsk(): v
         onAsk();
       }}
       style={{ left: x, top: y }}
-      className="fixed z-40 rounded-[14px] bg-gradient-to-br from-ws-pip to-ws-pip2 px-2.5 py-0.5 text-sm font-semibold text-ws-on-pip shadow-ws-pop"
+      className="ws-glass ws-glass-pip ws-glass-regular fixed z-40 rounded-[14px] px-2.5 py-0.5 text-sm font-semibold text-ws-ink"
     >
-      ✦ Ask Pip
+      <PipGlyph className="text-ws-pip" /> Ask Pip
     </button>
   );
 }

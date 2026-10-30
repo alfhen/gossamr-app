@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { auth, type AuthStatus } from "../backend/auth";
+import { Button } from "./Button";
 
 export function Setup({
   status,
@@ -45,20 +46,19 @@ export function Setup({
   };
 
   const input = "w-full rounded-md border border-field-border bg-field px-2.5 py-1.5 outline-none focus:border-accent focus:ring-3 focus:ring-accent-soft";
-  const primary = "rounded-md bg-accent px-3.5 py-1.5 font-semibold text-white disabled:opacity-45";
 
   return (
     <div data-tauri-drag-region className="grid h-full place-items-center overflow-auto bg-win px-6 py-10">
       <div className="grid w-full max-w-[520px] gap-6">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Connect Jira</h1>
+          <h1 className="font-display text-xl font-bold tracking-tight">Connect Jira</h1>
           <p className="mt-1 text-ink-2">
             Gossamr signs in with your own Atlassian OAuth app, so it acts as you with your permissions. Tokens are kept in the macOS Keychain.
           </p>
         </div>
 
         <section className="grid gap-3">
-          <h2 className="text-xs font-semibold tracking-wide text-ink-3 uppercase">1 · Register an OAuth app</h2>
+          <h2 className="text-sm font-semibold text-ink-2">1 · Register an OAuth app</h2>
           <ol className="selectable grid list-decimal gap-1.5 pl-5 text-ink-2">
             <li>
               Open <b className="text-ink">developer.atlassian.com/console/myapps</b> and create an <b className="text-ink">OAuth 2.0 integration</b>.
@@ -82,35 +82,35 @@ export function Setup({
                 <input id="client-secret" type="password" className={input} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="off" />
               </label>
               <div className="flex gap-2">
-                <button type="submit" className={primary} disabled={!clientId.trim() || !secret.trim() || busy !== null}>
+                <Button type="submit" variant="primary" disabled={!clientId.trim() || !secret.trim() || busy !== null}>
                   {busy === "save" ? "Saving…" : "Save to Keychain"}
-                </button>
+                </Button>
                 {configured && (
-                  <button type="button" className="px-2 text-ink-2" onClick={() => setEditing(false)}>
+                  <Button variant="quiet" onClick={() => setEditing(false)}>
                     Cancel
-                  </button>
+                  </Button>
                 )}
               </div>
             </form>
           ) : (
             <div className="flex items-center gap-2 text-ink-2">
               <span className="text-done">✓</span> App credentials saved in the Keychain.
-              <button type="button" className="text-accent" onClick={() => setEditing(true)}>
+              <Button variant="quiet" size="sm" onClick={() => setEditing(true)}>
                 Replace
-              </button>
+              </Button>
             </div>
           )}
         </section>
 
         <section className="grid gap-3">
-          <h2 className="text-xs font-semibold tracking-wide text-ink-3 uppercase">2 · Sign in</h2>
+          <h2 className="text-sm font-semibold text-ink-2">2 · Sign in</h2>
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" className={primary} disabled={!configured || busy !== null} onClick={() => void signIn()}>
+            <Button variant="primary" disabled={!configured || busy !== null} onClick={() => void signIn()}>
               {busy === "signin" ? "Waiting for the browser…" : "Sign in with Atlassian"}
-            </button>
-            <button type="button" className="text-accent disabled:opacity-45" disabled={busy === "signin"} onClick={onUseSampleData}>
+            </Button>
+            <Button variant="quiet" disabled={busy === "signin"} onClick={onUseSampleData}>
               Try it with sample data
-            </button>
+            </Button>
           </div>
           {busy === "signin" && <p className="text-sm text-ink-3">Approve access in the browser tab that just opened, then come back here.</p>}
         </section>

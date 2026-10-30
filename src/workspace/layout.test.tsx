@@ -149,7 +149,7 @@ describe("header and rail", () => {
     const out = renderToStaticMarkup(<Rail />);
     for (const label of ["Search and jump", "All projects", "Views", "Inbox", "Settings", "Pip"]) expect(out).toContain(`aria-label="${label}"`);
     expect(out).toContain('aria-label="DevOps"');
-    expect(out).toContain("DE</button>");
+    expect(out).toContain(">DE</span></button>");
     expect(out).toContain("data-tauri-drag-region");
   });
 
@@ -163,7 +163,7 @@ describe("header and rail", () => {
     const list = out.indexOf('aria-label="Projects"');
     expect(out.slice(out.lastIndexOf("<div", list), list)).toContain("overflow-y-auto");
     expect(out.indexOf('aria-label="Inbox"')).toBeGreaterThan(out.indexOf('aria-label="Project 7"'));
-    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Inbox"/);
+    expect(out).toMatch(/<div class="flex w-full shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Inbox"/);
   });
 
   it("shows a tooltip only where it was asked for", () => {
@@ -208,7 +208,7 @@ describe("nothing covers anything", () => {
   it("gives a narrow row's badges as named icons with tooltips, none of them dropped", () => {
     const all = { needsMe: true, blocked: true, draft: { id: "d1", to: "Done" }, moreDrafts: 2 } as const;
     const full = renderToStaticMarkup(<RowBadges {...all} compact={false} />);
-    for (const words of [">Your turn<", "⛓ blocked", "✦ draft → ", "Done"]) expect(full).toContain(words);
+    for (const words of [">Your turn<", "⛓ blocked", "data-pip-glyph", "draft → ", "Done"]) expect(full).toContain(words);
     const compact = renderToStaticMarkup(<RowBadges {...all} compact />);
     const icons = [...compact.matchAll(/<span role="img" aria-label="([^"]+)" title="([^"]+)"/g)].map((m) => [m[1], m[2]]);
     expect(icons).toEqual([

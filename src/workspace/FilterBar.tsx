@@ -10,6 +10,7 @@ import { useActiveTab, useLookup } from "./hooks";
 import { SaveViewInline } from "./SavedViews";
 import { buildTabItems } from "./tabItems";
 import { useTabs } from "./tabsStore";
+import { Button } from "../components/Button";
 
 export function ChipRow({ chips, onRemove }: { chips: { label: string }[]; onRemove(index: number): void }) {
   return (
@@ -62,21 +63,14 @@ export function CodeFilterMenu({ active, onToggle }: { active: ReadonlySet<CodeF
   const { open, setOpen, root } = usePopover();
   return (
     <div ref={root} className="relative shrink-0">
-      <button
-        type="button"
-        data-popover-trigger
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className={`rounded-md px-2 py-1 text-sm font-semibold hover:bg-ws-hover ${active.size ? "text-ws-accent" : "text-ws-ink2"}`}
-      >
+      <Button variant="plain" size="sm" data-popover-trigger aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} className={active.size ? "font-semibold text-ws-accent" : "font-semibold"}>
         Pull requests <span aria-hidden className="text-xs font-normal opacity-70">▾</span>
-      </button>
+      </Button>
       {open && (
-        <ul role="menu" aria-label="Filter by pull requests" className="absolute top-full right-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px rounded-lg border border-ws-sep2 bg-ws-win p-1 shadow-ws-pop">
+        <ul role="menu" aria-label="Filter by pull requests" className="absolute top-full right-0 z-30 m-0 mt-1 grid min-w-44 list-none gap-px ws-glass ws-glass-regular rounded-lg p-1 text-sm font-medium text-ws-ink">
           {CODE_FILTERS.map((k) => (
             <li key={k} role="none">
-              <button type="button" role="menuitemcheckbox" aria-checked={active.has(k)} onClick={() => onToggle(k)} className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-ws-hover">
+              <button type="button" role="menuitemcheckbox" aria-checked={active.has(k)} onClick={() => onToggle(k)} className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left ws-glass-item">
                 <span aria-hidden className="w-3 text-ws-accent">
                   {active.has(k) ? "✓" : ""}
                 </span>
@@ -134,9 +128,9 @@ export function FilterBar() {
       />
       {hasGithub && <CodeFilterMenu active={activeCode} onToggle={toggleCode} />}
       {chips.length > 0 && (
-        <button type="button" className="shrink-0 text-sm text-ws-ink3 underline hover:text-ws-ink" onClick={() => setFilter(scopeTo(stand?.filter ?? ALL, project))}>
+        <Button variant="quiet" size="sm" className="shrink-0" onClick={() => setFilter(scopeTo(stand?.filter ?? ALL, project))}>
           Reset
-        </button>
+        </Button>
       )}
       {filterChips(tab.filter).some((c) => c.type !== "container") &&
         (saved ? (

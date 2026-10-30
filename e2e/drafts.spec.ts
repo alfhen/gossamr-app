@@ -204,7 +204,7 @@ test.describe("a comment draft for keyboard and screen reader users", () => {
     expect(message.length).toBeGreaterThan(0);
     expect(await page.locator('[role="status"]:has([data-toast-action])').count()).toBe(0);
     await expect(page.locator("[data-toast]").getByRole("button", { name: /^Undo[^:]*: / })).toBeVisible();
-    expect(await page.locator("[data-toast] > span").first().textContent()).toBe(message);
+    expect(await page.locator("[data-toast-text]").textContent()).toBe(message);
   });
 });
 

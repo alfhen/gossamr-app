@@ -1,5 +1,6 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Cobweb } from "../components/Cobweb";
+import { PipGlyph } from "../components/PipGlyph";
 import { pressed } from "../lib/keys";
 import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";
@@ -8,6 +9,7 @@ import { daysQuiet } from "./boardLogic";
 import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
 import { selectHow, showsAge } from "./canvasShared";
+import { Button } from "../components/Button";
 
 export interface CardDraft {
   id: string;
@@ -114,8 +116,8 @@ export function ItemCard(p: ItemCardProps) {
       onDragEnd={p.onDragEnd}
       onClick={click}
       onKeyDown={key}
-      className={`ws-card group relative cursor-grab rounded-[10px] border bg-ws-win px-2.5 py-2 shadow-sm outline-offset-2 ${tone} ${wither} ${
-        p.marked ? "border-ws-pip ring-2 ring-ws-pip ws-card-pick" : p.selected ? "border-ws-pip ring-2 ring-ws-pip-soft ws-card-pick" : "border-ws-sep"
+      className={`ws-card group relative cursor-grab rounded-[10px] border bg-ws-card px-2.5 py-2 shadow-[var(--silk-top)] outline-offset-2 ${tone} ${wither} ${
+        p.marked ? "border-ws-pip ring-2 ring-ws-pip ws-card-pick" : p.selected ? "border-ws-accent ring-2 ring-ws-accent-soft ws-card-pick" : "border-ws-sep"
       }`}
     >
       <Cobweb level={p.wither} />
@@ -128,19 +130,9 @@ export function ItemCard(p: ItemCardProps) {
             {priority.glyph}
           </span>
         )}
-        <button
-          type="button"
-          aria-haspopup="menu"
-          aria-expanded={p.menuOpen}
-          aria-label={`Actions for ${item.item.key}`}
-          onClick={(ev) => {
-            ev.stopPropagation();
-            p.onMenu(!p.menuOpen);
-          }}
-          className="ml-auto rounded px-1 text-ws-ink3 opacity-0 hover:bg-ws-hover hover:text-ws-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
-        >
+        <Button variant="plain" size="sm" iconOnly className="ml-auto opacity-0 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100" aria-haspopup="menu" aria-expanded={p.menuOpen} aria-label={`Actions for ${item.item.key}`} onClick={(ev) => { ev.stopPropagation(); p.onMenu(!p.menuOpen); }}>
           ⋯
-        </button>
+        </Button>
       </div>
       <p className="my-1 font-medium [overflow-wrap:anywhere]">{item.title}</p>
       {item.labels.length > 0 && (
@@ -159,7 +151,7 @@ export function ItemCard(p: ItemCardProps) {
         {p.blocked && <span className="text-xs text-ws-blocked">⛓ blocked</span>}
         {p.moreDrafts > 0 && (
           <span className="text-xs text-ws-pip" title="Drafts waiting on this ticket">
-            ✦ {p.moreDrafts}
+            <PipGlyph /> {p.moreDrafts}
           </span>
         )}
         <PrBadge summary={p.code} />
@@ -174,9 +166,9 @@ export function ItemCard(p: ItemCardProps) {
           aria-label={`Actions for ${item.item.key}`}
           onKeyDown={menuKey}
           onClick={(ev) => ev.stopPropagation()}
-          className="absolute right-1 top-7 z-20 min-w-44 rounded-lg border border-ws-sep2 bg-ws-win py-1 shadow-ws-pop"
+          className="absolute right-1 top-7 z-20 min-w-44 ws-glass ws-glass-regular rounded-lg p-1 text-sm font-medium text-ws-ink"
         >
-          {p.moveTargets.length === 0 && <p className="px-3 py-1 text-ws-ink3">No moves from {item.status.name}</p>}
+          {p.moveTargets.length === 0 && <p className="px-2 py-1 text-ws-ink">No moves from {item.status.name}</p>}
           {p.moveTargets.map((s) => (
             <MenuButton key={s.id} onClick={() => p.onMove(s)}>
               Move to {s.name}
@@ -197,7 +189,7 @@ export function ItemCard(p: ItemCardProps) {
 
 function MenuButton({ onClick, children }: { onClick(): void; children: React.ReactNode }) {
   return (
-    <button type="button" role="menuitem" onClick={onClick} className="block w-full px-3 py-1 text-left hover:bg-ws-hover focus-visible:bg-ws-hover">
+    <button type="button" role="menuitem" onClick={onClick} className="block w-full rounded-md px-2 py-1 text-left ws-glass-item">
       {children}
     </button>
   );
@@ -208,12 +200,12 @@ export function DraftLine({ draft, onApprove, onSkip }: { draft: CardDraft; onAp
     <div className="mt-1.5 flex items-center text-sm font-semibold text-ws-pip" onClick={(ev) => ev.stopPropagation()}>
       <span>→ {draft.to} (draft)</span>
       <span className="ml-auto flex gap-1">
-        <button type="button" aria-label={`Approve move to ${draft.to}`} title="Approve" onClick={() => onApprove(draft.id)} className="rounded border border-ws-pip px-1.5 hover:bg-ws-pip hover:text-ws-on-pip">
+        <Button variant="pip" size="sm" iconOnly aria-label={`Approve move to ${draft.to}`} title="Approve" onClick={() => onApprove(draft.id)}>
           ✓
-        </button>
-        <button type="button" aria-label={`Skip move to ${draft.to}`} title="Skip" onClick={() => onSkip(draft.id)} className="rounded border border-ws-pip px-1.5 hover:bg-ws-pip hover:text-ws-on-pip">
+        </Button>
+        <Button variant="pip" size="sm" iconOnly aria-label={`Skip move to ${draft.to}`} title="Skip" onClick={() => onSkip(draft.id)}>
           ✕
-        </button>
+        </Button>
       </span>
     </div>
   );
@@ -225,7 +217,7 @@ export function GhostCard({ item, draft, onApprove, onSkip }: { item: WorkItem; 
     <article aria-label={`Draft: ${item.item.key} moves here`} className="rounded-[10px] border-[1.5px] border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-2">
       <div className="flex items-center gap-1.5">
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
-        <span className="ml-auto text-xs font-semibold text-ws-pip">✦ draft move</span>
+        <span className="ml-auto text-xs font-semibold text-ws-pip"><PipGlyph /> draft move</span>
       </div>
       <p className="my-1 truncate text-ws-ink2">{item.title}</p>
       <DraftLine draft={draft} onApprove={onApprove} onSkip={onSkip} />

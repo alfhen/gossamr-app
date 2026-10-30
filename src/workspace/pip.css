@@ -35,6 +35,16 @@
 .pip-thread {
   background: linear-gradient(transparent, var(--color-ws-ink3));
 }
+/* Zoom Pip inside the SVG, not the button: scaling the button stretches a cached bitmap of the dangling, filtered layer, so Pip blurs. */
+.pip-av .pip-body {
+  transform-box: view-box;
+  transform-origin: 50% 50%;
+  transition: transform 0.2s;
+}
+.pip-launch:hover .pip-body,
+.pip-launch:focus-visible .pip-body {
+  transform: scale(1.08) rotate(-3deg);
+}
 
 @keyframes pip-dangle {
   0%,
@@ -84,5 +94,166 @@
   }
   .pip-pup {
     transition: none;
+  }
+}
+
+.pip-work {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  max-height: 80px;
+  transition:
+    opacity 0.5s,
+    transform 0.5s,
+    max-height 0.5s;
+}
+.pip-work[data-leaving] {
+  opacity: 0;
+  transform: translateY(-14px);
+  max-height: 0;
+  pointer-events: none;
+}
+.pip-web-stage {
+  position: relative;
+  width: 120px;
+  height: 80px;
+}
+.pip-web {
+  position: absolute;
+  inset: 0;
+  width: 120px;
+  height: 80px;
+  overflow: visible;
+}
+.pip-web-g {
+  animation: pip-web-fade 6s linear infinite;
+}
+.pip-web-spokes line {
+  stroke: var(--color-ws-ink3);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  opacity: 0.7;
+  animation: pip-web-spokes 6s ease-out infinite;
+}
+.pip-web-spiral {
+  fill: none;
+  stroke: var(--color-ws-ink2);
+  stroke-width: 0.9;
+  stroke-linecap: round;
+  stroke-dasharray: 399.4;
+  stroke-dashoffset: 399.4;
+  opacity: 0.75;
+  animation: pip-web-spiral 6s linear infinite;
+}
+.pip-web-dew {
+  fill: var(--color-ws-pip);
+  opacity: 0;
+  animation: pip-web-dew 6s linear infinite;
+}
+.pip-crawler {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 22px;
+  height: 22px;
+  offset-rotate: auto 90deg;
+  offset-distance: 0%;
+  animation: pip-crawl 6s linear infinite;
+}
+.pip-verb {
+  font: 600 15px var(--font-display);
+  color: var(--color-ws-ink);
+  transition: opacity 0.2s;
+}
+[data-pip-chip] .pip-verb {
+  font: 600 12px var(--font-sans);
+}
+.pip-verb.swap {
+  opacity: 0;
+}
+
+@keyframes pip-web-fade {
+  0%,
+  85% {
+    opacity: 1;
+  }
+  95%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes pip-web-spokes {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  15%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes pip-web-spiral {
+  0%,
+  15% {
+    stroke-dashoffset: 399.4;
+  }
+  85%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes pip-web-dew {
+  0%,
+  40% {
+    opacity: 0;
+  }
+  50%,
+  85% {
+    opacity: 0.8;
+  }
+  95%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes pip-crawl {
+  0%,
+  15% {
+    offset-distance: 0%;
+  }
+  85% {
+    offset-distance: 92.08%;
+  }
+  100% {
+    offset-distance: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pip-web-g,
+  .pip-web-spokes line,
+  .pip-web-spiral,
+  .pip-web-dew,
+  .pip-crawler {
+    animation: none !important;
+  }
+  .pip-web-spokes line,
+  .pip-web-spiral {
+    stroke-dashoffset: 0;
+  }
+  .pip-web-dew {
+    opacity: 0.8;
+  }
+  .pip-crawler {
+    offset-distance: 90.24%;
+  }
+  .pip-verb,
+  .pip-work {
+    transition: none;
+  }
+  .pip-verb.swap {
+    opacity: 1;
   }
 }

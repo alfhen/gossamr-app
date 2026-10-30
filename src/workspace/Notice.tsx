@@ -1,4 +1,5 @@
 import type { Notice } from "./useCards";
+import { Button } from "../components/Button";
 
 export function NoticeLine({ notice, onDismiss }: { notice: Notice | null; onDismiss(): void }) {
   return (
@@ -6,9 +7,9 @@ export function NoticeLine({ notice, onDismiss }: { notice: Notice | null; onDis
       {notice && (
         <p className={notice.tone === "error" ? "text-ws-blocked" : "text-ws-ink2"}>
           {notice.text}{" "}
-          <button type="button" onClick={onDismiss} className="text-ws-ink3 underline">
+          <Button variant="quiet" size="sm" onClick={onDismiss}>
             Dismiss
-          </button>
+          </Button>
         </p>
       )}
     </div>

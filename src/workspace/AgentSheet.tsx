@@ -1,25 +1,26 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./AgentIcons";
 import { usePaneWidths } from "./PaneResizers";
+import { PipGlyph } from "../components/PipGlyph";
+import { Button, type ButtonProps } from "../components/Button";
 
-const BUTTON = "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm leading-normal whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45";
 const TONES = {
-  primary: "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110",
-  plain: "border-ws-sep2 text-ws-ink hover:bg-ws-hover",
-  teal: "border-ws-pip text-ws-pip hover:bg-ws-pip-soft",
-  danger: "border-ws-blocked text-ws-blocked hover:bg-ws-blocked-soft",
-  dangerFill: "border-ws-blocked bg-ws-blocked font-semibold text-white hover:brightness-110",
-  ghost: "border-transparent text-ws-ink2 hover:bg-ws-hover",
-} as const;
+  primary: { variant: "primary" },
+  plain: { variant: "secondary" },
+  teal: { variant: "pip" },
+  danger: { variant: "secondary", destructive: true },
+  dangerFill: { variant: "danger" },
+  ghost: { variant: "quiet" },
+} as const satisfies Record<string, Pick<ButtonProps, "variant" | "destructive">>;
 
 export type ButtonTone = keyof typeof TONES;
 
 export function Btn({ tone = "plain", icon, children, ...rest }: { tone?: ButtonTone; icon?: IconName; children: ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button type="button" {...rest} className={`${BUTTON} ${TONES[tone]} ${rest.className ?? ""}`}>
+    <Button {...rest} {...TONES[tone]}>
       {icon && <Icon name={icon} />}
       {children}
-    </button>
+    </Button>
   );
 }
 
@@ -58,7 +59,7 @@ export function sheetFocusTarget<T extends { isConnected: boolean }>(opener: T |
   return opener?.isConnected ? opener : tray();
 }
 
-/** The frame the agent sheets share with the ticket peek: it slides over the screen from the right. */
+/** The frame the agent sheets share with the ticket peek: a floating sheet that slides over the screen from the right. */
 export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min = 520, draft = false, docked = false, onWide, onClose, children, footer, topOn }: FrameProps) {
   const peek = usePaneWidths().peek;
   const frame = useRef<HTMLElement>(null);
@@ -76,6 +77,27 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
       sheetFocusTarget(opener, lost, () => document.querySelector<HTMLElement>("[data-needs-you-group], [data-needs-you-need], [data-needs-you-title]"))?.focus({ preventScroll: true });
     };
   }, [opener]);
+  const [under, setUnder] = useState(false);
+  const inner = (
+    <>
+      <div data-sheet-head data-under={docked ? undefined : under || undefined} className={`flex shrink-0 items-center gap-2 px-3.5 py-2 ${docked ? "border-b border-ws-sep" : "ws-sheet-head z-10"}`}>
+        <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{title}</span>
+        <span className="min-w-0 truncate text-xs text-ws-ink3">{hint}</span>
+        {onWide && (
+          <Button variant="quiet" size="sm" iconOnly className="ml-auto" aria-label={wide ? "Shrink" : "Expand"} aria-pressed={wide} title={wide ? "Shrink" : "Expand"} onClick={onWide}>
+            {wide ? "⤡" : "⤢"}
+          </Button>
+        )}
+        <Button variant="quiet" size="sm" iconOnly aria-label="Close" onClick={onClose} className={onWide ? "" : "ml-auto"}>
+          ×
+        </Button>
+      </div>
+      <div ref={body} data-sheet-body onScroll={(ev) => setUnder(ev.currentTarget.scrollTop > 2)} className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">
+        {children}
+      </div>
+      {footer && <div className={`flex shrink-0 flex-wrap items-center gap-2 border-t border-ws-sep px-[22px] py-2.5 ${docked ? "bg-ws-win" : "bg-ws-sheet"}`}>{footer}</div>}
+    </>
+  );
   return (
     <aside
       ref={frame}
@@ -83,25 +105,12 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
       id={id}
       role="dialog"
       aria-label={label}
-      className={`selectable ws-legacy outline-none flex max-w-full flex-col border-l border-ws-sep2 bg-ws-win ${docked ? "relative h-full shrink-0" : "ws-peek-in absolute inset-y-0 right-0 z-30 shadow-[-14px_0_40px_rgb(0_0_0/0.16)]"} ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
+      className={`selectable ws-legacy outline-none max-w-full ${
+        docked ? "relative flex h-full shrink-0 flex-col border-l border-ws-sep2 bg-ws-win" : "ws-peek-in pointer-events-none absolute inset-y-0 right-0 z-30 p-2"
+      } ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}
       style={{ width: wide && !docked ? "100%" : Math.max(peek, min), minWidth: Math.min(min, 360) }}
     >
-      <div className="flex shrink-0 items-center gap-2 border-b border-ws-sep px-3.5 py-2">
-        <span className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{title}</span>
-        <span className="min-w-0 truncate text-xs text-ws-ink3">{hint}</span>
-        {onWide && (
-          <button type="button" aria-label={wide ? "Shrink" : "Expand"} aria-pressed={wide} title={wide ? "Shrink" : "Expand"} onClick={onWide} className="ml-auto grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover">
-            {wide ? "⤡" : "⤢"}
-          </button>
-        )}
-        <button type="button" aria-label="Close" onClick={onClose} className={`${onWide ? "" : "ml-auto "}grid size-[26px] place-items-center rounded-md text-[15px] leading-none text-ws-ink3 hover:bg-ws-hover`}>
-          ×
-        </button>
-      </div>
-      <div ref={body} data-sheet-body className="grid min-h-0 flex-1 content-start gap-5 overflow-auto px-[22px] pt-4 pb-8">
-        {children}
-      </div>
-      {footer && <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-ws-sep bg-ws-win px-[22px] py-2.5">{footer}</div>}
+      {docked ? inner : <div className="ws-sheet pointer-events-auto flex h-full min-h-0 flex-col">{inner}</div>}
     </aside>
   );
 }
@@ -109,10 +118,10 @@ export function SheetFrame({ id = "agent-sheet", label, title, hint, wide, min =
 export function Sec({ title, count, aside, id, children }: { title: string; count?: ReactNode; aside?: ReactNode; id?: string; children: ReactNode }) {
   return (
     <section id={id} className="grid gap-2">
-      <h3 className="m-0 flex items-center gap-2 text-xs font-semibold tracking-[0.05em] text-ws-ink3 uppercase">
+      <h3 className="m-0 flex items-center gap-2 text-sm font-semibold text-ws-ink2">
         {title}
-        {count !== undefined && <span className="font-normal normal-case">{count}</span>}
-        {aside && <span className="ml-auto font-normal normal-case">{aside}</span>}
+        {count !== undefined && <span className="font-normal">{count}</span>}
+        {aside && <span className="ml-auto font-normal">{aside}</span>}
       </h3>
       {children}
     </section>
@@ -135,11 +144,11 @@ export function Box({ tone = "plain", label, children }: { tone?: keyof typeof B
   );
 }
 
-export function BoxTitle({ icon, tone, children }: { icon: IconName; tone: "needs" | "warn" | "failed" | "plain"; children: ReactNode }) {
+export function BoxTitle({ icon, tone, children }: { icon: IconName | "pip"; tone: "needs" | "warn" | "failed" | "plain"; children: ReactNode }) {
   const color = { needs: "text-ws-pip", warn: "text-ws-warn", failed: "text-ws-blocked", plain: "text-ws-ink" }[tone];
   return (
     <h4 className={`m-0 flex items-center gap-1.5 text-[13px] font-semibold ${color}`}>
-      <Icon name={icon} className="size-[15px]" />
+      {icon === "pip" ? <PipGlyph className="size-[15px]" /> : <Icon name={icon} className="size-[15px]" />}
       {children}
     </h4>
   );
@@ -160,22 +169,10 @@ export function CopyButton({ text, label = "Copy", what, onCopied }: { text: str
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
   return (
-    <button
-      type="button"
-      data-copy={text}
-      aria-label={what ? `Copy ${what}` : label}
-      onClick={async () => {
-        const copied = await copyText(text);
-        setState(copied ? "copied" : "failed");
-        if (copied) onCopied?.();
-        if (timer.current) clearTimeout(timer.current);
-        timer.current = setTimeout(() => setState("idle"), 1600);
-      }}
-      className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-px text-xs text-ws-ink2 hover:bg-ws-hover"
-    >
+    <Button variant="plain" size="sm" className="shrink-0" data-copy={text} aria-label={what ? `Copy ${what}` : label} onClick={async () => { const copied = await copyText(text); setState(copied ? "copied" : "failed"); if (copied) onCopied?.(); if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(() => setState("idle"), 1600); }}>
       <Icon name={state === "copied" ? "check" : "copy"} className="size-3" />
       <span aria-live="polite">{state === "copied" ? "Copied" : state === "failed" ? "Couldn't copy" : label}</span>
-    </button>
+    </Button>
   );
 }
 

@@ -33,6 +33,23 @@ test.describe("a ticket opened from the palette", () => {
   });
 });
 
+test.describe("the peek's section jump", () => {
+  test("a segment scrolls its section to the header, which stays in view while the content scrolls", async ({ page }) => {
+    await openApp(page);
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.keyboard.type("CA-402");
+    await page.keyboard.press("Enter");
+    const peek = peekSheet(page);
+    const head = peek.locator("[data-peek-head]");
+    const scroller = peek.locator("[data-peek-scroll]");
+    await expect(head).toBeVisible();
+    await head.getByRole("group", { name: "Sections" }).getByRole("button", { name: /Comments/ }).click();
+    await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await expect(head).toBeInViewport();
+    await expect(head).toHaveAttribute("data-under", "true");
+  });
+});
+
 test.describe("Esc and F6 across the list, the peek and Pip", () => {
   test("Esc in Pip's composer closes the peek over it first, then Pip", async ({ page }) => {
     await openApp(page);
@@ -318,5 +335,41 @@ test.describe("the rail's region", () => {
   test("the left rail is a named region", async ({ page }) => {
     await openApp(page);
     await expect(page.getByRole("complementary", { name: "Workspace sidebar" })).toBeVisible();
+  });
+});
+
+test.describe("the screen header", () => {
+  test("is solid at rest and fades once the list scrolls under it", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    const bar = page.locator(".ws-bar");
+    const scroller = page.locator("[data-bar-scroll]");
+    await expect(scroller).toBeVisible();
+    await expect(bar).not.toHaveAttribute("data-under", "");
+    await scroller.evaluate((el) => (el.scrollTop = 200));
+    await expect(bar).toHaveAttribute("data-under", "");
+    await scroller.evaluate((el) => (el.scrollTop = 0));
+    await expect(bar).not.toHaveAttribute("data-under", "");
+  });
+
+  test("keeps the row you reach with j below the bar", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    await expect(page.locator("[data-bar-scroll]")).toBeVisible();
+    await page.locator("body").click({ position: { x: 1, y: 1 } });
+    for (let i = 0; i < 40; i++) await page.keyboard.press("j");
+    const bar = await page.locator(".ws-bar").boundingBox();
+    const row = await page.locator('[role="option"][aria-selected="true"]').first().boundingBox();
+    expect(row!.y).toBeGreaterThanOrEqual(bar!.y + bar!.height - 1);
+  });
+
+  test("recomputes the fade when the view switches while scrolled", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    const bar = page.locator(".ws-bar");
+    await page.locator("[data-bar-scroll]").evaluate((el) => (el.scrollTop = 200));
+    await expect(bar).toHaveAttribute("data-under", "");
+    await page.getByRole("button", { name: "Board", exact: true }).click();
+    await expect(bar).not.toHaveAttribute("data-under", "");
   });
 });

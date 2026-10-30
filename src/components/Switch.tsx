@@ -21,16 +21,10 @@ export function Switch({ checked, onChange, disabled = false, pending = false, .
       disabled={disabled || pending}
       onClick={() => onChange(!checked)}
       {...aria}
-      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-0 p-0 transition-colors duration-150 motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-accent disabled:cursor-default ${
-        checked ? "bg-ws-accent hover:brightness-110" : "bg-ws-ink3/35 hover:bg-ws-ink3/50"
-      } ${disabled && !pending ? "opacity-45" : ""}`}
+      data-dimmed={disabled && !pending ? "" : undefined}
+      className="ws-switch focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-accent"
     >
-      <span
-        aria-hidden
-        className={`pointer-events-none grid size-4 place-items-center rounded-full bg-white shadow-sm transition-transform duration-150 motion-reduce:transition-none ${checked ? "translate-x-[18px]" : "translate-x-0.5"} ${
-          pending ? "opacity-80" : ""
-        }`}
-      >
+      <span aria-hidden className={`ws-switch-knob ${pending ? "opacity-80" : ""}`}>
         {pending && <span data-spinner className="size-2.5 animate-spin rounded-full border-[1.5px] border-ws-accent border-t-transparent motion-reduce:animate-none" />}
       </span>
     </button>

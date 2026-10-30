@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { filesIn } from "../lib/attachments";
 import { ACCEPTED_IMAGE_TYPES, MAX_IMAGES, prepareImage, refusal, withDetectedType, type PipImage, type ShownImage } from "../lib/pipImages";
 import { messageOf, useToasts } from "./toasts";
+import { Button } from "../components/Button";
 
 const LIGHTBOX_ATTR = "data-pip-lightbox";
 export const lightboxOpen = () => document.querySelector(`[${LIGHTBOX_ATTR}]`) !== null;
@@ -70,20 +71,13 @@ export function AttachButton({ disabled, onFiles }: { disabled: boolean; onFiles
           e.target.value = "";
         }}
       />
-      <button
-        type="button"
-        aria-label="Attach an image"
-        title={disabled ? `Up to ${MAX_IMAGES} images` : "Attach an image (or paste or drop one)"}
-        disabled={disabled}
-        onClick={() => input.current?.click()}
-        className="grid size-8 shrink-0 place-items-center self-center rounded-md border border-ws-sep2 text-ws-ink2 hover:border-ws-pip hover:text-ws-pip disabled:opacity-45"
-      >
+      <Button size="lg" iconOnly className="shrink-0 self-center" aria-label="Attach an image" title={disabled ? `Up to ${MAX_IMAGES} images` : "Attach an image (or paste or drop one)"} disabled={disabled} onClick={() => input.current?.click()}>
         <svg aria-hidden width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="3" width="12" height="10" rx="2" />
           <circle cx="6" cy="7" r="1.1" />
           <path d="m3 12 3.5-3 2.5 2 2-1.5L14 12" />
         </svg>
-      </button>
+      </Button>
     </>
   );
 }
@@ -95,9 +89,9 @@ export function Thumb({ image, onOpen, onRemove, size = 56 }: { image: ShownImag
         <img src={image.url} alt="" draggable={false} className="size-full object-cover" />
       </button>
       {onRemove && (
-        <button type="button" aria-label="Remove image" onClick={onRemove} className="absolute -top-1.5 -right-1.5 grid size-4.5 place-items-center rounded-full border border-ws-sep2 bg-ws-win text-sm leading-none text-ws-ink2 hover:border-ws-blocked hover:text-ws-blocked">
+        <Button iconOnly size="sm" aria-label="Remove image" onClick={onRemove} className="absolute -top-2 -right-2">
           ×
-        </button>
+        </Button>
       )}
     </li>
   );
@@ -154,9 +148,9 @@ export function Lightbox({ image, onClose }: { image: ShownImage; onClose(): voi
   return (
     <div {...{ [LIGHTBOX_ATTR]: "" }} role="dialog" aria-modal="true" aria-label="Image" onClick={onClose} className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6">
       <img src={image.url} alt="Attached screenshot" onClick={(e) => e.stopPropagation()} className="max-h-full max-w-full rounded-lg bg-ws-win object-contain shadow-ws-pop" />
-      <button ref={close} type="button" aria-label="Close image" onClick={onClose} className="absolute top-4 right-4 grid size-8 place-items-center rounded-full bg-ws-win text-xl leading-none text-ws-ink shadow-ws-pop">
+      <Button ref={close} iconOnly aria-label="Close image" onClick={onClose} className="absolute top-4 right-4">
         ×
-      </button>
+      </Button>
     </div>
   );
 }

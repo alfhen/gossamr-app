@@ -3,6 +3,8 @@ import { pressed, showOf } from "../lib/keys";
 import { relativeTime } from "../lib/views";
 import { initials, type Note, type ReplyInfo, type PeekSectionId, type SectionChip } from "./peekLogic";
 import { WorkDocView } from "./WorkDocView";
+import { Button } from "../components/Button";
+import { Segmented } from "../components/Segmented";
 
 const ICON: Record<PeekSectionId, ReactNode> = {
   description: <path d="M3 4h10M3 8h10M3 12h6" />,
@@ -42,11 +44,11 @@ export interface SectionCardProps {
 /** A titled region with a header bar that stays under the section nav while its body scrolls. */
 export function SectionCard({ id, title, count, collapsed = false, onToggle, tone = "plain", fill = false, children }: SectionCardProps) {
   const icon = id in ICON ? <SectionIcon id={id as PeekSectionId} /> : null;
-  const bar = `sticky top-9 z-[5] flex w-full items-center gap-2 bg-ws-bar px-3 py-2 text-left text-ws-ink2 ${collapsed ? "rounded-lg" : "rounded-t-lg"}`;
+  const bar = "sticky top-0 z-[5] flex w-full items-center gap-2 bg-ws-sheet py-2 text-left text-ws-ink2";
   const label = (
     <>
       {icon}
-      <h3 className="m-0 text-xs font-bold tracking-wide text-ws-ink uppercase">{title}</h3>
+      <h3 className="m-0 text-xs font-semibold text-ws-ink">{title}</h3>
       {count !== undefined && <CountBadge count={count} accent={tone === "discussion"} />}
     </>
   );
@@ -54,10 +56,10 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
     <section
       id={`peek-${id}`}
       data-section={id}
-      className={`grid rounded-lg border border-ws-sep2 bg-ws-win ${fill ? "min-h-64 shrink-0 grow grid-rows-[auto_1fr]" : ""}`}
+      className={`grid border-t border-ws-sep ${fill ? "min-h-64 shrink-0 grow grid-rows-[auto_1fr]" : ""}`}
     >
       {onToggle ? (
-        <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={`${bar} hover:brightness-95`}>
+        <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={bar}>
           {label}
           <svg aria-hidden viewBox="0 0 16 16" className={`ml-auto size-3.5 shrink-0 transition-transform ${collapsed ? "-rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 6l4 4 4-4" />
@@ -69,7 +71,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
       <div
         id={`peek-${id}-body`}
         hidden={collapsed}
-        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 rounded-b-lg p-3 ${id === "description" ? "" : "border-t border-ws-sep"}`}
+        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 pt-1 pb-3`}
       >
         {children}
       </div>
@@ -78,21 +80,23 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
 }
 
 export function SectionNav({ chips, onJump }: { chips: SectionChip[]; onJump?(id: PeekSectionId): void }) {
+  const options = chips.map((c) => ({
+    value: c.id,
+    label: (
+      <>
+        {c.title}
+        {c.count !== undefined && <CountBadge count={c.count} />}
+      </>
+    ),
+  }));
   return (
-    <nav aria-label="Sections" className="sticky top-0 z-10 -mx-[22px] flex h-9 items-center gap-1.5 overflow-x-auto border-b border-ws-sep2 bg-ws-win px-[22px]">
-      {chips.map((c) => (
-        <button
-          key={c.id}
-          type="button"
-          onClick={() => onJump?.(c.id)}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-sm font-semibold hover:bg-ws-hover ${c.id === "comments" ? "text-ws-accent" : "text-ws-ink2"}`}
-        >
-          <SectionIcon id={c.id} />
-          {c.title}
-          {c.count !== undefined && <CountBadge count={c.count} />}
-        </button>
-      ))}
-    </nav>
+    <Segmented
+      label="Sections"
+      options={options}
+      value={null}
+      onChange={(id) => onJump?.(id)}
+      className="min-w-0 max-w-full overflow-x-auto"
+    />
   );
 }
 
@@ -176,8 +180,8 @@ export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
       data-reply={reply ? "true" : undefined}
       tabIndex={onReply ? 0 : undefined}
       onKeyDown={onKey}
-      className={`group grid min-w-0 scroll-mt-24 gap-2 rounded-md border border-ws-sep bg-ws-bar/40 p-3 transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
-        reply ? "border-l-2 border-l-ws-accent/50" : ""
+      className={`group grid min-w-0 scroll-mt-24 gap-2 border-b border-ws-sep py-3 outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
+        reply ? "border-l-2 border-l-ws-accent/50 pl-3" : ""
       }`}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -188,15 +192,9 @@ export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
           {relativeTime(note.at, now)}
         </time>
         {onReply && (
-          <button
-            type="button"
-            onClick={() => onReply(note)}
-            title={`Reply to ${note.who} (press ${showOf("peek", "reply").toUpperCase()} on this comment)`}
-            aria-label={`Reply to ${note.who}`}
-            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-ws-ink3 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-ws-hover hover:text-ws-ink2 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-          >
+          <Button variant="plain" size="sm" className="ml-auto shrink-0 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100" onClick={() => onReply(note)} title={`Reply to ${note.who} (press ${showOf("peek", "reply").toUpperCase()} on this comment)`} aria-label={`Reply to ${note.who}`}>
             <span aria-hidden>↩ </span>Reply
-          </button>
+          </Button>
         )}
       </div>
       {reply && <ReplyQuote reply={reply} onShow={onShow} />}
