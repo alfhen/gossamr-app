@@ -61,8 +61,8 @@
     --color-ws-pip2: #9a8bff;
     --color-ws-on-pip: #04302c;
     --color-ws-done-soft: rgb(31 157 106 / 0.2);
-    --color-ws-blocked-soft: rgb(231 125 114 / 0.2);
     --color-ws-blocked: #e77d72;
+    --color-ws-blocked-soft: rgb(231 125 114 / 0.2);
     --color-ws-warn: #d6a04a;
     --color-ws-review: #bf9cec;
     --color-ws-review-soft: rgb(191 156 236 / 0.22);
@@ -107,8 +107,8 @@
   --color-ws-pip2: #9a8bff;
   --color-ws-on-pip: #04302c;
   --color-ws-done-soft: rgb(31 157 106 / 0.2);
-  --color-ws-blocked-soft: rgb(231 125 114 / 0.2);
   --color-ws-blocked: #e77d72;
+  --color-ws-blocked-soft: rgb(231 125 114 / 0.2);
   --color-ws-warn: #d6a04a;
   --color-ws-review: #bf9cec;
   --color-ws-review-soft: rgb(191 156 236 / 0.22);

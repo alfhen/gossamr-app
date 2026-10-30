@@ -91,20 +91,20 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 
 ### Contrast
 
-Measured against the window colour:
+Measured against the window colour (`ws-win`):
 
 | | Light | Dark |
 | --- | --- | --- |
 | `ws-ink` | 14.0 | 13.5 |
-| `ws-ink2` | 6.8 | 7.8 |
+| `ws-ink2` | 6.7 | 7.8 |
 | `ws-ink3` | 4.7 | 4.9 |
-| `ws-accent` | 5.9 | 6.6 |
-| `ws-pip` | 4.1 | 9.6 |
+| `ws-accent` | 5.8 | 6.5 |
+| `ws-pip` | 3.9 | 9.1 |
 | `ws-blocked` | 4.8 | 6.3 |
 | `ws-review` | 5.5 | 7.6 |
 | `ws-warn` | 3.6 | 7.4 |
 
-So: body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-pip` is below 4.5, so use it for icons, borders and bold or large text, never for a sentence a person must read. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
+So: against the window, body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-ink3` on `ws-side` and `ws-bar` is about 4.2, so in the sidebar and rail it stays for short meta only. Light-mode `ws-pip` is below 4.5, so use it for icons, borders and bold or large text, never for a sentence a person must read. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
 
 ## Type
 
