@@ -11,6 +11,7 @@ import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { useEscBack } from "./escBack";
+import { Segmented } from "../components/Segmented";
 
 /** The two facts the app states about what it does, and only here. */
 export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."] as const;
@@ -243,20 +244,7 @@ export function Settings() {
         </Section>
 
         <Section title="Theme">
-          <div role="radiogroup" aria-label="Theme" className="inline-flex rounded-lg bg-ws-sel p-0.5">
-            {THEMES.map((t) => (
-              <button
-                key={t}
-                type="button"
-                role="radio"
-                aria-checked={theme === t}
-                onClick={() => setTheme(t)}
-                className={`rounded-md px-3.5 py-1 font-semibold ${theme === t ? "bg-ws-win text-ws-ink shadow-sm" : "text-ws-ink2"}`}
-              >
-                {THEME_LABEL[t]}
-              </button>
-            ))}
-          </div>
+          <Segmented kind="radio" label="Theme" value={theme} onChange={setTheme} options={THEMES.map((t) => ({ value: t, label: THEME_LABEL[t] }))} />
         </Section>
 
         <Section title="Connections">

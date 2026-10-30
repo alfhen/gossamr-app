@@ -40,6 +40,17 @@
   --glass-inner-pip: var(--glass-inner);
   --glass-lens-pip: var(--glass-lens);
   --glass-lens-rim-pip: var(--glass-lens-rim);
+  --glass-body-control: rgb(255 253 249 / 0.62);
+  --ctl-depth: 0 1px 2px rgb(60 40 20 / 0.1), 0 3px 10px -3px rgb(60 40 20 / 0.16);
+  --thumb-glass: rgb(255 253 249 / 0.9);
+  --well-shade: inset 0 1px 2px rgb(70 45 20 / 0.07);
+  --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.28);
+  --bead-bottom: inset 0 -1px 0 rgb(43 38 33 / 0.18);
+  --prominent: #4b55c0;
+  --spring-dew: linear(0, 0.12, 0.333, 0.531, 0.686, 0.796, 0.87, 0.919, 0.95, 0.97, 0.982, 0.989, 0.993, 0.996, 0.998, 1);
+  --spring-dew-ms: 340ms;
+  --spring-silk: linear(0, 0.071, 0.231, 0.418, 0.596, 0.745, 0.86, 0.941, 0.993, 1.023, 1.036, 1.038, 1.035, 1.028, 1.021, 1.014, 1.009, 1.005, 1.002, 1, 0.999, 0.999, 0.999, 1);
+  --spring-silk-ms: 770ms;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -82,6 +93,12 @@
     --glass-inner-pip: inset 0 1px 1px rgb(118 200 203 / 0.22);
     --glass-lens-pip: rgb(118 200 203 / 0.1);
     --glass-lens-rim-pip: rgb(118 200 203 / 0.35);
+    --glass-body-control: rgb(255 236 210 / 0.07);
+    --ctl-depth: 0 1px 2px rgb(0 0 0 / 0.5), 0 4px 12px -4px rgb(0 0 0 / 0.6);
+    --thumb-glass: rgb(255 236 210 / 0.16);
+    --well-shade: inset 0 1px 3px rgb(0 0 0 / 0.35);
+    --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.2);
+    --bead-bottom: inset 0 -1px 0 rgb(0 0 0 / 0.25);
   }
 }
 
@@ -129,6 +146,12 @@
   --glass-inner-pip: inset 0 1px 1px rgb(118 200 203 / 0.22);
   --glass-lens-pip: rgb(118 200 203 / 0.1);
   --glass-lens-rim-pip: rgb(118 200 203 / 0.35);
+  --glass-body-control: rgb(255 236 210 / 0.07);
+  --ctl-depth: 0 1px 2px rgb(0 0 0 / 0.5), 0 4px 12px -4px rgb(0 0 0 / 0.6);
+  --thumb-glass: rgb(255 236 210 / 0.16);
+  --well-shade: inset 0 1px 3px rgb(0 0 0 / 0.35);
+  --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.2);
+  --bead-bottom: inset 0 -1px 0 rgb(0 0 0 / 0.25);
 }
 
 .ws-root,

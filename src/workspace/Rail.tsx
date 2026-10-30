@@ -18,6 +18,7 @@ import { RAIL_BADGES, matchesQuery, nounFor, railSplit, type Noun } from "./watc
 import { togglePip } from "./workstreamsStore";
 import { NeedsYouList } from "./NeedsYou";
 import { needsYouText, useNeedsYou } from "./useNeeds";
+import { SearchField } from "../components/SearchField";
 
 /** Fixed so the scrolling project list can't clip it. */
 export function RailTip({ label, hint, note, at }: { label: string; hint?: string; note?: string; at: { x: number; y: number } | null }) {
@@ -150,14 +151,7 @@ export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick
   const shown = rest.filter((c) => matchesQuery(c, query));
   return (
     <div className="grid">
-      <input
-        type="search"
-        aria-label={`Search watched ${noun.many}`}
-        placeholder={`Find a ${noun.one}`}
-        value={query}
-        onChange={(ev) => onQuery(ev.target.value)}
-        className="m-2.5 rounded-lg border border-ws-sep2 bg-ws-win px-2.5 py-1 outline-none placeholder:text-ws-ink3 focus:border-ws-accent"
-      />
+      <SearchField className="m-2.5" aria-label={`Search watched ${noun.many}`} placeholder={`Find a ${noun.one}`} value={query} onChange={onQuery} />
       <ul role="menu" aria-label={`Watched ${noun.many}`} className="m-0 max-h-[min(320px,50vh)] list-none overflow-y-auto p-0 pb-1">
         {shown.map((c) => (
           <li key={containerKey(c.ref)} role="none">

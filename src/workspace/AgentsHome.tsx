@@ -7,6 +7,7 @@ import { groupId } from "./needsActions";
 import { useNeedsYou } from "./useNeeds";
 import { useWorkView } from "./workViewStore";
 import { useWorkstreams } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 /** The ticket's key comes first on its own, so the title loses it when it starts with it, as a workstream's title does. */
 export function rowTitle(ws: Pick<WorkstreamView["workstream"], "itemKey" | "title">): string {
@@ -61,11 +62,10 @@ export const NO_WORKSTREAMS = "No workstreams yet. Ask Pip about a ticket to sta
 
 /** "Show closed", the way to the workstreams the list doesn't show. */
 export function WorkstreamTools({ showClosed, onShowClosed }: { showClosed: boolean; onShowClosed(on: boolean): void }) {
-  const button = "rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (
-    <button type="button" data-show-closed aria-pressed={showClosed} onClick={() => onShowClosed(!showClosed)} className={button}>
+    <Button variant="plain" size="sm" data-show-closed aria-pressed={showClosed} onClick={() => onShowClosed(!showClosed)}>
       {showClosed ? "Hide closed" : "Show closed"}
-    </button>
+    </Button>
   );
 }
 

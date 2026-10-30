@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { auth, type AuthStatus } from "../backend/auth";
+import { Button } from "./Button";
 
 export function Setup({
   status,
@@ -45,7 +46,6 @@ export function Setup({
   };
 
   const input = "w-full rounded-md border border-field-border bg-field px-2.5 py-1.5 outline-none focus:border-accent focus:ring-3 focus:ring-accent-soft";
-  const primary = "rounded-md bg-accent px-3.5 py-1.5 font-semibold text-white disabled:opacity-45";
 
   return (
     <div data-tauri-drag-region className="grid h-full place-items-center overflow-auto bg-win px-6 py-10">
@@ -82,9 +82,9 @@ export function Setup({
                 <input id="client-secret" type="password" className={input} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="off" />
               </label>
               <div className="flex gap-2">
-                <button type="submit" className={primary} disabled={!clientId.trim() || !secret.trim() || busy !== null}>
+                <Button type="submit" variant="primary" disabled={!clientId.trim() || !secret.trim() || busy !== null}>
                   {busy === "save" ? "Saving…" : "Save to Keychain"}
-                </button>
+                </Button>
                 {configured && (
                   <button type="button" className="px-2 text-ink-2" onClick={() => setEditing(false)}>
                     Cancel
@@ -105,9 +105,9 @@ export function Setup({
         <section className="grid gap-3">
           <h2 className="text-xs font-semibold tracking-wide text-ink-3 uppercase">2 · Sign in</h2>
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" className={primary} disabled={!configured || busy !== null} onClick={() => void signIn()}>
+            <Button variant="primary" disabled={!configured || busy !== null} onClick={() => void signIn()}>
               {busy === "signin" ? "Waiting for the browser…" : "Sign in with Atlassian"}
-            </button>
+            </Button>
             <button type="button" className="text-accent disabled:opacity-45" disabled={busy === "signin"} onClick={onUseSampleData}>
               Try it with sample data
             </button>

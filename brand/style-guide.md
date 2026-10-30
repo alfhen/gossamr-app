@@ -80,6 +80,12 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `glass-inner`, `glass-inner-pip` | warm white at 75% above, ink at 6% below | cream at 16% above; teal on Pip | Light inside the edge |
 | `glass-depth` | `0 10px 30px` brown at 16% | `0 12px 40px` black at 50% | The shadow |
 | `glass-lens`, `glass-lens-rim` (and `-pip`) | ivory at 45%, rim warm white at 85% | cream at 8%, rim at 28%; teal on Pip | Selection inside glass |
+| `glass-body-control` | ivory at 62% | cream at 7% | The body of a control's glass, a little stronger than a floating layer's |
+| `ctl-depth` | `0 1px 2px` and `0 3px 10px -3px` brown at 10% and 16% | `0 1px 2px` and `0 4px 12px -4px` black at 50% and 60% | The small shadow under a control |
+| `thumb-glass` | ivory at 90% | cream at 16% | The lens that slides in a segmented control |
+| `prominent` | `#4b55c0` | `#4b55c0` | The fill of the one main action; white text on it reaches about 5:1 in both themes |
+| `well-shade`, `bead-top`, `bead-bottom` | brown at 7% inside; white at 28% above, ink at 18% below | black at 35% inside; white at 20% above, black at 25% below | A sunken switch track, and the light on a prominent fill |
+| `spring-dew`, `spring-silk` (and `-ms`) | 340 ms, no bounce; 770 ms, 4% give | the same | Easing for controls; the full set is in the proposal below |
 
 `ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. Done moved from 156 to 145 degrees of hue, a leaf green, because Pip's Dew teal sits at 184 degrees: the gap is now 39 degrees, up from 20, so the two read apart at a glance. `ws-warn` has no soft fill.
 
@@ -147,7 +153,7 @@ Keep a line of body text under about 70 characters.
 - **Spacing** steps by 4 px. Rows and controls mostly use 8 px gaps and 8 to 12 px side padding.
 - **Corners:** 4 to 6 px on controls and rows, 6 to 10 px on cards and sheets, full rounding on pills, badges and avatars. The app icon's square uses the macOS shape.
 - **Lines, not boxes.** Separate with `ws-sep` hairlines. Use a border only where something is a distinct object (a card, a field, a draft).
-- **Shadow** only on things that float: popovers, the palette, toasts, Pip's launcher (`shadow-ws-pop`). Lists and cards lie flat.
+- **Shadow** on things that float: popovers, the palette, toasts, Pip's launcher (`shadow-ws-pop`). Controls sit just above their surface and cast a small one (`ctl-depth`). Lists and cards lie flat.
 - **Density:** the app is compact, like a Mac utility. The site can breathe: section padding of 96 to 128 px on desktop, 64 px on phones.
 
 ## Motion
@@ -249,9 +255,32 @@ Pip and the spiders also pause whenever the window is hidden, whatever the setti
 - **Video:** screen recordings of the real app at real speed, at most 15 s, muted, looping, with a poster frame. Never speed up a recording or add a fake cursor.
 - **Reduced motion:** Pip is already in the G when the page loads, and videos show their poster with a play button.
 
+## Controls
+
+Buttons, toggles, segmented controls and search fields are silk glass, grouped into capsules the way the Mac groups toolbar buttons. Use the components in `src/components/`; do not write a local button style. The classes are in `src/components/controls.css`.
+
+| Component | Use |
+| --- | --- |
+| `Button` | `variant` is `secondary` (clear glass, the default), `primary` (indigo, the one main action on a screen), `quiet`, `pip`, `pipSolid`, `plain` or `danger`. `size` is `sm` (22 px, in rows), `md` (28 px, in bars) or `lg` (32 px, in dialogs and sheets). |
+| `ButtonGroup` | Related actions in one capsule with hairlines between them. Needs a `label`. |
+| `Segmented` | One choice of several, or a toggle of one. A glass track with a lens that slides on `--spring-dew`. `kind="radio"` is a radio group and the arrow keys move it; the default is a row of pressed buttons. |
+| `Switch` | A sunken track that turns indigo when on. The knob turns to a clear lens while held. |
+| `SearchField` | A glass capsule for finding things in a list. |
+
+- **Clear glass** is the default button, with the tint, rim and inner light of the glass. In dark its body is cream at 7%, so a control reads as nearer than its bar.
+- **Prominent** is always indigo, because the main action is yours. Pip's buttons never take the fill: a tinted fill turns muddy on the warm ground. `pipSolid` exists only for Ask in Pip's own pane.
+- **Ask Pip** is the `pip` variant (clear glass with Pip's colour on the label, glyph and edge) in a bar or card, and `plain` with `pip` in a list row. It is never a filled button outside Pip's pane.
+- **Plain in rows.** Glass is for bars, sheet headers and dialogs. In a list where the same actions repeat on every row, use `plain`: text and an icon until you point at it.
+- **Groups.** Stop or remove actions stand alone, set apart from the group beside them, so they are hard to hit by accident. Mark them `destructive`; confirm with `danger`.
+- **No blur on controls.** They draw the glass layers without `backdrop-filter`, which spares WebKit a compositing layer for each of a screen's buttons. Over a flat colour it looks the same.
+- **No glass on glass.** Inside `ws-glass` (the palette, menus, toasts, Pip's header) a control is a lens.
+- **Reduce transparency** makes them solid and keeps their rim.
+- Pressing a button, a switch or a segmented control swells it slightly on `--spring-silk`. Under reduced motion it does not move.
+- The boxes you write in, such as a comment or Pip's box, stay solid wells, because they hold content.
+
 ## Proposal: dew and silk glass
 
-**Silk glass (step 3) is built; the rest is not.** Springs, dew interactions, reduced-motion handling and threads are still a proposal, so the motion above describes Gossamr as it is. Silk glass is described below as it ships. This section proposes how its motion and surfaces could become more fluid, inspired by dew on a spider's web and by Apple's Liquid Glass. It keeps the principles above; where it changes one, it says so.
+**Silk glass (step 3) and controls (step 5) are built; the rest is not.** Springs, dew interactions, reduced-motion handling and threads are still a proposal, so the motion above describes Gossamr as it is. Silk glass is described below as it ships. This section proposes how its motion and surfaces could become more fluid, inspired by dew on a spider's web and by Apple's Liquid Glass. It keeps the principles above; where it changes one, it says so.
 
 ### The idea
 

@@ -8,10 +8,8 @@ import { availableMethods, connectReducer, countdown, splitLinks, START, type Co
 import { openOnGithub, refreshAfterGithubChange, useGithubUi } from "./githubUi";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
+import { Button } from "../components/Button";
 
-const button = "rounded-lg px-3 py-1.5 font-semibold disabled:opacity-45";
-const primary = `${button} bg-ws-accent text-white`;
-const quiet = `${button} text-ws-ink2 hover:bg-ws-hover`;
 
 /** Message text where an address, such as the single sign-on page GitHub names, can be opened. */
 export function LinkedText({ text }: { text: string }) {
@@ -123,9 +121,9 @@ function TokenStep({ state, token, onToken, onSubmit, onBack, onOpen }: Pick<Con
       <p className="m-0 text-sm text-ws-ink3">The token stays in your system keychain. It is sent only to GitHub, and Gossamr only reads with it.</p>
       {state.error && <ErrorLine message={state.error} />}
       <div className="flex justify-end">
-        <button type="submit" disabled={!token.trim() || state.busy} className={primary}>
+        <Button variant="primary" type="submit" disabled={!token.trim() || state.busy}>
           {state.busy ? "Connecting…" : "Connect"}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -140,9 +138,9 @@ function CliStep({ state, onSubmit, onBack }: Pick<ConnectViewProps, "onSubmit" 
       </p>
       {state.error && <ErrorLine message={state.error} />}
       <div className="flex justify-end">
-        <button type="button" disabled={state.busy} onClick={onSubmit} className={primary}>
+        <Button variant="primary" disabled={state.busy} onClick={onSubmit}>
           {state.busy ? "Connecting…" : "Use my GitHub CLI login"}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -164,14 +162,14 @@ export function DeviceCode({ code, copied, onCopy, onOpen }: { code: DeviceStart
         <code aria-label={`Code ${code.userCode}`} className="selectable text-[28px] leading-none font-bold tracking-[0.12em]">
           {code.userCode}
         </code>
-        <button type="button" onClick={() => onCopy(code.userCode)} className="rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold hover:bg-ws-hover">
+        <Button size="sm" onClick={() => onCopy(code.userCode)}>
           {copied ? "Copied" : "Copy code"}
-        </button>
+        </Button>
       </div>
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        <button type="button" onClick={() => onOpen(code.verificationUri)} className="rounded-md bg-ws-accent px-2.5 py-1 font-semibold text-white">
+        <Button variant="primary" size="sm" onClick={() => onOpen(code.verificationUri)}>
           Open {host}
-        </button>
+        </Button>
         <span className="text-ws-ink3">and enter the code there.</span>
       </div>
     </div>
@@ -184,9 +182,9 @@ function DeviceStep({ state, now, copied, onCopy, onOpen, onBack, onRetry }: Pic
       <div className="grid gap-3">
         <p role="status" className="m-0 text-ws-ink3">Asking GitHub for a code…</p>
         <div className="flex justify-end">
-          <button type="button" onClick={onBack} className={quiet}>
+          <Button variant="quiet" onClick={onBack}>
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -201,9 +199,9 @@ function DeviceStep({ state, now, copied, onCopy, onOpen, onBack, onRetry }: Pic
           {state.expiresAt !== null && <span className="ml-auto text-ws-ink3">expires in {countdown(state.expiresAt, now)}</span>}
         </p>
         <div className="flex justify-end">
-          <button type="button" onClick={onBack} className={quiet}>
+          <Button variant="quiet" onClick={onBack}>
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -222,12 +220,12 @@ function DeviceStep({ state, now, copied, onCopy, onOpen, onBack, onRetry }: Pic
         )}
       </p>
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onBack} className={quiet}>
+        <Button variant="quiet" onClick={onBack}>
           Other ways
-        </button>
-        <button type="button" onClick={onRetry} className={primary}>
+        </Button>
+        <Button variant="primary" onClick={onRetry}>
           {state.phase === "expired" ? "Get a new code" : "Try again"}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -257,20 +255,20 @@ export function ConnectView(p: ConnectViewProps) {
         <div className="grid gap-3">
           <p className="m-0 text-ws-ink2">Pull requests that name your tickets will show up in the Development section of each ticket once the first sync finishes.</p>
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={p.onManage} className={quiet}>
+            <Button variant="quiet" onClick={p.onManage}>
               Manage repositories
-            </button>
-            <button type="button" onClick={p.onClose} className={primary}>
+            </Button>
+            <Button variant="primary" onClick={p.onClose}>
               Done
-            </button>
+            </Button>
           </div>
         </div>
       )}
       {state.step === "choose" && (
         <div className="flex justify-end">
-          <button type="button" onClick={p.onClose} className={quiet}>
+          <Button variant="quiet" onClick={p.onClose}>
             Cancel
-          </button>
+          </Button>
         </div>
       )}
     </div>

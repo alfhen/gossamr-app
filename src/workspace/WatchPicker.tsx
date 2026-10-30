@@ -6,6 +6,7 @@ import { keyColour, keyInitials } from "./projects";
 import { useCatalog, type Catalog } from "./useCatalog";
 import { messageOf, useToasts } from "./toasts";
 import { activityHint, agoText, choiceChanges, count, nounFor, permissionLabel, repoParts, suggestedIds, toggled, type Noun } from "./watchLogic";
+import { SearchField } from "../components/SearchField";
 
 export function Badge({ k }: { k: string }) {
   return (
@@ -137,14 +138,7 @@ export function ScrollSentinel({ busy, onVisible }: { busy: boolean; onVisible()
 
 export function SearchBox({ value, label, placeholder, onChange }: { value: string; label: string; placeholder: string; onChange(q: string): void }) {
   return (
-    <input
-      type="search"
-      aria-label={label}
-      placeholder={placeholder}
-      value={value}
-      onChange={(ev) => onChange(ev.target.value)}
-      className="w-full rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 outline-none placeholder:text-ws-ink3 focus:border-ws-accent"
-    />
+    <SearchField aria-label={label} placeholder={placeholder} value={value} onChange={onChange} />
   );
 }
 

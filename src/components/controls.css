@@ -1,0 +1,390 @@
+@layer components {
+  .ws-btn,
+  .ws-seg,
+  .ws-btn-group,
+  .ws-search {
+    --ctl-tint-now: var(--glass-tint);
+    --ctl-body-now: var(--glass-body-control);
+    --ctl-glass: linear-gradient(var(--ctl-tint-now), var(--ctl-tint-now)), linear-gradient(var(--ctl-body-now), var(--ctl-body-now));
+    position: relative;
+  }
+
+  .ws-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--color-ws-ink);
+    background: transparent;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      transform var(--spring-silk-ms) var(--spring-silk),
+      background-color 120ms;
+  }
+  .ws-btn:active:not(:disabled) {
+    transform: scale(1.04);
+  }
+  .ws-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .ws-btn > svg {
+    width: 12px;
+    height: 12px;
+    flex: none;
+  }
+  .ws-btn--sm {
+    height: 22px;
+    padding: 0 9px;
+  }
+  .ws-btn--lg {
+    height: 32px;
+    padding: 0 16px;
+    font-size: 13px;
+  }
+  .ws-btn--icon {
+    width: 28px;
+    padding: 0;
+  }
+  .ws-btn--icon.ws-btn--sm {
+    width: 22px;
+  }
+  .ws-btn--icon.ws-btn--lg {
+    width: 32px;
+  }
+
+  .ws-btn--secondary,
+  .ws-btn--pip {
+    background: var(--ctl-glass);
+    box-shadow: var(--glass-inner), var(--ctl-depth);
+  }
+  .ws-btn--secondary:hover:not(:disabled) {
+    background: linear-gradient(var(--color-ws-hover), var(--color-ws-hover)), var(--ctl-glass);
+  }
+  .ws-btn--pip {
+    color: var(--color-ws-pip);
+    font-weight: 600;
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--color-ws-pip) 32%, transparent),
+      var(--glass-inner),
+      var(--ctl-depth);
+  }
+  .ws-btn--pip:hover:not(:disabled) {
+    background: linear-gradient(var(--color-ws-pip-soft), var(--color-ws-pip-soft)), var(--ctl-glass);
+  }
+
+  .ws-btn--primary {
+    background: color-mix(in srgb, var(--prominent) 94%, transparent);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: var(--bead-top), var(--bead-bottom), var(--ctl-depth);
+  }
+  .ws-btn--danger {
+    background: var(--color-ws-blocked);
+    color: #fff;
+    font-weight: 600;
+    box-shadow: var(--bead-top), var(--bead-bottom), var(--ctl-depth);
+  }
+  .ws-btn--pip-solid {
+    background: color-mix(in srgb, var(--color-ws-pip) 94%, transparent);
+    color: var(--color-ws-on-pip);
+    font-weight: 600;
+    box-shadow: var(--bead-top), var(--bead-bottom), var(--ctl-depth);
+  }
+  .ws-btn--primary:hover:not(:disabled),
+  .ws-btn--danger:hover:not(:disabled),
+  .ws-btn--pip-solid:hover:not(:disabled) {
+    filter: brightness(1.1);
+  }
+
+  .ws-btn--quiet,
+  .ws-btn--plain {
+    color: var(--color-ws-ink2);
+  }
+  .ws-btn--quiet:hover:not(:disabled),
+  .ws-btn--plain:hover:not(:disabled) {
+    background: var(--color-ws-hover);
+    color: var(--color-ws-ink);
+  }
+  .ws-btn--plain.is-pip {
+    color: var(--color-ws-pip);
+    font-weight: 600;
+  }
+  .ws-btn--plain.is-pip:hover:not(:disabled) {
+    background: var(--color-ws-pip-soft);
+    color: var(--color-ws-pip);
+  }
+  .ws-btn.is-danger:not(.ws-btn--danger) {
+    color: var(--color-ws-blocked);
+  }
+
+  .ws-btn--secondary::before,
+  .ws-btn--pip::before,
+  .ws-btn--primary::before,
+  .ws-btn--danger::before,
+  .ws-btn--pip-solid::before,
+  .ws-seg::before,
+  .ws-btn-group::before,
+  .ws-search::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--glass-rim);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .ws-btn--primary::before,
+  .ws-btn--danger::before,
+  .ws-btn--pip-solid::before {
+    opacity: 0.6;
+  }
+  .ws-btn--pip::before {
+    background: var(--glass-rim-pip);
+  }
+
+  .ws-btn-group {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border-radius: 999px;
+    background: var(--ctl-glass);
+    box-shadow: var(--glass-inner), var(--ctl-depth);
+  }
+  .ws-btn-group > .ws-btn {
+    height: 24px;
+    padding: 0 11px;
+    background: transparent;
+    box-shadow: none;
+  }
+  .ws-btn-group > .ws-btn::before {
+    display: none;
+  }
+  .ws-btn-group > .ws-btn:hover:not(:disabled) {
+    background: var(--glass-lens);
+    box-shadow: inset 0 0 0 1px var(--glass-lens-rim);
+  }
+  .ws-btn-group > .ws-btn--icon {
+    width: 26px;
+    padding: 0;
+  }
+  .ws-btn-group-divider {
+    width: 1px;
+    height: 14px;
+    flex: none;
+    background: var(--color-ws-sep2);
+  }
+
+  .ws-seg {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: 999px;
+    background: var(--ctl-glass);
+    box-shadow: var(--glass-inner), var(--ctl-depth);
+  }
+  .ws-seg > button {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 24px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--color-ws-ink2);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .ws-seg > button:hover {
+    color: var(--color-ws-ink);
+  }
+  .ws-seg > button:is([aria-pressed="true"], [aria-checked="true"]) {
+    color: var(--color-ws-ink);
+    font-weight: 600;
+  }
+  .ws-seg > button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .ws-seg-thumb {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 0;
+    width: var(--seg-w, 0px);
+    border-radius: 999px;
+    background: var(--thumb-glass);
+    box-shadow:
+      inset 0 0 0 1px var(--glass-lens-rim),
+      var(--glass-inner),
+      0 1px 3px rgb(60 40 20 / 0.14);
+    transform: translateX(var(--seg-x, 0px));
+    pointer-events: none;
+  }
+  .ws-seg[data-ready] .ws-seg-thumb {
+    transition:
+      transform var(--spring-dew-ms) var(--spring-dew),
+      width var(--spring-dew-ms) var(--spring-dew),
+      scale var(--spring-silk-ms) var(--spring-silk);
+  }
+  .ws-seg[data-pressing] .ws-seg-thumb {
+    scale: 1.06;
+  }
+
+  .ws-switch {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    flex: none;
+    border: 0;
+    padding: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    background: var(--color-ws-side);
+    box-shadow:
+      var(--well-shade),
+      inset 0 0 0 1px var(--color-ws-sep2);
+    transition: background-color 200ms;
+  }
+  .ws-switch[aria-checked="true"] {
+    background: var(--prominent);
+    box-shadow: var(--bead-top), var(--bead-bottom);
+  }
+  .ws-switch:disabled {
+    cursor: default;
+  }
+  .ws-switch[data-dimmed] {
+    opacity: 0.45;
+  }
+  .ws-switch-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fff;
+    box-shadow:
+      0 1px 3px rgb(20 19 29 / 0.3),
+      inset 0 0 0 0.5px rgb(20 19 29 / 0.12);
+    pointer-events: none;
+    transition:
+      left var(--spring-silk-ms) var(--spring-silk),
+      width var(--spring-silk-ms) var(--spring-silk),
+      background-color 160ms,
+      box-shadow 160ms;
+  }
+  .ws-switch[aria-checked="true"] .ws-switch-knob {
+    left: 18px;
+  }
+  .ws-switch:active:not(:disabled) .ws-switch-knob {
+    width: 25px;
+    background: rgb(255 255 255 / 0.3);
+    box-shadow:
+      inset 0 0 0 1px rgb(255 255 255 / 0.85),
+      inset 0 1px 1px rgb(255 255 255 / 0.7),
+      0 2px 6px rgb(20 19 29 / 0.25);
+    -webkit-backdrop-filter: blur(1px) saturate(1.8);
+    backdrop-filter: blur(1px) saturate(1.8);
+  }
+  .ws-switch[aria-checked="true"]:active:not(:disabled) .ws-switch-knob {
+    left: 11px;
+  }
+
+  .ws-search {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 999px;
+    color: var(--color-ws-ink2);
+    min-width: 0;
+    background: var(--ctl-glass);
+    box-shadow: var(--glass-inner), var(--ctl-depth);
+  }
+  .ws-search > svg {
+    width: 13px;
+    height: 13px;
+    flex: none;
+  }
+  .ws-search input {
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-ws-ink);
+  }
+  .ws-search input::placeholder {
+    color: var(--color-ws-ink2);
+  }
+  .ws-search:focus-within {
+    outline: 2px solid var(--color-ws-accent);
+    outline-offset: 1px;
+  }
+
+  /* Inside a glass surface a control is a lens: glass does not sit on glass. */
+  .ws-glass :is(.ws-btn--secondary, .ws-btn--pip, .ws-seg, .ws-btn-group, .ws-search) {
+    background: var(--glass-lens);
+    box-shadow: inset 0 0 0 1px var(--glass-lens-rim);
+  }
+  .ws-glass .ws-btn--pip {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ws-pip) 32%, transparent);
+  }
+  .ws-glass :is(.ws-btn--secondary, .ws-btn--pip, .ws-seg, .ws-btn-group, .ws-search)::before {
+    display: none;
+  }
+  .ws-glass .ws-btn--secondary:hover:not(:disabled) {
+    background: linear-gradient(var(--color-ws-hover), var(--color-ws-hover)), var(--glass-lens);
+  }
+  .ws-glass .ws-seg-thumb {
+    background: var(--glass-lens);
+    box-shadow: inset 0 0 0 1px var(--glass-lens-rim);
+  }
+
+  .ws-btn--pip:focus-visible,
+  .ws-btn--pip-solid:focus-visible,
+  .ws-btn--plain.is-pip:focus-visible {
+    outline-color: var(--color-ws-pip);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ws-btn,
+    .ws-seg,
+    .ws-btn-group,
+    .ws-search {
+      --ctl-body-now: var(--color-ws-win);
+      --ctl-tint-now: transparent;
+    }
+  }
+
+  /* Set from macOS in the app, where WebKit doesn't report prefers-reduced-transparency. */
+  :root[data-transparency="reduce"] :is(.ws-btn, .ws-seg, .ws-btn-group, .ws-search) {
+    --ctl-body-now: var(--color-ws-win);
+    --ctl-tint-now: transparent;
+  }
+}
