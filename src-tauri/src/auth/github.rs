@@ -297,6 +297,11 @@ impl GithubAuth {
         find_gh_in(&self.gh_dirs)
     }
 
+    /// The saved session for `login`, if the store has one it can read.
+    pub fn session(&self, login: &str) -> Option<GithubSession> {
+        self.store.load(login).ok().flatten()
+    }
+
     pub fn gh_dirs(&self) -> &[PathBuf] {
         &self.gh_dirs
     }

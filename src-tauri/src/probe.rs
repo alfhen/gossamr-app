@@ -80,6 +80,16 @@ pub fn jira(outcome: Option<crate::error::Result<crate::auth::Account>>) -> Snap
     }
 }
 
+/// A GitHub account connected by token or browser sign-in, judged by whether GitHub accepts the stored token.
+pub fn github_token(login: &str, outcome: Option<crate::error::Result<crate::codehost::CodeAccount>>) -> Snapshot {
+    match outcome {
+        None => Snapshot::new(State::Error, "GitHub didn't answer in time."),
+        Some(Ok(me)) => Snapshot { account: Some(me.login.clone()), ..Snapshot::new(State::Ready, format!("Signed in as {}", me.login)) },
+        Some(Err(e)) if e.is_unauthorized() => Snapshot::new(State::NotSignedIn, format!("GitHub no longer accepts the token for {login}.")),
+        Some(Err(e)) => Snapshot::new(State::Error, e.to_string()),
+    }
+}
+
 #[derive(Deserialize)]
 struct Status {
     #[serde(default)]
@@ -258,6 +268,16 @@ mod tests {
         let seen = probe(&dirs, "alfhen").await;
         std::env::remove_var("GH_TOKEN");
         assert_eq!(seen.state, State::Ready);
+    }
+
+    #[test]
+    fn a_token_account_is_judged_by_github_not_by_gh() {
+        let ok = crate::codehost::CodeAccount { login: "ann".into(), name: None, avatar_url: None, scopes: None };
+        assert_eq!(github_token("ann", Some(Ok(ok))).account.as_deref(), Some("ann"));
+        let refused = github_token("ann", Some(Err(Error::CodeHost { status: 401, message: "Bad credentials".into() })));
+        assert_eq!((refused.state, refused.fix), (State::NotSignedIn, None));
+        assert_eq!(github_token("ann", Some(Err(Error::Api { status: 503, message: "down".into() }))).state, State::Error);
+        assert_eq!(github_token("ann", None).state, State::Error);
     }
 
     fn me() -> Account {
