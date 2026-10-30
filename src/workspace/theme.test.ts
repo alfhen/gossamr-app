@@ -58,4 +58,18 @@ describe("the theme tokens", () => {
       expect(ratio, `on-blocked in ${theme}`).toBeGreaterThanOrEqual(4.5);
     }
   });
+  it("makes a card differ from its lane and a lane from the window in both themes", () => {
+    for (const set of [light, { ...light, ...auto }]) {
+      expect(set["--color-ws-card"]).not.toBe(set["--color-ws-side"]);
+      expect(set["--color-ws-side"]).not.toBe(set["--color-ws-win"]);
+      expect(luminance(set["--color-ws-card"])).toBeGreaterThan(luminance(set["--color-ws-side"]));
+    }
+  });
+
+  it("tints stale cards over the card colour, with a darker tint in dark", () => {
+    const board = readFileSync(new URL("./board.css", import.meta.url), "utf8");
+    expect(board).toMatch(/\.ws-wither \{\s*background-color: color-mix\(in srgb, var\(--color-ws-card\), var\(--wither-tint\) var\(--wmix\)\)/);
+    expect(board).toMatch(/--wither-tint: #c9a66b/);
+    expect(board).toMatch(/--wither-tint: #8a7248/);
+  });
 });

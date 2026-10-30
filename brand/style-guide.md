@@ -60,6 +60,8 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | --- | --- | --- | --- |
 | `ws-win` | `#faf7f2` | `#1c1a17` | Window and page background |
 | `ws-side` | `#efe9e0` | `#24211d` | Sidebar and rail |
+| `ws-card` | `#fffdf9` | `#2b2723` | Board cards: a step above the lane they sit in |
+| `ws-sheet` | `#fffdf9` | `#24211d` | The peek and Pip's pane bodies (in use from step 11; defined now) |
 | `ws-bar` | `#f5f0e8` | `#201d1a` | Bars, footers, quiet panels |
 | `ws-ink` | `#2b2621` | `#e9e2d6` | Body text |
 | `ws-ink2` | `#5e564c` | `#b6ad9f` | Secondary text |
@@ -165,6 +167,7 @@ Keep a line of body text under about 70 characters.
   - The rail is a glass column inset 6 px from the window's edge (the clear glass fill and rim, no blur, so its tooltips stay fixed). Projects are glossy beads in their full colours. One lens with an indigo rim slides to the current button on `spring-dew`; its icon buttons show the hover lens.
   - Settings groups (connections, watched projects) are hairline groups. Fields, and lists that scroll, keep their box.
 - **Shadow** on things that float: popovers, the palette, toasts, Pip's launcher (`shadow-ws-pop`). Controls sit just above their surface and cast a small one (`ctl-depth`). Lists and cards lie flat.
+- **Raised and sunken.** Board lanes are wells: `ws-side`, `well-shade` and a `ws-sep` hairline. Cards are raised: `ws-card`, a hairline and `silk-top`, with no shadow at rest. Nearer is lighter in dark, so a card is lighter than its lane in both themes. A stale card's wither tint is mixed over `ws-card` (95%, 90% and 84% card over the three stages, with `#c9a66b` in light and the darker `#8a7248` in dark), so it reads in both.
 - **Density:** the app is compact, like a Mac utility. The site can breathe: section padding of 96 to 128 px on desktop, 64 px on phones.
 
 ## Motion
