@@ -338,7 +338,11 @@ impl GithubAuth {
             .send()
             .await?;
         let status = res.status();
-        let body: serde_json::Value = res.json().await.map_err(|_| Error::Auth(format!("GitHub answered {status} with something unexpected")))?;
+        let body: serde_json::Value = match res.json().await {
+            Ok(body) => body,
+            Err(_) if status.is_server_error() => return Err(Error::CodeHost { status: status.as_u16(), message: format!("GitHub answered {status}") }),
+            Err(_) => return Err(Error::Auth(format!("GitHub answered {status} with something unexpected"))),
+        };
         if let Some(e) = body["error"].as_str().filter(|_| !status.is_success() || body["access_token"].is_null()) {
             // `authorization_pending` and `slow_down` are answers, not failures; the caller reads them.
             if !matches!(e, "authorization_pending" | "slow_down") {

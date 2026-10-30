@@ -324,4 +324,12 @@ mod tests {
         fx.core.probe_connections(Probe::Launch).await;
         assert_eq!(snapshot_of(&fx.core, "github").map(|s| (s.state, s.account)), Some((State::NotSignedIn, None)));
     }
+
+    #[tokio::test]
+    async fn an_expired_browser_sign_in_whose_refresh_hits_a_server_error_is_only_an_error_and_keeps_the_account() {
+        use crate::codehost::github::testserver::Reply;
+        let fx = fixture_with_token_session(vec![("/login/oauth/access_token", vec![Reply::status(502, "<html>Bad gateway</html>")])], Some(1)).await;
+        fx.core.probe_connections(Probe::Launch).await;
+        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::Error));
+    }
 }
