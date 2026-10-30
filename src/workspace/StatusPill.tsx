@@ -5,17 +5,17 @@ import type { WorkstreamView } from "../types";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
 
-/** The pill's colours, from the theme's tokens: filled for what is the person's, soft for the rest, grey for what asks nothing. */
+/** The bead's colour by tone: indigo for what is the person's, amber for a failure, grey for what asks nothing. */
 const TONE: Record<StatusTone, string> = {
-  pip: "bg-ws-pip text-ws-on-pip",
-  warn: "border border-ws-warn/50 bg-ws-warn/10 text-ws-ink",
-  accent: "bg-ws-accent-soft text-ws-accent",
-  ink: "bg-ws-hover text-ws-ink2",
-  done: "bg-ws-done-soft text-ws-done",
+  pip: "[--c:var(--color-ws-accent)]",
+  warn: "[--c:var(--color-ws-warn)]",
+  accent: "[--c:var(--color-ws-accent)]",
+  ink: "[--c:var(--color-ws-ink3)]",
+  done: "[--c:var(--color-ws-done)]",
 };
 
 /**
- * A workstream's one status word as a small pill (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it.
+ * A workstream's one status word as a bead and a word (`data-status`, its state in `data-status-state`); its one short detail, if any, follows it.
  * The hint is the mouse's `title` and, for everyone else, a visually hidden line beside the pill that the pill is described by: it is
  * not a tab stop (the rows are walked with F6, j and k), so the row's own text carries it. `describe` is false
  * where the caller says the hint itself; `hintId` names the hint's line for a row that is described by it.
@@ -26,7 +26,7 @@ export function StatusPill({ status, title, detail = false, describe = true, hin
   const hint = title ?? hintFor(status);
   return (
     <>
-      <span data-status={status.state} title={hint} aria-describedby={describe ? hintId : undefined} className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 font-semibold whitespace-nowrap ${TONE[status.tone]}`}>
+      <span data-status={status.state} title={hint} aria-describedby={describe ? hintId : undefined} className={`ws-state shrink-0 text-xs font-medium whitespace-nowrap text-ws-ink2 ${TONE[status.tone]}`}>
         {status.word}
       </span>
       {describe && (

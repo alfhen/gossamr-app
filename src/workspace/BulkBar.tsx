@@ -1,3 +1,4 @@
+import { Button } from "../components/Button";
 export interface BulkBarProps {
   count: number;
   targets: { name: string; count: number }[];
@@ -33,13 +34,13 @@ export function BulkBar(p: BulkBarProps) {
           </select>
         </label>
         {p.approvable.length > 0 && !p.confirming && (
-          <button type="button" onClick={p.onAsk} className="rounded-md border border-ws-pip px-2.5 py-1 font-semibold text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip">
+          <Button variant="pip" size="sm" onClick={p.onAsk}>
             Approve {p.approvable.length} move{p.approvable.length === 1 ? "" : "s"}…
-          </button>
+          </Button>
         )}
-        <button type="button" onClick={p.onClear} className="ml-auto text-ws-ink3 underline hover:text-ws-ink">
+        <Button variant="quiet" size="sm" className="ml-auto" onClick={p.onClear}>
           Clear
-        </button>
+        </Button>
       </div>
       {p.confirming && (
         <div role="group" aria-label="Confirm bulk approval" className="mt-2 rounded-lg border border-ws-pip bg-ws-pip-soft p-3">
@@ -52,12 +53,12 @@ export function BulkBar(p: BulkBarProps) {
             ))}
           </ul>
           <div className="flex gap-2">
-            <button type="button" onClick={p.onApprove} className="rounded-md bg-ws-pip px-3 py-1 font-semibold text-ws-on-pip">
+            <Button variant="pipSolid" size="sm" onClick={p.onApprove}>
               Approve all {p.approvable.length}
-            </button>
-            <button type="button" onClick={p.onCancel} className="rounded-md border border-ws-sep2 px-3 py-1">
+            </Button>
+            <Button size="sm" onClick={p.onCancel}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}

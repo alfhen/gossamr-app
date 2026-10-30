@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "../components/Button";
 import type { Backend } from "../backend/types";
 import type { CatalogEntry, ConnectionInfo, Footprint, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -6,6 +7,7 @@ import { keyColour, keyInitials } from "./projects";
 import { useCatalog, type Catalog } from "./useCatalog";
 import { messageOf, useToasts } from "./toasts";
 import { activityHint, agoText, choiceChanges, count, nounFor, permissionLabel, repoParts, suggestedIds, toggled, type Noun } from "./watchLogic";
+import { SearchField } from "../components/SearchField";
 
 export function Badge({ k }: { k: string }) {
   return (
@@ -128,23 +130,16 @@ export function ScrollSentinel({ busy, onVisible }: { busy: boolean; onVisible()
   }, [busy]);
   return (
     <li ref={el} role="presentation" className="grid place-items-center py-2">
-      <button type="button" disabled={busy} onClick={onVisible} className="rounded-md px-3 py-1 text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-60">
+      <Button variant="plain" size="sm" disabled={busy} onClick={onVisible}>
         {busy ? "Loading more…" : "Load more"}
-      </button>
+      </Button>
     </li>
   );
 }
 
 export function SearchBox({ value, label, placeholder, onChange }: { value: string; label: string; placeholder: string; onChange(q: string): void }) {
   return (
-    <input
-      type="search"
-      aria-label={label}
-      placeholder={placeholder}
-      value={value}
-      onChange={(ev) => onChange(ev.target.value)}
-      className="w-full rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 outline-none placeholder:text-ws-ink3 focus:border-ws-accent"
-    />
+    <SearchField aria-label={label} placeholder={placeholder} value={value} onChange={onChange} />
   );
 }
 
@@ -160,9 +155,9 @@ export function CatalogError({ error, onRetry }: { error: string | null; onRetry
   return (
     <div role="alert" className="grid justify-items-center gap-2 px-4 py-8 text-center text-ws-blocked">
       <p className="m-0 [overflow-wrap:anywhere]">{error ?? "Couldn't load the list."}</p>
-      <button type="button" onClick={onRetry} className="rounded-md border border-ws-sep2 px-3 py-1 text-ws-ink hover:bg-ws-hover">
+      <Button onClick={onRetry}>
         Try again
-      </button>
+      </Button>
     </div>
   );
 }
@@ -217,7 +212,7 @@ export function WatchPickerView(p: WatchPickerViewProps) {
   );
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-[780px] flex-col px-8 pt-12 pb-6">
-      <h1 ref={heading} tabIndex={-1} className="m-0 text-2xl font-bold outline-none">
+      <h1 ref={heading} tabIndex={-1} className="font-display m-0 text-2xl font-bold outline-none">
         Choose what to watch
       </h1>
       <p className="mt-1 mb-4 max-w-[620px] text-ws-ink2">
@@ -225,12 +220,12 @@ export function WatchPickerView(p: WatchPickerViewProps) {
       </p>
       <SearchBox value={p.query} label={`Search ${noun.many}`} placeholder={code ? `Search ${noun.many} by name or owner` : `Search ${noun.many} by name or key`} onChange={p.onQuery} />
       <div className="my-2.5 flex flex-wrap items-center gap-1.5">
-        <button type="button" onClick={p.onSelectNone} disabled={n === 0} className="rounded-full border border-ws-sep2 px-2.5 py-px text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+        <Button size="sm" onClick={p.onSelectNone} disabled={n === 0}>
           Select none
-        </button>
-        <button type="button" onClick={p.onSelectSuggested} disabled={!p.suggested.list.length} className="rounded-full border border-ws-sep2 px-2.5 py-px text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+        </Button>
+        <Button size="sm" onClick={p.onSelectSuggested} disabled={!p.suggested.list.length}>
           Select suggested
-        </button>
+        </Button>
         {catalog.offline && <OfflineNote />}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto rounded-[10px] border border-ws-sep">
@@ -268,13 +263,13 @@ export function WatchPickerView(p: WatchPickerViewProps) {
           {n} selected
         </span>
         {p.onCancel && (
-          <button type="button" onClick={p.onCancel} disabled={p.saving} className="rounded-lg px-3 py-1.5 text-ws-ink2 hover:bg-ws-hover">
+          <Button variant="quiet" onClick={p.onCancel} disabled={p.saving}>
             Cancel
-          </button>
+          </Button>
         )}
-        <button type="button" onClick={p.onSave} disabled={n === 0 || p.saving} className="rounded-lg bg-ws-accent px-4 py-1.5 font-semibold text-white disabled:opacity-45">
+        <Button variant="primary" onClick={p.onSave} disabled={n === 0 || p.saving}>
           {p.saving ? "Saving…" : "Start watching"}
-        </button>
+        </Button>
       </div>
     </div>
   );

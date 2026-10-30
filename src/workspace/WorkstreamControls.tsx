@@ -85,7 +85,7 @@ function MoreMenu({ onStop }: { onStop(): void }) {
   }, [open, root]);
   return (
     <div ref={root} className="relative">
-      <Btn tone="plain" aria-label="More for this workstream" title={MORE_HINT} aria-description={MORE_HINT} aria-haspopup="menu" aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className="px-1.5 py-0.5">
+      <Btn tone="plain" aria-label="More for this workstream" title={MORE_HINT} aria-description={MORE_HINT} aria-haspopup="menu" aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)}>
         ⋯
       </Btn>
       {open && (
@@ -112,10 +112,10 @@ export function StopConfirm({ onStop, onKeep }: { onStop(): void; onKeep(): void
       }}
     >
       <span className="text-ws-ink2">Pause it and stop its agents? What they wrote stays in their worktrees.</span>
-      <Btn tone="dangerFill" autoFocus onClick={onStop} className="px-2 py-0.5">
+      <Btn tone="dangerFill" autoFocus onClick={onStop}>
         Yes, stop
       </Btn>
-      <Btn tone="ghost" onClick={onKeep} className="px-2 py-0.5">
+      <Btn tone="ghost" onClick={onKeep}>
         Keep going
       </Btn>
     </div>
@@ -144,10 +144,10 @@ export function CloseConfirm({ onClose, onKeep, drafts = 0 }: { onClose(): void;
       <span className="text-ws-ink2">
         <span id={question}>Close it?</span> <span id={detail}>Its conversation goes back to General; its agents and drafts are kept in General. {drafts > 0 ? `${CLOSE_DRAFTS_NOTE(drafts)} ` : ""}{CLOSE_RUNS_NOTE}</span>
       </span>
-      <Btn tone="primary" onClick={onClose} className="px-2 py-0.5">
+      <Btn tone="primary" onClick={onClose}>
         Close workstream
       </Btn>
-      <Btn tone="ghost" autoFocus aria-describedby={`${question} ${detail}`} onClick={onKeep} className="px-2 py-0.5">
+      <Btn tone="ghost" autoFocus aria-describedby={`${question} ${detail}`} onClick={onKeep}>
         Keep
       </Btn>
     </div>
@@ -162,7 +162,7 @@ export function PausedBanner({ view, actions }: { view: WorkstreamView; actions:
   return (
     <div role="group" aria-label="Why this workstream is paused" data-paused-banner={ws.pausedReason} className="flex flex-wrap items-center gap-2 rounded-md border border-ws-warn/40 bg-ws-warn/10 px-2.5 py-1 text-sm text-ws-ink">
       <span className="min-w-0 flex-1">{paused}</span>
-      <Btn tone="plain" data-ws-resume onClick={() => settlePauseFocus(actions.onResume(), "resume")} className="px-2 py-0.5">
+      <Btn tone="plain" data-ws-resume onClick={() => settlePauseFocus(actions.onResume(), "resume")}>
         Resume
       </Btn>
     </div>
@@ -183,7 +183,7 @@ export function AdoptNotice({ view }: { view: WorkstreamView }) {
       <p data-adopt-text className="m-0">
         {adoptOfferText(view.workstream.itemKey ?? "this ticket", a.runs.length, a.drafts.length)}
       </p>
-      <Btn tone="plain" data-adopt disabled={busy} onClick={() => (setBusy(true), void useWorkstreams.getState().adopt(id).finally(() => setBusy(false)))} className="px-2 py-0.5">
+      <Btn tone="plain" data-adopt disabled={busy} onClick={() => (setBusy(true), void useWorkstreams.getState().adopt(id).finally(() => setBusy(false)))}>
         Bring them here
       </Btn>
     </div>
@@ -245,13 +245,13 @@ export function WorkstreamControlsView({ view, actions, confirmingStop, onConfir
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
         <span className="ml-auto flex items-center gap-1">
           {!ws.pausedReason && (
-            <Btn tone="plain" data-ws-pause onClick={() => settlePauseFocus(actions.onPause(), "pause")} title={PAUSE_HINT} aria-description={PAUSE_HINT} className="px-1.5 py-0.5">
+            <Btn tone="plain" data-ws-pause onClick={() => settlePauseFocus(actions.onPause(), "pause")} title={PAUSE_HINT} aria-description={PAUSE_HINT}>
               Pause
             </Btn>
           )}
           {/* Both, or nothing: a Close whose confirm could close nothing is not offered. */}
           {onConfirmClose && actions.onClose && (
-            <Btn tone="plain" data-close-workstream onClick={() => onConfirmClose(true)} title={CLOSE_HINT} aria-description={CLOSE_HINT} className="px-1.5 py-0.5">
+            <Btn tone="plain" data-close-workstream onClick={() => onConfirmClose(true)} title={CLOSE_HINT} aria-description={CLOSE_HINT}>
               Close…
             </Btn>
           )}

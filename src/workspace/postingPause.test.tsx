@@ -18,7 +18,7 @@ describe("the posting pause (G26)", () => {
     expect(alert).toContain("Keep editing");
     expect(alert).toContain("Post anyway");
     expect(alert.indexOf("Keep editing")).toBeLessThan(alert.indexOf("Post anyway"));
-    const primary = [...html.matchAll(/<button[^>]*bg-ws-pip[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+    const primary = [...html.matchAll(/<button[^>]*ws-btn--primary[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
     expect(primary).toEqual(["Keep editing"]);
     expect(html).toContain("data-post-pause-keep");
   });

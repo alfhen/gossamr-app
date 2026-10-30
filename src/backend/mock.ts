@@ -614,6 +614,14 @@ export class MockBackend implements Backend {
 
   async setNeedsBadge(_count: number) {}
 
+  async reduceTransparency() {
+    return false;
+  }
+
+  onDisplayChanged(_listener: () => void) {
+    return () => {};
+  }
+
   async runsSetSettings(settings: AgentSettings) {
     return this.runs.setSettings(settings);
   }

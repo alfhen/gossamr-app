@@ -67,12 +67,12 @@ describe("the next-step line", () => {
 });
 
 describe("the workstream's controls", () => {
-  it("draws Pause, Close… and ⋯ as buttons with a border, not as text (G30)", () => {
+  it("draws Pause, Close… and ⋯ as glass buttons, not as text (G30)", () => {
     const html = renderToStaticMarkup(<WorkstreamControlsView view={viewOf()} actions={{ ...noop(), onClose: vi.fn() }} confirmingStop={false} onConfirmStop={vi.fn()} confirmingClose={false} onConfirmClose={vi.fn()} />);
     for (const hook of ["data-ws-pause", "data-close-workstream", "data-popover-trigger"]) {
       for (const tag of html.match(new RegExp(`<button[^>]*${hook}[^>]*>`, "g")) ?? []) {
-        expect(tag).toContain("border-ws-sep2");
-        expect(tag).not.toContain("border-transparent");
+        expect(tag).toContain("ws-btn--secondary");
+        expect(tag).not.toContain("ws-btn--quiet");
       }
     }
     expect(html.match(/<button[^>]*data-popover-trigger[^>]*>/g)).toHaveLength(1);

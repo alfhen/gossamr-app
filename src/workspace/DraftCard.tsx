@@ -1,5 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { MentionTextarea } from "../components/MentionTextarea";
+import { PipGlyph } from "../components/PipGlyph";
 import { docText } from "../lib/docs";
 import { autoLink, liveMentions, rewriteNote, subtasksNote, type Mention } from "../lib/mentions";
 import { isRunDraft as isAgentDraft, targetOf, unreachable } from "../lib/proposals";
@@ -28,6 +29,7 @@ import { liveDraft, setLiveDraft, touchDrafts, useDraftsRev } from "./draftLive"
 import { focusWhenDrawn } from "./focusDrawn";
 
 import { FromRun, useFromRunName } from "./RunProvenance";
+import { Button } from "../components/Button";
 
 export { focusWhenDrawn };
 
@@ -158,8 +160,6 @@ export interface DraftCardProps {
   headingLevel?: 3 | 4;
 }
 
-const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45";
-const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45";
 
 /** Under a comment being read whose text looks like a secret: the pause is coming, and the text above is what would be posted. */
 export const SECRET_NOTE = "This holds something that looks like a secret. Gossamr will pause before posting it.";
@@ -421,7 +421,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
       className={`ws-legacy ${PEEK_DRAFT_MARGIN} overflow-clip rounded-[10px] border border-dashed border-ws-pip bg-ws-win text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip ${state === "skipped" || state === "retired" ? "opacity-55" : ""}`}
     >
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
-        <span aria-hidden>✦</span>
+        <PipGlyph />
         {/* The card is named by this heading, so a screen reader says the title once. */}
         <Title id={titleId} className="m-0 text-sm font-semibold">
           {draftTitle(p)}
@@ -548,23 +548,24 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
             {open && (
               <>
                 {onDiscuss && (
-                  <button type="button" disabled={working} onClick={() => onDiscuss()} title="Pip reads the whole run and this draft, and changes the draft if you ask" className={button}>
+                  <Button variant="pip" disabled={working} onClick={() => onDiscuss()} title="Pip reads the whole run and this draft, and changes the draft if you ask">
+                    <PipGlyph />
                     Ask Pip
-                  </button>
+                  </Button>
                 )}
                 {(intent.type === "comment" || rewrite) && (
-                  <button type="button" data-draft-edit disabled={working} onClick={() => (editing ? setEditing(false) : (setEditing(true), focusField("textarea, input:not([type]), input[type=text]")))} className={button}>
+                  <Button data-draft-edit disabled={working} onClick={() => (editing ? setEditing(false) : (setEditing(true), focusField("textarea, input:not([type]), input[type=text]")))}>
                     {editing ? "Done editing" : "Edit"}
-                  </button>
+                  </Button>
                 )}
-                <button type="button" disabled={working} onClick={skip} className={button}>
+                <Button disabled={working} onClick={skip}>
                   Skip
-                </button>
+                </Button>
                 {/* While the pause shows, its own Post anyway stands in for this button, beside Keep editing. */}
                 {!pause && (
-                  <button type="button" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} aria-label={working || state === "applying" ? undefined : moveName} onClick={approve} className={primary}>
+                  <Button variant="primary" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} aria-label={working || state === "applying" ? undefined : moveName} onClick={approve}>
                     {working || state === "applying" ? "Working…" : action}
-                  </button>
+                  </Button>
                 )}
               </>
             )}

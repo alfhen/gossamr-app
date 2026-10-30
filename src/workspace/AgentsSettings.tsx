@@ -42,7 +42,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
       wide={false}
       onClose={onClose}
     >
-      <h2 className="m-0 text-[20px] leading-tight font-semibold">Agent settings</h2>
+      <h2 className="font-display m-0 text-[20px] leading-tight font-semibold">Agent settings</h2>
       <Sec title="Stop everything">
         <Box>
           <p className="m-0">Stops every agent Gossamr started, in every account. What each wrote stays in its worktree.</p>
@@ -77,7 +77,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
           {active.length > 0 && (
             <table className="w-full border-collapse text-left">
               <thead>
-                <tr className="text-xs tracking-[0.05em] text-ws-ink3 uppercase">
+                <tr className="text-sm font-semibold text-ws-ink2">
                   <th className="py-1 pr-2 font-semibold">Agent</th>
                   <th className="py-1 font-semibold">Starts in</th>
                 </tr>

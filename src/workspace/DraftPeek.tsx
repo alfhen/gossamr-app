@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAutoHeight } from "../components/autoHeight";
 import { useBackend } from "../backend/useBackend";
 import { MentionTextarea } from "../components/MentionTextarea";
+import { PipGlyph } from "../components/PipGlyph";
 import { containerKey } from "../lib/filter";
 import { leftByRun } from "../lib/proposals";
 import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";
@@ -17,12 +18,13 @@ import { PeekView, typingIn, type DraftSlots, type PeekViewProps } from "./PeekS
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { isTypingTarget } from "../lib/keys";
+import { Button } from "../components/Button";
+import { ButtonGroup } from "../components/ButtonGroup";
 
 const SAVE_DELAY_MS = 700;
 const HANDOVER_MS = 6000;
 
 const field = "rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-ws-ink disabled:opacity-60";
-const secondary = "rounded-lg border border-ws-sep2 bg-ws-win px-3.5 py-2 text-base hover:bg-ws-hover disabled:opacity-45";
 const KBD = "rounded border border-current/40 px-1 font-sans text-xs font-medium opacity-85";
 
 let stepped: "prev" | "next" | null = null;
@@ -65,26 +67,24 @@ function TitleField({ value, disabled, onChange, onBlur }: { value: string; disa
       onChange={(e) => onChange(e.target.value.replace(/\s*\n\s*/g, " "))}
       onKeyDown={(e) => e.key === "Enter" && !e.metaKey && !e.ctrlKey && e.preventDefault()}
       onBlur={onBlur}
-      className={`${field} block w-full resize-none overflow-hidden text-[20px] leading-tight font-semibold`}
+      className={`${field} block w-full font-display resize-none overflow-hidden text-[20px] leading-tight font-semibold`}
     />
   );
 }
 
-const STEP = "rounded-md px-2 py-0.5 font-semibold text-ws-ink2 hover:bg-ws-hover disabled:opacity-40 disabled:hover:bg-transparent";
-
 function DraftNav({ place, onStep }: { place: DraftPlace; onStep(id: string, how: "prev" | "next"): void }) {
   return (
-    <div role="group" aria-label={`Drafts waiting, ${place.position} of ${place.total}`} className="ml-auto flex shrink-0 items-center gap-0.5 text-sm">
-      <button type="button" data-step="prev" aria-label="Previous draft" disabled={!place.prev} onClick={() => place.prev && onStep(place.prev, "prev")} className={STEP}>
+    <ButtonGroup label={`Drafts waiting, ${place.position} of ${place.total}`} className="ml-auto shrink-0">
+      <Button variant="plain" data-step="prev" aria-label="Previous draft" disabled={!place.prev} onClick={() => place.prev && onStep(place.prev, "prev")}>
         <span aria-hidden>‹ </span>Prev
-      </button>
-      <span className="px-1 font-semibold text-ws-ink tabular-nums">
+      </Button>
+      <span className="px-1 text-sm font-semibold text-ws-ink tabular-nums">
         {place.position} of {place.total}
       </span>
-      <button type="button" data-step="next" aria-label="Next draft" disabled={!place.next} onClick={() => place.next && onStep(place.next, "next")} className={STEP}>
+      <Button variant="plain" data-step="next" aria-label="Next draft" disabled={!place.next} onClick={() => place.next && onStep(place.next, "next")}>
         Next<span aria-hidden> ›</span>
-      </button>
-    </div>
+      </Button>
+    </ButtonGroup>
   );
 }
 
@@ -102,7 +102,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
     banner: (
       <div className="grid gap-1">
         <div role="note" className="flex items-center gap-2 rounded-md border border-dashed border-ws-pip bg-ws-pip-soft px-2.5 py-1.5 text-sm font-semibold text-ws-pip">
-          <span aria-hidden>✦</span>
+          <PipGlyph />
           <span>New ticket draft</span>
           {p.origin.type === "run" && (
             <span className="font-normal">
@@ -205,20 +205,14 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
         {open || state.type === "applying" ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {open && onFinishWithPip && (
-              <button type="button" disabled={working} onClick={onFinishWithPip} title="Pip reads the whole run and this draft, and tightens it if you ask" className={secondary}>
+              <Button size="lg" disabled={working} onClick={onFinishWithPip} title="Pip reads the whole run and this draft, and tightens it if you ask">
                 Finish with Pip
-              </button>
+              </Button>
             )}
-            <button type="button" disabled={working} onClick={onSkip} className={secondary}>
+            <Button size="lg" disabled={working} onClick={onSkip}>
               Skip
-            </button>
-            <button
-              type="button"
-              disabled={working || state.type === "applying" || !fields.title.trim()}
-              onClick={onCreate}
-              aria-keyshortcuts="Meta+Enter Control+Enter"
-              className="inline-flex items-center gap-2 rounded-lg bg-ws-pip px-4 py-2 text-base font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45"
-            >
+            </Button>
+            <Button variant="primary" size="lg" disabled={working || state.type === "applying" || !fields.title.trim()} onClick={onCreate} aria-keyshortcuts="Meta+Enter Control+Enter">
               {working || state.type === "applying" ? (
                 "Working…"
               ) : (
@@ -229,7 +223,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
                   </kbd>
                 </>
               )}
-            </button>
+            </Button>
           </div>
         ) : null}
       </>

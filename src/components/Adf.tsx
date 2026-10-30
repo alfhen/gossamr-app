@@ -107,7 +107,7 @@ function Node({ node }: { node: AdfNode }): ReactNode {
       return <>{String(a.text ?? a.shortName ?? "")}</>;
     case "status":
       return (
-        <span className={`rounded-[4px] px-1.5 py-px text-[11px] font-semibold tracking-wide uppercase ${STATUS[String(a.color)] ?? STATUS.neutral}`}>
+        <span className={`rounded-[4px] px-1.5 py-px text-sm font-semibold ${STATUS[String(a.color)] ?? STATUS.neutral}`}>
           {String(a.text ?? "")}
         </span>
       );

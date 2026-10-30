@@ -5,6 +5,7 @@ import { projectOf, sameProject, scopeTo, withProject } from "./filters";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
 import { buildTabItems, type TabItem } from "./tabItems";
 import { useTabs } from "./tabsStore";
+import { Button } from "../components/Button";
 
 export function TabStrip({
   items,
@@ -68,21 +69,16 @@ export function TabStrip({
                 <span className={`shrink-0 rounded-full px-1.5 text-xs font-semibold ${item.active ? "bg-ws-pip-soft text-ws-pip" : "bg-ws-sel text-ws-ink3"}`}>{counts[i]}</span>
               </button>
               {item.tabId && (
-                <button
-                  type="button"
-                  aria-label={`Close tab ${item.label}`}
-                  onClick={() => onClose(item.tabId!)}
-                  className="mr-1 shrink-0 rounded px-1 text-lg leading-none text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink"
-                >
+                <Button variant="quiet" size="sm" iconOnly className="mr-1 shrink-0" aria-label={`Close tab ${item.label}`} onClick={() => onClose(item.tabId!)}>
                   ×
-                </button>
+                </Button>
               )}
             </div>
           ))}
         </div>
-        <button type="button" aria-label="New tab" title="New tab" onClick={onNew} className="mb-1 shrink-0 rounded px-2 text-lg leading-none text-ws-ink2 hover:bg-ws-hover">
+        <Button variant="quiet" size="sm" iconOnly className="mb-1 shrink-0" aria-label="New tab" title="New tab" onClick={onNew}>
           +
-        </button>
+        </Button>
       </div>
       <span className="mb-2 ml-auto shrink-0 px-1 text-sm text-ws-ink3" aria-live="polite">
         {shown} of {total}

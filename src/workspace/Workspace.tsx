@@ -21,7 +21,7 @@ import { PeekSheet } from "./PeekSheet";
 import { FilterNote, LAUNCHER_CLEAR, LAUNCHER_GUTTER, PipLauncher, SelectionAsk, usePipView } from "./PipExtras";
 import { GENERAL_CONVERSATION, PIP_INPUT_ID, PipPane } from "./PipPane";
 import { usePaneWidths } from "./PaneResizers";
-import { applyTheme, usePrefs } from "./prefs";
+import { applyTheme, followTransparency, usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
 import { togglePip, useWorkstreams } from "./workstreamsStore";
@@ -29,6 +29,7 @@ import { Rail } from "./Rail";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
+import { ScreenBar } from "./ScreenBar";
 import { ConnectGithubDialog } from "./ConnectGithub";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
@@ -37,6 +38,7 @@ import { ReauthBanner } from "./ReauthBanner";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
 import { useTabs, type Route } from "./tabsStore";
 import { ROUTE_NAME, routeHeading, routeTitle } from "./routeTitle";
+import { Button } from "../components/Button";
 
 /** Matches no item, for a filter that has nothing to read. */
 const NOTHING: WorkFilter = { type: "items", items: [] };
@@ -194,6 +196,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const status = useWorkspace((s) => s.status);
   const error = useWorkspace((s) => s.error);
   const route = useTabs((s) => s.route);
+  const activeTab = useActiveTab();
   const theme = usePrefs((s) => s.theme);
   const pipOpen = usePrefs((s) => s.pipOpen);
   const { pip: pipWidth, peek: peekWidth } = usePaneWidths();
@@ -232,6 +235,8 @@ export function Workspace({ backend }: { backend: Backend }) {
     return () => applyTheme("auto");
   }, [theme]);
 
+  useEffect(() => followTransparency(backend), [backend]);
+
   useEffect(() => {
     useWorkspace.getState().init(backend).catch(() => {});
     useActivity.getState().init(backend);
@@ -267,9 +272,9 @@ export function Workspace({ backend }: { backend: Backend }) {
       <div className="grid h-full place-items-center bg-ws-win px-6">
         <div className="grid max-w-[480px] justify-items-center gap-3 text-center">
           <p className="selectable m-0 text-ws-blocked">{error}</p>
-          <button type="button" className="rounded-md bg-ws-pip px-3.5 py-1.5 font-semibold text-ws-on-pip" onClick={() => useWorkspace.getState().init(backend).catch(() => {})}>
+          <Button variant="primary" onClick={() => useWorkspace.getState().init(backend).catch(() => {})}>
             Try again
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -304,15 +309,29 @@ export function Workspace({ backend }: { backend: Backend }) {
         >
           <div data-canvas-column style={{ paddingRight: room }} className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200">
             <ReauthBanner />
-            {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
-            {route === "workspace" && <FilterBar />}
-            {route === "workspace" && <FilterNote />}
-            <div className="min-h-0 flex-1">
-              {route === "workspace" && <Canvas />}
-              {route === "activity" && <ActivityView />}
-              {route === "agents" && <AgentsView />}
-              {route === "settings" && <Settings />}
-            </div>
+            {route === "workspace" ? (
+              <ScreenBar
+                resetKey={`${activeTab.id}:${activeTab.view}`}
+                bar={
+                  <>
+                    <Header />
+                    <FilterBar />
+                    <FilterNote />
+                  </>
+                }
+              >
+                <Canvas />
+              </ScreenBar>
+            ) : (
+              <>
+                <div data-tauri-drag-region className="h-[34px] shrink-0" />
+                <div className="min-h-0 flex-1">
+                  {route === "activity" && <ActivityView />}
+                  {route === "agents" && <AgentsView />}
+                  {route === "settings" && <Settings />}
+                </div>
+              </>
+            )}
           </div>
           <PeekSheet />
           <AgentSheets />

@@ -3,12 +3,13 @@ import { archiveControl } from "../lib/archiveRuns";
 import { roleLabel } from "../lib/roles";
 import type { ReviewView, Run } from "../types";
 import { Icon } from "./AgentIcons";
-import { RowActions, RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
+import { Dot, RowActions, RunBody, StateChip, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
 import { ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { runRef } from "../lib/runNames";
 import { verdictChip, verdictText } from "./runSheetLogic";
+import { Button } from "../components/Button";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -65,16 +66,9 @@ export function KeyAsking({ text }: { text?: string }) {
 /** The pill on a run that is in Needs you; pressing it opens the need rather than the run. */
 export function InNeedsYou({ onOpen }: { onOpen(): void }) {
   return (
-    <button
-      type="button"
-      data-in-needs-you
-      onClick={(ev) => (ev.stopPropagation(), onOpen())}
-      onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()}
-      title="This run is in Needs you. Open its decision at the top."
-      className="inline-flex shrink-0 items-center rounded-full border border-ws-pip/50 bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-    >
+    <Button variant="plain" pip size="sm" className="shrink-0" data-in-needs-you onClick={(ev) => (ev.stopPropagation(), onOpen())} onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()} title="This run is in Needs you. Open its decision at the top.">
       In Needs you
-    </button>
+    </Button>
   );
 }
 
@@ -135,10 +129,8 @@ export function RoleChip({ role }: { role: string }) {
 
 export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onStop, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = useStateView(run, now);
-  const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
   const tokens = formatTokens(run.tokens);
-  const needs = view.tone === "pip";
   return (
     <article
       id={agentId(run.id)}
@@ -152,9 +144,11 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       onClick={onOpen}
       // While a key of the Agents list waits for Enter, Enter is that key's (the window's handler does it), not "open".
       onKeyDown={asking ? undefined : onActivate(onOpen)}
-      style={{ ["--c" as string]: tone.color, boxShadow: `inset 3px 0 0 var(--c)${selected ? ", 0 0 0 2px var(--color-ws-accent-soft)" : ""}` }}
-      className={`ws-agent-card relative grid cursor-pointer content-start gap-2 rounded-[10px] border py-2.5 pr-3.5 pl-4 outline-offset-2 ${selected ? "border-ws-accent" : needs ? "border-ws-pip/45" : "border-ws-sep"} ${needs ? "bg-ws-pip-soft" : "bg-ws-win"}`}
+      className={`ws-agent-card relative grid cursor-pointer content-start gap-1.5 border-b border-ws-sep py-3 pr-2 pl-6 outline-offset-[-2px] ${selected ? "bg-ws-accent-soft" : "hover:bg-ws-hover"}`}
     >
+      <span className="absolute top-[17px] left-2 flex">
+        <Dot tone={view.tone} live={view.live} />
+      </span>
       <div className="flex min-w-0 items-center gap-2">
         <RunLabel label={label} />
         <RoleChip role={run.spec.role} />
@@ -162,7 +156,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}
           {onOpenNeed && <InNeedsYou onOpen={onOpenNeed} />}
-          <StateChip run={run} now={now} />
+          <StateChip run={run} now={now} plain />
         </span>
       </div>
       <h3 className="m-0 line-clamp-2 text-[13.5px] leading-[1.3] font-semibold text-balance [overflow-wrap:anywhere]">{title}</h3>
@@ -175,92 +169,86 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       </p>
       <KeyAsking text={asking} />
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
-      {onStop && <RowActions run={run} now={now} onAttach={onAttach} onStop={onStop} />}
-      <div className="flex flex-wrap items-center gap-2 empty:hidden">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {onStop && <RowActions run={run} now={now} onAttach={onAttach} onStop={onStop} />}
         {draftReady && onOpenDraft ? (
-          <button
-            type="button"
+          <Button
+            variant="pip"
+            size="sm"
             onClick={(ev) => (ev.stopPropagation(), onOpenDraft())}
             onKeyDown={ownKey}
             title="Open the comment draft."
-            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
             Draft ready
-          </button>
+          </Button>
         ) : (
           onDraftComment && (
-            <button
-              type="button"
+            <Button
+              variant="plain"
+              pip
+              size="sm"
               onClick={(ev) => (ev.stopPropagation(), onDraftComment())}
               onKeyDown={ownKey}
               title="Makes a comment draft."
               aria-label={`Draft comment on ${ticketLabel(run) ?? title}`}
-              className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
             >
               Draft comment
-            </button>
+            </Button>
           )
         )}
         {onBuildFromPlan && (
-          <button
-            type="button"
+          <Button
+            variant="plain"
+            pip
+            size="sm"
             onClick={(ev) => (ev.stopPropagation(), onBuildFromPlan())}
             onKeyDown={ownKey}
             title="Asks Pip to start a build from this plan"
-            className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
             Ask Pip to build
-          </button>
+          </Button>
         )}
         {onReviewThis && (
-          <button
-            type="button"
+          <Button
+            variant="plain"
+            pip
+            size="sm"
             onClick={(ev) => (ev.stopPropagation(), onReviewThis())}
             onKeyDown={ownKey}
             title="Asks Pip to review this build's pull request"
-            className="rounded-md border border-ws-pip px-2 py-px text-sm text-ws-pip hover:bg-ws-pip-soft"
           >
             Ask Pip to review
-          </button>
+          </Button>
         )}
         {descriptionReady && onOpenDescription && (
-          <button
-            type="button"
+          <Button
+            variant="pip"
+            size="sm"
             onClick={(ev) => (ev.stopPropagation(), onOpenDescription())}
             onKeyDown={ownKey}
             title="The description draft with this plan added."
-            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
             Description update ready
-          </button>
+          </Button>
         )}
         {breakdownReady && onOpenBreakdown && (
-          <button
-            type="button"
+          <Button
+            variant="pip"
+            size="sm"
             onClick={(ev) => (ev.stopPropagation(), onOpenBreakdown())}
             onKeyDown={ownKey}
             title="The subtasks draft."
-            className="rounded-md border border-ws-pip bg-ws-pip-soft px-2 py-px text-sm font-semibold text-ws-pip hover:brightness-95"
           >
             Breakdown proposed
-          </button>
+          </Button>
         )}
-      </div>
-      <div className="flex items-center gap-3 text-sm text-ws-ink3 tabular-nums">
-        {tokens && <span>{tokens}</span>}
+        {tokens && <span className="text-sm text-ws-ink3 tabular-nums">{tokens}</span>}
         {onArchive && (
-          <button
-            type="button"
-            data-archive
-            onClick={(ev) => (ev.stopPropagation(), onArchive())}
-            onKeyDown={ownKey}
-            title={archiveControl(run).title}
-            className="rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover"
-          >
+          <Button variant="plain" size="sm" data-archive onClick={(ev) => (ev.stopPropagation(), onArchive())} onKeyDown={ownKey} title={archiveControl(run).title}>
             Archive
-          </button>
+          </Button>
         )}
-        <time dateTime={ageSince(run)} className="ml-auto" title={run.endedAt ? "Ended" : "Started"}>
+        <time dateTime={ageSince(run)} className="ml-auto text-sm text-ws-ink3 tabular-nums" title={run.endedAt ? "Ended" : "Started"}>
           {ageText(run, now)}
         </time>
       </div>

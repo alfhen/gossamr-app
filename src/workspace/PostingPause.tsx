@@ -1,8 +1,7 @@
 import { useId } from "react";
 import { riskNote, type Risk, type RiskQuotes } from "../lib/riskyText";
+import { Button } from "../components/Button";
 
-const button = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm hover:bg-ws-hover disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip";
-const primary = "rounded-md bg-ws-pip px-3.5 py-1.5 text-sm font-semibold text-ws-on-pip shadow-sm hover:brightness-110 disabled:opacity-45 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip";
 
 /**
  * The pause before posting edited words that would reach everyone or look like a secret: what it found, then the two
@@ -30,12 +29,12 @@ export function PostingPause({ risks, quote, where, subject, anyway, working, on
     >
       <p id={note} role="alert" className="m-0 text-sm text-ws-warn">{riskNote(risks, quote, where, subject)}</p>
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" data-post-pause-keep aria-describedby={note} onClick={onKeep} className={primary}>
+        <Button variant="primary" data-post-pause-keep aria-describedby={note} onClick={onKeep}>
           Keep editing
-        </button>
-        <button type="button" data-post-pause-anyway aria-describedby={note} disabled={working} onClick={onPost} className={button}>
+        </Button>
+        <Button data-post-pause-anyway aria-describedby={note} disabled={working} onClick={onPost}>
           {anyway}
-        </button>
+        </Button>
       </div>
     </div>
   );

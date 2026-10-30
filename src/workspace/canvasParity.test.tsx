@@ -188,7 +188,8 @@ describe("ListRow", () => {
     expect(out).not.toContain("Needs you");
     expect(out).toContain("blocked");
     expect(out).toContain("draft → Done");
-    expect(out).toContain("✦ 2");
+    expect(out).toContain("data-pip-glyph");
+    expect(out).toContain("</svg> 2");
     expect(renderToStaticMarkup(<ListRow {...rowProps({ unread: true })} />)).toContain('aria-label="Unread updates"');
     expect(renderToStaticMarkup(<ListRow {...rowProps()} />)).not.toContain("role=\"img\"");
   });
@@ -260,6 +261,6 @@ describe("markers on the other canvases", () => {
     expect(renderToStaticMarkup(<AttentionDot needsMe={false} unread={false} />)).toBe("");
     expect(renderToStaticMarkup(<AttentionDot needsMe unread />)).toContain("bg-ws-pip");
     expect(renderToStaticMarkup(<AgeChip days={12} />)).toContain("text-ws-blocked");
-    expect(renderToStaticMarkup(<StatusPill status={status("In Review", "active")} />)).toContain("bg-ws-review-soft");
+    expect(renderToStaticMarkup(<StatusPill status={status("In Review", "active")} />)).toContain("--color-ws-review");
   });
 });

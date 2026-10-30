@@ -7,6 +7,7 @@ import { groupId } from "./needsActions";
 import { useNeedsYou } from "./useNeeds";
 import { useWorkView } from "./workViewStore";
 import { useWorkstreams } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 /** The ticket's key comes first on its own, so the title loses it when it starts with it, as a workstream's title does. */
 export function rowTitle(ws: Pick<WorkstreamView["workstream"], "itemKey" | "title">): string {
@@ -36,8 +37,9 @@ export function DecisionScope({ children }: { children: ReactNode }) {
 export function NeedsBadge({ count, total }: { count: number; total: number }) {
   if (!count) return null;
   return (
-    <span data-needs-you-badge title={`${count} of the ${total} in Needs you ${count === 1 ? "is" : "are"} here`} className="shrink-0 rounded-full bg-ws-pip px-1.5 text-[10px] leading-4 font-semibold text-ws-on-pip">
-      {count} {count === 1 ? "needs" : "need"} you
+    <span data-needs-you-badge title={`${count} of the ${total} in Needs you ${count === 1 ? "is" : "are"} here`} className="inline-flex shrink-0 items-center gap-1.5 text-xs text-ws-ink2">
+      <i className="grid h-4 min-w-4 place-items-center rounded-full bg-(--prominent) px-1 text-[10px] leading-none font-semibold text-white not-italic tabular-nums">{count}</i>{" "}
+      {count === 1 ? "needs" : "need"} you
     </span>
   );
 }
@@ -61,11 +63,10 @@ export const NO_WORKSTREAMS = "No workstreams yet. Ask Pip about a ticket to sta
 
 /** "Show closed", the way to the workstreams the list doesn't show. */
 export function WorkstreamTools({ showClosed, onShowClosed }: { showClosed: boolean; onShowClosed(on: boolean): void }) {
-  const button = "rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip";
   return (
-    <button type="button" data-show-closed aria-pressed={showClosed} onClick={() => onShowClosed(!showClosed)} className={button}>
+    <Button variant="plain" size="sm" data-show-closed aria-pressed={showClosed} onClick={() => onShowClosed(!showClosed)}>
       {showClosed ? "Hide closed" : "Show closed"}
-    </button>
+    </Button>
   );
 }
 
@@ -73,7 +74,7 @@ export function WorkstreamTools({ showClosed, onShowClosed }: { showClosed: bool
 export function ClosedWorkstreams({ closed, open }: { closed: readonly WorkstreamView[]; open: readonly WorkstreamView[] }) {
   return (
     <section aria-label="Closed workstreams" data-closed-workstreams className="grid gap-2">
-      <h3 className="m-0 text-xs font-semibold tracking-[0.05em] text-ws-ink2 uppercase">Closed workstreams</h3>
+      <h3 className="m-0 text-sm font-semibold text-ws-ink2">Closed workstreams</h3>
       <ul className="m-0 grid list-none gap-0.5 p-0">
         {closed.map((v) => {
           const key = v.workstream.itemKey;
@@ -87,17 +88,18 @@ export function ClosedWorkstreams({ closed, open }: { closed: readonly Workstrea
               </span>
               <span className="flex flex-wrap items-baseline gap-x-2 text-xs">
                 Closed
-                <button
-                  type="button"
+                <Button
+                  variant="quiet"
+                  size="sm"
                   data-reopen-workstream={v.workstream.id}
                   aria-label={`Reopen ${key ?? rowTitle(v.workstream)}`}
                   aria-disabled={blocked || undefined}
                   aria-describedby={blocked ? `reopen-blocked-${v.workstream.id}` : undefined}
                   onClick={() => !blocked && void useWorkstreams.getState().reopen(v.workstream.id)}
-                  className={`rounded px-1 font-medium underline focus-visible:outline-2 focus-visible:outline-ws-pip ${blocked ? "cursor-not-allowed text-ws-ink3" : "text-ws-ink2 hover:bg-ws-hover"}`}
+                  className={blocked ? "cursor-not-allowed text-ws-ink3" : ""}
                 >
                   Reopen
-                </button>
+                </Button>
                 {blocked && (
                   <span id={`reopen-blocked-${v.workstream.id}`} data-reopen-blocked>
                     {key} already has an open workstream

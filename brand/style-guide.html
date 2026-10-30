@@ -7,63 +7,72 @@
 <style>
   :root {
     color-scheme: light;
-    --win: #fcfbfe;
-    --side: #ecebf4;
-    --bar: #f4f3f9;
-    --sep: rgb(50 40 110 / 0.1);
-    --sep2: rgb(50 40 110 / 0.18);
-    --ink: #1b1a2b;
-    --ink2: #575672;
-    --ink3: #8c8ba6;
-    --accent: #4a5be0;
-    --accent-soft: rgb(74 91 224 / 0.1);
-    --pip: #0b8a86;
-    --pip-soft: rgb(11 138 134 / 0.1);
-    --pip2: #5b4bd1;
-    --done: #1f9d6a;
-    --blocked: #e0475b;
-    --review: #8a55d6;
-    --warn: #c98a1b;
-    --shadow: 0 12px 40px rgb(30 20 80 / 0.2);
+    --win: #faf7f2;
+    --side: #efe9e0;
+    --bar: #f5f0e8;
+    --sep: rgb(90 60 30 / 0.11);
+    --sep2: rgb(90 60 30 / 0.19);
+    --ink: #2b2621;
+    --ink2: #5e564c;
+    --ink3: #776e62;
+    --accent: #4b55c0;
+    --accent-soft: rgb(75 85 192 / 0.1);
+    --pip: #16737a;
+    --pip-soft: rgb(22 115 122 / 0.1);
+    --pip2: #5f54b8;
+    --done: #2e7d4f;
+    --done-soft: rgb(46 125 79 / 0.12);
+    --blocked: #bf4339;
+    --review: #7d4cb8;
+    --warn: #b07614;
+    --shadow: 0 12px 40px rgb(60 40 20 / 0.18);
     --sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --win: #14131d;
-      --side: #1c1b2a;
-      --bar: #191826;
-      --sep: rgb(190 180 255 / 0.1);
-      --sep2: rgb(190 180 255 / 0.18);
-      --ink: #eeedf8;
-      --ink2: #b1b0c8;
-      --ink3: #7b7a96;
-      --accent: #6a82ff;
-      --accent-soft: rgb(106 130 255 / 0.16);
-      --pip: #37d0c0;
-      --pip-soft: rgb(55 208 192 / 0.13);
-      --pip2: #9a8bff;
-      --review: #b48af0;
+      --win: #1c1a17;
+      --side: #24211d;
+      --bar: #201d1a;
+      --sep: rgb(255 235 205 / 0.09);
+      --sep2: rgb(255 235 205 / 0.16);
+      --ink: #e9e2d6;
+      --ink2: #b6ad9f;
+      --ink3: #90877b;
+      --accent: #8f98f0;
+      --accent-soft: rgb(143 152 240 / 0.15);
+      --pip: #76c8cb;
+      --pip-soft: rgb(118 200 203 / 0.12);
+      --pip2: #a99cf0;
+      --done: #6dbf8b;
+      --done-soft: rgb(109 191 139 / 0.2);
+      --review: #bf9cec;
+      --blocked: #e77d72;
+      --warn: #d6a04a;
       --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --win: #14131d;
-    --side: #1c1b2a;
-    --bar: #191826;
-    --sep: rgb(190 180 255 / 0.1);
-    --sep2: rgb(190 180 255 / 0.18);
-    --ink: #eeedf8;
-    --ink2: #b1b0c8;
-    --ink3: #7b7a96;
-    --accent: #6a82ff;
-    --accent-soft: rgb(106 130 255 / 0.16);
-    --pip: #37d0c0;
-    --pip-soft: rgb(55 208 192 / 0.13);
-    --pip2: #9a8bff;
-    --review: #b48af0;
+    --win: #1c1a17;
+    --side: #24211d;
+    --bar: #201d1a;
+    --sep: rgb(255 235 205 / 0.09);
+    --sep2: rgb(255 235 205 / 0.16);
+    --ink: #e9e2d6;
+    --ink2: #b6ad9f;
+    --ink3: #90877b;
+    --accent: #8f98f0;
+    --accent-soft: rgb(143 152 240 / 0.15);
+    --pip: #76c8cb;
+    --pip-soft: rgb(118 200 203 / 0.12);
+    --pip2: #a99cf0;
+    --done: #6dbf8b;
+    --done-soft: rgb(109 191 139 / 0.2);
+    --review: #bf9cec;
+    --blocked: #e77d72;
+    --warn: #d6a04a;
     --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
   }
 
@@ -172,7 +181,7 @@
   .marks { display: flex; flex-wrap: wrap; align-items: end; gap: 28px; padding: 24px; background: var(--bar); border: 1px solid var(--sep); border-radius: 14px; max-width: 920px; }
   .marks figure { margin: 0; text-align: center; }
   .marks figcaption { font-size: 12px; color: var(--ink3); margin-top: 6px; }
-  .on-light { background: #fcfbfe; border: 1px solid rgb(50 40 110 / 0.1); border-radius: 10px; padding: 24px; }
+  .on-light { background: #faf7f2; border: 1px solid rgb(90 60 30 / 0.11); border-radius: 10px; padding: 24px; }
   .on-dark { background: #14131d; border: 1px solid rgb(238 237 248 / 0.12); border-radius: 10px; padding: 24px; }
 
   .swatches { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); }
@@ -202,14 +211,14 @@
   .p-needs { color: var(--accent); background: var(--accent-soft); }
   .p-run { color: var(--pip); background: var(--pip-soft); }
   .p-fail { color: var(--blocked); background: rgb(224 71 91 / 0.12); }
-  .p-done { color: var(--done); background: rgb(31 157 106 / 0.14); }
+  .p-done { color: var(--done); background: var(--done-soft); }
   .p-idle { color: var(--ink3); background: var(--bar); }
   .draft { margin: 12px; border: 1.5px dashed var(--pip); background: var(--pip-soft); border-radius: 10px; padding: 12px; }
   .draft .who { font-size: 11px; color: var(--pip); font-weight: 600; }
   .btns { display: flex; gap: 8px; margin-top: 10px; }
   .btn { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .ask { font: 600 12px var(--sans); border: 0; border-radius: 14px; padding: 3px 10px; color: #fff; background: linear-gradient(135deg, #0b8a86, #5b4bd1); }
+  .ask { font: 600 12px var(--sans); border: 0; border-radius: 14px; padding: 3px 10px; color: #fff; background: linear-gradient(135deg, #16737a, #5f54b8); }
 
   .dos { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   @media (max-width: 600px) { .dos { grid-template-columns: 1fr; } }
@@ -309,26 +318,26 @@
 
   .glass-duo { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
   .gstage { --a: 0.22; position: relative; border-radius: 12px; overflow: hidden; min-height: 320px; padding: 16px; }
-  .gstage.l { background: #fcfbfe; border: 1px solid rgb(50 40 110 / 0.1); color: #1b1a2b; }
-  .gstage.d { background: #14131d; border: 1px solid rgb(190 180 255 / 0.12); color: #eeedf8; }
+  .gstage.l { background: #faf7f2; border: 1px solid rgb(90 60 30 / 0.11); color: #2b2621; }
+  .gstage.d { background: #1c1a17; border: 1px solid rgb(255 235 205 / 0.12); color: #e9e2d6; }
   .gstage .glow { position: absolute; border-radius: 50%; filter: blur(30px); pointer-events: none; }
-  .gstage .g1 { width: 220px; height: 220px; left: -40px; top: 40px; background: #37d0c0; opacity: 0.5; }
+  .gstage .g1 { width: 220px; height: 220px; left: -40px; top: 40px; background: #76c8cb; opacity: 0.5; }
   .gstage .g2 { width: 260px; height: 220px; right: -60px; bottom: -40px; background: #6a82ff; opacity: 0.55; }
   .gstage .g3 { width: 180px; height: 160px; left: 45%; top: -50px; background: #b48af0; opacity: 0.45; }
   .gstage .board { position: relative; display: grid; gap: 8px; }
   .gstage .row { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; font-size: 12px; }
-  .gstage.l .row { background: #ffffff; border: 1px solid rgb(50 40 110 / 0.1); }
-  .gstage.d .row { background: #1c1b2a; border: 1px solid rgb(190 180 255 / 0.1); }
+  .gstage.l .row { background: #ffffff; border: 1px solid rgb(90 60 30 / 0.11); }
+  .gstage.d .row { background: #24211d; border: 1px solid rgb(255 235 205 / 0.09); }
   .gstage .row b { font-weight: 600; }
   .gstage .row span:nth-child(2) { flex: 1; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .gstage .pl { font: 600 10px/16px var(--sans); padding: 0 7px; border-radius: 999px; }
-  .pl.n { color: #fff; background: #4a5be0; } .pl.r { color: #04302c; background: #37d0c0; } .pl.f { color: #fff; background: #e0475b; } .pl.v { color: #fff; background: #8a55d6; } .pl.o { color: #04302c; background: #1f9d6a; }
+  .pl.n { color: #fff; background: #4b55c0; } .pl.r { color: #04302c; background: #76c8cb; } .pl.f { color: #fff; background: #bf4339; } .pl.v { color: #fff; background: #7d4cb8; } .pl.o { color: #062a2c; background: #6dbf8b; }
   .gstage .cap { position: absolute; left: 16px; bottom: 10px; font-size: 11px; opacity: 0.6; }
 
   .silk-glass { position: absolute; left: 50%; top: 46%; width: min(380px, 84%); transform: translate(-50%, -50%); border-radius: 16px; isolation: isolate; }
   .silk-glass::before { content: ""; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none;
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
-  .l .silk-glass { color: #1b1a2b;
+  .l .silk-glass { color: #2b2621;
     background: linear-gradient(rgb(200 194 255 / 0.1), rgb(200 194 255 / 0.1)), rgb(255 255 255 / var(--a));
     -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06); backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
     box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.7), inset 0 -1px 1px rgb(20 19 29 / 0.06), 0 10px 30px rgb(20 19 29 / 0.18); }
@@ -345,24 +354,12 @@
   .d .silk-glass .r.on { background: rgb(200 194 255 / 0.1); box-shadow: inset 0 0 0 1px rgb(200 194 255 / 0.18); }
   .silk-glass .r .k { font: 11px var(--mono); opacity: 0.6; }
   .silk-glass .pipline { display: flex; align-items: center; gap: 8px; }
-  .silk-glass .pipline i { width: 8px; height: 8px; border-radius: 50%; background: #37d0c0; box-shadow: 0 0 8px #37d0c0; }
-  .glass-duo.solid .l .silk-glass { background: #fcfbfe; -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .glass-duo.solid .d .silk-glass { background: #1c1b2a; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .silk-glass .pipline i { width: 8px; height: 8px; border-radius: 50%; background: #76c8cb; box-shadow: 0 0 8px #76c8cb; }
+  .glass-duo.solid .l .silk-glass { background: #faf7f2; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-duo.solid .d .silk-glass { background: #24211d; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .gstage { min-height: 380px; }
-  .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; border-radius: 50%; display: grid; place-items: center; isolation: isolate; }
-  .orb::before { content: ""; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none;
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
-  .orb svg { width: 40px; height: 26px; }
-  .l .orb { background: linear-gradient(rgb(55 208 192 / 0.1), rgb(55 208 192 / 0.1)), rgb(255 255 255 / var(--a));
-    -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06); backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
-    box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.75), 0 10px 26px rgb(11 138 134 / 0.25); }
-  .l .orb::before { background: linear-gradient(135deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.2) 40%, rgb(255 255 255 / 0.05) 60%, rgb(255 255 255 / 0.6)); }
-  .d .orb { background: linear-gradient(rgb(55 208 192 / 0.08), rgb(55 208 192 / 0.08)), rgb(20 19 29 / calc(var(--a) + 0.16));
-    -webkit-backdrop-filter: blur(8px) saturate(1.6) brightness(0.9); backdrop-filter: blur(8px) saturate(1.6) brightness(0.9);
-    box-shadow: inset 0 1px 1px rgb(55 208 192 / 0.3), 0 12px 32px rgb(0 0 0 / 0.5); }
-  .d .orb::before { background: linear-gradient(135deg, rgb(55 208 192 / 0.6), rgb(55 208 192 / 0.1) 40%, rgb(55 208 192 / 0.02) 60%, rgb(55 208 192 / 0.35)); }
-  .glass-duo.solid .l .orb { background: #fcfbfe; -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .glass-duo.solid .d .orb { background: #1c1b2a; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; display: grid; place-items: center; filter: drop-shadow(0 6px 8px rgb(95 84 184 / 0.35)); }
+  .orb svg { width: 56px; height: 36px; }
   .glass-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-top: 12px; font-size: 13px; color: var(--ink2); }
   .glass-ctl input[type=range] { width: 180px; accent-color: var(--accent); }
   .glass-ctl button { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); cursor: pointer; }
@@ -478,35 +475,45 @@
 
 <section id="logo"><div class="wrap">
   <h2>Logo</h2>
-  <p>A silk <b>G</b>, with <b>Pip</b>, a small teal spider, hanging into it on a hairline thread. Pip is the only bright point. Below 64 px, use the small version: the G with Pip as a single dot.</p>
+  <p>A silk <b>G</b>, with <b>Pip</b>, a small teal spider, hanging into it on a hairline thread. Pip is the only bright point. Below 64 px, use the small version: the G with Pip as a single dot. The app icon is the one place the mark takes the silk-glass gloss: a frosted G with a bright edge on ink, and Pip drawn as a dew bead.</p>
   <div class="marks">
     <figure><svg width="128" height="128" role="img" aria-label="Full mark"><use href="#mark"/></svg><figcaption>Full, from 64 px</figcaption></figure>
     <figure><svg width="64" height="64" role="img" aria-label="Full mark at 64 px"><use href="#mark"/></svg><figcaption>64 px</figcaption></figure>
     <figure><svg width="32" height="32" role="img" aria-label="Small mark at 32 px"><use href="#mark-small"/></svg><figcaption>Small, 32 px</figcaption></figure>
     <figure><svg width="16" height="16" role="img" aria-label="Small mark at 16 px"><use href="#mark-small"/></svg><figcaption>Small, 16 px</figcaption></figure>
-    <figure><svg width="72" height="47" viewBox="226 340 572 372" role="img" aria-label="Pip mark"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+    <figure><svg width="72" height="47" viewBox="226 340 572 372" role="img" aria-label="Pip mark"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
       </g></svg><figcaption>Pip alone</figcaption></figure>
+    <figure><svg width="128" height="128" role="img" aria-label="App icon" viewBox="0 0 1024 1024"><defs>
+<linearGradient id="iconbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#25232f"/><stop offset=".5" stop-color="#1b1a25"/><stop offset="1" stop-color="#121119"/></linearGradient>
+<radialGradient id="iconglow" cx="538" cy="470" r="340" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#4fb9b4" stop-opacity="0.24"/><stop offset="0.2" stop-color="#4fb9b4" stop-opacity="0.2"/><stop offset="0.4" stop-color="#4fb9b4" stop-opacity="0.13"/><stop offset="0.6" stop-color="#4fb9b4" stop-opacity="0.07"/><stop offset="0.8" stop-color="#4fb9b4" stop-opacity="0.025"/><stop offset="1" stop-color="#4fb9b4" stop-opacity="0"/></radialGradient>
+<linearGradient id="iconfrost" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff" stop-opacity=".35"/><stop offset="1" stop-color="#ffffff" stop-opacity=".05"/></linearGradient>
+<linearGradient id="iconsilk" x1="250" y1="270" x2="790" y2="800" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f7f6fd"/><stop offset=".55" stop-color="#e6e3f7"/><stop offset="1" stop-color="#b7b0f2"/></linearGradient>
+<linearGradient id="iconspec" x1="183" y1="181" x2="760" y2="842" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".3" stop-color="#fff" stop-opacity=".2"/><stop offset=".65" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".4"/></linearGradient>
+<linearGradient id="iconedge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset=".4" stop-color="#fff" stop-opacity=".06"/><stop offset=".7" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".22"/></linearGradient>
+<radialGradient id="iconbead" cx=".36" cy=".3" r=".85"><stop offset="0" stop-color="#e4fbf6"/><stop offset=".5" stop-color="#4fb9b4"/><stop offset="1" stop-color="#256f78"/></radialGradient>
+<linearGradient id="iconrim" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity=".35"/></linearGradient>
+</defs><g transform="translate(100 100) scale(0.8046875)"><rect width="1024" height="1024" rx="225" fill="url(#iconbg)"/><rect width="1024" height="1024" rx="225" fill="url(#iconglow)"/><path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="#000" stroke-opacity="0.05" stroke-width="158" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 22)"/><path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="#000" stroke-opacity="0.07" stroke-width="138" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 18)"/><path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="#000" stroke-opacity="0.1" stroke-width="120" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 14)"/><path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="#000" stroke-opacity="0.12" stroke-width="108" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 10)"/><path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="url(#iconsilk)" stroke-opacity=".94" stroke-width="102" stroke-linecap="round" stroke-linejoin="round"/><path d="M 717 222 C 664 194 603 181 534 181 C 339 181 183 326 183 511 C 183 701 339 842 527 842 C 680 842 793 738 816 617 L 635 617" fill="none" stroke="url(#iconspec)" stroke-opacity=".7" stroke-width="31" stroke-linecap="round" stroke-linejoin="round"/><line x1="538" y1="233" x2="538" y2="369" stroke="#eeedf8" stroke-opacity=".55" stroke-width="5"/><circle cx="538" cy="300" r="9" fill="#eeedf8" fill-opacity=".85"/><path d="M 480 429 C 448 415 417 432 413 468" fill="none" stroke="#3fb4ad" stroke-width="15" stroke-linecap="round"/><path d="M 483 472 C 449 473 444 511 463 531" fill="none" stroke="#3fb4ad" stroke-width="15" stroke-linecap="round"/><path d="M 596 429 C 628 415 659 432 663 468" fill="none" stroke="#3fb4ad" stroke-width="15" stroke-linecap="round"/><path d="M 593 472 C 627 473 632 511 613 531" fill="none" stroke="#3fb4ad" stroke-width="15" stroke-linecap="round"/><circle cx="538" cy="441" r="72" fill="url(#iconbead)"/><ellipse cx="512" cy="410" rx="22" ry="14" fill="#fff" fill-opacity=".62" transform="rotate(-25 512 410)"/><ellipse cx="545" cy="488" rx="34" ry="12" fill="#fff" fill-opacity=".18"/><circle cx="538" cy="441" r="69" fill="none" stroke="url(#iconrim)" stroke-width="4"/><circle cx="516" cy="448" r="10" fill="#14131d" fill-opacity=".85"/><circle cx="560" cy="448" r="10" fill="#14131d" fill-opacity=".85"/><circle cx="519" cy="444" r="3.5" fill="#fff"/><circle cx="563" cy="444" r="3.5" fill="#fff"/><rect x="4" y="4" width="1016" height="1016" rx="221" fill="none" stroke="url(#iconedge)" stroke-width="8"/></g></svg><figcaption>App icon</figcaption></figure>
   </div>
 
   <h3>Wordmark</h3>
   <p>"Gossamr": one word, capital G, no "e" before the final r. System sans, semibold, the mark to its left.</p>
   <div class="grid">
-    <div class="on-light"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#1b1a2b">Gossamr</span></div></div>
+    <div class="on-light"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#2b2621">Gossamr</span></div></div>
     <div class="on-dark"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#eeedf8">Gossamr</span></div></div>
   </div>
 
   <h3>Don't</h3>
   <ul>
-    <li>Recolour the G or Pip, add gloss, outlines or shadows, or rotate the mark.</li>
+    <li>Recolour the G or Pip, add gloss, outlines or shadows, or rotate the mark. The app icon is the only exception to gloss.</li>
     <li>Use the full mark below 64 px: Pip's legs and thread blur.</li>
     <li>Separate Pip from its thread, or hang Pip anywhere but inside the G.</li>
     <li>Use gold or amber anywhere in the brand. Amber is the app's warning colour.</li>
@@ -522,37 +529,37 @@
   <p>Mostly ink and silk, a little lavender and indigo, and one small point of teal. The proportions are part of the brand: a page that is half teal is not Gossamr.</p>
   <div class="strip" role="img" aria-label="Brand colours in proportion: ink about half, silk a quarter, lavender, indigo and violet small, teal smallest">
     <span style="flex:50;background:#14131d;color:#eeedf8">Ink</span>
-    <span style="flex:27;background:#eeedf8;color:#1b1a2b">Silk</span>
-    <span style="flex:9;background:#c8c2ff;color:#1b1a2b">Lavender</span>
-    <span style="flex:7;background:#6a82ff;color:#fff">Indigo</span>
-    <span style="flex:4;background:#9a8bff"></span>
-    <span style="flex:3;background:#37d0c0"></span>
+    <span style="flex:27;background:#eeedf8;color:#2b2621">Silk</span>
+    <span style="flex:9;background:#c8c2ff;color:#2b2621">Lavender</span>
+    <span style="flex:7;background:#8f98f0;color:#fff">Indigo</span>
+    <span style="flex:4;background:#a99cf0"></span>
+    <span style="flex:3;background:#76c8cb"></span>
   </div>
   <ul class="legend">
-    <li><i style="background:#14131d"></i><b>Ink</b><span>#14131d, the dark window and the icon</span></li>
+    <li><i style="background:#14131d"></i><b>Ink</b><span>#14131d, the icon square</span></li>
     <li><i style="background:#eeedf8"></i><b>Silk</b><span>#eeedf8, the G and text on ink</span></li>
     <li><i style="background:#c8c2ff"></i><b>Lavender</b><span>#c8c2ff, threads, the G's fade, glass tint</span></li>
-    <li><i style="background:#6a82ff"></i><b>Indigo</b><span>#6a82ff dark, #4a5be0 light: you</span></li>
-    <li><i style="background:#9a8bff"></i><b>Violet</b><span>#9a8bff dark, #5b4bd1 light: Pip's second colour</span></li>
-    <li><i style="background:#37d0c0"></i><b>Pip teal</b><span>#37d0c0 dark, #0b8a86 light: Pip only</span></li>
+    <li><i style="background:#8f98f0"></i><b>Indigo</b><span>#8f98f0 dark, #4b55c0 light: you</span></li>
+    <li><i style="background:#a99cf0"></i><b>Violet</b><span>#a99cf0 dark, #5f54b8 light: Pip's second colour</span></li>
+    <li><i style="background:#76c8cb"></i><b>Pip teal</b><span>#76c8cb dark, #16737a light: Pip only</span></li>
   </ul>
 
   <h3>Interface tokens</h3>
   <div class="scroll"><table>
     <thead><tr><th>Token</th><th>Light</th><th>Dark</th><th>Use</th></tr></thead>
     <tbody>
-      <tr><td><code>ws-win</code></td><td>#fcfbfe</td><td>#14131d</td><td>Window and page</td></tr>
-      <tr><td><code>ws-side</code></td><td>#ecebf4</td><td>#1c1b2a</td><td>Sidebar and rail</td></tr>
-      <tr><td><code>ws-bar</code></td><td>#f4f3f9</td><td>#191826</td><td>Bars, footers, quiet panels</td></tr>
-      <tr><td><code>ws-ink</code></td><td>#1b1a2b</td><td>#eeedf8</td><td>Body text</td></tr>
-      <tr><td><code>ws-ink2</code></td><td>#575672</td><td>#b1b0c8</td><td>Secondary text</td></tr>
-      <tr><td><code>ws-ink3</code></td><td>#8c8ba6</td><td>#7b7a96</td><td>Meta: times, counts, hints</td></tr>
-      <tr><td><code>ws-accent</code></td><td>#4a5be0</td><td>#6a82ff</td><td>Your actions, focus, selection</td></tr>
-      <tr><td><code>ws-pip</code>, <code>ws-pip2</code></td><td>#0b8a86, #5b4bd1</td><td>#37d0c0, #9a8bff</td><td>Pip and Pip's drafts</td></tr>
-      <tr><td><code>ws-done</code></td><td>#1f9d6a</td><td>#1f9d6a</td><td>Done</td></tr>
-      <tr><td><code>ws-blocked</code></td><td>#e0475b</td><td>#e0475b</td><td>Failed, blocked</td></tr>
-      <tr><td><code>ws-review</code></td><td>#8a55d6</td><td>#b48af0</td><td>In review</td></tr>
-      <tr><td><code>ws-warn</code></td><td>#c98a1b</td><td>#c98a1b</td><td>Needs attention (icons and fills only)</td></tr>
+      <tr><td><code>ws-win</code></td><td>#faf7f2</td><td>#1c1a17</td><td>Window and page</td></tr>
+      <tr><td><code>ws-side</code></td><td>#efe9e0</td><td>#24211d</td><td>Sidebar and rail</td></tr>
+      <tr><td><code>ws-bar</code></td><td>#f5f0e8</td><td>#201d1a</td><td>Bars, footers, quiet panels</td></tr>
+      <tr><td><code>ws-ink</code></td><td>#2b2621</td><td>#e9e2d6</td><td>Body text</td></tr>
+      <tr><td><code>ws-ink2</code></td><td>#5e564c</td><td>#b6ad9f</td><td>Secondary text</td></tr>
+      <tr><td><code>ws-ink3</code></td><td>#776e62</td><td>#90877b</td><td>Meta: times, counts, hints</td></tr>
+      <tr><td><code>ws-accent</code></td><td>#4b55c0</td><td>#8f98f0</td><td>Your actions, focus, selection</td></tr>
+      <tr><td><code>ws-pip</code>, <code>ws-pip2</code></td><td>#16737a, #5f54b8</td><td>#76c8cb, #a99cf0</td><td>Pip and Pip's drafts</td></tr>
+      <tr><td><code>ws-done</code></td><td>#2e7d4f</td><td>#6dbf8b</td><td>Done</td></tr>
+      <tr><td><code>ws-blocked</code></td><td>#bf4339</td><td>#e77d72</td><td>Failed, blocked</td></tr>
+      <tr><td><code>ws-review</code></td><td>#7d4cb8</td><td>#bf9cec</td><td>In review</td></tr>
+      <tr><td><code>ws-warn</code></td><td>#b07614</td><td>#d6a04a</td><td>Needs attention (icons and fills only)</td></tr>
     </tbody>
   </table></div>
 
@@ -583,7 +590,8 @@
       <tr><td><code>ws-ink2</code></td><td>6.8</td><td>8.7</td></tr>
       <tr><td><code>ws-accent</code></td><td>5.3</td><td>5.5</td><td>Links and buttons</td></tr>
       <tr><td><code>ws-ink3</code></td><td>3.2</td><td>4.4</td><td>Meta, icons, large or bold text only</td></tr>
-      <tr><td><code>ws-pip</code></td><td>4.1</td><td>9.6</td><td>In light mode: icons, borders, bold labels</td></tr>
+      <tr><td><code>ws-pip</code></td><td>5.2</td><td>9.0</td><td>Pip text</td></tr>
+      <tr><td><code>ws-done</code></td><td>4.7</td><td>7.8</td><td>Done text</td></tr>
       <tr><td><code>ws-warn</code></td><td>2.9</td><td></td><td>Icons and fills; the words stay in ink</td></tr>
     </tbody>
   </table></div>
@@ -608,7 +616,7 @@
 
 <section id="shape"><div class="wrap">
   <h2>Space, shape and depth</h2>
-  <dl class="traits"><div><dt>A 4 px step</dt><dd>Rows and controls mostly use 8 px gaps and 8 to 12 px side padding.</dd></div><div><dt>Corners by size</dt><dd>4 to 6 px on controls and rows, 6 to 10 px on cards and sheets, round on pills and avatars.</dd></div><div><dt>Lines, not boxes</dt><dd>Hairline separators. A border only where something is a distinct object: a card, a field, a draft.</dd></div><div><dt>Shadow means floating</dt><dd>Only popovers, the palette, toasts and Pip's launcher cast a shadow. Lists and cards lie flat.</dd></div></dl>
+  <dl class="traits"><div><dt>A 4 px step</dt><dd>Rows and controls mostly use 8 px gaps and 8 to 12 px side padding.</dd></div><div><dt>Corners by size</dt><dd>round on controls, pills and avatars; 6 to 7 px on rows; 10 px on cards; 14 to 16 px on sheets.</dd></div><div><dt>Lines, not boxes</dt><dd>Hairline separators. A border only where something is a distinct object: a card, a field, a draft.</dd></div><div><dt>Shadow means floating</dt><dd>Popovers, the palette, toasts and Pip's launcher cast a shadow. Controls sit just above their surface with a small one. Lists and cards lie flat.</dd></div><div><dt>Controls are silk glass</dt><dd><code>Button</code>, <code>ButtonGroup</code>, <code>Segmented</code>, <code>Switch</code> and <code>SearchField</code> in <code>src/components/</code>. Clear glass by default, indigo for the one main action, Pip's colour on the label for Ask Pip. Heights 22, 28 and 32 px, fully rounded, 12 px labels at medium weight. Inside a glass surface they are lenses; with Reduce transparency they are solid.</dd></div></dl>
   <p style="margin-top:28px">The app is compact, like a Mac utility. The site breathes: 96 to 128 px between sections on desktop, 64 px on phones.</p>
 </div></section>
 
@@ -656,24 +664,24 @@
 
   <h3>Pip's vocabulary</h3>
   <div class="motion">
-    <figure style="margin:0"><div class="stage dangle"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+    <figure style="margin:0"><div class="stage dangle"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
       </g></svg></div></div><figcaption class="meta">Dangle: 5 px over 5 s</figcaption></figure>
-    <figure style="margin:0"><div class="stage bob"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+    <figure style="margin:0"><div class="stage bob"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
@@ -690,7 +698,7 @@
 </div></section>
 
 <section id="fluid" class="fluid"><div class="wrap">
-  <span class="proposal-tag">Proposal, not built yet</span>
+  <span class="proposal-tag">Proposal: silk glass is built, the rest is not</span>
   <h2>Dew and silk glass</h2>
   <p class="lead">Dew gathers on the threads, each bead pulled round by surface tension. When a bead grows heavy it lets go, and the thread springs back. Gossamr's drafts could move the same way, on surfaces of clear silk glass inspired by Liquid Glass.</p>
 
@@ -755,13 +763,13 @@
     <div class="demo">
       <h4>Pip feels your attention</h4>
       <p>Hover Pip: it lowers 3 px on silk, as if your attention weighs on the thread, and rises when you leave.</p>
-      <div class="pad"><div class="hover-pip"><div class="hang2"><i class="silk"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+      <div class="pad"><div class="hover-pip"><div class="hang2"><i class="silk"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
@@ -770,7 +778,7 @@
   </div>
 
   <h3>Silk glass</h3>
-  <p>For what floats above the work: the palette, menus, toasts, the Pip launcher and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never content.</p>
+  <p>For what floats above the work: the palette, menus, toasts, Pip's pane header and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never content.</p>
   <p>Like Liquid Glass, it is mostly clear: it takes its colour from what's behind it, blurs lightly so shapes show through, and catches light on its rim. The brand touch is a faint lavender tint, the colour of the silk G.</p>
   <div class="glass-duo" id="glassduo">
     <div class="gstage l">
@@ -790,7 +798,7 @@
         <div class="r"><span>Open the workstream on CA-388</span></div>
         <div class="r"><span>Go to Work</span><span class="k">⌘K</span></div>
       </div>
-      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#37d0c0"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
+      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#76c8cb" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#76c8cb"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
       <span class="cap">Light</span>
     </div>
     <div class="gstage d">
@@ -810,7 +818,7 @@
         <div class="r"><span>Open the workstream on CA-388</span></div>
         <div class="r"><span>Go to Work</span><span class="k">⌘K</span></div>
       </div>
-      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#37d0c0"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
+      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#76c8cb" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#76c8cb"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
       <span class="cap">Dark</span>
     </div>
   </div>
@@ -822,7 +830,7 @@
     <li>Body: white at 22% (ink at 38% in dark) with a faint lavender tint. Blur 6 to 8 px, saturation up, so shapes and colour come through.</li>
     <li>Rim: a 1 px light, brightest at the top-left corner, fading along the sides, glowing again at the bottom-right. Plus a soft inner light along the top.</li>
     <li>Selection is a clearer lens inside the glass, with its own rim. Text is full-strength ink, medium weight.</li>
-    <li>Pip's launcher is the one teal glass: the same body and rim, tinted teal, with a teal glow beneath.</li>
+    <li>Pip's launcher is not glass: Pip hangs free on its thread over the glass and the work, with only its soft violet shadow.</li>
     <li>If text can't keep 4.5:1 over the worst content behind it, raise the body (white 55%, ink 60%) or go solid. Reduce transparency makes it solid.</li>
     <li>No refraction in the app: WebKit doesn't apply SVG filters in <code>backdrop-filter</code>. On the site, refraction is an enhancement for browsers that do, on the hero and navigation only.</li>
   </ul>
@@ -831,7 +839,7 @@
   <ol>
     <li><b>Tokens:</b> add the springs and the fall to <code>theme.css</code>, and move the popover and peek motions onto dew.</li>
     <li><b>Dew:</b> approve as a falling bead, skip as evaporation, the badge swell, the ripple.</li>
-    <li><b>Silk glass:</b> the palette and menus, then toasts and the launcher. Measure scrolling with a menu open first.</li>
+    <li><b>Silk glass:</b> the palette and menus, then toasts and Pip's pane header. Measure scrolling with a menu open first.</li>
     <li><b>Threads:</b> a hairline from Pip to each new draft, and menus that flow from their buttons.</li>
     <li><b>gossamr.app:</b> Pip drops into the G on the drop spring, glass navigation, refraction in the hero.</li>
   </ol>
@@ -843,7 +851,8 @@
   <h2>Pip</h2>
   <p>Gossamr's one character: a round teal spider with two eyes, friendly rather than insect-like.</p>
   <ul>
-    <li><b>In the app</b>, Pip is the animated avatar: a teal-to-violet body, eight legs, eyes that blink and follow the pointer.</li>
+    <li><b>In the app</b>, Pip is the animated avatar, drawn as a dew bead: a teal-to-violet body with a soft highlight and a white rim that catches light, a smaller bead for a head, a small smile, eight thin legs, and eyes whose pupils carry a catchlight and follow the pointer. Gloss belongs to Pip's bead and the app icon only; the flat mark stays flat.</li>
+    <li><b>In text</b>, Pip has its own glyph: a spider on its thread, with a bead and two eyes cut out of it. It takes the colour of the text around it and is 1em tall, so it stands where a symbol would: the Pip button in the rail, Pip's drafts and their badges, "Ask Pip" in the palette, on a text selection, on the Work and ticket buttons and in a run result, and the "Pip asks you" box. The four-point spark stays only for a run that is working. It replaced the four-point star (✦), which says "AI" on every product that uses it. Gossamr never sells itself as AI, so what marks Pip's work is Pip.</li>
     <li><b>In the brand</b>, Pip is the flat mark: flat teal, two eyes, four legs.</li>
     <li>Pip appears where Pip acts or speaks: the launcher, the pane, Pip's drafts. Never as decoration, and never on errors as a joke.</li>
     <li>Pip is "Pip": never "the AI", "the bot" or "the assistant" in the interface.</li>

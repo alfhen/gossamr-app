@@ -176,8 +176,8 @@ test("a comment with two secrets pauses with both buttons in the group, the note
   const keep = pause.getByRole("button", { name: "Keep editing" });
   const anyway = pause.getByRole("button", { name: "Post anyway" });
   await expect(keep).toBeFocused();
-  await expect(keep).toHaveClass(/bg-ws-pip/);
-  await expect(anyway).not.toHaveClass(/bg-ws-pip/);
+  await expect(keep).toHaveClass(/ws-btn--primary/);
+  await expect(anyway).not.toHaveClass(/ws-btn--primary/);
   // Keep editing comes first, and the actions row has no second Post anyway.
   expect(await pause.evaluate((el) => !!(el.querySelector("[data-post-pause-keep]")!.compareDocumentPosition(el.querySelector("[data-post-pause-anyway]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   await expect(draft.locator("[data-draft-actions]").getByRole("button", { name: /Post/ })).toHaveCount(0);

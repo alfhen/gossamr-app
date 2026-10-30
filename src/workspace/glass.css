@@ -1,0 +1,179 @@
+@layer components {
+  /* No position here: menus rely on absolute/fixed utilities. backdrop-filter makes fixed descendants anchor to the panel. Static call sites add `relative` for the rim, and glass never goes on the element that scrolls. */
+  .ws-glass {
+    --glass-tint-now: var(--glass-tint);
+    --glass-body-now: var(--glass-body);
+    --glass-rim-now: var(--glass-rim);
+    --glass-inner-now: var(--glass-inner);
+    background:
+      linear-gradient(var(--glass-tint-now), var(--glass-tint-now)),
+      linear-gradient(var(--glass-body-now), var(--glass-body-now));
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: var(--glass-inner-now), var(--glass-depth);
+  }
+
+  .ws-glass::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--glass-rim-now);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* Any layer with ws-ink2 text uses this; ws-ink2 on clear glass misses 4.5:1 over accent and status fills. */
+  .ws-glass-regular {
+    --glass-body-now: var(--glass-body-regular);
+  }
+
+  /* Combine with .ws-glass on Pip's surfaces only. */
+  .ws-glass-pip {
+    --glass-tint-now: var(--glass-tint-pip);
+    --glass-rim-now: var(--glass-rim-pip);
+    --glass-inner-now: var(--glass-inner-pip);
+    --glass-lens: var(--glass-lens-pip);
+    --glass-lens-rim: var(--glass-lens-rim-pip);
+  }
+
+  /* A floating sheet: a solid body on the glass rim and depth. It clips to its corners; the rim sits above the content. */
+  .ws-sheet {
+    position: relative;
+    overflow: clip;
+    border-radius: 16px;
+    background: var(--color-ws-sheet);
+    box-shadow: var(--glass-depth);
+  }
+
+  .ws-sheet::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--glass-rim);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* A sheet's header stays put while the content scrolls under the fade below it. */
+  .ws-sheet-head {
+    position: relative;
+    background: var(--color-ws-sheet);
+    box-shadow: inset 0 -1px 0 var(--color-ws-sep);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .ws-sheet-head {
+      transition: box-shadow 160ms;
+    }
+  }
+
+  .ws-sheet-head[data-under] {
+    box-shadow: none;
+  }
+
+  .ws-sheet-head::after,
+  .ws-sheet-fade::after {
+    content: "";
+    position: absolute;
+    inset: 100% 0 auto;
+    height: 16px;
+    background: linear-gradient(var(--color-ws-sheet), transparent);
+    pointer-events: none;
+  }
+
+  /* A screen header is solid at rest. Once content scrolls under it the bar fades and only its controls blur; the bar itself is never glass. */
+  .ws-bar {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 10;
+    background: var(--color-ws-win);
+  }
+
+  .ws-bar[data-under] {
+    background: color-mix(in srgb, var(--color-ws-win) 98%, transparent);
+  }
+
+  .ws-bar[data-under]::after {
+    content: "";
+    position: absolute;
+    inset: 100% 0 auto;
+    height: 16px;
+    background: linear-gradient(color-mix(in srgb, var(--color-ws-win) 98%, transparent), transparent);
+    pointer-events: none;
+  }
+
+  .ws-bar[data-under] :is(.ws-btn--secondary, .ws-btn--pip, .ws-seg, .ws-btn-group, .ws-search) {
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ws-bar[data-under] {
+      --glass-filter: none;
+      background: var(--color-ws-win);
+    }
+
+    .ws-bar[data-under]::after {
+      display: none;
+    }
+  }
+
+  :root[data-transparency="reduce"] .ws-bar[data-under] {
+    --glass-filter: none;
+    background: var(--color-ws-win);
+  }
+
+  :root[data-transparency="reduce"] .ws-bar[data-under]::after {
+    display: none;
+  }
+
+  /* Selection inside glass: put it on the hovered, active or aria-selected row. */
+  .ws-glass-lens {
+    background: var(--glass-lens);
+    box-shadow: inset 0 0 0 1px var(--glass-lens-rim);
+  }
+
+  .ws-glass-item:hover,
+  .ws-glass-item:focus-visible {
+    background: linear-gradient(var(--color-ws-hover), var(--color-ws-hover)), var(--glass-lens);
+    box-shadow: inset 0 0 0 1px var(--glass-lens-rim);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ws-glass {
+      --glass-lens: var(--color-ws-accent-soft);
+      --glass-lens-rim: transparent;
+      --glass-body-now: var(--color-ws-win);
+      --glass-tint-now: transparent;
+      --glass-filter: none;
+    }
+  }
+
+  /* Set from macOS in the app, where WebKit doesn't report prefers-reduced-transparency. */
+  :root[data-transparency="reduce"] .ws-glass {
+    --glass-lens: var(--color-ws-accent-soft);
+    --glass-lens-rim: transparent;
+    --glass-body-now: var(--color-ws-win);
+    --glass-tint-now: transparent;
+    --glass-filter: none;
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .ws-glass {
+      --glass-lens: var(--color-ws-accent-soft);
+      --glass-lens-rim: transparent;
+      --glass-body-now: var(--color-ws-win);
+      --glass-tint-now: transparent;
+      --glass-filter: none;
+    }
+  }
+}

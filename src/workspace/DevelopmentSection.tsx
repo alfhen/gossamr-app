@@ -13,10 +13,10 @@ import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
 import { agoText, watchedReposLine } from "./watchLogic";
+import { Button } from "../components/Button";
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-const small = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold hover:bg-ws-hover disabled:opacity-45";
 
 function Who({ login }: { login: string }) {
   return (
@@ -60,7 +60,7 @@ export interface DetailState {
 function DetailBlock({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="grid gap-1">
-      <h4 className="m-0 text-xs font-semibold tracking-wide text-ws-ink3 uppercase">{title}</h4>
+      <h4 className="m-0 text-sm font-semibold text-ws-ink2">{title}</h4>
       {children}
     </div>
   );
@@ -79,9 +79,9 @@ export function PullDetail({ change, state, now, onOpen, onRetry }: { change: Co
       {state.status === "error" && (
         <div role="alert" className="grid gap-1.5 text-ws-blocked">
           <p className="m-0 [overflow-wrap:anywhere]">{state.error}</p>
-          <button type="button" onClick={onRetry} className={`${small} justify-self-start text-ws-ink`}>
+          <Button size="sm" className="justify-self-start" onClick={onRetry}>
             Try again
-          </button>
+          </Button>
         </div>
       )}
       {state.detail && (
@@ -145,9 +145,9 @@ export function PullDetail({ change, state, now, onOpen, onRetry }: { change: Co
         </>
       )}
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={onOpen} className={small}>
+        <Button size="sm" onClick={onOpen}>
           Open on GitHub
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -200,20 +200,20 @@ export function ChangeRow({ link, now, expanded, detail, onToggle, onOpen, onRet
       </span>
     </>
   );
-  const box = "grid min-w-0 rounded-lg border border-ws-sep";
+  const box = "grid min-w-0 border-b border-ws-sep last:border-b-0";
   if (!pull) {
     return (
-      <li title={provenanceHint(link.provenance)} className={`${box} grid-cols-[minmax(0,1fr)_auto] items-start gap-2 p-2.5`}>
+      <li title={provenanceHint(link.provenance)} className={`${box} grid-cols-[minmax(0,1fr)_auto] items-start gap-2 py-2.5`}>
         <div className="flex min-w-0 gap-2.5">{body}</div>
-        <button type="button" onClick={() => onOpen(c.url)} className={`${small} shrink-0`}>
+        <Button size="sm" className="shrink-0" onClick={() => onOpen(c.url)}>
           Open on GitHub
-        </button>
+        </Button>
       </li>
     );
   }
   return (
-    <li title={provenanceHint(link.provenance)} className={`${box} overflow-hidden ${expanded ? "border-ws-sep2" : ""}`}>
-      <button type="button" aria-expanded={expanded} onClick={onToggle} className="flex min-w-0 gap-2.5 p-2.5 text-left hover:bg-ws-hover">
+    <li title={provenanceHint(link.provenance)} className={`${box} overflow-hidden`}>
+      <button type="button" aria-expanded={expanded} onClick={onToggle} className="flex min-w-0 gap-2.5 py-2.5 text-left hover:bg-ws-hover">
         {body}
         <svg aria-hidden viewBox="0 0 16 16" className={`mt-1 size-3.5 shrink-0 text-ws-ink3 transition-transform ${expanded ? "" : "-rotate-90"}`} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
           <path d="M4 6l4 4 4-4" />
@@ -251,16 +251,16 @@ export function DevelopmentView(p: DevelopmentViewProps) {
     <SectionCard id="development" title="Development" count={p.links ? links.length : undefined} collapsed={p.collapsed} onToggle={p.onToggleSection}>
       <div className="flex flex-wrap items-center gap-2">
         <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink3">Pull requests, branches and commits that name {p.itemKey}.</p>
-        <button type="button" disabled={p.searching} onClick={p.onSearch} className={small}>
+        <Button size="sm" disabled={p.searching} onClick={p.onSearch}>
           {p.searching ? "Searching GitHub…" : "Search GitHub for this ticket"}
-        </button>
+        </Button>
       </div>
       {p.error && (
         <div role="alert" className="grid gap-1.5 text-ws-blocked">
           <p className="m-0 [overflow-wrap:anywhere]">{p.error}</p>
-          <button type="button" onClick={p.onRetry} className={`${small} justify-self-start text-ws-ink`}>
+          <Button size="sm" className="justify-self-start" onClick={p.onRetry}>
             Try again
-          </button>
+          </Button>
         </div>
       )}
       {!p.links && !p.error && (
@@ -273,13 +273,13 @@ export function DevelopmentView(p: DevelopmentViewProps) {
           <p className="m-0">
             Nothing {p.watched ?? "in your watched repositories"} names {p.itemKey} yet. Put the key in a branch name, pull request title or commit message and it shows up here after the next sync.
           </p>
-          <button type="button" onClick={p.onManage} className="justify-self-start text-sm text-ws-accent underline">
+          <Button variant="quiet" size="sm" className="justify-self-start" onClick={p.onManage}>
             Manage repositories
-          </button>
+          </Button>
         </div>
       )}
       {links.length > 0 && (
-        <ul aria-label="Linked code" className="m-0 grid list-none gap-2 p-0">
+        <ul aria-label="Linked code" className="m-0 grid list-none gap-0 p-0">
           {links.map((l) => (
             <ChangeRow
               key={l.change.externalId}
@@ -302,9 +302,9 @@ export function ConnectBanner({ onConnect }: { onConnect(): void }) {
   return (
     <div role="note" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed border-ws-sep2 bg-ws-bar px-3 py-1.5 text-sm text-ws-ink2">
       <span className="min-w-0 flex-1">Connect GitHub to see the PRs for this ticket</span>
-      <button type="button" onClick={onConnect} className="rounded-md px-2 py-0.5 font-semibold text-ws-accent hover:bg-ws-hover">
+      <Button variant="plain" size="sm" onClick={onConnect}>
         Connect GitHub
-      </button>
+      </Button>
     </div>
   );
 }

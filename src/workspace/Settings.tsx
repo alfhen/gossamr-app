@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Button } from "../components/Button";
 import { announceSignedOut } from "../accountEvents";
 import { auth } from "../backend/auth";
 import type { ConnectionInfo, WatchState } from "../types";
@@ -11,6 +12,7 @@ import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { useEscBack } from "./escBack";
+import { Segmented } from "../components/Segmented";
 
 /** The two facts the app states about what it does, and only here. */
 export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."] as const;
@@ -31,7 +33,7 @@ export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "err
 
 const DOT = { ok: "bg-ws-done", busy: "bg-ws-accent", error: "bg-ws-blocked" } as const;
 
-const CARD = "grid gap-1.5 rounded-xl border border-ws-sep2 bg-ws-win p-4";
+const CARD = "grid gap-1.5 border-b border-ws-sep py-3 first:pt-0";
 
 function useNow() {
   const [now, setNow] = useState(() => new Date());
@@ -61,9 +63,9 @@ function KindBadge({ children, round = false }: { children: ReactNode; round?: b
 
 function SyncNow({ c }: { c: ConnectionInfo }) {
   return (
-    <button type="button" disabled={c.syncing} onClick={() => void useWorkspace.getState().syncNow()} className="text-ws-accent underline disabled:opacity-50 disabled:no-underline">
+    <Button variant="quiet" size="sm" disabled={c.syncing} onClick={() => void useWorkspace.getState().syncNow()}>
       Sync now
-    </button>
+    </Button>
   );
 }
 
@@ -101,9 +103,9 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
       <div className="flex gap-3 text-sm">
         <SyncNow c={c} />
         {c.kind === "jira" && (
-          <button type="button" disabled={signingOut} onClick={() => void signOut()} className="text-ws-ink2 underline disabled:opacity-50">
+          <Button variant="quiet" size="sm" disabled={signingOut} onClick={() => void signOut()}>
             Sign out
-          </button>
+          </Button>
         )}
       </div>
     </li>
@@ -139,26 +141,26 @@ export function GithubCardView({ c, watch, now, confirming, busy, onSync, onMana
       <p className="m-0 text-sm text-ws-ink2">{watchSummary(watch, nounFor("github"))}</p>
       <SyncStatus line={line} />
       <div className="flex flex-wrap gap-3 text-sm">
-        <button type="button" disabled={c.syncing} onClick={onSync} className="text-ws-accent underline disabled:opacity-50 disabled:no-underline">
+        <Button variant="quiet" size="sm" disabled={c.syncing} onClick={onSync}>
           Sync now
-        </button>
-        <button type="button" onClick={onManage} className="text-ws-accent underline">
+        </Button>
+        <Button variant="quiet" size="sm" onClick={onManage}>
           Manage repositories
-        </button>
-        <button type="button" disabled={busy} onClick={onAskDisconnect} className="text-ws-ink2 underline disabled:opacity-50">
+        </Button>
+        <Button variant="quiet" size="sm" disabled={busy} onClick={onAskDisconnect}>
           Disconnect
-        </button>
+        </Button>
       </div>
       {confirming && (
         <div role="alertdialog" aria-label={`Disconnect ${c.workspace}`} className="mt-1 grid gap-2 rounded-lg border border-ws-warn bg-ws-bar px-3 py-2.5 text-sm">
           <p className="m-0 text-ws-ink">Disconnect {c.workspace}? Gossamr forgets its token and deletes the pull requests and branches it cached. Nothing on GitHub changes, and you can connect again any time.</p>
           <div className="flex gap-2">
-            <button type="button" disabled={busy} onClick={onDisconnect} className="rounded-md bg-ws-blocked px-3 py-1 font-semibold text-white disabled:opacity-50">
+            <Button variant="danger" disabled={busy} onClick={onDisconnect}>
               {busy ? "Disconnecting…" : "Disconnect"}
-            </button>
-            <button type="button" disabled={busy} onClick={onCancel} className="rounded-md px-3 py-1 text-ws-ink2 hover:bg-ws-hover">
+            </Button>
+            <Button variant="quiet" disabled={busy} onClick={onCancel}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -195,14 +197,14 @@ function GithubCard({ c }: { c: ConnectionInfo }) {
 
 export function ConnectGithubCard({ connected }: { connected: boolean }) {
   return (
-    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-dashed border-ws-sep2 p-4">
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
       <div className="min-w-0 flex-1">
         <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
         <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</div>
       </div>
-      <button type="button" onClick={() => useGithubUi.getState().openConnect()} className="shrink-0 rounded-lg bg-ws-accent px-3.5 py-1.5 font-semibold text-white">
+      <Button variant="primary" className="shrink-0" onClick={() => useGithubUi.getState().openConnect()}>
         Connect GitHub
-      </button>
+      </Button>
     </li>
   );
 }
@@ -210,7 +212,7 @@ export function ConnectGithubCard({ connected }: { connected: boolean }) {
 function Section({ title, id, children }: { title: string; id?: string; children: ReactNode }) {
   return (
     <section id={id} className="scroll-mt-4 border-b border-ws-sep py-5">
-      <h2 className="m-0 mb-2.5 text-lg font-semibold">{title}</h2>
+      <h2 className="font-display m-0 mb-2.5 text-lg font-semibold">{title}</h2>
       {children}
     </section>
   );
@@ -232,7 +234,7 @@ export function Settings() {
 
   return (
     <div className="h-full overflow-auto px-8 pb-10">
-      <h1 className="m-0 pt-6 text-xl font-bold">Settings</h1>
+      <h1 className="font-display m-0 pt-6 text-xl font-bold">Settings</h1>
       <div className="max-w-[720px]">
         <Section title="Safety">
           <ul data-promises className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
@@ -243,24 +245,11 @@ export function Settings() {
         </Section>
 
         <Section title="Theme">
-          <div role="radiogroup" aria-label="Theme" className="inline-flex rounded-lg bg-ws-sel p-0.5">
-            {THEMES.map((t) => (
-              <button
-                key={t}
-                type="button"
-                role="radio"
-                aria-checked={theme === t}
-                onClick={() => setTheme(t)}
-                className={`rounded-md px-3.5 py-1 font-semibold ${theme === t ? "bg-ws-win text-ws-ink shadow-sm" : "text-ws-ink2"}`}
-              >
-                {THEME_LABEL[t]}
-              </button>
-            ))}
-          </div>
+          <Segmented kind="radio" label="Theme" value={theme} onChange={setTheme} options={THEMES.map((t) => ({ value: t, label: THEME_LABEL[t] }))} />
         </Section>
 
         <Section title="Connections">
-          <ul aria-label="Connections" className="m-0 grid list-none gap-3 p-0">
+          <ul aria-label="Connections" className="m-0 grid list-none gap-0 p-0">
             {connections.map((c) => (c.kind === "github" ? <GithubCard key={c.id} c={c} /> : <ConnectionRow key={c.id} c={c} projects={projects.get(c.id) ?? 0} />))}
             <ConnectGithubCard connected={connections.some((c) => c.kind === "github")} />
           </ul>

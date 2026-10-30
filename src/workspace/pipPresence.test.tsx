@@ -10,6 +10,7 @@ import { DraftPreview, draftPreviewBody } from "./DraftPreview";
 import { AskPipButton, askPlacement, Launcher } from "./PipExtras";
 import { AppliedCard, ContextChip, escapeClosesPane, SeeingPanel } from "./PipPane";
 import { typingIn } from "./PeekSheet";
+import { PipGlyph } from "../components/PipGlyph";
 import { PipAvatar } from "./PipAvatar";
 import { pupilOffset } from "./pipGaze";
 import { appliedState, usePip } from "./pipStore";
@@ -151,6 +152,23 @@ describe("the avatar and launcher", () => {
     expect(out).toContain("pip-legs");
     expect(out).not.toContain("data-thinking");
     expect(out).not.toContain("pip-dangle");
+  });
+
+  it("keeps each pupil and its catchlight in one group, so the catchlight follows the pupil", () => {
+    const out = renderToStaticMarkup(<PipAvatar />);
+    expect(out.match(/<g class="pip-pup">(<circle[^>]*><\/circle>){2}<\/g>/g)).toHaveLength(2);
+  });
+
+  it("gives two avatars and two glyphs their own gradient and mask ids", () => {
+    const ids = (html: string, attr: string) => [...html.matchAll(new RegExp(`${attr}="([^"]+)"`, "g"))].map((m) => m[1]);
+    const avatars = renderToStaticMarkup(<><PipAvatar /><PipAvatar /></>);
+    const gradients = ids(avatars, "id");
+    expect(gradients).toHaveLength(4);
+    expect(new Set(gradients).size).toBe(4);
+    const glyphs = renderToStaticMarkup(<><PipGlyph /><PipGlyph /></>);
+    const masks = ids(glyphs, "id");
+    expect(new Set(masks).size).toBe(2);
+    expect(glyphs).toContain('aria-hidden="true"');
   });
 
   it("scuttles while thinking and dangles when asked to", () => {
