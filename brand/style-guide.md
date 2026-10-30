@@ -181,7 +181,7 @@ Motion in Gossamr has two speeds. The interface moves **quickly and quietly**, s
 1. **Motion explains where things are.** The peek slides in from the right because it lives on the right. A menu drops from the button that opened it. If a movement doesn't say where something came from or went, leave it out.
 2. **Quick for the interface, slow for life.** Interface motion finishes within 220 ms. Pip and the spiders take seconds.
 3. **One thing moves at a time.** Don't stagger lists, cascade cards or animate several regions together.
-4. **A loop means working.** Only work in progress loops: the ring on a running agent's dot, Pip bobbing while it answers, a pending switch's spinner, "Reading what happened…" while Pip reads. When the work stops, so does the motion. Pip's idle life (dangle, blink, twitch) is the one exception, and it is slow and irregular on purpose.
+4. **A loop means working.** Only work in progress loops: the ring on a running agent's dot, Pip spinning its web while it answers, a pending switch's spinner. When the work stops, so does the motion. Pip's idle life (dangle, blink, twitch) is the one exception, and it is slow and irregular on purpose.
 5. **No bounce in the interface.** Overshoot and swing belong to Pip and the spiders only.
 6. **Never move what the person is reading.** New entries don't push the timeline under the reader's eyes, and counts change without animation.
 7. **Motion is never the only signal.** Every state it shows is also shown in words or colour, so turning motion off loses nothing.
@@ -215,7 +215,7 @@ Distances stay small: 40 px for a sheet, 6 px and a 0.98 scale for a popover, 1 
 | Resize handle | The indigo line fades in, 120 ms | | |
 | Running agent | A ring grows from the status dot and fades, 1.8 s, ease-out, looping | Stops when the run stops | The only motion on a working run |
 | Pending control | A small spinner inside the control | Replaced by the result | Only inside the switch or button that is waiting |
-| Pip reading | The "Reading what happened…" line pulses | Replaced by Pip's answer | |
+| Pip at work | A web in the answer's place: eight spokes, then the spiral, with Pip crawling it in and back out, a dew bead, 6 s, looping | Lifts 14 px and fades, 500 ms, as the answer appears | `pip-work`, `pip-web-*`, `pip-crawl` in `pip.css`. A spider word (Spinning, Weaving, Untangling, Following a thread, Tying a knot, Mending the web, Gathering dew, Testing the silk, Casting a line, Reeling in) changes every 2.6 s in shuffled order, never the same twice running, and is hidden from screen readers. Under it a plain line of what Pip is doing, with the time after 5 s, is a polite live region. With the pane closed a glass chip beside the launcher carries the same word |
 | Cobweb on hover or selection | | Shrinks to 0.4, turns −10° and fades, 500 ms | It clears the card for the person to read |
 | Wither tint | Deepens across 600 ms as a stage is reached | | |
 
@@ -258,7 +258,7 @@ With `prefers-reduced-motion`, every animation and transition in the app stops, 
 | Sheets, popovers | Appear and disappear in place |
 | Running agent's ring | A plain dot in the state's colour |
 | Spinners | A still ring |
-| Pip | Sits still with open eyes; while it works, its pane still says what it is doing ("Reading what happened…") |
+| Pip | Sits still with open eyes; while it works, the web is drawn and still with Pip on it, the words change without fading and the line still says what Pip is doing ("Reading what happened") |
 | Cobweb spiders | Stay at their perch |
 
 Pip and the spiders also pause whenever the window is hidden, whatever the setting.
