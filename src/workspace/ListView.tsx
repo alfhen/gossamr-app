@@ -219,11 +219,11 @@ export function ListView({ items }: CanvasProps) {
     }
   };
 
-  if (!items.length) return <p className="p-10 text-center text-ws-ink3">Nothing matches this filter.</p>;
+  if (!items.length) return <p className="p-10 pt-[calc(var(--ws-bar-h,0px)+40px)] text-center text-ws-ink3">Nothing matches this filter.</p>;
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-auto px-6 pb-[calc(var(--ws-launcher-clear,0px)+24px)]">
+      <div data-bar-scroll className="min-h-0 flex-1 overflow-auto px-6 pt-[var(--ws-bar-h,0px)] pb-[calc(var(--ws-launcher-clear,0px)+24px)]">
         <div
           role="listbox"
           tabIndex={0}

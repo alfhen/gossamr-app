@@ -337,3 +337,18 @@ test.describe("the rail's region", () => {
     await expect(page.getByRole("complementary", { name: "Workspace sidebar" })).toBeVisible();
   });
 });
+
+test.describe("the screen header", () => {
+  test("is solid at rest and fades once the list scrolls under it", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    const bar = page.locator(".ws-bar");
+    const scroller = page.locator("[data-bar-scroll]");
+    await expect(scroller).toBeVisible();
+    await expect(bar).not.toHaveAttribute("data-under", "");
+    await scroller.evaluate((el) => (el.scrollTop = 200));
+    await expect(bar).toHaveAttribute("data-under", "");
+    await scroller.evaluate((el) => (el.scrollTop = 0));
+    await expect(bar).not.toHaveAttribute("data-under", "");
+  });
+});

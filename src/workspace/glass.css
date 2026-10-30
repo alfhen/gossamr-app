@@ -90,6 +90,54 @@
     pointer-events: none;
   }
 
+  /* A screen header is solid at rest. Once content scrolls under it the bar fades and only its controls blur; the bar itself is never glass. */
+  .ws-bar {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 10;
+    background: var(--color-ws-win);
+  }
+
+  .ws-bar[data-under] {
+    background: color-mix(in srgb, var(--color-ws-win) 96%, transparent);
+  }
+
+  .ws-bar[data-under]::after {
+    content: "";
+    position: absolute;
+    inset: 100% 0 auto;
+    height: 16px;
+    background: linear-gradient(color-mix(in srgb, var(--color-ws-win) 96%, transparent), transparent);
+    pointer-events: none;
+  }
+
+  .ws-bar[data-under] :is(.ws-btn--secondary, .ws-btn--pip, .ws-seg, .ws-btn-group, .ws-search) {
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ws-bar[data-under] {
+      --glass-filter: none;
+      background: var(--color-ws-win);
+    }
+  }
+
+  :root[data-transparency="reduce"] .ws-bar[data-under] {
+    --glass-filter: none;
+    background: var(--color-ws-win);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ws-bar[data-under]::after {
+      display: none;
+    }
+  }
+
+  :root[data-transparency="reduce"] .ws-bar[data-under]::after {
+    display: none;
+  }
+
   /* Selection inside glass: put it on the hovered, active or aria-selected row. */
   .ws-glass-lens {
     background: var(--glass-lens);
