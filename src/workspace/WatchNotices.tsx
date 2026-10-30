@@ -4,8 +4,8 @@ import { useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
 import { openTicketByKey } from "./jump";
 import { nounFor, strayText, type Noun } from "./watchLogic";
+import { Button } from "../components/Button";
 
-const link = "rounded-md px-2 py-0.5 text-sm font-semibold hover:bg-ws-hover";
 
 export interface PeekBannerProps {
   /** The container is one the person doesn't watch. Otherwise the ticket is only missing from the synced ones. */
@@ -24,13 +24,13 @@ export function PeekBanner({ unwatched, containerName, noun, busy, onWatch, onAs
         {unwatched ? `You're not watching ${containerName ?? `this ${noun.one}`}.` : "This ticket isn't one of your synced tickets."} This is a live read-only view.
       </span>
       {unwatched && (
-        <button type="button" disabled={busy} onClick={onWatch} className={`${link} text-ws-accent disabled:opacity-45`}>
+        <Button variant="plain" size="sm" disabled={busy} onClick={onWatch}>
           Watch {noun.one}
-        </button>
+        </Button>
       )}
-      <button type="button" onClick={onAskPip} className={`${link} text-ws-pip`}>
+      <Button variant="plain" pip size="sm" onClick={onAskPip}>
         Ask Pip about this ticket
-      </button>
+      </Button>
     </div>
   );
 }
@@ -58,12 +58,12 @@ export function StrayCard({ stray, noun, busy, onOpen, onWatch, onDismiss }: Str
           {stray.keys.length > 6 && <span className="text-ws-ink3">and {stray.keys.length - 6} more</span>}
         </div>
       </div>
-      <button type="button" disabled={busy} onClick={onWatch} className={`${link} text-ws-accent disabled:opacity-45`}>
+      <Button variant="plain" size="sm" disabled={busy} onClick={onWatch}>
         Watch {noun.one}
-      </button>
-      <button type="button" disabled={busy} onClick={onDismiss} className={`${link} text-ws-ink2 disabled:opacity-45`}>
+      </Button>
+      <Button variant="plain" size="sm" disabled={busy} onClick={onDismiss}>
         Dismiss
-      </button>
+      </Button>
     </li>
   );
 }

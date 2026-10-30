@@ -8,25 +8,14 @@ import { usePopover } from "./Popover";
 import { projectColour } from "./projects";
 import { TabBar } from "./TabBar";
 import { useTabs, VIEW_LABEL, type ViewMode } from "./tabsStore";
+import { Segmented } from "../components/Segmented";
 
 /** The order the prototype shows the canvases in. */
 export const SEGMENT_ORDER: readonly ViewMode[] = ["board", "list"];
 
 export function ViewSegment({ view, onChange }: { view: ViewMode; onChange(view: ViewMode): void }) {
   return (
-    <div role="group" aria-label="View" className="ml-auto flex shrink-0 rounded-[9px] bg-ws-sel p-0.5">
-      {SEGMENT_ORDER.map((v) => (
-        <button
-          key={v}
-          type="button"
-          aria-pressed={view === v}
-          onClick={() => onChange(v)}
-          className={`rounded-[7px] px-3 py-[3px] font-semibold ${view === v ? "bg-ws-win text-ws-ink shadow-[0_1px_3px_rgb(0_0_0/0.18)]" : "text-ws-ink2 hover:text-ws-ink"}`}
-        >
-          {VIEW_LABEL[v]}
-        </button>
-      ))}
-    </div>
+    <Segmented label="View" className="ml-auto shrink-0" value={view} onChange={onChange} options={SEGMENT_ORDER.map((v) => ({ value: v, label: VIEW_LABEL[v] }))} />
   );
 }
 

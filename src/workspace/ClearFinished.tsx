@@ -7,6 +7,7 @@ import { Btn } from "./AgentSheet";
 import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
+import { Button } from "../components/Button";
 
 export interface ClearFinishedViewProps {
   open: boolean;
@@ -27,18 +28,10 @@ export function ClearFinishedView({ open, onToggle, filter, preview, busy, onAge
   const kept = preview ? keptText(preview.kept) : null;
   return (
     <>
-      <button
-        type="button"
-        data-popover-trigger
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={onToggle}
-        title="Archive finished runs in one go"
-        className="inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover"
-      >
+      <Button data-popover-trigger aria-haspopup="dialog" aria-expanded={open} onClick={onToggle} title="Archive finished runs in one go">
         <Icon name="folder" />
         Clear finished…
-      </button>
+      </Button>
       {open && (
         <div role="dialog" aria-label="Clear finished runs" className="absolute top-full right-0 z-30 mt-1 grid w-[340px] max-w-[90vw] gap-3 rounded-lg border border-ws-sep2 bg-ws-win p-3 text-sm shadow-lg">
           <label className="grid gap-1">

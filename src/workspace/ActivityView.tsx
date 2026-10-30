@@ -9,6 +9,8 @@ import { useActivity } from "./activityStore";
 import { showMe } from "./jump";
 import { useTabs } from "./tabsStore";
 import { StrayNotices } from "./WatchNotices";
+import { Button } from "../components/Button";
+import { Segmented } from "../components/Segmented";
 
 export const feedRowId = (id: string) => `feed-${id}`;
 
@@ -27,7 +29,6 @@ export interface FeedRowProps {
   onShow(): void;
 }
 
-const action = "rounded px-1.5 py-0.5 text-sm text-ws-ink3 hover:bg-ws-hover hover:text-ws-ink disabled:opacity-45";
 
 export function FeedRow({ entry: e, actor, title, now, selected, openable, position, total, onOpen, onMarkRead, onShow }: FeedRowProps) {
   const onKey = (ev: KeyboardEvent) => {
@@ -65,14 +66,14 @@ export function FeedRow({ entry: e, actor, title, now, selected, openable, posit
           <time dateTime={e.at}>{relativeTime(e.at, now)}</time>
           <span className="ml-auto flex gap-0.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
             {openable && (
-              <button type="button" className={action} onClick={onShow}>
+              <Button variant="plain" size="sm" onClick={onShow}>
                 Show me
-              </button>
+              </Button>
             )}
             {e.unread && (
-              <button type="button" className={action} onClick={onMarkRead}>
+              <Button variant="plain" size="sm" onClick={onMarkRead}>
                 Mark read
-              </button>
+              </Button>
             )}
           </span>
         </div>
@@ -90,17 +91,7 @@ export function DayHeading({ label, level = 3 }: { label: string; level?: 2 | 3 
 export function MentionsFilter({ filter, onChange }: { filter: InboxFilter; onChange(filter: InboxFilter): void }) {
   const on = filter === "mentions";
   return (
-    <div role="group" aria-label="Show" className="flex flex-wrap gap-1.5">
-      <button
-        type="button"
-        data-filter="mentions"
-        aria-pressed={on}
-        onClick={() => onChange(on ? "all" : "mentions")}
-        className={`rounded-xl px-2.5 py-px text-sm font-semibold ${on ? "bg-ws-accent-soft text-ws-accent" : "text-ws-ink2 hover:bg-ws-hover"}`}
-      >
-        {FILTER_LABEL.mentions}
-      </button>
-    </div>
+    <Segmented label="Show" value={on ? "mentions" : null} onChange={() => onChange(on ? "all" : "mentions")} options={[{ value: "mentions", label: FILTER_LABEL.mentions, attrs: { "data-filter": "mentions" } }]} />
   );
 }
 

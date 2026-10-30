@@ -16,6 +16,7 @@ vi.mock("./useStateView", async () => {
 import { LAUNCHER_GUTTER } from "./PipExtras";
 import { PERMISSION_NOTE } from "./PermissionAsk";
 import { useActivity } from "./activityStore";
+import { Button } from "../components/Button";
 import { Rail, railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
 
@@ -96,8 +97,8 @@ describe("a failed launch on a card", () => {
     expect(out).not.toMatch(/<button[^>]*disabled=""/);
     const retry = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Retry<\/button>/)![0];
     const trust = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Trust this folder in Terminal<\/button>/)![0];
-    expect(retry).toContain("bg-ws-pip");
-    expect(trust).not.toContain("bg-ws-pip");
+    expect(retry).toContain("ws-btn--primary");
+    expect(trust).not.toContain("ws-btn--primary");
   });
 
   it.each([
@@ -494,7 +495,7 @@ describe("controls inside a card", () => {
       if (Array.isArray(n)) return n.forEach(walk);
       const e = n as El | null;
       if (!e || typeof e !== "object" || !("props" in e)) return;
-      if ((e as unknown as { type: unknown }).type === "button") found.push(e);
+      if ((e as unknown as { type: unknown }).type === Button) found.push(e);
       walk(e.props.children);
     };
     walk(el);

@@ -2,25 +2,25 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./AgentIcons";
 import { usePaneWidths } from "./PaneResizers";
 import { PipGlyph } from "../components/PipGlyph";
+import { Button, type ButtonProps } from "../components/Button";
 
-const BUTTON = "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm leading-normal whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45";
 const TONES = {
-  primary: "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110",
-  plain: "border-ws-sep2 text-ws-ink hover:bg-ws-hover",
-  teal: "border-ws-pip text-ws-pip hover:bg-ws-pip-soft",
-  danger: "border-ws-blocked text-ws-blocked hover:bg-ws-blocked-soft",
-  dangerFill: "border-ws-blocked bg-ws-blocked font-semibold text-white hover:brightness-110",
-  ghost: "border-transparent text-ws-ink2 hover:bg-ws-hover",
-} as const;
+  primary: { variant: "primary" },
+  plain: { variant: "secondary" },
+  teal: { variant: "pip" },
+  danger: { variant: "secondary", destructive: true },
+  dangerFill: { variant: "danger" },
+  ghost: { variant: "quiet" },
+} as const satisfies Record<string, Pick<ButtonProps, "variant" | "destructive">>;
 
 export type ButtonTone = keyof typeof TONES;
 
 export function Btn({ tone = "plain", icon, children, ...rest }: { tone?: ButtonTone; icon?: IconName; children: ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <button type="button" {...rest} className={`${BUTTON} ${TONES[tone]} ${rest.className ?? ""}`}>
+    <Button {...rest} {...TONES[tone]}>
       {icon && <Icon name={icon} />}
       {children}
-    </button>
+    </Button>
   );
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { agentsHome, openAgents, openApp } from "./support/app";
+import { agentsHome, openAgents, openApp, openPip, pipPane } from "./support/app";
 
 test.describe("Esc in Settings", () => {
   test("Esc leaves Settings for Pip home, from <body>", async ({ page }) => {
@@ -83,4 +83,24 @@ test("Settings states what Gossamr posts and what agents may do, and Work does n
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
   const promises = page.locator("[data-promises] li");
   await expect(promises).toHaveText(["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."]);
+});
+
+test("the theme control moves with the arrow keys and Space flips the Follow my screen switch", async ({ page }) => {
+  await openApp(page, "runs=empty");
+  await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
+  const theme = page.getByRole("radiogroup", { name: "Theme" });
+  const checked = theme.getByRole("radio", { checked: true });
+  const first = await checked.textContent();
+  await checked.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(theme.getByRole("radio", { checked: true })).not.toHaveText(first ?? "");
+  await expect(theme.getByRole("radio", { checked: true })).toBeFocused();
+
+  await openPip(page);
+  await pipPane(page).locator('button[aria-controls="pip-seeing"]').click();
+  const follow = pipPane(page).getByRole("switch", { name: "Follow my screen" });
+  const before = await follow.getAttribute("aria-checked");
+  await follow.focus();
+  await page.keyboard.press("Space");
+  await expect(follow).not.toHaveAttribute("aria-checked", before ?? "");
 });

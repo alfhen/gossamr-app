@@ -11,6 +11,7 @@ import { useWorkstreams } from "./workstreamsStore";
 import { PermissionAsk } from "./PermissionAsk";
 import { useStateView } from "./useStateView";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stateView, stoppedText, type Tone } from "./agentsLogic";
+import { Button } from "../components/Button";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
   pip: { text: "text-ws-pip", soft: "bg-ws-pip-soft", color: "var(--color-ws-pip)" },
@@ -36,21 +37,19 @@ export function Dot({ tone, live }: { tone: Tone; live: boolean }) {
   return <span aria-hidden className={`size-2 shrink-0 rounded-full bg-current ${TONE[tone].text} ${live ? "ws-live" : ""}`} />;
 }
 
-const BUTTON = "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-px text-sm leading-normal whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-45";
-
 /** The one way to answer anything from here: Terminal, where the person's own Claude asks. */
 export function OpenInTerminal({ run, onOpen, filled = true }: { run: Run; onOpen(): void; filled?: boolean }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant={filled ? "primary" : "secondary"}
+      size="sm"
       disabled={!run.shortId}
       title={run.shortId ? undefined : "There is no session to open yet"}
       onClick={(ev) => (ev.stopPropagation(), onOpen())}
-      className={`${BUTTON} ${filled ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}
     >
       <Icon name="term" />
       Open in Terminal
-    </button>
+    </Button>
   );
 }
 
@@ -63,7 +62,6 @@ export function RowActions({ run, now, onAttach, onStop }: { run: Run; now: numb
   const stop = stopControl(run);
   const terminal = !BODY_HAS_TERMINAL.includes(run.state) && quietMinutes(run, now) === null;
   if (!terminal && !stop.shown) return null;
-  const small = `${BUTTON} border-ws-sep2 text-ws-ink hover:bg-ws-hover`;
   return (
     <div className="flex flex-wrap items-center gap-2">
       {terminal && <OpenInTerminal run={run} onOpen={onAttach} filled={false} />}
@@ -81,18 +79,18 @@ export function RowActions({ run, now, onAttach, onStop }: { run: Run; now: numb
             className="inline-flex flex-wrap items-center gap-2 text-sm"
           >
             <span className="text-ws-ink2">{stop.ask ?? "Stop this agent? Its work is kept."}</span>
-            <button type="button" autoFocus onClick={() => (setAsking(false), onStop())} className={`${BUTTON} border-ws-blocked bg-ws-blocked font-semibold text-white`}>
+            <Button variant="danger" size="sm" autoFocus onClick={() => (setAsking(false), onStop())}>
               {stop.yes ?? "Yes, stop"}
-            </button>
-            <button type="button" onClick={() => setAsking(false)} className={small}>
+            </Button>
+            <Button size="sm" onClick={() => setAsking(false)}>
               {stop.label === "Cancel" ? "Keep it" : "Keep going"}
-            </button>
+            </Button>
           </span>
         ) : (
-          <button type="button" disabled={!stop.enabled} title={stop.title} onClick={(ev) => (ev.stopPropagation(), setAsking(true))} onKeyDown={ownKey} className={`${BUTTON} border-ws-blocked text-ws-blocked hover:bg-ws-blocked-soft`}>
+          <Button size="sm" destructive disabled={!stop.enabled} title={stop.title} onClick={(ev) => (ev.stopPropagation(), setAsking(true))} onKeyDown={ownKey}>
             <Icon name="stop" />
             {stop.label}
-          </button>
+          </Button>
         ))}
     </div>
   );
@@ -124,21 +122,15 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
     <div className="flex flex-wrap items-center gap-2">
       {help.kind === "noClone" && <CloneActions run={run} />}
       {help.primary && (
-        <button type="button" onClick={(ev) => (ev.stopPropagation(), failure.on.act(help.primary!.act))} className={`${BUTTON} ${next ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}>
+        <Button variant={next ? "primary" : "secondary"} size="sm" onClick={(ev) => (ev.stopPropagation(), failure.on.act(help.primary!.act))}>
           <Icon name={help.primary.act === "terminal" ? "term" : "ext"} />
           {help.primary.label}
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
-        disabled={!ready}
-        aria-describedby={ready ? undefined : why}
-        onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}
-        className={`${BUTTON} ${ready && !next ? "border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:brightness-110" : "border-ws-sep2 text-ws-ink hover:bg-ws-hover"}`}
-      >
+      <Button variant={ready && !next ? "primary" : "secondary"} size="sm" disabled={!ready} aria-describedby={ready ? undefined : why} onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}>
         <Icon name="retry" />
         Retry
-      </button>
+      </Button>
       {!ready && (
         <span id={why} className="text-xs text-ws-ink2">
           {RETRY_WAITS}

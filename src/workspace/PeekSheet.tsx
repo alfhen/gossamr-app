@@ -27,6 +27,7 @@ import { useTabs } from "./tabsStore";
 import { PeekNotice } from "./WatchNotices";
 import { WorkDocView } from "./WorkDocView";
 import { HeaderStatus } from "./StatusPill";
+import { Button } from "../components/Button";
 import { focusPip, useItemWorkstream, useWorkstreams } from "./workstreamsStore";
 import { useToasts } from "./toasts";
 import { isTypingTarget } from "../lib/keys";
@@ -754,16 +755,15 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
       agentMenu={
         !readOnly ? (
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
+            <Button
+              variant="pip"
               data-ask-pip
               onClick={() => (workstream ? focusPip(workstream.workstream.id) : void startFromPeek(ref))}
               title={`Ask Pip about ${ref.key}: it can start agents, and they stay with the ticket`}
-              className="inline-flex items-center gap-1.5 rounded-md border border-ws-pip px-2.5 py-0.5 text-sm font-semibold text-ws-pip hover:bg-ws-pip-soft"
             >
               <PipGlyph />
               Ask Pip
-            </button>
+            </Button>
             <WorkstreamControl
               workstream={workstream}
               onOpen={() => focusPip(workstream?.workstream.id)}

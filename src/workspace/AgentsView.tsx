@@ -33,8 +33,9 @@ import { NO_WORKSTREAM_ID, useWorkView } from "./workViewStore";
 import { currentNeeds, useNeedsYou } from "./useNeeds";
 import { needsIn } from "../lib/needs";
 import { PipGlyph } from "../components/PipGlyph";
+import { Button } from "../components/Button";
+import { Segmented } from "../components/Segmented";
 
-const BUTTON = "inline-flex items-center gap-1.5 rounded-md border border-ws-sep2 px-2.5 py-px text-sm leading-normal whitespace-nowrap hover:bg-ws-hover disabled:cursor-not-allowed disabled:opacity-45";
 
 export { useNow };
 
@@ -64,10 +65,10 @@ export function StopAll({ count, waiting = 0, busy, onStop }: { count: number; w
   }, [none]);
   if (!asking) {
     return (
-      <button type="button" disabled={none || busy} title="Stop every agent that is working or waiting" onClick={() => setAsking(true)} className={`${BUTTON} border-ws-blocked text-ws-blocked hover:bg-ws-blocked hover:text-white`}>
+      <Button destructive disabled={none || busy} title="Stop every agent that is working or waiting" onClick={() => setAsking(true)}>
         <Icon name="stop" />
         Stop all
-      </button>
+      </Button>
     );
   }
   return (
@@ -85,12 +86,10 @@ export function StopAll({ count, waiting = 0, busy, onStop }: { count: number; w
       <span className="text-sm text-ws-ink2">
         Stop {stopAllText(count, waiting)}? Their work is kept. Agents from Terminal are not touched.
       </span>
-      <button type="button" autoFocus onClick={() => (setAsking(false), onStop())} className={`${BUTTON} border-ws-blocked bg-ws-blocked font-semibold text-white`}>
+      <Button variant="danger" autoFocus onClick={() => (setAsking(false), onStop())}>
         Yes, stop all
-      </button>
-      <button type="button" onClick={() => setAsking(false)} className={BUTTON}>
-        Keep going
-      </button>
+      </Button>
+      <Button onClick={() => setAsking(false)}>Keep going</Button>
     </span>
   );
 }
@@ -126,21 +125,27 @@ export interface AgentsActions {
 /** The Work screen's one filter: Needs you, with the same count as the rail badge. */
 function NeedsFilter({ needsYou, filters, on }: { needsYou: number; filters: AgentFilters; on: AgentsActions }) {
   return (
-    <div role="group" aria-label="Show" data-summary-chips>
-      <button
-        type="button"
-        data-chip="needs"
-        aria-pressed={filters.needs}
-        onClick={() => on.filter({ needs: !filters.needs })}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-px text-sm leading-normal font-semibold whitespace-nowrap focus-visible:outline-2 focus-visible:outline-ws-pip ${filters.needs ? "border-ws-pip bg-ws-pip text-ws-on-pip" : "border-ws-pip text-ws-ink hover:bg-ws-hover"}`}
-      >
-        Needs you
-        <span data-chip-count data-needs-you-count>
-          {needsYou}
-        </span>
-        {needsYou === 0 && <span className="sr-only">Nothing needs you.</span>}
-      </button>
-    </div>
+    <Segmented
+      label="Show"
+      attrs={{ "data-summary-chips": true }}
+      value={filters.needs ? "needs" : null}
+      onChange={() => on.filter({ needs: !filters.needs })}
+      options={[
+        {
+          value: "needs",
+          attrs: { "data-chip": "needs" },
+          label: (
+            <>
+              Needs you
+              <span data-chip-count data-needs-you-count>
+                {needsYou}
+              </span>
+              {needsYou === 0 && <span className="sr-only">Nothing needs you.</span>}
+            </>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -308,14 +313,14 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
           </h1>
           <NeedsFilter needsYou={needsYou ?? 0} filters={filters} on={on} />
           <span className="flex-1" />
-          <button type="button" onClick={on.askPip} className={`${BUTTON} border-ws-pip bg-ws-pip font-semibold text-ws-on-pip hover:bg-ws-pip hover:brightness-110`}>
+          <Button variant="pip" onClick={on.askPip}>
             <PipGlyph />
             Ask Pip
-          </button>
-          <button type="button" onClick={on.openSafety} className={BUTTON}>
+          </Button>
+          <Button onClick={on.openSafety}>
             <Icon name="shield" />
             Agent settings
-          </button>
+          </Button>
           {clear}
           <StopAll count={stoppable(runs).length} waiting={slotWaiters(runs).length} busy={stopping} onStop={on.stopAll} />
         </header>

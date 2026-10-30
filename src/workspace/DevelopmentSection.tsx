@@ -13,10 +13,10 @@ import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
 import { agoText, watchedReposLine } from "./watchLogic";
+import { Button } from "../components/Button";
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-const small = "rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold hover:bg-ws-hover disabled:opacity-45";
 
 function Who({ login }: { login: string }) {
   return (
@@ -79,9 +79,9 @@ export function PullDetail({ change, state, now, onOpen, onRetry }: { change: Co
       {state.status === "error" && (
         <div role="alert" className="grid gap-1.5 text-ws-blocked">
           <p className="m-0 [overflow-wrap:anywhere]">{state.error}</p>
-          <button type="button" onClick={onRetry} className={`${small} justify-self-start text-ws-ink`}>
+          <Button size="sm" className="justify-self-start" onClick={onRetry}>
             Try again
-          </button>
+          </Button>
         </div>
       )}
       {state.detail && (
@@ -145,9 +145,9 @@ export function PullDetail({ change, state, now, onOpen, onRetry }: { change: Co
         </>
       )}
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={onOpen} className={small}>
+        <Button size="sm" onClick={onOpen}>
           Open on GitHub
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -205,9 +205,9 @@ export function ChangeRow({ link, now, expanded, detail, onToggle, onOpen, onRet
     return (
       <li title={provenanceHint(link.provenance)} className={`${box} grid-cols-[minmax(0,1fr)_auto] items-start gap-2 p-2.5`}>
         <div className="flex min-w-0 gap-2.5">{body}</div>
-        <button type="button" onClick={() => onOpen(c.url)} className={`${small} shrink-0`}>
+        <Button size="sm" className="shrink-0" onClick={() => onOpen(c.url)}>
           Open on GitHub
-        </button>
+        </Button>
       </li>
     );
   }
@@ -251,16 +251,16 @@ export function DevelopmentView(p: DevelopmentViewProps) {
     <SectionCard id="development" title="Development" count={p.links ? links.length : undefined} collapsed={p.collapsed} onToggle={p.onToggleSection}>
       <div className="flex flex-wrap items-center gap-2">
         <p className="m-0 min-w-0 flex-1 text-sm text-ws-ink3">Pull requests, branches and commits that name {p.itemKey}.</p>
-        <button type="button" disabled={p.searching} onClick={p.onSearch} className={small}>
+        <Button size="sm" disabled={p.searching} onClick={p.onSearch}>
           {p.searching ? "Searching GitHub…" : "Search GitHub for this ticket"}
-        </button>
+        </Button>
       </div>
       {p.error && (
         <div role="alert" className="grid gap-1.5 text-ws-blocked">
           <p className="m-0 [overflow-wrap:anywhere]">{p.error}</p>
-          <button type="button" onClick={p.onRetry} className={`${small} justify-self-start text-ws-ink`}>
+          <Button size="sm" className="justify-self-start" onClick={p.onRetry}>
             Try again
-          </button>
+          </Button>
         </div>
       )}
       {!p.links && !p.error && (

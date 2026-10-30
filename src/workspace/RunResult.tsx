@@ -25,7 +25,7 @@ export function Found({ run, outcome, on }: ResultProps) {
         <p data-run-report className="selectable m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{text || "It finished without a written answer."}</p>
         {reportNotes(outcome).map((note) => <p key={note} className="m-0 text-sm text-ws-ink3">{note}</p>)}
         <div className="flex flex-wrap items-center gap-2">
-          <Btn onClick={on.askPip}>
+          <Btn tone="teal" onClick={on.askPip}>
             <PipGlyph />
             Ask Pip
           </Btn>

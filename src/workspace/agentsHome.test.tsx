@@ -131,7 +131,7 @@ describe("what needs you, in the Agents list and its detail", () => {
     const off = screen({ workstreams: [held, calm], needsYou: 1 });
     expect(off).toMatch(/data-chip="needs"[^>]*>Needs you<span data-chip-count[^>]*>1</);
     const on = screen({ workstreams: [held, calm], needsYou: 1, filters: { ...NO_FILTERS, needs: true } });
-    expect(on).toMatch(/data-chip="needs"[^>]*aria-pressed="true"/);
+    expect(on).toMatch(/aria-pressed="true"[^>]*data-chip="needs"/);
   });
 
   it("shows the decision at the top of the detail, under Needs you, above the steps", () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "../components/Button";
 import type { Backend } from "../backend/types";
 import type { CatalogEntry, ConnectionInfo, Footprint, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -6,6 +7,7 @@ import { keyColour, keyInitials } from "./projects";
 import { useCatalog, type Catalog } from "./useCatalog";
 import { messageOf, useToasts } from "./toasts";
 import { activityHint, agoText, choiceChanges, count, nounFor, permissionLabel, repoParts, suggestedIds, toggled, type Noun } from "./watchLogic";
+import { SearchField } from "../components/SearchField";
 
 export function Badge({ k }: { k: string }) {
   return (
@@ -137,14 +139,7 @@ export function ScrollSentinel({ busy, onVisible }: { busy: boolean; onVisible()
 
 export function SearchBox({ value, label, placeholder, onChange }: { value: string; label: string; placeholder: string; onChange(q: string): void }) {
   return (
-    <input
-      type="search"
-      aria-label={label}
-      placeholder={placeholder}
-      value={value}
-      onChange={(ev) => onChange(ev.target.value)}
-      className="w-full rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 outline-none placeholder:text-ws-ink3 focus:border-ws-accent"
-    />
+    <SearchField aria-label={label} placeholder={placeholder} value={value} onChange={onChange} />
   );
 }
 
@@ -272,9 +267,9 @@ export function WatchPickerView(p: WatchPickerViewProps) {
             Cancel
           </button>
         )}
-        <button type="button" onClick={p.onSave} disabled={n === 0 || p.saving} className="rounded-lg bg-ws-accent px-4 py-1.5 font-semibold text-white disabled:opacity-45">
+        <Button variant="primary" onClick={p.onSave} disabled={n === 0 || p.saving}>
           {p.saving ? "Saving…" : "Start watching"}
-        </button>
+        </Button>
       </div>
     </div>
   );
