@@ -49,21 +49,22 @@ export function SettingsRowView({ row, noun, pinOnly, onPin, onUnwatch }: Settin
       </div>
       <div className="flex items-center gap-2">
         {!code && (
-          <button
-            type="button"
+          <Button
+            variant="quiet"
+            iconOnly
             aria-label={row.pinned ? `Unpin ${row.name} from the rail` : `Pin ${row.name} to the rail`}
             aria-pressed={row.pinned}
             title={row.pinned ? "Pinned to the rail" : "Pin to the rail"}
             onClick={() => onPin(!row.pinned)}
-            className={`grid size-7 place-items-center rounded-md text-base hover:bg-ws-hover ${row.pinned ? "text-ws-warn" : "text-ws-ink3"}`}
+            className={row.pinned ? "text-ws-warn" : ""}
           >
             <span aria-hidden>{row.pinned ? "★" : "☆"}</span>
-          </button>
+          </Button>
         )}
         {!pinOnly && (
-          <button type="button" aria-label={`Unwatch ${row.name}`} onClick={onUnwatch} className="rounded-md px-2 py-0.5 text-sm text-ws-ink2 hover:bg-ws-hover">
+          <Button variant="plain" size="sm" aria-label={`Unwatch ${row.name}`} onClick={onUnwatch}>
             Unwatch
-          </button>
+          </Button>
         )}
       </div>
     </li>
@@ -77,18 +78,11 @@ export function SuggestionChips({ chips, noun, onWatch }: { chips: Footprint[]; 
       <span className="text-sm text-ws-ink3">Suggested from your last 90 days</span>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((f) => (
-          <button
-            key={f.container.externalId}
-            type="button"
-            title={activityHint(f) ?? undefined}
-            aria-label={`Watch ${f.name}`}
-            onClick={() => onWatch(f)}
-            className="rounded-full border border-ws-sep2 px-2.5 py-px text-sm text-ws-ink2 hover:border-ws-accent hover:text-ws-accent"
-          >
+          <Button size="sm" key={f.container.externalId} title={activityHint(f) ?? undefined} aria-label={`Watch ${f.name}`} onClick={() => onWatch(f)}>
             <span aria-hidden>+ </span>
             {f.key}
             {f.assigned > 0 && <span className="ml-1 text-ws-ink3">{f.assigned} assigned</span>}
-          </button>
+          </Button>
         ))}
       </div>
       <span className="sr-only">Adds the {noun.one} to what you watch</span>
@@ -120,9 +114,9 @@ export function FindRow({ entry, code = false, now = new Date(), onWatch }: { en
           {entry.archived && <span className="ml-2 rounded-full bg-ws-sel px-1.5 text-xs text-ws-ink3">archived</span>}
         </span>
       )}
-      <button type="button" aria-label={`Watch ${entry.name}`} onClick={onWatch} className="rounded-md px-2 py-0.5 text-sm font-semibold text-ws-accent hover:bg-ws-hover">
+      <Button variant="plain" size="sm" aria-label={`Watch ${entry.name}`} onClick={onWatch}>
         Watch
-      </button>
+      </Button>
     </li>
   );
 }

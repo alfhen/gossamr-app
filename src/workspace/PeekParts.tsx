@@ -3,6 +3,7 @@ import { pressed, showOf } from "../lib/keys";
 import { relativeTime } from "../lib/views";
 import { initials, type Note, type ReplyInfo, type PeekSectionId, type SectionChip } from "./peekLogic";
 import { WorkDocView } from "./WorkDocView";
+import { Button } from "../components/Button";
 
 const ICON: Record<PeekSectionId, ReactNode> = {
   description: <path d="M3 4h10M3 8h10M3 12h6" />,
@@ -81,16 +82,11 @@ export function SectionNav({ chips, onJump }: { chips: SectionChip[]; onJump?(id
   return (
     <nav aria-label="Sections" className="sticky top-0 z-10 -mx-[22px] flex h-9 items-center gap-1.5 overflow-x-auto border-b border-ws-sep2 bg-ws-win px-[22px]">
       {chips.map((c) => (
-        <button
-          key={c.id}
-          type="button"
-          onClick={() => onJump?.(c.id)}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-sm font-semibold hover:bg-ws-hover ${c.id === "comments" ? "text-ws-accent" : "text-ws-ink2"}`}
-        >
+        <Button key={c.id} variant="plain" size="sm" onClick={() => onJump?.(c.id)} className={`shrink-0 font-semibold ${c.id === "comments" ? "text-ws-accent" : ""}`}>
           <SectionIcon id={c.id} />
           {c.title}
           {c.count !== undefined && <CountBadge count={c.count} />}
-        </button>
+        </Button>
       ))}
     </nav>
   );
@@ -188,15 +184,9 @@ export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
           {relativeTime(note.at, now)}
         </time>
         {onReply && (
-          <button
-            type="button"
-            onClick={() => onReply(note)}
-            title={`Reply to ${note.who} (press ${showOf("peek", "reply").toUpperCase()} on this comment)`}
-            aria-label={`Reply to ${note.who}`}
-            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-xs font-semibold text-ws-ink3 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-ws-hover hover:text-ws-ink2 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-          >
+          <Button variant="plain" size="sm" className="ml-auto shrink-0 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100" onClick={() => onReply(note)} title={`Reply to ${note.who} (press ${showOf("peek", "reply").toUpperCase()} on this comment)`} aria-label={`Reply to ${note.who}`}>
             <span aria-hidden>↩ </span>Reply
-          </button>
+          </Button>
         )}
       </div>
       {reply && <ReplyQuote reply={reply} onShow={onShow} />}

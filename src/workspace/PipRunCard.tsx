@@ -9,6 +9,7 @@ import { Dot, RowText, TONE } from "./AgentParts";
 import { STRIP_SHOWN, stripRuns } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
+import { Button } from "../components/Button";
 
 interface CardProps {
   run: Run;
@@ -55,9 +56,9 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
           )}
         </span>
       </div>
-      <button type="button" onClick={onOpen} aria-label={`Open ${title}`} data-run-open className="shrink-0 rounded-md border border-ws-sep2 px-2 py-px text-sm font-semibold hover:border-ws-pip hover:text-ws-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+      <Button variant="plain" size="sm" className="shrink-0" onClick={onOpen} aria-label={`Open ${title}`} data-run-open>
         Open
-      </button>
+      </Button>
     </article>
   );
 }

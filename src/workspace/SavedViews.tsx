@@ -30,9 +30,9 @@ export function SaveViewInline({ suggested, onSave }: { suggested: string; onSav
   const [editing, setEditing] = useState(false);
   if (!editing)
     return (
-      <button type="button" className="shrink-0 text-sm text-ws-ink3 underline hover:text-ws-ink" onClick={() => setEditing(true)}>
+      <Button variant="quiet" size="sm" className="shrink-0" onClick={() => setEditing(true)}>
         Save view
-      </button>
+      </Button>
     );
   return (
     <span className="flex w-[300px] shrink-0 items-center gap-1.5">
@@ -147,14 +147,9 @@ export function SavedViewsPanel(p: SavedViewsPanelProps) {
             />
           </div>
         ) : (
-          <button
-            type="button"
-            disabled={p.suggested === null}
-            onClick={() => setSaving(true)}
-            className="w-full rounded-md px-1 py-1 text-left font-semibold text-ws-pip hover:bg-ws-hover disabled:text-ws-ink3 disabled:hover:bg-transparent"
-          >
+          <Button variant="plain" pip size="sm" className="w-full justify-start" disabled={p.suggested === null} onClick={() => setSaving(true)}>
             Save current filter as a view
-          </button>
+          </Button>
         )}
       </div>
     </div>

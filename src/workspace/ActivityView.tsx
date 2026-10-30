@@ -169,9 +169,9 @@ export function ActivityView() {
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ws-sep px-6 py-2.5">
         <h1 className="m-0 text-base font-semibold">Inbox</h1>
         <MentionsFilter filter={filter} onChange={(f) => useActivity.getState().setFilter(f)} />
-        <button type="button" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead()} className="ml-auto text-sm text-ws-ink3 underline disabled:no-underline disabled:opacity-45">
+        <Button variant="quiet" size="sm" className="ml-auto" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead()}>
           Mark all read
-        </button>
+        </Button>
       </header>
       <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(32px,var(--ws-launcher-clear,0px))]">
         <div className="mx-auto max-w-[780px]">
@@ -179,9 +179,9 @@ export function ActivityView() {
           {status === "error" ? (
             <div role="alert" className="grid justify-items-center gap-2 py-12 text-ws-blocked">
               <p className="m-0">{error}</p>
-              <button type="button" className="rounded-md border border-ws-sep2 px-3 py-1 text-ws-ink" onClick={() => void useActivity.getState().reload()}>
+              <Button onClick={() => void useActivity.getState().reload()}>
                 Try again
-              </button>
+              </Button>
             </div>
           ) : status !== "ready" ? (
             <EmptyNote>Loading your inbox…</EmptyNote>
@@ -216,9 +216,9 @@ export function ActivityView() {
               ))}
               <div ref={sentinel} className="grid place-items-center py-4">
                 {next && (
-                  <button type="button" disabled={loadingMore} onClick={() => void useActivity.getState().loadMore()} className="rounded-md border border-ws-sep2 px-3 py-1 text-sm text-ws-ink2 hover:bg-ws-hover disabled:opacity-45">
+                  <Button size="sm" disabled={loadingMore} onClick={() => void useActivity.getState().loadMore()}>
                     {loadingMore ? "Loading…" : "Load more"}
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>

@@ -18,6 +18,7 @@ import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
 import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
+import { Button } from "../components/Button";
 
 const ICON: Record<Proposal["intent"]["type"], string> = { comment: "✎", transition: "⇄", subtasks: "☰", create: "＋", update: "✐", rewrite: "✎", link: "↔", startRun: "▶", followUp: "↺", runAnswer: "↩", githubReview: "◎" };
 
@@ -77,7 +78,7 @@ function Expandable({ id, text }: { id: string; text: string }) {
         {text}
       </div>
       {long && (
-        <button type="button" aria-expanded={open} aria-controls={id} aria-label={open ? "Show less of the draft text" : "Show more of the draft text"} onClick={() => setOpen(!open)} className="mt-1 rounded text-sm font-semibold text-ws-pip hover:underline">
+        <button type="button" aria-expanded={open} aria-controls={id} aria-label={open ? "Show less of the draft text" : "Show more of the draft text"} onClick={() => setOpen(!open)} className="mt-1 rounded-md text-sm font-semibold text-ws-pip hover:underline">
           {open ? "Show less" : "Show more"}
         </button>
       )}
@@ -258,17 +259,13 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onAppr
           {targetTitle && <span className="min-w-0 truncate">{targetTitle}</span>}
           {go &&
             (pending ? (
-              <button
-                type="button"
-                onClick={onOpen}
-                className="ml-auto shrink-0 rounded-md bg-ws-pip px-2.5 py-1 text-sm font-semibold text-ws-on-pip hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-              >
+              <Button variant="pipSolid" size="sm" className="ml-auto shrink-0" onClick={onOpen}>
                 {go}
-              </button>
+              </Button>
             ) : (
-              <button type="button" onClick={onOpen} className="ml-auto shrink-0 rounded-md border border-ws-sep2 px-2.5 py-1 text-sm font-semibold text-ws-ink2 hover:bg-ws-hover">
+              <Button size="sm" className="ml-auto shrink-0" onClick={onOpen}>
                 {go}
-              </button>
+              </Button>
             ))}
         </div>
         {warning && (

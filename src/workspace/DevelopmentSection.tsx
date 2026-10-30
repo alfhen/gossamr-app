@@ -273,9 +273,9 @@ export function DevelopmentView(p: DevelopmentViewProps) {
           <p className="m-0">
             Nothing {p.watched ?? "in your watched repositories"} names {p.itemKey} yet. Put the key in a branch name, pull request title or commit message and it shows up here after the next sync.
           </p>
-          <button type="button" onClick={p.onManage} className="justify-self-start text-sm text-ws-accent underline">
+          <Button variant="quiet" size="sm" className="justify-self-start" onClick={p.onManage}>
             Manage repositories
-          </button>
+          </Button>
         </div>
       )}
       {links.length > 0 && (
@@ -302,9 +302,9 @@ export function ConnectBanner({ onConnect }: { onConnect(): void }) {
   return (
     <div role="note" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed border-ws-sep2 bg-ws-bar px-3 py-1.5 text-sm text-ws-ink2">
       <span className="min-w-0 flex-1">Connect GitHub to see the PRs for this ticket</span>
-      <button type="button" onClick={onConnect} className="rounded-md px-2 py-0.5 font-semibold text-ws-accent hover:bg-ws-hover">
+      <Button variant="plain" size="sm" onClick={onConnect}>
         Connect GitHub
-      </button>
+      </Button>
     </div>
   );
 }

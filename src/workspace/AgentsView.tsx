@@ -177,9 +177,9 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
         {view ? <WorkstreamHeadExtras view={view} /> : <NeedsBadge count={mine} total={needs.length} />}
         <span className="text-xs text-ws-ink3">{group.runs.length}</span>
         {openId && onOpen && (
-          <button type="button" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)} className="ml-auto shrink-0 rounded-md px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-ws-pip">
+          <Button variant="plain" size="sm" className="ml-auto shrink-0" data-workstream-open={openId} aria-label={group.id ? `Open workstream ${name}` : `Open ${group.title}`} aria-expanded={current} onClick={() => onOpen(openId)}>
             Open
-          </button>
+          </Button>
         )}
       </div>
       {children}

@@ -22,6 +22,7 @@ import { approveEach } from "./useCards";
 import { useDecisionShown } from "./decisionShown";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
+import { Button } from "../components/Button";
 
 const NO_CHANGES: Readonly<Record<string, CodeChange | null>> = {};
 
@@ -136,16 +137,9 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
       ) : (
         together.length >= 2 && (
           <div>
-            <button
-              ref={ask}
-              type="button"
-              disabled={busy}
-              title={BATCH_TITLE}
-              onClick={() => (setOutcome(null), setFrozen(freezeBatch(counted)))}
-              className="rounded-md border border-ws-sep2 px-2.5 py-px text-sm font-semibold text-ws-ink hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip disabled:opacity-45"
-            >
+            <Button size="sm" ref={ask} disabled={busy} title={BATCH_TITLE} onClick={() => (setOutcome(null), setFrozen(freezeBatch(counted)))}>
               {busy ? "Approving…" : stepBatchLabel(step, together.length)}
-            </button>
+            </Button>
           </div>
         ))}
       {edited > 0 && (frozen !== null || together.length + edited >= 2) && (
@@ -177,7 +171,7 @@ export function EarlierStepDrafts({ step, drafts, initialOpen = false }: { step:
         aria-expanded={open}
         aria-controls={list}
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 justify-self-start rounded text-ws-ink3 hover:text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        className="flex items-center gap-1.5 justify-self-start rounded-md text-ws-ink3 hover:text-ws-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
       >
         <span aria-hidden className="text-xs">
           {open ? "▾" : "▸"}
@@ -219,7 +213,7 @@ function StepPullRequest({ pr, onOpen }: { pr: NonNullable<StepChip["pr"]>; onOp
         type="button"
         onClick={() => onOpen(pr.url)}
         title="Open on GitHub"
-        className="min-w-0 truncate rounded text-left font-semibold text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+        className="min-w-0 truncate rounded-md text-left font-semibold text-ws-pip hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
       >
         #{pr.number} {pr.title}
       </button>
@@ -238,14 +232,9 @@ function ReviewedPull({ repo, number, onOpen }: { repo: string; number: number; 
       <span className="min-w-0 truncate">
         Reviewed {repo}#{number}
       </span>
-      <button
-        type="button"
-        onClick={onOpen}
-        aria-label={`Open ${repo}#${number} on GitHub`}
-        className="shrink-0 rounded border border-ws-sep2 px-1.5 font-semibold text-ws-pip hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-      >
+      <Button size="sm" className="shrink-0" onClick={onOpen} aria-label={`Open ${repo}#${number} on GitHub`}>
         Open on GitHub
-      </button>
+      </Button>
     </p>
   );
 }
@@ -372,7 +361,7 @@ export function StepRailView({ view, runs, events, verdicts, changes = NO_CHANGE
                 aria-expanded={shown}
                 aria-controls={panel}
                 onClick={() => toggle(chip.kind)}
-                className={`grid w-full gap-0.5 rounded-lg border px-2.5 text-left outline-none hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip ${quiet ? "" : "py-1.5"} ${box}`}
+                className={`grid w-full gap-0.5 rounded-md border px-2.5 text-left outline-none hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-ws-pip ${quiet ? "" : "py-1.5"} ${box}`}
               >
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span aria-hidden className="text-xs text-ws-ink3">

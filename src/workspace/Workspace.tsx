@@ -37,6 +37,7 @@ import { ReauthBanner } from "./ReauthBanner";
 import { ToastHost, focusToast, toastPlacement } from "./ToastHost";
 import { useTabs, type Route } from "./tabsStore";
 import { ROUTE_NAME, routeHeading, routeTitle } from "./routeTitle";
+import { Button } from "../components/Button";
 
 /** Matches no item, for a filter that has nothing to read. */
 const NOTHING: WorkFilter = { type: "items", items: [] };
@@ -269,9 +270,9 @@ export function Workspace({ backend }: { backend: Backend }) {
       <div className="grid h-full place-items-center bg-ws-win px-6">
         <div className="grid max-w-[480px] justify-items-center gap-3 text-center">
           <p className="selectable m-0 text-ws-blocked">{error}</p>
-          <button type="button" className="rounded-md bg-ws-pip px-3.5 py-1.5 font-semibold text-ws-on-pip" onClick={() => useWorkspace.getState().init(backend).catch(() => {})}>
+          <Button variant="primary" onClick={() => useWorkspace.getState().init(backend).catch(() => {})}>
             Try again
-          </button>
+          </Button>
         </div>
       </div>
     );

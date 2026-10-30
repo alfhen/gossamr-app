@@ -6,6 +6,7 @@ import { ageText, runTitle } from "./agentsLogic";
 import { useRuns } from "./runsStore";
 import { useWorkspace } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
+import { Button } from "../components/Button";
 
 /** What the person is asked while deleting one archived run. `info` is null until the folder has been looked at. */
 export interface DeleteAsk {
@@ -78,9 +79,9 @@ export function ArchivedSectionView({ runs, open, now, ticketTitle, asking, onTo
           {runs.length}
         </span>
         <span className="ml-1 text-sm text-ws-ink3">Out of Agents and Needs you. Restore one, or delete it for good.</span>
-        <button type="button" aria-expanded={open} onClick={onToggle} className="ml-auto rounded-md px-2 py-px text-sm text-ws-ink2 hover:bg-ws-hover">
+        <Button variant="plain" size="sm" className="ml-auto" aria-expanded={open} onClick={onToggle}>
           {open ? "Hide" : "Show"}
-        </button>
+        </Button>
       </div>
       {open && (
         <div role="group" aria-label="Archived runs" className="overflow-hidden rounded-[10px] border border-ws-sep">

@@ -24,6 +24,7 @@ import { controlActions, PausedBanner } from "./WorkstreamControls";
 import { useWorkstreams } from "./workstreamsStore";
 import { isTypingTarget } from "../lib/keys";
 import { PipGlyph } from "../components/PipGlyph";
+import { Button } from "../components/Button";
 
 const STACK = "[data-workstream-needs]";
 
@@ -463,15 +464,9 @@ function NeedItem({ need, open }: { need: Need; open: boolean }) {
             </p>
           )}
         </div>
-        <button
-          type="button"
-          data-need-key={need.key}
-          aria-expanded={open}
-          onClick={(ev) => (ev.stopPropagation(), open ? close() : openIt())}
-          className="shrink-0 rounded px-2 py-px text-sm font-semibold text-ws-accent hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-        >
+        <Button variant="plain" size="sm" className="shrink-0" data-need-key={need.key} aria-expanded={open} onClick={(ev) => (ev.stopPropagation(), open ? close() : openIt())}>
           {open ? "Hide" : "Decide"}
-        </button>
+        </Button>
       </header>
       {open && (
         <div data-needs-pane-body className="grid gap-2">
@@ -555,15 +550,9 @@ function BatchDecision({ gid, needs }: { gid: string; needs: readonly Need[] }) 
             <span className="font-semibold">If you wait:</span> They stay here until you decide.
           </p>
         </div>
-        <button
-          type="button"
-          aria-label="Back to the list"
-          title="Back to the list (Esc)"
-          onClick={close}
-          className="shrink-0 rounded px-1.5 text-ws-ink3 hover:bg-ws-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-        >
+        <Button variant="plain" size="sm" iconOnly className="shrink-0" aria-label="Back to the list" title="Back to the list (Esc)" onClick={close}>
           ×
-        </button>
+        </Button>
       </header>
       <div data-needs-pane-body className="grid gap-2">
         {frozen && (

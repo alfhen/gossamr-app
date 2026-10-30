@@ -66,16 +66,9 @@ export function KeyAsking({ text }: { text?: string }) {
 /** The pill on a run that is in Needs you; pressing it opens the need rather than the run. */
 export function InNeedsYou({ onOpen }: { onOpen(): void }) {
   return (
-    <button
-      type="button"
-      data-in-needs-you
-      onClick={(ev) => (ev.stopPropagation(), onOpen())}
-      onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()}
-      title="This run is in Needs you. Open its decision at the top."
-      className="inline-flex shrink-0 items-center rounded-full border border-ws-pip/50 bg-ws-pip-soft px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap text-ws-pip hover:bg-ws-pip hover:text-ws-on-pip focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
-    >
+    <Button variant="plain" pip size="sm" className="shrink-0" data-in-needs-you onClick={(ev) => (ev.stopPropagation(), onOpen())} onKeyDown={(ev) => ev.key === "Enter" && ev.stopPropagation()} title="This run is in Needs you. Open its decision at the top.">
       In Needs you
-    </button>
+    </Button>
   );
 }
 

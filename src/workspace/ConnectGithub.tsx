@@ -38,9 +38,9 @@ function ErrorLine({ message }: { message: string }) {
 
 function BackButton({ onClick, disabled }: { onClick(): void; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className="justify-self-start text-sm text-ws-ink2 underline disabled:opacity-45">
+    <Button variant="quiet" size="sm" className="justify-self-start" onClick={onClick} disabled={disabled}>
       ← Other ways to connect
-    </button>
+    </Button>
   );
 }
 
@@ -68,7 +68,7 @@ function Choose({ options, onPick }: Pick<ConnectViewProps, "options" | "onPick"
     <ul aria-label="Ways to connect" className="m-0 grid list-none gap-2 p-0">
       {availableMethods(options).map((m) => (
         <li key={m.method}>
-          <button type="button" onClick={() => onPick(m.method)} className="grid w-full gap-0.5 rounded-xl border border-ws-sep2 px-3.5 py-2.5 text-left hover:border-ws-accent hover:bg-ws-hover">
+          <button type="button" onClick={() => onPick(m.method)} className="grid w-full gap-0.5 rounded-[10px] border border-ws-sep2 px-3.5 py-2.5 text-left hover:border-ws-accent hover:bg-ws-hover">
             <span className="font-semibold">{m.title}</span>
             <span className="text-sm text-ws-ink3">{m.hint}</span>
           </button>

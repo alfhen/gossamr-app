@@ -63,9 +63,9 @@ function KindBadge({ children, round = false }: { children: ReactNode; round?: b
 
 function SyncNow({ c }: { c: ConnectionInfo }) {
   return (
-    <button type="button" disabled={c.syncing} onClick={() => void useWorkspace.getState().syncNow()} className="text-ws-accent underline disabled:opacity-50 disabled:no-underline">
+    <Button variant="quiet" size="sm" disabled={c.syncing} onClick={() => void useWorkspace.getState().syncNow()}>
       Sync now
-    </button>
+    </Button>
   );
 }
 
@@ -103,9 +103,9 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
       <div className="flex gap-3 text-sm">
         <SyncNow c={c} />
         {c.kind === "jira" && (
-          <button type="button" disabled={signingOut} onClick={() => void signOut()} className="text-ws-ink2 underline disabled:opacity-50">
+          <Button variant="quiet" size="sm" disabled={signingOut} onClick={() => void signOut()}>
             Sign out
-          </button>
+          </Button>
         )}
       </div>
     </li>
@@ -141,15 +141,15 @@ export function GithubCardView({ c, watch, now, confirming, busy, onSync, onMana
       <p className="m-0 text-sm text-ws-ink2">{watchSummary(watch, nounFor("github"))}</p>
       <SyncStatus line={line} />
       <div className="flex flex-wrap gap-3 text-sm">
-        <button type="button" disabled={c.syncing} onClick={onSync} className="text-ws-accent underline disabled:opacity-50 disabled:no-underline">
+        <Button variant="quiet" size="sm" disabled={c.syncing} onClick={onSync}>
           Sync now
-        </button>
-        <button type="button" onClick={onManage} className="text-ws-accent underline">
+        </Button>
+        <Button variant="quiet" size="sm" onClick={onManage}>
           Manage repositories
-        </button>
-        <button type="button" disabled={busy} onClick={onAskDisconnect} className="text-ws-ink2 underline disabled:opacity-50">
+        </Button>
+        <Button variant="quiet" size="sm" disabled={busy} onClick={onAskDisconnect}>
           Disconnect
-        </button>
+        </Button>
       </div>
       {confirming && (
         <div role="alertdialog" aria-label={`Disconnect ${c.workspace}`} className="mt-1 grid gap-2 rounded-lg border border-ws-warn bg-ws-bar px-3 py-2.5 text-sm">
@@ -158,9 +158,9 @@ export function GithubCardView({ c, watch, now, confirming, busy, onSync, onMana
             <Button variant="danger" disabled={busy} onClick={onDisconnect}>
               {busy ? "Disconnecting…" : "Disconnect"}
             </Button>
-            <button type="button" disabled={busy} onClick={onCancel} className="rounded-md px-3 py-1 text-ws-ink2 hover:bg-ws-hover">
+            <Button variant="quiet" disabled={busy} onClick={onCancel}>
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       )}
