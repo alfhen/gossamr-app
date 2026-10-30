@@ -191,6 +191,10 @@ fn path_dirs() -> Vec<PathBuf> {
     std::env::split_paths(&path).chain(GH_DIRS.iter().map(PathBuf::from)).collect()
 }
 
+pub fn find_gh_in(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().map(|d| d.join("gh")).find(|p| p.is_file())
+}
+
 impl GithubAuth {
     pub fn new(http: reqwest::Client, store: Arc<dyn TokenStore>) -> Self {
         Self {
@@ -290,7 +294,11 @@ impl GithubAuth {
     }
 
     fn find_gh(&self) -> Option<PathBuf> {
-        self.gh_dirs.iter().map(|d| d.join("gh")).find(|p| p.is_file())
+        find_gh_in(&self.gh_dirs)
+    }
+
+    pub fn gh_dirs(&self) -> &[PathBuf] {
+        &self.gh_dirs
     }
 
     /// Runs `gh auth token` and keeps what it prints like a pasted token. The CLI's own files are never read.

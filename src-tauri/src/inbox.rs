@@ -23,6 +23,7 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 pub(crate) mod code;
 mod drafts;
 mod instances;
+mod probes;
 mod run_outcome;
 mod pip_runs;
 mod pip_turns;
@@ -41,6 +42,7 @@ mod watch;
 pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
 pub use run_outcome::{RunOutcome, SUMMARY_ONLY};
+pub use probes::Probe;
 pub use watch::{CatalogPage, WatchState};
 
 /// Events this old drop out of the inbox unless they are still unread.
@@ -158,6 +160,8 @@ pub struct ConnectionInfo {
     pub transient: bool,
     /// Atlassian ended the sign-in, so signing in again is the only way to sync.
     pub reauth: bool,
+    /// What the last probe of the instance found, once there is one.
+    pub status: Option<crate::probe::Snapshot>,
 }
 
 #[derive(Default)]
@@ -180,6 +184,7 @@ pub struct Core {
     db: Mutex<Open>,
     last_error: Mutex<Option<String>>,
     reauth_needed: AtomicBool,
+    probes: probes::Probes,
     syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
@@ -214,6 +219,7 @@ impl Core {
             db: Mutex::new(Open::default()),
             last_error: Mutex::new(None),
             reauth_needed: AtomicBool::new(false),
+            probes: probes::Probes::default(),
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
@@ -706,6 +712,7 @@ impl Core {
                 error: self.last_error.lock().expect("error lock poisoned").clone(),
                 transient: false,
                 reauth: self.reauth_needed.load(Ordering::SeqCst),
+                status: None,
             });
         }
         out.extend(self.code_connections());

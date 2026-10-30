@@ -64,6 +64,7 @@ impl Core {
                 info.instance_id = instance.id.clone();
                 info.display_name = instance.display_name.clone();
                 info.enabled = instance.enabled;
+                info.status = self.probe_snapshot(&instance.id);
             }
         }
     }

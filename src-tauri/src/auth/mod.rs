@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::secrets;
 use crate::tracker::Connection;
 
-pub use github::{DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
+pub use github::{find_gh_in, DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
 #[cfg(test)]
 pub use github::MemoryStore;
 pub use atlassian::{redirect_uri, Atlassian, ClientConfig, OAuthApp, SiteScope, SCOPES};
@@ -134,6 +134,9 @@ pub trait Authenticator: Send + Sync {
 
     /// Fresh credentials for the same site and account. Refresh tokens rotate, so the caller must keep the result.
     async fn refresh(&self, current: &Credentials) -> Result<Credentials>;
+
+    /// Who `token` signs in as, which also proves it still works.
+    async fn whoami(&self, token: &AccessToken) -> Result<Account>;
 }
 
 #[derive(Serialize)]
@@ -241,6 +244,12 @@ impl Auth {
     /// The signed-in connection, if any.
     pub async fn connection(&self) -> Option<Connection> {
         self.session.lock().await.as_ref().map(Credentials::connection)
+    }
+
+    /// Asks Jira who the saved session signs in as.
+    pub async fn whoami(&self) -> Result<Account> {
+        let token = self.credentials(false).await?;
+        self.authenticator.whoami(&token).await
     }
 
     /// Returns a valid access token, refreshing it when it is about to expire or when `force` is set (after a 401).

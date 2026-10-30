@@ -14,6 +14,7 @@ mod legacy;
 mod model;
 mod net;
 mod notify;
+mod probe;
 mod proposals;
 mod runs;
 mod secrets;
@@ -31,7 +32,7 @@ use tauri_plugin_opener::OpenerExt;
 use auth::{Auth, AuthStatus, DeviceStart, OAuthApp};
 use agent::{AgentService, AskOutcome, AskRequest};
 use tracker::Move;
-use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, WatchState, WorkstreamView};
+use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, Probe, WatchState, WorkstreamView};
 use error::{Error, Result};
 use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
@@ -312,9 +313,25 @@ async fn cache_transitions(core: State<'_, CoreState>, item: ItemRef) -> Result<
     core.cache_transitions(&item).await
 }
 
+/// Probes every instance first when `refresh` is set, which is what the refresh button asks for.
 #[tauri::command]
-async fn connections_list(core: State<'_, CoreState>) -> Result<Vec<ConnectionInfo>> {
+async fn connections_list(app: AppHandle, core: State<'_, CoreState>, refresh: bool) -> Result<Vec<ConnectionInfo>> {
+    if refresh {
+        probe_connections(&app, &core, Probe::Refresh).await;
+    }
     core.connections().await
+}
+
+/// Asks each instance how it stands, and tells the page about the ones that answered differently.
+async fn probe_connections(app: &AppHandle, core: &Core, why: Probe) {
+    for connection_id in core.probe_connections(why).await {
+        wire::changed(app, wire::Topic::Connections, &connection_id);
+    }
+}
+
+fn probe_in_background(app: &AppHandle, core: &CoreState, why: Probe) {
+    let (app, core) = (app.clone(), core.clone());
+    tauri::async_runtime::spawn(async move { probe_connections(&app, &core, why).await });
 }
 
 /// How a GitHub account is connected: a pasted token, the token `gh auth token` prints (run now, because the person
@@ -774,7 +791,12 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                             watch_changed(&app, &synced.connection_id);
                         }
                     }
-                    Err(e) => core.set_sync_failure(&e),
+                    Err(e) => {
+                        core.set_sync_failure(&e);
+                        if e.is_unauthorized() {
+                            probe_in_background(&app, &core, Probe::Unauthorized);
+                        }
+                    }
                 }
                 publish(&app, &core).await;
             }
@@ -796,9 +818,12 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         cache_changed(&app, &connection_id);
                         dev_links_changed(&app, &connection_id);
+                        if e.is_unauthorized() {
+                            probe_in_background(&app, &core, Probe::Unauthorized);
+                        }
                     }
                 }
                 publish(&app, &core).await;
@@ -853,6 +878,7 @@ pub fn run() {
                 let app = window.app_handle();
                 if let Some(core) = app.try_state::<CoreState>() {
                     core.focus.notify_one();
+                    probe_in_background(app, &core, Probe::Focus);
                 }
                 if let Some(runs) = app.try_state::<RunsState>() {
                     runs.focus.notify_one();
@@ -877,6 +903,7 @@ pub fn run() {
             tauri::async_runtime::block_on(core.restore());
             tauri::async_runtime::block_on(core.adopt_instances());
             app.manage(core.clone());
+            probe_in_background(app.handle(), &core, Probe::Launch);
 
             let config = config::AppConfig::load(&core.data_dir());
             let runs_handle = app.handle().clone();

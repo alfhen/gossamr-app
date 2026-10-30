@@ -365,6 +365,8 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
+    if (options.githubProbe) this.github.setProbe(options.githubProbe);
+    this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
@@ -417,13 +419,14 @@ export class MockBackend implements Backend {
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
       tickets: { edit: (key, change) => this.editTicket(key, change) },
-      github: { writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
+      github: { probe: (state) => this.github.setProbe(state), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
   }
 
   private readonly device: NonNullable<MockOptions["device"]>;
+  private readonly connectionsListeners = new Set<() => void>();
 
   /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
   readonly proposals = new MockProposals(async (intent, already) => {
@@ -616,6 +619,11 @@ export class MockBackend implements Backend {
 
   async reduceTransparency() {
     return false;
+  }
+
+  onConnectionsChanged(listener: () => void) {
+    this.connectionsListeners.add(listener);
+    return () => void this.connectionsListeners.delete(listener);
   }
 
   onDisplayChanged(_listener: () => void) {
@@ -1060,8 +1068,9 @@ export class MockBackend implements Backend {
     return this.connector.moves(ref);
   }
 
-  async connectionsList(): Promise<ConnectionInfo[]> {
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null, transient: false, reauth: false };
+  async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
+    if (refresh) this.github.recheck();
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null, transient: false, reauth: false, status: null };
     return this.github.connected ? [sample, this.github.info()] : [sample];
   }
 

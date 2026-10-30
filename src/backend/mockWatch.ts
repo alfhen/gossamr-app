@@ -1,7 +1,8 @@
 import type { Step } from "../lib/roles";
-import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type ItemRef, type Proposal, type WatchChange, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
+import { AUTO_WATCH_EVERYTHING_MAX, type ContainerRef, type Intent, type ItemRef, type Proposal, type ProbeState, type WatchChange, type WatchRow, type WatchState, type WorkstreamActor } from "../types";
 import { docText } from "../lib/docs";
 import type { GithubWrite } from "./mockGithub";
+import { PROBE_STATES } from "./mockProbes";
 import type { ScriptedFinish } from "./mockRunResult";
 import type { MockLaunch } from "./mockRuns";
 
@@ -10,6 +11,8 @@ export interface MockOptions {
   catalogSize?: number;
   /** When set, a GitHub connection is already signed in with this many repositories (at least the five sample ones). Without it the sign-in commands connect one with 14. */
   githubRepos?: number;
+  /** What the probe of the GitHub instance finds from the start (`?mockGithubProbe=notSignedIn`). */
+  githubProbe?: ProbeState;
   /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
   device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
   /** Which scripted agent runs exist, and the moment their ages count back from. */
@@ -138,6 +141,8 @@ export interface MockHandle {
   movePullHead(repo: string, number: number): boolean;
   /** How many reviews the sample GitHub was asked to post, refused ones included. */
   githubPostsTried(): number;
+  /** Has the probe of the GitHub instance find `state`, and tells the page as a `connections` event does. */
+  probeGithub(state: ProbeState): void;
   /** The next review post's answer is lost, as a 502: GitHub keeps the review when `kept`, and drops it otherwise. */
   loseNextReviewAnswer(kept: boolean): void;
 }
@@ -167,7 +172,7 @@ export interface MockClockParts {
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
-  github?: { writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
+  github?: { probe(state: ProbeState): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
 declare global {
@@ -182,7 +187,7 @@ declare global {
  * launch with the guard the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
- * `loseNextReviewAnswer(kept)` loses the next post's answer. The last sample backend made wins.
+ * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`. The last sample backend made wins.
  */
 export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -230,6 +235,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     githubWrites: () => (github?.writes ?? []).map((w) => ({ ...w, comments: w.comments.map((c) => ({ ...c })) })),
     movePullHead: (repo, number) => github?.movePullHead(repo, number) ?? false,
     githubPostsTried: () => github?.tried() ?? 0,
+    probeGithub: (state) => github?.probe(state),
     loseNextReviewAnswer: (kept) => github?.loseNextAnswer(kept),
   };
 }
@@ -250,7 +256,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -263,6 +269,8 @@ export function mockOptionsFromUrl(): MockOptions {
   const repos = count("mockRepos");
   if (projects) options.catalogSize = projects;
   if (repos) options.githubRepos = repos;
+  const probe = params.get("mockGithubProbe");
+  if (PROBE_STATES.some((s) => s === probe)) options.githubProbe = probe as ProbeState;
   const pace = count("pipPace");
   if (pace) options.pipPace = pace;
   if (params.get("mockReviewAccess") === "none") options.reviewAccess = "none";
