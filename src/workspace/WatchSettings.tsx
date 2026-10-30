@@ -23,7 +23,7 @@ export function SettingsRowView({ row, noun, pinOnly, onPin, onUnwatch }: Settin
   const code = noun.domain === "code";
   const synced = code ? `${row.cachedItems} ${row.cachedItems === 1 ? "change" : "changes"} synced` : `${row.cachedItems} ${row.cachedItems === 1 ? "ticket" : "tickets"} synced`;
   return (
-    <li className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-ws-sep px-3 py-2 last:border-b-0 `}>
+    <li className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-ws-sep px-1 py-2 last:border-b-0 `}>
       <span>
         <Badge k={code ? repoParts(row.key).name : row.key} />
       </span>
@@ -152,7 +152,7 @@ export function WatchCardView(p: WatchCardViewProps) {
   const watched = p.rows.length;
   const code = p.noun.domain === "code";
   return (
-    <article aria-label={`Watching in ${p.title}`} data-domain={p.noun.domain ?? "work"} className="grid gap-3 rounded-xl border border-ws-sep2 bg-ws-win p-4">
+    <article aria-label={`Watching in ${p.title}`} data-domain={p.noun.domain ?? "work"} className="grid gap-3 border-b border-ws-sep py-4 first:pt-0 last:border-b-0">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="min-w-0 flex-1">
           <div className="truncate">
@@ -177,7 +177,7 @@ export function WatchCardView(p: WatchCardViewProps) {
       </p>
       {selected && <SuggestionChips chips={p.chips} noun={p.noun} onWatch={p.onChip} />}
       <SearchBox value={p.query} label={`Search ${p.noun.many}`} placeholder={code ? `Search ${p.noun.many} by name or owner` : `Search ${p.noun.many} by name or key`} onChange={p.onQuery} />
-      <div className="overflow-hidden rounded-[10px] border border-ws-sep">
+      <div className="overflow-hidden border-y border-ws-sep">
         <ul aria-label={`Watched ${p.noun.many}`} className="m-0 list-none p-0">
           {shown.map((r) => (
             <SettingsRowView

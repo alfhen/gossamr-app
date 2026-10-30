@@ -34,7 +34,7 @@ export function PipRunCard({ run, now, ticketTitle, label, onOpen, focusable = f
       data-state={run.state}
       aria-label={`${title}, ${view.label}`}
       tabIndex={focusable ? -1 : undefined}
-      className="flex items-center gap-2 rounded-[10px] border border-ws-sep bg-ws-win py-1.5 pr-2 pl-2.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
+      className="flex items-center gap-2.5 border-b border-ws-sep py-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip"
     >
       <Dot tone={view.tone} live={view.live} />
       <div className="grid min-w-0 flex-1 leading-snug">
@@ -89,8 +89,8 @@ export function PipRunStripView({ runs, now, workstream = null, dismissed, title
   if (!shown.length) return null;
   const more = shown.length < listed.length;
   return (
-    <section aria-label="Your agents" className="grid gap-1.5">
-      <h3 className="m-0 flex items-baseline gap-1.5 text-sm font-semibold text-ws-ink2">
+    <section aria-label="Your agents" className="grid">
+      <h3 className="m-0 flex items-baseline gap-1.5 pb-1 text-sm font-semibold text-ws-ink2">
         Your agents <span data-strip-count className="font-normal">{more ? `${shown.length} of ${listed.length}` : shown.length}</span>
         {more && onSeeAll && (
           <button type="button" onClick={onSeeAll} className="ml-auto font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">

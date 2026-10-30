@@ -22,9 +22,16 @@ export const TONE: Record<Tone, { text: string; soft: string; color: string }> =
   muted: { text: "text-ws-ink3", soft: "bg-ws-hover", color: "var(--color-ws-ink3)" },
 };
 
-export function StateChip({ run, now }: { run: Run; now: number }) {
+export function StateChip({ run, now, plain = false }: { run: Run; now: number; plain?: boolean }) {
   const v = useStateView(run, now);
   const t = TONE[v.tone];
+  if (plain) {
+    return (
+      <span data-state={run.state} className="text-xs font-medium whitespace-nowrap text-ws-ink2">
+        {v.label}
+      </span>
+    );
+  }
   return (
     <span data-state={run.state} className={`inline-flex items-center gap-1 rounded-full px-2 text-xs leading-[1.6] font-semibold whitespace-nowrap ${t.soft} ${t.text}`}>
       <Icon name={STATE_ICON[v.icon]} className="size-[11px]" />

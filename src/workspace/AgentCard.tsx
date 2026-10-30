@@ -3,7 +3,7 @@ import { archiveControl } from "../lib/archiveRuns";
 import { roleLabel } from "../lib/roles";
 import type { ReviewView, Run } from "../types";
 import { Icon } from "./AgentIcons";
-import { RowActions, RunBody, StateChip, TONE, type FailureState } from "./AgentParts";
+import { Dot, RowActions, RunBody, StateChip, type FailureState } from "./AgentParts";
 import { ownKey } from "./agentKeys";
 import { ageSince, ageText, branchOf, formatTokens, repoName, runTitle } from "./agentsLogic";
 import { useStateView } from "./useStateView";
@@ -129,10 +129,8 @@ export function RoleChip({ role }: { role: string }) {
 
 export function AgentCard({ run, now, selected, position, total, ticketTitle, label, onOpen, onAttach, onStop, onDraftComment, onBuildFromPlan, onReviewThis, onArchive, draftReady, breakdownReady, onOpenDraft, onOpenBreakdown, descriptionReady, onOpenDescription, review, failure, onOpenNeed, asking }: AgentItemProps) {
   const view = useStateView(run, now);
-  const tone = TONE[view.tone];
   const title = runTitle(run, ticketTitle);
   const tokens = formatTokens(run.tokens);
-  const needs = view.tone === "pip";
   return (
     <article
       id={agentId(run.id)}
@@ -146,9 +144,11 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       onClick={onOpen}
       // While a key of the Agents list waits for Enter, Enter is that key's (the window's handler does it), not "open".
       onKeyDown={asking ? undefined : onActivate(onOpen)}
-      style={{ ["--c" as string]: tone.color, boxShadow: `inset 3px 0 0 var(--c)${selected ? ", 0 0 0 2px var(--color-ws-accent-soft)" : ""}` }}
-      className={`ws-agent-card relative grid cursor-pointer content-start gap-2 rounded-[10px] border py-2.5 pr-3.5 pl-4 outline-offset-2 ${selected ? "border-ws-accent" : needs ? "border-ws-pip/45" : "border-ws-sep"} ${needs ? "bg-ws-pip-soft" : "bg-ws-win"}`}
+      className={`ws-agent-card relative grid cursor-pointer content-start gap-1.5 border-b border-ws-sep py-3 pr-2 pl-6 outline-offset-[-2px] ${selected ? "bg-ws-accent-soft" : "hover:bg-ws-hover"}`}
     >
+      <span className="absolute top-[17px] left-2 flex">
+        <Dot tone={view.tone} live={view.live} />
+      </span>
       <div className="flex min-w-0 items-center gap-2">
         <RunLabel label={label} />
         <RoleChip role={run.spec.role} />
@@ -156,7 +156,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {review && <VerdictChip review={review} />}
           {onOpenNeed && <InNeedsYou onOpen={onOpenNeed} />}
-          <StateChip run={run} now={now} />
+          <StateChip run={run} now={now} plain />
         </span>
       </div>
       <h3 className="m-0 line-clamp-2 text-[13.5px] leading-[1.3] font-semibold text-balance [overflow-wrap:anywhere]">{title}</h3>

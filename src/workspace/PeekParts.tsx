@@ -43,11 +43,11 @@ export interface SectionCardProps {
 /** A titled region with a header bar that stays under the section nav while its body scrolls. */
 export function SectionCard({ id, title, count, collapsed = false, onToggle, tone = "plain", fill = false, children }: SectionCardProps) {
   const icon = id in ICON ? <SectionIcon id={id as PeekSectionId} /> : null;
-  const bar = `sticky top-9 z-[5] flex w-full items-center gap-2 bg-ws-bar px-3 py-2 text-left text-ws-ink2 ${collapsed ? "rounded-lg" : "rounded-t-lg"}`;
+  const bar = "sticky top-9 z-[5] flex w-full items-center gap-2 bg-ws-win py-2 text-left text-ws-ink2";
   const label = (
     <>
       {icon}
-      <h3 className="m-0 text-sm font-semibold text-ws-ink2">{title}</h3>
+      <h3 className="m-0 text-sm font-semibold text-ws-ink">{title}</h3>
       {count !== undefined && <CountBadge count={count} accent={tone === "discussion"} />}
     </>
   );
@@ -55,7 +55,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
     <section
       id={`peek-${id}`}
       data-section={id}
-      className={`grid rounded-lg border border-ws-sep2 bg-ws-win ${fill ? "min-h-64 shrink-0 grow grid-rows-[auto_1fr]" : ""}`}
+      className={`grid border-t border-ws-sep ${fill ? "min-h-64 shrink-0 grow grid-rows-[auto_1fr]" : ""}`}
     >
       {onToggle ? (
         <button type="button" aria-expanded={!collapsed} aria-controls={`peek-${id}-body`} onClick={onToggle} className={`${bar} hover:brightness-95`}>
@@ -70,7 +70,7 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
       <div
         id={`peek-${id}-body`}
         hidden={collapsed}
-        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 rounded-b-lg p-3 ${id === "description" ? "" : "border-t border-ws-sep"}`}
+        className={`${collapsed ? "hidden" : "grid"} min-w-0 gap-3 pt-1 pb-3`}
       >
         {children}
       </div>
@@ -172,8 +172,8 @@ export function CommentCard({ note, now, onReply, onShow }: CommentCardProps) {
       data-reply={reply ? "true" : undefined}
       tabIndex={onReply ? 0 : undefined}
       onKeyDown={onKey}
-      className={`group grid min-w-0 scroll-mt-24 gap-2 rounded-md border border-ws-sep bg-ws-bar/40 p-3 transition-shadow outline-none focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
-        reply ? "border-l-2 border-l-ws-accent/50" : ""
+      className={`group grid min-w-0 scroll-mt-24 gap-2 rounded-md border-b border-ws-sep py-3 transition-shadow outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-ws-accent/40 ${
+        reply ? "border-l-2 border-l-ws-accent/50 pl-3" : ""
       }`}
     >
       <div className="flex min-w-0 items-center gap-2">

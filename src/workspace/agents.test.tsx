@@ -272,13 +272,14 @@ describe("cards", () => {
     expect(card(run("needsAnswer", { shortId: null }))).toMatch(/<button[^>]* disabled=""/);
   });
 
-  it("gives every state an icon and a word", () => {
+  it("gives every state a bead and a word", () => {
     const states: RunState[] = ["queued", "launching", "working", "needsAnswer", "needsPermission", "systemBlocked", "done", "failed", "stopped", "unknown"];
     const words = ["Queued", "Launching", "Working", "Needs an answer", "Needs permission", "Sign-in needed", "Ready to review", "Failed", "Stopped", "Unknown"];
     states.forEach((s, i) => {
       const html = card(run(s));
       expect(html).toContain(`>${words[i]}<`);
-      expect(html).toMatch(/<span[^>]*data-state="[a-zA-Z]+"[^>]*><svg/);
+      expect(html).toMatch(/<span aria-hidden="true" class="size-2[^"]*rounded-full[^"]*"><\/span>/);
+      expect(html).toMatch(new RegExp(`<span data-state="${s}"[^>]*>${words[i]}</span>`));
     });
   });
 
@@ -458,10 +459,10 @@ describe("a run in Needs you", () => {
 describe("motion", () => {
   const css = readFileSync(new URL("./agents.css", import.meta.url), "utf8");
 
-  it("turns the pulse into a plain dot and stops card movement for reduced motion", () => {
+  it("turns the pulse into a plain dot and stops the row fade for reduced motion", () => {
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce)"));
     expect(reduced).toMatch(/\.ws-live::after\s*{\s*display:\s*none/);
-    expect(reduced).toMatch(/\.ws-agent-card:hover\s*{\s*transform:\s*none/);
+    expect(reduced).toMatch(/\.ws-agent-card\s*{\s*transition:\s*none/);
   });
 
   it("keeps the running dot's ring apart from the flash on an item you jump to", () => {
