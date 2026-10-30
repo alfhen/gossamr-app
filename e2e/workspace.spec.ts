@@ -33,6 +33,23 @@ test.describe("a ticket opened from the palette", () => {
   });
 });
 
+test.describe("the peek's section jump", () => {
+  test("a segment scrolls its section to the header, which stays in view while the content scrolls", async ({ page }) => {
+    await openApp(page);
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.keyboard.type("CA-402");
+    await page.keyboard.press("Enter");
+    const peek = peekSheet(page);
+    const head = peek.locator("[data-peek-head]");
+    const scroller = peek.locator("[data-peek-scroll]");
+    await expect(head).toBeVisible();
+    await head.getByRole("group", { name: "Sections" }).getByRole("button", { name: /Comments/ }).click();
+    await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await expect(head).toBeInViewport();
+    await expect(head).toHaveAttribute("data-under", "true");
+  });
+});
+
 test.describe("Esc and F6 across the list, the peek and Pip", () => {
   test("Esc in Pip's composer closes the peek over it first, then Pip", async ({ page }) => {
     await openApp(page);

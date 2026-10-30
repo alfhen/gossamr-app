@@ -80,7 +80,6 @@ export function SectionCard({ id, title, count, collapsed = false, onToggle, ton
 }
 
 export function SectionNav({ chips, onJump }: { chips: SectionChip[]; onJump?(id: PeekSectionId): void }) {
-  const [at, setAt] = useState<PeekSectionId>("description");
   const options = chips.map((c) => ({
     value: c.id,
     label: (
@@ -94,11 +93,8 @@ export function SectionNav({ chips, onJump }: { chips: SectionChip[]; onJump?(id
     <Segmented
       label="Sections"
       options={options}
-      value={chips.some((c) => c.id === at) ? at : null}
-      onChange={(id) => {
-        setAt(id);
-        onJump?.(id);
-      }}
+      value={null}
+      onChange={(id) => onJump?.(id)}
       className="min-w-0 max-w-full overflow-x-auto"
     />
   );
