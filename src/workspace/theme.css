@@ -1,6 +1,8 @@
 @theme {
   --color-ws-win: #faf7f2;
   --color-ws-side: #efe9e0;
+  --color-ws-card: #fffdf9;
+  --color-ws-sheet: #fffdf9;
   --color-ws-bar: #f5f0e8;
   --color-ws-hover: rgb(90 60 30 / 0.05);
   --color-ws-sel: rgb(90 60 30 / 0.08);
@@ -60,6 +62,8 @@
   :root:not([data-theme="light"]) {
     --color-ws-win: #1c1a17;
     --color-ws-side: #24211d;
+    --color-ws-card: #2b2723;
+    --color-ws-sheet: #24211d;
     --color-ws-bar: #201d1a;
     --color-ws-hover: rgb(255 235 205 / 0.05);
     --color-ws-sel: rgb(255 235 205 / 0.08);
@@ -104,7 +108,7 @@
     --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.2);
     --bead-bottom: inset 0 -1px 0 rgb(0 0 0 / 0.25);
     --bead-gloss: inset 0 1px 0 rgb(255 255 255 / 0.06);
-    --silk-top: inset 0 1px 0 rgb(200 194 255 / 0.08);
+    --silk-top: inset 0 1px 0 rgb(255 236 210 / 0.06);
   }
 }
 
@@ -116,6 +120,8 @@
   color-scheme: dark;
   --color-ws-win: #1c1a17;
   --color-ws-side: #24211d;
+  --color-ws-card: #2b2723;
+  --color-ws-sheet: #24211d;
   --color-ws-bar: #201d1a;
   --color-ws-hover: rgb(255 235 205 / 0.05);
   --color-ws-sel: rgb(255 235 205 / 0.08);
@@ -160,7 +166,7 @@
   --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.2);
   --bead-bottom: inset 0 -1px 0 rgb(0 0 0 / 0.25);
   --bead-gloss: inset 0 1px 0 rgb(255 255 255 / 0.06);
-  --silk-top: inset 0 1px 0 rgb(200 194 255 / 0.08);
+  --silk-top: inset 0 1px 0 rgb(255 236 210 / 0.06);
 }
 
 .ws-root,
