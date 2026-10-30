@@ -85,7 +85,7 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `glass-body-control` | ivory at 62% | cream at 7% | The body of a control's glass, a little stronger than a floating layer's |
 | `ctl-depth` | `0 1px 2px` and `0 3px 10px -3px` brown at 10% and 16% | `0 1px 2px` and `0 4px 12px -4px` black at 50% and 60% | The small shadow under a control |
 | `thumb-glass` | ivory at 90% | cream at 16% | The lens that slides in a segmented control |
-| `prominent` | `#4b55c0` | `#4b55c0` | The fill of the one main action; white text on it reaches 6:1 in both themes |
+| `prominent` | `#4b55c0` | `#4b55c0` | The fill of the one main action and of "needs you" counts; white text on it reaches 6:1 in both themes. It is a fill only: indigo text uses `ws-accent`, which lightens in dark |
 | `well-shade`, `bead-top`, `bead-bottom` | brown at 7% inside; white at 28% above, ink at 18% below | black at 35% inside; white at 20% above, black at 25% below | A sunken switch track, and the light on a prominent fill |
 | `bead-gloss`, `silk-top` | white at 50% on the top edge; white at 95% | white at 6%; lavender at 8% | The light on a small bead, and on the top edge of a lens or raised surface |
 | `spring-dew`, `spring-silk` (and `-ms`) | 340 ms, no bounce; 770 ms, 4% give | the same | Easing for controls; the full set is in the proposal below |

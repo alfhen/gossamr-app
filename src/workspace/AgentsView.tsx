@@ -161,7 +161,7 @@ function WorkstreamSection({ group, view, current, onOpen, children }: { group: 
     <section aria-label={group.title} data-workstream-group={group.id ?? "none"} data-has-needs={mine ? "" : undefined} aria-current={current || undefined} className="relative grid">
       <div className="flex min-w-0 items-center gap-2 border-b border-ws-sep pb-2">
         {group.id && (
-          <span aria-hidden className={mine ? "text-(--prominent)" : "text-ws-ink3"}>
+          <span aria-hidden className={mine ? "text-ws-accent" : "text-ws-ink3"}>
             ◆
           </span>
         )}

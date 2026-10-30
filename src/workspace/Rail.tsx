@@ -252,7 +252,7 @@ function BellIcon() {
 /** A count over a rail button, named and titled with what it counts: the one count of what needs you, the only badge. */
 function RailBadge({ count, what }: { count: number; what: string }) {
   return (
-    <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-accent px-1 text-[10px] font-semibold text-white shadow-[var(--bead-top),var(--bead-bottom)]">
+    <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-(--prominent) px-1 text-[10px] font-semibold text-white shadow-[var(--bead-top),var(--bead-bottom)]">
       {count > 99 ? "99+" : count}
     </span>
   );

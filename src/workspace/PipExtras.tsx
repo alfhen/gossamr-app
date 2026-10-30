@@ -89,7 +89,7 @@ export function Launcher({ needs, onOpen, thinking = false, clearRight = 0 }: { 
         >
           <PipAvatar size={64} dangle thinking={thinking} />
           {needs > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-ws-accent px-1 text-xs font-bold text-white">{needs}</span>
+            <span className="absolute -top-0.5 -right-0.5 grid h-5 min-w-5 place-items-center rounded-full border-2 border-ws-win bg-(--prominent) px-1 text-xs font-bold text-white">{needs}</span>
           )}
         </button>
       </div>

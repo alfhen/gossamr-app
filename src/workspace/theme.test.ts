@@ -52,6 +52,12 @@ describe("the theme tokens", () => {
     }
   });
 
+  it("keeps white labels readable on the prominent indigo, which no dark block overrides", () => {
+    const root = tokens(blockAfter(":root {"));
+    expect(auto["--prominent"]).toBeUndefined();
+    expect(contrast("#ffffff", root["--prominent"])).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("keeps the label on a danger fill readable in both themes", () => {
     for (const [theme, set] of [["light", light], ["dark", { ...light, ...auto }]] as const) {
       const ratio = contrast(set["--color-ws-on-blocked"], set["--color-ws-blocked"]);

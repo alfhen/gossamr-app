@@ -103,7 +103,7 @@ export function ToastCard({ toast: t, waiting, onDismiss }: { toast: Toast; wait
       className="pointer-events-auto relative flex flex-wrap items-start gap-x-2 gap-y-1 rounded-lg ws-glass ws-glass-regular px-3 py-2 text-sm font-medium text-ws-ink outline-none focus-visible:outline-2 focus-visible:outline-ws-pip"
     >
       {t.tone === "error" && (
-        <span aria-hidden className="mt-px grid size-4 shrink-0 place-items-center rounded-full bg-ws-blocked text-[10px] leading-none font-bold text-white">
+        <span aria-hidden className="mt-px grid size-4 shrink-0 place-items-center rounded-full bg-ws-blocked text-[10px] leading-none font-bold text-ws-on-blocked">
           !
         </span>
       )}

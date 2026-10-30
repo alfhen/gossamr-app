@@ -33,6 +33,9 @@
 .ws-wither {
   background-color: color-mix(in srgb, var(--color-ws-card), var(--wither-tint) var(--wmix));
 }
+.ws-wither.ws-card-draft {
+  background-color: color-mix(in srgb, var(--color-ws-pip-soft), var(--wither-tint) var(--wmix));
+}
 .ws-wither::before {
   content: "";
   position: absolute;
