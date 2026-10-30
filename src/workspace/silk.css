@@ -60,10 +60,14 @@
     --n: 0;
     position: relative;
     display: grid;
-    flex: 1;
+    flex: 1 0 0;
     justify-items: center;
+    align-content: start;
     gap: 5px;
-    min-width: 0;
+    min-width: 5.5rem;
+    padding-inline: 4px;
+    text-align: center;
+    text-wrap: balance;
   }
 
   .ws-thread > li > i {
