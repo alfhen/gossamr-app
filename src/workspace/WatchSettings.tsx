@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Button } from "../components/Button";
 import type { Backend } from "../backend/types";
 import { useBackend } from "../backend/useBackend";
 import type { CatalogEntry, ConnectionInfo, Footprint, WatchChange, WatchState } from "../types";
@@ -170,9 +171,9 @@ export function WatchCardView(p: WatchCardViewProps) {
           </div>
         </div>
         {!selected && (
-          <button type="button" onClick={p.onChoose} className="rounded-lg bg-ws-accent px-3 py-1 text-sm font-semibold text-white">
+          <Button variant="primary" size="sm" onClick={p.onChoose}>
             Choose {p.noun.many}…
-          </button>
+          </Button>
         )}
       </div>
       <p className="m-0 text-sm text-ws-ink3">

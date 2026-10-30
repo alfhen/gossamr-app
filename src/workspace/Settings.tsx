@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Button } from "../components/Button";
 import { announceSignedOut } from "../accountEvents";
 import { auth } from "../backend/auth";
 import type { ConnectionInfo, WatchState } from "../types";
@@ -154,9 +155,9 @@ export function GithubCardView({ c, watch, now, confirming, busy, onSync, onMana
         <div role="alertdialog" aria-label={`Disconnect ${c.workspace}`} className="mt-1 grid gap-2 rounded-lg border border-ws-warn bg-ws-bar px-3 py-2.5 text-sm">
           <p className="m-0 text-ws-ink">Disconnect {c.workspace}? Gossamr forgets its token and deletes the pull requests and branches it cached. Nothing on GitHub changes, and you can connect again any time.</p>
           <div className="flex gap-2">
-            <button type="button" disabled={busy} onClick={onDisconnect} className="rounded-md bg-ws-blocked px-3 py-1 font-semibold text-white disabled:opacity-50">
+            <Button variant="danger" disabled={busy} onClick={onDisconnect}>
               {busy ? "Disconnecting…" : "Disconnect"}
-            </button>
+            </Button>
             <button type="button" disabled={busy} onClick={onCancel} className="rounded-md px-3 py-1 text-ws-ink2 hover:bg-ws-hover">
               Cancel
             </button>
@@ -201,9 +202,9 @@ export function ConnectGithubCard({ connected }: { connected: boolean }) {
         <div className="font-semibold">{connected ? "Connect another GitHub account" : "Connect GitHub"}</div>
         <div className="text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</div>
       </div>
-      <button type="button" onClick={() => useGithubUi.getState().openConnect()} className="shrink-0 rounded-lg bg-ws-accent px-3.5 py-1.5 font-semibold text-white">
+      <Button variant="primary" className="shrink-0" onClick={() => useGithubUi.getState().openConnect()}>
         Connect GitHub
-      </button>
+      </Button>
     </li>
   );
 }

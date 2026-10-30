@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "../components/Button";
 import type { Backend } from "../backend/types";
 import type { CatalogEntry, ConnectionInfo, Footprint, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -266,9 +267,9 @@ export function WatchPickerView(p: WatchPickerViewProps) {
             Cancel
           </button>
         )}
-        <button type="button" onClick={p.onSave} disabled={n === 0 || p.saving} className="rounded-lg bg-ws-accent px-4 py-1.5 font-semibold text-white disabled:opacity-45">
+        <Button variant="primary" onClick={p.onSave} disabled={n === 0 || p.saving}>
           {p.saving ? "Saving…" : "Start watching"}
-        </button>
+        </Button>
       </div>
     </div>
   );
