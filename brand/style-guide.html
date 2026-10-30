@@ -7,63 +7,67 @@
 <style>
   :root {
     color-scheme: light;
-    --win: #fcfbfe;
-    --side: #ecebf4;
-    --bar: #f4f3f9;
-    --sep: rgb(50 40 110 / 0.1);
-    --sep2: rgb(50 40 110 / 0.18);
-    --ink: #1b1a2b;
-    --ink2: #575672;
-    --ink3: #8c8ba6;
-    --accent: #4a5be0;
-    --accent-soft: rgb(74 91 224 / 0.1);
+    --win: #faf7f2;
+    --side: #efe9e0;
+    --bar: #f5f0e8;
+    --sep: rgb(90 60 30 / 0.11);
+    --sep2: rgb(90 60 30 / 0.19);
+    --ink: #2b2621;
+    --ink2: #5e564c;
+    --ink3: #776e62;
+    --accent: #4b55c0;
+    --accent-soft: rgb(75 85 192 / 0.1);
     --pip: #0b8a86;
     --pip-soft: rgb(11 138 134 / 0.1);
     --pip2: #5b4bd1;
     --done: #1f9d6a;
-    --blocked: #e0475b;
-    --review: #8a55d6;
-    --warn: #c98a1b;
-    --shadow: 0 12px 40px rgb(30 20 80 / 0.2);
+    --blocked: #bf4339;
+    --review: #7d4cb8;
+    --warn: #b07614;
+    --shadow: 0 12px 40px rgb(60 40 20 / 0.18);
     --sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       color-scheme: dark;
-      --win: #14131d;
-      --side: #1c1b2a;
-      --bar: #191826;
-      --sep: rgb(190 180 255 / 0.1);
-      --sep2: rgb(190 180 255 / 0.18);
-      --ink: #eeedf8;
-      --ink2: #b1b0c8;
-      --ink3: #7b7a96;
-      --accent: #6a82ff;
-      --accent-soft: rgb(106 130 255 / 0.16);
+      --win: #1c1a17;
+      --side: #24211d;
+      --bar: #201d1a;
+      --sep: rgb(255 235 205 / 0.09);
+      --sep2: rgb(255 235 205 / 0.16);
+      --ink: #e9e2d6;
+      --ink2: #b6ad9f;
+      --ink3: #90877b;
+      --accent: #8f98f0;
+      --accent-soft: rgb(143 152 240 / 0.15);
       --pip: #37d0c0;
       --pip-soft: rgb(55 208 192 / 0.13);
       --pip2: #9a8bff;
-      --review: #b48af0;
+      --review: #bf9cec;
+      --blocked: #e77d72;
+      --warn: #d6a04a;
       --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
     }
   }
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --win: #14131d;
-    --side: #1c1b2a;
-    --bar: #191826;
-    --sep: rgb(190 180 255 / 0.1);
-    --sep2: rgb(190 180 255 / 0.18);
-    --ink: #eeedf8;
-    --ink2: #b1b0c8;
-    --ink3: #7b7a96;
-    --accent: #6a82ff;
-    --accent-soft: rgb(106 130 255 / 0.16);
+    --win: #1c1a17;
+    --side: #24211d;
+    --bar: #201d1a;
+    --sep: rgb(255 235 205 / 0.09);
+    --sep2: rgb(255 235 205 / 0.16);
+    --ink: #e9e2d6;
+    --ink2: #b6ad9f;
+    --ink3: #90877b;
+    --accent: #8f98f0;
+    --accent-soft: rgb(143 152 240 / 0.15);
     --pip: #37d0c0;
     --pip-soft: rgb(55 208 192 / 0.13);
     --pip2: #9a8bff;
-    --review: #b48af0;
+    --review: #bf9cec;
+    --blocked: #e77d72;
+    --warn: #d6a04a;
     --shadow: 0 12px 40px rgb(0 0 0 / 0.6);
   }
 
@@ -172,7 +176,7 @@
   .marks { display: flex; flex-wrap: wrap; align-items: end; gap: 28px; padding: 24px; background: var(--bar); border: 1px solid var(--sep); border-radius: 14px; max-width: 920px; }
   .marks figure { margin: 0; text-align: center; }
   .marks figcaption { font-size: 12px; color: var(--ink3); margin-top: 6px; }
-  .on-light { background: #fcfbfe; border: 1px solid rgb(50 40 110 / 0.1); border-radius: 10px; padding: 24px; }
+  .on-light { background: #faf7f2; border: 1px solid rgb(90 60 30 / 0.11); border-radius: 10px; padding: 24px; }
   .on-dark { background: #14131d; border: 1px solid rgb(238 237 248 / 0.12); border-radius: 10px; padding: 24px; }
 
   .swatches { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); }
@@ -309,26 +313,26 @@
 
   .glass-duo { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
   .gstage { --a: 0.22; position: relative; border-radius: 12px; overflow: hidden; min-height: 320px; padding: 16px; }
-  .gstage.l { background: #fcfbfe; border: 1px solid rgb(50 40 110 / 0.1); color: #1b1a2b; }
-  .gstage.d { background: #14131d; border: 1px solid rgb(190 180 255 / 0.12); color: #eeedf8; }
+  .gstage.l { background: #faf7f2; border: 1px solid rgb(90 60 30 / 0.11); color: #2b2621; }
+  .gstage.d { background: #1c1a17; border: 1px solid rgb(255 235 205 / 0.12); color: #e9e2d6; }
   .gstage .glow { position: absolute; border-radius: 50%; filter: blur(30px); pointer-events: none; }
   .gstage .g1 { width: 220px; height: 220px; left: -40px; top: 40px; background: #37d0c0; opacity: 0.5; }
   .gstage .g2 { width: 260px; height: 220px; right: -60px; bottom: -40px; background: #6a82ff; opacity: 0.55; }
   .gstage .g3 { width: 180px; height: 160px; left: 45%; top: -50px; background: #b48af0; opacity: 0.45; }
   .gstage .board { position: relative; display: grid; gap: 8px; }
   .gstage .row { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; font-size: 12px; }
-  .gstage.l .row { background: #ffffff; border: 1px solid rgb(50 40 110 / 0.1); }
-  .gstage.d .row { background: #1c1b2a; border: 1px solid rgb(190 180 255 / 0.1); }
+  .gstage.l .row { background: #ffffff; border: 1px solid rgb(90 60 30 / 0.11); }
+  .gstage.d .row { background: #24211d; border: 1px solid rgb(255 235 205 / 0.09); }
   .gstage .row b { font-weight: 600; }
   .gstage .row span:nth-child(2) { flex: 1; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .gstage .pl { font: 600 10px/16px var(--sans); padding: 0 7px; border-radius: 999px; }
-  .pl.n { color: #fff; background: #4a5be0; } .pl.r { color: #04302c; background: #37d0c0; } .pl.f { color: #fff; background: #e0475b; } .pl.v { color: #fff; background: #8a55d6; } .pl.o { color: #04302c; background: #1f9d6a; }
+  .pl.n { color: #fff; background: #4b55c0; } .pl.r { color: #04302c; background: #37d0c0; } .pl.f { color: #fff; background: #bf4339; } .pl.v { color: #fff; background: #7d4cb8; } .pl.o { color: #04302c; background: #1f9d6a; }
   .gstage .cap { position: absolute; left: 16px; bottom: 10px; font-size: 11px; opacity: 0.6; }
 
   .silk-glass { position: absolute; left: 50%; top: 46%; width: min(380px, 84%); transform: translate(-50%, -50%); border-radius: 16px; isolation: isolate; }
   .silk-glass::before { content: ""; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none;
     -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
-  .l .silk-glass { color: #1b1a2b;
+  .l .silk-glass { color: #2b2621;
     background: linear-gradient(rgb(200 194 255 / 0.1), rgb(200 194 255 / 0.1)), rgb(255 255 255 / var(--a));
     -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06); backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
     box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.7), inset 0 -1px 1px rgb(20 19 29 / 0.06), 0 10px 30px rgb(20 19 29 / 0.18); }
@@ -346,8 +350,8 @@
   .silk-glass .r .k { font: 11px var(--mono); opacity: 0.6; }
   .silk-glass .pipline { display: flex; align-items: center; gap: 8px; }
   .silk-glass .pipline i { width: 8px; height: 8px; border-radius: 50%; background: #37d0c0; box-shadow: 0 0 8px #37d0c0; }
-  .glass-duo.solid .l .silk-glass { background: #fcfbfe; -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .glass-duo.solid .d .silk-glass { background: #1c1b2a; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-duo.solid .l .silk-glass { background: #faf7f2; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-duo.solid .d .silk-glass { background: #24211d; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .gstage { min-height: 380px; }
   .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; display: grid; place-items: center; filter: drop-shadow(0 6px 8px rgb(91 75 209 / 0.35)); }
   .orb svg { width: 56px; height: 36px; }
@@ -488,7 +492,7 @@
   <h3>Wordmark</h3>
   <p>"Gossamr": one word, capital G, no "e" before the final r. System sans, semibold, the mark to its left.</p>
   <div class="grid">
-    <div class="on-light"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#1b1a2b">Gossamr</span></div></div>
+    <div class="on-light"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#2b2621">Gossamr</span></div></div>
     <div class="on-dark"><div class="lockup"><svg width="44" height="44" role="img" aria-label="Gossamr mark"><use href="#mark"/></svg><span style="font-size:32px;font-weight:600;letter-spacing:-0.02em;color:#eeedf8">Gossamr</span></div></div>
   </div>
 
@@ -510,17 +514,17 @@
   <p>Mostly ink and silk, a little lavender and indigo, and one small point of teal. The proportions are part of the brand: a page that is half teal is not Gossamr.</p>
   <div class="strip" role="img" aria-label="Brand colours in proportion: ink about half, silk a quarter, lavender, indigo and violet small, teal smallest">
     <span style="flex:50;background:#14131d;color:#eeedf8">Ink</span>
-    <span style="flex:27;background:#eeedf8;color:#1b1a2b">Silk</span>
-    <span style="flex:9;background:#c8c2ff;color:#1b1a2b">Lavender</span>
-    <span style="flex:7;background:#6a82ff;color:#fff">Indigo</span>
+    <span style="flex:27;background:#eeedf8;color:#2b2621">Silk</span>
+    <span style="flex:9;background:#c8c2ff;color:#2b2621">Lavender</span>
+    <span style="flex:7;background:#8f98f0;color:#fff">Indigo</span>
     <span style="flex:4;background:#9a8bff"></span>
     <span style="flex:3;background:#37d0c0"></span>
   </div>
   <ul class="legend">
-    <li><i style="background:#14131d"></i><b>Ink</b><span>#14131d, the dark window and the icon</span></li>
+    <li><i style="background:#14131d"></i><b>Ink</b><span>#14131d, the icon square</span></li>
     <li><i style="background:#eeedf8"></i><b>Silk</b><span>#eeedf8, the G and text on ink</span></li>
     <li><i style="background:#c8c2ff"></i><b>Lavender</b><span>#c8c2ff, threads, the G's fade, glass tint</span></li>
-    <li><i style="background:#6a82ff"></i><b>Indigo</b><span>#6a82ff dark, #4a5be0 light: you</span></li>
+    <li><i style="background:#8f98f0"></i><b>Indigo</b><span>#8f98f0 dark, #4b55c0 light: you</span></li>
     <li><i style="background:#9a8bff"></i><b>Violet</b><span>#9a8bff dark, #5b4bd1 light: Pip's second colour</span></li>
     <li><i style="background:#37d0c0"></i><b>Pip teal</b><span>#37d0c0 dark, #0b8a86 light: Pip only</span></li>
   </ul>
@@ -529,18 +533,18 @@
   <div class="scroll"><table>
     <thead><tr><th>Token</th><th>Light</th><th>Dark</th><th>Use</th></tr></thead>
     <tbody>
-      <tr><td><code>ws-win</code></td><td>#fcfbfe</td><td>#14131d</td><td>Window and page</td></tr>
-      <tr><td><code>ws-side</code></td><td>#ecebf4</td><td>#1c1b2a</td><td>Sidebar and rail</td></tr>
-      <tr><td><code>ws-bar</code></td><td>#f4f3f9</td><td>#191826</td><td>Bars, footers, quiet panels</td></tr>
-      <tr><td><code>ws-ink</code></td><td>#1b1a2b</td><td>#eeedf8</td><td>Body text</td></tr>
-      <tr><td><code>ws-ink2</code></td><td>#575672</td><td>#b1b0c8</td><td>Secondary text</td></tr>
-      <tr><td><code>ws-ink3</code></td><td>#8c8ba6</td><td>#7b7a96</td><td>Meta: times, counts, hints</td></tr>
-      <tr><td><code>ws-accent</code></td><td>#4a5be0</td><td>#6a82ff</td><td>Your actions, focus, selection</td></tr>
+      <tr><td><code>ws-win</code></td><td>#faf7f2</td><td>#1c1a17</td><td>Window and page</td></tr>
+      <tr><td><code>ws-side</code></td><td>#efe9e0</td><td>#24211d</td><td>Sidebar and rail</td></tr>
+      <tr><td><code>ws-bar</code></td><td>#f5f0e8</td><td>#201d1a</td><td>Bars, footers, quiet panels</td></tr>
+      <tr><td><code>ws-ink</code></td><td>#2b2621</td><td>#e9e2d6</td><td>Body text</td></tr>
+      <tr><td><code>ws-ink2</code></td><td>#5e564c</td><td>#b6ad9f</td><td>Secondary text</td></tr>
+      <tr><td><code>ws-ink3</code></td><td>#776e62</td><td>#90877b</td><td>Meta: times, counts, hints</td></tr>
+      <tr><td><code>ws-accent</code></td><td>#4b55c0</td><td>#8f98f0</td><td>Your actions, focus, selection</td></tr>
       <tr><td><code>ws-pip</code>, <code>ws-pip2</code></td><td>#0b8a86, #5b4bd1</td><td>#37d0c0, #9a8bff</td><td>Pip and Pip's drafts</td></tr>
       <tr><td><code>ws-done</code></td><td>#1f9d6a</td><td>#1f9d6a</td><td>Done</td></tr>
-      <tr><td><code>ws-blocked</code></td><td>#e0475b</td><td>#e0475b</td><td>Failed, blocked</td></tr>
-      <tr><td><code>ws-review</code></td><td>#8a55d6</td><td>#b48af0</td><td>In review</td></tr>
-      <tr><td><code>ws-warn</code></td><td>#c98a1b</td><td>#c98a1b</td><td>Needs attention (icons and fills only)</td></tr>
+      <tr><td><code>ws-blocked</code></td><td>#bf4339</td><td>#e77d72</td><td>Failed, blocked</td></tr>
+      <tr><td><code>ws-review</code></td><td>#7d4cb8</td><td>#bf9cec</td><td>In review</td></tr>
+      <tr><td><code>ws-warn</code></td><td>#b07614</td><td>#d6a04a</td><td>Needs attention (icons and fills only)</td></tr>
     </tbody>
   </table></div>
 

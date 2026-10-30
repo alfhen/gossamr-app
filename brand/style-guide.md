@@ -35,49 +35,49 @@ The app icons in `src-tauri/icons/` are generated from these with `./scripts/app
 
 ### Wordmark
 
-"Gossamr", one word, capital G, no "e" before the final r. Set it in the system sans at semibold, in ink (`#1b1a2b` on light, `#eeedf8` on dark). Place the mark to its left at the height of the cap plus descender, with a gap of half the mark's width. Do not replace the wordmark's G with the mark.
+"Gossamr", one word, capital G, no "e" before the final r. Set it in the system sans at semibold, in ink (`#2b2621` on light, `#e9e2d6` on dark). Place the mark to its left at the height of the cap plus descender, with a gap of half the mark's width. Do not replace the wordmark's G with the mark.
 
 ## Colour
 
-Gossamr is ink-indigo with one teal character. Every colour below is a token in `src/workspace/theme.css`.
+Gossamr is warm silk with one teal character: ivory in light, warm charcoal in dark, and indigo for the person. Every colour below is a token in `src/workspace/theme.css`.
 
 ### Brand core
 
 | Name | Value | Role |
 | --- | --- | --- |
-| Ink | `#14131d` | The dark window, the icon's square, the site's dark sections |
+| Ink | `#14131d` | The icon's square and the site's dark sections |
 | Silk | `#eeedf8` | The G, and text on ink |
 | Lavender | `#c8c2ff` | The faint end of the G's gradient; never on its own as text |
 | Pip teal | `#37d0c0` dark, `#0b8a86` light | Pip, and only Pip |
-| Indigo | `#6a82ff` dark, `#4a5be0` light | The person's own actions: focus, selection, primary buttons, links |
+| Indigo | `#8f98f0` dark, `#4b55c0` light | The person's own actions: focus, selection, primary buttons, links |
 | Violet | `#9a8bff` dark, `#5b4bd1` light | Pip's second colour: the end of its gradient and its legs |
 
 ### Interface tokens
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `ws-win` | `#fcfbfe` | `#14131d` | Window and page background |
-| `ws-side` | `#ecebf4` | `#1c1b2a` | Sidebar and rail |
-| `ws-bar` | `#f4f3f9` | `#191826` | Bars, footers, quiet panels |
-| `ws-ink` | `#1b1a2b` | `#eeedf8` | Body text |
-| `ws-ink2` | `#575672` | `#b1b0c8` | Secondary text |
-| `ws-ink3` | `#8c8ba6` | `#7b7a96` | Meta text: times, counts, hints |
-| `ws-sep`, `ws-sep2` | indigo at 10% and 18% | lavender at 10% and 18% | Hairlines and borders |
-| `ws-hover`, `ws-sel` | indigo at 5% and 7.5% | lavender at 7% and 10% | Hover and selected rows |
-| `ws-accent` | `#4a5be0` | `#6a82ff` | The person's actions |
+| `ws-win` | `#faf7f2` | `#1c1a17` | Window and page background |
+| `ws-side` | `#efe9e0` | `#24211d` | Sidebar and rail |
+| `ws-bar` | `#f5f0e8` | `#201d1a` | Bars, footers, quiet panels |
+| `ws-ink` | `#2b2621` | `#e9e2d6` | Body text |
+| `ws-ink2` | `#5e564c` | `#b6ad9f` | Secondary text |
+| `ws-ink3` | `#776e62` | `#90877b` | Meta text: times, counts, hints |
+| `ws-sep`, `ws-sep2` | brown at 11% and 19% | cream at 9% and 16% | Hairlines and borders |
+| `ws-hover`, `ws-sel` | brown at 5% and 8% | cream at 5% and 8% | Hover and selected rows |
+| `ws-accent` | `#4b55c0` | `#8f98f0` | The person's actions |
 | `ws-pip`, `ws-pip2` | `#0b8a86`, `#5b4bd1` | `#37d0c0`, `#9a8bff` | Pip and Pip's drafts |
 | `ws-done` | `#1f9d6a` | `#1f9d6a` | Done |
-| `ws-blocked` | `#e0475b` | `#e0475b` | Failed, blocked |
-| `ws-review` | `#8a55d6` | `#b48af0` | In review |
-| `ws-warn` | `#c98a1b` | `#c98a1b` | Needs attention |
-| `glass-tint` | lavender at 10% | lavender at 6% | The faint colour over glass |
+| `ws-blocked` | `#bf4339` | `#e77d72` | Failed, blocked |
+| `ws-review` | `#7d4cb8` | `#bf9cec` | In review |
+| `ws-warn` | `#b07614` | `#d6a04a` | Needs attention |
+| `glass-tint` | silk `#f6e2c4` at 14% | silk `#ffe4be` at 5% | The faint colour over glass |
 | `glass-tint-pip` | teal at 10% | teal at 6% | The same, on Pip's surfaces |
-| `glass-body`, `glass-body-regular` | white at 22% and 55% | ink at 38% and 60% | Clear and regular glass body |
-| `glass-filter` | `blur(6px) saturate(1.8) brightness(1.06)` | `blur(8px) saturate(1.6) brightness(0.9)` | What the glass does to the backdrop |
-| `glass-rim`, `glass-rim-pip` | white ring, 95% to 5% to 55% | lavender ring, 60% to 2% to 30%; teal on Pip | The 1 px edge light |
-| `glass-inner`, `glass-inner-pip` | white at 70% above, ink at 6% below | lavender at 25% above; teal on Pip | Light inside the edge |
-| `glass-depth` | `0 10px 30px` ink at 18% | `0 12px 40px` black at 50% | The shadow |
-| `glass-lens`, `glass-lens-rim` (and `-pip`) | white at 38%, rim white at 80% | lavender at 10%, rim at 35%; teal on Pip | Selection inside glass |
+| `glass-body`, `glass-body-regular` | ivory at 22% and 58% | warm charcoal at 38% and 60% | Clear and regular glass body |
+| `glass-filter` | `blur(6px) saturate(1.5) brightness(1.04)` | `blur(8px) saturate(1.4) brightness(0.92)` | What the glass does to the backdrop |
+| `glass-rim`, `glass-rim-pip` | warm white ring, 95% to 5% to 55% | cream ring, 45% to 2% to 22%; teal on Pip | The 1 px edge light |
+| `glass-inner`, `glass-inner-pip` | warm white at 75% above, ink at 6% below | cream at 16% above; teal on Pip | Light inside the edge |
+| `glass-depth` | `0 10px 30px` brown at 16% | `0 12px 40px` black at 50% | The shadow |
+| `glass-lens`, `glass-lens-rim` (and `-pip`) | ivory at 45%, rim warm white at 85% | cream at 8%, rim at 28%; teal on Pip | Selection inside glass |
 
 `ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. `ws-warn` has no soft fill.
 
@@ -91,18 +91,20 @@ Gossamr is ink-indigo with one teal character. Every colour below is a token in 
 
 ### Contrast
 
-Measured against the window colour:
+Measured against the window colour (`ws-win`):
 
 | | Light | Dark |
 | --- | --- | --- |
-| `ws-ink` | 16.6 | 15.9 |
-| `ws-ink2` | 6.8 | 8.7 |
-| `ws-ink3` | 3.2 | 4.4 |
-| `ws-accent` | 5.3 | 5.5 |
-| `ws-pip` | 4.1 | 9.6 |
-| `ws-warn` | 2.9 | |
+| `ws-ink` | 14.0 | 13.5 |
+| `ws-ink2` | 6.7 | 7.8 |
+| `ws-ink3` | 4.7 | 4.9 |
+| `ws-accent` | 5.8 | 6.5 |
+| `ws-pip` | 3.9 | 9.1 |
+| `ws-blocked` | 4.8 | 6.3 |
+| `ws-review` | 5.5 | 7.6 |
+| `ws-warn` | 3.6 | 7.4 |
 
-So: body and secondary text pass AA everywhere. `ws-ink3` and light-mode `ws-pip` are below 4.5, so use them for meta text, icons, borders and bold or large text, never for a sentence a person must read. `ws-warn` is for icons and fills; text about a warning stays in ink.
+So: against the window, body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-ink3` on `ws-side` and `ws-bar` is about 4.2, so in the sidebar and rail it stays for short meta only. Light-mode `ws-pip` is below 4.5, so use it for icons, borders and bold or large text, never for a sentence a person must read. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
 
 ## Type
 
@@ -299,22 +301,22 @@ A material for the things that float above the work: the palette, menus, popover
 
 Pip's launcher is not glass. Pip hangs free on its thread, with only its soft violet shadow, because Pip is a character, not a control in a frame.
 
-Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs only lightly (6 to 8 px) so shapes still show through, and catches light on its rim. Silk glass follows that, with one brand touch: a faint lavender tint, the colour of the silk G.
+Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs only lightly (6 to 8 px) so shapes still show through, and catches light on its rim. Silk glass follows that, with one brand touch: a faint silk tint, warm in both themes.
 
 | Layer | Light | Dark |
 | --- | --- | --- |
-| Body | White at 22%, with lavender `#c8c2ff` at 10% over it | Ink `#14131d` at 38%, with lavender at 6% over it |
-| Backdrop | `blur(6px) saturate(1.8) brightness(1.06)` | `blur(8px) saturate(1.6) brightness(0.9)` |
-| Rim | A 1 px light that is brightest at the top-left corner (white at 95%), fades to 5% along the sides, and glows again at the bottom-right (55%) | The same in lavender: 60%, 2%, 30% |
-| Inner light | `inset 0 1px 1px` white at 70%, `inset 0 -1px 1px` ink at 6% | `inset 0 1px 1px` lavender at 25% |
-| Depth | `0 10px 30px` ink at 18% | `0 12px 40px` black at 50% |
-| Selection inside | A clear lens: white at 38% with its own rim | Lavender at 10% with its own rim |
-| Pip's surfaces | Teal `#37d0c0` instead of lavender, at the same strengths | Teal instead of lavender |
+| Body | Ivory at 22%, with silk `#f6e2c4` at 14% over it | Warm charcoal `#1c1a17` at 38%, with silk `#ffe4be` at 5% over it |
+| Backdrop | `blur(6px) saturate(1.5) brightness(1.04)` | `blur(8px) saturate(1.4) brightness(0.92)` |
+| Rim | A 1 px light that is brightest at the top-left corner (warm white at 95%), fades to 5% along the sides, and glows again at the bottom-right (55%) | The same in cream: 45%, 2%, 22% |
+| Inner light | `inset 0 1px 1px` warm white at 75%, `inset 0 -1px 1px` ink at 6% | `inset 0 1px 1px` cream at 16% |
+| Depth | `0 10px 30px` brown at 16% | `0 12px 40px` black at 50% |
+| Selection inside | A clear lens: ivory at 45% with its own rim | Cream at 8% with its own rim |
+| Pip's surfaces | Teal `#37d0c0` instead of silk, at the same strengths | Teal instead of silk |
 
 **How to use it.** The classes are in `src/workspace/glass.css`, and the colours are the `glass-*` tokens in `theme.css`.
 
 - `ws-glass` is the material. Put it on the floating layer itself, never on the element that scrolls.
-- `ws-glass-regular` raises the body to white at 55% or ink at 60%. Use it on any layer that holds `ws-ink2` text, because `ws-ink2` on clear glass misses 4.5:1 over accent and status fills.
+- `ws-glass-regular` raises the body to ivory at 58% or charcoal at 60%. Use it on any layer that holds `ws-ink2` text, because `ws-ink2` on clear glass misses 4.5:1 over accent and status fills.
 - `ws-glass-pip` turns the tint, rim and light teal. Add it to `ws-glass` on Pip's surfaces only.
 - `ws-glass-lens` is the selection lens. Put it on the active or selected row.
 - `ws-glass-item` gives a row inside glass the lens on hover and keyboard focus.
@@ -341,7 +343,7 @@ Where it is used:
 
 **Rules for glass**
 
-- Text on glass must still reach 4.5:1 against the worst content that can sit behind it. If it can't, raise the body to the "regular" strength (white at 55%, ink at 60%) or make the layer solid.
+- Text on glass must still reach 4.5:1 against the worst content that can sit behind it. If it can't, raise the body to the "regular" strength (ivory at 58%, charcoal at 60%) or make the layer solid.
 - When the person turns on Reduce transparency, glass becomes solid `ws-win` and keeps its rim and depth. The app reads the macOS setting itself and follows it as it changes, because WebKit doesn't report `prefers-reduced-transparency`; the site uses that media query where the browser reports it. Glass is solid where `backdrop-filter` is not supported too.
 - Never stack glass on glass.
 - Teal only on Pip's surfaces, so "teal means Pip" still holds.
