@@ -330,7 +330,7 @@ export function TimelineView({
               <Fragment key={e.key}>
               {days.has(e.key) && (
                 <li data-timeline-day={days.get(e.key)} className="m-0 -mb-2 border-b border-ws-sep/60 pb-0.5 text-sm font-semibold text-ws-ink2">
-                  <h3 className="m-0 text-xs font-semibold">{days.get(e.key)}</h3>
+                  <h3 className="m-0 font-semibold">{days.get(e.key)}</h3>
                 </li>
               )}
               <li

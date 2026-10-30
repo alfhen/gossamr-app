@@ -112,8 +112,8 @@ export function Sec({ title, count, aside, id, children }: { title: string; coun
     <section id={id} className="grid gap-2">
       <h3 className="m-0 flex items-center gap-2 text-sm font-semibold text-ws-ink2">
         {title}
-        {count !== undefined && <span className="font-normal normal-case">{count}</span>}
-        {aside && <span className="ml-auto font-normal normal-case">{aside}</span>}
+        {count !== undefined && <span className="font-normal">{count}</span>}
+        {aside && <span className="ml-auto font-normal">{aside}</span>}
       </h3>
       {children}
     </section>

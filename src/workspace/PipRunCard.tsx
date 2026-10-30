@@ -93,7 +93,7 @@ export function PipRunStripView({ runs, now, workstream = null, dismissed, title
       <h3 className="m-0 flex items-baseline gap-1.5 text-sm font-semibold text-ws-ink2">
         Your agents <span data-strip-count className="font-normal">{more ? `${shown.length} of ${listed.length}` : shown.length}</span>
         {more && onSeeAll && (
-          <button type="button" onClick={onSeeAll} className="ml-auto font-semibold tracking-normal text-ws-accent normal-case hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
+          <button type="button" onClick={onSeeAll} className="ml-auto font-semibold text-ws-accent hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ws-pip">
             See all in Agents
           </button>
         )}

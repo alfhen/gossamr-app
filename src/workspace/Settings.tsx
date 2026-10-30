@@ -212,7 +212,7 @@ export function ConnectGithubCard({ connected }: { connected: boolean }) {
 function Section({ title, id, children }: { title: string; id?: string; children: ReactNode }) {
   return (
     <section id={id} className="scroll-mt-4 border-b border-ws-sep py-5">
-      <h2 className="m-0 mb-2.5 text-lg font-semibold">{title}</h2>
+      <h2 className="font-display m-0 mb-2.5 text-lg font-semibold">{title}</h2>
       {children}
     </section>
   );

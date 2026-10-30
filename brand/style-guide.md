@@ -132,7 +132,7 @@ The system font: `system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", san
 
 Two weights: regular and semibold (600). Bold is for counts in badges. Sentence case everywhere: titles, buttons, menus, labels. No all-caps and no letter-spacing on labels.
 
-Screen and sheet titles (Settings, Inbox, Work, the peek's ticket title, Pip's name in the pane) are set in SF Pro Rounded through `font-display` (`--font-display`), at the sizes above. Everything else stays in the system text face.
+Screen and sheet titles (the project title in the header, Settings and its sections, Inbox, Work, Connect GitHub, the peek's ticket and draft titles, Pip's name in the pane) are set in SF Pro Rounded through `font-display` (`--font-display`). Each keeps the size it already has (13 to 22 px); the size table is for body text. Group headings in the palette use the label style, `ws-ink2`. Status lozenges are 12 px. Everything else stays in the system text face.
 
 ### On gossamr.app
 
