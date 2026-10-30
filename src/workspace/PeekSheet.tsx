@@ -408,9 +408,9 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
         <div className="flex min-w-0 items-center gap-1.5 px-3 pt-2.5 text-xs text-ws-ink3">
           <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-ws-hover py-0.5 pr-1 pl-2">
             <span className="min-w-0 truncate">↩ Replying to <b className="font-semibold text-ws-ink2">{reply.to.who}</b></span>
-            <button type="button" aria-label="Cancel reply" title="Cancel reply" onClick={onCancelReply} className="grid size-4 shrink-0 place-items-center rounded-full leading-none hover:bg-ws-sel">
+            <Button variant="quiet" iconOnly size="sm" aria-label="Cancel reply" title="Cancel reply" onClick={onCancelReply} className="!size-4 shrink-0">
               ×
-            </button>
+            </Button>
           </span>
         </div>
       )}
@@ -475,7 +475,7 @@ export function WorkstreamControl({ workstream, onOpen, confirmingClose = false,
             }}
           >
             Close it? Its agents and drafts are kept in General. {CLOSE_RUNS_NOTE}
-            <Button variant="pip" size="sm" autoFocus onClick={onClose}>
+            <Button variant="quiet" destructive size="sm" autoFocus onClick={onClose}>
               Close workstream
             </Button>
             <Button variant="quiet" size="sm" onClick={() => onAskClose(false)}>

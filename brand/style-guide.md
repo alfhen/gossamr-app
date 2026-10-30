@@ -151,7 +151,7 @@ Keep a line of body text under about 70 characters.
 ## Space, shape and depth
 
 - **Spacing** steps by 4 px. Rows and controls mostly use 8 px gaps and 8 to 12 px side padding.
-- **Corners:** full rounding on controls, pills, badges and avatars; 6 to 7 px on rows and menu items; 10 px on cards; 14 to 16 px on sheets. The app icon's square uses the macOS shape.
+- **Corners:** full rounding on controls, pills, badges and avatars; 6 to 7 px (`rounded-md`) on rows and menu items; 10 px on cards; 14 to 16 px on sheets. The app icon's square uses the macOS shape.
 - **Lines, not boxes.** Separate with `ws-sep` hairlines. Use a border only where something is a distinct object (a card, a field, a draft).
 - **Shadow** on things that float: popovers, the palette, toasts, Pip's launcher (`shadow-ws-pop`). Controls sit just above their surface and cast a small one (`ctl-depth`). Lists and cards lie flat.
 - **Density:** the app is compact, like a Mac utility. The site can breathe: section padding of 96 to 128 px on desktop, 64 px on phones.
@@ -273,6 +273,7 @@ Buttons, toggles, segmented controls and search fields are silk glass, grouped i
 - **Plain in rows.** Glass is for bars, sheet headers and dialogs. In a list where the same actions repeat on every row, use `plain`: text and an icon until you point at it.
 - **Quiet for what was a link.** An action that used to be an underlined link ("Sync now", "Reset", "Dismiss") is `quiet`: plain text that takes the hover wash. A link that goes somewhere, such as a ticket key or a page on GitHub, stays a link.
 - **Icon-only buttons** use `iconOnly` and need an `aria-label`. They are square at the button's height.
+- **Raw buttons that stay:** links that go somewhere, card rows and image thumbnails keep their own styling. Anything else with a border, a fill or an underline uses `Button`.
 - **Groups.** Stop or remove actions stand alone, set apart from the group beside them, so they are hard to hit by accident. Mark them `destructive`; confirm with `danger`. Its label is white on the light red and dark ink on the lighter dark red (`ws-on-blocked`), so it reaches 4.5:1 in both themes.
 - **No blur on controls.** They draw the glass layers without `backdrop-filter`, which spares WebKit a compositing layer for each of a screen's buttons. Over a flat colour it looks the same.
 - **No glass on glass.** Inside `ws-glass` (the palette, menus, toasts, Pip's header) a control is a lens.
