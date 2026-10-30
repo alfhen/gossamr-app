@@ -349,20 +349,8 @@
   .glass-duo.solid .l .silk-glass { background: #fcfbfe; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .glass-duo.solid .d .silk-glass { background: #1c1b2a; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .gstage { min-height: 380px; }
-  .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; border-radius: 50%; display: grid; place-items: center; isolation: isolate; }
-  .orb::before { content: ""; position: absolute; inset: 0; padding: 1px; border-radius: inherit; pointer-events: none;
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
-  .orb svg { width: 40px; height: 26px; }
-  .l .orb { background: linear-gradient(rgb(55 208 192 / 0.1), rgb(55 208 192 / 0.1)), rgb(255 255 255 / var(--a));
-    -webkit-backdrop-filter: blur(6px) saturate(1.8) brightness(1.06); backdrop-filter: blur(6px) saturate(1.8) brightness(1.06);
-    box-shadow: inset 0 1px 1px rgb(255 255 255 / 0.75), 0 10px 26px rgb(11 138 134 / 0.25); }
-  .l .orb::before { background: linear-gradient(135deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.2) 40%, rgb(255 255 255 / 0.05) 60%, rgb(255 255 255 / 0.6)); }
-  .d .orb { background: linear-gradient(rgb(55 208 192 / 0.08), rgb(55 208 192 / 0.08)), rgb(20 19 29 / calc(var(--a) + 0.16));
-    -webkit-backdrop-filter: blur(8px) saturate(1.6) brightness(0.9); backdrop-filter: blur(8px) saturate(1.6) brightness(0.9);
-    box-shadow: inset 0 1px 1px rgb(55 208 192 / 0.3), 0 12px 32px rgb(0 0 0 / 0.5); }
-  .d .orb::before { background: linear-gradient(135deg, rgb(55 208 192 / 0.6), rgb(55 208 192 / 0.1) 40%, rgb(55 208 192 / 0.02) 60%, rgb(55 208 192 / 0.35)); }
-  .glass-duo.solid .l .orb { background: #fcfbfe; -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .glass-duo.solid .d .orb { background: #1c1b2a; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; display: grid; place-items: center; filter: drop-shadow(0 6px 8px rgb(91 75 209 / 0.35)); }
+  .orb svg { width: 56px; height: 36px; }
   .glass-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-top: 12px; font-size: 13px; color: var(--ink2); }
   .glass-ctl input[type=range] { width: 180px; accent-color: var(--accent); }
   .glass-ctl button { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); cursor: pointer; }
@@ -770,7 +758,7 @@
   </div>
 
   <h3>Silk glass</h3>
-  <p>For what floats above the work: the palette, menus, toasts, the Pip launcher and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never content.</p>
+  <p>For what floats above the work: the palette, menus, toasts, Pip's pane header and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never content.</p>
   <p>Like Liquid Glass, it is mostly clear: it takes its colour from what's behind it, blurs lightly so shapes show through, and catches light on its rim. The brand touch is a faint lavender tint, the colour of the silk G.</p>
   <div class="glass-duo" id="glassduo">
     <div class="gstage l">
@@ -822,7 +810,7 @@
     <li>Body: white at 22% (ink at 38% in dark) with a faint lavender tint. Blur 6 to 8 px, saturation up, so shapes and colour come through.</li>
     <li>Rim: a 1 px light, brightest at the top-left corner, fading along the sides, glowing again at the bottom-right. Plus a soft inner light along the top.</li>
     <li>Selection is a clearer lens inside the glass, with its own rim. Text is full-strength ink, medium weight.</li>
-    <li>Pip's launcher is the one teal glass: the same body and rim, tinted teal, with a teal glow beneath.</li>
+    <li>Pip's launcher is not glass: Pip hangs free on its thread over the glass and the work, with only its soft violet shadow.</li>
     <li>If text can't keep 4.5:1 over the worst content behind it, raise the body (white 55%, ink 60%) or go solid. Reduce transparency makes it solid.</li>
     <li>No refraction in the app: WebKit doesn't apply SVG filters in <code>backdrop-filter</code>. On the site, refraction is an enhancement for browsers that do, on the hero and navigation only.</li>
   </ul>
@@ -831,7 +819,7 @@
   <ol>
     <li><b>Tokens:</b> add the springs and the fall to <code>theme.css</code>, and move the popover and peek motions onto dew.</li>
     <li><b>Dew:</b> approve as a falling bead, skip as evaporation, the badge swell, the ripple.</li>
-    <li><b>Silk glass:</b> the palette and menus, then toasts and the launcher. Measure scrolling with a menu open first.</li>
+    <li><b>Silk glass:</b> the palette and menus, then toasts and Pip's pane header. Measure scrolling with a menu open first.</li>
     <li><b>Threads:</b> a hairline from Pip to each new draft, and menus that flow from their buttons.</li>
     <li><b>gossamr.app:</b> Pip drops into the G on the drop spring, glass navigation, refraction in the hero.</li>
   </ol>

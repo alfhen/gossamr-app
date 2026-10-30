@@ -295,7 +295,9 @@ Principle 3 holds: each of these is one element moving, and the follow-through a
 
 ### 3. Silk glass
 
-A material for the things that float above the work: the palette, menus, popovers, toasts, the Pip launcher and pane header, and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never for content.
+A material for the things that float above the work: the palette, menus, popovers, toasts, Pip's pane header and the Ask Pip chip, and the site's navigation. Lists, cards and reading text stay solid. Glass is for controls, never for content.
+
+Pip's launcher is not glass. Pip hangs free on its thread, with only its soft violet shadow, because Pip is a character, not a control in a frame.
 
 Liquid Glass is mostly clear. It takes its colour from what is behind it, blurs only lightly (6 to 8 px) so shapes still show through, and catches light on its rim. Silk glass follows that, with one brand touch: a faint lavender tint, the colour of the silk G.
 
@@ -328,7 +330,6 @@ Where it is used:
 | Rail watched-list popover | `ws-glass ws-glass-regular` |
 | Rail tooltips | `ws-glass ws-glass-regular` |
 | Toasts | `ws-glass ws-glass-regular` |
-| Pip launcher | `ws-glass ws-glass-pip` |
 | Ask Pip chip | `ws-glass ws-glass-pip ws-glass-regular` |
 | Pip pane header | `ws-glass ws-glass-pip ws-glass-regular` |
 
@@ -353,9 +354,9 @@ Under `prefers-reduced-motion`, none of the above moves. A bead doesn't fall; th
 
 1. **Tokens:** add the springs and `--fall` to `theme.css`, and move `ws-pop` and `ws-peek-*` onto `--spring-dew`. This is the smallest step, and the whole app already feels more fluid after it.
 2. **Dew:** approve as a falling bead, skip as evaporation, the badge swell and the ripple. One PR, with an e2e check that each still ends in the same state with reduced motion on.
-3. **Silk glass (done):** the palette and menus first, then toasts and the Pip launcher. Measure the scroll frame rate on a long list with a menu open before going further.
+3. **Silk glass (done):** the palette and menus first, then toasts and Pip's pane header. Measure the scroll frame rate on a long list with a menu open before going further.
 4. **Threads:** the line from Pip to a new draft, and the morph from source.
-5. **gossamr.app:** the hero's Pip drop on `--spring-drop`, refraction on the launcher-style glass, and the site's navigation in silk glass.
+5. **gossamr.app:** the hero's Pip drop on `--spring-drop`, refraction on the hero's glass, and the site's navigation in silk glass.
 
 Each step can be stopped without leaving the app half fluid: every step stands on its own.
 
