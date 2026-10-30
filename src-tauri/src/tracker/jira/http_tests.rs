@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::client::Jira;
 use super::JiraTracker;
-use crate::auth::{Account, Auth, Credentials, SiteScope, Site, Tokens};
+use crate::auth::{Account, Auth, Credentials, SiteScope, Site};
 use crate::codehost::github::testserver::{serve, Reply, Server};
 use crate::domain::{ContainerRef, Doc, Write, ItemRef};
 use crate::error::Error;
@@ -24,7 +24,9 @@ fn scope() -> SiteScope {
 
 fn auth(http: &reqwest::Client) -> Arc<Auth> {
     let credentials = Credentials {
-        tokens: Tokens { access_token: "tok".into(), refresh_token: "ref".into(), expires_at: u64::MAX / 2 },
+        email: "me@example.com".into(),
+        token: "tok".into(),
+        expires_on: "2999-01-01".into(),
         site: Site { cloud_id: "site".into(), name: "Site".into(), url: "https://site.atlassian.net".into() },
         me: Account { account_id: "me".into(), name: "Me".into(), avatar_url: None },
     };
@@ -275,4 +277,27 @@ async fn a_retry_after_given_as_a_past_date_retries_at_once() {
     .await;
     assert_eq!(client(&server).comments(&scope(), "CA-1").await.unwrap().len(), 3);
     assert_eq!(server.targets().len(), 2);
+}
+
+#[tokio::test]
+async fn every_request_goes_through_the_gateway_with_the_email_and_token_as_basic_auth() {
+    let server = serve(vec![(SEARCH, vec![Reply::ok(r#"{"issues":[]}"#)])]).await;
+    client(&server).search(&scope(), "x", None, 10).await.unwrap();
+    // me@example.com:tok
+    assert_eq!(server.header_of(0, "authorization").as_deref(), Some("Basic bWVAZXhhbXBsZS5jb206dG9r"));
+}
+
+#[tokio::test]
+async fn a_401_means_the_token_was_turned_down_and_is_not_retried() {
+    let server = serve(vec![(SEARCH, vec![Reply::status(401, "unauthorized")])]).await;
+    let err = client(&server).search(&scope(), "x", None, 10).await.err().unwrap();
+    assert!(err.needs_reauth(), "{err}");
+    assert_eq!(server.targets().len(), 1);
+}
+
+#[tokio::test]
+async fn a_401_about_a_missing_scope_says_so_instead_of_asking_for_a_new_sign_in() {
+    let server = serve(vec![(SEARCH, vec![Reply::status(401, r#"{"code":401,"message":"Unauthorized; scope does not match"}"#)])]).await;
+    let err = client(&server).search(&scope(), "x", None, 10).await.err().unwrap();
+    assert!(!err.needs_reauth() && err.to_string().contains("missing a scope"), "{err}");
 }

@@ -874,7 +874,7 @@ export interface WorkMove {
 }
 
 /** How a connection stands, from the last probe of its instance (`src-tauri/src/probe.rs`). */
-export type ProbeState = "ready" | "notSignedIn" | "notFound" | "error" | "off";
+export type ProbeState = "ready" | "expiresSoon" | "notSignedIn" | "notFound" | "error" | "off";
 
 export interface ProbeSnapshot {
   /** The command line tool the connection signs in through is there. */

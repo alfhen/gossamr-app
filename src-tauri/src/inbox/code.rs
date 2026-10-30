@@ -1199,11 +1199,11 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn nothing_is_adopted_while_the_saved_jira_session_cant_be_read_though_the_vault_can() {
+    async fn nothing_is_adopted_while_the_saved_jira_token_cant_be_read_though_the_vault_can() {
         let fake = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&fake);
         let fx = fixture(REPOS).await;
-        fake.deny_reads_of("session");
+        fake.deny_reads_of("jira-token");
         let core = Core::new(Arc::new(Auth::load(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker")), fx.dir.clone());
         core.adopt_instances().await;
         assert_eq!(crate::config::AppConfig::load(&fx.dir).version, 0);

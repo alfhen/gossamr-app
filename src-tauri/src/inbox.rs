@@ -7,7 +7,7 @@ use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
 use crate::connections::Binding;
-use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
+use crate::auth::{Account, Auth, AuthStatus, Scope, Site, TokenSignIn};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
@@ -158,7 +158,7 @@ pub struct ConnectionInfo {
     pub error: Option<String>,
     /// The error is a network failure that the next sync tries again, so it isn't worth interrupting anyone with.
     pub transient: bool,
-    /// Atlassian ended the sign-in, so signing in again is the only way to sync.
+    /// Jira turned down the API token, so a new one is the only way to sync.
     pub reauth: bool,
     /// What the last probe of the instance found, once there is one.
     pub status: Option<crate::probe::Snapshot>,
@@ -263,12 +263,12 @@ impl Core {
         self.data_dir.clone()
     }
 
-    /// Signs in and registers the resulting connection.
-    pub async fn sign_in(&self, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<AuthStatus> {
+    /// Signs in with an API token and registers the resulting connection.
+    pub async fn connect_jira(&self, input: &TokenSignIn) -> Result<AuthStatus> {
         let previous = self.auth.connection().await;
-        let connection = self.auth.sign_in(open_browser).await?;
+        let connection = self.auth.connect(input).await?;
         if let Some((_, site, _)) = self.auth.identity().await {
-            self.bind_instance(Binding::jira(&connection.id, &site.name, &site.url));
+            self.bind_instance(Binding::jira(&connection.id, &site.name, &site.url).with_email(input.email.trim()));
         }
         self.replace_connection(previous, connection);
         self.auth.status().await
@@ -863,13 +863,13 @@ mod tests {
 
     #[tokio::test]
     async fn signing_in_as_another_account_refuses_the_replaced_accounts_writes_to_the_app_database() {
-        use crate::auth::{Credentials, Tokens};
+        use crate::auth::Credentials;
 
         let fx = super::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
         let other = Account { account_id: "someone-else".into(), name: "Else".into(), avatar_url: None };
-        let creds = Credentials { tokens: Tokens { access_token: "t".into(), refresh_token: "r".into(), expires_at: u64::MAX / 2 }, site, me: other };
+        let creds = Credentials { email: "me@example.com".into(), token: "t".into(), expires_on: "2999-01-01".into(), site, me: other };
         let previous = fx.core.auth.connection().await;
         fx.core.replace_connection(previous, creds.connection());
 
@@ -1051,7 +1051,7 @@ pub(crate) mod testing {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::auth::{Credentials, Tokens};
+    use crate::auth::Credentials;
     use crate::domain::{Category, StatusDef, Transitions};
     use crate::tracker::testing::{sample_ticket, Recorder};
 
@@ -1197,7 +1197,7 @@ pub(crate) mod testing {
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
         let me = Account { account_id: "me".into(), name: "Me".into(), avatar_url: None };
-        let creds = Credentials { tokens: Tokens { access_token: "t".into(), refresh_token: "r".into(), expires_at: u64::MAX / 2 }, site, me };
+        let creds = Credentials { email: "me@example.com".into(), token: "t".into(), expires_on: "2999-01-01".into(), site, me };
         let scope = creds.scope();
         let http = reqwest::Client::new();
         let tracker = Arc::new(Recorder::default());

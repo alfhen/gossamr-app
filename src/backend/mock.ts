@@ -62,6 +62,7 @@ import { MockRuns, STOPPABLE } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
+import { jiraSnapshot } from "./mockProbes";
 import type { Backend, ReadScope } from "./types";
 
 export type { MockOptions };
@@ -357,6 +358,8 @@ export class MockBackend implements Backend {
 
   /** The multi-project tracker behind the cache reads. */
   readonly connector: MockConnector;
+  private readonly jiraToken: MockOptions["jiraToken"];
+
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
 
@@ -365,6 +368,7 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
+    this.jiraToken = options.jiraToken;
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
@@ -1070,7 +1074,9 @@ export class MockBackend implements Backend {
 
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
     if (refresh) this.github.recheck();
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null, transient: false, reauth: false, status: null };
+    const refused = this.jiraToken === "refused";
+    const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : null;
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status };
     return this.github.connected ? [sample, this.github.info()] : [sample];
   }
 
@@ -1184,8 +1190,6 @@ export class MockBackend implements Backend {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
-
-  async reconnectJira() {}
 
   async syncNow() {
     // A sync finds the draft pull requests builds opened.

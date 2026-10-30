@@ -426,10 +426,6 @@ export class JiraBackend implements Backend {
     return onChanged("assignedElsewhere", ({ connectionId, strays }) => listener({ connectionId, strays: strays ?? [] }));
   }
 
-  async reconnectJira() {
-    await invoke("sign_in");
-  }
-
   syncNow() {
     return invoke<void>("sync_now");
   }

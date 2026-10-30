@@ -1,13 +1,13 @@
-//! Sign-in behind an `Authenticator`, and the signed-in session Core reads credentials from.
+//! Jira sign-in behind an `Authenticator`, and the signed-in session Core reads credentials from.
 
 mod atlassian;
-mod callback;
 mod github;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use chrono::NaiveDate;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -18,22 +18,13 @@ use crate::tracker::Connection;
 pub use github::{find_gh_in, DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
 #[cfg(test)]
 pub use github::MemoryStore;
-pub use atlassian::{redirect_uri, Atlassian, ClientConfig, OAuthApp, SiteScope, SCOPES};
+pub use atlassian::{Atlassian, SiteScope};
 
-const SESSION_KEY: &str = "session";
-const REFRESH_MARGIN_SECS: u64 = 60;
-
-/// Where an OAuth app's client id and secret come from.
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClientSource {
-    /// Compiled into the build.
-    Bundled,
-    /// Supplied to the running app from its environment.
-    ManagedConfig,
-    /// Entered by the person on the setup screen and kept in the Keychain.
-    UserSupplied,
-}
+const TOKEN_KEY: &str = "jira-token";
+/// What an earlier build kept for Atlassian sign-in. Nothing reads these now.
+const RETIRED_KEYS: [&str; 2] = ["session", "oauth-app"];
+/// Days before a token's expiry that Gossamr starts saying so.
+pub const EXPIRY_WARNING_DAYS: i64 = 14;
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,46 +34,27 @@ pub struct TokenField {
     pub secret: bool,
 }
 
-/// A way to sign in, in the terms the setup screen needs. Only `OAuthCode` can be driven today.
+/// A way to sign in, in the terms the setup screen needs. GitHub offers all three until it signs in through `gh`.
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AuthMethod {
-    OAuthCode { client: ClientSource, pkce: bool },
     DeviceFlow { client_id: String },
     ApiToken { fields: Vec<TokenField> },
     /// Import the token the GitHub CLI holds, when the person asks.
     GhCli,
-    Broker { base_url: String },
 }
 
-impl AuthMethod {
-    fn is_supported(&self) -> bool {
-        matches!(self, AuthMethod::OAuthCode { .. })
-    }
-}
-
-/// The first offered method that can be driven. Connectors list their methods in order of preference.
-fn choose(methods: &[AuthMethod]) -> Result<&AuthMethod> {
-    methods.iter().find(|m| m.is_supported()).ok_or_else(|| Error::Auth("no sign-in method is available".into()))
-}
-
-/// A sign-in that has started and is waiting for the person.
-pub enum AuthChallenge {
-    /// Open `url` in a browser; the provider redirects back to the local listener.
-    Browser { url: String, loopback: callback::Loopback },
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Tokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub expires_at: u64,
-}
-
-impl Tokens {
-    pub fn needs_refresh(&self, now: u64) -> bool {
-        self.expires_at <= now + REFRESH_MARGIN_SECS
-    }
+/// What the Connect Jira sheet sends.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenSignIn {
+    pub site: String,
+    /// Only when the site wouldn't give it.
+    pub cloud_id: Option<String>,
+    pub email: String,
+    pub token: String,
+    /// `YYYY-MM-DD`. Atlassian doesn't report a token's expiry, so this is what the person says it is.
+    pub expires_on: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -101,10 +73,12 @@ pub struct Account {
     pub avatar_url: Option<String>,
 }
 
-/// What a sign-in leaves in the Keychain. The field names are the stored format, so existing sign-ins carry over.
+/// What a sign-in leaves in the Keychain.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credentials {
-    pub tokens: Tokens,
+    pub email: String,
+    pub token: String,
+    pub expires_on: String,
     pub site: Site,
     pub me: Account,
 }
@@ -125,15 +99,11 @@ impl Credentials {
 
 #[async_trait]
 pub trait Authenticator: Send + Sync {
-    /// The methods on offer, most preferred first.
-    fn methods(&self) -> Vec<AuthMethod>;
+    /// The cloud id `site` reports about itself, or `None` when it doesn't say.
+    async fn find_cloud_id(&self, site: &str) -> Result<Option<String>>;
 
-    async fn begin(&self, method: &AuthMethod) -> Result<AuthChallenge>;
-
-    async fn complete(&self, challenge: AuthChallenge) -> Result<Credentials>;
-
-    /// Fresh credentials for the same site and account. Refresh tokens rotate, so the caller must keep the result.
-    async fn refresh(&self, current: &Credentials) -> Result<Credentials>;
+    /// Checks the token against Jira and returns what to keep.
+    async fn connect(&self, input: &TokenSignIn) -> Result<Credentials>;
 
     /// Who `token` signs in as, which also proves it still works.
     async fn whoami(&self, token: &AccessToken) -> Result<Account>;
@@ -142,11 +112,10 @@ pub trait Authenticator: Send + Sync {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatus {
-    pub configured: bool,
-    pub callback_url: String,
-    pub scopes: &'static str,
     pub site: Option<Site>,
     pub me: Option<Account>,
+    pub email: Option<String>,
+    pub expires_on: Option<String>,
 }
 
 /// The signed-in connection and account a piece of work belongs to. Work started for one scope is refused once the
@@ -160,13 +129,13 @@ pub struct Scope {
 
 /// What the Jira client needs for one request.
 pub struct AccessToken {
-    pub access_token: String,
+    pub email: String,
+    pub token: String,
     pub scope: SiteScope,
 }
 
 pub struct Auth {
     authenticator: Arc<dyn Authenticator>,
-    client: ClientConfig,
     session: Mutex<Option<Credentials>>,
     restore_failed: bool,
 }
@@ -174,15 +143,21 @@ pub struct Auth {
 impl Auth {
     /// Restores the saved session. If the Keychain can't be read, the app starts signed out rather than failing.
     pub fn load(http: reqwest::Client) -> Self {
-        let (session, restore_failed) = match secrets::load(SESSION_KEY) {
+        let (session, restore_failed) = match secrets::load(TOKEN_KEY) {
             Ok(session) => (session, false),
             Err(e) => {
-                eprintln!("couldn't restore the saved Jira session: {e}");
+                eprintln!("couldn't restore the saved Jira token: {e}");
                 (None, true)
             }
         };
-        let client = ClientConfig;
-        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(session), restore_failed }
+        if session.is_none() && !restore_failed {
+            for key in RETIRED_KEYS {
+                if let Err(e) = secrets::delete(key) {
+                    eprintln!("couldn't remove the old Atlassian sign-in ({key}): {e}");
+                }
+            }
+        }
+        Self { authenticator: Arc::new(Atlassian::new(http)), session: Mutex::new(session), restore_failed }
     }
 
     /// Whether the saved session was there but couldn't be read, so a signed-out `Auth` doesn't mean nobody was signed in.
@@ -192,51 +167,44 @@ impl Auth {
 
     #[cfg(test)]
     pub fn signed_out(http: reqwest::Client) -> Self {
-        let client = ClientConfig;
-        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(None), restore_failed: false }
+        Self { authenticator: Arc::new(Atlassian::new(http)), session: Mutex::new(None), restore_failed: false }
     }
 
     #[cfg(test)]
     pub fn with_authenticator(authenticator: Arc<dyn Authenticator>, credentials: Credentials) -> Self {
-        Self { authenticator, client: ClientConfig, session: Mutex::new(Some(credentials)), restore_failed: false }
+        Self { authenticator, session: Mutex::new(Some(credentials)), restore_failed: false }
     }
 
     #[cfg(test)]
     pub fn signed_in(http: reqwest::Client, credentials: Credentials) -> Self {
-        let client = ClientConfig;
-        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(Some(credentials)), restore_failed: false }
+        Self::with_authenticator(Arc::new(Atlassian::new(http)), credentials)
     }
 
     pub async fn status(&self) -> Result<AuthStatus> {
         let session = self.session.lock().await;
         Ok(AuthStatus {
-            configured: self.client.resolve()?.is_some(),
-            callback_url: redirect_uri(),
-            scopes: SCOPES,
             site: session.as_ref().map(|s| s.site.clone()),
             me: session.as_ref().map(|s| s.me.clone()),
+            email: session.as_ref().map(|s| s.email.clone()),
+            expires_on: session.as_ref().map(|s| s.expires_on.clone()),
         })
     }
 
-    pub fn save_app(&self, app: OAuthApp) -> Result<()> {
-        self.client.save(app)
+    pub async fn find_cloud_id(&self, site: &str) -> Result<Option<String>> {
+        self.authenticator.find_cloud_id(site).await
     }
 
-    /// Runs the sign-in the connector prefers: `open_browser` is given the page the person must visit.
-    pub async fn sign_in(&self, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<Connection> {
-        let methods = self.authenticator.methods();
-        let challenge = self.authenticator.begin(choose(&methods)?).await?;
-        let AuthChallenge::Browser { url, .. } = &challenge;
-        open_browser(url)?;
-        let credentials = self.authenticator.complete(challenge).await?;
-        secrets::save(SESSION_KEY, &credentials)?;
+    /// Checks `input` against Jira and, only if it works, keeps it in place of any earlier sign-in.
+    pub async fn connect(&self, input: &TokenSignIn) -> Result<Connection> {
+        let credentials = self.authenticator.connect(input).await?;
+        secrets::save(TOKEN_KEY, &credentials)?;
         let connection = credentials.connection();
         *self.session.lock().await = Some(credentials);
         Ok(connection)
     }
 
     pub async fn sign_out(&self) -> Result<()> {
-        secrets::delete(SESSION_KEY)?;
+        secrets::delete(TOKEN_KEY)?;
         *self.session.lock().await = None;
         Ok(())
     }
@@ -251,37 +219,25 @@ impl Auth {
         self.session.lock().await.as_ref().map(Credentials::connection)
     }
 
-    /// Asks Jira who the saved session signs in as, and gives up on Jira's answer after `within` (`None`).
-    /// Only that wait is bounded: a refresh in progress is never cut short, because Atlassian has already rotated the
-    /// refresh token by the time its answer is lost. A 401 gets one forced refresh, as `JiraClient` does.
+    /// The day the saved token expires, as the person said.
+    pub async fn expires_on(&self) -> Option<NaiveDate> {
+        let session = self.session.lock().await;
+        NaiveDate::parse_from_str(&session.as_ref()?.expires_on, "%Y-%m-%d").ok()
+    }
+
+    /// Asks Jira who the saved token signs in as, and gives up on Jira's answer after `within` (`None`).
     pub async fn whoami(&self, within: Duration) -> Option<Result<Account>> {
-        let token = match self.credentials(false).await {
+        let token = match self.credentials().await {
             Ok(token) => token,
             Err(e) => return Some(Err(e)),
         };
-        match tokio::time::timeout(within, self.authenticator.whoami(&token)).await {
-            Ok(Err(Error::Api { status: 401, .. })) => {
-                let token = match self.credentials(true).await {
-                    Ok(token) => token,
-                    Err(e) => return Some(Err(e)),
-                };
-                tokio::time::timeout(within, self.authenticator.whoami(&token)).await.ok()
-            }
-            answered => answered.ok(),
-        }
+        tokio::time::timeout(within, self.authenticator.whoami(&token)).await.ok()
     }
 
-    /// Returns a valid access token, refreshing it when it is about to expire or when `force` is set (after a 401).
-    pub async fn credentials(&self, force: bool) -> Result<AccessToken> {
-        // Holding the lock across the refresh stops concurrent requests from spending the same rotating refresh token twice.
-        let mut guard = self.session.lock().await;
-        let session = guard.as_mut().ok_or(Error::NotSignedIn)?;
-        if force || session.tokens.needs_refresh(unix_now()) {
-            let fresh = self.authenticator.refresh(session).await?;
-            secrets::save(SESSION_KEY, &fresh)?;
-            *session = fresh;
-        }
-        Ok(AccessToken { access_token: session.tokens.access_token.clone(), scope: session.site_scope() })
+    pub async fn credentials(&self) -> Result<AccessToken> {
+        let session = self.session.lock().await;
+        let session = session.as_ref().ok_or(Error::NotSignedIn)?;
+        Ok(AccessToken { email: session.email.clone(), token: session.token.clone(), scope: session.site_scope() })
     }
 }
 
@@ -301,50 +257,16 @@ fn unix_now() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
-
-    fn oauth() -> AuthMethod {
-        AuthMethod::OAuthCode { client: ClientSource::Bundled, pkce: false }
-    }
-
-    #[test]
-    fn refreshes_a_minute_before_expiry() {
-        let t = Tokens { access_token: "a".into(), refresh_token: "r".into(), expires_at: 1_000 };
-        assert!(!t.needs_refresh(900));
-        assert!(t.needs_refresh(941));
-    }
-
-    #[test]
-    fn the_first_method_that_can_be_driven_is_chosen() {
-        let token = AuthMethod::ApiToken { fields: vec![] };
-        assert_eq!(choose(&[token.clone(), oauth()]).unwrap(), &oauth());
-        assert_eq!(choose(&[oauth(), token]).unwrap(), &oauth());
-    }
-
-    #[test]
-    fn no_drivable_method_is_an_error() {
-        let methods = [AuthMethod::Broker { base_url: "https://broker.invalid".into() }, AuthMethod::DeviceFlow { client_id: "x".into() }];
-        assert!(matches!(choose(&methods), Err(Error::Auth(_))));
-        assert!(choose(&[]).is_err());
-    }
-
-    #[test]
-    fn a_stored_session_from_before_this_layout_still_parses() {
-        let stored = r#"{"tokens":{"access_token":"a","refresh_token":"r","expires_at":5},
-            "site":{"cloudId":"c1","name":"Acme","url":"https://acme.atlassian.net"},
-            "me":{"accountId":"u1","name":"Ann","avatarUrl":null}}"#;
-        let c: Credentials = serde_json::from_str(stored).unwrap();
-        let connection = c.connection();
-        assert_eq!(connection.id, "jira:c1:u1");
-        assert_eq!(connection.display_name, "Acme");
-        assert_eq!(c.scope(), Scope { connection_id: "jira:c1:u1".into(), account_id: "u1".into() });
-        assert_eq!(c.site_scope(), SiteScope { cloud_id: "c1".into(), account_id: "u1".into() });
-    }
 
     fn credentials() -> Credentials {
         Credentials {
-            tokens: Tokens { access_token: "a".into(), refresh_token: "r".into(), expires_at: u64::MAX },
-            site: Site { cloud_id: "c1".into(), name: "Acme".into(), url: "https://acme.atlassian.net".into() },
+            email: "ann@acme.com".into(),
+            token: "secret-token".into(),
+            expires_on: "2027-10-30".into(),
+            site: Site { cloud_id: "c1".into(), name: "acme.atlassian.net".into(), url: "https://acme.atlassian.net".into() },
             me: Account { account_id: "u1".into(), name: "Ann".into(), avatar_url: None },
         }
     }
@@ -362,11 +284,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_saved_token_names_its_connection_after_the_site_and_the_account() {
+        let c = credentials();
+        assert_eq!(c.connection().id, "jira:c1:u1");
+        assert_eq!(c.connection().display_name, "acme.atlassian.net");
+        assert_eq!(c.scope(), Scope { connection_id: "jira:c1:u1".into(), account_id: "u1".into() });
+        assert_eq!(c.site_scope(), SiteScope { cloud_id: "c1".into(), account_id: "u1".into() });
+    }
+
     fn restore_everything() -> (bool, usize) {
         let http = reqwest::Client::new();
         let auth = Auth::load(http.clone());
         let signed_in = auth.session.try_lock().unwrap().is_some();
-        ClientConfig.resolve().ok();
         let restored = GithubAuth::new(http, Arc::new(KeychainStore)).restore();
         (signed_in, restored.len())
     }
@@ -375,8 +305,7 @@ mod tests {
     fn a_normal_launch_reads_the_keychain_once_and_writes_nothing() {
         let fake = secrets::fake::Fake::default();
         let _installed = secrets::fake::install(&fake);
-        secrets::save(SESSION_KEY, &credentials()).unwrap();
-        secrets::save("oauth-app", &OAuthApp { client_id: "id".into(), client_secret: "secret".into() }).unwrap();
+        secrets::save(TOKEN_KEY, &credentials()).unwrap();
         let store = KeychainStore;
         store.save(&github("ann")).unwrap();
         store.save(&github("bob")).unwrap();
@@ -388,21 +317,23 @@ mod tests {
     }
 
     #[test]
-    fn launching_after_the_old_layout_migrates_once_then_reads_once() {
+    fn launching_with_only_the_old_atlassian_sign_in_starts_signed_out_and_forgets_it() {
         let fake = secrets::fake::Fake::default();
         let _installed = secrets::fake::install(&fake);
-        fake.put("session", &serde_json::to_string(&credentials()).unwrap());
-        fake.put("github-logins", r#"["ann","bob"]"#);
+        let old = r#"{"tokens":{"access_token":"a","refresh_token":"r","expires_at":5},"site":{"cloudId":"c1","name":"Acme","url":"https://acme.atlassian.net"},"me":{"accountId":"u1","name":"Ann","avatarUrl":null}}"#;
+        fake.put("session", old);
+        fake.put("oauth-app", r#"{"client_id":"id","client_secret":"secret"}"#);
+        fake.put("github-logins", r#"["ann"]"#);
         fake.put("github:ann", &serde_json::to_string(&github("ann")).unwrap());
-        fake.put("github:bob", &serde_json::to_string(&github("bob")).unwrap());
-        assert_eq!(restore_everything(), (true, 2));
-        for old in ["session", "github-logins", "github:ann", "github:bob"] {
-            assert_eq!(fake.get(old), None);
+        assert_eq!(restore_everything(), (false, 1));
+        for retired in ["session", "oauth-app"] {
+            assert_eq!(fake.get(retired), None);
+            assert!(secrets::load::<Value>(retired).unwrap().is_none());
         }
 
         let _relaunched = secrets::fake::install(&fake);
         fake.reset_counts();
-        assert_eq!(restore_everything(), (true, 2));
+        assert_eq!(restore_everything(), (false, 1));
         assert_eq!((fake.reads(), fake.writes()), (1, 0));
     }
 
@@ -415,31 +346,22 @@ mod tests {
         assert_eq!(fake.reads(), 1);
     }
 
-    /// Refreshes slowly into tokens "b"/"rotated"; `/myself` accepts only "b" unless `any_token`, and takes `answer_after`.
+    /// Knows only `ann@acme.com`, answers after `answer_after`, and keeps no state.
     struct Slow {
-        refresh_takes: Duration,
         answer_after: Duration,
-        any_token: bool,
     }
 
     #[async_trait]
     impl Authenticator for Slow {
-        fn methods(&self) -> Vec<AuthMethod> {
-            Vec::new()
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
         }
-        async fn begin(&self, _: &AuthMethod) -> Result<AuthChallenge> {
-            unimplemented!()
-        }
-        async fn complete(&self, _: AuthChallenge) -> Result<Credentials> {
-            unimplemented!()
-        }
-        async fn refresh(&self, current: &Credentials) -> Result<Credentials> {
-            tokio::time::sleep(self.refresh_takes).await;
-            Ok(Credentials { tokens: Tokens { access_token: "b".into(), refresh_token: "rotated".into(), expires_at: u64::MAX }, ..current.clone() })
+        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
+            Ok(credentials())
         }
         async fn whoami(&self, token: &AccessToken) -> Result<Account> {
             tokio::time::sleep(self.answer_after).await;
-            if self.any_token || token.access_token == "b" {
+            if token.token == "secret-token" {
                 Ok(credentials().me)
             } else {
                 Err(Error::Api { status: 401, message: "revoked".into() })
@@ -447,37 +369,68 @@ mod tests {
         }
     }
 
-    fn auth_with(authenticator: Slow, expires_at: u64) -> Auth {
-        let mut session = credentials();
-        session.tokens.expires_at = expires_at;
-        Auth::with_authenticator(Arc::new(authenticator), session)
-    }
-
-    #[tokio::test]
-    async fn a_refresh_the_probe_started_finishes_and_is_saved_even_when_it_outlasts_the_probe_s_timeout() {
-        let fake = secrets::fake::Fake::default();
-        let _vault = secrets::fake::install(&fake);
-        let auth = auth_with(Slow { refresh_takes: Duration::from_millis(150), answer_after: Duration::ZERO, any_token: true }, 0);
-        let seen = auth.whoami(Duration::from_millis(30)).await;
-        assert_eq!(seen.map(|r| r.unwrap().name), Some("Ann".into()));
-        assert_eq!(secrets::load::<Credentials>(SESSION_KEY).unwrap().unwrap().tokens.refresh_token, "rotated");
-    }
-
     #[tokio::test]
     async fn jira_not_answering_in_time_is_none_and_leaves_the_session_as_it_was() {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
-        let auth = auth_with(Slow { refresh_takes: Duration::ZERO, answer_after: Duration::from_secs(30), any_token: true }, u64::MAX);
+        let auth = Auth::with_authenticator(Arc::new(Slow { answer_after: Duration::from_secs(30) }), credentials());
         assert!(auth.whoami(Duration::from_millis(30)).await.is_none());
+        assert!(auth.identity().await.is_some());
         assert_eq!(fake.writes(), 0);
     }
 
     #[tokio::test]
-    async fn a_token_jira_refuses_is_refreshed_once_before_the_session_counts_as_ended() {
+    async fn connecting_keeps_the_token_in_the_keychain_and_replaces_the_earlier_session() {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
-        let auth = auth_with(Slow { refresh_takes: Duration::ZERO, answer_after: Duration::ZERO, any_token: false }, u64::MAX);
-        assert_eq!(auth.whoami(Duration::from_secs(5)).await.map(|r| r.unwrap().name), Some("Ann".into()));
-        assert_eq!(secrets::load::<Credentials>(SESSION_KEY).unwrap().unwrap().tokens.refresh_token, "rotated");
+        let auth = Auth::with_authenticator(Arc::new(Slow { answer_after: Duration::ZERO }), Credentials { token: "old".into(), ..credentials() });
+        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "secret-token".into(), expires_on: "2027-10-30".into() };
+        assert_eq!(auth.connect(&input).await.unwrap().id, "jira:c1:u1");
+        assert_eq!(secrets::load::<Credentials>(TOKEN_KEY).unwrap().unwrap().token, "secret-token");
+        assert_eq!(auth.credentials().await.unwrap().token, "secret-token");
+    }
+
+    struct Refusing;
+
+    #[async_trait]
+    impl Authenticator for Refusing {
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
+            Err(Error::Auth("Jira didn't accept that email and token.".into()))
+        }
+        async fn whoami(&self, _: &AccessToken) -> Result<Account> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_that_does_not_work_leaves_the_earlier_session_and_the_keychain_alone() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        secrets::save(TOKEN_KEY, &credentials()).unwrap();
+        let auth = Auth::with_authenticator(Arc::new(Refusing), credentials());
+        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "x".into(), token: "bad".into(), expires_on: "2027-10-30".into() };
+        assert!(auth.connect(&input).await.is_err());
+        assert_eq!(auth.credentials().await.unwrap().token, "secret-token");
+        assert_eq!(secrets::load::<Credentials>(TOKEN_KEY).unwrap().unwrap().token, "secret-token");
+    }
+
+    #[tokio::test]
+    async fn signing_out_forgets_the_token() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        secrets::save(TOKEN_KEY, &credentials()).unwrap();
+        let auth = Auth::with_authenticator(Arc::new(Refusing), credentials());
+        auth.sign_out().await.unwrap();
+        assert!(matches!(auth.credentials().await, Err(Error::NotSignedIn)));
+        assert!(secrets::load::<Credentials>(TOKEN_KEY).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_expiry_day_is_what_the_person_said() {
+        let auth = Auth::with_authenticator(Arc::new(Refusing), credentials());
+        assert_eq!(auth.expires_on().await, NaiveDate::from_ymd_opt(2027, 10, 30));
     }
 }

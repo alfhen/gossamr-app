@@ -101,8 +101,8 @@ impl Jira {
 
     /// Sends one request as `scope`. It is refused before sending if the signed-in site or account is no longer
     /// `scope`, so work started for one account can never read or write as another. `build` may run several times:
-    /// a 401 is retried once with a refreshed token, and a 429 (or a 503 that says when to come back) is retried after
-    /// the wait Jira asks for, up to a few times, then reported as `RateLimited`.
+    /// a 429 (or a 503 that says when to come back) is retried after the wait Jira asks for, up to a few times, then
+    /// reported as `RateLimited`. A 401 means the token was revoked or has expired, and is `ReauthRequired`.
     async fn send(
         &self,
         client: &reqwest::Client,
@@ -111,19 +111,16 @@ impl Jira {
         path: &str,
         build: impl Fn(RequestBuilder) -> RequestBuilder,
     ) -> Result<reqwest::Response> {
-        let mut force_refresh = false;
         let mut limited = 0;
         loop {
-            let creds = self.auth.credentials(force_refresh).await?;
+            let creds = self.auth.credentials().await?;
             if &creds.scope != scope {
                 return Err(Error::SiteChanged);
             }
             let url = format!("{}/ex/jira/{}/rest/api/3/{path}", self.base, scope.cloud_id);
-            let res = build(client.request(method.clone(), url).bearer_auth(&creds.access_token)).send().await?;
-            // A token can be revoked or rotated elsewhere before it expires; refresh once and retry.
-            if res.status() == StatusCode::UNAUTHORIZED && !force_refresh {
-                force_refresh = true;
-                continue;
+            let res = build(client.request(method.clone(), url).basic_auth(&creds.email, Some(&creds.token))).send().await?;
+            if res.status() == StatusCode::UNAUTHORIZED {
+                return Err(unauthorized(res).await);
             }
             if let Some(wait) = rate_limit_wait(&res, limited) {
                 if limited >= RATE_RETRIES || wait > MAX_INLINE_WAIT_SECS {
@@ -561,6 +558,16 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
 }
 
 /// How long Jira wants us to wait, when the response is a rate limit: a 429, or a 503 that carries `Retry-After`.
+/// A 401 means the token was revoked or has expired, unless Atlassian says the token lacks a scope: a new sign-in
+/// would not fix that, so the sync error says what to do instead of raising the banner.
+async fn unauthorized(res: reqwest::Response) -> Error {
+    let body = res.text().await.unwrap_or_default();
+    if body.to_ascii_lowercase().contains("scope does not match") {
+        return Error::Api { status: 401, message: "the token is missing a scope this needs. Make a new token with all three scopes".into() };
+    }
+    Error::ReauthRequired
+}
+
 /// Without the header the wait doubles per attempt, as Atlassian advises.
 fn rate_limit_wait(res: &reqwest::Response, attempt: u32) -> Option<u64> {
     let asked = res.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| retry_after_secs(v, Utc::now()));

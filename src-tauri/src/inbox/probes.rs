@@ -84,7 +84,7 @@ impl Core {
             return Snapshot::off();
         }
         match instance.kind {
-            ConnectionKind::Jira => probe::jira(self.auth.whoami(probe::TIMEOUT).await),
+            ConnectionKind::Jira => probe::jira(self.auth.whoami(probe::TIMEOUT).await, self.auth.expires_on().await, chrono::Local::now().date_naive()),
             ConnectionKind::Github => {
                 let host = instance.config.host.as_deref().unwrap_or("github.com");
                 probe::github(self.code.auth.gh_dirs(), host, instance.config.login.as_deref().unwrap_or_default(), probe::TIMEOUT).await
@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use crate::auth::GithubAuth;
     use crate::connections::{self, Binding};
-    use crate::auth::{AccessToken, Account, AuthChallenge, AuthMethod, Authenticator, Credentials};
+    use crate::auth::{AccessToken, Account, Authenticator, Credentials, TokenSignIn};
     use crate::error::{Error, Result};
     use crate::inbox::testing::{fixture_with, fixture_with_authenticator};
     use crate::inbox::CodeService;
@@ -136,17 +136,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Authenticator for Jira {
-        fn methods(&self) -> Vec<AuthMethod> {
-            Vec::new()
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
         }
-        async fn begin(&self, _: &AuthMethod) -> Result<AuthChallenge> {
+        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
             unimplemented!()
-        }
-        async fn complete(&self, _: AuthChallenge) -> Result<Credentials> {
-            unimplemented!()
-        }
-        async fn refresh(&self, _: &Credentials) -> Result<Credentials> {
-            Err(Error::ReauthRequired)
         }
         async fn whoami(&self, _: &AccessToken) -> Result<Account> {
             self.asked.notify_one();

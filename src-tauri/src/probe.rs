@@ -8,7 +8,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-use crate::auth::find_gh_in;
+use chrono::NaiveDate;
+
+use crate::auth::{find_gh_in, EXPIRY_WARNING_DAYS};
 use crate::error::Error;
 
 /// A probe that takes longer is reported as a failure: `gh` can sit on a Keychain prompt.
@@ -21,6 +23,8 @@ const GH_OVERRIDES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"];
 #[serde(rename_all = "camelCase")]
 pub enum State {
     Ready,
+    /// Works, but the API token is within `EXPIRY_WARNING_DAYS` of the expiry date the person gave.
+    ExpiresSoon,
     NotSignedIn,
     /// The command line tool isn't installed.
     NotFound,
@@ -70,12 +74,21 @@ impl Snapshot {
     }
 }
 
-pub fn jira(outcome: Option<crate::error::Result<crate::auth::Account>>) -> Snapshot {
+/// `expires_on` is the date the person gave when they pasted the token; Atlassian doesn't report it.
+pub fn jira(outcome: Option<crate::error::Result<crate::auth::Account>>, expires_on: Option<NaiveDate>, today: NaiveDate) -> Snapshot {
     match outcome {
         None => Snapshot::new(State::Error, "Jira didn't answer in time."),
-        Some(Ok(me)) => Snapshot { account: Some(me.name.clone()), ..Snapshot::new(State::Ready, format!("Signed in as {}", me.name)) },
+        Some(Ok(me)) => {
+            let account = Some(me.name.clone());
+            let days_left = expires_on.map(|on| (on - today).num_days()).filter(|days| *days <= EXPIRY_WARNING_DAYS);
+            match (days_left, expires_on) {
+                (Some(days), Some(on)) if days < 0 => Snapshot { account, ..Snapshot::new(State::ExpiresSoon, format!("Token was due to expire on {}. Make a new one and paste it here.", on.format("%-d %b"))) },
+                (Some(days), _) => Snapshot { account, ..Snapshot::new(State::ExpiresSoon, format!("Token expires in {days} {}", if days == 1 { "day" } else { "days" })) },
+                (None, _) => Snapshot { account, ..Snapshot::new(State::Ready, format!("Signed in as {}", me.name)) },
+            }
+        }
         Some(Err(Error::NotSignedIn)) => Snapshot::new(State::NotSignedIn, "Not signed in to Jira."),
-        Some(Err(e)) if e.needs_reauth() || matches!(e, Error::Api { status: 401, .. }) => Snapshot::new(State::NotSignedIn, "Atlassian ended the sign-in."),
+        Some(Err(e)) if e.needs_reauth() || matches!(e, Error::Api { status: 401, .. }) => Snapshot::new(State::NotSignedIn, "Jira turned down your token. Make a new one and paste it here."),
         Some(Err(e)) => Snapshot::new(State::Error, e.to_string()),
     }
 }
@@ -264,6 +277,16 @@ mod tests {
         Account { account_id: "u1".into(), name: "Ann".into(), avatar_url: None }
     }
 
+    const TODAY: NaiveDate = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+
+    fn jira_until(outcome: Option<crate::error::Result<Account>>, expires_on: Option<&str>) -> Snapshot {
+        super::jira(outcome, expires_on.map(|d| d.parse().unwrap()), TODAY)
+    }
+
+    fn jira(outcome: Option<crate::error::Result<Account>>) -> Snapshot {
+        jira_until(outcome, Some("2027-10-30"))
+    }
+
     #[test]
     fn jira_answering_for_the_saved_session_is_ready_as_that_account() {
         let seen = jira(Some(Ok(me())));
@@ -277,6 +300,21 @@ mod tests {
         }
         assert_eq!(jira(Some(Err(Error::Api { status: 503, message: "down".into() }))).state, State::Error);
         assert_eq!(jira(None).state, State::Error);
+    }
+
+    #[test]
+    fn a_token_within_two_weeks_of_its_expiry_says_how_many_days_are_left_and_still_works() {
+        let seen = jira_until(Some(Ok(me())), Some("2026-11-13"));
+        assert_eq!((seen.state, seen.message.as_str(), seen.account.as_deref()), (State::ExpiresSoon, "Token expires in 14 days", Some("Ann")));
+        assert_eq!(jira_until(Some(Ok(me())), Some("2026-10-31")).message, "Token expires in 1 day");
+        assert_eq!(jira_until(Some(Ok(me())), Some("2026-11-14")).state, State::Ready);
+        assert_eq!(jira_until(Some(Ok(me())), None).state, State::Ready);
+    }
+
+    #[test]
+    fn a_token_past_the_date_the_person_gave_but_still_accepted_asks_for_a_new_one() {
+        let seen = jira_until(Some(Ok(me())), Some("2026-10-02"));
+        assert_eq!((seen.state, seen.message.as_str()), (State::ExpiresSoon, "Token was due to expire on 2 Oct. Make a new one and paste it here."));
     }
 
     #[test]
