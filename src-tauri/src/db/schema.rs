@@ -543,16 +543,23 @@ fn own_sessions(json: Option<String>) -> Vec<String> {
 /// Copies the app state a cache file holds into the app database, once per cache file, then retires the drafts the
 /// cache still shows as open so a release from before the move cannot post them a second time. The cache keeps its
 /// rows: a later step deletes them, after a release has run on the copy. Needs the cache attached as `cache`. Returns
-/// the ids of the copied drafts that were mid-post when the cache was last written.
-pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Vec<String>> {
+/// what the cache held that a closed app left half done.
+pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Adopted> {
     let marker = format!("copied:{cache_file}");
     let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?;
     if copied.is_some() {
-        return Ok(Vec::new());
+        return Ok(Adopted::default());
     }
     let tx = conn.unchecked_transaction()?;
     let mut held = Vec::new();
-    let mut interrupted = Vec::new();
+    let mut adopted = Adopted::default();
+    if has_cached_table(&tx, "pip_turns")? {
+        let mut stmt = tx.prepare(
+            "SELECT request_id FROM cache.pip_turns WHERE role = 'pip' AND status IN ('running', 'queued')
+             AND request_id NOT IN (SELECT request_id FROM main.pip_turns WHERE role = 'pip')",
+        )?;
+        adopted.pip_turns = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    }
     for table in APP_TABLES {
         let mut stmt = tx.prepare(&format!("SELECT name FROM pragma_table_info('{table}', 'cache')"))?;
         let columns = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join(", ");
@@ -567,7 +574,7 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Vec
     }
     if held.contains(&"proposals") {
         let mut stmt = tx.prepare("SELECT id FROM cache.proposals WHERE state = 'applying'")?;
-        interrupted = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        adopted.applying = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
         drop(stmt);
         tx.execute(
             "UPDATE cache.proposals SET state = 'retired', data = json_set(data, '$.state', json_object('type', 'retired', 'reason', ?1))
@@ -577,7 +584,19 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Vec
     }
     tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
     tx.commit()?;
-    Ok(interrupted)
+    Ok(adopted)
+}
+
+/// What `adopt_cached_app_state` copied that was cut off when the cache was last written: drafts mid-post and Pip
+/// turns running or queued, by id.
+#[derive(Default)]
+pub struct Adopted {
+    pub applying: Vec<String>,
+    pub pip_turns: Vec<String>,
+}
+
+fn has_cached_table(conn: &Connection, table: &str) -> Result<bool> {
+    Ok(conn.query_row("SELECT 1 FROM cache.sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(())).optional()?.is_some())
 }
 
 fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {

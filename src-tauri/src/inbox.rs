@@ -259,12 +259,22 @@ impl Core {
 
     /// Signs in and registers the resulting connection.
     pub async fn sign_in(&self, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<AuthStatus> {
+        let previous = self.auth.connection().await;
         let connection = self.auth.sign_in(open_browser).await?;
         if let Some((_, site, _)) = self.auth.identity().await {
             self.bind_instance(Binding::jira(&connection.id, &site.name, &site.url));
         }
-        self.registry.register(connection);
+        self.replace_connection(previous, connection);
         self.auth.status().await
+    }
+
+    /// Registers `connection`, and drops `previous` if it was another account: a registered connection is the proof
+    /// `with_app_db_for` relies on that its scope is still signed in.
+    fn replace_connection(&self, previous: Option<Connection>, connection: Connection) {
+        if let Some(previous) = previous.filter(|p| p.id != connection.id) {
+            self.registry.remove(&previous.id);
+        }
+        self.registry.register(connection);
     }
 
     /// Registers the connection restored from the Keychain, if any.
@@ -842,6 +852,25 @@ mod tests {
 
         fx.core.restart();
         assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "failed");
+    }
+
+    #[tokio::test]
+    async fn signing_in_as_another_account_refuses_the_replaced_accounts_writes_to_the_app_database() {
+        use crate::auth::{Credentials, Tokens};
+
+        let fx = super::testing::fixture().await;
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
+        let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
+        let other = Account { account_id: "someone-else".into(), name: "Else".into(), avatar_url: None };
+        let creds = Credentials { tokens: Tokens { access_token: "t".into(), refresh_token: "r".into(), expires_at: u64::MAX / 2 }, site, me: other };
+        let previous = fx.core.auth.connection().await;
+        fx.core.replace_connection(previous, creds.connection());
+
+        let finished = fx.core.pip_turn_finish(&fx.scope, "q1", "A's answer", true, None, None, None).await;
+        assert!(matches!(finished, Err(Error::SiteChanged)), "{finished:?}");
+        let begun = fx.core.pip_turn_begin(&creds.scope(), "general", "q2", "Hi", &crate::agent::TurnMeta::default(), "running").await;
+        assert!(begun.is_ok(), "{begun:?}");
+        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].text, "");
     }
 
     #[tokio::test]

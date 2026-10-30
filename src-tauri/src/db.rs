@@ -76,8 +76,9 @@ impl Db {
             std::fs::create_dir_all(dir)?;
         }
         let db = Self::attach(Connection::open(app)?, cache_str)?;
-        let interrupted = schema::adopt_cached_app_state(&db.conn, &cache.file_name().unwrap_or_default().to_string_lossy())?;
-        db.release_copied(&interrupted, chrono::Utc::now())?;
+        let adopted = schema::adopt_cached_app_state(&db.conn, &cache.file_name().unwrap_or_default().to_string_lossy())?;
+        db.release_copied(&adopted.applying, chrono::Utc::now())?;
+        db.fail_copied_pip_turns(&adopted.pip_turns)?;
         let mut file = Self::open_file(cache)?;
         schema::apply(&mut file, steps)?;
         Ok(db)
@@ -602,6 +603,32 @@ mod tests {
             assert_eq!(db.proposal(&stuck.id).unwrap().unwrap().state, ProposalState::Pending);
             assert_eq!(db.proposal(&stuck.id).unwrap().unwrap().error.as_deref(), Some(crate::db::proposals::INTERRUPTED_NOTE));
             assert_eq!(db.proposal(&posting.id).unwrap().unwrap().state, ProposalState::Applying);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn pip_turns_cut_off_in_a_copied_cache_are_failed_but_this_launchs_own_are_not() {
+            let (cache, app, dir) = files("copied-pip-turns");
+            let old = Db::open(&cache).unwrap();
+            old.begin_pip_turn("workspace", "cut-off", "Running", &Default::default(), "running", "t1").unwrap();
+            old.begin_pip_wake("ws:w1", "never-ran", "[Event] run r1 (triage) Done", &[("r1".into(), "done".into())], "queued", "t2").unwrap();
+            old.begin_pip_turn("workspace", "answered", "Fine", &Default::default(), "running", "t3").unwrap();
+            old.finish_pip_turn("answered", "Fine", true, None, None, None).unwrap();
+            drop(old);
+
+            let running = Db::open_app(&app).unwrap();
+            running.begin_pip_turn("workspace", "this-launch", "Running now", &Default::default(), "running", "t4").unwrap();
+
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            let status = |id: &str| -> (String, Option<String>) {
+                db.conn.query_row("SELECT status, error FROM pip_turns WHERE request_id = ?1 AND role = 'pip'", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+            };
+            assert_eq!(status("cut-off"), ("failed".into(), Some(crate::db::INTERRUPTED.into())));
+            assert_eq!(status("never-ran"), ("failed".into(), Some(crate::db::NEVER_RAN.into())));
+            assert_eq!(status("answered").0, "done");
+            assert_eq!(status("this-launch").0, "running");
+            let dropped: Vec<_> = db.workstream_events("w1").unwrap().into_iter().filter(|e| e.action == "wake_dropped").map(|e| (e.run_id, e.detail)).collect();
+            assert_eq!(dropped, [(Some("r1".to_string()), Some("done".to_string()))]);
             let _ = std::fs::remove_dir_all(dir);
         }
 
