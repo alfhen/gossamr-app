@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { CRAWL_PATH, SPIRAL, SPOKES } from "../lib/pipWeb";
 import { WORD_EVERY_MS, elapsedText, shuffledWords } from "../lib/pipWork";
 import { PipGlyph } from "../components/PipGlyph";
@@ -98,7 +98,7 @@ function PipWorking({ line, leaving, since }: { line: string; leaving: boolean; 
         <span className="text-xs text-ws-ink2">
           {line}
           {elapsed && (
-            <span className="tabular-nums">
+            <span aria-hidden className="tabular-nums">
               {" · "}
               {elapsed}
             </span>
@@ -112,15 +112,17 @@ function PipWorking({ line, leaving, since }: { line: string; leaving: boolean; 
 /** Shows the web while `working`, then lifts it away for half a second as the answer arrives. */
 export function PipWorkSlot({ working, line, since }: { working: boolean; line: string; since?: string }) {
   const [leaving, setLeaving] = useState(false);
-  const was = useRef(working);
+  const [was, setWas] = useState(working);
+  // Set while rendering, not in an effect, so the web that is showing stays mounted and transitions away.
+  if (was !== working) {
+    setWas(working);
+    setLeaving(!working);
+  }
   useEffect(() => {
-    const ended = was.current && !working;
-    was.current = working;
-    if (!ended) return;
-    setLeaving(true);
+    if (!leaving) return;
     const id = setTimeout(() => setLeaving(false), LIFT_MS);
     return () => clearTimeout(id);
-  }, [working]);
+  }, [leaving]);
   if (!working && !leaving) return null;
   return <PipWorking line={line} leaving={!working} since={since} />;
 }

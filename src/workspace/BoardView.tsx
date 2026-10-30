@@ -101,7 +101,7 @@ export function BoardView({ tab, items }: CanvasProps) {
       return to && here ? [{ item, draft: { id: p.id, to: to.name } }] : [];
     });
 
-  if (!sections.length) return <p className="p-10 text-center text-ws-ink3">Nothing matches this filter.</p>;
+  if (!sections.length) return <p className="p-10 pt-[calc(var(--ws-bar-h,0px)+40px)] text-center text-ws-ink3">Nothing matches this filter.</p>;
 
   const onKeyDown = (ev: React.KeyboardEvent) => {
     if (ev.key === "Escape" && cards.bulk.marked.length) useTabs.getState().clearMarks();
@@ -109,10 +109,10 @@ export function BoardView({ tab, items }: CanvasProps) {
 
   return (
     <div className="flex h-full flex-col" onKeyDown={onKeyDown}>
-      <div className="px-6 pb-2">
-        <WorkflowLine section={byCategory ? null : (sections[0] ?? null)} />
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pb-2">
+      <div data-bar-scroll className="flex min-h-0 flex-1 flex-col overflow-auto px-6 pt-[var(--ws-bar-h,0px)] scroll-pt-[var(--ws-bar-h,0px)] pb-2">
+        <div className="shrink-0 pb-2">
+          <WorkflowLine section={byCategory ? null : (sections[0] ?? null)} />
+        </div>
         {sections.map((section) => (
           <section key={section.key} aria-label={`${section.name} board`} className="min-h-72 min-w-full flex-1 pt-1 pb-2">
             <div className="grid h-full auto-cols-[minmax(200px,1fr)] grid-flow-col gap-2.5">

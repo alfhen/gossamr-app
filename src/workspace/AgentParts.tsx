@@ -14,7 +14,7 @@ import { permissionRequest, progressText, quietMinutes, quietText, resultHeadlin
 import { Button } from "../components/Button";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
-  pip: { text: "text-(--prominent)", soft: "bg-(--prominent)/12", color: "var(--prominent)" },
+  pip: { text: "text-ws-accent", soft: "bg-(--prominent)/12", color: "var(--prominent)" },
   accent: { text: "text-ws-accent", soft: "bg-ws-accent-soft", color: "var(--color-ws-accent)" },
   done: { text: "text-ws-done", soft: "bg-ws-done-soft", color: "var(--color-ws-done)" },
   warn: { text: "text-ws-warn", soft: "bg-ws-warn/15", color: "var(--color-ws-warn)" },

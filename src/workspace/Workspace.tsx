@@ -29,6 +29,7 @@ import { Rail } from "./Rail";
 import { TABBABLE, nextRegion, regionStep, wrapTab, type WorkspaceRegion } from "./workKeys";
 import { Settings } from "./Settings";
 import { Header } from "./Header";
+import { ScreenBar } from "./ScreenBar";
 import { ConnectGithubDialog } from "./ConnectGithub";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
@@ -195,6 +196,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const status = useWorkspace((s) => s.status);
   const error = useWorkspace((s) => s.error);
   const route = useTabs((s) => s.route);
+  const activeTab = useActiveTab();
   const theme = usePrefs((s) => s.theme);
   const pipOpen = usePrefs((s) => s.pipOpen);
   const { pip: pipWidth, peek: peekWidth } = usePaneWidths();
@@ -307,15 +309,29 @@ export function Workspace({ backend }: { backend: Backend }) {
         >
           <div data-canvas-column style={{ paddingRight: room }} className="flex min-h-0 min-w-0 flex-1 flex-col motion-safe:transition-[padding] motion-safe:duration-200">
             <ReauthBanner />
-            {route === "workspace" ? <Header /> : <div data-tauri-drag-region className="h-[34px] shrink-0" />}
-            {route === "workspace" && <FilterBar />}
-            {route === "workspace" && <FilterNote />}
-            <div className="min-h-0 flex-1">
-              {route === "workspace" && <Canvas />}
-              {route === "activity" && <ActivityView />}
-              {route === "agents" && <AgentsView />}
-              {route === "settings" && <Settings />}
-            </div>
+            {route === "workspace" ? (
+              <ScreenBar
+                resetKey={`${activeTab.id}:${activeTab.view}`}
+                bar={
+                  <>
+                    <Header />
+                    <FilterBar />
+                    <FilterNote />
+                  </>
+                }
+              >
+                <Canvas />
+              </ScreenBar>
+            ) : (
+              <>
+                <div data-tauri-drag-region className="h-[34px] shrink-0" />
+                <div className="min-h-0 flex-1">
+                  {route === "activity" && <ActivityView />}
+                  {route === "agents" && <AgentsView />}
+                  {route === "settings" && <Settings />}
+                </div>
+              </>
+            )}
           </div>
           <PeekSheet />
           <AgentSheets />

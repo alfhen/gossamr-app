@@ -166,7 +166,7 @@ export function ActivityView() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ws-sep px-6 py-2.5">
+      <header className="flex flex-wrap items-center gap-x-4 gap-y-2 px-6 py-2.5">
         <h1 className="font-display m-0 text-base font-semibold">Inbox</h1>
         <MentionsFilter filter={filter} onChange={(f) => useActivity.getState().setFilter(f)} />
         <Button variant="quiet" size="sm" className="ml-auto" disabled={unread === 0} onClick={() => void useActivity.getState().markAllRead()}>

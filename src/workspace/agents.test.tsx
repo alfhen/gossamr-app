@@ -190,7 +190,7 @@ describe("the Work screen groups agents by workstream", () => {
   it("draws a row's beads once, in the indigo that means it needs you", () => {
     const out = renderToStaticMarkup(<AgentCard run={run("needsAnswer")} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened: false, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
     expect(out.match(/size-2 shrink-0 rounded-full/g)).toHaveLength(1);
-    expect(out).toContain("text-(--prominent)");
+    expect(out).toContain("text-ws-accent");
     expect(out).not.toContain("text-ws-pip");
   });
 });
@@ -416,7 +416,7 @@ describe("the rail", () => {
     expect(label).toBe("Work, 3 things need you");
     expect(inner).toContain('aria-label="3 things need you" title="3 things need you"');
     expect(inner).toContain(">3<");
-    expect(inner).toContain("bg-ws-accent");
+    expect(inner).toContain("bg-(--prominent)");
   });
 
   it("keeps a failed run in the count however long it is looked at, until it is dismissed", () => {
@@ -433,7 +433,7 @@ describe("the rail", () => {
     set([run("working", { lastProgressAt: new Date(NOW + 4 * 60_000).toISOString() }), run("done", { id: "d" })]);
     const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Work/);
     expect(label).toBe("Work");
-    expect(inner).not.toContain("bg-ws-accent");
+    expect(inner).not.toContain("bg-(--prominent)");
   });
 
   it("names what the one badge counts", () => {
@@ -447,7 +447,7 @@ describe("the rail", () => {
     const [, label, inner] = button(renderToStaticMarkup(<Rail />), /Inbox/);
     useActivity.getInitialState().unread = 0;
     expect(label).toBe("Inbox");
-    expect(inner).not.toContain("bg-ws-accent");
+    expect(inner).not.toContain("bg-(--prominent)");
     expect(inner).not.toMatch(/>\d+</);
   });
 
