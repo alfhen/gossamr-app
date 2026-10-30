@@ -19,6 +19,7 @@
   --color-ws-done-soft: rgb(46 125 79 / 0.12);
   --color-ws-blocked: #bf4339;
   --color-ws-blocked-soft: rgb(191 67 57 / 0.1);
+  --color-ws-on-blocked: #ffffff;
   --color-ws-warn: #b07614;
   --color-ws-review: #7d4cb8;
   --color-ws-review-soft: rgb(125 76 184 / 0.14);
@@ -75,6 +76,7 @@
     --color-ws-done-soft: rgb(109 191 139 / 0.2);
     --color-ws-blocked: #e77d72;
     --color-ws-blocked-soft: rgb(231 125 114 / 0.2);
+    --color-ws-on-blocked: #1c1a17;
     --color-ws-warn: #d6a04a;
     --color-ws-review: #bf9cec;
     --color-ws-review-soft: rgb(191 156 236 / 0.22);
@@ -128,6 +130,7 @@
   --color-ws-done-soft: rgb(109 191 139 / 0.2);
   --color-ws-blocked: #e77d72;
   --color-ws-blocked-soft: rgb(231 125 114 / 0.2);
+  --color-ws-on-blocked: #1c1a17;
   --color-ws-warn: #d6a04a;
   --color-ws-review: #bf9cec;
   --color-ws-review-soft: rgb(191 156 236 / 0.22);

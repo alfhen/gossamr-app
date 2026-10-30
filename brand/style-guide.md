@@ -83,7 +83,7 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `glass-body-control` | ivory at 62% | cream at 7% | The body of a control's glass, a little stronger than a floating layer's |
 | `ctl-depth` | `0 1px 2px` and `0 3px 10px -3px` brown at 10% and 16% | `0 1px 2px` and `0 4px 12px -4px` black at 50% and 60% | The small shadow under a control |
 | `thumb-glass` | ivory at 90% | cream at 16% | The lens that slides in a segmented control |
-| `prominent` | `#4b55c0` | `#4b55c0` | The fill of the one main action; white text on it reaches about 5:1 in both themes |
+| `prominent` | `#4b55c0` | `#4b55c0` | The fill of the one main action; white text on it reaches 6:1 in both themes |
 | `well-shade`, `bead-top`, `bead-bottom` | brown at 7% inside; white at 28% above, ink at 18% below | black at 35% inside; white at 20% above, black at 25% below | A sunken switch track, and the light on a prominent fill |
 | `spring-dew`, `spring-silk` (and `-ms`) | 340 ms, no bounce; 770 ms, 4% give | the same | Easing for controls; the full set is in the proposal below |
 
@@ -271,11 +271,11 @@ Buttons, toggles, segmented controls and search fields are silk glass, grouped i
 - **Prominent** is always indigo, because the main action is yours. Pip's buttons never take the fill: a tinted fill turns muddy on the warm ground. `pipSolid` exists only for Ask in Pip's own pane.
 - **Ask Pip** is the `pip` variant (clear glass with Pip's colour on the label, glyph and edge) in a bar or card, and `plain` with `pip` in a list row. It is never a filled button outside Pip's pane.
 - **Plain in rows.** Glass is for bars, sheet headers and dialogs. In a list where the same actions repeat on every row, use `plain`: text and an icon until you point at it.
-- **Groups.** Stop or remove actions stand alone, set apart from the group beside them, so they are hard to hit by accident. Mark them `destructive`; confirm with `danger`.
+- **Groups.** Stop or remove actions stand alone, set apart from the group beside them, so they are hard to hit by accident. Mark them `destructive`; confirm with `danger`. Its label is white on the light red and dark ink on the lighter dark red (`ws-on-blocked`), so it reaches 4.5:1 in both themes.
 - **No blur on controls.** They draw the glass layers without `backdrop-filter`, which spares WebKit a compositing layer for each of a screen's buttons. Over a flat colour it looks the same.
 - **No glass on glass.** Inside `ws-glass` (the palette, menus, toasts, Pip's header) a control is a lens.
-- **Reduce transparency** makes them solid and keeps their rim.
-- Pressing a button, a switch or a segmented control swells it slightly on `--spring-silk`. Under reduced motion it does not move.
+- **Reduce transparency** makes them solid and keeps their rim; the held switch knob turns solid white.
+- Pressing a button, a switch or a segmented control swells it slightly on `--spring-silk`. Under reduced motion it does not move: the swell, the thumb scale and the held knob all stay still.
 - The boxes you write in, such as a comment or Pip's box, stay solid wells, because they hold content.
 
 ## Proposal: dew and silk glass

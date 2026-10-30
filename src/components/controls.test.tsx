@@ -162,9 +162,15 @@ describe("SearchField", () => {
 describe("control styles", () => {
   const css = readFileSync(new URL("./controls.css", import.meta.url), "utf8");
 
-  it("draws glass layers without a backdrop filter, except the held switch knob", () => {
-    const outside = css.replace(/\.ws-switch:active[^{]*\{[^}]*\}/g, "");
-    expect(outside).not.toMatch(/backdrop-filter/);
+  it("draws glass layers without a backdrop filter", () => {
+    expect(css).not.toMatch(/backdrop-filter/);
+  });
+
+  it("stops the press swell, the thumb scale and the held knob under reduced motion", () => {
+    const block = css.slice(css.indexOf("prefers-reduced-motion: reduce"));
+    expect(block).toMatch(/\.ws-btn:active[^{]*\{\s*transform: none/);
+    expect(block).toMatch(/data-pressing[^{]*\{\s*scale: 1;/);
+    expect(block).toMatch(/\.ws-switch-knob\s*\{\s*width: 18px/);
   });
 
   it("turns a control inside a glass surface into a lens and goes solid for reduced transparency", () => {
