@@ -27,6 +27,17 @@ describe("a connection's probe status", () => {
     expect([role("ready"), role("off"), role("notSignedIn"), role("error")]).toEqual([false, false, true, true]);
   });
 
+  it("never raises an alarm for a tool the connection doesn't depend on yet", () => {
+    const out = renderToStaticMarkup(<ProbeStatus status={githubSnapshot("notFound", "ada", checked)} now={NOW} advisory />);
+    expect(out).not.toContain('role="status"');
+    expect(out).toContain("brew install gh");
+    expect(["ready", "off", "error", "notSignedIn", "notFound"].map((state) => probeTone({ state: state as never }, true))).toEqual(["ok", "ok", "unsure", "unsure", "unsure"]);
+  });
+
+  it("lets the command be selected, for pasting into a terminal", () => {
+    expect(renderToStaticMarkup(<ProbeStatus status={githubSnapshot("notFound", "ada", checked)} now={NOW} />)).toContain('class="selectable ');
+  });
+
   it("treats a probe that couldn't tell as less alarming than one that found no login", () => {
     expect(["ready", "off", "error", "notSignedIn", "notFound"].map((state) => probeTone({ state: state as never }))).toEqual(["ok", "ok", "unsure", "error", "error"]);
   });

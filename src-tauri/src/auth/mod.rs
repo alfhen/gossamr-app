@@ -5,7 +5,7 @@ mod callback;
 mod github;
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -197,6 +197,11 @@ impl Auth {
     }
 
     #[cfg(test)]
+    pub fn with_authenticator(authenticator: Arc<dyn Authenticator>, credentials: Credentials) -> Self {
+        Self { authenticator, client: ClientConfig, session: Mutex::new(Some(credentials)), restore_failed: false }
+    }
+
+    #[cfg(test)]
     pub fn signed_in(http: reqwest::Client, credentials: Credentials) -> Self {
         let client = ClientConfig;
         Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(Some(credentials)), restore_failed: false }
@@ -246,10 +251,24 @@ impl Auth {
         self.session.lock().await.as_ref().map(Credentials::connection)
     }
 
-    /// Asks Jira who the saved session signs in as.
-    pub async fn whoami(&self) -> Result<Account> {
-        let token = self.credentials(false).await?;
-        self.authenticator.whoami(&token).await
+    /// Asks Jira who the saved session signs in as, and gives up on Jira's answer after `within` (`None`).
+    /// Only that wait is bounded: a refresh in progress is never cut short, because Atlassian has already rotated the
+    /// refresh token by the time its answer is lost. A 401 gets one forced refresh, as `JiraClient` does.
+    pub async fn whoami(&self, within: Duration) -> Option<Result<Account>> {
+        let token = match self.credentials(false).await {
+            Ok(token) => token,
+            Err(e) => return Some(Err(e)),
+        };
+        match tokio::time::timeout(within, self.authenticator.whoami(&token)).await {
+            Ok(Err(Error::Api { status: 401, .. })) => {
+                let token = match self.credentials(true).await {
+                    Ok(token) => token,
+                    Err(e) => return Some(Err(e)),
+                };
+                tokio::time::timeout(within, self.authenticator.whoami(&token)).await.ok()
+            }
+            answered => answered.ok(),
+        }
     }
 
     /// Returns a valid access token, refreshing it when it is about to expire or when `force` is set (after a 401).
@@ -394,5 +413,71 @@ mod tests {
         let _installed = secrets::fake::install(&fake);
         assert_eq!(restore_everything(), (false, 0));
         assert_eq!(fake.reads(), 1);
+    }
+
+    /// Refreshes slowly into tokens "b"/"rotated"; `/myself` accepts only "b" unless `any_token`, and takes `answer_after`.
+    struct Slow {
+        refresh_takes: Duration,
+        answer_after: Duration,
+        any_token: bool,
+    }
+
+    #[async_trait]
+    impl Authenticator for Slow {
+        fn methods(&self) -> Vec<AuthMethod> {
+            Vec::new()
+        }
+        async fn begin(&self, _: &AuthMethod) -> Result<AuthChallenge> {
+            unimplemented!()
+        }
+        async fn complete(&self, _: AuthChallenge) -> Result<Credentials> {
+            unimplemented!()
+        }
+        async fn refresh(&self, current: &Credentials) -> Result<Credentials> {
+            tokio::time::sleep(self.refresh_takes).await;
+            Ok(Credentials { tokens: Tokens { access_token: "b".into(), refresh_token: "rotated".into(), expires_at: u64::MAX }, ..current.clone() })
+        }
+        async fn whoami(&self, token: &AccessToken) -> Result<Account> {
+            tokio::time::sleep(self.answer_after).await;
+            if self.any_token || token.access_token == "b" {
+                Ok(credentials().me)
+            } else {
+                Err(Error::Api { status: 401, message: "revoked".into() })
+            }
+        }
+    }
+
+    fn auth_with(authenticator: Slow, expires_at: u64) -> Auth {
+        let mut session = credentials();
+        session.tokens.expires_at = expires_at;
+        Auth::with_authenticator(Arc::new(authenticator), session)
+    }
+
+    #[tokio::test]
+    async fn a_refresh_the_probe_started_finishes_and_is_saved_even_when_it_outlasts_the_probe_s_timeout() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let auth = auth_with(Slow { refresh_takes: Duration::from_millis(150), answer_after: Duration::ZERO, any_token: true }, 0);
+        let seen = auth.whoami(Duration::from_millis(30)).await;
+        assert_eq!(seen.map(|r| r.unwrap().name), Some("Ann".into()));
+        assert_eq!(secrets::load::<Credentials>(SESSION_KEY).unwrap().unwrap().tokens.refresh_token, "rotated");
+    }
+
+    #[tokio::test]
+    async fn jira_not_answering_in_time_is_none_and_leaves_the_session_as_it_was() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let auth = auth_with(Slow { refresh_takes: Duration::ZERO, answer_after: Duration::from_secs(30), any_token: true }, u64::MAX);
+        assert!(auth.whoami(Duration::from_millis(30)).await.is_none());
+        assert_eq!(fake.writes(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_token_jira_refuses_is_refreshed_once_before_the_session_counts_as_ended() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let auth = auth_with(Slow { refresh_takes: Duration::ZERO, answer_after: Duration::ZERO, any_token: false }, u64::MAX);
+        assert_eq!(auth.whoami(Duration::from_secs(5)).await.map(|r| r.unwrap().name), Some("Ann".into()));
+        assert_eq!(secrets::load::<Credentials>(SESSION_KEY).unwrap().unwrap().tokens.refresh_token, "rotated");
     }
 }

@@ -90,6 +90,14 @@ struct Status {
 struct Entry {
     state: String,
     login: String,
+    /// What failed when `state` is `error`: `HTTP 401: Bad credentials` for a refused token, a connection error offline.
+    error: Option<String>,
+}
+
+impl Entry {
+    fn token_refused(&self) -> bool {
+        self.error.as_deref().is_some_and(|e| e.starts_with("HTTP 401"))
+    }
 }
 
 enum Ran {
@@ -139,7 +147,8 @@ pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Durat
                     None => Snapshot::new(State::NotSignedIn, format!("gh has no login for {login} on {host}.")).fix(login_command),
                     Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("Signed in as {} on {host}", e.login)) },
                     Some(e) if e.state == "timeout" => Snapshot::new(State::Error, format!("gh couldn't reach {host}.")),
-                    Some(_) => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
+                    Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
+                    Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its token for {login} on {host}.")),
                 }
             }
         },
@@ -153,7 +162,7 @@ mod tests {
     use crate::auth::Account;
     use std::os::unix::fs::PermissionsExt;
 
-    const READY: &str = r#"{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"Alfhen","tokenSource":"keyring"},{"state":"error","active":false,"host":"github.com","login":"old"}]}}"#;
+    const READY: &str = r#"{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"Alfhen","tokenSource":"keyring"},{"state":"error","active":false,"host":"github.com","login":"old","error":"HTTP 401: Bad credentials"}]}}"#;
 
     fn gh_dir(name: &str, script: &str) -> Vec<PathBuf> {
         let dir = std::env::temp_dir().join(format!("gossamr-probe-{name}-{}", std::process::id()));
@@ -209,9 +218,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_token_gh_reports_as_failed_is_not_signed_in() {
-        let status = r#"{"hosts":{"github.com":[{"state":"error","host":"github.com","login":"alfhen","error":"bad credentials"}]}}"#;
+    async fn a_token_github_refused_is_not_signed_in() {
+        let status = r#"{"hosts":{"github.com":[{"state":"error","host":"github.com","login":"alfhen","error":"HTTP 401: Bad credentials (https://api.github.com/)"}]}}"#;
         assert_eq!(probe(&gh_saying("revoked", status), "alfhen").await.state, State::NotSignedIn);
+    }
+
+    #[tokio::test]
+    async fn a_request_that_failed_for_another_reason_is_an_error_that_keeps_the_account() {
+        for error in [r#""Get \"https://api.github.com/\": proxyconnect tcp: dial tcp 127.0.0.1:1: connect: connection refused""#, r#""HTTP 503: Service Unavailable""#, "null"] {
+            let status = format!(r#"{{"hosts":{{"github.com":[{{"state":"error","host":"github.com","login":"alfhen","error":{error}}}]}}}}"#);
+            let seen = probe(&gh_saying("unreachable", &status), "alfhen").await;
+            assert_eq!((seen.state, seen.fix.as_deref()), (State::Error, None));
+            let before = Snapshot { account: Some("alfhen".into()), ..Snapshot::new(State::Ready, "") };
+            assert_eq!(seen.keeping_account_of(Some(&before)).account.as_deref(), Some("alfhen"));
+        }
     }
 
     #[tokio::test]

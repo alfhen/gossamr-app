@@ -1188,6 +1188,11 @@ pub(crate) mod testing {
 
     /// The fixture with a scripted GitHub service in place of the real one.
     pub async fn fixture_with(code: Option<CodeService>) -> Fixture {
+        fixture_with_authenticator(code, None).await
+    }
+
+    /// `fixture_with`, signed in to Jira through `authenticator` instead of Atlassian.
+    pub async fn fixture_with_authenticator(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
@@ -1201,7 +1206,7 @@ pub(crate) mod testing {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
-        let mut core = Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()).with_home(home.clone());
+        let mut core = Core::new(Arc::new(authenticator.map_or_else(|| Auth::signed_in(http, creds.clone()), |a| Auth::with_authenticator(a, creds.clone()))), registry, dir.clone()).with_home(home.clone());
         if let Some(code) = code {
             core = core.with_code(code);
         }

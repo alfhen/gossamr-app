@@ -37,6 +37,7 @@ impl Core {
 
     pub(super) fn bind_instance(&self, binding: Binding) {
         self.change_instances(|config| connections::bind(config, binding));
+        self.probes_rebound();
     }
 
     pub(super) fn unbind_instance(&self, connection_id: &str) {
@@ -64,7 +65,7 @@ impl Core {
                 info.instance_id = instance.id.clone();
                 info.display_name = instance.display_name.clone();
                 info.enabled = instance.enabled;
-                info.status = self.probe_snapshot(&instance.id);
+                info.status = self.probe_snapshot(instance);
             }
         }
     }

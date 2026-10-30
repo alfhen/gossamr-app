@@ -153,7 +153,7 @@ export class MockGithub {
 
   info(): ConnectionInfo {
     const status = githubSnapshot(this.probe, GITHUB_LOGIN, this.checkedAt);
-    return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
+    return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: this.probe !== "off", kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
   }
 
   setProbe(state: ProbeState) {

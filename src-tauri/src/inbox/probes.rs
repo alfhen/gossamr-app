@@ -1,6 +1,7 @@
 //! Core's side of the probes: when each connection instance is asked how it stands, and the last answer for each.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -25,9 +26,17 @@ pub enum Probe {
 /// A window focus within this long of the last probe asks nothing again.
 const FOCUS_EVERY: Duration = Duration::from_secs(30);
 
+/// A snapshot, and the connection its instance was bound to when it was taken.
+struct Stored {
+    bound_to: Option<String>,
+    snapshot: Snapshot,
+}
+
 #[derive(Default)]
 pub(super) struct Probes {
-    snapshots: Mutex<HashMap<String, Snapshot>>,
+    snapshots: Mutex<HashMap<String, Stored>>,
+    /// Set when an instance is bound to another connection, so the next probe isn't throttled and finds the new account.
+    rebound: AtomicBool,
     /// Held while probing, so two triggers never run `gh` at once; it keeps when the last probe finished.
     last: tokio::sync::Mutex<Option<Instant>>,
 }
@@ -37,27 +46,37 @@ impl Core {
     /// A refresh reports all of them, because the page shows when they were checked.
     pub async fn probe_connections(&self, why: Probe) -> Vec<String> {
         let mut last = self.probes.last.lock().await;
-        if why == Probe::Focus && last.is_some_and(|at| at.elapsed() < FOCUS_EVERY) {
+        let rebound = self.probes.rebound.swap(false, Ordering::Relaxed);
+        if why == Probe::Focus && !rebound && last.is_some_and(|at| at.elapsed() < FOCUS_EVERY) {
             return Vec::new();
         }
         let config = AppConfig::load(&self.data_dir);
         let mut found = HashMap::new();
         let mut changed = Vec::new();
         for instance in &config.connections {
-            let previous = self.probe_snapshot(&instance.id);
+            let previous = self.probe_snapshot(instance);
             let now = self.probe_instance(instance).await.keeping_account_of(previous.as_ref());
             if why == Probe::Refresh || previous.as_ref().is_none_or(|p| !p.same_as(&now)) {
                 changed.push(instance.bound_to.clone().unwrap_or_else(|| instance.id.clone()));
             }
-            found.insert(instance.id.clone(), now);
+            found.insert(instance.id.clone(), Stored { bound_to: instance.bound_to.clone(), snapshot: now });
         }
+        // An answer for a connection the instance has since left is about the wrong account.
+        let current = AppConfig::load(&self.data_dir);
+        found.retain(|id, stored| current.connections.iter().any(|i| &i.id == id && i.bound_to == stored.bound_to));
         *self.probes.snapshots.lock().expect("probe lock poisoned") = found;
         *last = Some(Instant::now());
         changed
     }
 
-    pub(super) fn probe_snapshot(&self, instance_id: &str) -> Option<Snapshot> {
-        self.probes.snapshots.lock().expect("probe lock poisoned").get(instance_id).cloned()
+    /// The last answer for `instance`, unless it was taken while the instance was bound to another connection.
+    pub(super) fn probe_snapshot(&self, instance: &Instance) -> Option<Snapshot> {
+        let snapshots = self.probes.snapshots.lock().expect("probe lock poisoned");
+        snapshots.get(&instance.id).filter(|s| s.bound_to == instance.bound_to).map(|s| s.snapshot.clone())
+    }
+
+    pub(super) fn probes_rebound(&self) {
+        self.probes.rebound.store(true, Ordering::Relaxed);
     }
 
     async fn probe_instance(&self, instance: &Instance) -> Snapshot {
@@ -65,7 +84,7 @@ impl Core {
             return Snapshot::off();
         }
         match instance.kind {
-            ConnectionKind::Jira => probe::jira(tokio::time::timeout(probe::TIMEOUT, self.auth.whoami()).await.ok()),
+            ConnectionKind::Jira => probe::jira(self.auth.whoami(probe::TIMEOUT).await),
             ConnectionKind::Github => {
                 let host = instance.config.host.as_deref().unwrap_or("github.com");
                 probe::github(self.code.auth.gh_dirs(), host, instance.config.login.as_deref().unwrap_or_default(), probe::TIMEOUT).await
@@ -79,7 +98,9 @@ mod tests {
     use super::*;
     use crate::auth::GithubAuth;
     use crate::connections::{self, Binding};
-    use crate::inbox::testing::fixture_with;
+    use crate::auth::{AccessToken, Account, AuthChallenge, AuthMethod, Authenticator, Credentials};
+    use crate::error::{Error, Result};
+    use crate::inbox::testing::{fixture_with, fixture_with_authenticator};
     use crate::inbox::CodeService;
     use crate::probe::State;
     use std::os::unix::fs::PermissionsExt;
@@ -89,9 +110,98 @@ mod tests {
     fn gh_saying(dir: &std::path::Path, login: &str, state: &str) {
         std::fs::create_dir_all(dir).unwrap();
         let path = dir.join("gh");
-        let status = format!(r#"{{"hosts":{{"github.com":[{{"state":"{state}","host":"github.com","login":"{login}"}}]}}}}"#);
+        let error = if state == "error" { r#","error":"HTTP 401: Bad credentials""# } else { "" };
+        let status = format!(r#"{{"hosts":{{"github.com":[{{"state":"{state}","host":"github.com","login":"{login}"{error}}}]}}}}"#);
         std::fs::write(&path, format!("#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\necho '{status}'\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn snapshot_of(core: &Core, instance_id: &str) -> Option<Snapshot> {
+        let config = AppConfig::load(&core.data_dir());
+        core.probe_snapshot(config.connections.iter().find(|i| i.id == instance_id)?)
+    }
+
+    /// A Jira that answers `/myself` as Ann, or with 401 when `refused`, after waiting for `gate` when there is one.
+    struct Jira {
+        refused: bool,
+        gate: Option<Arc<tokio::sync::Notify>>,
+        asked: Arc<tokio::sync::Notify>,
+    }
+
+    impl Jira {
+        fn answering() -> Arc<Self> {
+            Arc::new(Self { refused: false, gate: None, asked: Default::default() })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Authenticator for Jira {
+        fn methods(&self) -> Vec<AuthMethod> {
+            Vec::new()
+        }
+        async fn begin(&self, _: &AuthMethod) -> Result<AuthChallenge> {
+            unimplemented!()
+        }
+        async fn complete(&self, _: AuthChallenge) -> Result<Credentials> {
+            unimplemented!()
+        }
+        async fn refresh(&self, _: &Credentials) -> Result<Credentials> {
+            Err(Error::ReauthRequired)
+        }
+        async fn whoami(&self, _: &AccessToken) -> Result<Account> {
+            self.asked.notify_one();
+            if let Some(gate) = &self.gate {
+                gate.notified().await;
+            }
+            if self.refused {
+                return Err(Error::Api { status: 401, message: "no".into() });
+            }
+            Ok(Account { account_id: "me".into(), name: "Ann".into(), avatar_url: None })
+        }
+    }
+
+    async fn jira_fixture(jira: Arc<Jira>) -> crate::inbox::testing::Fixture {
+        let fx = fixture_with_authenticator(None, Some(jira)).await;
+        fx.core.adopt_instances().await;
+        fx
+    }
+
+    #[tokio::test]
+    async fn an_enabled_jira_instance_is_probed_through_the_session_and_a_refusal_means_not_signed_in() {
+        let fx = jira_fixture(Jira::answering()).await;
+        fx.core.probe_connections(Probe::Launch).await;
+        assert_eq!(snapshot_of(&fx.core, "jira").map(|s| (s.state, s.account)), Some((State::Ready, Some("Ann".into()))));
+
+        let fx = jira_fixture(Arc::new(Jira { refused: true, gate: None, asked: Default::default() })).await;
+        fx.core.probe_connections(Probe::Launch).await;
+        assert_eq!(snapshot_of(&fx.core, "jira").map(|s| s.state), Some(State::NotSignedIn));
+    }
+
+    #[tokio::test]
+    async fn signing_in_to_another_jira_account_leaves_the_old_answer_behind_and_the_next_focus_probes_at_once() {
+        let fx = jira_fixture(Jira::answering()).await;
+        fx.core.probe_connections(Probe::Launch).await;
+        fx.core.bind_instance(Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
+        assert!(snapshot_of(&fx.core, "jira").is_none());
+        assert_eq!(fx.core.probe_connections(Probe::Focus).await, ["jira:other:u2"]);
+        assert!(snapshot_of(&fx.core, "jira").is_some());
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_comes_back_after_the_instance_was_rebound_is_dropped() {
+        let (gate, jira) = {
+            let gate = Arc::new(tokio::sync::Notify::new());
+            (gate.clone(), Arc::new(Jira { refused: false, gate: Some(gate), asked: Default::default() }))
+        };
+        let asked = jira.asked.clone();
+        let fx = jira_fixture(jira).await;
+        let core = fx.core.clone();
+        let probing = tokio::spawn(async move { core.probe_connections(Probe::Launch).await });
+        asked.notified().await;
+        fx.core.bind_instance(Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
+        gate.notify_one();
+        probing.await.unwrap();
+        assert!(snapshot_of(&fx.core, "jira").is_none());
     }
 
     /// A fixture whose `gh` is a script in the returned folder, with a Jira instance that is off and a GitHub one for `alfhen`.
@@ -117,8 +227,8 @@ mod tests {
         let (fx, _gh) = fixture_with_gh("kinds").await;
         let changed = fx.core.probe_connections(Probe::Launch).await;
         assert_eq!(changed, ["jira:site:me", "github:alfhen"]);
-        assert_eq!(fx.core.probe_snapshot("github").map(|s| (s.state, s.account)), Some((State::Ready, Some("alfhen".into()))));
-        assert_eq!(fx.core.probe_snapshot("jira").map(|s| s.state), Some(State::Off));
+        assert_eq!(snapshot_of(&fx.core, "github").map(|s| (s.state, s.account)), Some((State::Ready, Some("alfhen".into()))));
+        assert_eq!(snapshot_of(&fx.core, "jira").map(|s| s.state), Some(State::Off));
         let rows = fx.core.connections().await.unwrap();
         assert_eq!(rows[0].status.as_ref().map(|s| s.state), Some(State::Off));
     }
@@ -130,7 +240,7 @@ mod tests {
         assert!(fx.core.probe_connections(Probe::Unauthorized).await.is_empty());
         gh_saying(&gh, "alfhen", "error");
         assert_eq!(fx.core.probe_connections(Probe::Unauthorized).await, ["github:alfhen"]);
-        assert_eq!(fx.core.probe_snapshot("github").map(|s| s.state), Some(State::NotSignedIn));
+        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::NotSignedIn));
     }
 
     #[tokio::test]
@@ -146,9 +256,9 @@ mod tests {
         fx.core.probe_connections(Probe::Launch).await;
         gh_saying(&gh, "alfhen", "error");
         assert!(fx.core.probe_connections(Probe::Focus).await.is_empty());
-        assert_eq!(fx.core.probe_snapshot("github").map(|s| s.state), Some(State::Ready));
+        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::Ready));
         fx.core.probe_connections(Probe::Refresh).await;
-        assert_eq!(fx.core.probe_snapshot("github").map(|s| s.state), Some(State::NotSignedIn));
+        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::NotSignedIn));
     }
 
     #[tokio::test]
@@ -157,6 +267,6 @@ mod tests {
         fx.core.probe_connections(Probe::Launch).await;
         fx.core.unbind_instance("github:alfhen");
         fx.core.probe_connections(Probe::Refresh).await;
-        assert!(fx.core.probe_snapshot("github").is_none());
+        assert!(snapshot_of(&fx.core, "github").is_none());
     }
 }

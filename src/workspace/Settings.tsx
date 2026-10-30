@@ -142,7 +142,7 @@ export function GithubCardView({ c, watch, now, confirming, busy, onSync, onMana
       </div>
       <p className="m-0 text-sm text-ws-ink2">{watchSummary(watch, nounFor("github"))}</p>
       <SyncStatus line={line} />
-      {c.status && <ProbeStatus status={c.status} now={now} />}
+      {c.status && <ProbeStatus status={c.status} now={now} advisory />}
       <div className="flex flex-wrap gap-3 text-sm">
         <Button variant="quiet" size="sm" disabled={c.syncing} onClick={onSync}>
           Sync now
