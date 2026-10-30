@@ -36,12 +36,19 @@ describe("the theme tokens", () => {
     expect(forced).toEqual(auto);
   });
 
-  it("passes AA for body, secondary, indigo, blocked and review text on the window in both themes", () => {
+  it("passes AA for body, secondary, indigo, Pip, Done, blocked and review text on the window in both themes", () => {
     for (const [theme, set] of [["light", light], ["dark", { ...light, ...auto }]] as const) {
-      for (const name of ["ink", "ink2", "accent", "blocked", "review"]) {
+      for (const name of ["ink", "ink2", "accent", "pip", "done", "blocked", "review"]) {
         const ratio = contrast(set[`--color-ws-${name}`], set["--color-ws-win"]);
         expect(ratio, `${name} in ${theme}`).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+
+  it("keeps the label on a Pip fill readable in both themes", () => {
+    for (const [theme, set] of [["light", light], ["dark", { ...light, ...auto }]] as const) {
+      const ratio = contrast(set["--color-ws-on-pip"], set["--color-ws-pip"]);
+      expect(ratio, `on-pip in ${theme}`).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

@@ -17,10 +17,11 @@
     --ink3: #776e62;
     --accent: #4b55c0;
     --accent-soft: rgb(75 85 192 / 0.1);
-    --pip: #0b8a86;
-    --pip-soft: rgb(11 138 134 / 0.1);
-    --pip2: #5b4bd1;
-    --done: #1f9d6a;
+    --pip: #16737a;
+    --pip-soft: rgb(22 115 122 / 0.1);
+    --pip2: #5f54b8;
+    --done: #2e7d4f;
+    --done-soft: rgb(46 125 79 / 0.12);
     --blocked: #bf4339;
     --review: #7d4cb8;
     --warn: #b07614;
@@ -41,9 +42,11 @@
       --ink3: #90877b;
       --accent: #8f98f0;
       --accent-soft: rgb(143 152 240 / 0.15);
-      --pip: #37d0c0;
-      --pip-soft: rgb(55 208 192 / 0.13);
-      --pip2: #9a8bff;
+      --pip: #76c8cb;
+      --pip-soft: rgb(118 200 203 / 0.12);
+      --pip2: #a99cf0;
+      --done: #6dbf8b;
+      --done-soft: rgb(109 191 139 / 0.2);
       --review: #bf9cec;
       --blocked: #e77d72;
       --warn: #d6a04a;
@@ -62,9 +65,11 @@
     --ink3: #90877b;
     --accent: #8f98f0;
     --accent-soft: rgb(143 152 240 / 0.15);
-    --pip: #37d0c0;
-    --pip-soft: rgb(55 208 192 / 0.13);
-    --pip2: #9a8bff;
+    --pip: #76c8cb;
+    --pip-soft: rgb(118 200 203 / 0.12);
+    --pip2: #a99cf0;
+    --done: #6dbf8b;
+    --done-soft: rgb(109 191 139 / 0.2);
     --review: #bf9cec;
     --blocked: #e77d72;
     --warn: #d6a04a;
@@ -206,14 +211,14 @@
   .p-needs { color: var(--accent); background: var(--accent-soft); }
   .p-run { color: var(--pip); background: var(--pip-soft); }
   .p-fail { color: var(--blocked); background: rgb(224 71 91 / 0.12); }
-  .p-done { color: var(--done); background: rgb(31 157 106 / 0.14); }
+  .p-done { color: var(--done); background: var(--done-soft); }
   .p-idle { color: var(--ink3); background: var(--bar); }
   .draft { margin: 12px; border: 1.5px dashed var(--pip); background: var(--pip-soft); border-radius: 10px; padding: 12px; }
   .draft .who { font-size: 11px; color: var(--pip); font-weight: 600; }
   .btns { display: flex; gap: 8px; margin-top: 10px; }
   .btn { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .ask { font: 600 12px var(--sans); border: 0; border-radius: 14px; padding: 3px 10px; color: #fff; background: linear-gradient(135deg, #0b8a86, #5b4bd1); }
+  .ask { font: 600 12px var(--sans); border: 0; border-radius: 14px; padding: 3px 10px; color: #fff; background: linear-gradient(135deg, #16737a, #5f54b8); }
 
   .dos { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   @media (max-width: 600px) { .dos { grid-template-columns: 1fr; } }
@@ -316,7 +321,7 @@
   .gstage.l { background: #faf7f2; border: 1px solid rgb(90 60 30 / 0.11); color: #2b2621; }
   .gstage.d { background: #1c1a17; border: 1px solid rgb(255 235 205 / 0.12); color: #e9e2d6; }
   .gstage .glow { position: absolute; border-radius: 50%; filter: blur(30px); pointer-events: none; }
-  .gstage .g1 { width: 220px; height: 220px; left: -40px; top: 40px; background: #37d0c0; opacity: 0.5; }
+  .gstage .g1 { width: 220px; height: 220px; left: -40px; top: 40px; background: #76c8cb; opacity: 0.5; }
   .gstage .g2 { width: 260px; height: 220px; right: -60px; bottom: -40px; background: #6a82ff; opacity: 0.55; }
   .gstage .g3 { width: 180px; height: 160px; left: 45%; top: -50px; background: #b48af0; opacity: 0.45; }
   .gstage .board { position: relative; display: grid; gap: 8px; }
@@ -326,7 +331,7 @@
   .gstage .row b { font-weight: 600; }
   .gstage .row span:nth-child(2) { flex: 1; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .gstage .pl { font: 600 10px/16px var(--sans); padding: 0 7px; border-radius: 999px; }
-  .pl.n { color: #fff; background: #4b55c0; } .pl.r { color: #04302c; background: #37d0c0; } .pl.f { color: #fff; background: #bf4339; } .pl.v { color: #fff; background: #7d4cb8; } .pl.o { color: #04302c; background: #1f9d6a; }
+  .pl.n { color: #fff; background: #4b55c0; } .pl.r { color: #04302c; background: #76c8cb; } .pl.f { color: #fff; background: #bf4339; } .pl.v { color: #fff; background: #7d4cb8; } .pl.o { color: #062a2c; background: #6dbf8b; }
   .gstage .cap { position: absolute; left: 16px; bottom: 10px; font-size: 11px; opacity: 0.6; }
 
   .silk-glass { position: absolute; left: 50%; top: 46%; width: min(380px, 84%); transform: translate(-50%, -50%); border-radius: 16px; isolation: isolate; }
@@ -349,11 +354,11 @@
   .d .silk-glass .r.on { background: rgb(200 194 255 / 0.1); box-shadow: inset 0 0 0 1px rgb(200 194 255 / 0.18); }
   .silk-glass .r .k { font: 11px var(--mono); opacity: 0.6; }
   .silk-glass .pipline { display: flex; align-items: center; gap: 8px; }
-  .silk-glass .pipline i { width: 8px; height: 8px; border-radius: 50%; background: #37d0c0; box-shadow: 0 0 8px #37d0c0; }
+  .silk-glass .pipline i { width: 8px; height: 8px; border-radius: 50%; background: #76c8cb; box-shadow: 0 0 8px #76c8cb; }
   .glass-duo.solid .l .silk-glass { background: #faf7f2; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .glass-duo.solid .d .silk-glass { background: #24211d; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .gstage { min-height: 380px; }
-  .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; display: grid; place-items: center; filter: drop-shadow(0 6px 8px rgb(91 75 209 / 0.35)); }
+  .orb { position: absolute; right: 22px; bottom: 22px; width: 68px; height: 68px; display: grid; place-items: center; filter: drop-shadow(0 6px 8px rgb(95 84 184 / 0.35)); }
   .orb svg { width: 56px; height: 36px; }
   .glass-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin-top: 12px; font-size: 13px; color: var(--ink2); }
   .glass-ctl input[type=range] { width: 180px; accent-color: var(--accent); }
@@ -476,13 +481,13 @@
     <figure><svg width="64" height="64" role="img" aria-label="Full mark at 64 px"><use href="#mark"/></svg><figcaption>64 px</figcaption></figure>
     <figure><svg width="32" height="32" role="img" aria-label="Small mark at 32 px"><use href="#mark-small"/></svg><figcaption>Small, 32 px</figcaption></figure>
     <figure><svg width="16" height="16" role="img" aria-label="Small mark at 16 px"><use href="#mark-small"/></svg><figcaption>Small, 16 px</figcaption></figure>
-    <figure><svg width="72" height="47" viewBox="226 340 572 372" role="img" aria-label="Pip mark"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+    <figure><svg width="72" height="47" viewBox="226 340 572 372" role="img" aria-label="Pip mark"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
@@ -517,16 +522,16 @@
     <span style="flex:27;background:#eeedf8;color:#2b2621">Silk</span>
     <span style="flex:9;background:#c8c2ff;color:#2b2621">Lavender</span>
     <span style="flex:7;background:#8f98f0;color:#fff">Indigo</span>
-    <span style="flex:4;background:#9a8bff"></span>
-    <span style="flex:3;background:#37d0c0"></span>
+    <span style="flex:4;background:#a99cf0"></span>
+    <span style="flex:3;background:#76c8cb"></span>
   </div>
   <ul class="legend">
     <li><i style="background:#14131d"></i><b>Ink</b><span>#14131d, the icon square</span></li>
     <li><i style="background:#eeedf8"></i><b>Silk</b><span>#eeedf8, the G and text on ink</span></li>
     <li><i style="background:#c8c2ff"></i><b>Lavender</b><span>#c8c2ff, threads, the G's fade, glass tint</span></li>
     <li><i style="background:#8f98f0"></i><b>Indigo</b><span>#8f98f0 dark, #4b55c0 light: you</span></li>
-    <li><i style="background:#9a8bff"></i><b>Violet</b><span>#9a8bff dark, #5b4bd1 light: Pip's second colour</span></li>
-    <li><i style="background:#37d0c0"></i><b>Pip teal</b><span>#37d0c0 dark, #0b8a86 light: Pip only</span></li>
+    <li><i style="background:#a99cf0"></i><b>Violet</b><span>#a99cf0 dark, #5f54b8 light: Pip's second colour</span></li>
+    <li><i style="background:#76c8cb"></i><b>Pip teal</b><span>#76c8cb dark, #16737a light: Pip only</span></li>
   </ul>
 
   <h3>Interface tokens</h3>
@@ -540,8 +545,8 @@
       <tr><td><code>ws-ink2</code></td><td>#5e564c</td><td>#b6ad9f</td><td>Secondary text</td></tr>
       <tr><td><code>ws-ink3</code></td><td>#776e62</td><td>#90877b</td><td>Meta: times, counts, hints</td></tr>
       <tr><td><code>ws-accent</code></td><td>#4b55c0</td><td>#8f98f0</td><td>Your actions, focus, selection</td></tr>
-      <tr><td><code>ws-pip</code>, <code>ws-pip2</code></td><td>#0b8a86, #5b4bd1</td><td>#37d0c0, #9a8bff</td><td>Pip and Pip's drafts</td></tr>
-      <tr><td><code>ws-done</code></td><td>#1f9d6a</td><td>#1f9d6a</td><td>Done</td></tr>
+      <tr><td><code>ws-pip</code>, <code>ws-pip2</code></td><td>#16737a, #5f54b8</td><td>#76c8cb, #a99cf0</td><td>Pip and Pip's drafts</td></tr>
+      <tr><td><code>ws-done</code></td><td>#2e7d4f</td><td>#6dbf8b</td><td>Done</td></tr>
       <tr><td><code>ws-blocked</code></td><td>#bf4339</td><td>#e77d72</td><td>Failed, blocked</td></tr>
       <tr><td><code>ws-review</code></td><td>#7d4cb8</td><td>#bf9cec</td><td>In review</td></tr>
       <tr><td><code>ws-warn</code></td><td>#b07614</td><td>#d6a04a</td><td>Needs attention (icons and fills only)</td></tr>
@@ -575,7 +580,8 @@
       <tr><td><code>ws-ink2</code></td><td>6.8</td><td>8.7</td></tr>
       <tr><td><code>ws-accent</code></td><td>5.3</td><td>5.5</td><td>Links and buttons</td></tr>
       <tr><td><code>ws-ink3</code></td><td>3.2</td><td>4.4</td><td>Meta, icons, large or bold text only</td></tr>
-      <tr><td><code>ws-pip</code></td><td>4.1</td><td>9.6</td><td>In light mode: icons, borders, bold labels</td></tr>
+      <tr><td><code>ws-pip</code></td><td>5.2</td><td>9.0</td><td>Pip text</td></tr>
+      <tr><td><code>ws-done</code></td><td>4.7</td><td>7.8</td><td>Done text</td></tr>
       <tr><td><code>ws-warn</code></td><td>2.9</td><td></td><td>Icons and fills; the words stay in ink</td></tr>
     </tbody>
   </table></div>
@@ -648,24 +654,24 @@
 
   <h3>Pip's vocabulary</h3>
   <div class="motion">
-    <figure style="margin:0"><div class="stage dangle"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+    <figure style="margin:0"><div class="stage dangle"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
       </g></svg></div></div><figcaption class="meta">Dangle: 5 px over 5 s</figcaption></figure>
-    <figure style="margin:0"><div class="stage bob"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+    <figure style="margin:0"><div class="stage bob"><div class="hang"><i class="line"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
@@ -747,13 +753,13 @@
     <div class="demo">
       <h4>Pip feels your attention</h4>
       <p>Hover Pip: it lowers 3 px on silk, as if your attention weighs on the thread, and rises when you leave.</p>
-      <div class="pad"><div class="hover-pip"><div class="hang2"><i class="silk"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round">
+      <div class="pad"><div class="hover-pip"><div class="hang2"><i class="silk"></i><svg width="52" height="34" viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#3fb4ad" stroke-width="31" stroke-linecap="round">
         <path d="M 384 489 C 311 457 252 492 242 562"/>
         <path d="M 390 570 C 321 573 302 642 340 686"/>
         <path d="M 640 489 C 713 457 772 492 782 562"/>
         <path d="M 634 570 C 703 573 722 642 684 686"/>
       </g>
-      <circle cx="512" cy="512" r="154" fill="#37d0c0"/>
+      <circle cx="512" cy="512" r="154" fill="#3fb4ad"/>
       <g class="lids">
         <circle cx="465" cy="523" r="20" fill="#eeedf8"/>
         <circle cx="559" cy="523" r="20" fill="#eeedf8"/>
@@ -782,7 +788,7 @@
         <div class="r"><span>Open the workstream on CA-388</span></div>
         <div class="r"><span>Go to Work</span><span class="k">⌘K</span></div>
       </div>
-      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#37d0c0"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
+      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#76c8cb" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#76c8cb"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
       <span class="cap">Light</span>
     </div>
     <div class="gstage d">
@@ -802,7 +808,7 @@
         <div class="r"><span>Open the workstream on CA-388</span></div>
         <div class="r"><span>Go to Work</span><span class="k">⌘K</span></div>
       </div>
-      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#37d0c0" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#37d0c0"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
+      <span class="orb" aria-label="Pip's launcher" role="img"><svg viewBox="226 340 572 372" aria-hidden="true"><g fill="none" stroke="#76c8cb" stroke-width="31" stroke-linecap="round"><path d="M 384 489 C 311 457 252 492 242 562"/><path d="M 390 570 C 321 573 302 642 340 686"/><path d="M 640 489 C 713 457 772 492 782 562"/><path d="M 634 570 C 703 573 722 642 684 686"/></g><circle cx="512" cy="512" r="154" fill="#76c8cb"/><circle cx="465" cy="523" r="20" fill="#eeedf8"/><circle cx="559" cy="523" r="20" fill="#eeedf8"/></svg></span>
       <span class="cap">Dark</span>
     </div>
   </div>

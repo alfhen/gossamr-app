@@ -79,7 +79,7 @@ Gossamr is warm silk with one teal character: ivory in light, warm charcoal in d
 | `glass-depth` | `0 10px 30px` brown at 16% | `0 12px 40px` black at 50% | The shadow |
 | `glass-lens`, `glass-lens-rim` (and `-pip`) | ivory at 45%, rim warm white at 85% | cream at 8%, rim at 28%; teal on Pip | Selection inside glass |
 
-`ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. Done sits at 145 degrees of hue, a leaf green, because Pip's Dew teal sits near 183 degrees and the old Done green at 155 was too close to tell apart at a glance. `ws-warn` has no soft fill.
+`ws-accent`, `ws-pip`, `ws-done`, `ws-blocked` and `ws-review` each have a `-soft` fill (10 to 22% opacity) for backgrounds behind their text. `ws-review-soft` is a slightly lighter purple than `ws-review`. Done moved from 156 to 145 degrees of hue, a leaf green, because Pip's Dew teal sits at 184 degrees: the gap is now 39 degrees, up from 20, so the two read apart at a glance. `ws-warn` has no soft fill.
 
 ### Rules
 
