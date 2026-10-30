@@ -146,7 +146,7 @@ export function ListRow(p: RowProps) {
   const badges = useRef<HTMLSpanElement>(null);
   const compact = useCompactBadges(cell, badges, `${p.needsMe}|${p.blocked}|${p.draft?.to ?? ""}|${p.moreDrafts}`);
   const days = daysQuiet(item, p.now);
-  const lit = p.marked ? "bg-ws-accent-soft shadow-[inset_3px_0_0_var(--color-ws-accent)]" : p.selected ? "bg-ws-pip-soft shadow-[inset_3px_0_0_var(--color-ws-pip)]" : "hover:bg-ws-hover";
+  const lit = p.marked ? "bg-ws-accent-soft shadow-[inset_3px_0_0_var(--color-ws-accent)]" : p.selected ? "ws-lens-row border-t-transparent" : "hover:bg-ws-hover";
   return (
     <div
       id={rowId(itemKey(item.item))}

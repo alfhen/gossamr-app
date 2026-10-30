@@ -117,7 +117,7 @@ export function ItemCard(p: ItemCardProps) {
       onClick={click}
       onKeyDown={key}
       className={`ws-card group relative cursor-grab rounded-[10px] border bg-ws-win px-2.5 py-2 shadow-sm outline-offset-2 ${tone} ${wither} ${
-        p.marked ? "border-ws-pip ring-2 ring-ws-pip ws-card-pick" : p.selected ? "border-ws-pip ring-2 ring-ws-pip-soft ws-card-pick" : "border-ws-sep"
+        p.marked ? "border-ws-pip ring-2 ring-ws-pip ws-card-pick" : p.selected ? "border-ws-accent ring-2 ring-ws-accent-soft ws-card-pick" : "border-ws-sep"
       }`}
     >
       <Cobweb level={p.wither} />

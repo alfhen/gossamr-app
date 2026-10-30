@@ -47,6 +47,8 @@
   --well-shade: inset 0 1px 2px rgb(70 45 20 / 0.07);
   --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.28);
   --bead-bottom: inset 0 -1px 0 rgb(43 38 33 / 0.18);
+  --bead-gloss: inset 0 1px 0 rgb(255 255 255 / 0.5);
+  --silk-top: inset 0 1px 0 rgb(255 255 255 / 0.95);
   --prominent: #4b55c0;
   --spring-dew: linear(0, 0.12, 0.333, 0.531, 0.686, 0.796, 0.87, 0.919, 0.95, 0.97, 0.982, 0.989, 0.993, 0.996, 0.998, 1);
   --spring-dew-ms: 340ms;
@@ -101,6 +103,8 @@
     --well-shade: inset 0 1px 3px rgb(0 0 0 / 0.35);
     --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.2);
     --bead-bottom: inset 0 -1px 0 rgb(0 0 0 / 0.25);
+    --bead-gloss: inset 0 1px 0 rgb(255 255 255 / 0.06);
+    --silk-top: inset 0 1px 0 rgb(200 194 255 / 0.08);
   }
 }
 
@@ -155,6 +159,8 @@
   --well-shade: inset 0 1px 3px rgb(0 0 0 / 0.35);
   --bead-top: inset 0 1px 0 rgb(255 255 255 / 0.2);
   --bead-bottom: inset 0 -1px 0 rgb(0 0 0 / 0.25);
+  --bead-gloss: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --silk-top: inset 0 1px 0 rgb(200 194 255 / 0.08);
 }
 
 .ws-root,

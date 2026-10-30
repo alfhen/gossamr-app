@@ -1,5 +1,5 @@
 import { showOf } from "../lib/keys";
-import { useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -95,7 +95,45 @@ export function RailButton({
   );
 }
 
-const plain = (current: boolean) => (current ? "bg-ws-win text-ws-ink shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover");
+const plain = (current: boolean) => (current ? "text-ws-ink" : "text-ws-ink2 ws-rail-hover");
+
+/** A button whose popover is open holds the hover lens; the sliding lens marks only where you are. */
+const held = (open: boolean) => (open ? "text-ws-ink ws-glass-lens" : plain(false));
+
+/** Slides the rail's lens to the current button; it hides when that button is scrolled out of the project list. */
+function useRailLens(rail: RefObject<HTMLElement | null>, lens: RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const box = rail.current;
+    const el = lens.current;
+    if (!box || !el) return;
+    const list = box.querySelector<HTMLElement>('[role="group"]');
+    const place = () => {
+      const on = box.querySelector<HTMLElement>('button[aria-current="page"]');
+      if (!on) {
+        el.style.opacity = "0";
+        return;
+      }
+      const b = on.getBoundingClientRect();
+      const at = box.getBoundingClientRect();
+      const clip = on.closest('[role="group"]')?.getBoundingClientRect();
+      const hidden = clip !== undefined && (b.bottom > clip.bottom + 1 || b.top < clip.top - 1);
+      el.style.width = `${b.width}px`;
+      el.style.height = `${b.height}px`;
+      el.style.transform = `translate(${b.left - at.left}px, ${b.top - at.top}px)`;
+      el.style.opacity = hidden ? "0" : "1";
+    };
+    place();
+    const frame = requestAnimationFrame(() => (el.dataset.ready = ""));
+    const watch = new ResizeObserver(place);
+    watch.observe(box);
+    list?.addEventListener("scroll", place);
+    return () => {
+      cancelAnimationFrame(frame);
+      watch.disconnect();
+      list?.removeEventListener("scroll", place);
+    };
+  });
+}
 
 const Divider = () => <hr className="m-0 my-0.5 w-6 border-0 border-t border-ws-sep2" />;
 
@@ -110,7 +148,7 @@ function ViewsButton() {
 
   return (
     <div ref={root} className="relative">
-      <RailButton label="Views" tip={!open} aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className={`text-lg ${plain(open)}`}>
+      <RailButton label="Views" tip={!open} aria-expanded={open} data-popover-trigger onClick={() => setOpen(!open)} className={`text-lg ${held(open)}`}>
         <span aria-hidden>◎</span>
       </RailButton>
       {open && (
@@ -182,7 +220,7 @@ function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProp
   const [query, setQuery] = useState("");
   return (
     <div ref={root} className="relative">
-      <RailButton label={`More ${noun.many}`} tip={!open} aria-expanded={open} data-popover-trigger onClick={() => (setQuery(""), setOpen(!open))} className={`text-lg ${plain(open)}`}>
+      <RailButton label={`More ${noun.many}`} tip={!open} aria-expanded={open} data-popover-trigger onClick={() => (setQuery(""), setOpen(!open))} className={`text-lg ${held(open)}`}>
         <span aria-hidden>⋯</span>
       </RailButton>
       {open && (
@@ -214,7 +252,7 @@ function BellIcon() {
 /** A count over a rail button, named and titled with what it counts: the one count of what needs you, the only badge. */
 function RailBadge({ count, what }: { count: number; what: string }) {
   return (
-    <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-pip px-1 text-[10px] font-semibold text-ws-on-pip">
+    <span aria-label={what} title={what} className="absolute -top-[3px] -right-[3px] grid h-[16px] min-w-[16px] place-items-center rounded-full bg-ws-accent px-1 text-[10px] font-semibold text-white shadow-[var(--bead-top),var(--bead-bottom)]">
       {count > 99 ? "99+" : count}
     </span>
   );
@@ -280,10 +318,15 @@ export function Rail() {
   const { badges, rest } = railSplit(all, watch, project, RAIL_BADGES);
   const colourOf = (c: WorkContainer) => projectColour(all, c.ref);
   const noun = nounFor(kind);
+  const glass = useRef<HTMLDivElement>(null);
+  const lens = useRef<HTMLSpanElement>(null);
+  useRailLens(glass, lens);
 
   return (
-    <aside data-rail aria-label="Workspace sidebar" className="group/rail relative flex min-h-0 flex-col items-center gap-2 border-r border-ws-sep bg-ws-side pt-10 pb-2.5">
+    <aside data-rail aria-label="Workspace sidebar" className="group/rail relative flex min-h-0 flex-col px-1.5 pt-10 pb-2">
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-10" />
+      <div ref={glass} className="ws-rail flex min-h-0 flex-1 flex-col items-center gap-2 p-[5px]">
+      <span ref={lens} aria-hidden className="ws-rail-lens opacity-0" />
       <nav aria-label="Workspace" className="flex min-h-0 w-full flex-1 flex-col items-center gap-2">
         <RailButton label="Search and jump" hint={showOf("app", "jump")} onClick={() => setPaletteOpen(true)} className={`text-lg ${plain(false)}`}>
           <Glyph name="search" className="size-[17px]" />
@@ -302,10 +345,10 @@ export function Rail() {
               label={c.name}
               current={on}
               onClick={() => setProject(c.ref)}
-              style={{ background: colour, ["--pc" as string]: colour }}
-              className={`text-xs text-white ${on ? "opacity-100 shadow-[0_0_0_2px_var(--color-ws-side),0_0_0_4px_var(--pc)]" : "opacity-70 hover:opacity-100"}`}
             >
-              {projectInitials(c)}
+              <span aria-hidden className="ws-proj-bead" style={{ ["--pc" as string]: colour }}>
+                {projectInitials(c)}
+              </span>
             </RailButton>
           );
         })}
@@ -314,7 +357,7 @@ export function Rail() {
         <Divider />
         <ViewsButton />
       </nav>
-      <div className="flex shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2.5">
+      <div className="flex w-full shrink-0 flex-col items-center gap-2 border-t border-ws-sep pt-2">
         <RailButton label="Inbox" current={route === "activity"} onClick={() => setRoute("activity")} className={`text-lg ${plain(route === "activity")}`}>
           <BellIcon />
         </RailButton>
@@ -322,9 +365,10 @@ export function Rail() {
         <RailButton label="Settings" current={route === "settings"} onClick={() => setRoute("settings")} className={`text-lg ${plain(route === "settings")}`}>
           <span aria-hidden>⚙</span>
         </RailButton>
-        <RailButton label="Pip" hint={showOf("app", "pip")} pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "bg-ws-win text-ws-pip shadow-[0_1px_4px_rgb(0_0_0/0.2)]" : "text-ws-ink2 hover:bg-ws-hover"}`}>
+        <RailButton label="Pip" hint={showOf("app", "pip")} pressed={pipOpen} onClick={togglePip} className={`text-lg ${pipOpen ? "text-ws-pip ws-glass-lens" : plain(false)}`}>
           <PipGlyph />
         </RailButton>
+      </div>
       </div>
     </aside>
   );

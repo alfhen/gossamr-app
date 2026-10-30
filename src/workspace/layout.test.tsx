@@ -149,7 +149,7 @@ describe("header and rail", () => {
     const out = renderToStaticMarkup(<Rail />);
     for (const label of ["Search and jump", "All projects", "Views", "Inbox", "Settings", "Pip"]) expect(out).toContain(`aria-label="${label}"`);
     expect(out).toContain('aria-label="DevOps"');
-    expect(out).toContain("DE</button>");
+    expect(out).toContain(">DE</span></button>");
     expect(out).toContain("data-tauri-drag-region");
   });
 
@@ -163,7 +163,7 @@ describe("header and rail", () => {
     const list = out.indexOf('aria-label="Projects"');
     expect(out.slice(out.lastIndexOf("<div", list), list)).toContain("overflow-y-auto");
     expect(out.indexOf('aria-label="Inbox"')).toBeGreaterThan(out.indexOf('aria-label="Project 7"'));
-    expect(out).toMatch(/<div class="flex shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Inbox"/);
+    expect(out).toMatch(/<div class="flex w-full shrink-0[^"]*border-t[^"]*"><span class="[^"]*\brelative\b[^"]*"><button[^>]*aria-label="Inbox"/);
   });
 
   it("shows a tooltip only where it was asked for", () => {

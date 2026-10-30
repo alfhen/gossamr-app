@@ -20,27 +20,32 @@ import {
 } from "./boardLogic";
 import type { CanvasProps } from "./canvases";
 import { projectOf } from "./filters";
-import { StatusPill } from "./CanvasBits";
+import { BEAD } from "./CanvasBits";
 import { statusTone } from "./canvasShared";
 import { GhostCard, ItemCard } from "./ItemCard";
 import { useTabs } from "./tabsStore";
 import { useCards } from "./useCards";
 
-const DOT = { todo: "bg-ws-ink3", active: "bg-ws-accent", done: "bg-ws-done", review: "bg-ws-review", blocked: "bg-ws-blocked" } as const;
-
-/** The project's own statuses in order, or why the columns are categories when no project is picked. */
+/** The project's own statuses in order as beads on a thread, each sized by its tickets, or why the columns are categories when no project is picked. */
 export function WorkflowLine({ section }: { section: BoardSection | null }) {
   if (!section) return <p className="m-0 text-xs text-ws-ink3">Columns are status categories because each project has its own workflow. Pick a project to see its exact columns.</p>;
+  const count = (id: string) => section.columns.find((c) => c.status.id === id)?.items.length ?? 0;
   return (
-    <ol aria-label={`${section.name} workflow`} className="m-0 flex list-none flex-wrap items-center gap-1.5 p-0 text-xs text-ws-ink3">
-      <li className="font-bold text-ws-ink2">{section.name} workflow</li>
-      {section.workflow.statuses.map((s, at) => (
-        <li key={s.id} className="flex items-center gap-1.5">
-          {at > 0 && <span aria-hidden>›</span>}
-          <StatusPill status={s} title={moveHint(section.workflow, s)} />
-        </li>
-      ))}
-    </ol>
+    <div className="overflow-x-auto [scrollbar-width:none]">
+      <ol aria-label={`${section.name} workflow`} className="ws-thread">
+        {section.workflow.statuses.map((s) => {
+          const n = count(s.id);
+          return (
+            <li key={s.id} title={moveHint(section.workflow, s)} style={{ ["--n" as string]: Math.min(n, 5) }} className={BEAD[statusTone(s)]}>
+              <i aria-hidden />
+              <span className="text-xs leading-tight font-medium text-ws-ink2">
+                <span>{s.name}</span> <b className="font-semibold whitespace-nowrap text-ws-ink tabular-nums">{n}</b>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
@@ -136,7 +141,7 @@ export function BoardView({ tab, items }: CanvasProps) {
                     } ${verdict === "invalid" ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-center text-sm font-bold text-ws-ink2">
-                      <i className={`mr-1.5 size-2 rounded-full ${DOT[statusTone(column.status)]}`} />
+                      <i aria-hidden className={`ws-bead mr-2 ${BEAD[statusTone(column.status)]}`} />
                       {column.status.name}
                       <span className="ml-auto font-semibold text-ws-ink3">{column.items.length}</span>
                     </div>
