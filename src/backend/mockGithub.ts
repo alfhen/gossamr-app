@@ -144,7 +144,7 @@ export class MockGithub {
   }
 
   info(): ConnectionInfo {
-    return { id: GITHUB_CONNECTION, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false };
+    return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false };
   }
 
   watchState(): WatchState | null {

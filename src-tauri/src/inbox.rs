@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
+use crate::connections::Binding;
 use crate::auth::{Account, Auth, AuthStatus, Scope, Site};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
@@ -21,6 +22,7 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
 pub(crate) mod code;
 mod drafts;
+mod instances;
 mod run_outcome;
 mod pip_runs;
 mod pip_turns;
@@ -135,6 +137,10 @@ fn backfill_cache(db: &Db, connection: &Connection) -> Result<()> {
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionInfo {
     pub id: String,
+    /// The row in Settings this connection belongs to.
+    pub instance_id: String,
+    pub display_name: String,
+    pub enabled: bool,
     pub kind: tracker::ConnectionKind,
     /// The site or organisation.
     pub workspace: String,
@@ -242,6 +248,9 @@ impl Core {
     /// Signs in and registers the resulting connection.
     pub async fn sign_in(&self, open_browser: impl FnOnce(&str) -> Result<()>) -> Result<AuthStatus> {
         let connection = self.auth.sign_in(open_browser).await?;
+        if let Some((_, site, _)) = self.auth.identity().await {
+            self.bind_instance(Binding::jira(&connection.id, &site.name, &site.url));
+        }
         self.registry.register(connection);
         self.auth.status().await
     }
@@ -626,6 +635,9 @@ impl Core {
             let connection = self.connection(&scope)?;
             let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
             out.push(ConnectionInfo {
+                instance_id: connection.id.clone(),
+                display_name: site.name.clone(),
+                enabled: true,
                 id: connection.id,
                 kind: connection.kind,
                 workspace: site.name,
@@ -639,6 +651,7 @@ impl Core {
             });
         }
         out.extend(self.code_connections());
+        self.name_instances(&mut out);
         Ok(out)
     }
 
@@ -807,6 +820,17 @@ mod tests {
         let rows = fx.core.connections().await.unwrap();
         assert_eq!((rows[0].workspace.as_str(), rows[0].account.as_str(), rows[0].syncing), ("Acme", "Me", false));
         assert_eq!(rows[0].last_sync_at, None);
+    }
+
+    #[tokio::test]
+    async fn the_jira_sign_in_becomes_the_jira_instance_and_the_row_lists_under_it() {
+        let fx = super::testing::fixture().await;
+        fx.core.adopt_instances().await;
+        let config = crate::config::AppConfig::load(&fx.core.data_dir());
+        let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
+        assert_eq!((jira.id.as_str(), jira.display_name.as_str(), jira.bound_to.as_deref(), jira.config.site.as_deref()), ("jira", "Acme", Some("jira:site:me"), Some("acme.example")));
+        let rows = fx.core.connections().await.unwrap();
+        assert_eq!((rows[0].instance_id.as_str(), rows[0].display_name.as_str(), rows[0].enabled), ("jira", "Acme", true));
     }
 
     #[tokio::test]

@@ -400,13 +400,22 @@ impl GithubAuth {
         self.store.delete(login)
     }
 
-    /// Sessions restored from the Keychain. One that can't be read is skipped, so the rest still work.
-    pub fn restore(&self) -> Vec<GithubSession> {
-        let logins = self.store.logins().unwrap_or_else(|e| {
+    /// The saved logins, in the order they were first signed in. An unreadable index is an error, not an empty list.
+    pub fn try_logins(&self) -> Result<Vec<String>> {
+        self.store.logins()
+    }
+
+    /// The saved logins, or none when the index can't be read.
+    pub fn logins(&self) -> Vec<String> {
+        self.try_logins().unwrap_or_else(|e| {
             eprintln!("couldn't read the saved GitHub sign-ins: {e}");
             Vec::new()
-        });
-        logins.iter().filter_map(|l| self.store.load(l).ok().flatten()).collect()
+        })
+    }
+
+    /// Sessions restored from the Keychain. One that can't be read is skipped, so the rest still work.
+    pub fn restore(&self) -> Vec<GithubSession> {
+        self.logins().iter().filter_map(|l| self.store.load(l).ok().flatten()).collect()
     }
 }
 

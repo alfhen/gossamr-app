@@ -217,6 +217,11 @@ fn with_global<R>(f: impl FnOnce(&Vault) -> R) -> R {
     f(&vault)
 }
 
+/// Whether the vault could be read, so an empty answer from it means nothing is stored.
+pub fn is_ready() -> bool {
+    with_global(|v| v.with_ready(|_, _| Ok(())).is_ok())
+}
+
 pub fn load<T: DeserializeOwned>(account: &str) -> Result<Option<T>> {
     with_global(|v| v.load(account))
 }

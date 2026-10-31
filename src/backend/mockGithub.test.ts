@@ -27,6 +27,15 @@ describe("the mock GitHub connection", () => {
     expect([state.chosen, state.needsChoice, state.catalogSize]).toEqual([false, true, 13]);
   });
 
+  it("lists each connection under its Settings row", async () => {
+    const b = new MockBackend();
+    await b.githubConnectToken("ghp_x");
+    expect((await b.connectionsList()).map((c) => [c.instanceId, c.displayName, c.enabled])).toEqual([
+      ["jira", "Sample data", true],
+      ["github", "GitHub", true],
+    ]);
+  });
+
   it("connects through the gh import and the device flow, which must be started before it is polled", async () => {
     const gh = new MockBackend();
     expect((await gh.githubImportGhToken()).id).toBe(GH);
