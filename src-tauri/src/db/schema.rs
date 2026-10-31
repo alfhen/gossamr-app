@@ -390,21 +390,22 @@ DELETE FROM items WHERE EXISTS (SELECT 1 FROM watched_containers w WHERE w.conne
 UPDATE sync_state SET full_at = NULL WHERE connection_id IN (SELECT connection_id FROM watched_containers WHERE depth = 'whole' AND unwatched_at IS NULL);
 DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
 
-/// The cache's copies of the app tables go once the app database holds their rows, which `Db::open_with_app` records
-/// (`copied:<cache file>` in `app_meta`) before it applies this step. A file opened any other way has nothing to copy.
-const DROP_APP_COPIES: &str = "
-DROP TABLE IF EXISTS proposals;
-DROP TABLE IF EXISTS runs;
-DROP TABLE IF EXISTS run_events;
-DROP TABLE IF EXISTS run_messages;
-DROP TABLE IF EXISTS run_reports;
-DROP TABLE IF EXISTS run_report_tokens;
-DROP TABLE IF EXISTS pip_turns;
-DROP TABLE IF EXISTS workstreams;
-DROP TABLE IF EXISTS workstream_events;
+/// The cache's copies of the app tables are emptied once the app database holds their rows, which `Db::open_with_app`
+/// records (`copied:<cache file>` in `app_meta`) before it applies this step. The tables stay: a release from before the
+/// move opens the file at this version without recreating them and fails on its first query of one.
+const CLEAR_APP_COPIES: &str = "
+DELETE FROM proposals;
+DELETE FROM runs;
+DELETE FROM run_events;
+DELETE FROM run_messages;
+DELETE FROM run_reports;
+DELETE FROM run_report_tokens;
+DELETE FROM pip_turns;
+DELETE FROM workstreams;
+DELETE FROM workstream_events;
 DELETE FROM meta WHERE k LIKE 'claude:%' OR k = 'pip_sessions';";
 
-pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST, DROP_APP_COPIES];
+pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST, CLEAR_APP_COPIES];
 
 /// What Gossamr itself keeps, apart from any one connection's cache: drafts, runs and their reports, workstreams, Pip's
 /// conversations and the sessions Pip started. These are the final shapes of the tables the cache steps built up, so
@@ -525,7 +526,8 @@ const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages",
 const APP_META_KEYS: &str = "k LIKE 'claude:%'";
 
 /// How many of the cache's steps it takes to give its copies of the app tables their final shape. The copy into the
-/// app database reads them after these and before `DROP_APP_COPIES`, so that step cannot run first.
+/// app database reads them after these and before `CLEAR_APP_COPIES`, so `migrate` stops here and only
+/// `Db::open_with_app` applies that step, after the copy.
 pub const CACHE_STEPS_WITH_APP_STATE: usize = 18;
 
 pub(crate) fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
@@ -540,7 +542,7 @@ pub(crate) fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
 }
 
 pub fn migrate(conn: &mut Connection) -> Result<()> {
-    apply(conn, STEPS)
+    apply(conn, &STEPS[..CACHE_STEPS_WITH_APP_STATE])
 }
 
 pub fn migrate_app(conn: &mut Connection) -> Result<()> {
@@ -552,7 +554,7 @@ fn own_sessions(json: Option<String>) -> Vec<String> {
 }
 
 /// Copies the app state a cache file holds into the app database, once per cache file. The cache keeps its rows until
-/// `DROP_APP_COPIES`, which the caller applies after this returns. Needs the cache attached as `cache`. Returns
+/// `CLEAR_APP_COPIES`, which the caller applies after this returns. Needs the cache attached as `cache`. Returns
 /// what the cache held that a closed app left half done.
 pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Adopted> {
     let marker = format!("copied:{cache_file}");
@@ -623,7 +625,7 @@ fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The shape a cache has when the app database copies from it, which is what the steps before `DROP_APP_COPIES` build.
+    /// The shape a cache has when the app database copies from it, which is what the steps before `CLEAR_APP_COPIES` build.
     fn migrate_to_copy_shape(conn: &mut Connection) -> Result<()> {
         apply(conn, &STEPS[..CACHE_STEPS_WITH_APP_STATE])
     }
@@ -650,36 +652,47 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_file_gets_the_cache_tables_and_none_of_the_app_ones_at_the_latest_version() {
+    fn a_fresh_file_gets_the_cache_tables_at_the_last_cache_version() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
         for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
-        for t in APP_TABLES {
-            assert!(!names.contains(&t.to_string()), "{t} belongs to the app database");
-        }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
-    fn dropping_the_app_copies_keeps_the_cache_and_removes_only_the_sessions_pip_started_from_meta() {
+    fn clearing_the_app_copies_keeps_their_tables_and_the_cache_and_removes_only_the_sessions_pip_started_from_meta() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate_to_copy_shape(&mut conn).unwrap();
         conn.execute_batch(
             "INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES ('p', 'c', 'pending', 't', 't', '{}');
+             INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('workspace', 'q1', 'pip', 'done', 't');
              INSERT INTO meta (k, v) VALUES ('claude:CA-1', '{}'), ('pip_sessions', '[]'), ('last_sync_at', 't'), ('claude_note', 'x');
              INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x');",
         )
         .unwrap();
 
-        migrate(&mut conn).unwrap();
+        apply(&mut conn, STEPS).unwrap();
 
-        assert!(!tables(&conn).contains(&"proposals".to_string()));
+        for table in APP_TABLES {
+            assert!(tables(&conn).contains(&table.to_string()), "{table}");
+            assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{table}");
+        }
         let kept: Vec<String> = conn.prepare("SELECT k FROM meta ORDER BY k").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         assert_eq!(kept, ["claude_note", "last_sync_at"]);
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
+    fn migrate_leaves_the_app_rows_in_a_cache_for_the_copy() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.execute("INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES ('p', 'c', 'pending', 't', 't', '{}')", []).unwrap();
+        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM proposals", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -850,13 +863,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_file_is_at_version_twelve() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        migrate_to_copy_shape(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
-    }
-
-    #[test]
     fn a_version_eight_file_keeps_its_runs_and_drafts_and_gains_pip_turns() {
         let mut conn = Connection::open_in_memory().unwrap();
         for step in &STEPS[..8] {
@@ -911,13 +917,13 @@ mod tests {
     #[test]
     fn migrating_twice_changes_nothing() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrate_to_copy_shape(&mut conn).unwrap();
+        apply(&mut conn, STEPS).unwrap();
         conn.execute("INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x')", []).unwrap();
-        conn.execute("INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('workspace', 'q1', 'pip', 'done', 't')", []).unwrap();
-        migrate_to_copy_shape(&mut conn).unwrap();
+        conn.execute("INSERT INTO meta (k, v) VALUES ('last_sync_at', 't')", []).unwrap();
+        apply(&mut conn, STEPS).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
+        assert_eq!(conn.query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
     }
 
     #[test]

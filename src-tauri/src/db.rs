@@ -38,8 +38,8 @@ pub struct Db {
 }
 
 impl Db {
-    /// A cache file on its own, which holds no drafts, runs or conversations: GitHub's per-account files. It is
-    /// brought to the latest shape, which drops the app tables older files carried.
+    /// A cache file on its own, which holds no drafts, runs or conversations: GitHub's per-account files. Whatever app
+    /// tables it carries are left as they are, because only `open_with_app` copies them out and clears them.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -55,25 +55,11 @@ impl Db {
 
     /// A cache file with the app database attached, which is where drafts, runs, workstreams and Pip's conversations
     /// live. The app database is the main schema so its tables are found first. A cache that still holds app tables
-    /// is copied into the app database, and only then are its copies dropped.
+    /// is copied into the app database, and only then are its copies emptied.
     pub fn open_with_app(cache: &Path, app: &Path) -> Result<Self> {
-        Self::open_with_app_steps(cache, app, schema::STEPS)
-    }
-
-    /// The app database alone, with no cache attached, for work that touches only app tables. Anything that reads
-    /// items, events or a cache's `meta` needs `open_with_app`.
-    pub fn open_app(app: &Path) -> Result<Self> {
-        if let Some(dir) = app.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, home: None })
-    }
-
-    fn open_with_app_steps(cache: &Path, app: &Path, steps: &[&str]) -> Result<Self> {
         let cache_str = cache.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("cache path is not valid UTF-8: {}", cache.display())))?;
-        let through = schema::CACHE_STEPS_WITH_APP_STATE.min(steps.len());
         let mut file = Self::open_file(cache)?;
-        schema::apply(&mut file, &steps[..through])?;
+        schema::migrate(&mut file)?;
         drop(file);
         if let Some(dir) = app.parent() {
             std::fs::create_dir_all(dir)?;
@@ -83,8 +69,17 @@ impl Db {
         db.release_copied(&adopted.applying, chrono::Utc::now())?;
         db.fail_copied_pip_turns(&adopted.pip_turns)?;
         let mut file = Self::open_file(cache)?;
-        schema::apply(&mut file, steps)?;
+        schema::apply(&mut file, schema::STEPS)?;
         Ok(db)
+    }
+
+    /// The app database alone, with no cache attached, for work that touches only app tables. Anything that reads
+    /// items, events or a cache's `meta` needs `open_with_app`.
+    pub fn open_app(app: &Path) -> Result<Self> {
+        if let Some(dir) = app.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, home: None })
     }
 
     fn open_file(path: &Path) -> Result<Connection> {
@@ -417,6 +412,11 @@ mod tests {
         conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(())).optional().unwrap().is_some()
     }
 
+    fn count(file: &std::path::Path, table: &str) -> i64 {
+        let conn = Connection::open(file).unwrap();
+        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
     mod app_database {
         use super::*;
 
@@ -425,11 +425,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             (dir.join("inbox-site-me.sqlite"), dir.join("app.sqlite"), dir)
-        }
-
-        fn count(file: &std::path::Path, table: &str) -> i64 {
-            let conn = Connection::open(file).unwrap();
-            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
         }
 
         const WORKSTREAM: &str = "INSERT INTO workstreams (id, connection_id, title, mode, created_at, data) VALUES ('w1', 'c', 'Fix it', 'open', '2026-10-01T10:00:00Z', '{}');";
@@ -445,7 +440,7 @@ mod tests {
             drop(db);
 
             assert_eq!((count(&app, "workstreams"), count(&app, "pip_turns"), count(&app, "app_meta")), (1, 1, 2));
-            assert!(!has_table(&cache, "workstreams") && !has_table(&cache, "pip_turns"));
+            assert_eq!((count(&cache, "workstreams"), count(&cache, "pip_turns")), (0, 0));
             assert_eq!(count(&cache, "meta"), 1);
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -472,7 +467,8 @@ mod tests {
             drop(db);
             assert_eq!((count(&app, "workstreams"), count(&app, "pip_turns")), (0, 1), "a workstream the app deleted is not copied back");
             for table in ["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"] {
-                assert!(!has_table(&cache, table), "{table} left the cache once the app database held its rows");
+                assert!(has_table(&cache, table), "{table} stays so a release from before the move can still open the file");
+                assert_eq!(count(&cache, table), 0, "{table} was emptied once the app database held its rows");
             }
             let cache_meta = Connection::open(&cache).unwrap();
             let kept: Vec<String> = cache_meta.prepare("SELECT k FROM meta").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
@@ -570,33 +566,55 @@ mod tests {
         }
 
         #[test]
-        fn a_cache_loses_its_app_tables_only_after_the_app_database_holds_the_copy() {
+        fn a_cache_is_emptied_of_app_rows_only_after_the_app_database_holds_the_copy() {
             let (cache, app, dir, p) = legacy_cache_with("order", &comment_on("jira:site:ann"));
             Db::open_app(&app).unwrap().execute_batch("CREATE TRIGGER refuse BEFORE INSERT ON proposals BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
 
             assert!(Db::open_with_app(&cache, &app).is_err());
-            assert!(has_table(&cache, "proposals"), "the copy failed, so the cache keeps its rows");
+            assert_eq!(count(&cache, "proposals"), 1, "the copy failed, so the cache keeps its rows");
             assert_eq!(cache_version(&cache), schema::CACHE_STEPS_WITH_APP_STATE as i64);
 
             Db::open_app(&app).unwrap().execute_batch("DROP TRIGGER refuse;").unwrap();
             let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
             assert_eq!(db.proposal(&p.id).unwrap().map(|p| p.id), Some(p.id.clone()));
             drop(db);
-            assert!(!has_table(&cache, "proposals"));
+            assert_eq!(count(&cache, "proposals"), 0);
             assert_eq!(cache_version(&cache), schema::STEPS.len() as i64);
 
             let db = Db::open_with_app(&cache, &app).unwrap();
-            assert!(db.proposal(&p.id).unwrap().is_some(), "a cache with the tables already gone is skipped, not an error");
+            assert!(db.proposal(&p.id).unwrap().is_some(), "a cache that was already emptied is skipped, not an error");
             drop(db);
             let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
-        fn a_github_file_is_opened_without_the_app_tables() {
+        fn a_cache_not_yet_copied_keeps_its_rows_when_opened_on_its_own() {
+            let (cache, app, dir, p) = legacy_cache_with("on-its-own", &comment_on("jira:site:ann"));
+            drop(Db::open(&cache).unwrap());
+            assert_eq!(count(&cache, "proposals"), 1);
+            assert_eq!(cache_version(&cache), schema::CACHE_STEPS_WITH_APP_STATE as i64);
+
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&p.id).unwrap().is_some(), "the draft reached the app database");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_cache_that_was_copied_still_opens_for_a_release_from_before_the_move() {
+            let (cache, app, dir, _) = legacy_cache_with("downgrade", &comment_on("jira:site:ann"));
+            drop(Db::open_with_app(&cache, &app).unwrap());
+
+            for table in ["proposals", "runs", "pip_turns", "workstreams"] {
+                assert_eq!(count(&cache, table), 0, "{table}");
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_github_file_is_opened_with_the_cache_tables() {
             let (_, _, dir) = files("github-file");
             let file = dir.join("github-ann.sqlite");
             drop(Db::open(&file).unwrap());
-            assert!(!has_table(&file, "proposals") && !has_table(&file, "runs") && !has_table(&file, "pip_turns"));
             assert!(has_table(&file, "items") && has_table(&file, "code_changes"));
             let _ = std::fs::remove_dir_all(dir);
         }
