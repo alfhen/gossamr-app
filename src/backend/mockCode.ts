@@ -91,6 +91,7 @@ export class MockCode {
     private readonly now: number,
     me: string,
     private readonly watched: (repo: string) => boolean,
+    private readonly offName: () => string | null = () => null,
   ) {
     const who = (login: string): PersonRef => ({ connectionId, accountId: login });
     const base = {
@@ -242,7 +243,8 @@ export class MockCode {
   }
 
   private refused(repo: string): Error {
-    return new Error(`${repo} isn't one of the repositories you watch, so it isn't read.`);
+    const off = this.offName();
+    return new Error(off ? `${off} is off, so ${repo} isn't read.` : `${repo} isn't one of the repositories you watch, so it isn't read.`);
   }
 
   private require(repo: string) {

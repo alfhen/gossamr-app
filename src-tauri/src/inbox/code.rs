@@ -693,11 +693,12 @@ impl Core {
 
     /// The pull request as GitHub has it now, in a watched repository.
     pub async fn code_pull_change(&self, repo: &str, number: u64) -> Result<CodeChange> {
-        let (id, repo) = self.code_connection_for(repo)?;
+        let (id, repo) = self.chosen_connection_for(repo)?;
         self.code_host(&id).await?.pull_request_change(&repo, number).await
     }
 
     /// The connection that watches `repo` (compared without regard to case) and the repository as it is spelled there.
+    /// A repository of a connection that is off is refused as off, not as unwatched.
     pub fn code_connection_for(&self, repo: &str) -> Result<(String, String)> {
         for id in self.code.connection_ids() {
             if let Some(found) = self
@@ -708,7 +709,32 @@ impl Core {
                 return Ok((id, found));
             }
         }
+        match self.off_code_name(Some(repo))? {
+            Some(name) => Err(Error::CodeHost { status: 403, message: format!("{name} is off, so {repo} isn't read.") }),
+            None => Err(refused(repo)),
+        }
+    }
+
+    /// Like `code_connection_for`, and still the answer while the connection is off: a run already approved keeps its
+    /// way to GitHub, since it works in a local clone.
+    pub(crate) fn chosen_connection_for(&self, repo: &str) -> Result<(String, String)> {
+        for id in self.code.connection_ids() {
+            if let Some(found) = self.chosen_repos(&id)?.into_iter().find(|r| r.eq_ignore_ascii_case(repo)) {
+                return Ok((id, found));
+            }
+        }
         Err(refused(repo))
+    }
+
+    /// The name of a GitHub connection that is off: the one that follows `repo` when one is given, else any.
+    pub fn off_code_name(&self, repo: Option<&str>) -> Result<Option<String>> {
+        for id in self.code.connection_ids() {
+            let Some(name) = self.off_name(&id) else { continue };
+            if repo.is_none_or(|repo| self.chosen_repos(&id).is_ok_and(|repos| is_watched_repo(&repos, repo))) {
+                return Ok(Some(name));
+            }
+        }
+        Ok(None)
     }
 
     /// Every watched repository with the connection that watches it.
@@ -720,6 +746,15 @@ impl Core {
                     .into_iter()
                     .map(|r| (id.clone(), r)),
             );
+        }
+        Ok(out)
+    }
+
+    /// Every repository chosen, off connections included, for the checks that run at launch.
+    pub(crate) fn chosen_code_repos(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for id in self.code.connection_ids() {
+            out.extend(self.chosen_repos(&id)?);
         }
         Ok(out)
     }
@@ -1790,13 +1825,29 @@ pub(crate) mod tests {
         for refused in [lx.core().code_pull_request(&CodeRef { connection_id: "github:ann".into(), repo: "acme/webshop".into(), number: 208 }).await.err(), lx.core().code_pull_requests("github:ann", "acme/webshop").await.err()] {
             assert!(refused.is_some_and(|e| e.to_string().contains("is off, so acme/webshop isn't read")));
         }
-        assert!(lx.core().code_connection_for("acme/webshop").is_err());
+        let refused = lx.core().code_connection_for("acme/webshop").unwrap_err().to_string();
+        assert!(refused.contains("is off, so acme/webshop isn't read"), "{refused}");
+        assert!(lx.core().code_connection_for("acme/gateway").is_err_and(|e| e.to_string().contains("is off")), "the repositories chosen are the ones that are off");
+        assert!(lx.core().require_watched_repo("acme/webshop").is_ok(), "a run is still launched into a chosen repository");
         assert_eq!(lx.core().with_code_db("github:ann", |db| Ok(db.code_changes("github:ann")?.len())).unwrap(), 4, "the cache is kept");
 
         lx.core().set_instance_enabled(&instance, true).await.unwrap();
         assert_eq!(lx.core().watched_repo_names().unwrap(), watched);
         assert_eq!(lx.core().dev_links(&ca208).unwrap(), links);
         assert_eq!(lx.requests_to("/pulls"), fetched, "nothing was fetched to bring them back");
+    }
+
+    #[tokio::test]
+    async fn a_review_run_can_still_read_its_pull_request_while_github_is_off() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.core().adopt_instances().await;
+        lx.sync().await;
+        let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        lx.core().set_instance_enabled(&instance, false).await.unwrap();
+
+        let change = lx.core().code_pull_change("acme/webshop", 208).await.unwrap();
+
+        assert_eq!(change.number, Some(208));
     }
 
     #[tokio::test]

@@ -271,6 +271,9 @@ impl Core {
         }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
+        if self.off_name(connection_id).is_some() {
+            return Ok(Vec::new());
+        }
         if refresh {
             self.check_assigned_elsewhere(&scope).await?;
         }
@@ -657,10 +660,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_jira_that_is_off_leaves_every_view_and_comes_back_whole_without_a_fetch() {
+    async fn a_jira_that_is_off_leaves_every_view_and_comes_back_whole_when_it_is_on_again() {
         let fx = fixture().await;
         fx.core.adopt_instances().await;
         fx.add_item(2).await;
+        let event = crate::events::NewEvent {
+            id: "jira:site:me:e1".into(),
+            kind: crate::model::EventKind::Comment,
+            ticket_key: "CA-1".into(),
+            actor: crate::model::Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None },
+            at: now_iso(),
+            text: "Looks good".into(),
+            field: None,
+        };
+        let action = ("a1".to_string(), crate::model::MyAction { ticket_key: "CA-1".into(), at: now_iso(), kind: "transition".into(), text: "To do → Done".into() });
+        fx.core
+            .with_db_for(&fx.scope, |db| {
+                db.insert_events(std::slice::from_ref(&event), "2000-01-01T00:00:00Z")?;
+                db.insert_cache_events(&crate::sync::domain_event("jira:site:me", &event).into_iter().collect::<Vec<_>>())?;
+                db.insert_activity(&[action])
+            })
+            .await
+            .unwrap();
         let item = fx.item("CA-1");
         let everything = Filter::And { filters: vec![] };
         let feed = FeedQuery::default();
@@ -675,14 +696,19 @@ mod tests {
                     fx.cache_item(&item).await.unwrap().is_some(),
                     fx.cache_people().await.unwrap().len(),
                     fx.cache_feed(&feed).await.unwrap().entries.len(),
+                    fx.cache_feed_unread(&[]).await.unwrap(),
+                    fx.cache_events(&item, 10).await.unwrap().len(),
+                    fx.snapshot().await.unwrap().events.len(),
+                    fx.snapshot().await.unwrap().activity.len(),
                 )
             }
         };
         let before = shown(&fx).await;
         assert!(before.0 == 2 && before.1 > 0 && before.2 > 0 && before.3 && before.4 > 0, "{before:?}");
+        assert!(before.5 > 0 && before.6 > 0 && before.7 > 0 && before.8 > 0 && before.9 > 0, "the Inbox has something to hide: {before:?}");
 
         fx.core.set_instance_enabled("jira", false).await.unwrap();
-        assert_eq!(shown(&fx).await, (0, 0, 0, false, 0, 0));
+        assert_eq!(shown(&fx).await, (0, 0, 0, false, 0, 0, 0, 0, 0, 0));
         assert!(fx.core.search_cached(&fx.scope, &everything).await.unwrap().is_empty());
         assert!(fx.core.cache_comments(&item, true).await.unwrap().is_empty());
         assert!(fx.core.cache_transitions(&item).await.unwrap().is_empty());
@@ -708,5 +734,6 @@ mod tests {
 
         fx.core.set_instance_enabled("jira", true).await.unwrap();
         assert_eq!(fx.core.radar_if_due().await.unwrap().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
+        assert_eq!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().len(), 1);
     }
 }

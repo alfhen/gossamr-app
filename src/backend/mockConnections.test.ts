@@ -115,7 +115,7 @@ describe("the mock on/off switch", () => {
     await b.connectionSetEnabled("github", false);
     expect(await b.devLinks(ticket)).toEqual([]);
     expect(await b.devLinksLive(ticket)).toEqual([]);
-    await expect(b.codePullRequest({ connectionId: "github:ada", repo: "acme/webshop", number: 212 })).rejects.toThrow("isn't one of the repositories you watch");
+    await expect(b.codePullRequest({ connectionId: "github:ada", repo: "acme/webshop", number: 212 })).rejects.toThrow("GitHub is off, so acme/webshop isn't read.");
     expect(b.github.watchedRepos()).toEqual([]);
     await b.connectionSetEnabled("github", true);
     expect(await b.devLinks(ticket)).toHaveLength(shown);

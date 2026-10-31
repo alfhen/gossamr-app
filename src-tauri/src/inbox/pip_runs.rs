@@ -71,7 +71,7 @@ impl Core {
         }
         match repos.as_slice() {
             [only] => Ok((only.clone(), work.title)),
-            [] => Err(refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings.")),
+            [] => Err(self.no_repository()),
             several => Err(refuse(format!(
                 "It isn't clear which repository to use ({}): pass repo, or ask the person which one.",
                 several.join(", ")
@@ -79,11 +79,18 @@ impl Core {
         }
     }
 
+    fn no_repository(&self) -> Error {
+        match self.off_code_name(None) {
+            Ok(Some(name)) => refuse(format!("{name} is off, so its repositories are hidden from you and there is nowhere to run an agent. Ask the person to turn it on in Settings.")),
+            _ => refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings."),
+        }
+    }
+
     /// The watched repository `repo` names, spelling case forgiven.
     pub(crate) fn watched_repo_named(&self, repo: &str) -> Result<String> {
         let names = self.watched_repo_names()?;
         if names.is_empty() {
-            return Err(refuse("No repository is watched, so there is nowhere to run an agent. Ask the person to watch one in Settings."));
+            return Err(self.no_repository());
         }
         names.iter().find(|n| n.eq_ignore_ascii_case(repo.trim())).cloned().ok_or_else(|| refuse(format!("{} isn't a repository the user watches. The watched ones are: {}.", repo.trim(), names.join(", "))))
     }
