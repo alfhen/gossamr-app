@@ -1131,8 +1131,9 @@ export class MockBackend implements Backend {
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
     if (refresh) this.github.recheck();
     const refused = this.jiraToken === "refused";
-    const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : null;
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
+    const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
+    const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: true, kind: "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
     const all = this.github.connected ? [sample, this.github.info()] : [sample];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }

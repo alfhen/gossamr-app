@@ -116,6 +116,7 @@ test.describe("a Jira token close to its expiry", () => {
     await expect(page.getByRole("listitem", { name: "Sample data connection" })).toContainText("Token expires in 9 days");
     const detail = page.getByRole("region", { name: "Sample data details" });
     await expect(detail.locator("[data-probe]")).toHaveAttribute("data-probe", "expiresSoon");
+    await expect(detail).toContainText("Your Jira token expires on 7 Nov. Make a new one and paste it here.");
     await detail.getByRole("button", { name: "Make a new token" }).click();
     await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
   });

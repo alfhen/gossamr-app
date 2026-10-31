@@ -881,7 +881,11 @@ export interface ProbeSnapshot {
   version: string | null;
   state: ProbeState;
   account: string | null;
+  /** For GitHub, the login gh has active on the host: the account agents clone and push as. */
+  activeLogin: string | null;
   message: string;
+  /** What the detail pane says when it needs more than the list's one line. */
+  detail: string | null;
   /** The command that fixes it. */
   fix: string | null;
   checkedAt: string;
