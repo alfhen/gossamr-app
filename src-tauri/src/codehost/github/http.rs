@@ -133,8 +133,9 @@ impl Api {
     }
 
     /// After a 401, the token `gh` gives now, when it differs from the one just refused: `gh` may have renewed it since.
-    async fn renewed(&self, refused: &str) -> Result<Option<String>> {
-        Ok(Some(self.credentials.token().await?).filter(|now| now != refused))
+    /// If `gh` can't be asked, the 401 stands.
+    async fn renewed(&self, refused: &str) -> Option<String> {
+        self.credentials.token().await.ok().filter(|now| now != refused)
     }
 
     /// Sends the request, trying again after a failure in transit or a 502, 503 or 504. Only reads are sent through
@@ -221,7 +222,7 @@ impl Api {
         let token = self.credentials.token().await?;
         let mut answer = send(token.clone()).await?;
         if answer.0 == StatusCode::UNAUTHORIZED {
-            if let Some(renewed) = self.renewed(&token).await? {
+            if let Some(renewed) = self.renewed(&token).await {
                 answer = send(renewed).await?;
             }
         }
@@ -259,7 +260,7 @@ impl Api {
         let mut res = send(&token).await?;
         // A 401 means GitHub did not act on it, so sending again with a renewed token cannot post twice.
         if res.status() == StatusCode::UNAUTHORIZED {
-            if let Some(renewed) = self.renewed(&token).await? {
+            if let Some(renewed) = self.renewed(&token).await {
                 res = send(&renewed).await?;
             }
         }
@@ -480,6 +481,23 @@ mod tests {
         let server = serve(vec![("POST /w", vec![Reply::status(401, "{}")])]).await;
         let (status, ..) = api_with(&server.base, vec!["same"]).post_json("/w", &serde_json::json!({})).await.unwrap();
         assert_eq!((status, server.targets().len()), (401, 1));
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_stays_a_401_when_gh_cannot_be_asked_again() {
+        struct Once(std::sync::atomic::AtomicBool);
+        #[async_trait::async_trait]
+        impl CredentialSource for Once {
+            async fn token(&self) -> Result<String> {
+                if self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return Err(Error::CodeHost { status: 504, message: "gh didn't answer in time".into() });
+                }
+                Ok("old".into())
+            }
+        }
+        let server = serve(vec![("/a", vec![Reply::status(401, "{}")])]).await;
+        let api = Api::new(reqwest::Client::new(), &server.base, Arc::new(Once(Default::default())), "github:ann", Arc::new(Mutex::new(Db::in_memory().unwrap())));
+        assert!(api.get("/a").await.unwrap_err().is_unauthorized());
     }
 
     #[tokio::test]
