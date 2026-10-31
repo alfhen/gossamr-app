@@ -48,7 +48,11 @@ export async function disconnectGithub(connectionId: string, label: string): Pro
     useToasts.getState().push(`Couldn't disconnect ${label}: ${messageOf(e)}`);
     return false;
   }
-  await refreshAfterGithubChange();
+  try {
+    await refreshAfterGithubChange();
+  } catch (e) {
+    useWorkspace.getState().report("Couldn't refresh after disconnecting", e);
+  }
   useToasts.getState().push(`Disconnected ${label}. Its token and cached pull requests are gone.`, "info");
   return true;
 }

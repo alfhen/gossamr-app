@@ -15,7 +15,8 @@ export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status"
   if (c.kind === "mock" && !c.status) return { text: "Sample tickets · nothing is sent anywhere", tone: "quiet" };
   if (!c.enabled || c.status?.state === "off") return { text: "Off", tone: "quiet" };
   const s = c.status;
-  if (checking || !s) return { text: "Checking…", tone: "busy" };
+  if (checking) return { text: "Checking…", tone: "busy" };
+  if (!s) return { text: "Not checked yet", tone: "quiet" };
   const error = probeDecides(c) ? "error" : "unsure";
   switch (s.state) {
     case "ready":

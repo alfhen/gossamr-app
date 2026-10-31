@@ -13,9 +13,13 @@ describe("a connection's line in the list", () => {
     expect(statusLine(github("ready"), false)).toEqual({ text: "Authenticated · ada", tone: "ok" });
   });
 
-  it("says Checking while a probe runs, or before the first one answers", () => {
+  it("says Checking only while a probe runs", () => {
     expect(statusLine(github("ready"), true).text).toBe("Checking…");
-    expect(statusLine(base, false)).toEqual({ text: "Checking…", tone: "busy" });
+    expect(statusLine(base, true)).toEqual({ text: "Checking…", tone: "busy" });
+  });
+
+  it("does not claim a check is running for a connection that has no snapshot and none pending", () => {
+    expect(statusLine(base, false)).toEqual({ text: "Not checked yet", tone: "quiet" });
   });
 
   it("says Not signed in and Not found as an error for Jira", () => {

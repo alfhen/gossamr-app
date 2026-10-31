@@ -35,8 +35,10 @@ export interface ConnectionsViewProps {
   watch: WatchState[];
   now: Date;
   checking: boolean;
-  confirming: boolean;
-  busy: boolean;
+  /** The GitHub connection whose Disconnect is being confirmed. */
+  confirming: string | null;
+  /** The GitHub connection being disconnected. */
+  busy: string | null;
   copied: boolean;
   onSelect(id: string): void;
   onCheck(): void;
@@ -136,7 +138,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>
           <div className="flex flex-wrap gap-2">
             {c.kind === "github" ? (
-              <Button variant="quiet" size="sm" destructive disabled={p.busy} onClick={p.onAskDisconnect}>
+              <Button variant="quiet" size="sm" destructive disabled={p.busy === c.id} onClick={p.onAskDisconnect}>
                 Disconnect
               </Button>
             ) : (
@@ -150,14 +152,14 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
               </>
             )}
           </div>
-          {p.confirming && (
+          {c.kind === "github" && p.confirming === c.id && (
             <div role="alertdialog" aria-label={`Disconnect ${c.workspace}`} className="grid gap-2 border-t border-ws-sep pt-2 text-sm">
               <p className="m-0">Disconnect {c.workspace}? Gossamr forgets its token and deletes the pull requests and branches it cached. Nothing on GitHub changes.</p>
               <div className="flex gap-2">
-                <Button variant="danger" size="sm" disabled={p.busy} onClick={p.onDisconnect}>
-                  {p.busy ? "Disconnecting…" : "Disconnect"}
+                <Button variant="danger" size="sm" disabled={p.busy === c.id} onClick={p.onDisconnect}>
+                  {p.busy === c.id ? "Disconnecting…" : "Disconnect"}
                 </Button>
-                <Button variant="quiet" size="sm" disabled={p.busy} onClick={p.onCancel}>
+                <Button variant="quiet" size="sm" disabled={p.busy === c.id} onClick={p.onCancel}>
                   Cancel
                 </Button>
               </div>
@@ -235,11 +237,11 @@ export function ConnectionsSection({ now }: { now: Date }) {
   const selectedId = useConnectionsUi((s) => s.selected);
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const current = connections.find((c) => c.id === selectedId) ?? connections[0];
   const select = (id: string) => {
-    setConfirming(false);
+    setConfirming(null);
     useConnectionsUi.getState().select(id);
   };
   const check = async () => {
@@ -283,15 +285,17 @@ export function ConnectionsSection({ now }: { now: Date }) {
       onManage={() => useTabs.getState().openSettings("watching")}
       onNewToken={() => useJiraUi.getState().openConnect()}
       onSignOut={() => void signOut()}
-      onAskDisconnect={() => setConfirming(true)}
-      onCancel={() => setConfirming(false)}
+      onAskDisconnect={() => setConfirming(current?.id ?? null)}
+      onCancel={() => setConfirming(null)}
       onDisconnect={() => {
-        if (!current) return;
-        setBusy(true);
-        void disconnectGithub(current.id, current.workspace).then((ok) => {
-          setBusy(false);
-          if (ok) setConfirming(false);
-        });
+        const target = connections.find((c) => c.id === confirming);
+        if (!target) return;
+        setBusy(target.id);
+        void disconnectGithub(target.id, target.workspace)
+          .then((ok) => {
+            if (ok) setConfirming(null);
+          })
+          .finally(() => setBusy(null));
       }}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
     />

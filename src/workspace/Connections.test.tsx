@@ -18,8 +18,8 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       watch={[]}
       now={NOW}
       checking={false}
-      confirming={false}
-      busy={false}
+      confirming={null}
+      busy={null}
       copied={false}
       onSelect={vi.fn()}
       onCheck={vi.fn()}
@@ -77,7 +77,18 @@ describe("the connections list", () => {
 
   it("asks before it disconnects GitHub", () => {
     expect(view()).not.toContain("alertdialog");
-    expect(view({ confirming: true })).toContain("alertdialog");
+    expect(view({ confirming: gh.id })).toContain("alertdialog");
+  });
+
+  it("shows the confirmation on the connection it was asked for, never on the one that takes its place", () => {
+    const out = view({ connections: [jira], selectedId: jira.id, confirming: gh.id, busy: gh.id });
+    expect(out).not.toContain("alertdialog");
+    expect(out).not.toContain("Disconnecting…");
+  });
+
+  it("disables Disconnect only for the connection being disconnected", () => {
+    expect(view({ confirming: gh.id, busy: gh.id })).toContain("Disconnecting…");
+    expect(view({ confirming: gh.id, busy: "github:grace" })).not.toContain("Disconnecting…");
   });
 
   it("keeps only the selected row in the tab order, so the arrow keys move between rows", () => {
