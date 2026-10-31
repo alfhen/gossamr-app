@@ -82,7 +82,7 @@ describe("the list's keys and times", () => {
   });
 
   it("names the account drafts post as, and for GitHub the one agents push as", () => {
-    expect(actingAs(base)).toEqual(["Drafts post as ada via GitHub.", "Agents clone and push as whichever account gh has active."]);
+    expect(actingAs(base)).toEqual(["Drafts post as ada via GitHub.", "Agents clone and push with your own git and gh setup, which may be a different account."]);
     expect(actingAs(jira())).toEqual(["Drafts post as Ada Example via Jira."]);
     expect(actingAs({ ...base, kind: "mock" })).toEqual([]);
   });

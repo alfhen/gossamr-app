@@ -48,7 +48,7 @@ export function oldestCheck(connections: Pick<ConnectionInfo, "status">[]): stri
 
 /** Whose drafts and agents act as which account, for the detail pane. */
 export function actingAs(c: Pick<ConnectionInfo, "kind" | "workspace" | "account">): string[] {
-  if (c.kind === "github") return [`Drafts post as ${c.workspace} via GitHub.`, "Agents clone and push as whichever account gh has active."];
+  if (c.kind === "github") return [`Drafts post as ${c.workspace} via GitHub.`, "Agents clone and push with your own git and gh setup, which may be a different account."];
   if (c.kind === "jira") return [`Drafts post as ${c.account} via Jira.`];
   return [];
 }
