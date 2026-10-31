@@ -25,7 +25,7 @@ export function SignInBannerView({ lost, onFix }: { lost: Lost[]; onFix(only: Lo
   if (!lost.length) return null;
   const only = lost.length === 1 ? lost[0] : null;
   const jira = only !== null && only.kind !== "github";
-  const text = !only ? `${lost.length} connections are signed out, so they aren't syncing.` : jira ? "Jira turned down your token, so nothing is syncing. Your drafts, runs and proposals are kept." : `${only.displayName} is signed out, so it isn't syncing.`;
+  const text = !only ? `${lost.length} connections are signed out, so they aren't syncing.` : jira ? "Jira turned down your token, so Jira isn't syncing. Your drafts, runs and proposals are kept." : `${only.displayName} is signed out, so it isn't syncing.`;
   return (
     <div role="alert" className="mx-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-ws-blocked/40 py-1.5 text-sm">
       <span className="min-w-0 flex-1 text-ws-ink2">{text}</span>
