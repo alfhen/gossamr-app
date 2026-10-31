@@ -150,16 +150,16 @@ fn version_of(output: &str) -> Option<String> {
 }
 
 /// Runs `gh auth status` and `gh --version`. A failure is already the snapshot to show.
-async fn ask_gh(gh_dirs: &[PathBuf], timeout: Duration) -> Result<(Option<String>, Status), Snapshot> {
+async fn ask_gh(gh_dirs: &[PathBuf], timeout: Duration) -> Result<(Option<String>, Status), Box<Snapshot>> {
     let Some(gh) = find_gh_in(gh_dirs) else {
-        return Err(Snapshot { installed: false, ..Snapshot::new(State::NotFound, "gh isn't installed.").fix("brew install gh") });
+        return Err(Box::new(Snapshot { installed: false, ..Snapshot::new(State::NotFound, "gh isn't installed.").fix("brew install gh") }));
     };
     let (version, status) = tokio::join!(run_gh(&gh, &["--version"], timeout), run_gh(&gh, &["auth", "status", "--json", "hosts"], timeout));
     let version = match version {
         Ran::Output { stdout, .. } => version_of(&stdout),
         _ => None,
     };
-    let failed = |snapshot: Snapshot| Err(Snapshot { version: version.clone(), ..snapshot });
+    let failed = |snapshot: Snapshot| Err(Box::new(Snapshot { version: version.clone(), ..snapshot }));
     match status {
         Ran::TimedOut => failed(Snapshot::new(State::Error, "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.").fix("gh auth status")),
         Ran::Failed => failed(Snapshot::new(State::Error, "Gossamr couldn't run gh.")),
@@ -175,7 +175,7 @@ async fn ask_gh(gh_dirs: &[PathBuf], timeout: Duration) -> Result<(Option<String
 pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Duration) -> Snapshot {
     let (version, status) = match ask_gh(gh_dirs, timeout).await {
         Ok(asked) => asked,
-        Err(snapshot) => return snapshot,
+        Err(snapshot) => return *snapshot,
     };
     let login_command = format!("gh auth login -h {host}");
     let entry = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).find(|e| e.login.eq_ignore_ascii_case(login));
@@ -193,7 +193,7 @@ pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Durat
 pub async fn github_first_run(gh_dirs: &[PathBuf], host: &str, timeout: Duration) -> Snapshot {
     let (version, status) = match ask_gh(gh_dirs, timeout).await {
         Ok(asked) => asked,
-        Err(snapshot) => return snapshot,
+        Err(snapshot) => return *snapshot,
     };
     let entries: Vec<&Entry> = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).collect();
     let working = entries.iter().find(|e| e.state == "success" && e.active).or_else(|| entries.iter().find(|e| e.state == "success"));
