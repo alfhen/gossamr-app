@@ -11,6 +11,8 @@ import { onSignedOut } from "./accountEvents";
 import { resetAccountState } from "./accountState";
 import type { Backend } from "./backend/types";
 import { Setup } from "./components/Setup";
+import { desktopFirstRun, type FirstRunApi } from "./backend/firstRun";
+import { firstRunStateFromUrl, mockFirstRun } from "./backend/mockFirstRun";
 
 type Phase =
   | { name: "loading" }
@@ -23,6 +25,11 @@ const accountKey = (account: { site: { cloudId: string }; me: { accountId: strin
 
 export function Root() {
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
+  const [firstRun] = useState<FirstRunApi | null>(() => {
+    if (isTauri()) return desktopFirstRun;
+    const state = firstRunStateFromUrl();
+    return state ? mockFirstRun(state) : null;
+  });
 
   const start = (status: AuthStatus | null) => {
     const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
@@ -46,7 +53,7 @@ export function Root() {
   };
 
   useEffect(() => {
-    if (!isTauri()) return start(null);
+    if (!isTauri()) return firstRun ? setPhase({ name: "setup" }) : start(null);
     checkAuth();
   }, []);
 
@@ -72,7 +79,7 @@ export function Root() {
         </div>
       );
     case "setup":
-      return <Setup onSignedIn={start} onUseSampleData={() => start(null)} />;
+      return firstRun && <Setup api={firstRun} onSignedIn={(s) => start(isTauri() ? s : null)} onUseSampleData={() => start(null)} />;
     case "app":
       return <Workspace backend={phase.backend} />;
   }

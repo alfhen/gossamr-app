@@ -113,6 +113,8 @@ struct Status {
 struct Entry {
     state: String,
     login: String,
+    #[serde(default)]
+    active: bool,
     /// What failed when `state` is `error`: `HTTP 401: Bad credentials` for a refused token, a connection error offline.
     error: Option<String>,
 }
@@ -147,34 +149,63 @@ fn version_of(output: &str) -> Option<String> {
     output.lines().next()?.strip_prefix("gh version ")?.split_whitespace().next().map(String::from)
 }
 
-/// Asks `gh` about `login` on `host`, never about the active account.
-pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Duration) -> Snapshot {
+/// Runs `gh auth status` and `gh --version`. A failure is already the snapshot to show.
+async fn ask_gh(gh_dirs: &[PathBuf], timeout: Duration) -> Result<(Option<String>, Status), Box<Snapshot>> {
     let Some(gh) = find_gh_in(gh_dirs) else {
-        return Snapshot { installed: false, ..Snapshot::new(State::NotFound, "gh isn't installed.").fix("brew install gh") };
+        return Err(Box::new(Snapshot { installed: false, ..Snapshot::new(State::NotFound, "gh isn't installed.").fix("brew install gh") }));
     };
     let (version, status) = tokio::join!(run_gh(&gh, &["--version"], timeout), run_gh(&gh, &["auth", "status", "--json", "hosts"], timeout));
     let version = match version {
         Ran::Output { stdout, .. } => version_of(&stdout),
         _ => None,
     };
-    let login_command = format!("gh auth login -h {host}");
-    let snapshot = match status {
-        Ran::TimedOut => Snapshot::new(State::Error, "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.").fix("gh auth status"),
-        Ran::Failed => Snapshot::new(State::Error, "Gossamr couldn't run gh."),
-        Ran::Output { ok: false, .. } => Snapshot::new(State::Error, "This version of gh can't report its logins. Update it, then check again.").fix("brew upgrade gh"),
+    let failed = |snapshot: Snapshot| Err(Box::new(Snapshot { version: version.clone(), ..snapshot }));
+    match status {
+        Ran::TimedOut => failed(Snapshot::new(State::Error, "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.").fix("gh auth status")),
+        Ran::Failed => failed(Snapshot::new(State::Error, "Gossamr couldn't run gh.")),
+        Ran::Output { ok: false, .. } => failed(Snapshot::new(State::Error, "This version of gh can't report its logins. Update it, then check again.").fix("brew upgrade gh")),
         Ran::Output { stdout, .. } => match serde_json::from_str::<Status>(&stdout) {
-            Err(_) => Snapshot::new(State::Error, "gh gave an answer Gossamr couldn't read."),
-            Ok(status) => {
-                let entry = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).find(|e| e.login.eq_ignore_ascii_case(login));
-                match entry {
-                    None => Snapshot::new(State::NotSignedIn, format!("gh has no login for {login} on {host}.")).fix(login_command),
-                    Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("gh is signed in as {} on {host}", e.login)) },
-                    Some(e) if e.state == "timeout" => Snapshot::new(State::Error, format!("gh couldn't reach {host}.")),
-                    Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
-                    Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its token for {login} on {host}.")),
-                }
-            }
+            Err(_) => failed(Snapshot::new(State::Error, "gh gave an answer Gossamr couldn't read.")),
+            Ok(parsed) => Ok((version.clone(), parsed)),
         },
+    }
+}
+
+/// Asks `gh` about `login` on `host`, never about the active account.
+pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Duration) -> Snapshot {
+    let (version, status) = match ask_gh(gh_dirs, timeout).await {
+        Ok(asked) => asked,
+        Err(snapshot) => return *snapshot,
+    };
+    let login_command = format!("gh auth login -h {host}");
+    let entry = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).find(|e| e.login.eq_ignore_ascii_case(login));
+    let snapshot = match entry {
+        None => Snapshot::new(State::NotSignedIn, format!("gh has no login for {login} on {host}.")).fix(login_command),
+        Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("gh is signed in as {} on {host}", e.login)) },
+        Some(e) if e.state == "timeout" => Snapshot::new(State::Error, format!("gh couldn't reach {host}.")),
+        Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
+        Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its token for {login} on {host}.")),
+    };
+    Snapshot { version, ..snapshot }
+}
+
+/// Before any connection exists, no login is named, so this reports the account `gh` has active on `host`.
+/// Only that account counts: `gh auth token` and gh's git credentials come from it, so a working inactive login must not hide a broken active one.
+pub async fn github_first_run(gh_dirs: &[PathBuf], host: &str, timeout: Duration) -> Snapshot {
+    let (version, status) = match ask_gh(gh_dirs, timeout).await {
+        Ok(asked) => asked,
+        Err(snapshot) => return *snapshot,
+    };
+    let entries: Vec<&Entry> = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).collect();
+    let login_command = format!("gh auth login -h {host}");
+    let active = entries.iter().copied().find(|e| e.active).or(if let [only] = entries[..] { Some(only) } else { None });
+    let snapshot = match active {
+        None if entries.is_empty() => Snapshot::new(State::NotSignedIn, format!("gh has no login on {host}.")).fix(login_command),
+        None => Snapshot::new(State::Error, format!("gh has no active login on {host}.")).fix(format!("gh auth switch -h {host}")),
+        Some(e) if e.state == "success" => Snapshot { account: Some(e.login.clone()), ..Snapshot::new(State::Ready, format!("gh is signed in as {} on {host}", e.login)) },
+        Some(e) if e.state == "timeout" => Snapshot::new(State::Error, format!("gh couldn't reach {host}.")),
+        Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {} on {host} no longer works.", e.login)).fix(login_command),
+        Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its login on {host}.")),
     };
     Snapshot { version, ..snapshot }
 }
@@ -255,6 +286,57 @@ mod tests {
             let before = Snapshot { account: Some("alfhen".into()), ..Snapshot::new(State::Ready, "") };
             assert_eq!(seen.keeping_account_of(Some(&before)).account.as_deref(), Some("alfhen"));
         }
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_the_account_gh_has_active_is_the_one_reported() {
+        let both = r#"{"hosts":{"github.com":[{"state":"success","active":false,"host":"github.com","login":"other"},{"state":"success","active":true,"host":"github.com","login":"Alfhen"}]}}"#;
+        let seen = github_first_run(&gh_saying("first-run", both), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.account.as_deref(), seen.version.as_deref(), seen.fix), (State::Ready, Some("Alfhen"), Some("2.97.0"), None));
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_a_gh_with_no_login_is_not_signed_in_with_the_command_to_run() {
+        let seen = github_first_run(&gh_saying("first-run-none", r#"{"hosts":{}}"#), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.fix.as_deref()), (State::NotSignedIn, Some("gh auth login -h github.com")));
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_a_missing_gh_is_not_found_and_a_refused_token_is_not_signed_in() {
+        let gone = github_first_run(&[std::env::temp_dir().join("gossamr-probe-nowhere")], "github.com", Duration::from_secs(5)).await;
+        assert_eq!((gone.state, gone.fix.as_deref()), (State::NotFound, Some("brew install gh")));
+        let refused = r#"{"hosts":{"github.com":[{"state":"error","active":true,"host":"github.com","login":"alfhen","error":"HTTP 401: Bad credentials"}]}}"#;
+        let seen = github_first_run(&gh_saying("first-run-refused", refused), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.account), (State::NotSignedIn, None));
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_a_refused_active_account_is_not_hidden_by_a_working_inactive_one() {
+        let status = r#"{"hosts":{"github.com":[{"state":"error","active":true,"host":"github.com","login":"work","error":"HTTP 401: Bad credentials"},{"state":"success","active":false,"host":"github.com","login":"personal"}]}}"#;
+        let seen = github_first_run(&gh_saying("first-run-inactive-works", status), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.account, seen.fix.as_deref()), (State::NotSignedIn, None, Some("gh auth login -h github.com")));
+        assert!(seen.message.contains("work"));
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_logins_with_none_active_are_not_guessed_between() {
+        let status = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"a"},{"state":"success","host":"github.com","login":"b"}]}}"#;
+        let seen = github_first_run(&gh_saying("first-run-none-active", status), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.account, seen.fix.as_deref()), (State::Error, None, Some("gh auth switch -h github.com")));
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_the_only_login_is_the_one_reported_even_when_gh_does_not_say_it_is_active() {
+        let status = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"solo"}]}}"#;
+        let seen = github_first_run(&gh_saying("first-run-solo", status), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.account.as_deref()), (State::Ready, Some("solo")));
+    }
+
+    #[tokio::test]
+    async fn before_any_login_is_named_a_gh_that_cannot_reach_github_is_an_error_not_a_sign_out() {
+        let offline = r#"{"hosts":{"github.com":[{"state":"timeout","active":true,"host":"github.com","login":"alfhen"}]}}"#;
+        let seen = github_first_run(&gh_saying("first-run-offline", offline), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.state, seen.fix), (State::Error, None));
     }
 
     #[tokio::test]
