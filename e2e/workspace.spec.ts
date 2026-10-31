@@ -372,4 +372,17 @@ test.describe("the screen header", () => {
     await page.getByRole("button", { name: "Board", exact: true }).click();
     await expect(bar).not.toHaveAttribute("data-under", "");
   });
+
+  test("goes solid again when a filter empties the list while scrolled", async ({ page }) => {
+    await openApp(page);
+    await page.getByRole("button", { name: "List", exact: true }).click();
+    const bar = page.locator(".ws-bar");
+    await page.locator("[data-bar-scroll]").evaluate((el) => (el.scrollTop = 200));
+    await expect(bar).toHaveAttribute("data-under", "");
+    const filter = page.getByRole("textbox", { name: "Filter" });
+    await filter.fill("zzqx-matches-nothing");
+    await filter.press("Enter");
+    await expect(page.getByText("Nothing matches this filter.")).toBeVisible();
+    await expect(bar).not.toHaveAttribute("data-under", "");
+  });
 });
