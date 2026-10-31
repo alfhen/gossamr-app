@@ -55,6 +55,10 @@ describe("a connection that is signed out", () => {
     expect(isSignedOut(github("notFound"))).toBe(true);
   });
 
+  it("is not Jira just because its probe found nothing to run", () => {
+    expect(isSignedOut(jira({ status: githubSnapshot("notFound", "x", CHECKED) }))).toBe(false);
+  });
+
   it("is not GitHub while gh is signed in, can't be reached, or the connection is off", () => {
     expect(isSignedOut(github("ready"))).toBe(false);
     expect(isSignedOut(github("error"))).toBe(false);

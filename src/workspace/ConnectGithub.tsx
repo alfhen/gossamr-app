@@ -5,6 +5,7 @@ import { Button } from "../components/Button";
 import { GH_LOGIN_COMMAND, safeGithubUrl, splitLinks } from "../lib/githubUrl";
 import type { GhAccount, GhAccounts } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { isSignedOut } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { openOnGithub, refreshAfterGithubChange, useGithubUi } from "./githubUi";
 import { messageOf, useToasts } from "./toasts";
@@ -31,6 +32,8 @@ export interface ConnectGithubViewProps {
   found: GhAccounts | null;
   /** Logins (lower case) that already have a GitHub connection. */
   connected: string[];
+  /** The connected logins (lower case) that GitHub no longer accepts. */
+  signedOut: string[];
   /** The login being connected. */
   connecting: string | null;
   error: string | null;
@@ -58,17 +61,18 @@ function Command({ command, copied, terminal, onCopy, onOpenTerminal }: { comman
   );
 }
 
-function AccountRow({ account, connected, busy, onConnect }: { account: GhAccount; connected: boolean; busy: boolean; onConnect(): void }) {
-  const note = connected ? "Connected" : !account.usable ? "GitHub refused its token. Sign in again." : account.active ? "Active in gh" : "";
+function AccountRow({ account, connected, signedOut, busy, onConnect }: { account: GhAccount; connected: boolean; signedOut: boolean; busy: boolean; onConnect(): void }) {
+  const note = signedOut ? "Signed out" : connected ? "Connected" : !account.usable ? "GitHub refused its token. Sign in again." : account.active ? "Active in gh" : "";
+  const action = signedOut ? "Sign in again" : "Connect";
   return (
     <li className="flex items-center gap-3 border-b border-ws-sep py-2 last:border-b-0">
       <span className="min-w-0 flex-1 truncate">
         <span className="font-semibold">{account.login}</span>
         {note && <span className="ml-2 text-sm text-ws-ink3">{note}</span>}
       </span>
-      {!connected && (
-        <Button size="sm" aria-label={`Connect ${account.login}`} disabled={!account.usable || busy} onClick={onConnect}>
-          {busy ? "Connecting…" : "Connect"}
+      {(!connected || signedOut) && (
+        <Button variant="plain" size="sm" aria-label={`${action} ${signedOut ? "as " : ""}${account.login}`} disabled={!account.usable || busy} onClick={onConnect}>
+          {busy ? "Connecting…" : action}
         </Button>
       )}
     </li>
@@ -92,14 +96,14 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
       {listed && (
         <ul aria-label="Accounts gh knows" className="m-0 list-none border-y border-ws-sep p-0">
           {found.accounts.map((a) => (
-            <AccountRow key={a.login} account={a} connected={p.connected.includes(a.login.toLowerCase())} busy={p.connecting === a.login} onConnect={() => p.onConnect(a.login)} />
+            <AccountRow key={a.login} account={a} connected={p.connected.includes(a.login.toLowerCase())} signedOut={p.signedOut.includes(a.login.toLowerCase())} busy={p.connecting === a.login} onConnect={() => p.onConnect(a.login)} />
           ))}
         </ul>
       )}
       {found && !listed && (
         <div className="grid gap-2">
           <p className="m-0 text-ws-ink2">{found.message}</p>
-          {found.fix && <Command command={found.fix} copied={p.copied} terminal={found.installed} onCopy={p.onCopy} onOpenTerminal={p.onOpenTerminal} />}
+          {found.fix && <Command command={found.fix} copied={p.copied} terminal={found.fix === GH_LOGIN_COMMAND} onCopy={p.onCopy} onOpenTerminal={p.onOpenTerminal} />}
         </div>
       )}
       {p.error && (
@@ -115,10 +119,10 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
         </div>
       )}
       <div className="flex justify-between gap-2">
-        <Button variant="quiet" disabled={!found} onClick={p.onCheck}>
+        <Button variant="quiet" size="lg" disabled={!found} onClick={p.onCheck}>
           {found && !listed && found.fix ? "I've run it, check again" : "Check again"}
         </Button>
-        <Button variant="primary" disabled={p.connecting !== null} onClick={p.onClose}>
+        <Button variant="primary" size="lg" disabled={p.connecting !== null} onClick={p.onClose}>
           Done
         </Button>
       </div>
@@ -199,19 +203,23 @@ function ConnectFlow({ backend, onClose }: { backend: Backend; onClose(): void }
     return () => window.removeEventListener("keydown", onKey);
   }, [connecting, onClose]);
 
+  const github = connections.filter((c) => c.kind === "github");
   return (
-    <ConnectGithubView
-      found={found}
-      connected={connections.filter((c) => c.kind === "github").map((c) => c.workspace.toLowerCase())}
-      connecting={connecting}
-      error={error}
-      copied={copied}
-      onConnect={(login) => void connect(login)}
-      onCopy={copy}
-      onOpenTerminal={() => backend.githubOpenLogin().catch((e) => setError(`Couldn't open Terminal: ${messageOf(e)}`))}
-      onCheck={check}
-      onClose={onClose}
-    />
+    <ConnectFrame onClose={() => connecting === null && onClose()}>
+      <ConnectGithubView
+        found={found}
+        connected={github.map((c) => c.workspace.toLowerCase())}
+        signedOut={github.filter(isSignedOut).map((c) => c.workspace.toLowerCase())}
+        connecting={connecting}
+        error={error}
+        copied={copied}
+        onConnect={(login) => void connect(login)}
+        onCopy={copy}
+        onOpenTerminal={() => backend.githubOpenLogin().catch((e) => setError(`Couldn't open Terminal: ${messageOf(e)}`))}
+        onCheck={check}
+        onClose={onClose}
+      />
+    </ConnectFrame>
   );
 }
 
@@ -222,9 +230,5 @@ export function ConnectGithubDialog() {
   const backend = useBackend();
   const ready = useWorkspace((s) => s.status === "ready");
   if (!open || !backend || !ready) return null;
-  return (
-    <ConnectFrame onClose={close}>
-      <ConnectFlow backend={backend} onClose={close} />
-    </ConnectFrame>
-  );
+  return <ConnectFlow backend={backend} onClose={close} />;
 }

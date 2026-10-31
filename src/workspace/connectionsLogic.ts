@@ -33,8 +33,8 @@ export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status"
 }
 
 /** A connection that is on and that Gossamr can no longer sign in as. For GitHub that includes a `gh` that isn't installed. */
-export function isSignedOut(c: Pick<ConnectionInfo, "enabled" | "reauth" | "status">): boolean {
-  return c.enabled && (c.reauth || c.status?.state === "notSignedIn" || c.status?.state === "notFound");
+export function isSignedOut(c: Pick<ConnectionInfo, "kind" | "enabled" | "reauth" | "status">): boolean {
+  return c.enabled && (c.reauth || c.status?.state === "notSignedIn" || (c.kind === "github" && c.status?.state === "notFound"));
 }
 
 /** When the oldest probe among `connections` ran: the time "Checked 3m ago" at the top of the list can promise. */
@@ -63,7 +63,6 @@ export function rowAfter(ids: string[], current: string | null, key: string): st
   const step = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0;
   return step ? stepKey(ids, current, step) : null;
 }
-
 
 /** What the sync of a connection is doing, for its detail and its watch card. */
 export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "error"> & { transient?: boolean }, now: Date): { text: string; tone: "ok" | "busy" | "error" } {

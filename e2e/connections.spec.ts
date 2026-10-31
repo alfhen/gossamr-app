@@ -7,6 +7,7 @@ async function openSettings(page: Page) {
 }
 
 const rowOf = (page: Page, name: string) => page.getByRole("listitem", { name: `${name} connection` });
+const refuseToken = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { refuseGithubToken(): void } }).__gossamrMock.refuseGithubToken());
 const probe = (page: Page, state: string) => page.evaluate((s) => (globalThis as unknown as { __gossamrMock: { probeGithub(state: string): void } }).__gossamrMock.probeGithub(s), state);
 
 test.describe("the Connections list", () => {
@@ -179,6 +180,27 @@ test.describe("the Connections list", () => {
     await expect(page.getByRole("heading", { name: "Choose what to watch" })).toBeVisible();
   });
 
+  test("signs a connected account in again from the sheet when GitHub turned its token down, and keeps its drafts", async ({ page }) => {
+    const review = await reviewedDraft(page);
+    await expect(review).toBeVisible();
+    const before = (await reviewDrafts(page)).map((d) => d.state);
+    await toast(page).getByRole("button", { name: "Dismiss" }).click();
+    await refuseToken(page);
+    const banner = page.getByRole("alert").filter({ hasText: "GitHub is signed out" });
+    await expect(banner).toBeVisible();
+    await banner.getByRole("button", { name: "Open connections" }).click();
+    const detail = page.getByRole("region", { name: "GitHub details" });
+    await expect(detail).toContainText("GitHub no longer accepts the token for ada.");
+    await detail.getByRole("button", { name: "Sign in again" }).click();
+    const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
+    await expect(sheet.getByRole("list", { name: "Accounts gh knows" })).toContainText("Signed out");
+    await sheet.getByRole("button", { name: "Sign in again as ada" }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(banner).toHaveCount(0);
+    await expect(detail).toContainText("gh is signed in as ada");
+    expect((await reviewDrafts(page)).map((d) => d.state)).toEqual(before);
+  });
+
   test("closes the sheet with Escape", async ({ page }) => {
     await openApp(page, "runs=empty");
     await openSettings(page);
@@ -197,6 +219,16 @@ test.describe("the Connections list", () => {
     await expect(sheet.getByRole("list", { name: "Accounts gh knows" })).toHaveCount(0);
     await sheet.getByRole("button", { name: "Open Terminal" }).click();
     await expect.poll(() => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { connectionTerminals(): string[] } }).__gossamrMock.connectionTerminals())).toEqual(["gh auth login -h github.com"]);
+  });
+
+  test("opens Terminal only on the login command, not on a fix the sheet shows for a gh that didn't answer", async ({ page }) => {
+    await openApp(page, "runs=empty&mockGithubProbe=error");
+    await openSettings(page);
+    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
+    await expect(sheet.getByText("gh auth status", { exact: true })).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Copy" })).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Open Terminal" })).toHaveCount(0);
   });
 
   test("says gh isn't installed, with how to install it and no Terminal button", async ({ page }) => {

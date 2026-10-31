@@ -142,7 +142,7 @@ describe("the connect GitHub sheet", () => {
     fix: null,
     ...over,
   });
-  const props = (over: Partial<ConnectGithubViewProps> = {}): ConnectGithubViewProps => ({ found: found(), connected: [], connecting: null, error: null, copied: false, onConnect: vi.fn(), onCopy: vi.fn(), onOpenTerminal: vi.fn(), onCheck: vi.fn(), onClose: vi.fn(), ...over });
+  const props = (over: Partial<ConnectGithubViewProps> = {}): ConnectGithubViewProps => ({ found: found(), connected: [], signedOut: [], connecting: null, error: null, copied: false, onConnect: vi.fn(), onCopy: vi.fn(), onOpenTerminal: vi.fn(), onCheck: vi.fn(), onClose: vi.fn(), ...over });
   const show = (over?: Partial<ConnectGithubViewProps>) => renderToStaticMarkup(<ConnectGithubView {...props(over)} />);
 
   it("lists the accounts gh knows, marks the active one, and offers another account with the login command", () => {
@@ -161,6 +161,21 @@ describe("the connect GitHub sheet", () => {
     expect(out).toContain("Connected");
     expect(out).not.toContain('aria-label="Connect ada"');
     expect(out).toContain('aria-label="Connect ada-work"');
+  });
+
+  it("offers Sign in again on a connected account that GitHub no longer accepts, and nothing on the others", () => {
+    const out = show({ connected: ["ada", "ada-work"], signedOut: ["ada"] });
+    expect(out).toContain('aria-label="Sign in again as ada"');
+    expect(out).toContain("Signed out");
+    expect(out).not.toContain('aria-label="Connect ada"');
+    expect(out).not.toContain("Sign in again as ada-work");
+  });
+
+  it("opens Terminal only when the command shown is the login command", () => {
+    const other = show({ found: found({ accounts: [], message: "gh didn't answer in time.", fix: "gh auth status" }) });
+    expect(other).toContain("gh auth status");
+    expect(other).not.toContain("Open Terminal");
+    expect(show({ found: found({ accounts: [], message: "gh has no login.", fix: "gh auth login -h github.com" }) })).toContain("Open Terminal");
   });
 
   it("disables an account whose token GitHub refused and says to sign in again", () => {

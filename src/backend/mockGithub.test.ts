@@ -77,7 +77,7 @@ describe("the mock GitHub connection", () => {
     expect(await listed()).toEqual({ installed: true, accounts: [{ login: "ada", active: true, usable: true }], message: null, fix: null });
     expect(await listed("notSignedIn")).toMatchObject({ installed: true, accounts: [], message: "gh has no login on github.com.", fix: "gh auth login -h github.com" });
     expect(await listed("notFound")).toMatchObject({ installed: false, accounts: [], fix: "brew install gh" });
-    expect(await listed("error")).toMatchObject({ installed: true, accounts: [], fix: null });
+    expect(await listed("error")).toMatchObject({ installed: true, accounts: [], fix: "gh auth status" });
   });
 
   it("connects the login gh holds, and refuses one it doesn't", async () => {

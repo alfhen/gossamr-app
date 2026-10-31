@@ -146,6 +146,11 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
             Make a new token
           </Button>
         )}
+        {!jira && s.state === "notSignedIn" && (
+          <Button variant="primary" size="sm" onClick={p.onConnectGithub}>
+            Sign in again
+          </Button>
+        )}
         <Button size="sm" disabled={p.checking} onClick={p.onCheck}>
           {s.fix ? "I've run it, check again" : "Check again"}
         </Button>
