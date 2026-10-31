@@ -27,6 +27,16 @@ function Spinner() {
   return <span data-spinner aria-hidden className="size-2 animate-spin rounded-full border-[1.5px] border-ws-accent border-t-transparent motion-reduce:animate-none" />;
 }
 
+/** A bead and the one line a connection's row shows. */
+export function StatusLine({ line }: { line: { text: string; tone: LineTone } }) {
+  return (
+    <span data-line={line.tone} className={`ws-state ${BEAD[line.tone]} max-w-full text-sm text-ws-ink2`}>
+      {line.tone === "busy" && <Spinner />}
+      <span className="truncate">{line.text}</span>
+    </span>
+  );
+}
+
 function badgeText(c: ConnectionInfo) {
   return c.kind === "mock" ? "SD" : c.kind === "jira" ? "JI" : keyInitials(c.workspace);
 }
@@ -86,10 +96,7 @@ function Row({ c, selected, checking, pending, onSelect, onToggle }: RowProps) {
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate font-semibold">{c.displayName}</span>
-          <span data-line={line.tone} className={`ws-state ${BEAD[line.tone]} max-w-full text-sm text-ws-ink2`}>
-            {line.tone === "busy" && <Spinner />}
-            <span className="truncate">{line.text}</span>
-          </span>
+          <StatusLine line={line} />
         </span>
       </button>
       {canSwitch(c) && (
