@@ -1,4 +1,4 @@
-import { connectionOf, heldNote } from "../lib/proposals";
+import { connectionOf, heldNote, madeText } from "../lib/proposals";
 import type { ConnectionInfo, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
 
@@ -16,7 +16,7 @@ export function useHeldNote(p: Proposal): string | null {
   return useWorkspace((s) => heldNote(p, s.connections));
 }
 
-/** Under a draft's text: that it waits, if its connection is off, and the account it posts as. */
+/** Under a draft's text: that it waits, with how old it is, if its connection is off or being checked again, and otherwise the account it posts as. */
 export function DraftAccount({ proposal, className = "text-sm" }: { proposal: Proposal; className?: string }) {
   const connections = useWorkspace((s) => s.connections);
   const held = heldNote(proposal, connections);
@@ -24,7 +24,7 @@ export function DraftAccount({ proposal, className = "text-sm" }: { proposal: Pr
   if (!held && !as) return null;
   return (
     <p data-draft-account className={`m-0 ${className} ${held ? "text-ws-ink2" : "text-ws-ink3"}`}>
-      {held ?? as}
+      {held ? `${held} ${madeText(proposal.createdAt, new Date())}.` : as}
     </p>
   );
 }

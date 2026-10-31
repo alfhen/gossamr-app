@@ -433,7 +433,9 @@ pub fn edit_noted(db: &Db, id: &str, intent: Intent, note: &str, at: DateTime<Ut
     p.revisions.push(Revision { at, note: note.into(), intent: intent.clone() });
     p.intent = intent;
     p.updated_at = at;
-    p.error = None;
+    if p.error.as_deref() != Some(crate::inbox::code::REVIEW_HEAD_MOVED_NOTE) {
+        p.error = None;
+    }
     db.save_proposal(&p)?;
     Ok(p)
 }

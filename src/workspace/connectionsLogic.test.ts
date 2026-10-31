@@ -4,7 +4,7 @@ import type { ConnectionInfo } from "../types";
 import { actingAs, isSignedOut, oldestCheck, rowAfter, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
-const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null };
+const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
 const github = (state: Parameters<typeof githubSnapshot>[0]): ConnectionInfo => ({ ...base, status: githubSnapshot(state, "ada", CHECKED) });
 const jira = (over: Partial<ConnectionInfo> = {}): ConnectionInfo => ({ ...base, id: "jira:c:u", instanceId: "jira", displayName: "Acme Jira", kind: "jira", workspace: "acme.atlassian.net", ...over });
 

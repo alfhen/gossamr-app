@@ -162,6 +162,8 @@ pub struct ConnectionInfo {
     pub reauth: bool,
     /// What the last probe of the instance found, once there is one.
     pub status: Option<crate::probe::Snapshot>,
+    /// It was turned back on and its first sync hasn't finished, so its waiting drafts are still being checked.
+    pub rechecking: bool,
 }
 
 #[derive(Default)]
@@ -447,8 +449,17 @@ impl Core {
             let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after)?;
             db.set_meta(LAST_SYNC, &stamp(started))?;
             let containers_changed = pulled.containers.is_some();
-            // A draft that can't be re-judged must not stop the items from syncing.
-            let revised = proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()).unwrap_or_default();
+            // A draft that can't be re-judged must not stop the items from syncing, but it keeps the connection's drafts held.
+            let revised = match proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()) {
+                Ok(revised) => {
+                    self.finish_recheck(&connection_id, started);
+                    revised
+                }
+                Err(e) => {
+                    eprintln!("couldn't re-judge the waiting drafts of {connection_id}: {e}");
+                    0
+                }
+            };
             Ok(Synced {
                 connection_id: connection_id.clone(),
                 changed: stored.upserted.any() || containers_changed,
@@ -739,6 +750,7 @@ impl Core {
                 transient: false,
                 reauth: self.reauth_needed.load(Ordering::SeqCst),
                 status: None,
+                rechecking: false,
             });
         }
         out.extend(self.code_connections());

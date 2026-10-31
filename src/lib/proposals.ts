@@ -1,5 +1,6 @@
 import { docText } from "./docs";
 import { maskSecrets } from "./riskyText";
+import { relativeTime } from "./views";
 import type { BasisField, ConnectionInfo, Intent, ItemRef, Proposal, ReviewComment } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
@@ -44,10 +45,22 @@ export function connectionOf(p: Proposal, connections: readonly ConnectionInfo[]
   return connections.find((c) => c.id === id) ?? null;
 }
 
-/** What a pending draft says while its connection is off, as `Core::refuse_while_off` words the refusal. Null when it can be approved. */
+/** What a pending draft says while its connection is off or being checked again, as `Core::refuse_while_held` words the refusal. Null when it can be approved. */
 export function heldNote(p: Proposal, connections: readonly ConnectionInfo[]): string | null {
   const c = p.state.type === "pending" ? connectionOf(p, connections) : null;
-  return c && !c.enabled ? `${c.displayName} is off. This draft waits until you turn it on.` : null;
+  if (!c) return null;
+  if (!c.enabled) return `${c.displayName} is off. This draft waits until you turn it on.`;
+  return c.rechecking ? `Checking this draft against ${c.displayName}.` : null;
+}
+
+const UNIT = { m: "minute", h: "hour", d: "day" } as const;
+
+/** How old a draft is, as a sentence: "Made 3 days ago". */
+export function madeText(iso: string, now: Date): string {
+  const r = relativeTime(iso, now);
+  const n = /^(\d+)([mhd])$/.exec(r);
+  if (n) return `Made ${n[1]} ${UNIT[n[2] as keyof typeof UNIT]}${n[1] === "1" ? "" : "s"} ago`;
+  return r === "now" ? "Made just now" : r === "Yday" ? "Made yesterday" : `Made on ${r}`;
 }
 
 /**

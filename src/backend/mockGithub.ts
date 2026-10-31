@@ -18,6 +18,9 @@ import { MockCode } from "./mockCode";
 import { githubSnapshot, type GithubProbeState } from "./mockProbes";
 import { MockWatch } from "./mockWatch";
 
+/** How long the sample GitHub takes over the sync that follows turning it on. */
+const RECHECK_MS = 700;
+
 export const GITHUB_LOGIN = "ada";
 export const GITHUB_CONNECTION = `github:${GITHUB_LOGIN}`;
 const CATALOG_PAGE = 50;
@@ -93,6 +96,10 @@ export class MockGithub {
   /** GitHub turned down the stored token while gh still holds a good one (`refuseToken`). */
   private tokenRefused = false;
   private checkedAt: string;
+  /** Turned back on and not yet synced: its waiting drafts are being checked. It ends by itself after a moment, or never when held (`?mockGithubRecheck=hold`) until `finishRecheck`. */
+  private rechecking = false;
+  private recheckTimer: ReturnType<typeof setTimeout> | null = null;
+  holdRecheck = false;
   /** Called when `setProbe` changes what the probe found, as the backend's `connections` event would be sent. */
   onProbeChanged: () => void = () => {};
 
@@ -148,6 +155,7 @@ export class MockGithub {
   disconnect(connectionId: string) {
     if (connectionId !== GITHUB_CONNECTION) return;
     this.instances++;
+    this.stopRecheck();
     this.on = true;
     this.watch = null;
     this.repos = [];
@@ -157,7 +165,7 @@ export class MockGithub {
   info(): ConnectionInfo {
     const found = githubSnapshot(this.enabled ? this.probe : "off", GITHUB_LOGIN, this.checkedAt);
     const status = this.tokenRefused && this.enabled ? { ...found, state: "notSignedIn" as const, account: null, message: `GitHub no longer accepts the token for ${GITHUB_LOGIN}.` } : found;
-    return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.enabled, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
+    return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.enabled, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status, rechecking: this.rechecking && this.enabled };
   }
 
   get enabled() {
@@ -166,10 +174,31 @@ export class MockGithub {
 
   /** Turning it on after the probe was forced to "off" leaves it with nothing to be wrong, so it reads as ready. */
   setEnabled(on: boolean) {
+    const was = this.enabled;
     if (on && this.probe === "off") this.probe = "ready";
     this.on = on;
+    if (!this.enabled) this.stopRecheck();
+    else if (!was) this.startRecheck();
     this.checkedAt = new Date().toISOString();
     this.code.linksChanged();
+  }
+
+  private startRecheck() {
+    this.rechecking = true;
+    if (!this.holdRecheck) this.recheckTimer = setTimeout(() => this.finishRecheck(), RECHECK_MS);
+  }
+
+  private stopRecheck() {
+    this.rechecking = false;
+    if (this.recheckTimer) clearTimeout(this.recheckTimer);
+    this.recheckTimer = null;
+  }
+
+  /** The first sync since it was turned on has finished. */
+  finishRecheck() {
+    if (!this.rechecking) return;
+    this.stopRecheck();
+    this.onProbeChanged();
   }
 
   setProbe(state: GithubProbeState) {

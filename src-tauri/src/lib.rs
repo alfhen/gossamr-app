@@ -843,6 +843,14 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         if synced.links_changed {
                             dev_links_changed(&app, &connection_id);
                         }
+                        if synced.rechecked {
+                            wire::changed(&app, Topic::Connections, &connection_id);
+                        }
+                        if synced.reviews_changed {
+                            if let Ok(scope) = core.scope().await {
+                                proposals_changed(&app, &scope.connection_id);
+                            }
+                        }
                         // A pull request found here can end a workstream's wait for its build's one.
                         if synced.changed || synced.links_changed {
                             if let Ok(scope) = core.scope().await {
