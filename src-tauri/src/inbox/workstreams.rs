@@ -754,6 +754,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_finished_build_whose_pull_request_is_cached_does_not_wait_for_it_while_github_is_off() {
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        fx.core.adopt_instances().await;
+        let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+        let build = insert_at(&fx, "r-build", &ws.id, "build", RunState::Done, 10, |_| {}).await;
+        let pull = crate::codehost::links::tests::pr(301, &format!("worktree-{}", build.spec.name), "Retry", "");
+        fx.core.with_code_db("github:ann", |db| db.upsert_code_changes(&[pull], "2026-09-29T00:00:00Z")).unwrap();
+        let instance = crate::config::AppConfig::load(&fx.dir).connections.into_iter().find(|i| i.kind == crate::tracker::ConnectionKind::Github).unwrap().id;
+
+        fx.core.set_instance_enabled(&instance, false).await.unwrap();
+
+        assert_eq!(waiting(&fx, &ws.id).await, None);
+    }
+
+    #[tokio::test]
     async fn a_finished_build_waits_for_its_pull_request_until_a_sync_caches_it() {
         let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();

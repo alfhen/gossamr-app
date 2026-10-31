@@ -410,7 +410,7 @@ impl Core {
 
     /// Like `watched_repos`, and still the answer while the connection is off: a sync and the links read it so that the
     /// cache stays whole until the connection is on again.
-    fn chosen_repos(&self, id: &str) -> Result<Vec<String>> {
+    pub(super) fn chosen_repos(&self, id: &str) -> Result<Vec<String>> {
         self.with_code_db(id, |db| {
             let set = db.watch_set(id)?;
             let catalog = || -> Result<Vec<String>> { Ok(db.catalog_search(id, "", usize::MAX >> 1)?.into_iter().filter(|c| !c.archived).map(|c| c.container_ref.external_id).collect()) };

@@ -66,7 +66,7 @@ impl Core {
         let branches = pr::branches_of(run);
         let mut found = Vec::new();
         for id in self.code.connection_ids() {
-            let Some(repo) = self.watched_repos(&id)?.into_iter().find(|r| r.eq_ignore_ascii_case(&run.spec.repo)) else { continue };
+            let Some(repo) = self.chosen_repos(&id)?.into_iter().find(|r| r.eq_ignore_ascii_case(&run.spec.repo)) else { continue };
             found.extend(self.with_code_db(&id, |db| db.code_changes_for_branch(&id, &repo, &branches))?);
         }
         Ok(pr::change_for(run, &found))
