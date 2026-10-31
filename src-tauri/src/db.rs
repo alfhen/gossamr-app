@@ -478,7 +478,7 @@ mod tests {
     mod shared_app_database {
         use super::*;
         use crate::domain::fixtures::{item_ref, now, run_spec};
-        use crate::domain::{Doc, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunQuery};
+        use crate::domain::{Doc, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState};
         use crate::proposals::{create, Draft};
 
         fn files(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
@@ -533,6 +533,42 @@ mod tests {
             assert_eq!(ann.runs(&RunQuery::default()).unwrap().len(), 1);
             assert!(bob.begin_posting_review(&review.id, now(), None).unwrap().is_some());
             assert!(bob.begin_posting_review(&hers.id, now(), None).unwrap().is_none());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_connection_cannot_read_or_change_another_ones_run_by_its_id() {
+            let (ann_cache, app, dir) = files("run-ids");
+            let ann = Db::open_with_app(&ann_cache, &app).unwrap().for_connection("jira:site:ann");
+            let done = |id: &str| Run { state: RunState::Done, ..run_of(id, "jira:site:ann") };
+            let event = |id: &str| RunEvent { run_id: id.into(), seq: 0, at: now(), kind: "k".into(), text: "t".into(), detail: None };
+            for id in ["open", "archived"] {
+                ann.insert_run(&done(id)).unwrap();
+                ann.append_events(id, &[event(id)]).unwrap();
+            }
+            ann.archive_runs(&["archived".into()], now()).unwrap();
+            ann.put_run_message("open", "Later.", now()).unwrap();
+
+            let bob = Db::open_with_app(&dir.join("inbox-site-bob.sqlite"), &app).unwrap().for_connection("jira:site:bob");
+            assert!(bob.run("open").unwrap().is_none());
+            assert!(bob.run_by_start_key("popen").unwrap().is_none());
+            assert!(bob.run_events("open").unwrap().is_empty());
+            assert!(bob.run_messages_waiting().unwrap().is_empty());
+            assert!(!bob.save_run(&Run { last_detail: Some("bob's".into()), ..done("open") }).unwrap());
+            assert!(bob.archive_runs(&["open".into()], now()).unwrap().is_empty());
+            assert_eq!(bob.append_events("open", &[event("open")]).unwrap(), 0);
+            assert!(!bob.restore_run("archived").unwrap());
+            assert!(!bob.delete_archived_run("archived").unwrap());
+            let mut app_only = Db::open_app(&app).unwrap();
+            assert!(app_only.homed("jira:site:bob", |db| db.run("open").unwrap().is_none()));
+            assert!(app_only.run("open").unwrap().is_some(), "an unhomed handle sees every run");
+
+            let open = ann.run("open").unwrap().unwrap();
+            assert_eq!((open.last_detail, open.archived_at), (None, None), "left as it was");
+            assert_eq!(ann.run_events("open").unwrap().len(), 1);
+            assert_eq!(ann.run_messages_waiting().unwrap(), ["open"]);
+            assert!(ann.run("archived").unwrap().unwrap().archived_at.is_some());
+            assert_eq!(ann.run_events("archived").unwrap().len(), 1);
             let _ = std::fs::remove_dir_all(dir);
         }
 
