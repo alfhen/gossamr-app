@@ -147,6 +147,7 @@ export interface MockHandle {
   githubPostsTried(): number;
   /** Has the probe of the GitHub instance find `state`, and tells the page as a `connections` event does. */
   probeGithub(state: GithubProbeState): void;
+  refuseGithubToken(): void;
   /** The next review post's answer is lost, as a 502: GitHub keeps the review when `kept`, and drops it otherwise. */
   loseNextReviewAnswer(kept: boolean): void;
 }
@@ -177,7 +178,7 @@ export interface MockClockParts {
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
   terminals?: readonly string[];
-  github?: { probe(state: GithubProbeState): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
+  github?: { probe(state: GithubProbeState): void; refuseToken(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
 declare global {
@@ -192,7 +193,7 @@ declare global {
  * launch with the guard the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
- * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`. The last sample backend made wins.
+ * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`, and `refuseGithubToken()` has GitHub turn down the stored token. The last sample backend made wins.
  */
 export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github, terminals, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
@@ -242,6 +243,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     movePullHead: (repo, number) => github?.movePullHead(repo, number) ?? false,
     githubPostsTried: () => github?.tried() ?? 0,
     probeGithub: (state) => github?.probe(state),
+    refuseGithubToken: () => github?.refuseToken(),
     loseNextReviewAnswer: (kept) => github?.loseNextAnswer(kept),
   };
 }

@@ -381,13 +381,13 @@ fn probe_in_background(app: &AppHandle, core: &CoreState, why: Probe) {
     tauri::async_runtime::spawn(async move { probe_connections(&app, &core, why).await });
 }
 
-/// How a GitHub account is connected: a pasted token, the token `gh auth token` prints (run now, because the person
-/// asked), or the code `github_device_start` showed once it was authorised in the browser.
+/// How a GitHub account is connected: a pasted token, the token `gh auth token` prints for `login` or, with none, for the
+/// active account (run now, because the person asked), or the code `github_device_start` showed once it was authorised in the browser.
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "via")]
 enum GithubSource {
     Token { token: String },
-    GhCli,
+    GhCli { login: Option<String> },
     Device,
 }
 
@@ -397,11 +397,23 @@ enum GithubSource {
 async fn github_connect(app: AppHandle, core: State<'_, CoreState>, source: GithubSource) -> Result<ConnectionInfo> {
     let connected = match source {
         GithubSource::Token { token } => core.github_connect_token(&token).await?,
-        GithubSource::GhCli => core.github_import_gh_token().await?,
+        GithubSource::GhCli { login } => core.github_import_gh_token(login.as_deref()).await?,
         GithubSource::Device => core.github_device_poll().await?,
     };
     watch_changed(&app, &connected.id);
     Ok(connected)
+}
+
+/// The accounts `gh` is signed in as on github.com, for the Connect GitHub sheet.
+#[tauri::command]
+async fn github_gh_accounts(core: State<'_, CoreState>) -> Result<probe::GhAccounts> {
+    Ok(core.github_gh_accounts().await)
+}
+
+/// Opens Terminal on `gh auth login`. The command is Gossamr's own, never one from the page.
+#[tauri::command(async)]
+fn github_open_login(runs: State<'_, RunsState>) -> Result<()> {
+    runs.open_fix(probe::GH_LOGIN_COMMAND)
 }
 
 /// Which ways of connecting GitHub work here: the device flow needs a client id, `gh` must be installed.
@@ -1031,6 +1043,8 @@ pub fn run() {
             github_connect,
             github_sign_in_options,
             github_device_start,
+            github_gh_accounts,
+            github_open_login,
             proposals_list,
             proposals_create,
             proposals_edit,

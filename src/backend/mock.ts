@@ -42,6 +42,7 @@ import type {
 import { stepOf } from "../lib/roles";
 import { fold } from "../lib/mentions";
 import { nameProblem } from "../lib/connectionName";
+import { GH_LOGIN_COMMAND } from "../lib/githubUrl";
 import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
@@ -428,7 +429,7 @@ export class MockBackend implements Backend {
       pip: { hold: holdMockPip, idle: mockPipIdle },
       tickets: { edit: (key, change) => this.editTicket(key, change) },
       terminals: this.terminals,
-      github: { probe: (state) => this.github.setProbe(state), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
+      github: { probe: (state) => this.github.setProbe(state), refuseToken: () => this.github.refuseToken(), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
@@ -1170,8 +1171,16 @@ export class MockBackend implements Backend {
     return this.github.connectToken(token);
   }
 
-  async githubImportGhToken() {
-    return this.github.importGhToken();
+  async githubImportGhToken(login?: string) {
+    return this.github.importGhToken(login);
+  }
+
+  async githubAccounts() {
+    return this.github.ghAccounts();
+  }
+
+  async githubOpenLogin() {
+    this.terminals.push(GH_LOGIN_COMMAND);
   }
 
   async githubDeviceStart() {

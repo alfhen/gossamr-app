@@ -27,9 +27,9 @@ describe("a connection's line in the list", () => {
     expect(statusLine(jira({ status: { ...githubSnapshot("notFound", "x", CHECKED) } }), false)).toEqual({ text: "Not found · jira", tone: "error" });
   });
 
-  it("calls what gh says about GitHub advice, not an error, while GitHub still signs in with its own token", () => {
-    expect(statusLine(github("notSignedIn"), false)).toEqual({ text: "Not signed in", tone: "unsure" });
-    expect(statusLine(github("notFound"), false)).toEqual({ text: "Not found · gh", tone: "unsure" });
+  it("says Not signed in and Not found as an error for GitHub, because gh decides whether it works", () => {
+    expect(statusLine(github("notSignedIn"), false)).toEqual({ text: "Not signed in", tone: "error" });
+    expect(statusLine(github("notFound"), false)).toEqual({ text: "Not found · gh", tone: "error" });
   });
 
   it("shows how long a Jira token has left", () => {
@@ -50,9 +50,19 @@ describe("a connection that is signed out", () => {
     expect(isSignedOut(jira({ status: jiraSnapshot("notSignedIn", CHECKED) }))).toBe(true);
   });
 
-  it("is never GitHub on what gh says alone, until gh is where its token comes from", () => {
-    expect(isSignedOut(github("notSignedIn"))).toBe(false);
+  it("is GitHub when gh has no login for it or isn't installed", () => {
+    expect(isSignedOut(github("notSignedIn"))).toBe(true);
+    expect(isSignedOut(github("notFound"))).toBe(true);
+  });
+
+  it("is not Jira just because its probe found nothing to run", () => {
+    expect(isSignedOut(jira({ status: githubSnapshot("notFound", "x", CHECKED) }))).toBe(false);
+  });
+
+  it("is not GitHub while gh is signed in, can't be reached, or the connection is off", () => {
     expect(isSignedOut(github("ready"))).toBe(false);
+    expect(isSignedOut(github("error"))).toBe(false);
+    expect(isSignedOut({ ...github("notSignedIn"), enabled: false })).toBe(false);
   });
 });
 

@@ -71,6 +71,17 @@ describe("the desktop backend's wiring", () => {
     expect(lib).toContain("async fn first_run_github(core: State<'_, CoreState>) -> Result<probe::Snapshot>");
   });
 
+  it("connects a GitHub account by the login gh holds and opens Terminal on a login command only Rust knows", () => {
+    const jira = read("./jira.ts");
+    const lib = read("../../src-tauri/src/lib.rs");
+    expect(jira).toContain('invoke<ConnectionInfo>("github_connect", { source: { via: "ghCli", login } })');
+    expect(jira).toContain('invoke<GhAccounts>("github_gh_accounts")');
+    expect(jira).toContain('invoke<void>("github_open_login")');
+    expect(lib).toContain("GhCli { login: Option<String> }");
+    expect(lib).toContain("fn github_open_login(runs: State<'_, RunsState>) -> Result<()>");
+    expect(lib.slice(lib.indexOf("generate_handler!"))).toContain("github_gh_accounts,");
+  });
+
   it("turns an instance on or off by its instance id, and the page can't name a command or a connection id", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");

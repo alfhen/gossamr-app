@@ -193,6 +193,7 @@ impl Core {
     async fn connected(&self, session: GithubSession) -> Result<super::ConnectionInfo> {
         let connection = self.code.remember(session.clone());
         self.bind_instance(Binding::github(&session.login));
+        self.probe_bound_now(&connection.id).await;
         self.registry.register(connection.clone());
         // So the catalog is known before the first sync, which a search of the watched repositories depends on.
         let _ = self.probe_code_catalog(&connection.id).await;
@@ -207,8 +208,8 @@ impl Core {
         self.connected(session).await
     }
 
-    pub async fn github_import_gh_token(&self) -> Result<super::ConnectionInfo> {
-        let session = self.code.auth.import_gh_token().await?;
+    pub async fn github_import_gh_token(&self, login: Option<&str>) -> Result<super::ConnectionInfo> {
+        let session = self.code.auth.import_gh_token(login).await?;
         self.connected(session).await
     }
 

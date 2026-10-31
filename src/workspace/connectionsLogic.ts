@@ -4,12 +4,6 @@ import { agoText } from "./watchLogic";
 
 export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
 
-/**
- * Whether the probe decides if the connection works. GitHub still signs in with its own token, so what `gh` says about it
- * is advice until step 5 of docs/connections-proposal.md moves the token to `gh`; then this is true for every kind.
- */
-export const probeDecides = (c: Pick<ConnectionInfo, "kind">) => c.kind !== "github";
-
 export const OFF_DETAIL = "Off. Gossamr doesn't sync it, Pip can't see it and drafts for it wait. What's cached is kept.";
 
 /** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. */
@@ -22,16 +16,15 @@ export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status"
   const s = c.status;
   if (checking) return { text: "Checking…", tone: "busy" };
   if (!s) return { text: "Not checked yet", tone: "quiet" };
-  const error = probeDecides(c) ? "error" : "unsure";
   switch (s.state) {
     case "ready":
       return { text: `Authenticated · ${s.account ?? c.account}`, tone: "ok" };
     case "expiresSoon":
       return { text: s.message, tone: "unsure" };
     case "notSignedIn":
-      return { text: "Not signed in", tone: error };
+      return { text: "Not signed in", tone: "error" };
     case "notFound":
-      return { text: `Not found · ${c.kind === "github" ? "gh" : c.kind}`, tone: error };
+      return { text: `Not found · ${c.kind === "github" ? "gh" : c.kind}`, tone: "error" };
     case "error":
       return { text: "Couldn't check", tone: "unsure" };
     case "off":
@@ -39,9 +32,9 @@ export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status"
   }
 }
 
-/** A connection that is on and that Gossamr can no longer sign in as. */
+/** A connection that is on and that Gossamr can no longer sign in as. For GitHub that includes a `gh` that isn't installed. */
 export function isSignedOut(c: Pick<ConnectionInfo, "kind" | "enabled" | "reauth" | "status">): boolean {
-  return c.enabled && (c.reauth || (probeDecides(c) && c.status?.state === "notSignedIn"));
+  return c.enabled && (c.reauth || c.status?.state === "notSignedIn" || (c.kind === "github" && c.status?.state === "notFound"));
 }
 
 /** When the oldest probe among `connections` ran: the time "Checked 3m ago" at the top of the list can promise. */
@@ -70,7 +63,6 @@ export function rowAfter(ids: string[], current: string | null, key: string): st
   const step = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0;
   return step ? stepKey(ids, current, step) : null;
 }
-
 
 /** What the sync of a connection is doing, for its detail and its watch card. */
 export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "error"> & { transient?: boolean }, now: Date): { text: string; tone: "ok" | "busy" | "error" } {

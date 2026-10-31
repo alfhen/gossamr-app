@@ -307,15 +307,24 @@ impl GithubAuth {
         &self.gh_dirs
     }
 
-    /// Runs `gh auth token` and keeps what it prints like a pasted token. The CLI's own files are never read.
-    pub async fn import_gh_token(&self) -> Result<GithubSession> {
+    /// Runs `gh auth token` for `login` (the active account when none is named) and keeps what it prints like a pasted
+    /// token. The CLI's own files are never read.
+    pub async fn import_gh_token(&self, login: Option<&str>) -> Result<GithubSession> {
         let gh = self.find_gh().ok_or_else(|| Error::Auth("the GitHub CLI (gh) isn't installed here".into()))?;
-        let out = Command::new(gh)
-            .args(["auth", "token"])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .await
-            .map_err(|e| Error::Auth(format!("couldn't run gh: {e}")))?;
+        let mut command = Command::new(gh);
+        command.args(["auth", "token"]);
+        if let Some(login) = login {
+            // A login that starts with a dash would be read as a flag.
+            if login.is_empty() || login.starts_with('-') || !login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return Err(Error::Auth(format!("{login} isn't a GitHub login")));
+            }
+            command.args(["-h", "github.com", "-u", login]);
+        }
+        command.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        for name in crate::probe::GH_OVERRIDES {
+            command.env_remove(name);
+        }
+        let out = command.output().await.map_err(|e| Error::Auth(format!("couldn't run gh: {e}")))?;
         let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !out.status.success() || token.is_empty() {
             return Err(Error::Auth("gh has no token to give. Run `gh auth login` in a terminal, then try again".into()));
@@ -509,9 +518,42 @@ mod tests {
         fake_gh(&dir, "[ \"$1 $2\" = \"auth token\" ] && echo gho_fromgh");
         let (auth, store) = auth(&server, None, vec![PathBuf::from("/nonexistent"), dir.clone()]);
         assert!(store.logins().unwrap().is_empty(), "nothing happens before the import");
-        let session = auth.import_gh_token().await.unwrap();
+        let session = auth.import_gh_token(None).await.unwrap();
         assert_eq!((session.token.as_str(), session.source), ("gho_fromgh", SessionSource::GhCli));
         assert_eq!(server.header_of(0, "authorization").as_deref(), Some("Bearer gho_fromgh"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_named_login_is_imported_with_its_own_token_and_never_the_active_one() {
+        let server = serve(vec![("/user", vec![Reply::ok(USER)])]).await;
+        let dir = temp("named");
+        fake_gh(&dir, "if [ \"$*\" = \"auth token -h github.com -u work\" ]; then echo gho_work; else echo gho_active; fi");
+        let (auth, _) = auth(&server, None, vec![dir.clone()]);
+        let session = auth.import_gh_token(Some("work")).await.unwrap();
+        assert_eq!(session.token, "gho_work");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_enterprise_managed_login_with_an_underscore_is_imported() {
+        let server = serve(vec![("/user", vec![Reply::ok(USER)])]).await;
+        let dir = temp("emu");
+        fake_gh(&dir, "if [ \"$*\" = \"auth token -h github.com -u octocat_acme\" ]; then echo gho_emu; fi");
+        let (auth, _) = auth(&server, None, vec![dir.clone()]);
+        assert_eq!(auth.import_gh_token(Some("octocat_acme")).await.unwrap().token, "gho_emu");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_login_that_could_pass_for_a_flag_is_refused_before_gh_runs() {
+        let server = serve(vec![]).await;
+        let dir = temp("flag");
+        fake_gh(&dir, "echo gho_x");
+        let (auth, _) = auth(&server, None, vec![dir.clone()]);
+        for login in ["--hostname", "-u", "a b", "", "a;b", "a/b"] {
+            assert!(auth.import_gh_token(Some(login)).await.unwrap_err().to_string().contains("isn't a GitHub login"), "{login}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -519,11 +561,11 @@ mod tests {
     async fn gh_missing_or_signed_out_gives_a_plain_message() {
         let server = serve(vec![]).await;
         let (missing, _) = auth(&server, None, vec![PathBuf::from("/nonexistent")]);
-        assert!(missing.import_gh_token().await.unwrap_err().to_string().contains("isn't installed"));
+        assert!(missing.import_gh_token(None).await.unwrap_err().to_string().contains("isn't installed"));
         let dir = temp("out");
         fake_gh(&dir, "echo 'not logged in' >&2; exit 1");
         let (out, _) = auth(&server, None, vec![dir.clone()]);
-        assert!(out.import_gh_token().await.unwrap_err().to_string().contains("gh auth login"));
+        assert!(out.import_gh_token(None).await.unwrap_err().to_string().contains("gh auth login"));
         assert!(server.targets().is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
