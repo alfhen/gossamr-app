@@ -86,7 +86,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
     <div className="grid gap-3.5">
       <div>
         <h2 className="font-display m-0 text-lg font-semibold">Connect GitHub</h2>
-        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. {agentsPush(found?.accounts.find((a) => a.active)?.login ?? null)}</p>
+        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. {agentsPush((found?.accounts.find((a) => a.active) ?? (found?.accounts.length === 1 ? found.accounts[0] : undefined))?.login ?? null)}</p>
       </div>
       {!found && (
         <p role="status" className="m-0 text-ws-ink3">

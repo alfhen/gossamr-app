@@ -95,9 +95,9 @@ describe("the connections list", () => {
   it("says who drafts post as, and which account agents push as", () => {
     const out = view();
     expect(out).toContain("Drafts post as ada via GitHub.");
-    expect(out).toContain("Agents push as ada, gh&#x27;s active account.");
+    expect(out).toContain("gh&#x27;s active account is ada.");
     const other = { ...gh, status: { ...gh.status!, activeLogin: "alfhen" } };
-    expect(view({ connections: [other, jira], selectedId: other.id })).toContain("Agents push as alfhen, gh&#x27;s active account.");
+    expect(view({ connections: [other, jira], selectedId: other.id })).toContain("gh&#x27;s active account is alfhen.");
   });
 
   it("gives the date a Jira token runs out in its detail while the list keeps the days", () => {

@@ -48,7 +48,7 @@ export function oldestCheck(connections: Pick<ConnectionInfo, "status">[]): stri
 
 /** What the detail pane and the Connect GitHub sheet say about the account agents clone and push as. */
 export const agentsPush = (activeLogin: string | null) =>
-  activeLogin ? `Agents push as ${activeLogin}, gh's active account.` : "Agents clone and push with your own git and gh setup, which may be a different account.";
+  activeLogin ? `gh's active account is ${activeLogin}. Agents clone and push with your own git and gh setup, which may be a different account.` : "Agents clone and push with your own git and gh setup, which may be a different account.";
 
 /** Whose drafts and agents act as which account, for the detail pane. */
 export function actingAs(c: Pick<ConnectionInfo, "kind" | "workspace" | "account" | "status">): string[] {

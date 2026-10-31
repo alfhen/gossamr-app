@@ -198,7 +198,7 @@ describe("the connect GitHub sheet", () => {
 
   it("names the account gh has active as the one agents push as", () => {
     const out = show({ found: found({ accounts: [{ login: "other", active: false, usable: true }, { login: "ada", active: true, usable: true }] }) });
-    expect(out).toContain("Agents push as ada, gh&#x27;s active account.");
+    expect(out).toContain("gh&#x27;s active account is ada.");
   });
 
   it("says Connecting on the account being connected and keeps Done from closing mid-way", () => {
