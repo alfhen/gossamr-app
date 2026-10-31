@@ -41,6 +41,7 @@ import type {
 } from "../types";
 import { stepOf } from "../lib/roles";
 import { fold } from "../lib/mentions";
+import { nameProblem } from "../lib/connectionName";
 import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
@@ -426,6 +427,7 @@ export class MockBackend implements Backend {
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
       tickets: { edit: (key, change) => this.editTicket(key, change) },
+      terminals: this.terminals,
       github: { probe: (state) => this.github.setProbe(state), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
     });
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
@@ -1075,12 +1077,31 @@ export class MockBackend implements Backend {
     return this.connector.moves(ref);
   }
 
+  /** The commands Terminal was opened on, oldest first. */
+  readonly terminals: string[] = [];
+  private readonly names = new Map<string, string>();
+
+  async connectionOpenTerminal(instanceId: string) {
+    const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
+    if (!fix) throw new Error("There's nothing to run for this connection. Check it again.");
+    this.terminals.push(fix);
+  }
+
+  async connectionRename(instanceId: string, displayName: string) {
+    const problem = nameProblem(displayName);
+    if (problem) throw new Error(problem);
+    if (!(await this.connectionsList()).some((c) => c.instanceId === instanceId)) throw new Error("This connection is gone. Reopen Settings.");
+    this.names.set(instanceId, displayName.trim());
+    this.connectionsListeners.forEach((l) => l());
+  }
+
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
     if (refresh) this.github.recheck();
     const refused = this.jiraToken === "refused";
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : null;
     const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status };
-    return this.github.connected ? [sample, this.github.info()] : [sample];
+    const all = this.github.connected ? [sample, this.github.info()] : [sample];
+    return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }
 
   async devLinks(item: ItemRef) {

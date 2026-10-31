@@ -100,9 +100,10 @@ pub fn bind(config: &mut AppConfig, binding: Binding) {
     match existing {
         Some(at) => {
             let instance = &mut config.connections[at];
+            let same_site = instance.config.site == binding.config.site;
             instance.bound_to = Some(binding.connection_id);
             instance.config = binding.config;
-            if binding.kind == ConnectionKind::Jira {
+            if binding.kind == ConnectionKind::Jira && !same_site {
                 instance.display_name = display_name;
             }
         }
@@ -208,6 +209,15 @@ mod tests {
         assert_eq!(ids(&config), ["jira"]);
         let jira = &config.connections[0];
         assert_eq!((jira.display_name.as_str(), jira.bound_to.as_deref(), jira.config.site.as_deref(), jira.enabled), ("Globex", Some("jira:c2:a9"), Some("globex.atlassian.net"), false));
+    }
+
+    #[test]
+    fn signing_in_to_the_same_jira_site_again_keeps_the_name_you_gave_it() {
+        let mut config = AppConfig::default();
+        adopt(&mut config, true, Some(Binding::jira("jira:c1:a1", "Acme", "https://acme.atlassian.net")), Vec::new());
+        config.connections[0].display_name = "Work Jira".into();
+        bind(&mut config, Binding::jira("jira:c1:a2", "Acme", "https://acme.atlassian.net"));
+        assert_eq!(config.connections[0].display_name, "Work Jira");
     }
 
     #[test]

@@ -25,6 +25,8 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onCheck={vi.fn()}
       onSync={vi.fn()}
       onCopy={vi.fn()}
+      onOpenTerminal={vi.fn()}
+      onRename={vi.fn()}
       onManage={vi.fn()}
       onNewToken={vi.fn()}
       onSignOut={vi.fn()}
@@ -62,6 +64,20 @@ describe("the connections list", () => {
     expect(out).toContain("Copy");
     expect(out).toContain("I&#x27;ve run it, check again");
     expect(out).toContain("Not signed in");
+  });
+
+  it("opens Terminal on the fix beside Copy, and offers neither when there is nothing to run", () => {
+    const stuck = view({ connections: [{ ...gh, status: githubSnapshot("notSignedIn", "ada", CHECKED) }] });
+    expect(stuck).toContain("Open Terminal");
+    expect(stuck.indexOf("Copy")).toBeLessThan(stuck.indexOf("Open Terminal"));
+    expect(view()).not.toContain("Open Terminal");
+  });
+
+  it("shows the name of a connection with a way to rename it, and none for the sample", () => {
+    const out = view();
+    expect(out).toContain("<h4");
+    expect(out).toContain("Rename");
+    expect(view({ connections: [{ ...gh, kind: "mock", displayName: "Sample data" }], selectedId: gh.id })).not.toContain("Rename");
   });
 
   it("offers a new token for a Jira token that is about to run out", () => {

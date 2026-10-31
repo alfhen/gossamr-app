@@ -64,6 +64,33 @@ test.describe("the Connections list", () => {
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("brew install gh");
   });
 
+  test("opens Terminal on the command that fixes a connection", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6&mockGithubProbe=notSignedIn");
+    await openSettings(page);
+    await rowOf(page, "GitHub").getByRole("button").click();
+    await page.getByRole("region", { name: "GitHub details" }).getByRole("button", { name: "Open Terminal" }).click();
+    await expect.poll(() => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { connectionTerminals(): string[] } }).__gossamrMock.connectionTerminals())).toEqual(["gh auth login -h github.com"]);
+  });
+
+  test("renames a connection from its detail, and Cancel keeps the old name", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
+    await openSettings(page);
+    await rowOf(page, "GitHub").getByRole("button").click();
+    const detail = page.getByRole("region", { name: "GitHub details" });
+    await detail.getByRole("button", { name: "Rename" }).click();
+    await detail.getByRole("textbox", { name: "Display name" }).fill("Work GitHub");
+    await detail.getByRole("button", { name: "Cancel" }).click();
+    await expect(rowOf(page, "GitHub")).toBeVisible();
+    await detail.getByRole("button", { name: "Rename" }).click();
+    const name = detail.getByRole("textbox", { name: "Display name" });
+    await name.fill("   ");
+    await expect(detail.getByRole("button", { name: "Save" })).toBeDisabled();
+    await name.fill("Work GitHub");
+    await detail.getByRole("button", { name: "Save" }).click();
+    await expect(rowOf(page, "Work GitHub")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Work GitHub details" })).toBeVisible();
+  });
+
   test("checks every connection from the top and says when", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);

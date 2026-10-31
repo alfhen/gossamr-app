@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { announceSignedOut } from "../accountEvents";
 import { auth } from "../backend/auth";
 import { Button } from "../components/Button";
+import { nameProblem, NAME_LIMIT } from "../lib/connectionName";
 import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { actingAs, oldestCheck, probeDecides, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
@@ -44,6 +45,9 @@ export interface ConnectionsViewProps {
   onCheck(): void;
   onSync(): void;
   onCopy(command: string): void;
+  onOpenTerminal(): void;
+  /** Resolves true when the name was saved. */
+  onRename(name: string): Promise<boolean>;
   onManage(): void;
   onNewToken(): void;
   onSignOut(): void;
@@ -106,6 +110,9 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           <Button size="sm" onClick={() => p.onCopy(s.fix as string)}>
             {p.copied ? "Copied" : "Copy"}
           </Button>
+          <Button size="sm" onClick={p.onOpenTerminal}>
+            Open Terminal
+          </Button>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -123,6 +130,75 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   );
 }
 
+const FIELD = "min-w-0 rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 font-normal outline-none focus:border-ws-accent";
+
+function NameField({ name, onRename }: { name: string; onRename(name: string): Promise<boolean> }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  if (draft === null) {
+    return (
+      <>
+        <p className="m-0">{name}</p>
+        <div>
+          <Button variant="quiet" size="sm" onClick={() => setDraft(name)}>
+            Rename
+          </Button>
+        </div>
+      </>
+    );
+  }
+  const problem = nameProblem(draft);
+  const save = async () => {
+    if (problem || saving) return;
+    if (draft.trim() === name) return setDraft(null);
+    setSaving(true);
+    try {
+      if (await onRename(draft.trim())) setDraft(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <form
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        void save();
+      }}
+      className="grid gap-2"
+    >
+      <input
+        aria-label="Display name"
+        value={draft}
+        disabled={saving}
+        maxLength={NAME_LIMIT * 2}
+        autoFocus
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(ev) => setDraft(ev.target.value)}
+        onKeyDown={(ev) => {
+          if (ev.key !== "Escape") return;
+          ev.stopPropagation();
+          setDraft(null);
+        }}
+        className={FIELD}
+      />
+      {problem && draft !== "" && (
+        <p role="status" className="m-0 text-sm text-ws-blocked">
+          {problem}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button type="submit" variant="primary" size="sm" disabled={problem !== null || saving}>
+          Save
+        </Button>
+        <Button variant="quiet" size="sm" disabled={saving} onClick={() => setDraft(null)}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const sync = syncLine(c, p.now);
   const watch = p.watch.find((w) => w.connectionId === c.id);
@@ -133,6 +209,11 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
       <Field label="Status">
         <StatusField c={c} p={p} />
       </Field>
+      {!sample && (
+        <Field label="Name">
+          <NameField name={c.displayName} onRename={p.onRename} />
+        </Field>
+      )}
       {!sample && (
         <Field label="Account">
           <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>
@@ -220,7 +301,7 @@ export function ConnectionsView(p: ConnectionsViewProps) {
           <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} onSelect={() => p.onSelect(c.id)} />
         ))}
       </ul>
-      {selected && <Detail c={selected} p={p} />}
+      {selected && <Detail key={selected.id} c={selected} p={p} />}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3">
         <span className="min-w-0 flex-1 text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</span>
         <Button variant={hasGithub ? "secondary" : "primary"} onClick={p.onConnectGithub}>
@@ -260,6 +341,27 @@ export function ConnectionsSection({ now }: { now: Date }) {
       useWorkspace.getState().report("Couldn't sign out", e);
     }
   };
+  const openTerminal = async (c: ConnectionInfo | undefined) => {
+    const backend = useWorkspace.getState().backend;
+    if (!c || !backend) return;
+    try {
+      await backend.connectionOpenTerminal(c.instanceId);
+    } catch (e) {
+      useWorkspace.getState().report("Couldn't open Terminal", e);
+    }
+  };
+  const rename = async (c: ConnectionInfo | undefined, name: string) => {
+    const backend = useWorkspace.getState().backend;
+    if (!c || !backend) return false;
+    try {
+      await backend.connectionRename(c.instanceId, name);
+      await useWorkspace.getState().refreshConnections();
+      return true;
+    } catch (e) {
+      useWorkspace.getState().report("Couldn't rename it", e);
+      return false;
+    }
+  };
   return (
     <ConnectionsView
       connections={connections}
@@ -282,6 +384,8 @@ export function ConnectionsSection({ now }: { now: Date }) {
           () => useToasts.getState().push("Couldn't copy it. Select it and copy by hand."),
         )
       }
+      onOpenTerminal={() => void openTerminal(current)}
+      onRename={(name) => rename(current, name)}
       onManage={() => useTabs.getState().openSettings("watching")}
       onNewToken={() => useJiraUi.getState().openConnect()}
       onSignOut={() => void signOut()}

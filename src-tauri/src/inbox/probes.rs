@@ -75,6 +75,16 @@ impl Core {
         snapshots.get(&instance.id).filter(|s| s.bound_to == instance.bound_to).map(|s| s.snapshot.clone())
     }
 
+    /// The command that fixes `instance_id`, from the last answer the probe gave for it.
+    pub fn fix_command(&self, instance_id: &str) -> crate::error::Result<String> {
+        let config = AppConfig::load(&self.data_dir);
+        let instance = config.connections.iter().find(|i| i.id == instance_id);
+        instance
+            .and_then(|i| self.probe_snapshot(i))
+            .and_then(|s| s.fix)
+            .ok_or_else(|| crate::error::Error::Input("There's nothing to run for this connection. Check it again.".into()))
+    }
+
     pub(super) fn probes_rebound(&self) {
         self.probes.rebound.store(true, Ordering::Relaxed);
     }
@@ -291,6 +301,18 @@ mod tests {
         assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::Ready));
         fx.core.probe_connections(Probe::Refresh).await;
         assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::NotSignedIn));
+    }
+
+    #[tokio::test]
+    async fn the_command_to_run_is_the_fix_the_last_probe_found_for_that_instance() {
+        let (fx, gh) = fixture_with_gh("fix").await;
+        fx.core.probe_connections(Probe::Launch).await;
+        assert!(fx.core.fix_command("github").is_err(), "a connection that works has nothing to run");
+        gh_saying(&gh, "someone-else", "success");
+        fx.core.probe_connections(Probe::Refresh).await;
+        assert_eq!(fx.core.fix_command("github").unwrap(), "gh auth login -h github.com");
+        assert!(fx.core.fix_command("jira").is_err());
+        assert!(fx.core.fix_command("github_9").is_err());
     }
 
     #[tokio::test]
