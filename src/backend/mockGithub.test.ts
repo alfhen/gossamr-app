@@ -64,6 +64,7 @@ describe("the mock GitHub connection", () => {
   it("connects through the gh import and the device flow, which must be started before it is polled", async () => {
     const gh = new MockBackend();
     expect((await gh.githubImportGhToken()).id).toBe(GH);
+    await expect(new MockBackend({ githubRepos: 6, githubProbe: "notSignedIn" }).githubImportGhToken()).rejects.toThrow("gh has no token");
 
     const device = new MockBackend();
     await expect(device.githubDevicePoll()).rejects.toThrow("start signing in first");

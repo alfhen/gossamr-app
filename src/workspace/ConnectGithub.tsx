@@ -173,7 +173,7 @@ function ConnectFlow({ backend, onClose }: { backend: Backend; onClose(): void }
     try {
       const connection = await backend.githubImportGhToken(login);
       useToasts.getState().push(`Connected to GitHub as ${connection.workspace}.`, "info");
-      await refreshAfterGithubChange();
+      await refreshAfterGithubChange().catch((e) => useToasts.getState().push(`Couldn't refresh GitHub connections: ${messageOf(e)}`));
       useConnectionsUi.getState().select(connection.id);
       onClose();
     } catch (e) {

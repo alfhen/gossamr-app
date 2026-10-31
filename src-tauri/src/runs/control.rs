@@ -191,7 +191,7 @@ pub fn write_fix_file(dir: &Path, command: &str) -> Result<PathBuf> {
         return Err(refuse("Gossamr won't run that command: it has a character in it that a fix never needs."));
     }
     let digest: String = Sha256::digest(command.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
-    write_script(dir, &format!("fix-{digest}"), &format!("#!/bin/zsh\n{command}\n"))
+    write_script(dir, &format!("fix-{digest}"), &format!("#!/bin/zsh\nunset GH_TOKEN GITHUB_TOKEN GH_HOST\n{command}\n"))
 }
 
 /// Deletes attach scripts older than a day.

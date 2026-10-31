@@ -6,7 +6,7 @@ export const GH_LOGIN_COMMAND = "gh auth login -h github.com";
 /** Splits text into plain parts and addresses, so an address in an error message can be opened from it. */
 export function splitLinks(text: string): { text: string; url: boolean }[] {
   return text
-    .split(/(https:\/\/[^\s"'<>)]+)/g)
+    .split(/(https:\/\/[^\s"'<>)]*[^\s"'<>).,;:!?])/g)
     .filter(Boolean)
     .map((part) => ({ text: part, url: /^https:\/\//.test(part) }));
 }

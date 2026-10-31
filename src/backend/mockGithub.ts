@@ -134,7 +134,8 @@ export class MockGithub {
   }
 
   importGhToken(login?: string): ConnectionInfo {
-    if (login && !this.ghAccounts().accounts.some((a) => a.login === login && a.usable)) throw new Error(`gh has no token for ${login}. Run \`gh auth login\` in a terminal, then try again`);
+    const usable = this.ghAccounts().accounts.filter((a) => a.usable);
+    if (login ? !usable.some((a) => a.login === login) : usable.length === 0) throw new Error(`gh has no token${login ? ` for ${login}` : ""}. Run \`gh auth login\` in a terminal, then try again`);
     if (!this.connected) this.connect();
     this.tokenRefused = false;
     return this.info();

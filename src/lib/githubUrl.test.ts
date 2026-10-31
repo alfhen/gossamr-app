@@ -36,4 +36,12 @@ describe("addresses in a message", () => {
       { text: " first", url: false },
     ]);
   });
+
+  it("leave out the full stop that ends the sentence", () => {
+    expect(splitLinks("authorise at https://github.com/orgs/acme/sso?x=1.")).toEqual([
+      { text: "authorise at ", url: false },
+      { text: "https://github.com/orgs/acme/sso?x=1", url: true },
+      { text: ".", url: false },
+    ]);
+  });
 });
