@@ -169,7 +169,7 @@ impl Core {
 
     pub(super) async fn with_proposals<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let scope = self.scope().await?;
-        self.with_db_for(&scope, f).await
+        self.with_app_db_for(&scope, f).await
     }
 
     pub async fn proposals(&self, query: &ProposalQuery) -> Result<Vec<Proposal>> {
@@ -178,11 +178,11 @@ impl Core {
 
     /// Drafts in `scope`'s connection, for the assistant's tools.
     pub async fn proposals_in(&self, scope: &Scope, query: &ProposalQuery) -> Result<Vec<Proposal>> {
-        self.with_db_for(scope, |db| db.proposals(query)).await
+        self.with_app_db_for(scope, |db| db.proposals(query)).await
     }
 
     pub async fn proposal_in(&self, scope: &Scope, id: &str) -> Result<Option<Proposal>> {
-        self.with_db_for(scope, |db| db.proposal(id)).await
+        self.with_app_db_for(scope, |db| db.proposal(id)).await
     }
 
     /// Pip's change to one of its pending drafts, or to a pending comment, new ticket or breakdown drafted from a run's result. Anyone else's,

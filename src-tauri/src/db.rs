@@ -57,6 +57,15 @@ impl Db {
         Self::open_with_app_steps(cache, app, schema::STEPS)
     }
 
+    /// The app database alone, with no cache attached, for work that touches only app tables. Anything that reads
+    /// items, events or a cache's `meta` needs `open_with_app`.
+    pub fn open_app(app: &Path) -> Result<Self> {
+        if let Some(dir) = app.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, home: None })
+    }
+
     fn open_with_app_steps(cache: &Path, app: &Path, steps: &[&str]) -> Result<Self> {
         let cache_str = cache.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("cache path is not valid UTF-8: {}", cache.display())))?;
         let through = schema::CACHE_STEPS_WITH_APP_STATE.min(steps.len());
@@ -67,7 +76,9 @@ impl Db {
             std::fs::create_dir_all(dir)?;
         }
         let db = Self::attach(Connection::open(app)?, cache_str)?;
-        schema::adopt_cached_app_state(&db.conn, &cache.file_name().unwrap_or_default().to_string_lossy())?;
+        let adopted = schema::adopt_cached_app_state(&db.conn, &cache.file_name().unwrap_or_default().to_string_lossy())?;
+        db.release_copied(&adopted.applying, chrono::Utc::now())?;
+        db.fail_copied_pip_turns(&adopted.pip_turns)?;
         let mut file = Self::open_file(cache)?;
         schema::apply(&mut file, steps)?;
         Ok(db)
@@ -97,9 +108,22 @@ impl Db {
         }
     }
 
-    fn attach(mut conn: Connection, cache: &str) -> Result<Self> {
+    /// Runs `f` with this handle limited to `connection_id`'s drafts and runs, as `for_connection` limits it for good.
+    pub fn homed<T>(&mut self, connection_id: &str, f: impl FnOnce(&Self) -> T) -> T {
+        self.home = Some(connection_id.to_string());
+        let out = f(self);
+        self.home = None;
+        out
+    }
+
+    fn migrated_app(mut conn: Connection) -> Result<Connection> {
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         schema::migrate_app(&mut conn)?;
+        Ok(conn)
+    }
+
+    fn attach(conn: Connection, cache: &str) -> Result<Self> {
+        let conn = Self::migrated_app(conn)?;
         conn.execute("ATTACH DATABASE ?1 AS cache", [cache])?;
         Ok(Self { conn, home: None })
     }
@@ -550,6 +574,61 @@ mod tests {
             let db = Db::open_with_app_steps(&cache, &app, &steps).unwrap();
             assert!(db.proposal(&p.id).unwrap().is_some(), "a cache with the tables already gone is skipped, not an error");
             drop(db);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_handle_with_no_cache_holds_the_app_tables_and_nothing_else() {
+            let (_, app, dir) = files("app-only");
+            let db = Db::open_app(&app).unwrap();
+            db.set_app_meta("k", "v").unwrap();
+            assert_eq!(db.app_meta("k").unwrap().as_deref(), Some("v"));
+            assert!(db.item(&item_ref("1")).is_err(), "there is no cache to read");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_draft_that_was_mid_post_in_a_copied_cache_is_released_but_this_launchs_own_is_not() {
+            let (cache, app, dir) = files("copied-applying");
+            let old = Db::open(&cache).unwrap();
+            let stuck = create(&old, Draft::from_pip("q", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            old.begin_applying(&stuck.id, now()).unwrap().unwrap();
+            drop(old);
+
+            let running = Db::open_app(&app).unwrap();
+            let posting = create(&running, comment_on("jira:site:bob"), now()).unwrap();
+            running.begin_applying(&posting.id, now()).unwrap().unwrap();
+
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            assert_eq!(db.proposal(&stuck.id).unwrap().unwrap().state, ProposalState::Pending);
+            assert_eq!(db.proposal(&stuck.id).unwrap().unwrap().error.as_deref(), Some(crate::db::proposals::INTERRUPTED_NOTE));
+            assert_eq!(db.proposal(&posting.id).unwrap().unwrap().state, ProposalState::Applying);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn pip_turns_cut_off_in_a_copied_cache_are_failed_but_this_launchs_own_are_not() {
+            let (cache, app, dir) = files("copied-pip-turns");
+            let old = Db::open(&cache).unwrap();
+            old.begin_pip_turn("workspace", "cut-off", "Running", &Default::default(), "running", "t1").unwrap();
+            old.begin_pip_wake("ws:w1", "never-ran", "[Event] run r1 (triage) Done", &[("r1".into(), "done".into())], "queued", "t2").unwrap();
+            old.begin_pip_turn("workspace", "answered", "Fine", &Default::default(), "running", "t3").unwrap();
+            old.finish_pip_turn("answered", "Fine", true, None, None, None).unwrap();
+            drop(old);
+
+            let running = Db::open_app(&app).unwrap();
+            running.begin_pip_turn("workspace", "this-launch", "Running now", &Default::default(), "running", "t4").unwrap();
+
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            let status = |id: &str| -> (String, Option<String>) {
+                db.conn.query_row("SELECT status, error FROM pip_turns WHERE request_id = ?1 AND role = 'pip'", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap()
+            };
+            assert_eq!(status("cut-off"), ("failed".into(), Some(crate::db::INTERRUPTED.into())));
+            assert_eq!(status("never-ran"), ("failed".into(), Some(crate::db::NEVER_RAN.into())));
+            assert_eq!(status("answered").0, "done");
+            assert_eq!(status("this-launch").0, "running");
+            let dropped: Vec<_> = db.workstream_events("w1").unwrap().into_iter().filter(|e| e.action == "wake_dropped").map(|e| (e.run_id, e.detail)).collect();
+            assert_eq!(dropped, [(Some("r1".to_string()), Some("done".to_string()))]);
             let _ = std::fs::remove_dir_all(dir);
         }
 

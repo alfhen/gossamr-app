@@ -483,7 +483,7 @@ async fn after_a_restart_only_what_pip_was_not_woken_for_wakes_it() {
     assert_eq!(t.wake_turns().await.len(), 1);
     // The app closes; a run finishes meanwhile; the app opens again with a supervisor that remembers nothing.
     t.run("r2", "triage", RunState::Done, |_| {}).await;
-    t.fx.core.close_db();
+    t.fx.core.restart();
     assert_eq!(t.workstream().await.paused_reason, None, "a restart pauses nothing");
     let fake = Fake::default();
     let svc = service(&t.fx, &fake).await;
@@ -686,7 +686,7 @@ async fn a_wake_waiting_behind_the_person_when_gossamr_closes_is_woken_for_again
     let waiting = t.wake_turns().await[0].request_id.clone();
 
     // Quitting and opening the app again leaves the wake never run, and its fact free to be woken for.
-    t.fx.core.close_db();
+    t.fx.core.restart();
     let wake = t.wake_turns().await.into_iter().find(|w| w.request_id == waiting).unwrap();
     assert_eq!((wake.status.as_str(), wake.error.as_deref()), ("failed", Some(crate::db::NEVER_RAN)));
     assert!(dropped(&t, "done").await);
@@ -789,7 +789,7 @@ async fn quota_missed(t: &T) -> Run {
 async fn a_wake_that_hit_the_quota_is_found_again_after_a_restart() {
     let t = setup().await;
     let run = quota_missed(&t).await;
-    t.fx.core.close_db();
+    t.fx.core.restart();
     let fake = Fake::default();
     let svc = service(&t.fx, &fake).await;
     let sup = supervisor(&t.fx, &svc, &t.emitted);

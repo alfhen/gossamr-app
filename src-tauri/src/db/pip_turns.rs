@@ -205,22 +205,42 @@ impl Db {
     /// Marks turns that were waiting or running when the app last closed as failed; nothing is left to finish them. A
     /// wake that never ran gives its facts back with a supervisor `wake_dropped` line each, so Pip is woken for them again.
     pub fn fail_interrupted_pip_turns(&self) -> Result<usize> {
+        self.fail_pip_turns(None)
+    }
+
+    /// `fail_interrupted_pip_turns` for just the turns `request_ids` names: the ones copied in from a cache file. Not the
+    /// others, which this launch may be running right now.
+    pub(super) fn fail_copied_pip_turns(&self, request_ids: &[String]) -> Result<usize> {
+        self.fail_pip_turns(Some(request_ids))
+    }
+
+    fn fail_pip_turns(&self, only: Option<&[String]>) -> Result<usize> {
+        let wanted = |id: &str| only.is_none_or(|ids| ids.iter().any(|i| i == id));
         self.atomically(|db| {
             let mut stmt = db.conn.prepare(
-                "SELECT w.conversation, w.meta FROM pip_turns w JOIN pip_turns p ON p.request_id = w.request_id AND p.role = 'pip'
+                "SELECT w.request_id, w.conversation, w.meta FROM pip_turns w JOIN pip_turns p ON p.request_id = w.request_id AND p.role = 'pip'
                  WHERE w.role = 'wake' AND p.status = 'queued'",
             )?;
-            let never_ran = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            let never_ran = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
             let now = chrono::Utc::now();
-            for (conversation, meta) in never_ran {
+            for (_, conversation, meta) in never_ran.into_iter().filter(|(id, ..)| wanted(id)) {
                 let Some(workstream) = conversation.strip_prefix(crate::agent::WORKSTREAM_PREFIX) else { continue };
                 for (run, key) in meta.as_deref().map(wake_facts_of).unwrap_or_default() {
                     db.append_workstream_event(&WorkstreamEvent::new(workstream, Actor::Supervisor, "wake_dropped", now).run(&run).detail(&key))?;
                 }
             }
-            let running = db.conn.execute("UPDATE pip_turns SET status = 'failed', error = ?1 WHERE role = 'pip' AND status = 'running'", params![INTERRUPTED])?;
-            let waiting = db.conn.execute("UPDATE pip_turns SET status = 'failed', error = ?1 WHERE role = 'pip' AND status = 'queued'", params![NEVER_RAN])?;
-            Ok(running + waiting)
+            let mut stmt = db.conn.prepare("SELECT request_id, status FROM pip_turns WHERE role = 'pip' AND status IN ('running', 'queued')")?;
+            let open = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            drop(stmt);
+            let mut failed = 0;
+            for (request_id, status) in open.into_iter().filter(|(id, _)| wanted(id)) {
+                let error = if status == "queued" { NEVER_RAN } else { INTERRUPTED };
+                failed += db.conn.execute("UPDATE pip_turns SET status = 'failed', error = ?2 WHERE request_id = ?1 AND role = 'pip'", params![request_id, error])?;
+            }
+            Ok(failed)
         })
     }
 
