@@ -63,6 +63,14 @@ describe("the desktop backend's wiring", () => {
     expect(lib).toContain("fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String)");
   });
 
+  it("opens Terminal on the first-run fix from gh's own answer, with no command or id from the page", () => {
+    const auth = read("./auth.ts");
+    const lib = read("../../src-tauri/src/lib.rs");
+    expect(auth).toContain('invoke<void>("first_run_open_terminal")');
+    expect(lib).toContain("async fn first_run_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>) -> Result<()>");
+    expect(lib).toContain("async fn first_run_github(core: State<'_, CoreState>) -> Result<probe::Snapshot>");
+  });
+
   it("turns an instance on or off by its instance id, and the page can't name a command or a connection id", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");

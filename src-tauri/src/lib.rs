@@ -329,6 +329,19 @@ fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsStat
     runs.open_fix(&core.fix_command(&instance_id)?)
 }
 
+/// What `gh` says about itself before any connection exists: the first-run screen's GitHub line.
+#[tauri::command]
+async fn first_run_github(core: State<'_, CoreState>) -> Result<probe::Snapshot> {
+    Ok(core.first_run_github().await)
+}
+
+/// Opens Terminal on the fix the first-run screen shows, asked of `gh` again. The command comes from the probe, never from the page.
+#[tauri::command]
+async fn first_run_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>) -> Result<()> {
+    let fix = core.first_run_github().await.fix.ok_or_else(|| error::Error::Input("There's nothing to run. Check again.".into()))?;
+    runs.open_fix(&fix)
+}
+
 /// Saves the name Settings shows for an instance.
 #[tauri::command]
 fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String) -> Result<()> {
@@ -1007,6 +1020,8 @@ pub fn run() {
             cache_transitions,
             connections_list,
             connection_open_terminal,
+            first_run_github,
+            first_run_open_terminal,
             connection_rename,
             connection_set_enabled,
             connection_remove,

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ProbeSnapshot } from "../types";
 
 export interface Site {
   cloudId: string;
@@ -35,4 +36,10 @@ export const auth = {
   cloudId: (site: string) => invoke<string | null>("jira_cloud_id", { site }),
   connect: (input: TokenSignIn) => invoke<AuthStatus>("jira_connect", { input }),
   signOut: () => invoke<void>("sign_out"),
+};
+
+/** What the first-run screen asks of `gh`, before any connection exists. */
+export const firstRun = {
+  github: () => invoke<ProbeSnapshot>("first_run_github"),
+  openTerminal: () => invoke<void>("first_run_open_terminal"),
 };

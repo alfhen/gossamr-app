@@ -97,6 +97,11 @@ impl Core {
             .ok_or_else(|| crate::error::Error::Input("There's nothing to run for this connection. Check it again.".into()))
     }
 
+    /// What `gh` says before any connection exists, for the first-run screen. Nothing is kept: the screen asks again after the person runs the fix.
+    pub async fn first_run_github(&self) -> Snapshot {
+        probe::github_first_run(self.code.auth.gh_dirs(), "github.com", probe::TIMEOUT).await
+    }
+
     pub(super) fn probes_forget(&self, instance_id: &str) {
         self.probes.snapshots.lock().expect("probe lock poisoned").remove(instance_id);
     }
