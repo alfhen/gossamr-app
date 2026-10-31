@@ -6,7 +6,7 @@ import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
-import { actingAs, canSwitch, OFF_DETAIL, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
+import { actingAs, canSwitch, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
@@ -119,7 +119,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const s = c.status;
-  const loud = s !== null && probeDecides(c) && (s.state === "notSignedIn" || s.state === "notFound");
+  const loud = s !== null && (s.state === "notSignedIn" || s.state === "notFound");
   const jira = c.kind !== "github";
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
   if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
@@ -144,6 +144,11 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
         {needsToken && (
           <Button variant="primary" size="sm" onClick={p.onNewToken}>
             Make a new token
+          </Button>
+        )}
+        {!jira && s.state === "notSignedIn" && (
+          <Button variant="primary" size="sm" onClick={p.onConnectGithub}>
+            Sign in again
           </Button>
         )}
         <Button size="sm" disabled={p.checking} onClick={p.onCheck}>

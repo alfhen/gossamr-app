@@ -1,11 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { CodeChange, DevLink } from "../types";
+import type { CodeChange, DevLink, GhAccounts } from "../types";
 import { summarize } from "../lib/devLinks";
 import { PrBadge } from "./DevBits";
 import { ChangeRow, ConnectBanner, DevelopmentView, PullDetail, type DevelopmentViewProps } from "./DevelopmentSection";
-import { ConnectView, type ConnectViewProps } from "./ConnectGithub";
-import { connectReducer, START } from "./connectFlow";
+import { ConnectGithubView, type ConnectGithubViewProps } from "./ConnectGithub";
 import { PickerRow } from "./WatchPicker";
 import { FindRow, SettingsRowView } from "./WatchSettings";
 import { nounFor } from "./watchLogic";
@@ -132,45 +131,86 @@ describe("the Development section", () => {
   });
 });
 
-describe("the connect dialog", () => {
-  const props = (over: Partial<ConnectViewProps> = {}): ConnectViewProps => ({ state: START, options: { token: true, ghCli: true, deviceFlow: true }, token: "", now: 0, copied: false, onToken: vi.fn(), onPick: vi.fn(), onSubmit: vi.fn(), onBack: vi.fn(), onRetry: vi.fn(), onCopy: vi.fn(), onOpen: vi.fn(), onClose: vi.fn(), onManage: vi.fn(), ...over });
-  const show = (over?: Partial<ConnectViewProps>) => renderToStaticMarkup(<ConnectView {...props(over)} />);
+describe("the connect GitHub sheet", () => {
+  const found = (over: Partial<GhAccounts> = {}): GhAccounts => ({
+    installed: true,
+    accounts: [
+      { login: "ada", active: true, usable: true },
+      { login: "ada-work", active: false, usable: true },
+    ],
+    message: null,
+    fix: null,
+    ...over,
+  });
+  const props = (over: Partial<ConnectGithubViewProps> = {}): ConnectGithubViewProps => ({ found: found(), connected: [], signedOut: [], connecting: null, error: null, copied: false, onConnect: vi.fn(), onCopy: vi.fn(), onOpenTerminal: vi.fn(), onCheck: vi.fn(), onClose: vi.fn(), ...over });
+  const show = (over?: Partial<ConnectGithubViewProps>) => renderToStaticMarkup(<ConnectGithubView {...props(over)} />);
 
-  it("offers the methods that work and hides the others", () => {
-    const all = show();
-    expect(all).toContain("Paste a personal access token");
-    expect(all).toContain("Use my GitHub CLI login");
-    expect(all).toContain("Sign in with your browser");
-    const token = show({ options: { token: true, ghCli: false, deviceFlow: false } });
-    expect(token).not.toContain("GitHub CLI");
-    expect(token).not.toContain("browser");
-    expect(show({ options: null })).toContain("Checking what is available");
+  it("lists the accounts gh knows, marks the active one, and offers another account with the login command", () => {
+    const out = show();
+    for (const text of ["Accounts gh knows", "ada-work", "Active in gh", 'aria-label="Connect ada"', 'aria-label="Connect ada-work"', "Another account", "gh auth login -h github.com", "Copy", "Open Terminal"]) expect(out).toContain(text);
   });
 
-  it("explains the token types and scopes, and hides the token", () => {
-    const out = show({ state: connectReducer(START, { type: "pick", method: "token" }), token: "ghp_secret" });
-    for (const text of ["read:org", "notifications", "Contents, Pull requests and Metadata", "Create a classic token", 'type="password"']) expect(out).toContain(text);
+  it("has no token, CLI import or browser code step", () => {
+    const out = show();
+    for (const text of ["personal access token", "Use my GitHub CLI login", "Sign in with your browser"]) expect(out).not.toContain(text);
+    expect(out).not.toContain('type="password"');
   });
 
-  it("explains the CLI import and shows errors inline", () => {
-    let state = connectReducer(START, { type: "pick", method: "cli" });
-    expect(show({ state })).toContain("runs");
-    state = connectReducer(connectReducer(state, { type: "submit" }), { type: "fail", message: "gh isn't signed in" });
-    expect(show({ state })).toContain("gh isn&#x27;t signed in");
+  it("shows an account that is already connected as Connected, with no button", () => {
+    const out = show({ connected: ["ada"] });
+    expect(out).toContain("Connected");
+    expect(out).not.toContain('aria-label="Connect ada"');
+    expect(out).toContain('aria-label="Connect ada-work"');
   });
 
-  it("shows the device code with copy and open, the countdown, and the ending states", () => {
-    const code = { userCode: "WDJB-MJHT", verificationUri: "https://github.com/login/device", expiresIn: 900, interval: 5 };
-    let state = connectReducer(START, { type: "pick", method: "device" });
-    expect(show({ state })).toContain("Asking GitHub for a code");
-    state = connectReducer(state, { type: "deviceCode", code, now: 0 });
-    const waiting = show({ state, now: 60_000 });
-    for (const text of ["WDJB-MJHT", "Copy code", "Open github.com/login/device", "Waiting for you to authorise", "14:00", "Cancel"]) expect(waiting).toContain(text);
-    expect(show({ state, copied: true })).toContain("Copied");
-    expect(show({ state: connectReducer(state, { type: "deviceEnd", message: "expired_token: the code expired" }) })).toContain("expired before it was entered");
-    const denied = show({ state: connectReducer(state, { type: "deviceEnd", message: "access_denied" }) });
-    expect(denied).toContain("denied");
-    expect(denied).toContain("Try again");
+  it("offers Sign in again on a connected account that GitHub no longer accepts, and nothing on the others", () => {
+    const out = show({ connected: ["ada", "ada-work"], signedOut: ["ada"] });
+    expect(out).toContain('aria-label="Sign in again as ada"');
+    expect(out).toContain("Signed out");
+    expect(out).not.toContain('aria-label="Connect ada"');
+    expect(out).not.toContain("Sign in again as ada-work");
+  });
+
+  it("says why a signed-out account cannot sign in again when gh's token was refused too", () => {
+    const out = show({ found: found({ accounts: [{ login: "ada", active: true, usable: false }] }), connected: ["ada"], signedOut: ["ada"] });
+    expect(out).toContain("gh&#x27;s token was refused too. Use Another account.");
+    expect(out).toContain("disabled");
+  });
+
+  it("opens Terminal only when the command shown is the login command", () => {
+    const other = show({ found: found({ accounts: [], message: "gh didn't answer in time.", fix: "gh auth status" }) });
+    expect(other).toContain("gh auth status");
+    expect(other).not.toContain("Open Terminal");
+    expect(show({ found: found({ accounts: [], message: "gh has no login.", fix: "gh auth login -h github.com" }) })).toContain("Open Terminal");
+  });
+
+  it("disables an account whose token GitHub refused and says to sign in again", () => {
+    const out = show({ found: found({ accounts: [{ login: "old", active: false, usable: false }] }) });
+    expect(out).toContain("GitHub refused its token");
+    expect(out).toMatch(/<button[^>]*aria-label="Connect old"[^>]*disabled/);
+  });
+
+  it("says Connecting on the account being connected and keeps Done from closing mid-way", () => {
+    const out = show({ connecting: "ada" });
+    expect(out).toContain("Connecting…");
+    expect(out).toMatch(/<button[^>]*disabled[^>]*>Done/);
+  });
+
+  it("shows what gh says and the command that fixes it when it has no login or isn't installed", () => {
+    const none = show({ found: found({ accounts: [], message: "gh has no login on github.com.", fix: "gh auth login -h github.com" }) });
+    for (const text of ["gh has no login on github.com.", "gh auth login -h github.com", "Open Terminal", "I&#x27;ve run it, check again"]) expect(none).toContain(text);
+    expect(none).not.toContain("Another account");
+    const missing = show({ found: found({ installed: false, accounts: [], message: "gh isn't installed.", fix: "brew install gh" }) });
+    expect(missing).toContain("brew install gh");
+    expect(missing).not.toContain("Open Terminal");
+  });
+
+  it("says it is asking gh while the answer is on its way, and shows an error with its address openable", () => {
+    expect(show({ found: null })).toContain("Asking gh…");
+    const out = show({ error: "authorise at https://github.com/orgs/acme/sso?x=1" });
+    expect(out).toContain('role="alert"');
+    expect(out).toContain("<button");
+    expect(out).toContain("https://github.com/orgs/acme/sso?x=1");
   });
 });
 

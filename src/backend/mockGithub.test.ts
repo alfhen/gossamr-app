@@ -64,12 +64,34 @@ describe("the mock GitHub connection", () => {
   it("connects through the gh import and the device flow, which must be started before it is polled", async () => {
     const gh = new MockBackend();
     expect((await gh.githubImportGhToken()).id).toBe(GH);
+    await expect(new MockBackend({ githubRepos: 6, githubProbe: "notSignedIn" }).githubImportGhToken()).rejects.toThrow("gh has no token");
 
     const device = new MockBackend();
     await expect(device.githubDevicePoll()).rejects.toThrow("start signing in first");
     const start = await device.githubDeviceStart();
     expect([start.userCode, start.verificationUri]).toEqual(["WDJB-MJHT", "https://github.com/login/device"]);
     expect((await device.githubDevicePoll()).id).toBe(GH);
+  });
+
+  it("lists the account gh holds, and lists none in each state where gh has none to give", async () => {
+    const listed = async (probe?: MockOptions["githubProbe"]) => new MockBackend({ githubRepos: 6, githubProbe: probe }).githubAccounts();
+    expect(await listed()).toEqual({ installed: true, accounts: [{ login: "ada", active: true, usable: true }], message: null, fix: null });
+    expect(await listed("notSignedIn")).toMatchObject({ installed: true, accounts: [], message: "gh has no login on github.com.", fix: "gh auth login -h github.com" });
+    expect(await listed("notFound")).toMatchObject({ installed: false, accounts: [], fix: "brew install gh" });
+    expect(await listed("error")).toMatchObject({ installed: true, accounts: [], fix: "gh auth status" });
+  });
+
+  it("connects the login gh holds, and refuses one it doesn't", async () => {
+    const b = new MockBackend();
+    await expect(b.githubImportGhToken("someone")).rejects.toThrow("gh has no token for someone");
+    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
+    expect((await b.githubImportGhToken("ada")).id).toBe(GH);
+  });
+
+  it("opens Terminal on the login command", async () => {
+    const b = new MockBackend();
+    await b.githubOpenLogin();
+    expect(b.terminals).toEqual(["gh auth login -h github.com"]);
   });
 
   it("starts signed in with the requested number of repositories, at least the six samples", async () => {

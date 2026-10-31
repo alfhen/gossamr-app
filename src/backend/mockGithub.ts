@@ -5,6 +5,7 @@ import type {
   ContainerSummary,
   DeviceStart,
   Footprint,
+  GhAccounts,
   GithubSignInOptions,
   Intent,
   PostedReview,
@@ -14,6 +15,7 @@ import type {
   WatchChanged,
   WatchState,
 } from "../types";
+import { GH_LOGIN_COMMAND } from "../lib/githubUrl";
 import { MockCode } from "./mockCode";
 import { githubSnapshot, type GithubProbeState } from "./mockProbes";
 import { MockWatch } from "./mockWatch";
@@ -91,6 +93,8 @@ export class MockGithub {
   /** What the probe of the GitHub instance finds, and when it last looked. */
   private probe: GithubProbeState = "ready";
   private on = true;
+  /** GitHub turned down the stored token while gh still holds a good one (`refuseToken`). */
+  private tokenRefused = false;
   private checkedAt: string;
   /** Called when `setProbe` changes what the probe found, as the backend's `connections` event would be sent. */
   onProbeChanged: () => void = () => {};
@@ -129,9 +133,30 @@ export class MockGithub {
     return this.info();
   }
 
-  importGhToken(): ConnectionInfo {
+  importGhToken(login?: string): ConnectionInfo {
+    const usable = this.ghAccounts().accounts.filter((a) => a.usable);
+    if (login ? !usable.some((a) => a.login === login) : usable.length === 0) throw new Error(`gh has no token${login ? ` for ${login}` : ""}. Run \`gh auth login\` in a terminal, then try again`);
     if (!this.connected) this.connect();
+    this.tokenRefused = false;
     return this.info();
+  }
+
+  /** GitHub turns down the stored token, as when a token expires or is revoked; gh's own login is untouched. */
+  refuseToken() {
+    this.tokenRefused = true;
+    this.checkedAt = new Date().toISOString();
+    this.onProbeChanged();
+  }
+
+  /** What `gh` holds: the sample login, or nothing in each state where `gh` has none to give. */
+  ghAccounts(): GhAccounts {
+    if (this.probe === "notFound") return { installed: false, accounts: [], message: "gh isn't installed.", fix: "brew install gh" };
+    if (this.probe === "notSignedIn") return { installed: true, accounts: [], message: "gh has no login on github.com.", fix: GH_LOGIN_COMMAND };
+    if (this.probe === "error") {
+      const { message, fix } = githubSnapshot("error", GITHUB_LOGIN, this.checkedAt);
+      return { installed: true, accounts: [], message, fix };
+    }
+    return { installed: true, accounts: [{ login: GITHUB_LOGIN, active: true, usable: true }], message: null, fix: null };
   }
 
   deviceStart(): DeviceStart {
@@ -156,7 +181,8 @@ export class MockGithub {
   }
 
   info(): ConnectionInfo {
-    const status = githubSnapshot(this.enabled ? this.probe : "off", GITHUB_LOGIN, this.checkedAt);
+    const found = githubSnapshot(this.enabled ? this.probe : "off", GITHUB_LOGIN, this.checkedAt);
+    const status = this.tokenRefused && this.enabled ? { ...found, state: "notSignedIn" as const, account: null, message: `GitHub no longer accepts the token for ${GITHUB_LOGIN}.` } : found;
     return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.enabled, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
   }
 

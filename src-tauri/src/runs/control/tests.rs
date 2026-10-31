@@ -236,6 +236,14 @@ fn the_attach_file_is_exactly_three_lines_and_private() {
 }
 
 #[test]
+fn a_fix_file_clears_the_gh_overrides_before_it_runs_the_command() {
+    let dir = tmp("fix-file");
+    let file = write_fix_file(&dir, "gh auth login -h github.com").unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "#!/bin/zsh\nunset GH_TOKEN GITHUB_TOKEN GH_HOST\ngh auth login -h github.com\n");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_path_that_could_reach_the_shell_is_refused_and_nothing_is_written() {
     let dir = tmp("attach-hostile");
     let (id, claude) = ids();
@@ -307,7 +315,7 @@ async fn a_fix_opens_in_the_terminal_the_person_chose_from_a_private_script_with
     let opened = rig.opened.0.lock().unwrap().clone();
     assert_eq!(*rig.opened.1.lock().unwrap(), [TerminalChoice::ITerm]);
     assert_eq!(opened.len(), 1);
-    assert_eq!(std::fs::read_to_string(&opened[0]).unwrap(), "#!/bin/zsh\ngh auth login -h github.com\n");
+    assert_eq!(std::fs::read_to_string(&opened[0]).unwrap(), "#!/bin/zsh\nunset GH_TOKEN GITHUB_TOKEN GH_HOST\ngh auth login -h github.com\n");
     assert_eq!(std::fs::metadata(&opened[0]).unwrap().permissions().mode() & 0o777, 0o700);
 }
 

@@ -1020,6 +1020,21 @@ export interface GithubSignInOptions {
   token: boolean;
 }
 
+/** One login `gh` holds on github.com. `usable` is false only when GitHub refused its token. */
+export interface GhAccount {
+  login: string;
+  active: boolean;
+  usable: boolean;
+}
+
+/** The logins `gh` holds. `message` and `fix` say what is missing when the list is empty. */
+export interface GhAccounts {
+  installed: boolean;
+  accounts: GhAccount[];
+  message: string | null;
+  fix: string | null;
+}
+
 /** The code the person enters at `verificationUri` to authorise the app. The token never reaches the page. */
 export interface DeviceStart {
   userCode: string;

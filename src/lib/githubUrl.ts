@@ -1,8 +1,15 @@
 export const GITHUB_HOST = "github.com";
 
-/** Where a person creates a classic token with the scopes Gossamr reads with already ticked. */
-export const CLASSIC_TOKEN_URL = "https://github.com/settings/tokens/new?scopes=repo,read:org,notifications&description=Gossamr";
-export const FINE_GRAINED_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+/** What a person runs to add another account to `gh`. */
+export const GH_LOGIN_COMMAND = "gh auth login -h github.com";
+
+/** Splits text into plain parts and addresses, so an address in an error message can be opened from it. */
+export function splitLinks(text: string): { text: string; url: boolean }[] {
+  return text
+    .split(/(https:\/\/[^\s"'<>)]*[^\s"'<>).,;:!?])/g)
+    .filter(Boolean)
+    .map((part) => ({ text: part, url: /^https:\/\//.test(part) }));
+}
 
 /**
  * The address when it is safe to hand to the system browser: https, no credentials, no port, and a GitHub host. Other
