@@ -1,8 +1,8 @@
 //! A fresh copy of a repository in the visible folder `~/Gossamr/agents/<owner>/<repo>`, for a repository the person
 //! has no clone of. Nothing here starts by itself: the person has seen the folder and the command and pressed the button.
 //!
-//! Git runs with the person's shell environment, so their own credentials work, and with hooks switched off. Gossamr's
-//! stored GitHub token is never passed on, and `GIT_TERMINAL_PROMPT=0` is set on these processes only, never on `claude`.
+//! Git runs with the person's shell environment, so their own credentials work, and with hooks switched off. The token
+//! Gossamr reads from `gh` is never passed on, and `GIT_TERMINAL_PROMPT=0` is set on these processes only, never on `claude`.
 
 use std::ffi::OsString;
 use std::fmt;

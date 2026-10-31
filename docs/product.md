@@ -44,7 +44,7 @@ A GitHub review names its reviewer agent and the commit it reviewed. Inline comm
 
 - Pip has only Gossamr's MCP tools, with no file, shell or web tools.
 - Agents have your own Claude Code permissions and integrations. Their brief asks them to push only their own branch, open draft pull requests and never merge; this is not a sandbox over your setup.
-- Secrets stay in the macOS Keychain. Each agent's private MCP config is the sole on-disk token exception, and that token expires when the run ends.
+- Secrets stay in the macOS Keychain: one Jira token per connection. Gossamr stores no GitHub token. It asks `gh` each time, so that token is only as safe as `gh` keeps it (the Keychain, or plain text in `hosts.yml` after `gh auth login --insecure-storage`), and Gossamr gets every scope `gh` holds. Each agent's private MCP config is the one other on-disk token, and that token expires when the run ends.
 - Nothing in a keyboard shortcut should act while you type in an input or text area.
 
 The remaining refactor work is tracked in [the simplification proposal](simplification-proposal.md); the Linear adapter is the step left. [The CLI findings](agents-cli-findings.md) record what has actually been checked against Claude Code.
