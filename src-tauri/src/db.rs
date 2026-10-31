@@ -70,6 +70,7 @@ impl Db {
         db.fail_copied_pip_turns(&adopted.pip_turns)?;
         let mut file = Self::open_file(cache)?;
         schema::apply(&mut file, schema::STEPS)?;
+        schema::clear_app_copies(&mut file)?;
         Ok(db)
     }
 
@@ -495,7 +496,7 @@ mod tests {
     mod shared_app_database {
         use super::*;
         use crate::domain::fixtures::{item_ref, now, run_spec};
-        use crate::domain::{Doc, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunQuery};
+        use crate::domain::{Doc, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState};
         use crate::proposals::{create, Draft};
 
         fn files(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
@@ -553,6 +554,42 @@ mod tests {
             let _ = std::fs::remove_dir_all(dir);
         }
 
+        #[test]
+        fn a_connection_cannot_read_or_change_another_ones_run_by_its_id() {
+            let (ann_cache, app, dir) = files("run-ids");
+            let ann = Db::open_with_app(&ann_cache, &app).unwrap().for_connection("jira:site:ann");
+            let done = |id: &str| Run { state: RunState::Done, ..run_of(id, "jira:site:ann") };
+            let event = |id: &str| RunEvent { run_id: id.into(), seq: 0, at: now(), kind: "k".into(), text: "t".into(), detail: None };
+            for id in ["open", "archived"] {
+                ann.insert_run(&done(id)).unwrap();
+                ann.append_events(id, &[event(id)]).unwrap();
+            }
+            ann.archive_runs(&["archived".into()], now()).unwrap();
+            ann.put_run_message("open", "Later.", now()).unwrap();
+
+            let bob = Db::open_with_app(&dir.join("inbox-site-bob.sqlite"), &app).unwrap().for_connection("jira:site:bob");
+            assert!(bob.run("open").unwrap().is_none());
+            assert!(bob.run_by_start_key("popen").unwrap().is_none());
+            assert!(bob.run_events("open").unwrap().is_empty());
+            assert!(bob.run_messages_waiting().unwrap().is_empty());
+            assert!(!bob.save_run(&Run { last_detail: Some("bob's".into()), ..done("open") }).unwrap());
+            assert!(bob.archive_runs(&["open".into()], now()).unwrap().is_empty());
+            assert_eq!(bob.append_events("open", &[event("open")]).unwrap(), 0);
+            assert!(!bob.restore_run("archived").unwrap());
+            assert!(!bob.delete_archived_run("archived").unwrap());
+            let mut app_only = Db::open_app(&app).unwrap();
+            assert!(app_only.homed("jira:site:bob", |db| db.run("open").unwrap().is_none()));
+            assert!(app_only.run("open").unwrap().is_some(), "an unhomed handle sees every run");
+
+            let open = ann.run("open").unwrap().unwrap();
+            assert_eq!((open.last_detail, open.archived_at), (None, None), "left as it was");
+            assert_eq!(ann.run_events("open").unwrap().len(), 1);
+            assert_eq!(ann.run_messages_waiting().unwrap(), ["open"]);
+            assert!(ann.run("archived").unwrap().unwrap().archived_at.is_some());
+            assert_eq!(ann.run_events("archived").unwrap().len(), 1);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
         fn legacy_cache_with(tag: &str, draft: &Draft) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, Proposal) {
             let (cache, app, dir) = files(tag);
             let old = Db::open_before_the_move(&cache).unwrap();
@@ -603,6 +640,30 @@ mod tests {
             assert!(db.proposal(&first.id).unwrap().is_some());
             drop(db);
             assert_eq!(count(&cache, "proposals"), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn rows_a_release_from_before_the_move_writes_to_an_emptied_cache_are_copied_once_and_what_the_app_then_deletes_stays_deleted() {
+            let (cache, app, dir, first) = legacy_cache_with("written-after-clear", &comment_on("jira:site:ann"));
+            drop(Db::open_with_app(&cache, &app).unwrap());
+            assert_eq!(cache_version(&cache), schema::STEPS.len() as i64);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let later = create(&old, Draft::from_pip("later", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            old.execute_batch("INSERT INTO workstreams (id, connection_id, title, mode, created_at, data) VALUES ('w1', 'jira:site:ann', 'Fix it', 'open', '2026-10-01T10:00:00Z', '{}');").unwrap();
+            drop(old);
+
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_some());
+            assert!(db.proposal(&first.id).unwrap().is_some());
+            drop(db);
+            assert_eq!((count(&cache, "proposals"), count(&cache, "workstreams")), (0, 0));
+
+            Db::open_app(&app).unwrap().execute_batch(&format!("DELETE FROM proposals WHERE id = '{}'; DELETE FROM workstreams;", later.id)).unwrap();
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_none());
+            drop(db);
+            assert_eq!(count(&app, "workstreams"), 0);
             let _ = std::fs::remove_dir_all(dir);
         }
 

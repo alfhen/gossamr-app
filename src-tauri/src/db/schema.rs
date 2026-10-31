@@ -390,9 +390,12 @@ DELETE FROM items WHERE EXISTS (SELECT 1 FROM watched_containers w WHERE w.conne
 UPDATE sync_state SET full_at = NULL WHERE connection_id IN (SELECT connection_id FROM watched_containers WHERE depth = 'whole' AND unwatched_at IS NULL);
 DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
 
-/// The cache's copies of the app tables are emptied once the app database holds their rows, which `Db::open_with_app`
-/// records (`copied:<cache file>` in `app_meta`) before it applies this step. The tables stay: a release from before the
-/// move opens the file at this version without recreating them and fails on its first query of one.
+/// Marks a cache whose copies of the app tables `Db::open_with_app` has emptied. It empties them with `clear_app_copies`
+/// on every open, not here, because a release from before the move can write to them again at this version.
+const APP_COPIES_CLEARED: &str = "";
+
+/// The tables stay: a release from before the move opens the file without recreating them and fails on its first query
+/// of one.
 const CLEAR_APP_COPIES: &str = "
 DELETE FROM proposals;
 DELETE FROM runs;
@@ -405,7 +408,7 @@ DELETE FROM workstreams;
 DELETE FROM workstream_events;
 DELETE FROM meta WHERE k LIKE 'claude:%' OR k = 'pip_sessions';";
 
-pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST, CLEAR_APP_COPIES];
+pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST, APP_COPIES_CLEARED];
 
 /// What Gossamr itself keeps, apart from any one connection's cache: drafts, runs and their reports, workstreams, Pip's
 /// conversations and the sessions Pip started. These are the final shapes of the tables the cache steps built up, so
@@ -526,8 +529,7 @@ const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages",
 const APP_META_KEYS: &str = "k LIKE 'claude:%'";
 
 /// How many of the cache's steps it takes to give its copies of the app tables their final shape. The copy into the
-/// app database reads them after these and before `CLEAR_APP_COPIES`, so `migrate` stops here and only
-/// `Db::open_with_app` applies that step, after the copy.
+/// app database reads them after these, so `migrate` stops here and only `Db::open_with_app` applies the rest, after the copy.
 pub const CACHE_STEPS_WITH_APP_STATE: usize = 18;
 
 pub(crate) fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
@@ -549,12 +551,23 @@ pub fn migrate_app(conn: &mut Connection) -> Result<()> {
     apply(conn, APP_STEPS)
 }
 
+/// Empties the cache's copies of the app tables. Only call it once the app database holds their rows.
+pub fn clear_app_copies(conn: &mut Connection) -> Result<()> {
+    if conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'proposals'", [], |_| Ok(())).optional()?.is_none() {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    tx.execute_batch(CLEAR_APP_COPIES)?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn own_sessions(json: Option<String>) -> Vec<String> {
     json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
 /// Copies the app state a cache file holds into the app database, once per cache file. The cache keeps its rows until
-/// `CLEAR_APP_COPIES`, which the caller applies after this returns. Needs the cache attached as `cache`. Returns
+/// `clear_app_copies`, which the caller runs after this returns. Needs the cache attached as `cache`. Returns
 /// what the cache held that a closed app left half done.
 pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Adopted> {
     let marker = format!("copied:{cache_file}");
@@ -589,7 +602,7 @@ pub struct Adopted {
 }
 
 /// Copies the cache's app rows the app database lacks, so rows a release from before the move wrote to a cache that was
-/// already marked copied survive `CLEAR_APP_COPIES`. Returns the tables the cache held.
+/// already marked copied survive `clear_app_copies`. Returns the tables the cache held.
 fn copy_cached_rows(tx: &rusqlite::Transaction) -> Result<Vec<&'static str>> {
     let mut held = Vec::new();
     for table in APP_TABLES {
@@ -631,7 +644,7 @@ fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The shape a cache has when the app database copies from it, which is what the steps before `CLEAR_APP_COPIES` build.
+    /// The shape a cache has when the app database copies from it.
     fn migrate_to_copy_shape(conn: &mut Connection) -> Result<()> {
         apply(conn, &STEPS[..CACHE_STEPS_WITH_APP_STATE])
     }
@@ -680,7 +693,7 @@ mod tests {
         )
         .unwrap();
 
-        apply(&mut conn, STEPS).unwrap();
+        clear_app_copies(&mut conn).unwrap();
 
         for table in APP_TABLES {
             assert!(tables(&conn).contains(&table.to_string()), "{table}");
