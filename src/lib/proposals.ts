@@ -1,6 +1,6 @@
 import { docText } from "./docs";
 import { maskSecrets } from "./riskyText";
-import type { BasisField, Intent, ItemRef, Proposal, ReviewComment } from "../types";
+import type { BasisField, ConnectionInfo, Intent, ItemRef, Proposal, ReviewComment } from "../types";
 
 /** Fails to compile when a switch over a union misses a case, and throws if one slips through at run time. */
 export function unreachable(value: never): never {
@@ -29,6 +29,25 @@ export function targetOf(intent: Intent): ItemRef | null {
     default:
       return unreachable(intent);
   }
+}
+
+/** The connection a draft is made for: where it would be applied, or where a review would be posted. */
+function connectionIdOf(p: Proposal): string | null {
+  const i = p.intent;
+  if (i.type === "githubReview") return i.connectionId;
+  if (i.type === "create") return i.container.connectionId;
+  return targetOf(i)?.connectionId ?? null;
+}
+
+export function connectionOf(p: Proposal, connections: readonly ConnectionInfo[]): ConnectionInfo | null {
+  const id = connectionIdOf(p);
+  return connections.find((c) => c.id === id) ?? null;
+}
+
+/** What a pending draft says while its connection is off, as `Core::refuse_while_off` words the refusal. Null when it can be approved. */
+export function heldNote(p: Proposal, connections: readonly ConnectionInfo[]): string | null {
+  const c = p.state.type === "pending" ? connectionOf(p, connections) : null;
+  return c && !c.enabled ? `${c.displayName} is off. This draft waits until you turn it on.` : null;
 }
 
 /**

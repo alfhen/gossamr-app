@@ -119,6 +119,7 @@ impl Core {
     /// while one of its drafts is being posted. The cache and the token stay either way.
     pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
         let _alone = self.sign_in.lock().await;
+        let _gate = self.draft_gate.lock().await;
         let config = AppConfig::load(&self.data_dir);
         let instance = connections::is_live(&config).then(|| config.connections.iter().find(|i| i.id == instance_id)).flatten();
         let Some(instance) = instance else { return Err(Error::Input("This connection is gone. Reopen Settings.".into())) };
@@ -179,6 +180,21 @@ impl Core {
             return Ok(RemovalTarget { kind: ConnectionKind::Github, connection_id: id.into(), name: "GitHub".into(), instance_id: None, login: Some(session.login) });
         }
         Err(Error::Input("This connection is gone. Reopen Settings.".into()))
+    }
+
+    /// The name of the instance `connection_id` belongs to, when it is turned off. Nothing is off while the list can't be read.
+    pub(super) fn off_name(&self, connection_id: &str) -> Option<String> {
+        let config = AppConfig::load(&self.data_dir);
+        let off = |i: &&connections::Instance| !i.enabled && i.bound_to.as_deref().unwrap_or(&i.id) == connection_id;
+        connections::is_live(&config).then(|| config.connections.iter().find(off).map(|i| i.display_name.clone())).flatten()
+    }
+
+    /// Turns away a write for a connection that is off: its drafts wait until it is on.
+    pub(super) fn refuse_while_off(&self, connection_id: &str) -> Result<()> {
+        match self.off_name(connection_id) {
+            Some(name) => Err(Error::Proposal(format!("{name} is off. This draft waits until you turn it on."))),
+            None => Ok(()),
+        }
     }
 
     async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {

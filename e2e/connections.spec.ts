@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, reviewDrafts, reviewedDraft, toast } from "./support/app";
+import { githubPostsTried, openApp, peekSheet, peekTicket, reviewDrafts, reviewedDraft, toast } from "./support/app";
 
 async function openSettings(page: Page) {
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
@@ -150,6 +150,31 @@ test.describe("the Connections list", () => {
     await expect(toast(page).filter({ hasText: "Removed GitHub." })).toBeVisible();
     expect((await reviewDrafts(page)).map((d) => d.state)).toEqual(["retired"]);
     await expect(rowOf(page, "Sample data")).toBeVisible();
+  });
+
+  test("holds a review draft while GitHub is off, and lets it be approved again once GitHub is on", async ({ page }) => {
+    const review = await reviewedDraft(page);
+    await expect(review).toContainText("Posts as ada via GitHub");
+    await toast(page).getByRole("button", { name: "Dismiss" }).click();
+    await openSettings(page);
+    const github = rowOf(page, "GitHub").getByRole("switch", { name: "GitHub" });
+    await github.click();
+    await expect(github).not.toBeChecked();
+    await page.getByRole("button", { name: "All projects" }).click();
+    await peekTicket(page, "CA-402");
+    const held = peekSheet(page).getByRole("article", { name: "GitHub review of acme/webshop#218" });
+    await expect(held).toContainText("GitHub is off. This draft waits until you turn it on.");
+    await expect(held).not.toContainText("Posts as");
+    await expect(held.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(await githubPostsTried(page)).toBe(0);
+    await page.keyboard.press("Escape");
+    await openSettings(page);
+    await github.click();
+    await expect(github).toBeChecked();
+    await page.getByRole("button", { name: "All projects" }).click();
+    await peekTicket(page, "CA-402");
+    await expect(held).toContainText("Posts as ada via GitHub");
+    await expect(held.getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
   test("opens the Connect GitHub sheet from the foot of the list, with the account already connected marked and the login command for another", async ({ page }) => {

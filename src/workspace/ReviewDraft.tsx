@@ -11,6 +11,7 @@ import { PostingPause } from "./PostingPause";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
 import { showPause, type DraftCardProps } from "./DraftCard";
 import { useCardKeys } from "./draftCardKeys";
+import { DraftAccount, useHeldNote } from "./draftHold";
 import { PEEK_DRAFT_MARGIN, peekFocusAfterLeaving } from "./peekDrafts";
 import { sameCommit, usePullDiff, type PullDiffState } from "./reviewDiff";
 import { openOnGithub } from "./githubUi";
@@ -297,7 +298,8 @@ export function ReviewDraft({
   };
   // Another edit takes the pause back: it said what the earlier words held.
   useEffect(() => setPause(null), [summary, JSON.stringify(comments)]);
-  const approvable = open && !working && state !== "applying" && !problem;
+  const waiting = useHeldNote(p);
+  const approvable = open && !working && state !== "applying" && !problem && !waiting;
   const keys = useCardKeys(p, {
     // Posting by key is the Post review button's step, asked for Enter first, and only where the token can post.
     approve: canPost && approvable ? () => post() : undefined,
@@ -485,6 +487,7 @@ export function ReviewDraft({
             {shownError ?? problem}
           </p>
         )}
+        <DraftAccount proposal={p} />
         {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} where="the pull request" subject="Your edit" anyway="Post it anyway" working={working || state === "applying" || !!problem} onKeep={keepEditing} onPost={() => post()} />}
         <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
           <Button className="mr-auto" onClick={() => void openOnGithub(`https://github.com/${review.repo}/pull/${review.number}`)}>Open on GitHub</Button>
@@ -500,13 +503,13 @@ export function ReviewDraft({
                 Skip
               </Button>
               {canPost && p.maybePosted?.checkedAt && (
-                <Button data-review-post-anyway disabled={working || state === "applying" || !!problem} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => post({ postAnyway: true })}>
+                <Button data-review-post-anyway disabled={working || state === "applying" || !!problem || !!waiting} title={problem ?? "Sends this review though it may already be on GitHub."} onClick={() => post({ postAnyway: true })}>
                   Post again
                 </Button>
               )}
               {/* While the pause shows, its own Post it anyway stands in for this button, beside Keep editing. */}
               {canPost && !pause && (
-                <Button variant="primary" disabled={working || state === "applying" || !!problem} title={problem ?? undefined} onClick={() => post()}>
+                <Button variant="primary" disabled={working || state === "applying" || !!problem || !!waiting} title={problem ?? undefined} onClick={() => post()}>
                   {working || state === "applying" ? "Posting…" : "Approve"}
                 </Button>
               )}

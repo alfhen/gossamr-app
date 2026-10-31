@@ -376,7 +376,11 @@ impl Core {
     pub async fn approve_proposal(&self, id: &str) -> Result<Proposal> {
         let scope = self.scope().await?;
         let tracker = self.tracker(&scope)?;
-        let claimed = self.with_db_for(&scope, |db| proposals::begin(db, id, Utc::now())).await?;
+        let claimed = {
+            let _gate = self.draft_gate.lock().await;
+            self.refuse_while_off(&scope.connection_id)?;
+            self.with_db_for(&scope, |db| proposals::begin(db, id, Utc::now())).await?
+        };
         let outcome = proposals::execute(tracker.as_ref(), &claimed).await;
         let wrote = outcome.error.is_none() || !outcome.created.is_empty();
         let done = self.with_db_for(&scope, |db| {
@@ -502,6 +506,32 @@ mod tests {
         let done = fx.core.approve_proposal(&drafted.id).await.unwrap();
         assert_eq!(done.state, ProposalState::Applied);
         assert_eq!(fx.tracker.intents(), vec![Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }]);
+    }
+
+    #[tokio::test]
+    async fn a_draft_for_a_jira_that_is_off_waits_and_is_applied_once_it_is_on() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.adopt_instances().await;
+        let drafted = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+
+        let refused = fx.core.approve_proposal(&drafted.id).await.unwrap_err();
+
+        assert!(refused.to_string().contains("is off. This draft waits until you turn it on."), "{refused}");
+        assert!(fx.tracker.intents().is_empty());
+        assert_eq!(fx.core.proposal(&drafted.id).await.unwrap().unwrap().state, ProposalState::Pending);
+
+        fx.core.set_instance_enabled("jira", true).await.unwrap();
+        assert_eq!(fx.core.approve_proposal(&drafted.id).await.unwrap().state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_jira_that_is_off_is_not_asked_for_anything_by_the_sync_loop() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.adopt_instances().await;
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+
+        assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_none());
     }
 
     #[tokio::test]
