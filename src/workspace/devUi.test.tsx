@@ -163,9 +163,9 @@ describe("the connect GitHub sheet", () => {
     expect(out).toContain('aria-label="Connect ada-work"');
   });
 
-  it("disables an account gh can't use and says to sign in again", () => {
+  it("disables an account whose token GitHub refused and says to sign in again", () => {
     const out = show({ found: found({ accounts: [{ login: "old", active: false, usable: false }] }) });
-    expect(out).toContain("gh can&#x27;t use its token");
+    expect(out).toContain("GitHub refused its token");
     expect(out).toMatch(/<button[^>]*aria-label="Connect old"[^>]*disabled/);
   });
 

@@ -1020,7 +1020,7 @@ export interface GithubSignInOptions {
   token: boolean;
 }
 
-/** One login `gh` holds on github.com. `usable` is false when `gh` can't use its token right now. */
+/** One login `gh` holds on github.com. `usable` is false only when GitHub refused its token. */
 export interface GhAccount {
   login: string;
   active: boolean;

@@ -315,7 +315,7 @@ impl GithubAuth {
         command.args(["auth", "token"]);
         if let Some(login) = login {
             // A login that starts with a dash would be read as a flag.
-            if login.is_empty() || login.starts_with('-') || !login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            if login.is_empty() || login.starts_with('-') || !login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
                 return Err(Error::Auth(format!("{login} isn't a GitHub login")));
             }
             command.args(["-h", "github.com", "-u", login]);
@@ -536,12 +536,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_enterprise_managed_login_with_an_underscore_is_imported() {
+        let server = serve(vec![("/user", vec![Reply::ok(USER)])]).await;
+        let dir = temp("emu");
+        fake_gh(&dir, "if [ \"$*\" = \"auth token -h github.com -u octocat_acme\" ]; then echo gho_emu; fi");
+        let (auth, _) = auth(&server, None, vec![dir.clone()]);
+        assert_eq!(auth.import_gh_token(Some("octocat_acme")).await.unwrap().token, "gho_emu");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_login_that_could_pass_for_a_flag_is_refused_before_gh_runs() {
         let server = serve(vec![]).await;
         let dir = temp("flag");
         fake_gh(&dir, "echo gho_x");
         let (auth, _) = auth(&server, None, vec![dir.clone()]);
-        for login in ["--hostname", "-u", "a b", "", "a;b"] {
+        for login in ["--hostname", "-u", "a b", "", "a;b", "a/b"] {
             assert!(auth.import_gh_token(Some(login)).await.unwrap_err().to_string().contains("isn't a GitHub login"), "{login}");
         }
         std::fs::remove_dir_all(dir).unwrap();

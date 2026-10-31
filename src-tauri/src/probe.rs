@@ -213,7 +213,7 @@ pub async fn github_first_run(gh_dirs: &[PathBuf], host: &str, timeout: Duration
     Snapshot { version, ..snapshot }
 }
 
-/// A login `gh` holds on a host. `usable` is false when `gh` can't use its token right now.
+/// A login `gh` holds on a host. `usable` is false only when GitHub refused its token; offline is not a sign-out.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GhAccount {
@@ -243,7 +243,7 @@ pub async fn github_accounts(gh_dirs: &[PathBuf], host: &str, timeout: Duration)
         .iter()
         .filter(|(h, _)| h.eq_ignore_ascii_case(host))
         .flat_map(|(_, entries)| entries)
-        .map(|e| GhAccount { login: e.login.clone(), active: e.active, usable: e.state == "success" })
+        .map(|e| GhAccount { login: e.login.clone(), active: e.active, usable: !e.token_refused() })
         .collect();
     accounts.sort_by_key(|a| !a.active);
     let empty = accounts.is_empty();
@@ -493,6 +493,13 @@ mod tests {
         let listed: Vec<_> = seen.accounts.iter().map(|a| (a.login.as_str(), a.active, a.usable)).collect();
         assert_eq!(listed, [("Alfhen", true, true), ("work", false, true), ("old", false, false)]);
         assert_eq!((seen.installed, seen.message, seen.fix), (true, None, None));
+    }
+
+    #[tokio::test]
+    async fn a_login_gh_could_not_check_because_it_was_offline_is_still_usable() {
+        let status = r#"{"hosts":{"github.com":[{"state":"timeout","active":true,"host":"github.com","login":"alfhen"},{"state":"error","active":false,"host":"github.com","login":"work","error":"HTTP 503: Service Unavailable"}]}}"#;
+        let seen = github_accounts(&gh_saying("accounts-offline", status), "github.com", Duration::from_secs(5)).await;
+        assert!(seen.accounts.iter().all(|a| a.usable), "{:?}", seen.accounts);
     }
 
     #[tokio::test]

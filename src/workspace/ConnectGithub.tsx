@@ -59,7 +59,7 @@ function Command({ command, copied, terminal, onCopy, onOpenTerminal }: { comman
 }
 
 function AccountRow({ account, connected, busy, onConnect }: { account: GhAccount; connected: boolean; busy: boolean; onConnect(): void }) {
-  const note = connected ? "Connected" : !account.usable ? "gh can't use its token. Sign in again." : account.active ? "Active in gh" : "";
+  const note = connected ? "Connected" : !account.usable ? "GitHub refused its token. Sign in again." : account.active ? "Active in gh" : "";
   return (
     <li className="flex items-center gap-3 border-b border-ws-sep py-2 last:border-b-0">
       <span className="min-w-0 flex-1 truncate">
