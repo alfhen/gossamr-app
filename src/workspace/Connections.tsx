@@ -6,7 +6,7 @@ import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
-import { actingAs, OFF_DETAIL, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
+import { actingAs, canSwitch, OFF_DETAIL, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
@@ -92,7 +92,7 @@ function Row({ c, selected, checking, pending, onSelect, onToggle }: RowProps) {
           </span>
         </span>
       </button>
-      {c.kind !== "mock" && (
+      {canSwitch(c) && (
         <span className="shrink-0 pr-2">
           <Switch checked={c.enabled} pending={pending} onChange={onToggle} aria-label={c.displayName} />
         </span>
@@ -293,6 +293,7 @@ export function ConnectionsView(p: ConnectionsViewProps) {
   const selected = p.connections.find((c) => c.id === p.selectedId) ?? p.connections[0];
   const checked = oldestCheck(p.connections);
   const onKeyDown = (ev: KeyboardEvent) => {
+    if ((ev.target as HTMLElement).closest('[role="switch"]')) return;
     const next = rowAfter(p.connections.map((c) => c.id), selected?.id ?? null, ev.key);
     if (!next) return;
     ev.preventDefault();

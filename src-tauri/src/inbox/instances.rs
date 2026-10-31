@@ -106,8 +106,8 @@ impl Core {
         renamed.ok_or_else(|| Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
-    /// Turns `instance_id` on or off, and returns the connection (or instance) to tell the page about. Turning off waits
-    /// for a draft that is being posted, so one is never left half done. The cache and the token stay either way.
+    /// Turns `instance_id` on or off, and returns the connection (or instance) to tell the page about. Turning off refuses
+    /// while one of its drafts is being posted. The cache and the token stay either way.
     pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
         let _alone = self.sign_in.lock().await;
         let config = AppConfig::load(&self.data_dir);
@@ -400,7 +400,7 @@ mod tests {
         let review = draft_for(&fx, review_on_github(&fx)).await;
         let cache = fx.dir.join(db_file(&fx.core.auth.connection().await.unwrap()));
 
-        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        fx.core.set_instance_enabled("github", false).await.unwrap();
 
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Pending);
         assert!(cache.exists());
@@ -435,8 +435,21 @@ mod tests {
 
         assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft for GitHub right now")), "{refused}");
         assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), true)]);
+
         fx.core.set_instance_enabled("jira", false).await.unwrap();
         fx.core.set_instance_enabled("jira", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_back_on_is_never_refused_for_a_draft_being_posted() {
+        let fx = adopted().await;
+        let posting = draft_for(&fx, review_on_github(&fx)).await;
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+        fx.core.with_app_db(|db| db.begin_posting_review(&posting.id, chrono::Utc::now(), None)).await.unwrap();
+
+        fx.core.set_instance_enabled("github", true).await.unwrap();
+
+        assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), true)]);
     }
 
     #[tokio::test]

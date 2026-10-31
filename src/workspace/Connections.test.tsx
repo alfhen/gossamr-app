@@ -139,6 +139,11 @@ describe("the connections list", () => {
     expect(out).toMatch(/role="switch" aria-checked="true"[^>]*aria-label="GitHub"/);
   });
 
+  it("gives no switch to a row that no instance backs, since turning it off would always fail", () => {
+    const unbacked = { ...gh, id: "github:ada", instanceId: "github:ada" };
+    expect(view({ connections: [unbacked] })).not.toContain('role="switch"');
+  });
+
   it("keeps the switch beside the row's button, never inside it", () => {
     const row = view().match(/<li aria-label="GitHub connection".*?<\/li>/s)?.[0] ?? "";
     expect(row.indexOf("</button>")).toBeLessThan(row.indexOf('role="switch"'));
