@@ -313,7 +313,7 @@ mod tests {
 
     fn queued(id: &str, worktree: &str) -> Run {
         let spec = crate::domain::RunSpec { name: worktree.into(), ..run_spec() };
-        Run::started_by_pip(id.into(), "c".into(), None, spec, "inbox.sqlite".into(), "req-1", now())
+        Run::started_by_pip(id.into(), "c".into(), None, spec, "req-1", now())
     }
 
     #[test]
@@ -329,7 +329,7 @@ mod tests {
     fn a_session_id_per_run_and_a_draft_per_old_run_are_enforced_by_the_table() {
         let db = Db::in_memory().unwrap();
         let run = |id: &str, draft: &str, name: &str| {
-            let mut r = Run::queued(id.into(), draft.into(), "c".into(), None, crate::domain::RunSpec { name: name.into(), ..run_spec() }, "f".into(), now());
+            let mut r = Run::queued(id.into(), draft.into(), "c".into(), None, crate::domain::RunSpec { name: name.into(), ..run_spec() }, now());
             r.short_id = crate::runs::cli::ShortId::parse("0123abcd");
             r
         };
@@ -343,11 +343,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-runs-{}", std::process::id()));
         let file = dir.join("inbox.sqlite");
         let run = {
-            let db = Db::open(&file).unwrap();
+            let db = Db::open_with_app(&file, &dir.join("app.sqlite")).unwrap();
             db.insert_started_run(&queued("a", "eng-1-cart-0001"), "pip:one").unwrap().0
         };
 
-        let db = Db::open(&file).unwrap();
+        let db = Db::open_with_app(&file, &dir.join("app.sqlite")).unwrap();
         assert_eq!(db.release_interrupted(now()).unwrap(), 0);
         assert_eq!(db.run(&run.id).unwrap().unwrap().state, RunState::Queued);
         assert_eq!(count_runs(&db), 1);
@@ -360,7 +360,7 @@ mod tests {
         let mk = |id: &str, item: &str, state: RunState, mins: i64| {
             let mut spec = run_spec();
             spec.name = format!("name-{id}");
-            let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), Some(item_ref(item)), spec, "f".into(), now() + Duration::minutes(mins));
+            let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), Some(item_ref(item)), spec, now() + Duration::minutes(mins));
             r.state = state;
             db.insert_run(&r).unwrap();
             r
@@ -381,7 +381,7 @@ mod tests {
         let db = Db::in_memory().unwrap();
         let mk = |id: &str, workstream: Option<&str>, mins: i64| {
             let spec = crate::domain::RunSpec { name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
-            db.insert_run(&Run::queued(id.into(), format!("p{id}"), "c".into(), None, spec, "f".into(), now() + Duration::minutes(mins))).unwrap();
+            db.insert_run(&Run::queued(id.into(), format!("p{id}"), "c".into(), None, spec, now() + Duration::minutes(mins))).unwrap();
         };
         mk("a", Some("ws-1"), 0);
         mk("b", None, 1);
@@ -435,7 +435,7 @@ mod tests {
 
     fn stored(db: &Db, id: &str, state: RunState) -> Run {
         let spec = crate::domain::RunSpec { name: format!("name-{id}"), ..run_spec() };
-        let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), None, spec, "f".into(), now());
+        let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), None, spec, now());
         r.state = state;
         db.insert_run(&r).unwrap();
         r
@@ -446,7 +446,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-archive-{}", std::process::id()));
         let file = dir.join("inbox.sqlite");
         {
-            let db = Db::open(&file).unwrap();
+            let db = Db::open_with_app(&file, &dir.join("app.sqlite")).unwrap();
             stored(&db, "a", RunState::Done);
             stored(&db, "b", RunState::Done);
             assert_eq!(db.archive_runs(&["a".into()], now()).unwrap(), ["a"]);
@@ -455,7 +455,7 @@ mod tests {
             stale.last_detail = Some("polled".into());
             db.save_run(&stale).unwrap();
         }
-        let db = Db::open(&file).unwrap();
+        let db = Db::open_with_app(&file, &dir.join("app.sqlite")).unwrap();
         let by_id = |id: &str| db.runs(&RunQuery::default()).unwrap().into_iter().find(|r| r.id == id).unwrap();
         assert!(by_id("a").archived_at.is_some(), "a run saved from an older copy is still archived");
         assert_eq!(by_id("a").last_detail.as_deref(), Some("polled"));
@@ -497,7 +497,7 @@ mod tests {
 
     fn started(id: &str) -> Run {
         let spec = crate::domain::RunSpec { name: format!("name-{id}"), ..run_spec() };
-        Run::started_by_pip(id.into(), "c".into(), None, spec, "f".into(), "req-1", now())
+        Run::started_by_pip(id.into(), "c".into(), None, spec, "req-1", now())
     }
 
     #[test]
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn an_old_runs_start_key_is_its_drafts_id_and_cannot_be_used_to_start_another() {
         let db = Db::in_memory().unwrap();
-        let mut old = Run::queued("old".into(), "p1".into(), "c".into(), None, crate::domain::RunSpec { name: "eng-1-cart-0001".into(), ..run_spec() }, "f".into(), now());
+        let mut old = Run::queued("old".into(), "p1".into(), "c".into(), None, crate::domain::RunSpec { name: "eng-1-cart-0001".into(), ..run_spec() }, now());
         old.state = RunState::Done;
         db.insert_run(&old).unwrap();
         assert_eq!(db.run_by_start_key("p1").unwrap().unwrap().id, "old");
@@ -527,9 +527,22 @@ mod tests {
     }
 
     #[test]
+    fn a_run_stored_with_a_database_file_still_reads() {
+        let db = Db::in_memory().unwrap();
+        let mut run = serde_json::to_value(queued("a", "eng-1-cart-0001")).unwrap();
+        run["dbFile"] = "inbox-site-me.sqlite".into();
+        db.execute_batch(&format!(
+            "INSERT INTO runs (id, start_key, connection_id, role, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('a', 'k', 'c', 'build', 'acme/webshop', '/w', 'queued', 't', 't', '{}')",
+            run.to_string().replace('\'', "''")
+        ))
+        .unwrap();
+        assert_eq!(db.run("a").unwrap().unwrap().id, "a");
+    }
+
+    #[test]
     fn a_run_stored_with_a_kind_and_the_fields_of_its_kind_reads_as_a_role_and_keeps_them() {
         let db = Db::in_memory().unwrap();
-        let mut run = serde_json::to_value(Run::queued("old".into(), "p1".into(), "c".into(), None, run_spec(), "f".into(), now())).unwrap();
+        let mut run = serde_json::to_value(Run::queued("old".into(), "p1".into(), "c".into(), None, run_spec(), now())).unwrap();
         run["spec"] = serde_json::json!({
             "kind": "review", "repo": "acme/webshop", "clonePath": "/Users/me/Code/webshop", "base": "main", "name": "eng-1-cart-0001",
             "instruction": "Review the pull request.", "buildAccount": "Rounded.", "buildFromRun": "b1", "pr": 12, "prSha": "a1b2c3d4e5f6", "allowPush": false
@@ -555,7 +568,7 @@ mod tests {
     fn a_new_run_is_stored_under_its_role() {
         let db = Db::in_memory().unwrap();
         let spec = crate::domain::RunSpec { role: crate::domain::Role::parse("Code Reviewer").unwrap(), name: "eng-1-cart-0002".into(), ..run_spec() };
-        db.insert_run(&Run::queued("r".into(), String::new(), "c".into(), None, spec, "f".into(), now())).unwrap();
+        db.insert_run(&Run::queued("r".into(), String::new(), "c".into(), None, spec, now())).unwrap();
         let role: String = db.conn.query_row("SELECT role FROM runs WHERE id = 'r'", [], |r| r.get(0)).unwrap();
         assert_eq!(role, "code reviewer");
     }

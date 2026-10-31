@@ -133,7 +133,7 @@ impl T {
     /// Stores a run of `kind` linked to the workstream, at rest in `state`, changed by `edit`.
     async fn run(&self, id: &str, kind: &str, state: RunState, edit: impl FnOnce(&mut Run)) -> Run {
         let spec = RunSpec { role: Role::parse(kind).unwrap(), workstream: Some(self.ws.clone()), name: format!("ca-1-{id}"), ..run_spec() };
-        let mut run = Run::queued(id.into(), format!("p-{id}"), self.fx.scope.connection_id.clone(), Some(self.fx.item("CA-1")), spec, "f".into(), Utc::now());
+        let mut run = Run::queued(id.into(), format!("p-{id}"), self.fx.scope.connection_id.clone(), Some(self.fx.item("CA-1")), spec, Utc::now());
         run.state = state;
         run.ended_at = Some(Utc::now());
         edit(&mut run);
@@ -313,7 +313,7 @@ fn quota_errors_are_told_from_other_failures() {
 
 #[test]
 fn a_fact_is_keyed_by_its_state_and_a_finish_after_a_continuation_is_another() {
-    let mut run = Run::queued("r1".into(), "p".into(), "c".into(), None, run_spec(), "f".into(), Utc::now());
+    let mut run = Run::queued("r1".into(), "p".into(), "c".into(), None, run_spec(), Utc::now());
     run.state = RunState::Done;
     assert_eq!(WakeFact::new(&run, WakeState::Done).key(), "done");
     run.continued_at = Some(Utc::now());
@@ -441,7 +441,7 @@ async fn a_finished_agent_wakes_pip_in_a_ticketless_workstream() {
     let t = setup().await;
     let ws = t.fx.core.open_workstream(&t.fx.scope, None, Some("Look into checkout".into())).await.unwrap();
     let spec = RunSpec { workstream: Some(ws.id.clone()), ..run_spec() };
-    let mut run = Run::queued("r9".into(), "p-r9".into(), t.fx.scope.connection_id.clone(), None, spec, "f".into(), Utc::now());
+    let mut run = Run::queued("r9".into(), "p-r9".into(), t.fx.scope.connection_id.clone(), None, spec, Utc::now());
     run.state = RunState::Done;
     t.fx.insert_run(&run).await;
     t.sup.clone().on_run(run, Attention::Done).await;
@@ -513,7 +513,7 @@ async fn nothing_happens_before_the_supervisor_is_bound() {
     let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
     let sup = Supervisor::new(fx.core.clone(), Arc::new(|_, _| {}), Arc::new(|_| {}));
     let spec = RunSpec { workstream: Some(ws.id.clone()), ..run_spec() };
-    let mut run = Run::queued("r1".into(), "p".into(), fx.scope.connection_id.clone(), Some(fx.item("CA-1")), spec, "f".into(), Utc::now());
+    let mut run = Run::queued("r1".into(), "p".into(), fx.scope.connection_id.clone(), Some(fx.item("CA-1")), spec, Utc::now());
     run.state = RunState::Done;
     fx.insert_run(&run).await;
     sup.notify(&run, Attention::Done);

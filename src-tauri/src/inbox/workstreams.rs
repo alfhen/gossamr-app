@@ -731,7 +731,7 @@ mod tests {
 
     async fn insert_run(fx: &Fixture, id: &str, workstream: Option<&str>, kind: &str, state: RunState) -> Run {
         let spec = RunSpec { role: crate::domain::Role::parse(kind).unwrap(), name: format!("name-{id}"), workstream: workstream.map(Into::into), ..run_spec() };
-        let mut run = Run::queued(id.into(), format!("p-{id}"), fx.scope.connection_id.clone(), Some(fx.item("CA-1")), spec, "f".into(), Utc::now());
+        let mut run = Run::queued(id.into(), format!("p-{id}"), fx.scope.connection_id.clone(), Some(fx.item("CA-1")), spec, Utc::now());
         run.state = state;
         fx.core.with_db_for(&fx.scope, |db| db.insert_run(&run)).await.unwrap();
         run

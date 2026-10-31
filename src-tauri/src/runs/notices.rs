@@ -275,7 +275,7 @@ mod tests {
         fn run(id: &str, kind: &str, state: RunState, queued: i64, ended: Option<i64>) -> Run {
             let mut spec = run_spec();
             spec.role = crate::domain::Role::parse(kind).unwrap();
-            let mut r = Run::queued(id.into(), "p".into(), "c".into(), Some(ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() }), spec, "db".into(), t(queued));
+            let mut r = Run::queued(id.into(), "p".into(), "c".into(), Some(ItemRef { connection_id: "c".into(), external_id: "1".into(), key: "CA-1".into() }), spec, t(queued));
             r.state = state;
             r.ended_at = ended.map(t);
             r

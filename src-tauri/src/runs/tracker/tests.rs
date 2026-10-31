@@ -384,7 +384,7 @@ async fn a_poll_that_cannot_list_sessions_changes_nothing() {
 #[test]
 fn notices_say_what_the_plan_says() {
     let run = |state: RunState, needs: Option<&str>, error: Option<&str>| {
-        let mut r = Run::queued("r".into(), "p".into(), "c".into(), Some(crate::domain::ItemRef { connection_id: "c".into(), external_id: "10".into(), key: "CE-806".into() }), crate::domain::fixtures::run_spec(), "db".into(), Utc::now());
+        let mut r = Run::queued("r".into(), "p".into(), "c".into(), Some(crate::domain::ItemRef { connection_id: "c".into(), external_id: "10".into(), key: "CE-806".into() }), crate::domain::fixtures::run_spec(), Utc::now());
         (r.state, r.needs, r.error) = (state, needs.map(Into::into), error.map(Into::into));
         r
     };

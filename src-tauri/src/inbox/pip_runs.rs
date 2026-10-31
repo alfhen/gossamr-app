@@ -142,11 +142,10 @@ impl Core {
     /// The workstream's audit says Pip started it, in which turn kind, and as what.
     pub(crate) async fn commit_pip_run(&self, scope: &Scope, start: &PipStart<'_>, item: Option<ItemRef>, spec: RunSpec) -> Result<(Run, bool)> {
         let connection_id = scope.connection_id.clone();
-        let file = super::db_file(&self.connection(scope)?);
         let workstream = spec.workstream.clone();
         let role = spec.role.clone();
         let id = proposals::new_id()?;
-        let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, file, start.request_id, Utc::now());
+        let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, start.request_id, Utc::now());
         self.with_app_db_atomically_for(scope, |db| {
             if let Some(ws) = workstream.as_deref() {
                 super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;

@@ -17,13 +17,22 @@ const FILE: &str = "run-index.json";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
-    pub db_file: String,
     pub run_id: String,
     pub expected_worktree: PathBuf,
     #[serde(default)]
     pub short_id: Option<ShortId>,
     #[serde(default)]
     pub terminal: bool,
+}
+
+/// An entry as written to the file. Releases from before the move to the app database fail to parse an entry without
+/// `dbFile`, and then see no runs of other accounts, so the key stays until those releases are gone.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnDisk<'a> {
+    db_file: &'static str,
+    #[serde(flatten)]
+    entry: &'a Entry,
 }
 
 pub struct RunIndex {
@@ -92,7 +101,8 @@ impl RunIndex {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(entries)?)?;
+        let on_disk: Vec<OnDisk> = entries.iter().map(|entry| OnDisk { db_file: "", entry }).collect();
+        std::fs::write(&tmp, serde_json::to_string_pretty(&on_disk)?)?;
         std::fs::rename(&tmp, &self.path)?;
         Ok(())
     }
@@ -110,7 +120,6 @@ mod tests {
 
     fn entry(run_id: &str, short: Option<&str>) -> Entry {
         Entry {
-            db_file: "inbox-a.sqlite".into(),
             run_id: run_id.into(),
             expected_worktree: format!("/c/.claude/worktrees/{run_id}").into(),
             short_id: short.and_then(ShortId::parse),
@@ -162,12 +171,33 @@ mod tests {
     }
 
     #[test]
+    fn an_index_written_with_a_database_file_still_loads() {
+        let d = dir("old-entries");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("run-index.json"), r#"[{"dbFile":"inbox-a.sqlite","runId":"r","expectedWorktree":"/x"}]"#).unwrap();
+        assert_eq!(RunIndex::load(&d).live(), vec![Entry { run_id: "r".into(), expected_worktree: "/x".into(), short_id: None, terminal: false }]);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn the_file_keeps_a_database_file_key_for_releases_that_require_it() {
+        let d = dir("db-file-key");
+        let index = RunIndex::load(&d);
+        index.record(entry("r", Some("abc12345"))).unwrap();
+        let text = std::fs::read_to_string(d.join("run-index.json")).unwrap();
+        let written: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+        assert!(written[0].get("dbFile").is_some_and(|v| v.is_string()), "{text}");
+        assert_eq!(RunIndex::load(&d).live().len(), 1);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
     fn a_short_id_that_is_not_one_makes_the_file_unreadable_rather_than_trusted() {
         let d = dir("badid");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join("run-index.json"),
-            r#"[{"dbFile":"f","runId":"r","expectedWorktree":"/x","shortId":"../../etc"}]"#,
+            r#"[{"runId":"r","expectedWorktree":"/x","shortId":"../../etc"}]"#,
         )
         .unwrap();
         assert!(RunIndex::load(&d).live().is_empty());

@@ -653,7 +653,7 @@ mod tests {
 
     fn a_run(id: &str, state: crate::domain::RunState) -> Run {
         let spec = crate::domain::fixtures::run_spec();
-        let mut run = Run::queued(id.into(), "p".into(), "c".into(), Some(item_ref("1")), spec, "f".into(), chrono::Utc::now());
+        let mut run = Run::queued(id.into(), "p".into(), "c".into(), Some(item_ref("1")), spec, chrono::Utc::now());
         run.state = state;
         run
     }
