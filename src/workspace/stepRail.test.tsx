@@ -2,7 +2,9 @@ import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { CodeChange, Intent, ItemRef, Proposal, ReviewView, Run, RunState, WorkstreamEvent, WorkstreamView } from "../types";
+import type { CodeChange, ConnectionInfo, Intent, ItemRef, Proposal, ReviewView, Run, RunState, WorkstreamEvent, WorkstreamView } from "../types";
+import { docFromText } from "../lib/docs";
+import { useWorkspace } from "../workspaceStore";
 import { DecisionShownContext } from "./decisionShown";
 import { EDITED_ASIDE, freezeBatch } from "./workViewLogic";
 import { setLiveDraft } from "./draftLive";
@@ -288,6 +290,22 @@ describe("the step rail", () => {
     const html = renderToStaticMarkup(<StepDrafts step="review" drafts={[fromRun("c1", comment, "r5"), fromRun("c2", comment, "r5"), fromRun("t1", transition, "r5")]} approve={vi.fn()} initialConfirming />);
     setLiveDraft("c1", null);
     expect(html).toContain(">Yes, approve 2</button>");
+    expect(html).not.toContain("data-batch-left-out");
+  });
+
+  it("doesn't call a held draft left out as a repeat when its connection is off", () => {
+    const off = { id: "mock", instanceId: "jira", displayName: "Sample data", enabled: false, kind: "mock", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null } as ConnectionInfo;
+    const said: Intent = { ...comment, body: docFromText("Same words") } as Intent;
+    const drafts = [fromRun("c1", said, "r5"), fromRun("c2", said, "r5"), fromRun("t1", transition, "r5")];
+    const render = () => renderToStaticMarkup(<StepDrafts step="review" drafts={drafts} approve={vi.fn()} initialConfirming />);
+    expect(render()).toContain("data-batch-left-out");
+    const seen = (connections: ConnectionInfo[]) => {
+      useWorkspace.setState({ connections });
+      Object.assign(useWorkspace.getInitialState(), { connections });
+    };
+    seen([off]);
+    const html = render();
+    seen([]);
     expect(html).not.toContain("data-batch-left-out");
   });
 
