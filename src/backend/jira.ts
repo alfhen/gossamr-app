@@ -124,6 +124,10 @@ export class JiraBackend implements Backend {
     return invoke<void>("connection_rename", { instanceId, displayName });
   }
 
+  connectionSetEnabled(instanceId: string, enabled: boolean) {
+    return invoke<void>("connection_set_enabled", { instanceId, enabled });
+  }
+
   connectionRemove(instanceId: string) {
     return invoke<void>("connection_remove", { instanceId });
   }

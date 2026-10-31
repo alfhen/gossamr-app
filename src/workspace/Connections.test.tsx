@@ -21,6 +21,7 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       confirming={null}
       busy={null}
       copied={false}
+      toggling={[]}
       onSelect={vi.fn()}
       onCheck={vi.fn()}
       onSync={vi.fn()}
@@ -32,6 +33,7 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onAskRemove={vi.fn()}
       onCancel={vi.fn()}
       onRemove={vi.fn()}
+      onToggle={vi.fn()}
       onConnectGithub={vi.fn()}
       {...over}
     />,
@@ -122,6 +124,34 @@ describe("the connections list", () => {
   it("disables Remove only for the connection being removed", () => {
     expect(view({ confirming: gh.id, busy: gh.id })).toContain("Removing…");
     expect(view({ confirming: gh.id, busy: "github:grace" })).not.toContain("Removing…");
+  });
+
+  it("gives each real connection a switch named for it, on or off as it is, and none to the sample", () => {
+    const out = view({ connections: [{ ...jira, enabled: false }, gh, { ...gh, id: "mock", instanceId: "mock", kind: "mock", displayName: "Sample data" }] });
+    expect(out.match(/role="switch"/g)).toHaveLength(2);
+    expect(out).toMatch(/role="switch" aria-checked="false"[^>]*aria-label="Acme Jira"/);
+    expect(out).toMatch(/role="switch" aria-checked="true"[^>]*aria-label="GitHub"/);
+  });
+
+  it("keeps the switch beside the row's button, never inside it", () => {
+    const row = view().match(/<li aria-label="GitHub connection".*?<\/li>/s)?.[0] ?? "";
+    expect(row.indexOf("</button>")).toBeLessThan(row.indexOf('role="switch"'));
+    expect(row.match(/<button/g)).toHaveLength(2);
+  });
+
+  it("shows Off on the row and in the detail, and stops Sync now, while a connection is off", () => {
+    const off = { ...gh, enabled: false, status: githubSnapshot("off", "ada", CHECKED) };
+    const out = view({ connections: [off] });
+    expect(out).toContain("Off");
+    expect(out).toContain("Gossamr doesn&#x27;t sync it, Pip can&#x27;t see it and drafts for it wait.");
+    expect(out).not.toContain("Authenticated");
+    expect(out).toMatch(/disabled=""[^>]*>Sync now/);
+  });
+
+  it("holds only the switch that was pressed while its answer is on the way", () => {
+    const out = view({ toggling: ["jira"] });
+    expect(out.match(/aria-busy="true"/g)).toHaveLength(1);
+    expect(out).toMatch(/aria-busy="true"[^>]*aria-label="Acme Jira"/);
   });
 
   it("keeps only the selected row in the tab order, so the arrow keys move between rows", () => {

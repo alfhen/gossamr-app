@@ -4,6 +4,8 @@ import type { AuthStatus } from "./auth";
 /** `gh` has no expiry to warn about. */
 export type GithubProbeState = Exclude<ProbeState, "expiresSoon">;
 
+const OFF_MESSAGE = "Off. Gossamr doesn't sync it, Pip can't see it and drafts for it wait.";
+
 const LOGIN_COMMAND = "gh auth login -h github.com";
 
 /** What `src-tauri/src/probe.rs` finds for a GitHub instance in each state, so the page can be driven through all of them. */
@@ -19,7 +21,7 @@ export function githubSnapshot(state: GithubProbeState, login: string, checkedAt
     case "error":
       return { ...found, account: login, message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.", fix: "gh auth status" };
     case "off":
-      return { ...found, message: "Off. Gossamr doesn't sync it, Pip can't see it and drafts for it wait." };
+      return { ...found, message: OFF_MESSAGE };
   }
 }
 
