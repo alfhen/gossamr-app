@@ -157,12 +157,27 @@ impl Db {
     /// have gone through.
     pub fn release_interrupted(&self, at: DateTime<Utc>) -> Result<usize> {
         let stuck = self.proposals(&ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() })?;
-        for mut p in stuck.iter().cloned() {
+        self.release(stuck, at)
+    }
+
+    /// `release_interrupted` for drafts just copied in from a cache file. Not the others: an `Applying` draft of this
+    /// launch may be posting right now.
+    pub(super) fn release_copied(&self, ids: &[String], at: DateTime<Utc>) -> Result<usize> {
+        let mut stuck = Vec::new();
+        for id in ids {
+            stuck.extend(self.proposal(id)?.filter(|p| p.state == ProposalState::Applying));
+        }
+        self.release(stuck, at)
+    }
+
+    fn release(&self, stuck: Vec<Proposal>, at: DateTime<Utc>) -> Result<usize> {
+        let released = stuck.len();
+        for mut p in stuck {
             p.state = ProposalState::Pending;
             p.updated_at = at;
             p.error = Some(INTERRUPTED_NOTE.into());
             self.save_proposal(&p)?;
         }
-        Ok(stuck.len())
+        Ok(released)
     }
 }

@@ -1,5 +1,5 @@
-//! Pip's conversations, kept in the signed-in account's database. Every write names the scope the turn was asked in
-//! and is refused once that account is no longer signed in, so a turn that ends after a sign-out lands nowhere.
+//! Pip's conversations, kept in the app database. Every write names the scope the turn was asked in and is refused
+//! once that connection is no longer registered, so a turn that ends after a sign-out lands nowhere.
 
 use super::{now_millis, Core};
 use crate::agent::{conversation_id, TurnMeta, TurnUsage};
@@ -12,32 +12,32 @@ impl Core {
     pub async fn pip_turn_begin(&self, scope: &Scope, conversation: &str, request_id: &str, prompt: &str, meta: &TurnMeta, status: &str) -> Result<()> {
         let at = now_millis();
         let conversation = conversation_id(conversation);
-        self.with_db_for(scope, |db| db.begin_pip_turn(&conversation, request_id, prompt, meta, status, &at).map(|_| ())).await
+        self.with_app_db_for(scope, |db| db.begin_pip_turn(&conversation, request_id, prompt, meta, status, &at).map(|_| ())).await
     }
 
     /// Records a wake turn in `conversation`: its event lines in place of a question, and the `(run, key)` facts they tell of.
     pub async fn pip_wake_begin(&self, scope: &Scope, conversation: &str, request_id: &str, lines: &str, facts: &[(String, String)], status: &str) -> Result<()> {
         let at = now_millis();
         let conversation = conversation_id(conversation);
-        self.with_db_for(scope, |db| db.begin_pip_wake(&conversation, request_id, lines, facts, status, &at).map(|_| ())).await
+        self.with_app_db_for(scope, |db| db.begin_pip_wake(&conversation, request_id, lines, facts, status, &at).map(|_| ())).await
     }
 
     /// Rewrites a waiting wake turn's event lines and facts after more were merged into it.
     pub async fn pip_wake_lines(&self, scope: &Scope, request_id: &str, lines: &str, facts: &[(String, String)]) -> Result<()> {
-        self.with_db_for(scope, |db| db.set_pip_wake(request_id, lines, facts)).await
+        self.with_app_db_for(scope, |db| db.set_pip_wake(request_id, lines, facts)).await
     }
 
     /// Forgets a turn recorded but never queued.
     pub async fn pip_turn_forget(&self, scope: &Scope, request_id: &str) -> Result<()> {
-        self.with_db_for(scope, |db| db.delete_pip_turn(request_id)).await
+        self.with_app_db_for(scope, |db| db.delete_pip_turn(request_id)).await
     }
 
     pub async fn pip_turn_status(&self, scope: &Scope, request_id: &str, status: &str) -> Result<()> {
-        self.with_db_for(scope, |db| db.set_pip_turn_status(request_id, status)).await
+        self.with_app_db_for(scope, |db| db.set_pip_turn_status(request_id, status)).await
     }
 
     pub async fn pip_turn_step(&self, scope: &Scope, request_id: &str, step: &str) -> Result<()> {
-        self.with_db_for(scope, |db| db.push_pip_turn_step(request_id, step)).await
+        self.with_app_db_for(scope, |db| db.push_pip_turn_step(request_id, step)).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -51,14 +51,14 @@ impl Core {
         session: Option<&str>,
         usage: Option<&TurnUsage>,
     ) -> Result<()> {
-        self.with_db_for(scope, |db| db.finish_pip_turn(request_id, text, ok, error, session, usage)).await
+        self.with_app_db_for(scope, |db| db.finish_pip_turn(request_id, text, ok, error, session, usage)).await
     }
 
     /// The signed-in account's turns in `conversation`, oldest first. Asked for `workspace`, it gives `general`'s, which
     /// is where those turns now are.
     pub async fn pip_turns(&self, conversation: &str) -> Result<Vec<PipTurn>> {
         let conversation = conversation_id(conversation);
-        self.with_db(|db| db.pip_turns(&conversation)).await
+        self.with_app_db(|db| db.pip_turns(&conversation)).await
     }
 }
 
@@ -116,8 +116,7 @@ mod tests {
         let before: Vec<String> = fx.core.pip_turns("workspace").await.unwrap().into_iter().map(|t| t.status).collect();
         assert_eq!(before, ["running", "queued", "done"], "an open database leaves turns alone");
 
-        // What quitting and opening the app does to the account's database.
-        fx.core.close_db();
+        fx.core.restart();
         let after: Vec<(String, Option<String>)> = fx.core.pip_turns("workspace").await.unwrap().into_iter().map(|t| (t.status, t.error)).collect();
         assert_eq!(
             after,
@@ -156,9 +155,9 @@ mod tests {
         let path = fx.dir.join("inbox-site-me.sqlite");
         let _ = std::fs::remove_file(&path);
         std::fs::create_dir_all(&path).unwrap();
-        assert!(fx.core.pip_turns("workspace").await.is_err(), "the broken file must really fail to open");
+        assert!(fx.core.with_db_for(&fx.scope, |_| Ok(())).await.is_err(), "the broken file must really fail to open");
 
         fx.core.sign_out().await.unwrap();
-        assert!(matches!(fx.core.pip_turns("workspace").await, Err(crate::error::Error::NotSignedIn)), "the person is signed out");
+        assert!(matches!(fx.core.with_db(|_| Ok(())).await, Err(crate::error::Error::NotSignedIn)), "the person is signed out");
     }
 }
