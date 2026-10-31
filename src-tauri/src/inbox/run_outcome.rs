@@ -63,18 +63,23 @@ impl Core {
     }
 
     fn change_of(&self, run: &Run) -> Result<Option<CodeChange>> {
+        self.change_in(run, |id| self.watched_repos(id))
+    }
+
+    fn change_in(&self, run: &Run, repos: impl Fn(&str) -> Result<Vec<String>>) -> Result<Option<CodeChange>> {
         let branches = pr::branches_of(run);
         let mut found = Vec::new();
         for id in self.code.connection_ids() {
-            let Some(repo) = self.watched_repos(&id)?.into_iter().find(|r| r.eq_ignore_ascii_case(&run.spec.repo)) else { continue };
+            let Some(repo) = repos(&id)?.into_iter().find(|r| r.eq_ignore_ascii_case(&run.spec.repo)) else { continue };
             found.extend(self.with_code_db(&id, |db| db.code_changes_for_branch(&id, &repo, &branches))?);
         }
         Ok(pr::change_for(run, &found))
     }
 
-    /// The number of the pull request a build opened in its own repository, as far as a sync has cached it.
+    /// The number of the pull request a build opened in its own repository, as far as a sync has cached it. It reads the
+    /// cache of a connection that is off too, so that a finished build is not taken for one still waiting.
     pub(super) fn pull_request_of(&self, run: &Run) -> Result<Option<u64>> {
-        Ok(self.change_of(run)?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number))
+        Ok(self.change_in(run, |id| self.chosen_repos(id))?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number))
     }
 
     /// The pull request a build opened in its own repository and the commit at its head, as far as a sync has cached them.

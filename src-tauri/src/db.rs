@@ -668,6 +668,26 @@ mod tests {
         }
 
         #[test]
+        fn a_draft_left_mid_post_in_a_cache_already_marked_copied_is_released() {
+            let (cache, app, dir) = files("topped-up-applying");
+            let mut conn = Connection::open(&app).unwrap();
+            schema::migrate_app(&mut conn).unwrap();
+            conn.execute("INSERT INTO app_meta (k, v) VALUES (?1, '1')", [format!("copied:{}", cache.file_name().unwrap().to_string_lossy())]).unwrap();
+            drop(conn);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let stuck = create(&old, Draft::from_pip("q", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            old.begin_applying(&stuck.id, now()).unwrap().unwrap();
+            old.begin_pip_turn("workspace", "cut-off", "Running", &Default::default(), "running", "t1").unwrap();
+            drop(old);
+
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            assert_eq!(db.proposal(&stuck.id).unwrap().unwrap().state, ProposalState::Pending);
+            let status: String = db.conn.query_row("SELECT status FROM pip_turns WHERE request_id = 'cut-off' AND role = 'pip'", [], |r| r.get(0)).unwrap();
+            assert_eq!(status, "failed");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
         fn pip_turns_cut_off_in_a_copied_cache_are_failed_but_this_launchs_own_are_not() {
             let (cache, app, dir) = files("copied-pip-turns");
             let old = Db::open_before_the_move(&cache).unwrap();

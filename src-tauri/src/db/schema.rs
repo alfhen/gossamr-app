@@ -558,13 +558,7 @@ fn own_sessions(json: Option<String>) -> Vec<String> {
 /// what the cache held that a closed app left half done.
 pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Adopted> {
     let marker = format!("copied:{cache_file}");
-    let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?;
-    if copied.is_some() {
-        let tx = conn.unchecked_transaction()?;
-        copy_cached_rows(&tx)?;
-        tx.commit()?;
-        return Ok(Adopted::default());
-    }
+    let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?.is_some();
     let tx = conn.unchecked_transaction()?;
     let mut adopted = Adopted::default();
     if has_cached_table(&tx, "pip_turns")? {
@@ -574,12 +568,14 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Ado
         )?;
         adopted.pip_turns = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     }
-    let held = copy_cached_rows(&tx)?;
-    if held.contains(&"proposals") {
-        let mut stmt = tx.prepare("SELECT id FROM cache.proposals WHERE state = 'applying'")?;
+    if has_cached_table(&tx, "proposals")? {
+        let mut stmt = tx.prepare("SELECT id FROM cache.proposals WHERE state = 'applying' AND id NOT IN (SELECT id FROM main.proposals)")?;
         adopted.applying = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     }
-    tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
+    copy_cached_rows(&tx)?;
+    if !copied {
+        tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
+    }
     tx.commit()?;
     Ok(adopted)
 }
