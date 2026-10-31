@@ -101,6 +101,14 @@ describe("the desktop backend's wiring", () => {
     expect(lib).not.toContain("async fn github_disconnect");
   });
 
+  it("checks a connection again when a GitHub sync is refused for its token", () => {
+    const lib = read("../../src-tauri/src/lib.rs");
+    const loop = lib.slice(lib.indexOf("core.sync_code_if_due(trigger)"));
+    const failure = loop.slice(loop.indexOf("Err(e) => {"), loop.indexOf("publish(&app, &core).await;"));
+    expect(failure).toContain("e.is_unauthorized()");
+    expect(failure).toContain("probe_in_background(&app, &core, Probe::Unauthorized)");
+  });
+
   it("reads a review draft's notes in the backend's words", () => {
     const rust = read("../../src-tauri/src/inbox/code.rs").replace(/"\s*\n\s*"/g, "");
     expect(rust).toContain(`pub const REVIEW_OUTDATED_NOTE: &str =\n    "${REVIEW_OUTDATED_NOTE}";`);

@@ -844,9 +844,12 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(e) => {
                         cache_changed(&app, &connection_id);
                         dev_links_changed(&app, &connection_id);
+                        if e.is_unauthorized() {
+                            probe_in_background(&app, &core, Probe::Unauthorized);
+                        }
                     }
                 }
                 publish(&app, &core).await;

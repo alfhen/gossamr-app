@@ -139,7 +139,7 @@ impl Api {
     }
 
     /// Sends the request, trying again after a failure in transit or a 502, 503 or 504. Only reads are sent through
-    /// here, so repeating one is safe; a write goes through `post_json`, which never repeats. The body is read inside
+    /// here, so repeating one is safe; a write goes through `post_json`, which repeats only after a 401. The body is read inside
     /// the loop because it can fail in transit too.
     async fn fetch(&self, request: impl Fn() -> reqwest::RequestBuilder) -> Result<(StatusCode, HeaderMap, String)> {
         let mut retries = RETRY_DELAYS.iter();
@@ -249,16 +249,16 @@ impl Api {
         Ok(page)
     }
 
-    /// Posts `body` as JSON once and returns the status, headers and body as they came, success or not. There is no retry
-    /// of any kind: a write that failed in transit may still have gone through, so repeating it could post twice. Nothing
-    /// is cached. The rate-limit guard and bookkeeping apply as for reads.
+    /// Posts `body` as JSON and returns the status, headers and body as they came, success or not. The only repeat is
+    /// after a 401 with a token `gh` has since renewed. A write that failed in transit may still have gone through, so
+    /// nothing else is retried. Nothing is cached. The rate-limit guard and bookkeeping apply as for reads.
     pub async fn post_json(&self, target: &str, body: &serde_json::Value) -> Result<(u16, HeaderMap, String)> {
         let url = self.url(target);
         self.guard(&url)?;
         let send = |token: &str| self.http.post(&url).bearer_auth(token).header(ACCEPT, JSON).header("X-GitHub-Api-Version", API_VERSION).json(body).send();
         let token = self.credentials.token().await?;
         let mut res = send(&token).await?;
-        // A 401 means GitHub did not act on it, so sending again with a renewed token cannot post twice.
+        // GitHub did not act on a 401, so this is the one resend that cannot post twice.
         if res.status() == StatusCode::UNAUTHORIZED {
             if let Some(renewed) = self.renewed(&token).await {
                 res = send(&renewed).await?;

@@ -14,7 +14,7 @@ const GH_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
 pub fn path_dirs() -> Vec<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).chain(GH_DIRS.iter().map(PathBuf::from)).collect()
+    GH_DIRS.iter().map(PathBuf::from).chain(std::env::split_paths(&path)).collect()
 }
 
 pub fn find_gh_in(dirs: &[PathBuf]) -> Option<PathBuf> {
@@ -24,7 +24,8 @@ pub fn find_gh_in(dirs: &[PathBuf]) -> Option<PathBuf> {
 /// Where a request gets its token from.
 #[async_trait]
 pub trait CredentialSource: Send + Sync {
-    /// The token to send now. A failure to get one is a 401 when the account has none to give.
+    /// The token to send now. An account with none to give is a 401; a `gh` that can't be run or asked is
+    /// `Error::Credentials`. Neither reaches the host.
     async fn token(&self) -> Result<String>;
 }
 
@@ -70,8 +71,8 @@ pub async fn gh_token(gh_dirs: &[PathBuf], host: &str, login: Option<&str>) -> R
         args.extend(["-u", login]);
     }
     match run_gh(&gh, &args, TIMEOUT).await {
-        Ran::TimedOut => Err(Error::CodeHost { status: 504, message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then try again.".into() }),
-        Ran::Failed => Err(Error::CodeHost { status: 503, message: "Gossamr couldn't run gh.".into() }),
+        Ran::TimedOut => Err(Error::Credentials("gh didn't answer in time. If macOS is asking for Keychain access, allow it, then try again.".into())),
+        Ran::Failed => Err(Error::Credentials("Gossamr couldn't run gh.".into())),
         Ran::Output { ok, stdout } => {
             let token = stdout.trim();
             if !ok || token.is_empty() {
@@ -116,6 +117,12 @@ mod tests {
         let dirs = fake_gh("unused");
         std::fs::write(dirs[0].join("gh"), format!("#!/bin/sh\n{script}\n")).unwrap();
         dirs
+    }
+
+    #[test]
+    fn the_homebrew_folders_are_searched_before_path() {
+        let dirs = path_dirs();
+        assert_eq!(&dirs[..2], [PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
     }
 
     #[tokio::test]

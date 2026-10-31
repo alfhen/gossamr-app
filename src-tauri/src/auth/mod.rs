@@ -251,6 +251,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_saved_token_names_its_connection_after_the_site_and_the_account() {
+        let c = credentials();
+        assert_eq!(c.connection().id, "jira:c1:u1");
+        assert_eq!(c.connection().display_name, "acme.atlassian.net");
+        assert_eq!(c.scope(), Scope { connection_id: "jira:c1:u1".into(), account_id: "u1".into() });
+        assert_eq!(c.site_scope(), SiteScope { cloud_id: "c1".into(), account_id: "u1".into() });
+    }
+
     fn restore_everything() -> (bool, usize) {
         let http = reqwest::Client::new();
         let auth = Auth::load(http.clone());

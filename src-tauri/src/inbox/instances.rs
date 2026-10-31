@@ -55,9 +55,10 @@ fn clean_name(name: &str) -> Result<String> {
 }
 
 impl Core {
-    /// Creates the instances for the Jira sign-in and the GitHub accounts already there, once: those an earlier build
-    /// saved a token for and those connected this run. It leaves `config.json` alone unless there is something to
-    /// adopt, and does nothing while any of the sign-ins it reads failed to load.
+    /// Creates the instances for the Jira sign-in and the GitHub accounts already there, once: the logins recorded in the
+    /// Keychain, whether an earlier build saved a token for them or they were connected through `gh`. It leaves
+    /// `config.json` alone unless there is something to adopt, and does nothing while any of the sign-ins it reads
+    /// failed to load.
     pub async fn adopt_instances(&self) {
         let config = AppConfig::load(&self.data_dir);
         if let Some(problem) = &config.connections_error {
@@ -76,14 +77,7 @@ impl Core {
             eprintln!("couldn't read the saved GitHub sign-ins, so the connections aren't adopted yet: {e}");
         }
         let readable = secrets::is_ready() && !self.auth.restore_failed() && logins.is_ok();
-        // An account connected before the first adoption has no saved token to find it by.
-        let mut logins = logins.unwrap_or_default();
-        for login in self.code.connected_logins() {
-            if !logins.iter().any(|l| l.eq_ignore_ascii_case(&login)) {
-                logins.push(login);
-            }
-        }
-        let github = logins.iter().map(|login| Binding::github(login)).collect();
+        let github = logins.unwrap_or_default().iter().map(|login| Binding::github(login)).collect();
         let adopted = AppConfig::update_if(&self.data_dir, |config| connections::adopt(config, readable, jira, github));
         if let Err(e) = adopted {
             eprintln!("couldn't save the connections to config.json: {e}");
@@ -91,8 +85,15 @@ impl Core {
     }
 
     pub(super) fn bind_instance(&self, binding: Binding) {
-        self.change_instances(|config| connections::bind(config, binding));
+        if let Err(e) = self.try_bind_instance(binding) {
+            eprintln!("couldn't save the connections to config.json: {e}");
+        }
         self.probes_rebound();
+    }
+
+    /// Binds the instance for `binding` when the connections are live, and reports a failed write.
+    pub(super) fn try_bind_instance(&self, binding: Binding) -> Result<()> {
+        self.try_change_instances(|config| connections::bind(config, binding))
     }
 
     pub(super) fn unbind_instance(&self, connection_id: &str) {
@@ -217,7 +218,7 @@ impl Core {
             done => return done,
         }
         let Some(login) = target.login.as_deref() else { return Ok(()) };
-        self.code.auth.forget_saved_token(login)?;
+        self.code.auth.forget_login(login)?;
         self.registry.remove(&target.connection_id);
         remove_db_files(&self.data_dir.join(super::code::github_db_file(login)));
         Ok(())
@@ -236,15 +237,18 @@ impl Core {
         Ok(())
     }
 
-    fn change_instances(&self, change: impl FnOnce(&mut AppConfig)) {
-        let saved = AppConfig::update_if(&self.data_dir, |config| {
+    fn try_change_instances(&self, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
+        AppConfig::update_if(&self.data_dir, |config| {
             let live = connections::is_live(config);
             if live {
                 change(config);
             }
             live
-        });
-        if let Err(e) = saved {
+        })
+    }
+
+    fn change_instances(&self, change: impl FnOnce(&mut AppConfig)) {
+        if let Err(e) = self.try_change_instances(change) {
             eprintln!("couldn't save the connections to config.json: {e}");
         }
     }

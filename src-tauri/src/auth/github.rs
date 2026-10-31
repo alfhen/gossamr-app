@@ -1,8 +1,10 @@
 //! GitHub accounts. `gh` holds the sign-in and Gossamr asks it for the token each time (see `gh.rs`). The Keychain
-//! holds only what an earlier build saved: a token per login and an index of the logins.
+//! holds an index of the logins, which is the record of which accounts exist while `config.json` can't say, and any
+//! token an earlier build saved.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use reqwest::header::ACCEPT;
 use serde::Deserialize;
@@ -38,16 +40,18 @@ pub struct GithubAuth {
     http: reqwest::Client,
     api: String,
     gh_dirs: Vec<PathBuf>,
+    /// Logins whose saved token is known to be gone, so the Keychain is not asked again this run.
+    token_dropped: Mutex<HashSet<String>>,
 }
 
 impl GithubAuth {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { http, api: API_BASE.into(), gh_dirs: path_dirs() }
+        Self { http, api: API_BASE.into(), gh_dirs: path_dirs(), token_dropped: Mutex::default() }
     }
 
     #[cfg(test)]
     pub fn for_test(http: reqwest::Client, base: &str, gh_dirs: Vec<PathBuf>) -> Self {
-        Self { http, api: base.into(), gh_dirs }
+        Self { http, api: base.into(), gh_dirs, token_dropped: Mutex::default() }
     }
 
     pub fn gh_dirs(&self) -> &[PathBuf] {
@@ -90,13 +94,13 @@ impl GithubAuth {
         Ok(GithubSession { login: account.login, name: account.name })
     }
 
-    /// The logins an earlier build saved a token for, in the order they were first signed in. An unreadable index is an
-    /// error, not an empty list.
+    /// The logins Gossamr is connected to, in the order they were first connected. An unreadable index is an error, not
+    /// an empty list.
     pub fn try_logins(&self) -> Result<Vec<String>> {
         Ok(secrets::load(INDEX_KEY)?.unwrap_or_default())
     }
 
-    /// The saved logins, or none when the index can't be read.
+    /// The recorded logins, or none when the index can't be read.
     pub fn logins(&self) -> Vec<String> {
         self.try_logins().unwrap_or_else(|e| {
             eprintln!("couldn't read the saved GitHub sign-ins: {e}");
@@ -104,15 +108,37 @@ impl GithubAuth {
         })
     }
 
-    /// Deletes the token an earlier build saved for `login`. It does nothing when there is none.
-    pub fn forget_saved_token(&self, login: &str) -> Result<()> {
+    /// Adds `login` to the index. It holds no token.
+    pub fn record_login(&self, login: &str) -> Result<()> {
         let mut logins = self.try_logins()?;
-        if !logins.iter().any(|l| l.eq_ignore_ascii_case(login)) {
+        if logins.iter().any(|l| l.eq_ignore_ascii_case(login)) {
             return Ok(());
         }
-        secrets::delete(&entry(login))?;
-        logins.retain(|l| !l.eq_ignore_ascii_case(login));
+        logins.push(login.into());
         secrets::save(INDEX_KEY, &logins)
+    }
+
+    /// Deletes the token an earlier build saved for `login` and leaves the login in the index.
+    pub fn drop_saved_token(&self, login: &str) -> Result<()> {
+        let key = entry(login);
+        if self.token_dropped.lock().expect("token lock poisoned").contains(&key) {
+            return Ok(());
+        }
+        secrets::delete(&key)?;
+        self.token_dropped.lock().expect("token lock poisoned").insert(key);
+        Ok(())
+    }
+
+    /// Forgets `login`: its saved token, if any, and its place in the index.
+    pub fn forget_login(&self, login: &str) -> Result<()> {
+        let mut logins = self.try_logins()?;
+        secrets::delete(&entry(login))?;
+        if logins.iter().any(|l| l.eq_ignore_ascii_case(login)) {
+            logins.retain(|l| !l.eq_ignore_ascii_case(login));
+            secrets::save(INDEX_KEY, &logins)?;
+        }
+        self.token_dropped.lock().expect("token lock poisoned").remove(&entry(login));
+        Ok(())
     }
 }
 
@@ -163,19 +189,43 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_a_saved_token_removes_its_entry_and_its_place_in_the_index_and_nothing_else() {
+    fn dropping_a_saved_token_keeps_the_login_and_asks_the_keychain_once() {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
         secrets::save(INDEX_KEY, &vec!["Ann".to_string(), "bob".into()]).unwrap();
         fake.put("github:ann", "{}");
         fake.put("github:bob", "{}");
         let auth = GithubAuth::new(reqwest::Client::new());
-        auth.forget_saved_token("ANN").unwrap();
-        assert_eq!(auth.logins(), ["bob"]);
+        auth.drop_saved_token("ANN").unwrap();
+        assert_eq!(auth.logins(), ["Ann", "bob"]);
         assert_eq!((fake.get("github:ann"), fake.get("github:bob").is_some()), (None, true));
 
         fake.reset_counts();
-        auth.forget_saved_token("ann").unwrap();
-        assert_eq!((fake.writes(), fake.removes()), (0, 0), "a login with no saved token costs no write");
+        auth.drop_saved_token("ann").unwrap();
+        assert_eq!((fake.writes(), fake.removes()), (0, 0));
+    }
+
+    #[test]
+    fn recording_a_login_adds_it_once_whatever_its_case() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let auth = GithubAuth::new(reqwest::Client::new());
+        auth.record_login("Ann").unwrap();
+        auth.record_login("bob").unwrap();
+        auth.record_login("ann").unwrap();
+        assert_eq!(auth.logins(), ["Ann", "bob"]);
+    }
+
+    #[test]
+    fn forgetting_a_login_removes_its_token_and_its_place_in_the_index_and_nothing_else() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        secrets::save(INDEX_KEY, &vec!["Ann".to_string(), "bob".into()]).unwrap();
+        fake.put("github:ann", "{}");
+        fake.put("github:bob", "{}");
+        let auth = GithubAuth::new(reqwest::Client::new());
+        auth.forget_login("ANN").unwrap();
+        assert_eq!(auth.logins(), ["bob"]);
+        assert_eq!((fake.get("github:ann"), fake.get("github:bob").is_some()), (None, true));
     }
 }

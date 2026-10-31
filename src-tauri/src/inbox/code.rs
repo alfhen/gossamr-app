@@ -101,14 +101,6 @@ impl CodeService {
         self.sessions.lock().expect("session lock poisoned").get(id).cloned().ok_or(Error::NotSignedIn)
     }
 
-    /// The logins connected this run, in connection id order.
-    pub fn connected_logins(&self) -> Vec<String> {
-        let sessions = self.sessions.lock().expect("session lock poisoned");
-        let mut ids: Vec<&String> = sessions.keys().collect();
-        ids.sort();
-        ids.into_iter().map(|id| sessions[id].login.clone()).collect()
-    }
-
     pub fn connection_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.sessions.lock().expect("session lock poisoned").keys().cloned().collect();
         ids.sort();
@@ -145,8 +137,8 @@ fn parse_time(s: &str) -> Option<DateTime<Utc>> {
 }
 
 impl Core {
-    /// The logins to register at launch: the GitHub instances in `config.json`, or until they are adopted the logins an
-    /// earlier build saved a token for.
+    /// The logins to register at launch: the GitHub instances in `config.json`, or the recorded logins until they are
+    /// adopted and whenever the list can't be read.
     fn github_logins(&self) -> Vec<String> {
         let config = AppConfig::load(&self.data_dir);
         if !connections::is_live(&config) {
@@ -163,13 +155,13 @@ impl Core {
         }
     }
 
-    /// Deletes the token an earlier build saved for `login`, once `gh` is known to hold the login. Until the
-    /// connections are adopted the saved logins are what adopts them, so nothing is deleted.
+    /// Deletes the token an earlier build saved for `login`, once `gh` is known to hold the login and the connections
+    /// are adopted. The login stays in the index, which is what finds the account when `config.json` can't.
     pub(super) fn drop_saved_token(&self, login: &str) {
         if !connections::is_live(&AppConfig::load(&self.data_dir)) {
             return;
         }
-        if let Err(e) = self.code.auth.forget_saved_token(login) {
+        if let Err(e) = self.code.auth.drop_saved_token(login) {
             eprintln!("couldn't remove the GitHub token saved for {login}: {e}");
         }
     }
@@ -203,9 +195,23 @@ impl Core {
         Ok(host)
     }
 
+    /// Records the account where the next launch finds it: `config.json` when its connections are live, and the index
+    /// either way, since it is all that remains while they are not.
+    fn keep_account(&self, login: &str) -> Result<()> {
+        let recorded = self.code.auth.record_login(login);
+        if !connections::is_live(&AppConfig::load(&self.data_dir)) {
+            return recorded;
+        }
+        if let Err(e) = recorded {
+            eprintln!("couldn't record the GitHub login {login}: {e}");
+        }
+        self.try_bind_instance(Binding::github(login))
+    }
+
     async fn connected(&self, session: GithubSession) -> Result<super::ConnectionInfo> {
+        self.keep_account(&session.login)?;
         let connection = self.code.remember(session.clone());
-        self.bind_instance(Binding::github(&session.login));
+        self.probes_rebound();
         self.drop_saved_token(&session.login);
         self.probe_bound_now(&connection.id).await;
         self.registry.register(connection.clone());
@@ -223,11 +229,11 @@ impl Core {
         self.connected(session).await
     }
 
-    /// Forgets the account: any token an earlier build saved leaves the Keychain and its cached data is deleted. `gh`
-    /// keeps its login.
+    /// Forgets the account: its place in the index and any token an earlier build saved leave the Keychain, and its
+    /// cached data is deleted. `gh` keeps its login.
     pub async fn github_disconnect(&self, connection_id: &str) -> Result<()> {
         let session = self.code.session(connection_id)?;
-        self.code.auth.forget_saved_token(&session.login)?;
+        self.code.auth.forget_login(&session.login)?;
         self.code.sessions.lock().expect("session lock poisoned").remove(connection_id);
         self.code.hosts.lock().expect("host lock poisoned").remove(connection_id);
         self.code.dbs.lock().expect("db map lock poisoned").remove(connection_id);
@@ -1133,13 +1139,14 @@ pub(crate) mod tests {
         fake.deny_reads_of("vault");
         let _vault = crate::secrets::fake::install(&fake);
         let fx = fixture(REPOS).await;
-        fx.core.github_connect(None).await.unwrap();
+        assert!(matches!(fx.core.github_connect(None).await, Err(Error::KeychainUnavailable(_))), "the account would be lost at relaunch");
         fx.core.adopt_instances().await;
         assert_eq!(crate::config::AppConfig::load(&fx.dir).version, 0);
         assert!(instance_ids(&fx).is_empty());
 
         let readable = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&readable);
+        fx.core.github_connect(None).await.unwrap();
         fx.core.adopt_instances().await;
         assert_eq!(instance_ids(&fx), [("github".to_string(), "github:ann".to_string())]);
     }
@@ -1313,7 +1320,101 @@ pub(crate) mod tests {
         fx.core.adopt_instances().await;
         fx.core.github_connect(Some("ann")).await.unwrap();
         assert_eq!(fake.get("github:ann"), None);
-        assert!(fx.core.code.auth.logins().is_empty());
+        assert_eq!(fx.core.code.auth.logins(), ["ann"], "the login stays: it is what finds the account when config.json can't");
+    }
+
+    fn relaunch(fx: &Fx) -> Core {
+        Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker")), fx.dir.clone())
+            .with_code(CodeService::with_factory(GithubAuth::for_test(reqwest::Client::new(), "http://unused.invalid", Vec::new()), Box::new(|_, _, _| unreachable!("no host is built"))))
+    }
+
+    async fn connected_ids(core: &Core) -> Vec<String> {
+        core.connections().await.unwrap().into_iter().map(|c| c.id).collect()
+    }
+
+    #[tokio::test]
+    async fn an_account_connected_before_the_connections_are_adopted_is_adopted_and_listed_at_the_next_launch() {
+        let fake = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        assert!(instance_ids(&fx).is_empty(), "nothing is adopted yet");
+
+        let relaunched = relaunch(&fx);
+        relaunched.adopt_instances().await;
+        relaunched.restore().await;
+
+        assert_eq!(instance_ids(&fx), [("github".to_string(), "github:ann".to_string())]);
+        assert_eq!(connected_ids(&relaunched).await, ["github:ann"]);
+    }
+
+    #[tokio::test]
+    async fn connecting_while_the_login_cant_be_recorded_fails_rather_than_losing_the_account_at_relaunch() {
+        let fake = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        fake.deny_writes(true);
+        assert!(fx.core.github_connect(Some("ann")).await.is_err());
+        assert!(fx.core.code.connection_ids().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_adopted_account_is_still_listed_when_the_connections_block_cant_be_read_after_gh_took_over_from_the_saved_token() {
+        let fake = crate::secrets::fake::Fake::default();
+        fake.put("github-logins", r#"["ann"]"#);
+        fake.put("github:ann", "{}");
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        fx.core.adopt_instances().await;
+        let status = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"ann"}]}}"#;
+        let gh = fx.core.code.auth.gh_dirs()[0].join("gh");
+        std::fs::write(&gh, format!("#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\n[ \"$1 $2\" = \"auth token\" ] && {{ echo ghp_x; exit 0; }}\necho '{status}'\n")).unwrap();
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        assert_eq!(fake.get("github:ann"), None, "gh holds the login, so the saved token is gone");
+
+        std::fs::write(fx.dir.join("config.json"), r#"{"version":1,"connections":[{"displayName":"no id or kind"}]}"#).unwrap();
+        let relaunched = relaunch(&fx);
+        relaunched.adopt_instances().await;
+        relaunched.restore().await;
+
+        assert_eq!(connected_ids(&relaunched).await, ["github:ann"]);
+    }
+
+    #[tokio::test]
+    async fn an_account_connected_while_the_connections_cant_be_read_is_still_there_after_they_can() {
+        let fake = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        std::fs::create_dir_all(&fx.dir).unwrap();
+        std::fs::write(fx.dir.join("config.json"), r#"{"version":1,"connections":[{"displayName":"no id or kind"}]}"#).unwrap();
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        std::fs::remove_file(fx.dir.join("config.json")).unwrap();
+
+        let relaunched = relaunch(&fx);
+        relaunched.adopt_instances().await;
+        relaunched.restore().await;
+
+        assert_eq!(connected_ids(&relaunched).await, ["github:ann"]);
+    }
+
+    #[tokio::test]
+    async fn a_sync_refused_for_its_token_is_unauthorised_and_the_probe_it_prompts_marks_the_instance_not_signed_in() {
+        let fx = fixture(REPOS).await;
+        fx.core.adopt_instances().await;
+        let ready = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"ann"}]}}"#;
+        let gh = fx.core.code.auth.gh_dirs()[0].join("gh");
+        std::fs::write(&gh, format!("#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\n[ \"$1 $2\" = \"auth token\" ] && {{ echo ghp_x; exit 0; }}\necho '{ready}'\n")).unwrap();
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        let state = |fx: &Fx| fx.core.probe_snapshot(&crate::config::AppConfig::load(&fx.dir).connections[0]).map(|s| s.state);
+        assert_eq!(state(&fx), Some(crate::probe::State::Ready));
+
+        let lost = r#"{"hosts":{"github.com":[{"state":"error","host":"github.com","login":"ann","error":"HTTP 401: Bad credentials"}]}}"#;
+        std::fs::write(&gh, format!("#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\n[ \"$1 $2\" = \"auth token\" ] && exit 1\necho '{lost}'\n")).unwrap();
+        let synced = fx.core.sync_code_if_due(crate::sync::Trigger::Now).await;
+        assert!(matches!(synced.as_slice(), [(_, Err(e))] if e.is_unauthorized()));
+
+        assert_eq!(fx.core.probe_connections(crate::inbox::probes::Probe::Unauthorized).await, ["github:ann"]);
+        assert_eq!(state(&fx), Some(crate::probe::State::NotSignedIn));
     }
 
     #[tokio::test]
@@ -1932,6 +2033,26 @@ mod review_tests {
         let refused = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!(refused.state, ProposalState::Applied, "a later attempt may go through");
         assert_eq!(posts(&fx).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_post_gh_cant_get_a_token_for_sends_nothing_and_isnt_marked_maybe_posted() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let gh = fx.core.code.auth.gh_dirs()[0].join("gh");
+        let working = std::fs::read_to_string(&gh).unwrap();
+        std::fs::write(&gh, "#!/nonexistent/interpreter\n").unwrap();
+
+        let back = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+
+        assert_eq!((back.state.clone(), back.maybe_posted.clone()), (ProposalState::Pending, None));
+        assert!(back.error.as_deref().unwrap().contains("couldn't run gh") && !back.error.as_deref().unwrap().contains(REVIEW_MAYBE_POSTED_NOTE), "{:?}", back.error);
+        assert!(posts(&fx).is_empty());
+
+        std::fs::write(&gh, working).unwrap();
+        let done = fx.core.post_review_draft(&p.id, back.revisions.len(), false).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied);
+        assert_eq!(posts(&fx).len(), 1, "posted once, with no search for a review that was never sent");
     }
 
     #[tokio::test]
