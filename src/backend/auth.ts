@@ -13,16 +13,26 @@ export interface Account {
 }
 
 export interface AuthStatus {
-  configured: boolean;
-  callbackUrl: string;
-  scopes: string;
   site: Site | null;
   me: Account | null;
+  email: string | null;
+  /** `YYYY-MM-DD`, as the person said when they pasted the token. */
+  expiresOn: string | null;
+}
+
+/** What the Connect Jira sheet sends. */
+export interface TokenSignIn {
+  site: string;
+  /** Only when the site wouldn't give it. */
+  cloudId?: string;
+  email: string;
+  token: string;
+  expiresOn: string;
 }
 
 export const auth = {
   status: () => invoke<AuthStatus>("auth_status"),
-  saveApp: (clientId: string, clientSecret: string) => invoke<AuthStatus>("save_oauth_app", { clientId, clientSecret }),
-  signIn: () => invoke<AuthStatus>("sign_in"),
+  cloudId: (site: string) => invoke<string | null>("jira_cloud_id", { site }),
+  connect: (input: TokenSignIn) => invoke<AuthStatus>("jira_connect", { input }),
   signOut: () => invoke<void>("sign_out"),
 };

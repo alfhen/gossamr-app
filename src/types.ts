@@ -874,7 +874,7 @@ export interface WorkMove {
 }
 
 /** How a connection stands, from the last probe of its instance (`src-tauri/src/probe.rs`). */
-export type ProbeState = "ready" | "notSignedIn" | "notFound" | "error" | "off";
+export type ProbeState = "ready" | "expiresSoon" | "notSignedIn" | "notFound" | "error" | "off";
 
 export interface ProbeSnapshot {
   /** The command line tool the connection signs in through is there. */
@@ -906,7 +906,7 @@ export interface ConnectionInfo {
   error: string | null;
   /** The error is a network failure the next sync retries; it shows on the row but doesn't raise a toast. */
   transient: boolean;
-  /** Atlassian ended the sign-in; signing in again is the only way this connection syncs. */
+  /** Jira turned down the API token; a new one is the only way this connection syncs. */
   reauth: boolean;
   /** What the last probe found; null until the first one finishes, and for the sample connection. */
   status: ProbeSnapshot | null;

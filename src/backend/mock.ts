@@ -62,6 +62,8 @@ import { MockRuns, STOPPABLE } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
+import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
+import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
 
 export type { MockOptions };
@@ -357,6 +359,9 @@ export class MockBackend implements Backend {
 
   /** The multi-project tracker behind the cache reads. */
   readonly connector: MockConnector;
+  private jiraToken: MockOptions["jiraToken"];
+  private jiraAccount: AuthStatus;
+
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
 
@@ -365,6 +370,8 @@ export class MockBackend implements Backend {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
+    this.jiraToken = options.jiraToken;
+    this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
@@ -1070,7 +1077,9 @@ export class MockBackend implements Backend {
 
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
     if (refresh) this.github.recheck();
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: null, transient: false, reauth: false, status: null };
+    const refused = this.jiraToken === "refused";
+    const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : null;
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status };
     return this.github.connected ? [sample, this.github.info()] : [sample];
   }
 
@@ -1185,7 +1194,26 @@ export class MockBackend implements Backend {
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
 
-  async reconnectJira() {}
+  async jiraStatus() {
+    return this.jiraAccount;
+  }
+
+  async jiraCloudId(site: string) {
+    const host = mockJiraHost(site);
+    if (host.startsWith("slow")) await new Promise((r) => setTimeout(r, 300));
+    return host.startsWith("unknown") ? null : mockCloudId(host);
+  }
+
+  async jiraConnect(input: TokenSignIn) {
+    const host = mockJiraHost(input.site);
+    if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
+    if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
+    if (input.cloudId && !host.startsWith("unknown") && input.cloudId !== mockCloudId(host)) throw new Error(`That cloud id isn't the one ${host} reports. Check the site.`);
+    this.jiraAccount = mockJiraStatus(host, input.email.trim(), input.expiresOn, input.cloudId);
+    this.jiraToken = undefined;
+    this.connectionsListeners.forEach((l) => l());
+    return this.jiraAccount;
+  }
 
   async syncNow() {
     // A sync finds the draft pull requests builds opened.

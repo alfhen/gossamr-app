@@ -98,7 +98,7 @@ impl Core {
             return Snapshot::off();
         }
         match instance.kind {
-            ConnectionKind::Jira => probe::jira(self.auth.whoami(probe::TIMEOUT).await),
+            ConnectionKind::Jira => probe::jira(self.auth.whoami(probe::TIMEOUT).await, self.auth.expires_on().await, chrono::Local::now().date_naive()),
             ConnectionKind::Github => {
                 let host = instance.config.host.as_deref().unwrap_or("github.com");
                 let login = instance.config.login.as_deref().unwrap_or_default();
@@ -116,7 +116,7 @@ mod tests {
     use super::*;
     use crate::auth::GithubAuth;
     use crate::connections::{self, Binding};
-    use crate::auth::{AccessToken, Account, AuthChallenge, AuthMethod, Authenticator, Credentials};
+    use crate::auth::{AccessToken, Account, Authenticator, Credentials, TokenSignIn};
     use crate::error::{Error, Result};
     use crate::inbox::testing::{fixture_with, fixture_with_authenticator};
     use crate::inbox::CodeService;
@@ -154,17 +154,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Authenticator for Jira {
-        fn methods(&self) -> Vec<AuthMethod> {
-            Vec::new()
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
         }
-        async fn begin(&self, _: &AuthMethod) -> Result<AuthChallenge> {
+        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
             unimplemented!()
-        }
-        async fn complete(&self, _: AuthChallenge) -> Result<Credentials> {
-            unimplemented!()
-        }
-        async fn refresh(&self, _: &Credentials) -> Result<Credentials> {
-            Err(Error::ReauthRequired)
         }
         async fn whoami(&self, _: &AccessToken) -> Result<Account> {
             self.asked.notify_one();
@@ -193,6 +187,44 @@ mod tests {
         let fx = jira_fixture(Arc::new(Jira { refused: true, gate: None, asked: Default::default() })).await;
         fx.core.probe_connections(Probe::Launch).await;
         assert_eq!(snapshot_of(&fx.core, "jira").map(|s| s.state), Some(State::NotSignedIn));
+    }
+
+    /// Accepts any token and keeps the expiry day exactly as `connect` was given it.
+    struct Accepting;
+
+    #[async_trait::async_trait]
+    impl Authenticator for Accepting {
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn connect(&self, input: &TokenSignIn) -> Result<Credentials> {
+            let site = crate::auth::Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
+            let me = Account { account_id: "me".into(), name: "Ann".into(), avatar_url: None };
+            Ok(Credentials { email: input.email.clone(), token: input.token.clone(), expires_on: input.expires_on.clone(), site, me })
+        }
+        async fn whoami(&self, _: &AccessToken) -> Result<Account> {
+            Ok(Account { account_id: "me".into(), name: "Ann".into(), avatar_url: None })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_connected_with_an_expiry_inside_two_weeks_is_probed_as_expiring_soon() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let fx = fixture_with_authenticator(None, Some(Arc::new(Accepting))).await;
+        fx.core.adopt_instances().await;
+        let on = chrono::Local::now().date_naive() + chrono::Days::new(5);
+        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "tok".into(), expires_on: on.to_string() };
+        fx.core.connect_jira(&input).await.unwrap();
+
+        fx.core.probe_connections(Probe::Launch).await;
+        let seen = snapshot_of(&fx.core, "jira").unwrap();
+        assert_eq!((seen.state, seen.message.as_str()), (State::ExpiresSoon, "Token expires in 5 days"));
+
+        let later = TokenSignIn { expires_on: (on + chrono::Days::new(300)).to_string(), ..input };
+        fx.core.connect_jira(&later).await.unwrap();
+        fx.core.probe_connections(Probe::Refresh).await;
+        assert_eq!(snapshot_of(&fx.core, "jira").map(|s| s.state), Some(State::Ready));
     }
 
     #[tokio::test]

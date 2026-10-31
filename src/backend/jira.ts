@@ -53,6 +53,7 @@ import type {
   WorkstreamView,
   WorkstreamsChanged,
 } from "../types";
+import { auth, type TokenSignIn } from "./auth";
 import { EVENTS, onChanged } from "./events";
 import type { Backend, ReadScope } from "./types";
 
@@ -426,12 +427,20 @@ export class JiraBackend implements Backend {
     return onChanged("assignedElsewhere", ({ connectionId, strays }) => listener({ connectionId, strays: strays ?? [] }));
   }
 
-  async reconnectJira() {
-    await invoke("sign_in");
-  }
-
   syncNow() {
     return invoke<void>("sync_now");
+  }
+
+  jiraStatus() {
+    return auth.status();
+  }
+
+  jiraCloudId(site: string) {
+    return auth.cloudId(site);
+  }
+
+  jiraConnect(input: TokenSignIn) {
+    return auth.connect(input);
   }
 
   openUrl(url: string) {

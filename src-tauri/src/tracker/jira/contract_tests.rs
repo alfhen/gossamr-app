@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::client::Jira;
 use super::{adf, JiraTracker};
-use crate::auth::{Account, Auth, Credentials, SiteScope, Site, Tokens};
+use crate::auth::{Account, Auth, Credentials, SiteScope, Site};
 use crate::codehost::github::testserver::{serve, Reply, Server};
 use crate::domain::{
     Block, BodyChange, Category, ContainerRef, Doc, Inline, Write, ItemKind, ItemRef, Link, LinkKind, Mark, NewItem, Patch, PersonRef, Priority, TitleChange,
@@ -38,7 +38,9 @@ fn scope() -> SiteScope {
 
 fn auth(http: &reqwest::Client) -> Arc<Auth> {
     let credentials = Credentials {
-        tokens: Tokens { access_token: "tok-secret".into(), refresh_token: "ref".into(), expires_at: u64::MAX / 2 },
+        email: "me@example.com".into(),
+        token: "tok-secret".into(),
+        expires_on: "2999-01-01".into(),
         site: Site { cloud_id: "site".into(), name: "Site".into(), url: "https://site.atlassian.net".into() },
         me: Account { account_id: "me".into(), name: "Me".into(), avatar_url: None },
     };

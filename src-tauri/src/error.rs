@@ -12,16 +12,17 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("{0}")]
     Io(#[from] std::io::Error),
-    #[error("Add your Atlassian OAuth app's client ID and secret first")]
-    NotConfigured,
     #[error("Not signed in to Jira")]
     NotSignedIn,
     #[error("You're now signed in to a different Jira site or account, so this was cancelled")]
     SiteChanged,
     #[error("Sign-in failed: {0}")]
     Auth(String),
-    /// Atlassian no longer honours the refresh token, so only a new sign-in can restore the connection.
-    #[error("Jira signed you out. Sign in again to keep syncing")]
+    /// Something the person typed into a form, with the message written for them.
+    #[error("{0}")]
+    Input(String),
+    /// Jira turned down the API token (revoked or expired), so only a new one restores the connection.
+    #[error("Jira turned down your token. Make a new one to keep syncing")]
     ReauthRequired,
     #[error("{0}")]
     Claude(String),

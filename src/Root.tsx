@@ -14,7 +14,7 @@ import { Setup } from "./components/Setup";
 
 type Phase =
   | { name: "loading" }
-  | { name: "setup"; status: AuthStatus }
+  | { name: "setup" }
   | { name: "app"; backend: Backend }
   | { name: "error"; message: string };
 
@@ -36,7 +36,7 @@ export function Root() {
     setPhase({ name: "loading" });
     auth
       .status()
-      .then((s) => (s.site ? start(s) : setPhase({ name: "setup", status: s })))
+      .then((s) => (s.site ? start(s) : setPhase({ name: "setup" })))
       .catch((e) => setPhase({ name: "error", message: `Couldn't check your Jira sign-in: ${e}` }));
   };
 
@@ -72,7 +72,7 @@ export function Root() {
         </div>
       );
     case "setup":
-      return <Setup status={phase.status} onSignedIn={start} onUseSampleData={() => start(null)} />;
+      return <Setup onSignedIn={start} onUseSampleData={() => start(null)} />;
     case "app":
       return <Workspace backend={phase.backend} />;
   }
