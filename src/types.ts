@@ -876,6 +876,10 @@ export interface WorkMove {
 /** A signed-in connection and how its sync is going. */
 export interface ConnectionInfo {
   id: string;
+  /** The Settings row this connection belongs to: `jira`, `github`, `github_2`. Stays when the account behind it changes. */
+  instanceId: string;
+  displayName: string;
+  enabled: boolean;
   kind: "jira" | "github" | "mock";
   /** The site or organisation; for GitHub, the account's login. */
   workspace: string;

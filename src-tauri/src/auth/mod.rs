@@ -165,29 +165,38 @@ pub struct Auth {
     authenticator: Arc<dyn Authenticator>,
     client: ClientConfig,
     session: Mutex<Option<Credentials>>,
+    restore_failed: bool,
 }
 
 impl Auth {
     /// Restores the saved session. If the Keychain can't be read, the app starts signed out rather than failing.
     pub fn load(http: reqwest::Client) -> Self {
-        let session = secrets::load(SESSION_KEY).unwrap_or_else(|e| {
-            eprintln!("couldn't restore the saved Jira session: {e}");
-            None
-        });
+        let (session, restore_failed) = match secrets::load(SESSION_KEY) {
+            Ok(session) => (session, false),
+            Err(e) => {
+                eprintln!("couldn't restore the saved Jira session: {e}");
+                (None, true)
+            }
+        };
         let client = ClientConfig;
-        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(session) }
+        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(session), restore_failed }
+    }
+
+    /// Whether the saved session was there but couldn't be read, so a signed-out `Auth` doesn't mean nobody was signed in.
+    pub fn restore_failed(&self) -> bool {
+        self.restore_failed
     }
 
     #[cfg(test)]
     pub fn signed_out(http: reqwest::Client) -> Self {
         let client = ClientConfig;
-        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(None) }
+        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(None), restore_failed: false }
     }
 
     #[cfg(test)]
     pub fn signed_in(http: reqwest::Client, credentials: Credentials) -> Self {
         let client = ClientConfig;
-        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(Some(credentials)) }
+        Self { authenticator: Arc::new(Atlassian::new(http, client.clone())), client, session: Mutex::new(Some(credentials)), restore_failed: false }
     }
 
     pub async fn status(&self) -> Result<AuthStatus> {
