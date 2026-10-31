@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodeChange, DevLink, GhAccounts } from "../types";
 import { summarize } from "../lib/devLinks";
 import { PrBadge } from "./DevBits";
-import { ChangeRow, ConnectBanner, DevelopmentView, PullDetail, type DevelopmentViewProps } from "./DevelopmentSection";
+import { ChangeRow, ConnectBanner, DevelopmentView, GithubOffNote, PullDetail, type DevelopmentViewProps } from "./DevelopmentSection";
 import { ConnectGithubView, type ConnectGithubViewProps } from "./ConnectGithub";
 import { PickerRow } from "./WatchPicker";
 import { FindRow, SettingsRowView } from "./WatchSettings";
@@ -103,6 +103,12 @@ describe("the Development section", () => {
   it("can be folded", () => {
     expect(view({ collapsed: true, onToggleSection: vi.fn() })).toContain('aria-expanded="false"');
     expect(renderToStaticMarkup(<ConnectBanner onConnect={vi.fn()} />)).toContain("Connect GitHub to see the PRs for this ticket");
+  });
+
+  it("says GitHub is off, and not that it is missing, when its account is off", () => {
+    const out = renderToStaticMarkup(<GithubOffNote onOpenSettings={vi.fn()} />);
+    expect(out).toContain("GitHub is off. Turn it on to see the PRs for this ticket");
+    expect(out).not.toContain("Connect GitHub");
   });
 
   it("expands a pull request into files, commits and reviewers with a way to open it", () => {

@@ -800,6 +800,7 @@ export class MockBackend implements Backend {
   }
 
   private reviewedFiles(review: Extract<Intent, { type: "githubReview" }>): ChangedFile[] | { unreadable: string } | null {
+    if (this.github.offName) return { unreadable: `${this.github.offName} is off, so ${review.repo} isn't read.` };
     if (!this.github.isWatched(review.repo)) return { unreadable: `${review.repo} isn't one of the repositories you watch, so it isn't read.` };
     if (this.github.code.change(review.repo, review.number)?.sha !== review.commitSha) return { unreadable: `the pull request has moved on from ${review.commitSha.slice(0, 8)} since the review read it` };
     return this.github.code.pullFiles(review.repo, review.number);
@@ -1167,6 +1168,7 @@ export class MockBackend implements Backend {
 
   /** As `Core::require_watched`: a repository that isn't watched is never read, nor written to. */
   private requireWatched(repo: string) {
+    if (this.github.offName) throw new Error(`${this.github.offName} is off, so ${repo} isn't read.`);
     if (!this.github.isWatched(repo)) throw new Error(`${repo} isn't one of the repositories you watch, so it isn't read.`);
   }
 

@@ -536,9 +536,17 @@ pub(super) async fn call_tool(st: &McpState, request_id: &str, params: &Value) -
     }
 }
 
+fn refuse_off(core: &Core, scope: &Scope) -> std::result::Result<(), String> {
+    match core.off_name(&scope.connection_id) {
+        Some(name) => Err(format!("{name} is off, so its tickets are hidden from you. The person can turn it on in Settings.")),
+        None => Ok(()),
+    }
+}
+
 /// Pip reads and drafts on items in watched projects, and on an unwatched one only when the user handed it over in this
 /// run. Creating a new item in any project is a different tool and isn't held to this.
 pub(super) async fn reachable(st: &McpState, run: &PipRun, key: &str) -> std::result::Result<(), String> {
+    refuse_off(&st.core, &run.scope)?;
     if run.handed.contains(&key.to_uppercase()) || st.core.is_item_watched(&run.scope, key).await.map_err(|e| e.to_string())? {
         return Ok(());
     }
@@ -550,6 +558,9 @@ pub(super) async fn reachable(st: &McpState, run: &PipRun, key: &str) -> std::re
 async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &Value) -> Reply {
     let core = &st.core;
     let scope = &run.scope;
+    if matches!(name, "search_items" | "get_item" | "find_containers" | "list_containers" | "get_workflow" | "list_next_statuses") {
+        refuse_off(core, scope)?;
+    }
     let mut draft_args;
     let (name, args) = if name == "draft" {
         let name = match required(args, "kind")? {
@@ -1263,6 +1274,32 @@ mod tests {
 
         let bad = r.err("search_items", json!({ "filter": { "type": "nope" } })).await;
         assert!(bad.contains("filter isn't valid") && bad.contains("needsMe"), "{bad}");
+    }
+
+    #[tokio::test]
+    async fn pip_cannot_read_or_draft_on_a_jira_that_is_off_until_it_is_on() {
+        let r = rig().await;
+        r.fx.core.adopt_instances().await;
+        r.fx.core.set_instance_enabled("jira", false).await.unwrap();
+
+        for (tool, args) in [
+            ("search_items", json!({})),
+            ("get_item", json!({ "key": "CA-1" })),
+            ("list_containers", json!({})),
+            ("find_containers", json!({ "query": "CA" })),
+            ("get_workflow", json!({ "container": "CA" })),
+            ("list_next_statuses", json!({ "key": "CA-1" })),
+            ("propose_comment", json!({ "key": "CA-1", "body": "hello" })),
+            ("propose_transition", json!({ "key": "CA-1", "status_id": "10001" })),
+            ("propose_subtasks", json!({ "key": "CA-1", "summaries": "[\"a\"]" })),
+            ("propose_create", json!({ "container": "CA", "title": "New thing", "kind": "bug" })),
+        ] {
+            let refused = r.err(tool, args).await;
+            assert!(refused.contains("is off, so its "), "{tool}: {refused}");
+        }
+
+        r.fx.core.set_instance_enabled("jira", true).await.unwrap();
+        assert!(r.ok("search_items", json!({})).await.starts_with("2 items match"));
     }
 
     #[tokio::test]

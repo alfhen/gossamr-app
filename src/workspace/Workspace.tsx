@@ -12,6 +12,7 @@ import { CANVASES } from "./canvases";
 import { useStepKeys } from "./browse";
 import { itemKey, usesCode, withoutCode } from "../lib/filter";
 import { pressed } from "../lib/keys";
+import { showsCode } from "./connectionsLogic";
 import { workspaceTicketLinks } from "./jump";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
@@ -206,7 +207,7 @@ export function Workspace({ backend }: { backend: Backend }) {
   const setPipOpen = usePrefs((s) => s.setPipOpen);
   const choice = useWorkspace((s) => s.watch.find((w) => w.needsChoice));
   const choiceConnection = useWorkspace((s) => s.connections.find((c) => c.id === choice?.connectionId));
-  const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const hasGithub = useWorkspace((s) => showsCode(s.connections));
   useGlobalKeys();
   useRegionKeys();
   usePipView();

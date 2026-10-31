@@ -501,10 +501,11 @@ impl Core {
                 .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
                 .unwrap_or_default();
             let connection_id = scope.connection_id.clone();
+            let off = self.off_name(&connection_id).is_some();
             let visible = db.watch_set(&connection_id)?.visible();
-            let cached = tickets_of(&db.items_synced_since(&connection_id, &cutoff, &visible)?)?;
+            let cached = if off { Vec::new() } else { tickets_of(&db.items_synced_since(&connection_id, &cutoff, &visible)?)? };
             let keys = db.visible_keys(&connection_id, &visible)?;
-            let shown = |key: &str| keys.as_ref().is_none_or(|k| k.contains(key));
+            let shown = |key: &str| !off && keys.as_ref().is_none_or(|k| k.contains(key));
             let seen = db.seen()?;
             let default_since = ago(Duration::days(DEFAULT_SEEN_DAYS));
 
@@ -571,6 +572,7 @@ impl Core {
 
     /// The moves open to a ticket. A move's id is its target status.
     pub async fn transitions(&self, scope: &Scope, key: &str) -> Result<Vec<Transition>> {
+        self.refuse_hidden(&scope.connection_id)?;
         let moves = self.tracker(scope)?.transitions(&Self::item(scope, key)).await?;
         Ok(moves.into_iter().map(|m| Transition { id: m.to.id.clone(), name: m.name, to: Status::from(&m.to) }).collect())
     }
@@ -594,6 +596,7 @@ impl Core {
 
     /// The cached item, or a fresh read from Jira when it isn't cached.
     pub async fn work_item(&self, scope: &Scope, key: &str) -> Result<WorkItem> {
+        self.refuse_hidden(&scope.connection_id)?;
         let item = Self::item(scope, key);
         let (cached, last_sync) = self.with_db_for(scope, |db| Ok((db.item(&item)?, db.meta(LAST_SYNC)?))).await?;
         match cached {
@@ -619,6 +622,9 @@ impl Core {
             return Err(Error::SiteChanged);
         }
         let connection_id = scope.connection_id.clone();
+        if self.off_name(&connection_id).is_some() {
+            return Ok(Vec::new());
+        }
         let now = Utc::now();
         self.with_db_for(scope, |db| {
             let visible = if include_unwatched { Visible::All } else { db.watch_set(&connection_id)?.visible() };
@@ -645,6 +651,9 @@ impl Core {
 
     async fn containers_with(&self, scope: &Scope, include_unwatched: bool) -> Result<Vec<Container>> {
         let id = scope.connection_id.clone();
+        if self.off_name(&id).is_some() {
+            return Ok(Vec::new());
+        }
         self.with_db_for(scope, |db| {
             let visible = if include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
             Ok(db.containers(&id)?.into_iter().filter(|c| visible.allows(&c.container_ref.external_id)).collect())
@@ -683,6 +692,9 @@ impl Core {
         if item.connection_id != connection.id {
             return Err(Error::SiteChanged);
         }
+        if self.off_name(&connection.id).is_some() {
+            return Ok(Vec::new());
+        }
         if refresh {
             if let Ok(live) = self.tracker(&scope)?.comments(item).await {
                 return Ok(live);
@@ -699,6 +711,9 @@ impl Core {
         let scope = self.scope().await?;
         if item.connection_id != scope.connection_id {
             return Err(Error::SiteChanged);
+        }
+        if self.off_name(&scope.connection_id).is_some() {
+            return Ok(Vec::new());
         }
         self.tracker(&scope)?.transitions(item).await
     }
@@ -733,12 +748,18 @@ impl Core {
 
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
         let scope = self.scope().await?;
+        if self.off_name(&scope.connection_id).is_some() {
+            return Ok(Vec::new());
+        }
         self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
     }
 
     pub async fn cache_feed(&self, query: &FeedQuery) -> Result<FeedPage> {
         let scope = self.scope().await?;
         let id = self.connection(&scope)?.id;
+        if self.off_name(&id).is_some() {
+            return Ok(FeedPage { entries: Vec::new(), next: None });
+        }
         self.with_db_for(&scope, |db| {
             let visible = if query.include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
             db.feed(&id, query, &visible)
@@ -750,6 +771,9 @@ impl Core {
     pub async fn cache_feed_unread(&self, kinds: &[crate::domain::EventKind]) -> Result<usize> {
         let scope = self.scope().await?;
         let id = self.connection(&scope)?.id;
+        if self.off_name(&id).is_some() {
+            return Ok(0);
+        }
         self.with_db_for(&scope, |db| db.feed_unread(&id, kinds, &db.watch_set(&id)?.visible())).await
     }
 

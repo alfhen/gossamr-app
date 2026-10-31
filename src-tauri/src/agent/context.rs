@@ -31,6 +31,9 @@ pub struct ScreenContext {
     /// Set by Core, not the page: the open item is in a project the user doesn't watch.
     #[serde(skip)]
     pub unwatched_item: bool,
+    /// Set by Core, not the page: the name of the tracker when it is off, so the open item and selection were dropped.
+    #[serde(skip)]
+    pub tracker_off: Option<String>,
 }
 
 impl ScreenContext {
@@ -56,6 +59,9 @@ impl ScreenContext {
         }
         if !self.selection.is_empty() {
             lines.push(format!("Selected: {}", self.selection.iter().map(|r| r.key.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        if let Some(name) = &self.tracker_off {
+            lines.push(format!("{name} is off, so its tickets are hidden from you."));
         }
         if let Some(i) = &self.item {
             let handed = if self.unwatched_item { " (in a project the user doesn't watch; they handed it to you for this request)" } else { "" };

@@ -608,6 +608,11 @@ impl AgentService {
         }
 
         let mut context = req.context.in_connection(&scope.connection_id);
+        if let Some(name) = self.core.off_name(&scope.connection_id) {
+            context.item = None;
+            context.selection.clear();
+            context.tracker_off = Some(name);
+        }
         let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
         if let Some(key) = workstream.as_ref().and_then(|w| w.workstream.item_key.as_ref()) {
             handed.insert(key.to_uppercase());
@@ -1297,6 +1302,28 @@ mod tests {
             assert_eq!(fresh.session_of("q2").as_deref(), Some("sess-q1"));
             fresh.open("q2").await;
             until_status(&fx, &conversation, "q2", "done").await;
+        }
+
+        #[tokio::test]
+        async fn a_workstream_turn_with_a_ticket_still_starts_while_its_tracker_is_off() {
+            let fx = fixture().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
+            let conversation = format!("ws:{}", ws.id);
+            fx.core.adopt_instances().await;
+            fx.core.set_instance_enabled("jira", false).await.unwrap();
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let mut with_ticket = ask("q1", &conversation);
+            with_ticket.context = ScreenContext { item: Some(fx.item("CA-1")), selection: vec![fx.item("CA-2")], ..Default::default() };
+
+            svc.ask(with_ticket, sink.clone()).await.unwrap();
+
+            fake.until_started(1).await;
+            let prompt = fake.0.prompts.lock().unwrap().get("q1").cloned().unwrap();
+            assert!(prompt.contains("is off, so its tickets are hidden from you"), "{prompt}");
+            assert!(!prompt.contains("[Ticket CA-1]") && !prompt.contains("Open item") && !prompt.contains("Selected"), "{prompt}");
+            fake.open("q1").await;
+            until_status(&fx, &conversation, "q1", "done").await;
         }
 
         #[tokio::test]

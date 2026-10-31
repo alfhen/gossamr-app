@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { actingAs, isSignedOut, oldestCheck, rowAfter, statusLine } from "./connectionsLogic";
+import { actingAs, isSignedOut, oldestCheck, rowAfter, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null };
@@ -85,5 +85,20 @@ describe("the list's keys and times", () => {
     expect(actingAs(base)).toEqual(["Drafts post as ada via GitHub.", "Agents clone and push as whichever account gh has active."]);
     expect(actingAs(jira())).toEqual(["Drafts post as Ada Example via Jira."]);
     expect(actingAs({ ...base, kind: "mock" })).toEqual([]);
+  });
+});
+
+describe("when code shows", () => {
+  it("shows code while a GitHub account is on", () => {
+    expect(showsCode([jira(), base])).toBe(true);
+  });
+
+  it("hides code when every GitHub account is off, and when there is none", () => {
+    expect(showsCode([jira(), { ...base, enabled: false }])).toBe(false);
+    expect(showsCode([jira()])).toBe(false);
+  });
+
+  it("shows code when one of two GitHub accounts is on", () => {
+    expect(showsCode([{ ...base, enabled: false }, base])).toBe(true);
   });
 });

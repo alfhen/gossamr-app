@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "./mock";
+import { itemRef } from "./mockConnector";
 
 describe("the mock connection actions", () => {
   it("opens Terminal on the fix of the instance, and refuses one that has nothing to run", async () => {
@@ -102,6 +103,23 @@ describe("the mock on/off switch", () => {
     expect(b.proposals.get(draft.id)?.state).toEqual({ type: "pending" });
     await b.connectionSetEnabled("github", true);
     await expect(b.proposalsPostReview(draft.id, 0)).resolves.toBeDefined();
+  });
+
+  it("hides the code linked to a ticket while GitHub is off, tells the page, and shows it again on without asking GitHub", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const ticket = itemRef("CA-402");
+    let told = 0;
+    b.onDevLinksChanged(() => told++);
+    const shown = (await b.devLinks(ticket)).length;
+    expect(shown).toBeGreaterThan(0);
+    await b.connectionSetEnabled("github", false);
+    expect(await b.devLinks(ticket)).toEqual([]);
+    expect(await b.devLinksLive(ticket)).toEqual([]);
+    await expect(b.codePullRequest({ connectionId: "github:ada", repo: "acme/webshop", number: 212 })).rejects.toThrow("GitHub is off, so acme/webshop isn't read.");
+    expect(b.github.watchedRepos()).toEqual([]);
+    await b.connectionSetEnabled("github", true);
+    expect(await b.devLinks(ticket)).toHaveLength(shown);
+    expect(told).toBe(2);
   });
 
   it("starts a new account on, even when the one removed was off", async () => {
