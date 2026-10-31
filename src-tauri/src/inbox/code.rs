@@ -49,7 +49,7 @@ pub fn is_code_connection(id: &str) -> bool {
     id.starts_with("github:")
 }
 
-fn db_file(login: &str) -> String {
+pub(super) fn github_db_file(login: &str) -> String {
     let safe: String = login.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     format!("github-{safe}.sqlite")
 }
@@ -106,7 +106,7 @@ impl CodeService {
         connection
     }
 
-    fn session(&self, id: &str) -> Result<GithubSession> {
+    pub(super) fn session(&self, id: &str) -> Result<GithubSession> {
         self.sessions.lock().expect("session lock poisoned").get(id).cloned().ok_or(Error::NotSignedIn)
     }
 
@@ -164,7 +164,7 @@ impl Core {
         if let Some(db) = dbs.get(id) {
             return Ok(db.clone());
         }
-        let db = Arc::new(Mutex::new(Db::open(&self.data_dir.join(db_file(&session.login)))?));
+        let db = Arc::new(Mutex::new(Db::open(&self.data_dir.join(github_db_file(&session.login)))?));
         dbs.insert(id.to_string(), db.clone());
         Ok(db)
     }
@@ -236,7 +236,7 @@ impl Core {
         self.code.dbs.lock().expect("db map lock poisoned").remove(connection_id);
         self.registry.remove(connection_id);
         self.unbind_instance(connection_id);
-        let path = self.data_dir.join(db_file(&session.login));
+        let path = self.data_dir.join(github_db_file(&session.login));
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
         }
@@ -1093,7 +1093,7 @@ pub(crate) mod tests {
         other.core.restore().await;
         let ids: Vec<String> = other.core.connections().await.unwrap().into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["github:acme-bot", "github:ann"]);
-        assert_ne!(db_file("ann"), db_file("acme-bot"));
+        assert_ne!(github_db_file("ann"), github_db_file("acme-bot"));
     }
 
     fn instance_ids(fx: &Fx) -> Vec<(String, String)> {
@@ -1269,7 +1269,7 @@ pub(crate) mod tests {
         let fx = fixture(REPOS).await;
         fx.core.github_connect_token("ghp_x").await.unwrap();
         fx.core.watch_state().await.unwrap();
-        let file = fx.dir.join(db_file("ann"));
+        let file = fx.dir.join(github_db_file("ann"));
         assert!(file.exists());
         fx.core.github_disconnect("github:ann").await.unwrap();
         assert!(fx.store.logins().unwrap().is_empty());

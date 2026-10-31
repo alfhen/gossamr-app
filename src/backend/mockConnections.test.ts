@@ -40,6 +40,17 @@ describe("the mock connection actions", () => {
     expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2"]);
   });
 
+  it("refuses to remove GitHub while one of its reviews is being posted, and leaves every draft as it was", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const review = { type: "githubReview" as const, connectionId: "github:ada", item: null, runId: "r1", repo: "acme/webshop", number: 1, commitSha: "abcdef1", summary: "Fine.", comments: [] };
+    const posting = b.proposals.draft(review, "Review from Pip");
+    const waiting = b.proposals.draft({ ...review, number: 2 }, "Review from Pip");
+    void b.proposals.postReview(posting.id, 0, () => new Promise(() => {}), async () => null);
+    await expect(b.connectionRemove("github")).rejects.toThrow("posting a draft for GitHub right now");
+    expect(b.proposals.get(waiting.id)?.state).toEqual({ type: "pending" });
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github"]);
+  });
+
   it("refuses the sample data and an instance that is gone", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     await expect(b.connectionRemove("jira")).rejects.toThrow("built in");

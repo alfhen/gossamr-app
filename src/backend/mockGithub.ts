@@ -86,9 +86,9 @@ export class MockGithub {
   private losing: "kept" | "dropped" | null = null;
   /** How many posts were asked for, refused ones included. */
   tried = 0;
-  /** What the probe of the GitHub instance finds, and when it last looked. */
   /** One more for each account removed: a removed instance's id is not given out again. */
   private instances = 1;
+  /** What the probe of the GitHub instance finds, and when it last looked. */
   private probe: GithubProbeState = "ready";
   private checkedAt: string;
   /** Called when `setProbe` changes what the probe found, as the backend's `connections` event would be sent. */

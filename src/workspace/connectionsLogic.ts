@@ -57,7 +57,7 @@ export function removalWarning(c: Pick<ConnectionInfo, "kind" | "displayName" | 
   if (c.kind === "github") {
     return `Remove ${c.displayName}? Gossamr deletes the pull requests and branches it cached for ${c.workspace}, forgets its token and closes the drafts that post as ${c.workspace}. Your gh login and GitHub stay as they are.`;
   }
-  return `Remove ${c.displayName}? Gossamr deletes the tickets it cached, forgets your token and closes the drafts for it. Pip's conversations and Jira stay as they are.`;
+  return `Remove ${c.displayName}? Gossamr deletes the tickets it cached and your conversations with Pip, forgets your token and closes the drafts for it. Jira stays as it is.`;
 }
 
 /** The row an arrow key moves to; the ends hold. */

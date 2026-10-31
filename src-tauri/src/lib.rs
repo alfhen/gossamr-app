@@ -340,14 +340,18 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
 /// Removes a connection instance: its token, cache and open drafts go, and its id is never used again.
 #[tauri::command]
 async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()> {
-    let connection_id = core.remove_instance(&instance_id).await?;
-    if let Some(win) = app.get_webview_window("main").filter(|_| !connection_id.starts_with("github:")) {
+    let removed = core.remove_instance(&instance_id).await?;
+    let connection_id = removed.connection_id;
+    if let Some(win) = app.get_webview_window("main").filter(|_| removed.kind == tracker::ConnectionKind::Jira) {
         let _ = win.set_badge_count(None);
     }
     wire::changed(&app, wire::Topic::Connections, &connection_id);
     wire::changed(&app, wire::Topic::Cache, &connection_id);
     watch_changed(&app, &connection_id);
     proposals_changed(&app, &connection_id);
+    if removed.workstreams {
+        workstreams_changed(&app, &connection_id);
+    }
     Ok(())
 }
 

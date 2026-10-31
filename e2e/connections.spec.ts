@@ -111,6 +111,7 @@ test.describe("the Connections list", () => {
     const ask = page.getByRole("alertdialog", { name: "Remove GitHub" });
     await expect(ask).toContainText("deletes the pull requests and branches it cached for ada, forgets its token and closes the drafts that post as ada");
     await expect(ask).toContainText("Your gh login and GitHub stay as they are.");
+    await expect(ask.getByRole("button", { name: "Cancel" })).toBeFocused();
     await ask.getByRole("button", { name: "Cancel" }).click();
     await expect(ask).toHaveCount(0);
     await expect(rowOf(page, "GitHub")).toBeVisible();

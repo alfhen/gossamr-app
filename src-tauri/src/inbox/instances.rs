@@ -3,7 +3,7 @@
 
 use super::{db_file, ConnectionInfo, Core};
 use crate::config::AppConfig;
-use crate::connections::{self, Binding, Instance};
+use crate::connections::{self, Binding};
 use crate::db::is_for;
 use crate::domain::{Actor, ProposalQuery, ProposalState, StateKind};
 use crate::error::{Error, Result};
@@ -12,6 +12,33 @@ use crate::secrets;
 use crate::tracker::{Connection, ConnectionKind};
 
 const NAME_LIMIT: usize = 60;
+
+/// What a removal tells the page to refresh.
+#[derive(Debug, PartialEq)]
+pub struct Removed {
+    pub connection_id: String,
+    pub kind: ConnectionKind,
+    pub workstreams: bool,
+}
+
+struct RemovalTarget {
+    kind: ConnectionKind,
+    connection_id: String,
+    name: String,
+    instance_id: Option<String>,
+    login: Option<String>,
+}
+
+fn open_drafts_for(db: &crate::db::Db, connection_id: &str) -> Result<Vec<crate::domain::Proposal>> {
+    let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
+    Ok(db.proposals(&open)?.into_iter().filter(|p| is_for(p, connection_id)).collect())
+}
+
+fn remove_db_files(path: &std::path::Path) {
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+}
 
 fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
@@ -79,58 +106,104 @@ impl Core {
         renamed.ok_or_else(|| Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
-    /// Removes `instance_id`: drafts that target it are closed with a reason, the token Gossamr stored is forgotten, its
-    /// cache is deleted and its id is retired. A draft being posted stops it, before anything is deleted. Returns the
-    /// connection to tell the page about.
-    pub async fn remove_instance(&self, instance_id: &str) -> Result<String> {
-        let config = AppConfig::load(&self.data_dir);
-        let instance = config.connections.iter().find(|i| i.id == instance_id).filter(|_| connections::is_live(&config)).cloned();
-        let instance = instance.ok_or_else(|| Error::Input("This connection is gone. Reopen Settings.".into()))?;
-        let key = instance.bound_to.clone().unwrap_or_else(|| instance.id.clone());
-        self.close_drafts_for(&instance, &key).await?;
-        match instance.kind {
-            ConnectionKind::Github => match self.github_disconnect(&key).await {
-                Ok(()) | Err(Error::NotSignedIn) => {}
-                Err(e) => return Err(e),
-            },
-            ConnectionKind::Jira => self.forget_jira(&key).await?,
+    /// Removes `instance_id`: the token Gossamr stored is forgotten, its cache is deleted, drafts that target it are
+    /// closed with a reason and its id is retired. A draft being posted stops it before anything is deleted. Drafts are
+    /// closed last, so a removal that fails leaves them open. `instance_id` may also be a connection no instance
+    /// names (the list can't be read, or the connection was never adopted); that one has no id to retire.
+    pub async fn remove_instance(&self, instance_id: &str) -> Result<Removed> {
+        let _alone = self.sign_in.lock().await;
+        let target = self.removal_target(instance_id).await?;
+        self.refuse_while_posting(&target).await?;
+        match target.kind {
+            ConnectionKind::Github => self.forget_github(&target).await?,
+            ConnectionKind::Jira => self.forget_jira(&target.connection_id).await?,
         }
-        AppConfig::update_if(&self.data_dir, |config| connections::remove(config, instance_id))?;
-        self.probes_forget(instance_id);
-        Ok(key)
+        let workstreams = match self.close_drafts_for(&target).await {
+            Ok(workstreams) => workstreams,
+            Err(e) => {
+                eprintln!("couldn't close the drafts for {}: {e}", target.name);
+                false
+            }
+        };
+        if let Some(id) = &target.instance_id {
+            if let Err(e) = AppConfig::update_if(&self.data_dir, |config| connections::remove(config, id)) {
+                eprintln!("couldn't save the connections to config.json: {e}");
+            }
+            self.probes_forget(id);
+        }
+        Ok(Removed { connection_id: target.connection_id, kind: target.kind, workstreams })
     }
 
-    async fn close_drafts_for(&self, instance: &Instance, connection_id: &str) -> Result<()> {
-        let reason = format!("{} was removed.", instance.display_name);
+    async fn removal_target(&self, id: &str) -> Result<RemovalTarget> {
+        let config = AppConfig::load(&self.data_dir);
+        let listed = connections::is_live(&config).then(|| config.connections.iter().find(|i| i.id == id)).flatten();
+        if let Some(instance) = listed {
+            let connection_id = instance.bound_to.clone().unwrap_or_else(|| instance.id.clone());
+            let login = instance.config.login.clone();
+            return Ok(RemovalTarget { kind: instance.kind, connection_id, name: instance.display_name.clone(), instance_id: Some(instance.id.clone()), login });
+        }
+        if let Some(connection) = self.auth.connection().await.filter(|c| c.id == id) {
+            return Ok(RemovalTarget { kind: ConnectionKind::Jira, connection_id: connection.id, name: connection.display_name, instance_id: None, login: None });
+        }
+        if let Ok(session) = self.code.session(id) {
+            return Ok(RemovalTarget { kind: ConnectionKind::Github, connection_id: id.into(), name: "GitHub".into(), instance_id: None, login: Some(session.login) });
+        }
+        Err(Error::Input("This connection is gone. Reopen Settings.".into()))
+    }
+
+    async fn refuse_while_posting(&self, target: &RemovalTarget) -> Result<()> {
+        let posting = self.with_app_db(|db| open_drafts_for(db, &target.connection_id).map(|mine| mine.iter().any(|p| p.state == ProposalState::Applying))).await?;
+        if posting {
+            return Err(Error::Input(format!("Gossamr is posting a draft for {} right now. Try again in a moment.", target.name)));
+        }
+        Ok(())
+    }
+
+    /// Closes the pending drafts for the removed connection, and for Jira forgets Pip's conversations, which sign-out
+    /// used to clear. Says whether a closed draft was in a workstream.
+    async fn close_drafts_for(&self, target: &RemovalTarget) -> Result<bool> {
+        let reason = format!("{} was removed.", target.name);
         let now = chrono::Utc::now();
         self.with_app_db(|db| {
             db.atomically(|db| {
-                let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
-                let mine: Vec<_> = db.proposals(&open)?.into_iter().filter(|p| is_for(p, connection_id)).collect();
-                if mine.iter().any(|p| p.state == ProposalState::Applying) {
-                    return Err(Error::Input(format!("Gossamr is posting a draft for {} right now. Try again in a moment.", instance.display_name)));
-                }
-                for p in mine {
+                let mut workstreams = false;
+                for p in open_drafts_for(db, &target.connection_id)?.into_iter().filter(|p| p.state == ProposalState::Pending) {
                     let closed = proposals::retire(db, &p.id, &reason, now)?;
                     proposals::record(db, &closed, Actor::Person, "draft_retired", now);
+                    workstreams |= closed.workstream().is_some();
                 }
-                Ok(())
+                if target.kind == ConnectionKind::Jira {
+                    db.clear_app_pip_turns()?;
+                }
+                Ok(workstreams)
             })
         })
         .await
     }
 
+    /// Forgets the GitHub token and deletes the account's cache, whether or not its session loaded at launch.
+    async fn forget_github(&self, target: &RemovalTarget) -> Result<()> {
+        match self.github_disconnect(&target.connection_id).await {
+            Err(Error::NotSignedIn) => {}
+            done => return done,
+        }
+        let Some(login) = target.login.as_deref() else { return Ok(()) };
+        self.code.auth.disconnect(login)?;
+        self.registry.remove(&target.connection_id);
+        remove_db_files(&self.data_dir.join(super::code::github_db_file(login)));
+        Ok(())
+    }
+
     /// Forgets the Jira token and deletes the site's cache, if `connection_id` is the signed-in connection.
     async fn forget_jira(&self, connection_id: &str) -> Result<()> {
-        let _alone = self.sign_in.lock().await;
-        let Some(connection) = self.auth.connection().await.filter(|c| c.id == connection_id) else { return Ok(()) };
+        let Some(connection) = self.auth.connection().await else { return Ok(()) };
+        if connection.id != connection_id {
+            return Err(Error::Input("Jira is signed in to another account now. Reopen Settings.".into()));
+        }
         self.auth.sign_out().await?;
         self.registry.remove(&connection.id);
         self.close_db();
-        let path = self.data_dir.join(db_file(&connection));
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
-        }
+        remove_db_files(&self.data_dir.join(db_file(&connection)));
         Ok(())
     }
 
@@ -236,7 +309,8 @@ mod tests {
         let cache = fx.dir.join(db_file(&fx.core.auth.connection().await.unwrap()));
         assert!(cache.exists());
 
-        assert_eq!(fx.core.remove_instance("jira").await.unwrap(), "jira:site:me");
+        let removed = fx.core.remove_instance("jira").await.unwrap();
+        assert_eq!(removed, Removed { connection_id: "jira:site:me".into(), kind: ConnectionKind::Jira, workstreams: false });
 
         assert_eq!(state_of(&fx, &jira.id).await, ProposalState::Retired("Acme was removed.".into()));
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Pending);
@@ -280,5 +354,162 @@ mod tests {
         let fx = adopted().await;
         assert!(matches!(fx.core.remove_instance("github_9").await, Err(Error::Input(_))));
         assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    use crate::auth::{GithubAuth, GithubSession, TokenStore};
+    use crate::inbox::code::{github_db_file, CodeService};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// A GitHub token store whose delete can be refused, as the Keychain does when you deny its prompt.
+    #[derive(Default)]
+    struct Keychain {
+        held: crate::auth::MemoryStore,
+        refuse_deletes: AtomicBool,
+    }
+
+    impl TokenStore for Keychain {
+        fn logins(&self) -> Result<Vec<String>> {
+            self.held.logins()
+        }
+        fn load(&self, login: &str) -> Result<Option<GithubSession>> {
+            self.held.load(login)
+        }
+        fn save(&self, session: &GithubSession) -> Result<()> {
+            self.held.save(session)
+        }
+        fn delete(&self, login: &str) -> Result<()> {
+            if self.refuse_deletes.load(Ordering::SeqCst) {
+                return Err(Error::Keychain(keyring::Error::NoStorageAccess("denied".into())));
+            }
+            self.held.delete(login)
+        }
+    }
+
+    /// Jira and GitHub's `ann` both connected and adopted. With `restored` false, the GitHub token is in the Keychain but
+    /// its session didn't load at launch.
+    async fn with_github(restored: bool) -> (crate::inbox::testing::Fixture, Arc<Keychain>) {
+        let keychain = Arc::new(Keychain::default());
+        keychain
+            .save(&GithubSession { login: "ann".into(), name: None, avatar_url: None, token: "t".into(), source: crate::auth::SessionSource::Token, scopes: None, refresh_token: None, expires_at: None })
+            .unwrap();
+        let auth = GithubAuth::for_test(reqwest::Client::new(), keychain.clone(), "http://unused.invalid", None, vec![]);
+        let code = CodeService::with_factory(auth, Box::new(|_, _| unreachable!("nothing here talks to GitHub")));
+        let fx = fixture_with_authenticator(Some(code), None).await;
+        if restored {
+            fx.core.restore().await;
+        }
+        fx.core.adopt_instances().await;
+        (fx, keychain)
+    }
+
+    fn review_on_ann(fx: &crate::inbox::testing::Fixture) -> Intent {
+        match review_on_github(fx) {
+            Intent::GithubReview { item, run_id, repo, number, commit_sha, summary, comments, .. } => {
+                Intent::GithubReview { connection_id: "github:ann".into(), item, run_id, repo, number, commit_sha, summary, comments }
+            }
+            other => other,
+        }
+    }
+
+    fn cache_files(fx: &crate::inbox::testing::Fixture) -> Vec<std::path::PathBuf> {
+        let base = fx.dir.join(github_db_file("ann"));
+        ["", "-wal", "-shm"].iter().map(|suffix| std::path::PathBuf::from(format!("{}{suffix}", base.display()))).collect()
+    }
+
+    fn leave_cache(fx: &crate::inbox::testing::Fixture) {
+        for file in cache_files(fx) {
+            std::fs::write(file, "x").unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn removing_github_forgets_its_session_and_token_and_deletes_every_cache_file() {
+        let (fx, keychain) = with_github(true).await;
+        leave_cache(&fx);
+        let review = draft_for(&fx, review_on_ann(&fx)).await;
+
+        let removed = fx.core.remove_instance("github").await.unwrap();
+
+        assert_eq!(removed, Removed { connection_id: "github:ann".into(), kind: ConnectionKind::Github, workstreams: false });
+        assert!(keychain.logins().unwrap().is_empty());
+        assert!(fx.core.code.connection_ids().is_empty());
+        assert!(cache_files(&fx).iter().all(|f| !f.exists()));
+        assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
+        assert_eq!(ids(&fx), ["jira"]);
+    }
+
+    #[tokio::test]
+    async fn removing_a_github_account_whose_session_didnt_load_still_forgets_its_token_and_cache() {
+        let (fx, keychain) = with_github(false).await;
+        leave_cache(&fx);
+        assert_eq!(ids(&fx), ["jira", "github"]);
+
+        fx.core.remove_instance("github").await.unwrap();
+
+        assert!(keychain.logins().unwrap().is_empty());
+        assert!(cache_files(&fx).iter().all(|f| !f.exists()));
+        assert_eq!(ids(&fx), ["jira"]);
+    }
+
+    #[tokio::test]
+    async fn a_github_token_that_wont_delete_leaves_the_connection_and_its_drafts_as_they_were() {
+        let (fx, keychain) = with_github(true).await;
+        leave_cache(&fx);
+        let review = draft_for(&fx, review_on_ann(&fx)).await;
+        keychain.refuse_deletes.store(true, Ordering::SeqCst);
+
+        assert!(fx.core.remove_instance("github").await.is_err());
+
+        assert_eq!(state_of(&fx, &review.id).await, ProposalState::Pending);
+        assert_eq!(keychain.logins().unwrap(), ["ann"]);
+        assert_eq!(fx.core.code.connection_ids(), ["github:ann"]);
+        assert!(cache_files(&fx).iter().all(|f| f.exists()));
+        assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    #[tokio::test]
+    async fn a_jira_token_that_wont_delete_leaves_the_connection_its_cache_and_its_drafts_as_they_were() {
+        let fx = adopted().await;
+        let jira = draft_for(&fx, Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }).await;
+        let cache = fx.dir.join(db_file(&fx.core.auth.connection().await.unwrap()));
+        let fake = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&fake);
+        fake.deny_writes(true);
+
+        assert!(fx.core.remove_instance("jira").await.is_err());
+
+        assert_eq!(state_of(&fx, &jira.id).await, ProposalState::Pending);
+        assert!(fx.core.auth.connection().await.is_some());
+        assert!(cache.exists());
+        assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    #[tokio::test]
+    async fn removing_jira_forgets_pips_conversations_and_removing_github_keeps_them() {
+        let fx = adopted().await;
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "done").await.unwrap();
+        let turns = || fx.core.with_app_db(|db| Ok(db.pip_turns("general")?.len()));
+
+        fx.core.remove_instance("github").await.unwrap();
+        assert!(turns().await.unwrap() > 0);
+
+        fx.core.remove_instance("jira").await.unwrap();
+        assert_eq!(turns().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn connections_can_be_removed_by_connection_id_while_the_list_cant_be_read() {
+        let (fx, keychain) = with_github(true).await;
+        let review = draft_for(&fx, review_on_ann(&fx)).await;
+        std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
+
+        fx.core.remove_instance("github:ann").await.unwrap();
+        fx.core.remove_instance("jira:site:me").await.unwrap();
+
+        assert!(keychain.logins().unwrap().is_empty());
+        assert!(fx.core.auth.connection().await.is_none());
+        assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
+        assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
     }
 }

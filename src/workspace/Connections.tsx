@@ -232,7 +232,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
                 <Button variant="danger" size="sm" disabled={p.busy === c.id} onClick={p.onRemove}>
                   {p.busy === c.id ? "Removing…" : "Remove"}
                 </Button>
-                <Button variant="quiet" size="sm" disabled={p.busy === c.id} onClick={p.onCancel}>
+                <Button variant="quiet" size="sm" autoFocus disabled={p.busy === c.id} onClick={p.onCancel}>
                   Cancel
                 </Button>
               </div>

@@ -1100,9 +1100,9 @@ export class MockBackend implements Backend {
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
     const reason = `${target.displayName} was removed.`;
-    for (const d of this.proposals.list({ states: ["pending"] })) {
-      if (d.intent.type === "githubReview" && d.intent.connectionId === target.id) this.proposals.retire(d.id, reason);
-    }
+    const mine = this.proposals.list({ states: ["pending", "applying"] }).filter((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
+    if (mine.some((d) => d.state.type === "applying")) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
+    for (const d of mine) this.proposals.retire(d.id, reason);
     this.names.delete(instanceId);
     this.github.disconnect(target.id);
     this.connectionsListeners.forEach((l) => l());

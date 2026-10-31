@@ -15,13 +15,14 @@ export async function removeConnection(c: Pick<ConnectionInfo, "instanceId" | "k
     return false;
   }
   if (c.kind === "jira") {
+    // Signing out clears the toasts and leaves the workspace that shows them, so Setup is the confirmation.
     announceSignedOut();
-  } else {
-    try {
-      await refreshAfterGithubChange();
-    } catch (e) {
-      useWorkspace.getState().report("Couldn't refresh after removing it", e);
-    }
+    return true;
+  }
+  try {
+    await refreshAfterGithubChange();
+  } catch (e) {
+    useWorkspace.getState().report("Couldn't refresh after removing it", e);
   }
   useToasts.getState().push(`Removed ${c.displayName}.`, "info");
   return true;

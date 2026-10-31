@@ -37,6 +37,7 @@ describe("removing a connection", () => {
     await expect(removeConnection(jira)).resolves.toBe(true);
     off();
     expect(heard).toHaveBeenCalledOnce();
+    expect(useToasts.getState().toasts).toEqual([]);
   });
 
   it("reports false with the reason, and changes nothing, when the backend refuses", async () => {
