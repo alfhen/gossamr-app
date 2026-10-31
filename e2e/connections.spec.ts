@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./support/app";
+import { openApp, reviewDrafts, reviewedDraft, toast } from "./support/app";
 
 async function openSettings(page: Page) {
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
@@ -101,16 +101,34 @@ test.describe("the Connections list", () => {
     await expect(page.getByRole("button", { name: "Check all" })).toBeEnabled();
   });
 
-  test("asks before it disconnects GitHub, and Cancel leaves it connected", async ({ page }) => {
+  test("asks before it removes GitHub, says what is deleted, and Cancel leaves it connected", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await rowOf(page, "GitHub").getByRole("button").click();
-    await page.getByRole("region", { name: "GitHub details" }).getByRole("button", { name: "Disconnect" }).click();
-    const ask = page.getByRole("alertdialog", { name: "Disconnect ada" });
-    await expect(ask).toBeVisible();
+    const detail = page.getByRole("region", { name: "GitHub details" });
+    await expect(detail.getByRole("button", { name: "Disconnect" })).toHaveCount(0);
+    await detail.getByRole("button", { name: "Remove", exact: true }).click();
+    const ask = page.getByRole("alertdialog", { name: "Remove GitHub" });
+    await expect(ask).toContainText("deletes the pull requests and branches it cached for ada, forgets its token and closes the drafts that post as ada");
+    await expect(ask).toContainText("Your gh login and GitHub stay as they are.");
+    await expect(ask.getByRole("button", { name: "Cancel" })).toBeFocused();
     await ask.getByRole("button", { name: "Cancel" }).click();
     await expect(ask).toHaveCount(0);
     await expect(rowOf(page, "GitHub")).toBeVisible();
+  });
+
+  test("removes GitHub: the row goes and the review draft that would post there is closed with a reason", async ({ page }) => {
+    const review = await reviewedDraft(page);
+    await expect(review).toBeVisible();
+    await toast(page).getByRole("button", { name: "Dismiss" }).click();
+    await openSettings(page);
+    await rowOf(page, "GitHub").getByRole("button").click();
+    await page.getByRole("region", { name: "GitHub details" }).getByRole("button", { name: "Remove", exact: true }).click();
+    await page.getByRole("alertdialog", { name: "Remove GitHub" }).getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(rowOf(page, "GitHub")).toHaveCount(0);
+    await expect(toast(page).filter({ hasText: "Removed GitHub." })).toBeVisible();
+    expect((await reviewDrafts(page)).map((d) => d.state)).toEqual(["retired"]);
+    await expect(rowOf(page, "Sample data")).toBeVisible();
   });
 
   test("connects another GitHub account from the foot of the list", async ({ page }) => {

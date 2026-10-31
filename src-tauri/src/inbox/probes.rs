@@ -87,6 +87,10 @@ impl Core {
             .ok_or_else(|| crate::error::Error::Input("There's nothing to run for this connection. Check it again.".into()))
     }
 
+    pub(super) fn probes_forget(&self, instance_id: &str) {
+        self.probes.snapshots.lock().expect("probe lock poisoned").remove(instance_id);
+    }
+
     pub(super) fn probes_rebound(&self) {
         self.probes.rebound.store(true, Ordering::Relaxed);
     }

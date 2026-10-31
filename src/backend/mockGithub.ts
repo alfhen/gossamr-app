@@ -86,6 +86,8 @@ export class MockGithub {
   private losing: "kept" | "dropped" | null = null;
   /** How many posts were asked for, refused ones included. */
   tried = 0;
+  /** One more for each account removed: a removed instance's id is not given out again. */
+  private instances = 1;
   /** What the probe of the GitHub instance finds, and when it last looked. */
   private probe: GithubProbeState = "ready";
   private checkedAt: string;
@@ -145,6 +147,7 @@ export class MockGithub {
 
   disconnect(connectionId: string) {
     if (connectionId !== GITHUB_CONNECTION) return;
+    this.instances++;
     this.watch = null;
     this.repos = [];
     this.listeners.forEach((l) => l({ connectionId }));
@@ -152,7 +155,7 @@ export class MockGithub {
 
   info(): ConnectionInfo {
     const status = githubSnapshot(this.probe, GITHUB_LOGIN, this.checkedAt);
-    return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: this.probe !== "off", kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
+    return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.probe !== "off", kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
   }
 
   setProbe(state: GithubProbeState) {

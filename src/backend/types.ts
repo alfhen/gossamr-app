@@ -90,6 +90,8 @@ export interface Backend {
   connectionOpenTerminal(instanceId: string): Promise<void>;
   /** Saves the name Settings shows for instance `instanceId`. */
   connectionRename(instanceId: string, displayName: string): Promise<void>;
+  /** Removes instance `instanceId`: its cache and the token Gossamr stored go, drafts that target it are closed with a reason, and its id is never used again. Refuses while one of its drafts is being posted. */
+  connectionRemove(instanceId: string): Promise<void>;
   /** Which ways of connecting GitHub work here. */
   githubSignInOptions(): Promise<GithubSignInOptions>;
   /** Validates a personal access token (classic or fine-grained) and connects the account it belongs to. */
@@ -100,8 +102,6 @@ export interface Backend {
   githubDeviceStart(): Promise<DeviceStart>;
   /** Resolves with the connection once the code is authorised; rejects if it expires or is denied. */
   githubDevicePoll(): Promise<ConnectionInfo>;
-  /** Forgets the account's token and deletes what was cached for it. */
-  githubDisconnect(connectionId: string): Promise<void>;
   /** The pull requests, branches and commits that name a work item, from the cache. Instant; only watched repositories. Strongest first. */
   devLinks(item: ItemRef): Promise<DevLink[]>;
   /** Searches the watched repositories for the item's key, caches what it finds and returns the links. Slower; for when a person opens the item. */
