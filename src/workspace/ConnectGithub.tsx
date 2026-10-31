@@ -5,7 +5,7 @@ import { Button } from "../components/Button";
 import { GH_LOGIN_COMMAND, safeGithubUrl, splitLinks } from "../lib/githubUrl";
 import type { GhAccount, GhAccounts } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { isSignedOut } from "./connectionsLogic";
+import { agentsPush, isSignedOut } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { openOnGithub, refreshAfterGithubChange, useGithubUi } from "./githubUi";
 import { messageOf, useToasts } from "./toasts";
@@ -86,7 +86,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
     <div className="grid gap-3.5">
       <div>
         <h2 className="font-display m-0 text-lg font-semibold">Connect GitHub</h2>
-        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. Agents clone and push with your own git and gh setup, which may be a different account.</p>
+        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. {agentsPush(found?.accounts.find((a) => a.active)?.login ?? null)}</p>
       </div>
       {!found && (
         <p role="status" className="m-0 text-ws-ink3">

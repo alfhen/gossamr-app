@@ -12,6 +12,13 @@ describe("the mock connection actions", () => {
     expect(b.terminals).toHaveLength(1);
   });
 
+  it("lists the Jira site it was connected to in place of the sample name", async () => {
+    const b = new MockBackend();
+    expect((await b.connectionsList())[0]).toMatchObject({ displayName: "Sample data", status: null });
+    await b.jiraConnect({ site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" });
+    expect((await b.connectionsList())[0]).toMatchObject({ displayName: "acme.atlassian.net", status: { state: "ready", account: "Alf Henderson" } });
+  });
+
   it("renames an instance, trimmed, and tells the page", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     let told = 0;

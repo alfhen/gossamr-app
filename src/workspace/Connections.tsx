@@ -127,7 +127,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   return (
     <>
       <p data-probe={s.state} role={loud ? "status" : undefined} className={`m-0 ${loud ? "text-ws-blocked" : "text-ws-ink"}`}>
-        {s.message}
+        {s.detail ?? s.message}
       </p>
       {s.fix && (
         <div className="flex flex-wrap items-center gap-2">
@@ -262,7 +262,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
               <p className="m-0">{removalWarning(c)}</p>
               <div className="flex gap-2">
                 <Button variant="danger" size="sm" disabled={p.busy === c.id} onClick={p.onRemove}>
-                  {p.busy === c.id ? "Removing…" : "Remove"}
+                  {p.busy === c.id ? "Removing…" : "Yes, remove"}
                 </Button>
                 <Button variant="quiet" size="sm" autoFocus disabled={p.busy === c.id} onClick={p.onCancel}>
                   Cancel

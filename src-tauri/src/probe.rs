@@ -43,7 +43,11 @@ pub struct Snapshot {
     pub version: Option<String>,
     pub state: State,
     pub account: Option<String>,
+    /// For GitHub, the login `gh` has active on the host: the account agents clone and push as.
+    pub active_login: Option<String>,
     pub message: String,
+    /// What the detail pane says when it needs more than the one line the list shows.
+    pub detail: Option<String>,
     /// The command that fixes it, when there is one.
     pub fix: Option<String>,
     pub checked_at: String,
@@ -51,7 +55,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     fn new(state: State, message: impl Into<String>) -> Self {
-        Self { installed: true, version: None, state, account: None, message: message.into(), fix: None, checked_at: crate::inbox::now_iso() }
+        Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, checked_at: crate::inbox::now_iso() }
     }
 
     fn fix(mut self, command: impl Into<String>) -> Self {
@@ -73,6 +77,9 @@ impl Snapshot {
         if self.state == State::Error && self.account.is_none() {
             self.account = previous.and_then(|p| p.account.clone());
         }
+        if self.state == State::Error && self.active_login.is_none() {
+            self.active_login = previous.and_then(|p| p.active_login.clone());
+        }
         self
     }
 }
@@ -83,11 +90,15 @@ pub fn jira(outcome: Option<crate::error::Result<crate::auth::Account>>, expires
         None => Snapshot::new(State::Error, "Jira didn't answer in time."),
         Some(Ok(me)) => {
             let account = Some(me.name.clone());
-            let days_left = expires_on.map(|on| (on - today).num_days()).filter(|days| *days <= EXPIRY_WARNING_DAYS);
-            match (days_left, expires_on) {
-                (Some(days), Some(on)) if days < 0 => Snapshot { account, ..Snapshot::new(State::ExpiresSoon, format!("Token was due to expire on {}. Make a new one and paste it here.", on.format("%-d %b"))) },
-                (Some(days), _) => Snapshot { account, ..Snapshot::new(State::ExpiresSoon, format!("Token expires in {days} {}", if days == 1 { "day" } else { "days" })) },
-                (None, _) => Snapshot { account, ..Snapshot::new(State::Ready, format!("Signed in as {}", me.name)) },
+            let soon = expires_on.map(|on| (on, (on - today).num_days())).filter(|(_, days)| *days <= EXPIRY_WARNING_DAYS);
+            match soon {
+                Some((on, days)) if days < 0 => Snapshot { account, ..Snapshot::new(State::ExpiresSoon, format!("Token was due to expire on {}. Make a new one and paste it here.", on.format("%-d %b"))) },
+                Some((on, days)) => Snapshot {
+                    account,
+                    detail: Some(format!("Your Jira token expires on {}. Make a new one and paste it here.", on.format("%-d %b"))),
+                    ..Snapshot::new(State::ExpiresSoon, format!("Token expires in {days} {}", if days == 1 { "day" } else { "days" }))
+                },
+                None => Snapshot { account, ..Snapshot::new(State::Ready, format!("Signed in as {}", me.name)) },
             }
         }
         Some(Err(Error::NotSignedIn)) => Snapshot::new(State::NotSignedIn, "Not signed in to Jira."),
@@ -145,7 +156,7 @@ fn version_of(output: &str) -> Option<String> {
 /// Runs `gh auth status` and `gh --version`. A failure is already the snapshot to show.
 async fn ask_gh(gh_dirs: &[PathBuf], timeout: Duration) -> Result<(Option<String>, Status), Box<Snapshot>> {
     let Some(gh) = find_gh_in(gh_dirs) else {
-        return Err(Box::new(Snapshot { installed: false, ..Snapshot::new(State::NotFound, "gh isn't installed.").fix("brew install gh") }));
+        return Err(Box::new(Snapshot { installed: false, ..Snapshot::new(State::NotFound, "gh isn't installed. Use the command below, or get the installer from cli.github.com.").fix("brew install gh") }));
     };
     let (version, status) = tokio::join!(run_gh(&gh, &["--version"], timeout), run_gh(&gh, &["auth", "status", "--json", "hosts"], timeout));
     let version = match version {
@@ -164,6 +175,12 @@ async fn ask_gh(gh_dirs: &[PathBuf], timeout: Duration) -> Result<(Option<String
     }
 }
 
+/// The login `gh` has active on `host`; a host with one login has no other to pick.
+fn active_login(status: &Status, host: &str) -> Option<String> {
+    let entries: Vec<&Entry> = status.hosts.iter().filter(|(h, _)| h.eq_ignore_ascii_case(host)).flat_map(|(_, entries)| entries).collect();
+    entries.iter().copied().find(|e| e.active).or(if let [only] = entries[..] { Some(only) } else { None }).map(|e| e.login.clone())
+}
+
 /// Asks `gh` about `login` on `host`, never about the active account.
 pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Duration) -> Snapshot {
     let (version, status) = match ask_gh(gh_dirs, timeout).await {
@@ -179,7 +196,7 @@ pub async fn github(gh_dirs: &[PathBuf], host: &str, login: &str, timeout: Durat
         Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {login} on {host} no longer works.")).fix(login_command),
         Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its token for {login} on {host}.")),
     };
-    Snapshot { version, ..snapshot }
+    Snapshot { version, active_login: active_login(&status, host), ..snapshot }
 }
 
 /// Before any connection exists, no login is named, so this reports the account `gh` has active on `host`.
@@ -200,7 +217,7 @@ pub async fn github_first_run(gh_dirs: &[PathBuf], host: &str, timeout: Duration
         Some(e) if e.token_refused() => Snapshot::new(State::NotSignedIn, format!("gh's token for {} on {host} no longer works.", e.login)).fix(login_command),
         Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its login on {host}.")),
     };
-    Snapshot { version, ..snapshot }
+    Snapshot { version, active_login: active_login(&status, host), ..snapshot }
 }
 
 /// A login `gh` holds on a host. `usable` is false only when GitHub refused its token; offline is not a sign-out.
@@ -274,6 +291,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_probe_of_one_login_also_reports_the_login_gh_has_active() {
+        let seen = probe(&gh_saying("active", READY), "old").await;
+        assert_eq!((seen.state, seen.active_login.as_deref()), (State::NotSignedIn, Some("Alfhen")));
+        let sole = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"alfhen"}]}}"#;
+        assert_eq!(probe(&gh_saying("sole", sole), "alfhen").await.active_login.as_deref(), Some("alfhen"));
+        let none_active = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"a"},{"state":"success","host":"github.com","login":"b"}]}}"#;
+        assert_eq!(probe(&gh_saying("none-active", none_active), "a").await.active_login, None);
+    }
+
+    #[tokio::test]
     async fn the_login_in_the_config_is_probed_not_the_active_account() {
         let seen = probe(&gh_saying("inactive", READY), "old").await;
         assert_eq!(seen.state, State::NotSignedIn);
@@ -291,6 +318,7 @@ mod tests {
     async fn gh_not_being_installed_is_not_found_with_how_to_install_it() {
         let seen = probe(&[std::env::temp_dir().join("gossamr-probe-nowhere")], "alfhen").await;
         assert_eq!((seen.state, seen.installed, seen.fix.as_deref()), (State::NotFound, false, Some("brew install gh")));
+        assert!(seen.message.contains("cli.github.com"), "{}", seen.message);
     }
 
     #[tokio::test]
@@ -438,6 +466,7 @@ mod tests {
         let seen = jira_until(Some(Ok(me())), Some("2026-11-13"));
         assert_eq!((seen.state, seen.message.as_str(), seen.account.as_deref()), (State::ExpiresSoon, "Token expires in 14 days", Some("Ann")));
         assert_eq!(jira_until(Some(Ok(me())), Some("2026-10-31")).message, "Token expires in 1 day");
+        assert_eq!(seen.detail.as_deref(), Some("Your Jira token expires on 13 Nov. Make a new one and paste it here."));
         assert_eq!(jira_until(Some(Ok(me())), Some("2026-11-14")).state, State::Ready);
         assert_eq!(jira_until(Some(Ok(me())), None).state, State::Ready);
     }
@@ -446,6 +475,13 @@ mod tests {
     fn a_token_past_the_date_the_person_gave_but_still_accepted_asks_for_a_new_one() {
         let seen = jira_until(Some(Ok(me())), Some("2026-10-02"));
         assert_eq!((seen.state, seen.message.as_str()), (State::ExpiresSoon, "Token was due to expire on 2 Oct. Make a new one and paste it here."));
+    }
+
+    #[test]
+    fn a_gh_probe_that_could_not_tell_keeps_the_active_login_found_before() {
+        let before = Snapshot { active_login: Some("alfhen".into()), ..Snapshot::new(State::Ready, "") };
+        assert_eq!(Snapshot::new(State::Error, "").keeping_account_of(Some(&before)).active_login.as_deref(), Some("alfhen"));
+        assert_eq!(Snapshot::new(State::NotSignedIn, "").keeping_account_of(Some(&before)).active_login, None);
     }
 
     #[test]

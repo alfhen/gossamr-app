@@ -28,7 +28,7 @@ test.describe("GitHub's status in Settings", () => {
     await expect(card.locator("code")).toHaveText("gh auth login -h github.com");
 
     await probe(page, "notFound");
-    await expect(card).toContainText("gh isn't installed.");
+    await expect(card).toContainText("gh isn't installed. Use the command below, or get the installer from cli.github.com.");
     await expect(card.locator("code")).toHaveText("brew install gh");
 
     await probe(page, "error");

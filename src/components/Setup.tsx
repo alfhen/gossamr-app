@@ -8,7 +8,7 @@ import { ConnectJiraForm } from "../workspace/ConnectJira";
 import { messageOf } from "../workspace/toasts";
 import { Button } from "./Button";
 
-const NOT_CHECKED: ProbeSnapshot = { installed: true, version: null, state: "error", account: null, message: "", fix: null, checkedAt: "" };
+const NOT_CHECKED: ProbeSnapshot = { installed: true, version: null, state: "error", account: null, activeLogin: null, message: "", detail: null, fix: null, checkedAt: "" };
 
 function Row({ badge, name, line, action, children }: { badge: string; name: string; line: { text: string; tone: LineTone }; action?: ReactNode; children?: ReactNode }) {
   return (

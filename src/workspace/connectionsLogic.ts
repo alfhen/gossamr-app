@@ -46,9 +46,13 @@ export function oldestCheck(connections: Pick<ConnectionInfo, "status">[]): stri
   return times.length ? times.reduce((a, b) => (Date.parse(a) <= Date.parse(b) ? a : b)) : null;
 }
 
+/** What the detail pane and the Connect GitHub sheet say about the account agents clone and push as. */
+export const agentsPush = (activeLogin: string | null) =>
+  activeLogin ? `Agents push as ${activeLogin}, gh's active account.` : "Agents clone and push with your own git and gh setup, which may be a different account.";
+
 /** Whose drafts and agents act as which account, for the detail pane. */
-export function actingAs(c: Pick<ConnectionInfo, "kind" | "workspace" | "account">): string[] {
-  if (c.kind === "github") return [`Drafts post as ${c.workspace} via GitHub.`, "Agents clone and push with your own git and gh setup, which may be a different account."];
+export function actingAs(c: Pick<ConnectionInfo, "kind" | "workspace" | "account" | "status">): string[] {
+  if (c.kind === "github") return [`Drafts post as ${c.workspace} via GitHub.`, agentsPush(c.status?.activeLogin ?? null)];
   if (c.kind === "jira") return [`Drafts post as ${c.account} via Jira.`];
   return [];
 }

@@ -28,7 +28,7 @@ test.describe("the Connections list", () => {
     const detail = page.getByRole("region", { name: "GitHub details" });
     await expect(detail).toContainText("gh is signed in as ada on github.com");
     await expect(detail).toContainText("Drafts post as ada via GitHub.");
-    await expect(detail).toContainText("Agents clone and push with your own git and gh setup, which may be a different account.");
+    await expect(detail).toContainText("Agents push as ada, gh's active account.");
     await expect(page.getByRole("region", { name: "Sample data details" })).toHaveCount(0);
   });
 
@@ -146,7 +146,7 @@ test.describe("the Connections list", () => {
     await openSettings(page);
     await rowOf(page, "GitHub").getByRole("button").click();
     await page.getByRole("region", { name: "GitHub details" }).getByRole("button", { name: "Remove", exact: true }).click();
-    await page.getByRole("alertdialog", { name: "Remove GitHub" }).getByRole("button", { name: "Remove", exact: true }).click();
+    await page.getByRole("alertdialog", { name: "Remove GitHub" }).getByRole("button", { name: "Yes, remove" }).click();
     await expect(rowOf(page, "GitHub")).toHaveCount(0);
     await expect(toast(page).filter({ hasText: "Removed GitHub." })).toBeVisible();
     expect((await reviewDrafts(page)).map((d) => d.state)).toEqual(["retired"]);
@@ -317,7 +317,7 @@ test.describe("the Connections list", () => {
     await openSettings(page);
     await page.getByRole("button", { name: "Connect GitHub" }).click();
     const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
-    await expect(sheet).toContainText("gh isn't installed.");
+    await expect(sheet).toContainText("gh isn't installed. Use the command below, or get the installer from cli.github.com.");
     await expect(sheet.getByText("brew install gh")).toBeVisible();
     await expect(sheet.getByRole("button", { name: "Open Terminal" })).toHaveCount(0);
   });

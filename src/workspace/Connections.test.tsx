@@ -95,7 +95,15 @@ describe("the connections list", () => {
   it("says who drafts post as, and which account agents push as", () => {
     const out = view();
     expect(out).toContain("Drafts post as ada via GitHub.");
-    expect(out).toContain("Agents clone and push with your own git and gh setup, which may be a different account.");
+    expect(out).toContain("Agents push as ada, gh&#x27;s active account.");
+    const other = { ...gh, status: { ...gh.status!, activeLogin: "alfhen" } };
+    expect(view({ connections: [other, jira], selectedId: other.id })).toContain("Agents push as alfhen, gh&#x27;s active account.");
+  });
+
+  it("gives the date a Jira token runs out in its detail while the list keeps the days", () => {
+    const out = view({ selectedId: jira.id });
+    expect(out).toContain("Your Jira token expires on 7 Nov. Make a new one and paste it here.");
+    expect(out).toContain("Token expires in 9 days");
   });
 
   it("offers Remove in place of Disconnect and Sign out, and asks before it deletes", () => {
@@ -107,6 +115,12 @@ describe("the connections list", () => {
     }
     expect(view({ confirming: gh.id })).toContain("alertdialog");
     expect(view({ confirming: jira.id, selectedId: jira.id })).toContain("alertdialog");
+  });
+
+  it("labels the confirming button Yes, remove so only one button reads Remove", () => {
+    const out = view({ confirming: gh.id });
+    expect(out).toContain("Yes, remove");
+    expect(out.match(/>Remove</g)).toHaveLength(1);
   });
 
   it("says what Remove deletes for GitHub: the cache and the drafts, and that gh is untouched", () => {
