@@ -173,15 +173,6 @@ struct Open {
     cache: Option<(String, Db)>,
 }
 
-#[derive(Default)]
-struct Open {
-    /// `app.sqlite` alone, opened on first use and kept for the life of the app.
-    app: Option<Db>,
-    /// One cache per connection, opened for whichever is signed in. A connection is a site and an account, so two
-    /// people signing in to the same site on one Mac never see each other's tickets or inbox.
-    cache: Option<(String, Db)>,
-}
-
 pub struct Core {
     pub auth: Arc<Auth>,
     registry: Registry,
