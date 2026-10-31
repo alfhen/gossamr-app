@@ -3,7 +3,7 @@ import { resetAccountState } from "./accountState";
 import { MockBackend } from "./backend/mock";
 import { useClaude } from "./claudeStore";
 import { usePip } from "./workspace/pipStore";
-import { syncLine } from "./workspace/Settings";
+import { syncLine } from "./workspace/connectionsLogic";
 import { useTabs } from "./workspace/tabsStore";
 import { useToasts } from "./workspace/toasts";
 import { useWorkspace } from "./workspaceStore";

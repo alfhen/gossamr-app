@@ -1,0 +1,133 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
+import type { ConnectionInfo } from "../types";
+import { ConnectionsView, type ConnectionsViewProps } from "./Connections";
+import { SignInBannerView } from "./SignInBanner";
+
+const NOW = new Date("2026-10-30T12:00:00Z");
+const CHECKED = "2026-10-30T11:57:00Z";
+const gh: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: githubSnapshot("ready", "ada", CHECKED) };
+const jira: ConnectionInfo = { ...gh, id: "jira:c:u", instanceId: "jira", displayName: "Acme Jira", kind: "jira", workspace: "acme.atlassian.net", account: "Alf Henderson", status: jiraSnapshot("expiresSoon", CHECKED) };
+
+const view = (over: Partial<ConnectionsViewProps> = {}) =>
+  renderToStaticMarkup(
+    <ConnectionsView
+      connections={[jira, gh]}
+      selectedId={gh.id}
+      watch={[]}
+      now={NOW}
+      checking={false}
+      confirming={null}
+      busy={null}
+      copied={false}
+      onSelect={vi.fn()}
+      onCheck={vi.fn()}
+      onSync={vi.fn()}
+      onCopy={vi.fn()}
+      onManage={vi.fn()}
+      onNewToken={vi.fn()}
+      onSignOut={vi.fn()}
+      onAskDisconnect={vi.fn()}
+      onCancel={vi.fn()}
+      onDisconnect={vi.fn()}
+      onConnectGithub={vi.fn()}
+      {...over}
+    />,
+  );
+
+describe("the connections list", () => {
+  it("shows a switched-off connection as off in its detail, not its last probe", () => {
+    const out = view({ connections: [{ ...jira, enabled: false }], selectedId: jira.id });
+    expect(out).toContain("Off.");
+    expect(out).not.toContain("Make a new token");
+  });
+
+  it("lists each connection with its status line and marks the selected one", () => {
+    const out = view();
+    expect(out).toContain("Acme Jira");
+    expect(out).toContain("Token expires in 9 days");
+    expect(out).toContain("Authenticated · ada");
+    expect(out.match(/aria-current="true"/g)).toHaveLength(1);
+    expect(out).toContain("Checked 3m ago");
+  });
+
+  it("shows the detail of the selected connection only", () => {
+    expect(view()).toContain('aria-label="GitHub details"');
+    expect(view()).not.toContain('aria-label="Acme Jira details"');
+    expect(view({ selectedId: jira.id })).toContain('aria-label="Acme Jira details"');
+  });
+
+  it("falls back to the first connection when the selected one is gone", () => {
+    expect(view({ selectedId: "github:gone" })).toContain('aria-label="Acme Jira details"');
+  });
+
+  it("offers the command that fixes a connection, to copy and then check again", () => {
+    const out = view({ connections: [{ ...gh, status: githubSnapshot("notSignedIn", "ada", CHECKED) }] });
+    expect(out).toContain("gh auth login -h github.com");
+    expect(out).toContain("Copy");
+    expect(out).toContain("I&#x27;ve run it, check again");
+    expect(out).toContain("Not signed in");
+  });
+
+  it("offers a new token for a Jira token that is about to run out", () => {
+    expect(view({ selectedId: jira.id })).toContain("Make a new token");
+    expect(view({ selectedId: gh.id })).not.toContain("Make a new token");
+  });
+
+  it("says who drafts post as, and which account agents push as", () => {
+    const out = view();
+    expect(out).toContain("Drafts post as ada via GitHub.");
+    expect(out).toContain("Agents clone and push as whichever account gh has active.");
+  });
+
+  it("asks before it disconnects GitHub", () => {
+    expect(view()).not.toContain("alertdialog");
+    expect(view({ confirming: gh.id })).toContain("alertdialog");
+  });
+
+  it("shows the confirmation on the connection it was asked for, never on the one that takes its place", () => {
+    const out = view({ connections: [jira], selectedId: jira.id, confirming: gh.id, busy: gh.id });
+    expect(out).not.toContain("alertdialog");
+    expect(out).not.toContain("Disconnecting…");
+  });
+
+  it("disables Disconnect only for the connection being disconnected", () => {
+    expect(view({ confirming: gh.id, busy: gh.id })).toContain("Disconnecting…");
+    expect(view({ confirming: gh.id, busy: "github:grace" })).not.toContain("Disconnecting…");
+  });
+
+  it("keeps only the selected row in the tab order, so the arrow keys move between rows", () => {
+    const tabIndexes = [...view().matchAll(/data-connection="[^"]+"[^>]*tabindex="(-?\d)"/g)].map((m) => m[1]);
+    expect(tabIndexes.sort()).toEqual(["-1", "0"]);
+  });
+});
+
+describe("the banner for a connection that is signed out", () => {
+  const noop = vi.fn();
+
+  it("shows nothing while every connection is signed in", () => {
+    expect(renderToStaticMarkup(<SignInBannerView lost={[]} onFix={noop} />)).toBe("");
+  });
+
+  it("offers Jira a new token", () => {
+    const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={noop} />);
+    expect(out).toContain("Jira turned down your token");
+    expect(out).toContain("Make a new token");
+  });
+
+  it("sends the others, and any several, to the connections", () => {
+    expect(renderToStaticMarkup(<SignInBannerView lost={[gh]} onFix={noop} />)).toContain("GitHub is signed out");
+    const many = renderToStaticMarkup(<SignInBannerView lost={[jira, gh]} onFix={noop} />);
+    expect(many).toContain("2 connections are signed out");
+    expect(many).toContain("Open connections");
+  });
+});
+
+describe("the sign-in banner text", () => {
+  it("says Jira isn't syncing, not that nothing is", () => {
+    const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={vi.fn()} />);
+    expect(out).toContain("Jira isn&#x27;t syncing");
+    expect(out).not.toContain("nothing is syncing");
+  });
+});

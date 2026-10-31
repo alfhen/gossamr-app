@@ -11,7 +11,7 @@ export const VIEW_LABEL: Record<ViewMode, string> = { board: "Board", list: "Lis
 export type Route = "workspace" | "activity" | "agents" | "settings";
 
 /** A part of Settings that something else can open directly. */
-export type SettingsSection = "watching";
+export type SettingsSection = "connections" | "watching";
 
 export interface Tab {
   id: string;

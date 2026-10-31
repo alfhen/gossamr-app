@@ -6,7 +6,6 @@ import { PrBadge } from "./DevBits";
 import { ChangeRow, ConnectBanner, DevelopmentView, PullDetail, type DevelopmentViewProps } from "./DevelopmentSection";
 import { ConnectView, type ConnectViewProps } from "./ConnectGithub";
 import { connectReducer, START } from "./connectFlow";
-import { GithubCardView } from "./Settings";
 import { PickerRow } from "./WatchPicker";
 import { FindRow, SettingsRowView } from "./WatchSettings";
 import { nounFor } from "./watchLogic";
@@ -195,15 +194,5 @@ describe("repositories in the pickers and settings", () => {
     expect(row).toContain("Unwatch");
     expect(row).not.toContain("Pin ");
     expect(row).not.toContain("Involved");
-  });
-
-  it("shows the GitHub account with its watch summary and a confirmed disconnect", () => {
-    const c = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github" as const, workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null };
-    const watch = { chosen: true, needsChoice: false, watches: [] as never[] };
-    const cardProps = { c, watch: { ...watch, connectionId: "github:ada", catalogSize: null }, now: NOW, busy: false, onSync: vi.fn(), onManage: vi.fn(), onAskDisconnect: vi.fn(), onCancel: vi.fn(), onDisconnect: vi.fn() };
-    const out = renderToStaticMarkup(<GithubCardView {...cardProps} confirming={false} />);
-    for (const text of ["AD", "ada", "Not watching any repositories yet", "Manage repositories", "Disconnect"]) expect(out).toContain(text);
-    expect(out).not.toContain("alertdialog");
-    expect(renderToStaticMarkup(<GithubCardView {...cardProps} confirming />)).toContain("alertdialog");
   });
 });

@@ -4,7 +4,12 @@ import { openApp } from "./support/app";
 async function openSettings(page: Page) {
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
-  return page.getByRole("listitem", { name: "GitHub account ada" });
+}
+
+async function openGithub(page: Page) {
+  await openSettings(page);
+  await page.getByRole("listitem", { name: "GitHub connection" }).getByRole("button").click();
+  return page.getByRole("region", { name: "GitHub details" });
 }
 
 /** Has the sample GitHub probe find `state`, as Rust's `connections` event would announce it. */
@@ -13,7 +18,7 @@ const probe = (page: Page, state: string) => page.evaluate((s) => (globalThis as
 test.describe("GitHub's status in Settings", () => {
   test("shows each way gh can stand, with the command that fixes it, as the probe finds it", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
-    const card = await openSettings(page);
+    const card = await openGithub(page);
     await expect(card.locator("[data-probe]")).toHaveAttribute("data-probe", "ready");
     await expect(card).toContainText("gh is signed in as ada on github.com");
 
@@ -32,13 +37,13 @@ test.describe("GitHub's status in Settings", () => {
 
   test("starts on what the probe found before the page opened", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6&mockGithubProbe=notFound");
-    const card = await openSettings(page);
+    const card = await openGithub(page);
     await expect(card.locator("[data-probe]")).toHaveAttribute("data-probe", "notFound");
   });
 
   test("Check again asks once more and leaves the button ready", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
-    const card = await openSettings(page);
+    const card = await openGithub(page);
     await expect(card).toContainText("Checked just now");
     await card.getByRole("button", { name: "Check again" }).click();
     await expect(card.locator("[data-probe]")).toHaveAttribute("data-probe", "ready");
@@ -48,8 +53,8 @@ test.describe("GitHub's status in Settings", () => {
   test("the sample connection shows no probe", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
-    const sample = page.getByRole("listitem", { name: "Sample data connection" });
-    await expect(sample).toBeVisible();
-    await expect(sample.locator("[data-probe]")).toHaveCount(0);
+    await expect(page.getByRole("listitem", { name: "Sample data connection" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Sample data details" })).toBeVisible();
+    await expect(page.locator("[data-probe]")).toHaveCount(0);
   });
 });

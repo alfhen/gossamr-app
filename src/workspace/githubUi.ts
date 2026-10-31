@@ -35,8 +35,11 @@ export async function refreshAfterGithubChange() {
   // Another token may write where the last couldn't, or not where it could.
   useReviewAccess.getState().forgetAll();
   const ws = useWorkspace.getState();
-  await Promise.all([ws.refreshConnections(), ws.refreshWatch(), ws.refresh()]);
-  useDev.getState().invalidate();
+  try {
+    await Promise.all([ws.refreshConnections(), ws.refreshWatch(), ws.refresh()]);
+  } finally {
+    useDev.getState().invalidate();
+  }
 }
 
 export async function disconnectGithub(connectionId: string, label: string): Promise<boolean> {
@@ -48,7 +51,11 @@ export async function disconnectGithub(connectionId: string, label: string): Pro
     useToasts.getState().push(`Couldn't disconnect ${label}: ${messageOf(e)}`);
     return false;
   }
-  await refreshAfterGithubChange();
+  try {
+    await refreshAfterGithubChange();
+  } catch (e) {
+    useWorkspace.getState().report("Couldn't refresh after disconnecting", e);
+  }
   useToasts.getState().push(`Disconnected ${label}. Its token and cached pull requests are gone.`, "info");
   return true;
 }
