@@ -38,6 +38,8 @@ pub struct Db {
 }
 
 impl Db {
+    /// A cache file on its own, which holds no drafts, runs or conversations: GitHub's per-account files. Whatever app
+    /// tables it carries are left as they are, because only `open_with_app` copies them out and clears them.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -52,26 +54,12 @@ impl Db {
     }
 
     /// A cache file with the app database attached, which is where drafts, runs, workstreams and Pip's conversations
-    /// live. The app database is the main schema so its tables are found first; the cache's copies of them, left
-    /// from before the move, are never read.
+    /// live. The app database is the main schema so its tables are found first. A cache that still holds app tables
+    /// is copied into the app database, and only then are its copies emptied.
     pub fn open_with_app(cache: &Path, app: &Path) -> Result<Self> {
-        Self::open_with_app_steps(cache, app, schema::STEPS)
-    }
-
-    /// The app database alone, with no cache attached, for work that touches only app tables. Anything that reads
-    /// items, events or a cache's `meta` needs `open_with_app`.
-    pub fn open_app(app: &Path) -> Result<Self> {
-        if let Some(dir) = app.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, home: None })
-    }
-
-    fn open_with_app_steps(cache: &Path, app: &Path, steps: &[&str]) -> Result<Self> {
         let cache_str = cache.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("cache path is not valid UTF-8: {}", cache.display())))?;
-        let through = schema::CACHE_STEPS_WITH_APP_STATE.min(steps.len());
         let mut file = Self::open_file(cache)?;
-        schema::apply(&mut file, &steps[..through])?;
+        schema::migrate(&mut file)?;
         drop(file);
         if let Some(dir) = app.parent() {
             std::fs::create_dir_all(dir)?;
@@ -81,8 +69,17 @@ impl Db {
         db.release_copied(&adopted.applying, chrono::Utc::now())?;
         db.fail_copied_pip_turns(&adopted.pip_turns)?;
         let mut file = Self::open_file(cache)?;
-        schema::apply(&mut file, steps)?;
+        schema::apply(&mut file, schema::STEPS)?;
         Ok(db)
+    }
+
+    /// The app database alone, with no cache attached, for work that touches only app tables. Anything that reads
+    /// items, events or a cache's `meta` needs `open_with_app`.
+    pub fn open_app(app: &Path) -> Result<Self> {
+        if let Some(dir) = app.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, home: None })
     }
 
     fn open_file(path: &Path) -> Result<Connection> {
@@ -127,6 +124,14 @@ impl Db {
         let conn = Self::migrated_app(conn)?;
         conn.execute("ATTACH DATABASE ?1 AS cache", [cache])?;
         Ok(Self { conn, home: None })
+    }
+
+    /// A cache file as the releases before the move to the app database left it, with its own app tables.
+    #[cfg(test)]
+    pub fn open_before_the_move(path: &Path) -> Result<Self> {
+        let mut file = Self::open_file(path)?;
+        schema::apply(&mut file, &schema::STEPS[..schema::CACHE_STEPS_WITH_APP_STATE])?;
+        Ok(Self { conn: file, home: None })
     }
 
     #[cfg(test)]
@@ -402,6 +407,16 @@ mod tests {
         assert!(db.set_done("missing", None).is_err());
     }
 
+    fn has_table(file: &std::path::Path, table: &str) -> bool {
+        let conn = Connection::open(file).unwrap();
+        conn.query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |_| Ok(())).optional().unwrap().is_some()
+    }
+
+    fn count(file: &std::path::Path, table: &str) -> i64 {
+        let conn = Connection::open(file).unwrap();
+        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
     mod app_database {
         use super::*;
 
@@ -410,11 +425,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             (dir.join("inbox-site-me.sqlite"), dir.join("app.sqlite"), dir)
-        }
-
-        fn count(file: &std::path::Path, table: &str) -> i64 {
-            let conn = Connection::open(file).unwrap();
-            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
         }
 
         const WORKSTREAM: &str = "INSERT INTO workstreams (id, connection_id, title, mode, created_at, data) VALUES ('w1', 'c', 'Fix it', 'open', '2026-10-01T10:00:00Z', '{}');";
@@ -436,10 +446,10 @@ mod tests {
         }
 
         #[test]
-        fn a_cache_that_held_app_state_hands_it_over_once_and_keeps_its_own_rows() {
+        fn a_cache_that_held_app_state_hands_it_over_once_and_keeps_only_its_own_rows() {
             let (cache, app, dir) = files("adopt");
             {
-                let old = Db::open(&cache).unwrap();
+                let old = Db::open_before_the_move(&cache).unwrap();
                 old.execute_batch(&format!("{WORKSTREAM}{TURN}")).unwrap();
                 old.set_meta("claude:CA-1", r#"{"id":"s1"}"#).unwrap();
                 old.set_meta("pip_sessions", r#"["s1"]"#).unwrap();
@@ -456,7 +466,13 @@ mod tests {
             assert_eq!(db.app_meta("last_sync_at").unwrap(), None, "cache bookkeeping stays with the cache");
             drop(db);
             assert_eq!((count(&app, "workstreams"), count(&app, "pip_turns")), (0, 1), "a workstream the app deleted is not copied back");
-            assert_eq!((count(&cache, "workstreams"), count(&cache, "pip_turns")), (1, 1), "the cache's own rows stay until a later step drops them");
+            for table in ["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"] {
+                assert!(has_table(&cache, table), "{table} stays so a release from before the move can still open the file");
+                assert_eq!(count(&cache, table), 0, "{table} was emptied once the app database held its rows");
+            }
+            let cache_meta = Connection::open(&cache).unwrap();
+            let kept: Vec<String> = cache_meta.prepare("SELECT k FROM meta").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+            assert_eq!(kept, ["last_sync_at"], "the sessions Pip started left the cache's meta");
             let _ = std::fs::remove_dir_all(dir);
         }
 
@@ -510,7 +526,7 @@ mod tests {
 
         fn run_of(id: &str, connection: &str) -> Run {
             let spec = crate::domain::RunSpec { name: format!("name-{id}"), ..run_spec() };
-            Run::queued(id.into(), format!("p{id}"), connection.into(), None, spec, "f".into(), now())
+            Run::queued(id.into(), format!("p{id}"), connection.into(), None, spec, now())
         }
 
         #[test]
@@ -539,42 +555,86 @@ mod tests {
 
         fn legacy_cache_with(tag: &str, draft: &Draft) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, Proposal) {
             let (cache, app, dir) = files(tag);
-            let old = Db::open(&cache).unwrap();
+            let old = Db::open_before_the_move(&cache).unwrap();
             let p = create(&old, Draft::from_pip("q", None, draft.intent.clone(), None), now()).unwrap();
             drop(old);
             (cache, app, dir, p)
         }
 
-        #[test]
-        fn drafts_still_open_in_a_copied_cache_are_retired_there_so_an_older_release_cannot_post_them_again() {
-            let (cache, app, dir, p) = legacy_cache_with("retire", &comment_on("jira:site:ann"));
-            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
-            assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Pending, "the app copy is still waiting for the person");
-            drop(db);
+        fn cache_version(file: &std::path::Path) -> i64 {
+            Connection::open(file).unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap()
+        }
 
-            let old_release = Db::open(&cache).unwrap();
-            let stored = old_release.proposal(&p.id).unwrap().unwrap();
-            assert!(matches!(stored.state, ProposalState::Retired(_)), "{:?}", stored.state);
-            assert_eq!(old_release.release_interrupted(now()).unwrap(), 0);
-            assert!(old_release.proposals(&ProposalQuery { states: Some(vec![crate::domain::StateKind::Pending, crate::domain::StateKind::Applying]), ..Default::default() }).unwrap().is_empty());
+        #[test]
+        fn a_cache_is_emptied_of_app_rows_only_after_the_app_database_holds_the_copy() {
+            let (cache, app, dir, p) = legacy_cache_with("order", &comment_on("jira:site:ann"));
+            Db::open_app(&app).unwrap().execute_batch("CREATE TRIGGER refuse BEFORE INSERT ON proposals BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+
+            assert!(Db::open_with_app(&cache, &app).is_err());
+            assert_eq!(count(&cache, "proposals"), 1, "the copy failed, so the cache keeps its rows");
+            assert_eq!(cache_version(&cache), schema::CACHE_STEPS_WITH_APP_STATE as i64);
+
+            Db::open_app(&app).unwrap().execute_batch("DROP TRIGGER refuse;").unwrap();
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert_eq!(db.proposal(&p.id).unwrap().map(|p| p.id), Some(p.id.clone()));
+            drop(db);
+            assert_eq!(count(&cache, "proposals"), 0);
+            assert_eq!(cache_version(&cache), schema::STEPS.len() as i64);
+
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            assert!(db.proposal(&p.id).unwrap().is_some(), "a cache that was already emptied is skipped, not an error");
+            drop(db);
             let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
-        fn the_copy_happens_before_a_later_cache_step_drops_the_app_tables() {
-            let (cache, app, dir, p) = legacy_cache_with("order", &comment_on("jira:site:ann"));
-            let mut steps = schema::STEPS.to_vec();
-            steps.push("DROP TABLE proposals; DROP TABLE pip_turns;");
+        fn rows_a_release_from_before_the_move_wrote_to_a_copied_cache_are_kept_when_it_is_emptied() {
+            let (cache, app, dir, first) = legacy_cache_with("topped-up", &comment_on("jira:site:ann"));
+            let mut conn = Connection::open(&app).unwrap();
+            schema::migrate_app(&mut conn).unwrap();
+            conn.execute("INSERT INTO app_meta (k, v) VALUES (?1, '1')", [format!("copied:{}", cache.file_name().unwrap().to_string_lossy())]).unwrap();
+            drop(conn);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let later = create(&old, Draft::from_pip("later", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            drop(old);
 
-            let db = Db::open_with_app_steps(&cache, &app, &steps).unwrap().for_connection("jira:site:ann");
-            assert_eq!(db.proposal(&p.id).unwrap().map(|p| p.id), Some(p.id.clone()));
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_some());
+            assert!(db.proposal(&first.id).unwrap().is_some());
             drop(db);
-            let gone = Connection::open(&cache).unwrap().prepare("SELECT 1 FROM proposals").is_err();
-            assert!(gone, "the later step ran, after the copy");
+            assert_eq!(count(&cache, "proposals"), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
 
-            let db = Db::open_with_app_steps(&cache, &app, &steps).unwrap();
-            assert!(db.proposal(&p.id).unwrap().is_some(), "a cache with the tables already gone is skipped, not an error");
-            drop(db);
+        #[test]
+        fn a_cache_not_yet_copied_keeps_its_rows_when_opened_on_its_own() {
+            let (cache, app, dir, p) = legacy_cache_with("on-its-own", &comment_on("jira:site:ann"));
+            drop(Db::open(&cache).unwrap());
+            assert_eq!(count(&cache, "proposals"), 1);
+            assert_eq!(cache_version(&cache), schema::CACHE_STEPS_WITH_APP_STATE as i64);
+
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&p.id).unwrap().is_some(), "the draft reached the app database");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_cache_that_was_copied_still_opens_for_a_release_from_before_the_move() {
+            let (cache, app, dir, _) = legacy_cache_with("downgrade", &comment_on("jira:site:ann"));
+            drop(Db::open_with_app(&cache, &app).unwrap());
+
+            for table in ["proposals", "runs", "pip_turns", "workstreams"] {
+                assert_eq!(count(&cache, table), 0, "{table}");
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_github_file_is_opened_with_the_cache_tables() {
+            let (_, _, dir) = files("github-file");
+            let file = dir.join("github-ann.sqlite");
+            drop(Db::open(&file).unwrap());
+            assert!(has_table(&file, "items") && has_table(&file, "code_changes"));
             let _ = std::fs::remove_dir_all(dir);
         }
 
@@ -591,7 +651,7 @@ mod tests {
         #[test]
         fn a_draft_that_was_mid_post_in_a_copied_cache_is_released_but_this_launchs_own_is_not() {
             let (cache, app, dir) = files("copied-applying");
-            let old = Db::open(&cache).unwrap();
+            let old = Db::open_before_the_move(&cache).unwrap();
             let stuck = create(&old, Draft::from_pip("q", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
             old.begin_applying(&stuck.id, now()).unwrap().unwrap();
             drop(old);
@@ -608,9 +668,29 @@ mod tests {
         }
 
         #[test]
+        fn a_draft_left_mid_post_in_a_cache_already_marked_copied_is_released() {
+            let (cache, app, dir) = files("topped-up-applying");
+            let mut conn = Connection::open(&app).unwrap();
+            schema::migrate_app(&mut conn).unwrap();
+            conn.execute("INSERT INTO app_meta (k, v) VALUES (?1, '1')", [format!("copied:{}", cache.file_name().unwrap().to_string_lossy())]).unwrap();
+            drop(conn);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let stuck = create(&old, Draft::from_pip("q", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            old.begin_applying(&stuck.id, now()).unwrap().unwrap();
+            old.begin_pip_turn("workspace", "cut-off", "Running", &Default::default(), "running", "t1").unwrap();
+            drop(old);
+
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            assert_eq!(db.proposal(&stuck.id).unwrap().unwrap().state, ProposalState::Pending);
+            let status: String = db.conn.query_row("SELECT status FROM pip_turns WHERE request_id = 'cut-off' AND role = 'pip'", [], |r| r.get(0)).unwrap();
+            assert_eq!(status, "failed");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
         fn pip_turns_cut_off_in_a_copied_cache_are_failed_but_this_launchs_own_are_not() {
             let (cache, app, dir) = files("copied-pip-turns");
-            let old = Db::open(&cache).unwrap();
+            let old = Db::open_before_the_move(&cache).unwrap();
             old.begin_pip_turn("workspace", "cut-off", "Running", &Default::default(), "running", "t1").unwrap();
             old.begin_pip_wake("ws:w1", "never-ran", "[Event] run r1 (triage) Done", &[("r1".into(), "done".into())], "queued", "t2").unwrap();
             old.begin_pip_turn("workspace", "answered", "Fine", &Default::default(), "running", "t3").unwrap();
@@ -638,7 +718,7 @@ mod tests {
             let (ann_cache, app, dir) = files("sessions");
             let bob_cache = dir.join("inbox-site-bob.sqlite");
             for (file, sessions) in [(&ann_cache, r#"["s1","s2"]"#), (&bob_cache, r#"["s3","s1"]"#)] {
-                Db::open(file).unwrap().set_meta("pip_sessions", sessions).unwrap();
+                Db::open_before_the_move(file).unwrap().set_meta("pip_sessions", sessions).unwrap();
             }
             drop(Db::open_with_app(&ann_cache, &app).unwrap());
             let db = Db::open_with_app(&bob_cache, &app).unwrap();

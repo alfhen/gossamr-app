@@ -205,7 +205,7 @@ async fn two_launches_never_overlap_in_the_cli() {
 async fn the_cap_counts_runs_of_other_accounts_through_the_index() {
     let rig = build(None, |s| s.with_cap(2)).await;
     for n in 0..2 {
-        let other = Entry { db_file: "inbox-other.sqlite".into(), run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false };
+        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false };
         rig.svc.index.record(other).unwrap();
     }
     let run = rig.queued(1).await;
@@ -710,7 +710,7 @@ fn a_session_belongs_to_a_run_by_worktree_path_or_short_id_and_never_by_name_or_
     let link = base.join("link");
     std::os::unix::fs::symlink(base.join("real"), &link).unwrap();
 
-    let mut run = Run::queued("r".into(), "p".into(), "c".into(), None, RunSpec { clone_path: link.join("clone"), name: "w".into(), ..run_spec() }, "f".into(), Utc::now());
+    let mut run = Run::queued("r".into(), "p".into(), "c".into(), None, RunSpec { clone_path: link.join("clone"), name: "w".into(), ..run_spec() }, Utc::now());
     let listed = |id: &str, cwd: &Path| FakeCli::session(id, cwd);
     assert!(belongs_to(&listed("0a0a0a0a", &real_dir), &run), "the listed path is the real one, the expected one goes through a link");
     assert!(belongs_to(&listed("0a0a0a0a", &link.join("clone/.claude/worktrees/w")), &run));

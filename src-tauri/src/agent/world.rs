@@ -263,7 +263,7 @@ async fn a_review_is_posted_to_github_only_on_the_persons_approval() -> std::res
     let build = w.person_starts_as(1, "build").await;
     let build = w.finish(&build, BUILT).await;
     let spec = RunSpec { role: crate::domain::Role::parse("review").unwrap(), pr: Some(12), pr_sha: Some(FIRST.into()), report: true, workstream: Some(w.ws.clone()), ..w.rig.spec(2) };
-    let mut review = Run::queued("rev1".into(), "p-rev1".into(), build.connection_id.clone(), build.item.clone(), spec, "f".into(), chrono::Utc::now());
+    let mut review = Run::queued("rev1".into(), "p-rev1".into(), build.connection_id.clone(), build.item.clone(), spec, chrono::Utc::now());
     (review.state, review.ended_at, review.result, review.result_complete) = (RunState::Done, Some(chrono::Utc::now()), Some(PASSING.into()), true);
     fx.insert_run(&review).await;
     let made = core.draft_review(&fx.scope, crate::domain::Origin::Chat { request_id: "review-world".into(), workstream: Some(w.ws.clone()) }, crate::inbox::code::GithubReviewDraft { run_id: review.id.clone(), repo: review.spec.repo.clone(), number: 12, reviewed_sha: FIRST.into(), summary: "Looks good to merge.".into(), comments: vec![] }).await.map_err(|e| e.to_string())?;
