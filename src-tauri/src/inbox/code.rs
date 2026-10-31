@@ -902,7 +902,7 @@ impl Core {
 pub const REVIEW_OUTDATED_NOTE: &str =
     "GitHub says this review's lines no longer match the pull request; it is outdated. Discard it or edit the comments and try again.";
 /// The error of a review whose pull request has new commits since it was written. It is not sent: it would name a
-/// commit that is no longer the head. An edit clears it.
+/// commit that is no longer the head. An edit keeps it, as an edit can't change the commit.
 pub const REVIEW_HEAD_MOVED_NOTE: &str = "The pull request has new commits since this review was written. Discard it and ask Pip to review again.";
 /// The error a review draft keeps when a post may have reached GitHub though no answer said so. The draft keeps that
 /// post as `maybe_posted`, and its next post looks for it on GitHub first.
@@ -2288,6 +2288,11 @@ mod review_tests {
         let refused = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err();
         assert!(refused.to_string().contains("new commits since this review was written"), "{refused}");
         assert!(posts(&fx).is_empty(), "nothing is sent for a commit that is no longer the head");
+
+        let edited = fx.core.edit_proposal(&p.id, &super::super::drafts::Edit::GithubReview { summary: Some("My own words.".into()), comments: None }).await.unwrap();
+        assert_eq!(edited.error.as_deref(), Some(REVIEW_HEAD_MOVED_NOTE));
+        assert!(fx.core.post_review_draft(&p.id, edited.revisions.len(), false).await.is_err());
+        assert!(posts(&fx).is_empty());
     }
 
     #[tokio::test]
