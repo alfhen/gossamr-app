@@ -27,7 +27,7 @@ pub use cache::{stamp, SyncState, Upserted};
 pub use runs::ARCHIVABLE;
 pub use code::CachedHttp;
 pub use proposals::is_for;
-pub use pip_turns::{PipTurn, NEVER_RAN};
+pub use pip_turns::{PipTurn, DISCONNECTED, NEVER_RAN, SIGNED_OUT};
 #[cfg(test)]
 pub use pip_turns::INTERRUPTED;
 

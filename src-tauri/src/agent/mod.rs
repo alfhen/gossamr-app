@@ -965,8 +965,9 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            let rows = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
-            assert!(rows.pip_turns(GENERAL_CONVERSATION).unwrap().is_empty());
+            let turns = fx.core.pip_turns(GENERAL_CONVERSATION).await.unwrap();
+            assert!(!turns.is_empty() && turns.iter().all(|t| t.text.is_empty()), "{turns:?}");
+            assert!(turns.iter().all(|t| (t.status.as_str(), t.error.as_deref()) == ("failed", Some(crate::db::SIGNED_OUT))), "{turns:?}");
         }
 
     mod queueing {

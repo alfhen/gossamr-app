@@ -189,7 +189,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
       update(requestId, ({ ask: _, ...t }) => ({ ...t, text, status: end.ok ? "done" : "failed", error: end.ok ? null : end.error, sessionId: end.sessionId ?? t.sessionId, usage: end.usage }));
     },
 
-    /** Forgets every conversation, as signing out does. */
+    /** Forgets every conversation. */
     clear() {
       all = [];
       resumable = [];

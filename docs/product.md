@@ -6,7 +6,7 @@ Inbox shows mentions, comments, status changes and assignments on watched ticket
 
 ## Workstreams and agents
 
-A workstream holds one ticket or one ticketless task, its conversation with Pip, notes, agents and drafts. Tell Pip what you want done. It starts, messages and stops Claude Code agents within that workstream and wakes when an agent has something to report. You can pause a workstream or stop an agent yourself.
+A workstream holds one ticket or one ticketless task, its conversation with Pip, notes, agents and drafts. Tell Pip what you want done. It starts, messages and stops Claude Code agents within that workstream and wakes when an agent has something to report. You can pause a workstream or stop an agent yourself. Pip's conversations stay when you sign out, remove a connection or sign in to another Jira site.
 
 Roles such as planner, builder and reviewer are labels Pip chooses, not different permission tiers. Every agent uses your Claude Code setup, with Gossamr's report, ask, read-workstream and wait tools added. Gossamr does not accept folder trust for you or change your Claude settings. Permission prompts belong in Terminal.
 
