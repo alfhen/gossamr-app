@@ -16,8 +16,11 @@ use crate::error::Error;
 /// A probe that takes longer is reported as a failure: `gh` can sit on a Keychain prompt.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 
+/// What Terminal runs to add another account, and what a probe offers as the fix for a missing login.
+pub const GH_LOGIN_COMMAND: &str = "gh auth login -h github.com";
+
 /// Variables that make `gh` use another token or host than the one stored for the account.
-const GH_OVERRIDES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"];
+pub(crate) const GH_OVERRIDES: [&str; 3] = ["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,6 +211,43 @@ pub async fn github_first_run(gh_dirs: &[PathBuf], host: &str, timeout: Duration
         Some(_) => Snapshot::new(State::Error, format!("gh couldn't check its login on {host}.")),
     };
     Snapshot { version, ..snapshot }
+}
+
+/// A login `gh` holds on a host. `usable` is false when `gh` can't use its token right now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhAccount {
+    pub login: String,
+    pub active: bool,
+    pub usable: bool,
+}
+
+/// The logins `gh` holds on a host. `message` and `fix` say what is missing when there are none.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GhAccounts {
+    pub installed: bool,
+    pub accounts: Vec<GhAccount>,
+    pub message: Option<String>,
+    pub fix: Option<String>,
+}
+
+/// Lists every login `gh` holds on `host`, the active one first.
+pub async fn github_accounts(gh_dirs: &[PathBuf], host: &str, timeout: Duration) -> GhAccounts {
+    let status = match ask_gh(gh_dirs, timeout).await {
+        Ok((_, status)) => status,
+        Err(snapshot) => return GhAccounts { installed: snapshot.installed, accounts: Vec::new(), message: Some(snapshot.message), fix: snapshot.fix },
+    };
+    let mut accounts: Vec<GhAccount> = status
+        .hosts
+        .iter()
+        .filter(|(h, _)| h.eq_ignore_ascii_case(host))
+        .flat_map(|(_, entries)| entries)
+        .map(|e| GhAccount { login: e.login.clone(), active: e.active, usable: e.state == "success" })
+        .collect();
+    accounts.sort_by_key(|a| !a.active);
+    let empty = accounts.is_empty();
+    GhAccounts { installed: true, accounts, message: empty.then(|| format!("gh has no login on {host}.")), fix: empty.then(|| GH_LOGIN_COMMAND.to_string()) }
 }
 
 #[cfg(test)]
@@ -444,5 +484,26 @@ mod tests {
         b.checked_at = "later".into();
         assert!(a.same_as(&b));
         assert!(!a.same_as(&jira(None)));
+    }
+
+    #[tokio::test]
+    async fn the_accounts_gh_holds_are_listed_with_the_active_one_first_and_the_unusable_marked() {
+        let status = r#"{"hosts":{"github.com":[{"state":"success","active":false,"host":"github.com","login":"work"},{"state":"success","active":true,"host":"github.com","login":"Alfhen"},{"state":"error","active":false,"host":"github.com","login":"old","error":"HTTP 401: Bad credentials"}],"ghe.example.com":[{"state":"success","active":true,"host":"ghe.example.com","login":"elsewhere"}]}}"#;
+        let seen = github_accounts(&gh_saying("accounts", status), "github.com", Duration::from_secs(5)).await;
+        let listed: Vec<_> = seen.accounts.iter().map(|a| (a.login.as_str(), a.active, a.usable)).collect();
+        assert_eq!(listed, [("Alfhen", true, true), ("work", false, true), ("old", false, false)]);
+        assert_eq!((seen.installed, seen.message, seen.fix), (true, None, None));
+    }
+
+    #[tokio::test]
+    async fn no_login_on_the_host_lists_nothing_and_offers_the_login_command() {
+        let seen = github_accounts(&gh_saying("accounts-none", r#"{"hosts":{}}"#), "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.accounts.len(), seen.installed, seen.message.as_deref(), seen.fix.as_deref()), (0, true, Some("gh has no login on github.com."), Some("gh auth login -h github.com")));
+    }
+
+    #[tokio::test]
+    async fn a_missing_gh_lists_nothing_and_offers_how_to_install_it() {
+        let seen = github_accounts(&[std::env::temp_dir().join("gossamr-probe-nowhere")], "github.com", Duration::from_secs(5)).await;
+        assert_eq!((seen.accounts.len(), seen.installed, seen.fix.as_deref()), (0, false, Some("brew install gh")));
     }
 }

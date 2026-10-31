@@ -106,6 +106,11 @@ impl Core {
         found
     }
 
+    /// The logins `gh` holds on github.com, for the Connect GitHub sheet.
+    pub async fn github_gh_accounts(&self) -> probe::GhAccounts {
+        probe::github_accounts(self.code.auth.gh_dirs(), "github.com", probe::TIMEOUT).await
+    }
+
     /// The command that fixes what the first-run screen last showed, without asking `gh` again.
     pub fn first_run_fix(&self) -> crate::error::Result<String> {
         let shown = self.probes.first_run.lock().expect("probe lock poisoned").clone();

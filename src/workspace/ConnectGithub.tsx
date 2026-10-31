@@ -1,15 +1,13 @@
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Backend } from "../backend/types";
 import { useBackend } from "../backend/useBackend";
-import { CLASSIC_TOKEN_URL, FINE_GRAINED_TOKEN_URL, safeGithubUrl } from "../lib/githubUrl";
-import type { DeviceStart, GithubSignInOptions } from "../types";
-import { useWorkspace } from "../workspaceStore";
-import { availableMethods, connectReducer, countdown, splitLinks, START, type ConnectMethod, type ConnectState } from "./connectFlow";
-import { openOnGithub, refreshAfterGithubChange, useGithubUi } from "./githubUi";
-import { useTabs } from "./tabsStore";
-import { messageOf, useToasts } from "./toasts";
 import { Button } from "../components/Button";
-
+import { GH_LOGIN_COMMAND, safeGithubUrl, splitLinks } from "../lib/githubUrl";
+import type { GhAccount, GhAccounts } from "../types";
+import { useWorkspace } from "../workspaceStore";
+import { useConnectionsUi } from "./connectionsUi";
+import { openOnGithub, refreshAfterGithubChange, useGithubUi } from "./githubUi";
+import { messageOf, useToasts } from "./toasts";
 
 /** Message text where an address, such as the single sign-on page GitHub names, can be opened. */
 export function LinkedText({ text }: { text: string }) {
@@ -28,257 +26,115 @@ export function LinkedText({ text }: { text: string }) {
   );
 }
 
-function ErrorLine({ message }: { message: string }) {
-  return (
-    <p role="alert" className="m-0 rounded-lg border border-ws-blocked bg-ws-blocked-soft px-3 py-2 text-ws-blocked [overflow-wrap:anywhere]">
-      <LinkedText text={message} />
-    </p>
-  );
-}
-
-function BackButton({ onClick, disabled }: { onClick(): void; disabled?: boolean }) {
-  return (
-    <Button variant="quiet" size="sm" className="justify-self-start" onClick={onClick} disabled={disabled}>
-      ← Other ways to connect
-    </Button>
-  );
-}
-
-export interface ConnectViewProps {
-  state: ConnectState;
-  /** Null while the options are still being read. */
-  options: GithubSignInOptions | null;
-  token: string;
-  now: number;
+export interface ConnectGithubViewProps {
+  /** Null while `gh` is being asked. */
+  found: GhAccounts | null;
+  /** Logins (lower case) that already have a GitHub connection. */
+  connected: string[];
+  /** The login being connected. */
+  connecting: string | null;
+  error: string | null;
   copied: boolean;
-  onToken(token: string): void;
-  onPick(method: ConnectMethod): void;
-  onSubmit(): void;
-  onBack(): void;
-  onRetry(): void;
-  onCopy(code: string): void;
-  onOpen(url: string): void;
+  onConnect(login: string): void;
+  onCopy(command: string): void;
+  onOpenTerminal(): void;
+  onCheck(): void;
   onClose(): void;
-  onManage(): void;
 }
 
-function Choose({ options, onPick }: Pick<ConnectViewProps, "options" | "onPick">) {
-  if (!options) return <p role="status" className="m-0 text-ws-ink3">Checking what is available…</p>;
+function Command({ command, copied, terminal, onCopy, onOpenTerminal }: { command: string; copied: boolean; terminal: boolean } & Pick<ConnectGithubViewProps, "onCopy" | "onOpenTerminal">) {
   return (
-    <ul aria-label="Ways to connect" className="m-0 grid list-none gap-2 p-0">
-      {availableMethods(options).map((m) => (
-        <li key={m.method}>
-          <button type="button" onClick={() => onPick(m.method)} className="grid w-full gap-0.5 rounded-[10px] border border-ws-sep2 px-3.5 py-2.5 text-left hover:border-ws-accent hover:bg-ws-hover">
-            <span className="font-semibold">{m.title}</span>
-            <span className="text-sm text-ws-ink3">{m.hint}</span>
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function TokenStep({ state, token, onToken, onSubmit, onBack, onOpen }: Pick<ConnectViewProps, "token" | "onToken" | "onSubmit" | "onBack" | "onOpen"> & { state: Extract<ConnectState, { step: "token" }> }) {
-  return (
-    <form
-      onSubmit={(ev) => {
-        ev.preventDefault();
-        if (token.trim() && !state.busy) onSubmit();
-      }}
-      className="grid gap-3"
-    >
-      <BackButton onClick={onBack} disabled={state.busy} />
-      <div className="grid gap-1 text-sm text-ws-ink2">
-        <p className="m-0">
-          <b className="font-semibold text-ws-ink">Classic token:</b> tick <code>repo</code>, <code>read:org</code> and <code>notifications</code>.
-        </p>
-        <p className="m-0">
-          <b className="font-semibold text-ws-ink">Fine-grained token:</b> read-only access to Contents, Pull requests and Metadata.
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-        <button type="button" onClick={() => onOpen(CLASSIC_TOKEN_URL)} className="text-ws-accent underline">
-          Create a classic token
-        </button>
-        <button type="button" onClick={() => onOpen(FINE_GRAINED_TOKEN_URL)} className="text-ws-accent underline">
-          Create a fine-grained token
-        </button>
-      </div>
-      <label className="grid gap-1 text-sm font-semibold">
-        Personal access token
-        <input
-          type="password"
-          autoComplete="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          value={token}
-          disabled={state.busy}
-          onChange={(ev) => onToken(ev.target.value)}
-          placeholder="ghp_… or github_pat_…"
-          className="rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 font-mono font-normal outline-none placeholder:text-ws-ink3 focus:border-ws-accent"
-        />
-      </label>
-      <p className="m-0 text-sm text-ws-ink3">The token stays in your system keychain. It is sent only to GitHub, and Gossamr only reads with it.</p>
-      {state.error && <ErrorLine message={state.error} />}
-      <div className="flex justify-end">
-        <Button variant="primary" type="submit" disabled={!token.trim() || state.busy}>
-          {state.busy ? "Connecting…" : "Connect"}
+    <div className="flex flex-wrap items-center gap-2">
+      <code className="selectable rounded bg-ws-sel px-1.5 py-0.5 font-mono text-xs">{command}</code>
+      <Button size="sm" onClick={() => onCopy(command)}>
+        {copied ? "Copied" : "Copy"}
+      </Button>
+      {terminal && (
+        <Button size="sm" onClick={onOpenTerminal}>
+          Open Terminal
         </Button>
-      </div>
-    </form>
-  );
-}
-
-function CliStep({ state, onSubmit, onBack }: Pick<ConnectViewProps, "onSubmit" | "onBack"> & { state: Extract<ConnectState, { step: "cli" }> }) {
-  return (
-    <div className="grid gap-3">
-      <BackButton onClick={onBack} disabled={state.busy} />
-      <p className="m-0 text-ws-ink2">
-        This runs <code>gh auth token</code> once, when you click the button, and connects with the token it prints. Nothing else is read from the GitHub CLI.
-      </p>
-      {state.error && <ErrorLine message={state.error} />}
-      <div className="flex justify-end">
-        <Button variant="primary" disabled={state.busy} onClick={onSubmit}>
-          {state.busy ? "Connecting…" : "Use my GitHub CLI login"}
-        </Button>
-      </div>
+      )}
     </div>
   );
 }
 
-export function DeviceCode({ code, copied, onCopy, onOpen }: { code: DeviceStart; copied: boolean; onCopy(code: string): void; onOpen(url: string): void }) {
-  const host = (() => {
-    try {
-      const u = new URL(code.verificationUri);
-      return `${u.host}${u.pathname}`;
-    } catch {
-      return code.verificationUri;
-    }
-  })();
+function AccountRow({ account, connected, busy, onConnect }: { account: GhAccount; connected: boolean; busy: boolean; onConnect(): void }) {
+  const note = connected ? "Connected" : !account.usable ? "gh can't use its token. Sign in again." : account.active ? "Active in gh" : "";
   return (
-    <div className="grid gap-2.5 rounded-xl border border-ws-sep2 bg-ws-bar p-3.5">
-      <span className="text-sm text-ws-ink3">Your code</span>
-      <div className="flex flex-wrap items-center gap-3">
-        <code aria-label={`Code ${code.userCode}`} className="selectable text-[28px] leading-none font-bold tracking-[0.12em]">
-          {code.userCode}
-        </code>
-        <Button size="sm" onClick={() => onCopy(code.userCode)}>
-          {copied ? "Copied" : "Copy code"}
+    <li className="flex items-center gap-3 border-b border-ws-sep py-2 last:border-b-0">
+      <span className="min-w-0 flex-1 truncate">
+        <span className="font-semibold">{account.login}</span>
+        {note && <span className="ml-2 text-sm text-ws-ink3">{note}</span>}
+      </span>
+      {!connected && (
+        <Button size="sm" aria-label={`Connect ${account.login}`} disabled={!account.usable || busy} onClick={onConnect}>
+          {busy ? "Connecting…" : "Connect"}
         </Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <Button variant="primary" size="sm" onClick={() => onOpen(code.verificationUri)}>
-          Open {host}
-        </Button>
-        <span className="text-ws-ink3">and enter the code there.</span>
-      </div>
-    </div>
+      )}
+    </li>
   );
 }
 
-function DeviceStep({ state, now, copied, onCopy, onOpen, onBack, onRetry }: Pick<ConnectViewProps, "now" | "copied" | "onCopy" | "onOpen" | "onBack" | "onRetry"> & { state: Extract<ConnectState, { step: "device" }> }) {
-  if (state.phase === "starting") {
-    return (
-      <div className="grid gap-3">
-        <p role="status" className="m-0 text-ws-ink3">Asking GitHub for a code…</p>
-        <div className="flex justify-end">
-          <Button variant="quiet" onClick={onBack}>
-            Cancel
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  if (state.phase === "waiting" && state.code) {
-    return (
-      <div className="grid gap-3">
-        <DeviceCode code={state.code} copied={copied} onCopy={onCopy} onOpen={onOpen} />
-        <p role="status" className="m-0 flex items-center gap-2 text-ws-ink2">
-          <span aria-hidden className="size-2 animate-pulse rounded-full bg-ws-accent" />
-          Waiting for you to authorise in the browser…
-          {state.expiresAt !== null && <span className="ml-auto text-ws-ink3">expires in {countdown(state.expiresAt, now)}</span>}
-        </p>
-        <div className="flex justify-end">
-          <Button variant="quiet" onClick={onBack}>
-            Cancel
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  const what =
-    state.phase === "expired" ? "The code expired before it was entered." : state.phase === "denied" ? "GitHub said the request was denied, so nothing was connected." : "Signing in didn't finish.";
-  return (
-    <div className="grid gap-3">
-      <p role="alert" className="m-0 rounded-lg border border-ws-blocked bg-ws-blocked-soft px-3 py-2 text-ws-blocked [overflow-wrap:anywhere]">
-        {what}
-        {state.phase === "failed" && state.error && (
-          <>
-            {" "}
-            <LinkedText text={state.error} />
-          </>
-        )}
-      </p>
-      <div className="flex justify-end gap-2">
-        <Button variant="quiet" onClick={onBack}>
-          Other ways
-        </Button>
-        <Button variant="primary" onClick={onRetry}>
-          {state.phase === "expired" ? "Get a new code" : "Try again"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-const SUBTITLE: Record<ConnectState["step"], string> = {
-  choose: `Gossamr reads your pull requests, branches and commits to show the code behind each ticket.`,
-  token: "",
-  cli: "",
-  device: "",
-  connected: "",
-};
-
-export function ConnectView(p: ConnectViewProps) {
-  const { state } = p;
+export function ConnectGithubView(p: ConnectGithubViewProps) {
+  const { found } = p;
+  const listed = found !== null && found.accounts.length > 0;
   return (
     <div className="grid gap-3.5">
       <div>
-        <h2 className="font-display m-0 text-lg font-semibold">{state.step === "connected" ? `Connected as ${state.connection.workspace}` : "Connect GitHub"}</h2>
-        {SUBTITLE[state.step] && <p className="mt-1 mb-0 text-ws-ink2">{SUBTITLE[state.step]}</p>}
+        <h2 className="font-display m-0 text-lg font-semibold">Connect GitHub</h2>
+        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. Agents clone and push as the account gh has active.</p>
       </div>
-      {state.step === "choose" && <Choose options={p.options} onPick={p.onPick} />}
-      {state.step === "token" && <TokenStep state={state} token={p.token} onToken={p.onToken} onSubmit={p.onSubmit} onBack={p.onBack} onOpen={p.onOpen} />}
-      {state.step === "cli" && <CliStep state={state} onSubmit={p.onSubmit} onBack={p.onBack} />}
-      {state.step === "device" && <DeviceStep state={state} now={p.now} copied={p.copied} onCopy={p.onCopy} onOpen={p.onOpen} onBack={p.onBack} onRetry={p.onRetry} />}
-      {state.step === "connected" && (
-        <div className="grid gap-3">
-          <p className="m-0 text-ws-ink2">Pull requests that name your tickets will show up in the Development section of each ticket once the first sync finishes.</p>
-          <div className="flex justify-end gap-2">
-            <Button variant="quiet" onClick={p.onManage}>
-              Manage repositories
-            </Button>
-            <Button variant="primary" onClick={p.onClose}>
-              Done
-            </Button>
-          </div>
+      {!found && (
+        <p role="status" className="m-0 text-ws-ink3">
+          Asking gh…
+        </p>
+      )}
+      {listed && (
+        <ul aria-label="Accounts gh knows" className="m-0 list-none border-y border-ws-sep p-0">
+          {found.accounts.map((a) => (
+            <AccountRow key={a.login} account={a} connected={p.connected.includes(a.login.toLowerCase())} busy={p.connecting === a.login} onConnect={() => p.onConnect(a.login)} />
+          ))}
+        </ul>
+      )}
+      {found && !listed && (
+        <div className="grid gap-2">
+          <p className="m-0 text-ws-ink2">{found.message}</p>
+          {found.fix && <Command command={found.fix} copied={p.copied} terminal={found.installed} onCopy={p.onCopy} onOpenTerminal={p.onOpenTerminal} />}
         </div>
       )}
-      {state.step === "choose" && (
-        <div className="flex justify-end">
-          <Button variant="quiet" onClick={p.onClose}>
-            Cancel
-          </Button>
+      {p.error && (
+        <p role="alert" className="m-0 text-sm text-ws-blocked [overflow-wrap:anywhere]">
+          <LinkedText text={p.error} />
+        </p>
+      )}
+      {listed && (
+        <div className="grid gap-2 border-t border-ws-sep pt-3">
+          <h3 className="m-0 text-sm font-semibold">Another account</h3>
+          <p className="m-0 text-sm text-ws-ink2">Run this in Terminal, then check again.</p>
+          <Command command={GH_LOGIN_COMMAND} copied={p.copied} terminal onCopy={p.onCopy} onOpenTerminal={p.onOpenTerminal} />
         </div>
       )}
+      <div className="flex justify-between gap-2">
+        <Button variant="quiet" disabled={!found} onClick={p.onCheck}>
+          {found && !listed && found.fix ? "I've run it, check again" : "Check again"}
+        </Button>
+        <Button variant="primary" disabled={p.connecting !== null} onClick={p.onClose}>
+          Done
+        </Button>
+      </div>
     </div>
   );
 }
 
 export function ConnectFrame({ children, onClose, label = "Connect GitHub" }: { children: ReactNode; onClose(): void; label?: string }) {
+  const sheet = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const at = document.activeElement;
+    if (!sheet.current?.contains(at)) sheet.current?.focus({ preventScroll: true });
+  }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 pt-[10vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label={label} className="ws-pop mb-8 w-[min(520px,92vw)] rounded-[14px] border border-ws-sep2 bg-ws-win p-5 text-ws-ink shadow-ws-pop">
+      <div ref={sheet} tabIndex={-1} role="dialog" aria-modal="true" aria-label={label} className="ws-pop ws-sheet mb-8 w-[min(520px,92vw)] p-5 text-ws-ink outline-none">
         {children}
       </div>
     </div>
@@ -286,141 +142,80 @@ export function ConnectFrame({ children, onClose, label = "Connect GitHub" }: { 
 }
 
 function ConnectFlow({ backend, onClose }: { backend: Backend; onClose(): void }) {
-  const [state, dispatch] = useReducer(connectReducer, START);
-  const [options, setOptions] = useState<GithubSignInOptions | null>(null);
-  const [token, setToken] = useState("");
-  const [now, setNow] = useState(() => Date.now());
+  const connections = useWorkspace((s) => s.connections);
+  const [found, setFound] = useState<GhAccounts | null>(null);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const attempt = useRef(0);
+  const asked = useRef(0);
 
-  useEffect(() => {
-    let current = true;
-    backend.githubSignInOptions().then(
-      (o) => current && setOptions(o),
-      () => current && setOptions({ token: true, ghCli: false, deviceFlow: false }),
+  const check = () => {
+    const mine = ++asked.current;
+    setFound(null);
+    setError(null);
+    backend.githubAccounts().then(
+      (accounts) => mine === asked.current && setFound(accounts),
+      (e) => mine === asked.current && setFound({ installed: true, accounts: [], message: `Couldn't ask gh: ${messageOf(e)}`, fix: null }),
     );
-    return () => {
-      current = false;
-      attempt.current++;
-    };
+  };
+  useEffect(() => {
+    check();
+    return () => void asked.current++;
   }, [backend]);
 
-  const failed = (e: unknown) => {
-    const message = messageOf(e);
-    dispatch({ type: "fail", message });
-    useToasts.getState().push(`Couldn't connect GitHub: ${message}`);
-  };
-
-  const succeeded = async (connection: Awaited<ReturnType<Backend["githubConnectToken"]>>) => {
-    setToken("");
-    dispatch({ type: "connected", connection });
-    useToasts.getState().push(`Connected to GitHub as ${connection.workspace}.`, "info");
-    await refreshAfterGithubChange();
-  };
-
-  const device = state.step === "device" ? state.phase : null;
-  useEffect(() => {
-    if (device !== "starting") return;
-    const mine = ++attempt.current;
-    const stale = () => mine !== attempt.current;
-    (async () => {
-      let code: DeviceStart;
-      try {
-        code = await backend.githubDeviceStart();
-      } catch (e) {
-        if (!stale()) failed(e);
-        return;
-      }
-      if (stale()) return;
-      dispatch({ type: "deviceCode", code, now: Date.now() });
-      try {
-        const connection = await backend.githubDevicePoll();
-        if (!stale()) await succeeded(connection);
-      } catch (e) {
-        if (stale()) return;
-        const message = messageOf(e);
-        dispatch({ type: "deviceEnd", message });
-        useToasts.getState().push(`GitHub sign-in stopped: ${message}`);
-      }
-    })();
-  }, [device, backend]);
-
-  useEffect(() => {
-    if (device !== "waiting") return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [device]);
-
-  const expiresAt = state.step === "device" ? state.expiresAt : null;
-  useEffect(() => {
-    if (device === "waiting" && expiresAt !== null && now >= expiresAt + 5000) {
-      attempt.current++;
-      dispatch({ type: "deviceEnd", message: "the code expired before it was entered" });
-    }
-  }, [now, device, expiresAt]);
-
-  const submit = async () => {
-    if (state.step !== "token" && state.step !== "cli") return;
-    const mine = ++attempt.current;
-    dispatch({ type: "submit" });
+  const connect = async (login: string) => {
+    setConnecting(login);
+    setError(null);
     try {
-      const connection = state.step === "token" ? await backend.githubConnectToken(token.trim()) : await backend.githubImportGhToken();
-      if (mine === attempt.current) await succeeded(connection);
+      const connection = await backend.githubImportGhToken(login);
+      useToasts.getState().push(`Connected to GitHub as ${connection.workspace}.`, "info");
+      await refreshAfterGithubChange();
+      useConnectionsUi.getState().select(connection.id);
+      onClose();
     } catch (e) {
-      if (mine === attempt.current) failed(e);
+      setError(messageOf(e));
+    } finally {
+      setConnecting(null);
     }
   };
 
-  const copy = (code: string) => {
-    navigator.clipboard?.writeText(code).then(
+  const copy = (command: string) => {
+    navigator.clipboard?.writeText(command).then(
       () => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       },
-      () => useToasts.getState().push("Couldn't copy the code. Select it and copy it by hand."),
+      () => useToasts.getState().push("Couldn't copy it. Select it and copy by hand."),
     );
   };
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape" || ev.defaultPrevented) return;
+      if (ev.key !== "Escape" || ev.defaultPrevented || connecting) return;
       ev.preventDefault();
-      if (state.step === "token" || state.step === "cli") {
-        if (!state.busy) onClose();
-      } else onClose();
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state, onClose]);
+  }, [connecting, onClose]);
 
   return (
-    <ConnectView
-      state={state}
-      options={options}
-      token={token}
-      now={now}
+    <ConnectGithubView
+      found={found}
+      connected={connections.filter((c) => c.kind === "github").map((c) => c.workspace.toLowerCase())}
+      connecting={connecting}
+      error={error}
       copied={copied}
-      onToken={setToken}
-      onPick={(method) => dispatch({ type: "pick", method })}
-      onSubmit={() => void submit()}
-      onBack={() => {
-        attempt.current++;
-        setToken("");
-        dispatch({ type: "back" });
-      }}
-      onRetry={() => dispatch({ type: "retry" })}
+      onConnect={(login) => void connect(login)}
       onCopy={copy}
-      onOpen={(url) => void openOnGithub(url)}
+      onOpenTerminal={() => backend.githubOpenLogin().catch((e) => setError(`Couldn't open Terminal: ${messageOf(e)}`))}
+      onCheck={check}
       onClose={onClose}
-      onManage={() => {
-        onClose();
-        useTabs.getState().openSettings("watching");
-      }}
     />
   );
 }
 
-/** The connect flow, opened from Settings, the palette or a ticket's Development section. */
+/** The sheet opened from Settings, the palette or a ticket's Development section. */
 export function ConnectGithubDialog() {
   const open = useGithubUi((s) => s.connectOpen);
   const close = useGithubUi((s) => s.closeConnect);

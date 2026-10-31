@@ -29,6 +29,7 @@ import type {
   DevLink,
   DevLinksChanged,
   DeviceStart,
+  GhAccounts,
   GithubSignInOptions,
   WorkComment,
   WorkContainer,
@@ -140,8 +141,16 @@ export class JiraBackend implements Backend {
     return invoke<ConnectionInfo>("github_connect", { source: { via: "token", token } });
   }
 
-  githubImportGhToken() {
-    return invoke<ConnectionInfo>("github_connect", { source: { via: "ghCli" } });
+  githubImportGhToken(login?: string) {
+    return invoke<ConnectionInfo>("github_connect", { source: { via: "ghCli", login } });
+  }
+
+  githubAccounts() {
+    return invoke<GhAccounts>("github_gh_accounts");
+  }
+
+  githubOpenLogin() {
+    return invoke<void>("github_open_login");
   }
 
   githubDeviceStart() {

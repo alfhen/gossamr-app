@@ -5,6 +5,7 @@ import type {
   ContainerSummary,
   DeviceStart,
   Footprint,
+  GhAccounts,
   GithubSignInOptions,
   Intent,
   PostedReview,
@@ -14,6 +15,7 @@ import type {
   WatchChanged,
   WatchState,
 } from "../types";
+import { GH_LOGIN_COMMAND } from "../lib/githubUrl";
 import { MockCode } from "./mockCode";
 import { githubSnapshot, type GithubProbeState } from "./mockProbes";
 import { MockWatch } from "./mockWatch";
@@ -129,9 +131,18 @@ export class MockGithub {
     return this.info();
   }
 
-  importGhToken(): ConnectionInfo {
+  importGhToken(login?: string): ConnectionInfo {
+    if (login && !this.ghAccounts().accounts.some((a) => a.login === login && a.usable)) throw new Error(`gh has no token for ${login}. Run \`gh auth login\` in a terminal, then try again`);
     if (!this.connected) this.connect();
     return this.info();
+  }
+
+  /** What `gh` holds: the sample login, or nothing in each state where `gh` has none to give. */
+  ghAccounts(): GhAccounts {
+    if (this.probe === "notFound") return { installed: false, accounts: [], message: "gh isn't installed.", fix: "brew install gh" };
+    if (this.probe === "notSignedIn") return { installed: true, accounts: [], message: "gh has no login on github.com.", fix: GH_LOGIN_COMMAND };
+    if (this.probe === "error") return { installed: true, accounts: [], message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.", fix: null };
+    return { installed: true, accounts: [{ login: GITHUB_LOGIN, active: true, usable: true }], message: null, fix: null };
   }
 
   deviceStart(): DeviceStart {

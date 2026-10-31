@@ -42,6 +42,7 @@ import type {
 import { stepOf } from "../lib/roles";
 import { fold } from "../lib/mentions";
 import { nameProblem } from "../lib/connectionName";
+import { GH_LOGIN_COMMAND } from "../lib/githubUrl";
 import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
@@ -1170,8 +1171,16 @@ export class MockBackend implements Backend {
     return this.github.connectToken(token);
   }
 
-  async githubImportGhToken() {
-    return this.github.importGhToken();
+  async githubImportGhToken(login?: string) {
+    return this.github.importGhToken(login);
+  }
+
+  async githubAccounts() {
+    return this.github.ghAccounts();
+  }
+
+  async githubOpenLogin() {
+    this.terminals.push(GH_LOGIN_COMMAND);
   }
 
   async githubDeviceStart() {

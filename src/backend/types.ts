@@ -31,6 +31,7 @@ import type {
   FeedPage,
   FeedQuery,
   Footprint,
+  GhAccounts,
   GithubSignInOptions,
   PullRequestDetail,
   ReviewAccess,
@@ -98,8 +99,12 @@ export interface Backend {
   githubSignInOptions(): Promise<GithubSignInOptions>;
   /** Validates a personal access token (classic or fine-grained) and connects the account it belongs to. */
   githubConnectToken(token: string): Promise<ConnectionInfo>;
-  /** Connects with the token `gh auth token` prints. Runs `gh` only when this is called. */
-  githubImportGhToken(): Promise<ConnectionInfo>;
+  /** Connects with the token `gh auth token` prints for `login`, or for the active account with none. Runs `gh` only when this is called. */
+  githubImportGhToken(login?: string): Promise<ConnectionInfo>;
+  /** The logins `gh` holds on github.com, asked of `gh` each time. */
+  githubAccounts(): Promise<GhAccounts>;
+  /** Opens Terminal on `gh auth login`. */
+  githubOpenLogin(): Promise<void>;
   /** Starts the browser device flow: show `userCode`, open `verificationUri`, then await `githubDevicePoll`. */
   githubDeviceStart(): Promise<DeviceStart>;
   /** Resolves with the connection once the code is authorised; rejects if it expires or is denied. */

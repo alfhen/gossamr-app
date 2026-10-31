@@ -207,8 +207,8 @@ impl Core {
         self.connected(session).await
     }
 
-    pub async fn github_import_gh_token(&self) -> Result<super::ConnectionInfo> {
-        let session = self.code.auth.import_gh_token().await?;
+    pub async fn github_import_gh_token(&self, login: Option<&str>) -> Result<super::ConnectionInfo> {
+        let session = self.code.auth.import_gh_token(login).await?;
         self.connected(session).await
     }
 
