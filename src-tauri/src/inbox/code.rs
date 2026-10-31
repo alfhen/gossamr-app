@@ -415,7 +415,7 @@ impl Core {
 
     /// Like `watched_repos`, and still the answer while the connection is off: a sync and the links read it so that the
     /// cache stays whole until the connection is on again.
-    fn chosen_repos(&self, id: &str) -> Result<Vec<String>> {
+    pub(super) fn chosen_repos(&self, id: &str) -> Result<Vec<String>> {
         self.with_code_db(id, |db| {
             let set = db.watch_set(id)?;
             let catalog = || -> Result<Vec<String>> { Ok(db.catalog_search(id, "", usize::MAX >> 1)?.into_iter().filter(|c| !c.archived).map(|c| c.container_ref.external_id).collect()) };
@@ -799,11 +799,13 @@ impl Core {
         Err(refused(repo))
     }
 
-    /// The name of a GitHub connection that is off: the one that follows `repo` when one is given, else any.
+    /// The name of a GitHub connection that is off and hides something: the one that follows `repo` when one is given,
+    /// else any that has repositories chosen.
     pub fn off_code_name(&self, repo: Option<&str>) -> Result<Option<String>> {
         for id in self.code.connection_ids() {
             let Some(name) = self.off_name(&id) else { continue };
-            if repo.is_none_or(|repo| self.chosen_repos(&id).is_ok_and(|repos| is_watched_repo(&repos, repo))) {
+            let repos = self.chosen_repos(&id)?;
+            if repo.map_or(!repos.is_empty(), |repo| is_watched_repo(&repos, repo)) {
                 return Ok(Some(name));
             }
         }
