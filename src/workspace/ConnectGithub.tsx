@@ -62,7 +62,7 @@ function Command({ command, copied, terminal, onCopy, onOpenTerminal }: { comman
 }
 
 function AccountRow({ account, connected, signedOut, busy, onConnect }: { account: GhAccount; connected: boolean; signedOut: boolean; busy: boolean; onConnect(): void }) {
-  const note = signedOut ? "Signed out" : connected ? "Connected" : !account.usable ? "GitHub refused its token. Sign in again." : account.active ? "Active in gh" : "";
+  const note = signedOut ? (account.usable ? "Signed out" : "Signed out. gh's token was refused too. Use Another account.") : connected ? "Connected" : !account.usable ? "GitHub refused its token. Sign in again." : account.active ? "Active in gh" : "";
   const action = signedOut ? "Sign in again" : "Connect";
   return (
     <li className="flex items-center gap-3 border-b border-ws-sep py-2 last:border-b-0">

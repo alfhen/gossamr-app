@@ -181,7 +181,7 @@ export class MockGithub {
 
   info(): ConnectionInfo {
     const found = githubSnapshot(this.enabled ? this.probe : "off", GITHUB_LOGIN, this.checkedAt);
-    const status = this.tokenRefused && found.state === "ready" ? { ...found, state: "notSignedIn" as const, account: null, message: `GitHub no longer accepts the token for ${GITHUB_LOGIN}.` } : found;
+    const status = this.tokenRefused && this.enabled ? { ...found, state: "notSignedIn" as const, account: null, message: `GitHub no longer accepts the token for ${GITHUB_LOGIN}.` } : found;
     return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.enabled, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
   }
 

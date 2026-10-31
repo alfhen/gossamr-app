@@ -171,6 +171,12 @@ describe("the connect GitHub sheet", () => {
     expect(out).not.toContain("Sign in again as ada-work");
   });
 
+  it("says why a signed-out account cannot sign in again when gh's token was refused too", () => {
+    const out = show({ found: found({ accounts: [{ login: "ada", active: true, usable: false }] }), connected: ["ada"], signedOut: ["ada"] });
+    expect(out).toContain("gh&#x27;s token was refused too. Use Another account.");
+    expect(out).toContain("disabled");
+  });
+
   it("opens Terminal only when the command shown is the login command", () => {
     const other = show({ found: found({ accounts: [], message: "gh didn't answer in time.", fix: "gh auth status" }) });
     expect(other).toContain("gh auth status");
