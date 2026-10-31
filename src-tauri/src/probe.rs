@@ -60,7 +60,7 @@ impl Snapshot {
     }
 
     pub fn off() -> Self {
-        Self::new(State::Off, "Off. Gossamr doesn't sync it, Pip can't see it and drafts for it wait.")
+        Self::new(State::Off, "Off. Gossamr doesn't sync it and drafts for it wait.")
     }
 
     /// Whether `other` says the same thing, whenever it was checked.

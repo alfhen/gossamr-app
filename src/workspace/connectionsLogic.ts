@@ -4,7 +4,7 @@ import { agoText } from "./watchLogic";
 
 export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
 
-export const OFF_DETAIL = "Off. Gossamr doesn't sync it, Pip can't see it and drafts for it wait. What's cached is kept.";
+export const OFF_DETAIL = "Off. Gossamr doesn't sync it and drafts for it wait. What's cached is kept.";
 
 /** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. */
 export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind">) => c.kind !== "mock" && c.instanceId !== c.id;

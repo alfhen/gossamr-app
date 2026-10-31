@@ -195,6 +195,8 @@ pub struct Core {
     pub wake: Notify,
     /// Held across a whole connect or sign-out, so a slow connect can't land after a sign-out or beside another connect.
     sign_in: tokio::sync::Mutex<()>,
+    /// Held while a draft is claimed for posting and while a connection is turned off, so a draft can't be claimed after the check that said its connection was on.
+    draft_gate: tokio::sync::Mutex<()>,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
     pub focus: Notify,
 }
@@ -228,6 +230,7 @@ impl Core {
             asks: Asks::default(),
             wake: Notify::new(),
             sign_in: tokio::sync::Mutex::new(()),
+            draft_gate: tokio::sync::Mutex::new(()),
             focus: Notify::new(),
         }
     }
@@ -402,6 +405,9 @@ impl Core {
     pub async fn sync_if_due(&self, trigger: Trigger) -> Option<Result<Synced>> {
         let (scope, _, _) = self.auth.identity().await?;
         let id = scope.connection_id;
+        if self.off_name(&id).is_some() {
+            return None;
+        }
         let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
         if !due {
             return None;

@@ -2,10 +2,12 @@ import { repeatedComments, safeToBatch } from "../lib/needs";
 import { isRunDraft } from "../lib/proposals";
 import { stageOf, type Step } from "../lib/roles";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
-import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent } from "../types";
+import type { CodeChange, ConnectionInfo, Proposal, ReviewView, Run, WorkstreamEvent } from "../types";
 import { liveCounts, liveWords, needsPerson, runApproved, stateView, type Tone } from "./agentsLogic";
 import { keptEditsOfDraft } from "./DraftCard";
+import { heldNote } from "../lib/proposals";
 import { liveDraft } from "./draftLive";
+import { useWorkspace } from "../workspaceStore";
 import { shownVerdict, verdictChip } from "./runSheetLogic";
 
 /** Pure helpers behind a workstream's step rail and the drawer's footer. They read the live stores' values and decide nothing. */
@@ -75,11 +77,12 @@ export const editedPending = (drafts: readonly Proposal[]): Proposal[] => drafts
 /**
  * The drafts of a step that "Approve N safe drafts" would approve, in order; it is offered only for two or more. A comment
  * with the same text as an earlier one on its ticket is left to be decided on its own (see `repeatedComments`), and one the
- * person edited is posted from its card, since approving here would post the stored text.
+ * person edited is posted from its card, since approving here would post the stored text. A draft whose connection is off
+ * waits.
  */
-export function batchable(drafts: readonly Proposal[]): Proposal[] {
+export function batchable(drafts: readonly Proposal[], connections: readonly ConnectionInfo[] = useWorkspace.getState().connections): Proposal[] {
   // Edited drafts go first, so an edited copy of a comment can't make its unedited twin count as the repeat.
-  const unedited = drafts.filter((p) => !draftEdited(p.id));
+  const unedited = drafts.filter((p) => !draftEdited(p.id) && !heldNote(p, connections));
   const repeated = new Set(repeatedComments(unedited).map((p) => p.id));
   return unedited.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id));
 }

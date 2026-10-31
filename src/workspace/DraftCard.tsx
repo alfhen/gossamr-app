@@ -27,6 +27,7 @@ import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/risky
 import { PostingPause } from "./PostingPause";
 import { liveDraft, setLiveDraft, touchDrafts, useDraftsRev } from "./draftLive";
 import { focusWhenDrawn } from "./focusDrawn";
+import { DraftAccount, useHeldNote } from "./draftHold";
 
 import { FromRun, useFromRunName } from "./RunProvenance";
 import { Button } from "../components/Button";
@@ -368,7 +369,8 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
 
   /** The field of the card the keyboard goes to for e: a text box, or the first choice. */
   const focusField = (selector: string) => requestAnimationFrame(() => card.current?.querySelector<HTMLElement>(selector)?.focus());
-  const approvable = open && !working && state !== "applying";
+  const held = useHeldNote(p);
+  const approvable = open && !working && state !== "applying" && !held;
   const startEditing = !open
     ? undefined
     : intent.type === "comment" || rewrite
@@ -538,6 +540,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
           </p>
         )}
         {pause && open && <PostingPause risks={pause.risks} quote={pause.quote} subject={youEdited ? "Your edit" : "This draft"} anyway="Post anyway" working={working || state === "applying"} onKeep={keepEditing} onPost={approve} />}
+        <DraftAccount proposal={p} />
         {(open || onShow) && (
           <div data-draft-actions className="sticky bottom-0 z-[1] -mx-3 -mb-2.5 flex flex-wrap items-center justify-end gap-2 border-t border-ws-sep bg-ws-win px-3 py-2">
             {onShow && (
@@ -563,7 +566,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 </Button>
                 {/* While the pause shows, its own Post anyway stands in for this button, beside Keep editing. */}
                 {!pause && (
-                  <Button variant="primary" disabled={working || state === "applying" || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} aria-label={working || state === "applying" ? undefined : moveName} onClick={approve}>
+                  <Button variant="primary" disabled={working || state === "applying" || !!held || (intent.type === "comment" && !body.trim()) || (intent.type === "subtasks" && remaining === 0) || rewriteBlock} aria-label={working || state === "applying" ? undefined : moveName} onClick={approve}>
                     {working || state === "applying" ? "Working…" : action}
                   </Button>
                 )}

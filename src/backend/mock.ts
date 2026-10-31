@@ -47,7 +47,7 @@ import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
-import { basisFieldsOf, targetOf, workstreamOf } from "../lib/proposals";
+import { basisFieldsOf, heldNote, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { assemblePlan } from "./mockPlanSection";
 import { withTriageSection } from "./mockTriageSection";
@@ -876,11 +876,20 @@ export class MockBackend implements Backend {
     this.workstreams.changed();
   }
 
-  proposalsApprove(id: string) {
+  /** Turns a draft away while its connection is off, as the desktop app does. */
+  private async refuseWhileOff(id: string) {
+    const draft = this.proposals.list({}).find((d) => d.id === id);
+    const held = draft && heldNote(draft, await this.connectionsList());
+    if (held) throw new Error(held);
+  }
+
+  async proposalsApprove(id: string) {
+    await this.refuseWhileOff(id);
     return this.proposals.approve(id);
   }
 
   async proposalsPostReview(id: string, revisions: number, postAnyway = false) {
+    await this.refuseWhileOff(id);
     return this.proposals.postReview(
       id,
       revisions,

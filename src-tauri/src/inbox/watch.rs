@@ -298,6 +298,9 @@ impl Core {
     pub async fn radar_if_due(&self) -> Result<Option<(String, Vec<Stray>)>> {
         let Some((scope, _, _)) = self.auth.identity().await else { return Ok(None) };
         let id = scope.connection_id.clone();
+        if self.off_name(&id).is_some() {
+            return Ok(None);
+        }
         let now = Utc::now();
         {
             let mut last = self.radar.lock().expect("radar lock poisoned");
@@ -644,5 +647,20 @@ mod tests {
         assert_eq!(first.map(|(id, s)| (id, s.len())), Some(("jira:site:me".to_string(), 1)));
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"]), stray("FIN", &["FIN-1"])];
         assert!(fx.core.radar_if_due().await.unwrap().is_none(), "asked again within the interval");
+    }
+
+    #[tokio::test]
+    async fn the_radar_does_not_ask_a_jira_that_is_off_and_asks_again_once_it_is_on() {
+        let fx = fixture().await;
+        fx.core.adopt_instances().await;
+        selected(&fx, &[watch("CA")]).await;
+        *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"])];
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+
+        assert!(fx.core.radar_if_due().await.unwrap().is_none());
+        assert!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().is_empty(), "nothing was recorded for an off Jira");
+
+        fx.core.set_instance_enabled("jira", true).await.unwrap();
+        assert_eq!(fx.core.radar_if_due().await.unwrap().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
     }
 }
