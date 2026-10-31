@@ -19,8 +19,21 @@ export function ScreenBar({ bar, resetKey, children }: { bar: ReactNode; resetKe
   }, []);
 
   useEffect(() => {
-    const scroller = frame.current?.querySelector<HTMLElement>(SCROLLER);
-    barEl.current?.toggleAttribute("data-under", (scroller?.scrollTop ?? 0) > 2);
+    const root = frame.current;
+    if (!root) return;
+    let scroller = root.querySelector<HTMLElement>(SCROLLER);
+    const mark = () => barEl.current?.toggleAttribute("data-under", (scroller?.scrollTop ?? 0) > 2);
+    mark();
+    if (typeof MutationObserver === "undefined") return;
+    // A filter that empties the list swaps the scroller for a note without a scroll event, so the swap itself re-reads the fade.
+    const watch = new MutationObserver(() => {
+      const next = root.querySelector<HTMLElement>(SCROLLER);
+      if (next === scroller) return;
+      scroller = next;
+      mark();
+    });
+    watch.observe(root, { childList: true, subtree: true });
+    return () => watch.disconnect();
   }, [resetKey]);
 
   return (
