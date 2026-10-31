@@ -182,6 +182,18 @@ pub fn write_claude_file(dir: &Path, purpose: Purpose, claude: &Path, clone: &Pa
     write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\ncd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
 }
 
+/// Writes `<dir>/fix-<digest of the command>.command` running `command`. The command comes from a probe's fixed
+/// strings, but its host part is read from config.json, so only plain words, dots, dashes, colons and underscores
+/// pass: nothing in it can be quoting, a separator or a substitution.
+pub fn write_fix_file(dir: &Path, command: &str) -> Result<PathBuf> {
+    let plain = !command.trim().is_empty() && command.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '-' | '_' | ':'));
+    if !plain {
+        return Err(refuse("Gossamr won't run that command: it has a character in it that a fix never needs."));
+    }
+    let digest: String = Sha256::digest(command.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
+    write_script(dir, &format!("fix-{digest}"), &format!("#!/bin/zsh\n{command}\n"))
+}
+
 /// Deletes attach scripts older than a day.
 pub fn clean_attach_dir(dir: &Path, older_than: Duration) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -361,6 +373,13 @@ impl RunService {
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_attach_file(&dir, &claude, &run.expected_worktree, &id)?;
+        self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+    }
+
+    /// Opens Terminal running `command`, in the Terminal or iTerm the person chose. The caller takes `command` from
+    /// Rust's own state, never from the page.
+    pub fn open_fix(&self, command: &str) -> Result<()> {
+        let file = write_fix_file(&self.core.data_dir().join(ATTACH_DIR), command)?;
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 

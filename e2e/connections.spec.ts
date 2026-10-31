@@ -81,6 +81,8 @@ test.describe("the Connections list", () => {
     await detail.getByRole("textbox", { name: "Display name" }).fill("Work GitHub");
     await detail.getByRole("button", { name: "Cancel" }).click();
     await expect(rowOf(page, "GitHub")).toBeVisible();
+    await expect(rowOf(page, "Work GitHub")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Work GitHub details" })).toHaveCount(0);
     await detail.getByRole("button", { name: "Rename" }).click();
     const name = detail.getByRole("textbox", { name: "Display name" });
     await name.fill("   ");

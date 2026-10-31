@@ -19,7 +19,6 @@ mod proposals;
 mod runs;
 mod secrets;
 mod sync;
-mod terminal;
 mod tracker;
 mod wire;
 
@@ -326,9 +325,8 @@ async fn probe_connections(app: &AppHandle, core: &Core, why: Probe) {
 
 /// Opens Terminal on the fix the instance's last probe found. The command comes from that snapshot, never from the page.
 #[tauri::command]
-async fn connection_open_terminal(core: State<'_, CoreState>, instance_id: String) -> Result<()> {
-    let command = core.fix_command(&instance_id)?;
-    terminal::open(&command).await
+fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()> {
+    runs.open_fix(&core.fix_command(&instance_id)?)
 }
 
 /// Saves the name Settings shows for an instance.
