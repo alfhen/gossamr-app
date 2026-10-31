@@ -124,11 +124,11 @@ describe("the mock GitHub connection", () => {
     expect((await b.watchSuggestions()).every((r) => !r.key.startsWith("acme/"))).toBe(true);
   });
 
-  it("forgets the account on disconnect", async () => {
+  it("forgets the account on remove", async () => {
     const b = new MockBackend({ githubRepos: 14 });
     const changed = vi.fn();
     b.onWatchChanged(changed);
-    await b.githubDisconnect(GH);
+    await b.connectionRemove("github");
     expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock"]);
     expect(await b.watchGet()).toHaveLength(1);
     expect(changed).toHaveBeenCalledWith({ connectionId: GH });

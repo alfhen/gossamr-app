@@ -26,4 +26,35 @@ describe("the mock connection actions", () => {
     await expect(b.connectionRename("github_9", "Work")).rejects.toThrow("gone");
     expect((await b.connectionsList()).find((c) => c.instanceId === "github")?.displayName).toBe("GitHub");
   });
+
+  it("removes GitHub, closes the review drafts that post there with a reason, and never gives its id to the next account", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const draft = b.proposals.draft({ type: "githubReview", connectionId: "github:ada", item: null, runId: "r1", repo: "acme/webshop", number: 1, commitSha: "abcdef1", summary: "Fine.", comments: [] }, "Review from Pip");
+    let told = 0;
+    b.onConnectionsChanged(() => told++);
+    await b.connectionRemove("github");
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira"]);
+    expect(b.proposals.get(draft.id)?.state).toEqual({ type: "retired", reason: "GitHub was removed." });
+    expect(told).toBe(1);
+    await b.githubConnectToken("ghp_x");
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2"]);
+  });
+
+  it("refuses to remove GitHub while one of its reviews is being posted, and leaves every draft as it was", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const review = { type: "githubReview" as const, connectionId: "github:ada", item: null, runId: "r1", repo: "acme/webshop", number: 1, commitSha: "abcdef1", summary: "Fine.", comments: [] };
+    const posting = b.proposals.draft(review, "Review from Pip");
+    const waiting = b.proposals.draft({ ...review, number: 2 }, "Review from Pip");
+    void b.proposals.postReview(posting.id, 0, () => new Promise(() => {}), async () => null);
+    await expect(b.connectionRemove("github")).rejects.toThrow("posting a draft for GitHub right now");
+    expect(b.proposals.get(waiting.id)?.state).toEqual({ type: "pending" });
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github"]);
+  });
+
+  it("refuses the sample data and an instance that is gone", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await expect(b.connectionRemove("jira")).rejects.toThrow("built in");
+    await expect(b.connectionRemove("github_9")).rejects.toThrow("gone");
+    expect(await b.connectionsList()).toHaveLength(2);
+  });
 });

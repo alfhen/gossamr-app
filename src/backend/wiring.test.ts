@@ -63,6 +63,15 @@ describe("the desktop backend's wiring", () => {
     expect(lib).toContain("fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String)");
   });
 
+  it("removes a connection by its instance id, and has no other way to disconnect or sign out of one in the page", () => {
+    const jira = read("./jira.ts");
+    const lib = read("../../src-tauri/src/lib.rs");
+    expect(jira).toContain('invoke<void>("connection_remove", { instanceId })');
+    expect(lib).toContain("async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()>");
+    expect(jira).not.toContain("github_disconnect");
+    expect(lib).not.toContain("async fn github_disconnect");
+  });
+
   it("reads a review draft's notes in the backend's words", () => {
     const rust = read("../../src-tauri/src/inbox/code.rs").replace(/"\s*\n\s*"/g, "");
     expect(rust).toContain(`pub const REVIEW_OUTDATED_NOTE: &str =\n    "${REVIEW_OUTDATED_NOTE}";`);

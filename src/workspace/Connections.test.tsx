@@ -29,10 +29,9 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onRename={vi.fn()}
       onManage={vi.fn()}
       onNewToken={vi.fn()}
-      onSignOut={vi.fn()}
-      onAskDisconnect={vi.fn()}
+      onAskRemove={vi.fn()}
       onCancel={vi.fn()}
-      onDisconnect={vi.fn()}
+      onRemove={vi.fn()}
       onConnectGithub={vi.fn()}
       {...over}
     />,
@@ -97,20 +96,38 @@ describe("the connections list", () => {
     expect(out).toContain("Agents clone and push as whichever account gh has active.");
   });
 
-  it("asks before it disconnects GitHub", () => {
-    expect(view()).not.toContain("alertdialog");
+  it("offers Remove in place of Disconnect and Sign out, and asks before it deletes", () => {
+    for (const out of [view(), view({ selectedId: jira.id })]) {
+      expect(out).toContain("Remove");
+      expect(out).not.toContain("Disconnect");
+      expect(out).not.toContain("Sign out");
+      expect(out).not.toContain("alertdialog");
+    }
     expect(view({ confirming: gh.id })).toContain("alertdialog");
+    expect(view({ confirming: jira.id, selectedId: jira.id })).toContain("alertdialog");
+  });
+
+  it("says what Remove deletes for GitHub: the cache, the token and the drafts, and that gh is untouched", () => {
+    const out = view({ confirming: gh.id });
+    expect(out).toContain("Remove GitHub? Gossamr deletes the pull requests and branches it cached for ada, forgets its token and closes the drafts that post as ada.");
+    expect(out).toContain("Your gh login and GitHub stay as they are.");
+  });
+
+  it("says what Remove deletes for Jira, including your conversations with Pip", () => {
+    const out = view({ confirming: jira.id, selectedId: jira.id });
+    expect(out).toContain("Remove Acme Jira? Gossamr deletes the tickets it cached and your conversations with Pip, forgets your token and closes the drafts for it.");
+    expect(out).toContain("Jira stays as it is.");
   });
 
   it("shows the confirmation on the connection it was asked for, never on the one that takes its place", () => {
     const out = view({ connections: [jira], selectedId: jira.id, confirming: gh.id, busy: gh.id });
     expect(out).not.toContain("alertdialog");
-    expect(out).not.toContain("Disconnecting…");
+    expect(out).not.toContain("Removing…");
   });
 
-  it("disables Disconnect only for the connection being disconnected", () => {
-    expect(view({ confirming: gh.id, busy: gh.id })).toContain("Disconnecting…");
-    expect(view({ confirming: gh.id, busy: "github:grace" })).not.toContain("Disconnecting…");
+  it("disables Remove only for the connection being removed", () => {
+    expect(view({ confirming: gh.id, busy: gh.id })).toContain("Removing…");
+    expect(view({ confirming: gh.id, busy: "github:grace" })).not.toContain("Removing…");
   });
 
   it("keeps only the selected row in the tab order, so the arrow keys move between rows", () => {

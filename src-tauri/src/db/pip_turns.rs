@@ -202,6 +202,12 @@ impl Db {
         Ok(())
     }
 
+    /// Forgets every conversation in the app database, for a database opened without a cache file.
+    pub fn clear_app_pip_turns(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM main.pip_turns", [])?;
+        Ok(())
+    }
+
     /// Marks turns that were waiting or running when the app last closed as failed; nothing is left to finish them. A
     /// wake that never ran gives its facts back with a supervisor `wake_dropped` line each, so Pip is woken for them again.
     pub fn fail_interrupted_pip_turns(&self) -> Result<usize> {

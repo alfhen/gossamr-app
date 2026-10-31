@@ -23,6 +23,14 @@ fn connection_of(p: &Proposal) -> String {
     }
 }
 
+/// Whether `p` is made for `connection_id`: it would be applied there, or a review would be posted there.
+pub fn is_for(p: &Proposal, connection_id: &str) -> bool {
+    match &p.intent {
+        Intent::GithubReview { connection_id: host, .. } => host == connection_id,
+        _ => connection_of(p) == connection_id,
+    }
+}
+
 impl Db {
     pub fn insert_proposal(&self, p: &Proposal) -> Result<()> {
         let item_id = p.target().map(|t| t.external_id.clone());

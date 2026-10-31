@@ -337,6 +337,24 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
     Ok(())
 }
 
+/// Removes a connection instance: its token, cache and open drafts go, and its id is never used again.
+#[tauri::command]
+async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()> {
+    let removed = core.remove_instance(&instance_id).await?;
+    let connection_id = removed.connection_id;
+    if let Some(win) = app.get_webview_window("main").filter(|_| removed.kind == tracker::ConnectionKind::Jira) {
+        let _ = win.set_badge_count(None);
+    }
+    wire::changed(&app, wire::Topic::Connections, &connection_id);
+    wire::changed(&app, wire::Topic::Cache, &connection_id);
+    watch_changed(&app, &connection_id);
+    proposals_changed(&app, &connection_id);
+    if removed.workstreams {
+        workstreams_changed(&app, &connection_id);
+    }
+    Ok(())
+}
+
 fn probe_in_background(app: &AppHandle, core: &CoreState, why: Probe) {
     let (app, core) = (app.clone(), core.clone());
     tauri::async_runtime::spawn(async move { probe_connections(&app, &core, why).await });
@@ -375,13 +393,6 @@ fn github_sign_in_options(core: State<'_, CoreState>) -> auth::SignInOptions {
 #[tauri::command]
 async fn github_device_start(core: State<'_, CoreState>) -> Result<DeviceStart> {
     core.github_device_start().await
-}
-
-#[tauri::command]
-async fn github_disconnect(app: AppHandle, core: State<'_, CoreState>, connection_id: String) -> Result<()> {
-    core.github_disconnect(&connection_id).await?;
-    watch_changed(&app, &connection_id);
-    Ok(())
 }
 
 /// The pull requests, branches and commits that name a work item, from the cache: instant, and only watched repositories.
@@ -988,6 +999,7 @@ pub fn run() {
             connections_list,
             connection_open_terminal,
             connection_rename,
+            connection_remove,
             dev_links,
             code_pull_request,
             code_review_access,
@@ -995,7 +1007,6 @@ pub fn run() {
             github_connect,
             github_sign_in_options,
             github_device_start,
-            github_disconnect,
             proposals_list,
             proposals_create,
             proposals_edit,
