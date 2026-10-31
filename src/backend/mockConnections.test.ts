@@ -94,6 +94,16 @@ describe("the mock on/off switch", () => {
     await expect(b.connectionSetEnabled("github_9", false)).rejects.toThrow("gone");
   });
 
+  it("keeps a review for GitHub from being posted while GitHub is off, and sends it on once GitHub is on", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const draft = b.proposals.draft({ type: "githubReview", connectionId: "github:ada", item: null, runId: "r1", repo: "acme/webshop", number: 1, commitSha: "abcdef1", summary: "Fine.", comments: [] }, "Review from Pip");
+    await b.connectionSetEnabled("github", false);
+    await expect(b.proposalsPostReview(draft.id, 0)).rejects.toThrow("GitHub is off. This draft waits until you turn it on.");
+    expect(b.proposals.get(draft.id)?.state).toEqual({ type: "pending" });
+    await b.connectionSetEnabled("github", true);
+    await expect(b.proposalsPostReview(draft.id, 0)).resolves.toBeDefined();
+  });
+
   it("starts a new account on, even when the one removed was off", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     await b.connectionSetEnabled("github", false);

@@ -589,6 +589,9 @@ impl Core {
     pub async fn sync_code_if_due(&self, trigger: Trigger) -> Vec<(String, Result<CodeSynced>)> {
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
+            if self.off_name(&id).is_some() {
+                continue;
+            }
             let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
             if !due {
                 continue;
@@ -648,6 +651,9 @@ impl Core {
             }
         }
         for id in self.code.connection_ids() {
+            if self.off_name(&id).is_some() {
+                continue;
+            }
             let repos = self.watched_repos(&id)?;
             if repos.is_empty() {
                 continue;
@@ -877,9 +883,13 @@ impl Core {
     /// (`REVIEW_NOT_FOUND_NOTE`). Only `post_anyway`, the person's explicit choice, then sends it again.
     pub async fn post_review_draft(&self, id: &str, seen: usize, post_anyway: bool) -> Result<Proposal> {
         let scope = self.scope().await?;
+        let gate = self.draft_gate.lock().await;
         let (claimed, look_for) = self
             .with_app_db_for(&scope, |db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+                if let Intent::GithubReview { connection_id, .. } = &current.intent {
+                    self.refuse_while_off(connection_id)?;
+                }
                 if current.state == ProposalState::Pending && current.revisions.len() != seen {
                     return Err(Error::Proposal(REVIEW_CHANGED.into()));
                 }
@@ -895,6 +905,7 @@ impl Core {
                 }
             })
             .await?;
+        drop(gate);
         let Intent::GithubReview { connection_id, repo, number, commit_sha, summary, comments, .. } = &claimed.intent else {
             unreachable!("only a review draft is claimed for posting")
         };
@@ -1644,6 +1655,20 @@ pub(crate) mod tests {
         assert!(lx.core().sync_code_if_due(Trigger::Timer).await.is_empty(), "not due again before the limit resets");
     }
 
+    #[tokio::test]
+    async fn a_connection_that_is_off_is_not_synced_and_is_synced_again_once_it_is_on() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.core().adopt_instances().await;
+        let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        lx.core().set_instance_enabled(&instance, false).await.unwrap();
+
+        assert!(lx.core().sync_code_if_due(Trigger::Now).await.is_empty());
+        assert_eq!(lx.requests_to("/pulls"), 0);
+
+        lx.core().set_instance_enabled(&instance, true).await.unwrap();
+        assert_eq!(lx.core().sync_code_if_due(Trigger::Now).await.len(), 1);
+    }
+
     fn webshop_pulls(lx: &Linked) -> HashMap<u64, CodeChange> {
         let changes = lx.core().with_code_db("github:ann", |db| db.code_changes("github:ann")).unwrap();
         changes.into_iter().filter(|c| c.repo == "acme/webshop").map(|c| (c.number.unwrap(), c)).collect()
@@ -1734,6 +1759,23 @@ pub(crate) mod tests {
         assert_eq!(lx.core().dev_links(&lx.fx.item("CA-209")).unwrap().len(), 1, "now from the cache");
         let (_, changed_again) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
         assert!(changed_again.is_empty(), "nothing new the second time");
+    }
+
+    #[tokio::test]
+    async fn a_live_search_does_not_ask_a_github_that_is_off() {
+        let lx = linked(vec![("/search/issues".into(), vec![Reply::ok(ISSUES_KEY)]), ("/search/commits".into(), vec![Reply::ok("{\"items\":[]}")])], Some("repo")).await;
+        lx.core().adopt_instances().await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+        let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        lx.core().set_instance_enabled(&instance, false).await.unwrap();
+
+        let (_, changed) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
+
+        assert!(changed.is_empty());
+        assert_eq!(lx.requests_to("/search"), 0);
+        lx.core().set_instance_enabled(&instance, true).await.unwrap();
+        lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
+        assert!(lx.requests_to("/search") > 0);
     }
 
     #[tokio::test]
@@ -1994,6 +2036,25 @@ mod review_tests {
         assert_eq!(body["comments"].as_array().unwrap().iter().map(|c| (c["path"].as_str().unwrap(), c["line"].as_u64().unwrap())).collect::<Vec<_>>(), [("src/consumer/retry.ts", 42), ("src/consumer/retry.ts", 17)]);
         assert!(fx.tracker.intents().is_empty(), "posting a review writes nothing to Jira");
         assert_eq!(fx.core.proposal(&p.id).await.unwrap(), Some(done));
+    }
+
+    #[tokio::test]
+    async fn a_review_for_a_connection_that_is_off_waits_and_posts_once_it_is_on() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        fx.core.adopt_instances().await;
+        let p = drafted(&fx).await;
+        let instance = AppConfig::load(&fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        fx.core.set_instance_enabled(&instance, false).await.unwrap();
+
+        let refused = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err();
+
+        assert!(refused.to_string().contains("GitHub is off. This draft waits until you turn it on."), "{refused}");
+        assert!(posts(&fx).is_empty());
+        assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending);
+
+        fx.core.set_instance_enabled(&instance, true).await.unwrap();
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied);
     }
 
     #[tokio::test]

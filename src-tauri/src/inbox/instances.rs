@@ -119,6 +119,7 @@ impl Core {
     /// while one of its drafts is being posted. The cache and the token stay either way.
     pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
         let _alone = self.sign_in.lock().await;
+        let _gate = self.draft_gate.lock().await;
         let config = AppConfig::load(&self.data_dir);
         let instance = connections::is_live(&config).then(|| config.connections.iter().find(|i| i.id == instance_id)).flatten();
         let Some(instance) = instance else { return Err(Error::Input("This connection is gone. Reopen Settings.".into())) };
@@ -137,11 +138,13 @@ impl Core {
     }
 
     /// Removes `instance_id`: the token Gossamr stored is forgotten, its cache is deleted, drafts that target it are
-    /// closed with a reason and its id is retired. A draft being posted stops it before anything is deleted. Drafts are
+    /// closed with a reason and its id is retired. A draft being posted stops it before anything is deleted, and no draft is claimed
+    /// for posting until the removal is done. Drafts are
     /// closed last, so a removal that fails leaves them open. `instance_id` may also be a connection no instance
     /// names (the list can't be read, or the connection was never adopted); that one has no id to retire.
     pub async fn remove_instance(&self, instance_id: &str) -> Result<Removed> {
         let _alone = self.sign_in.lock().await;
+        let _gate = self.draft_gate.lock().await;
         let target = self.removal_target(instance_id).await?;
         self.refuse_while_posting(&target.connection_id, &target.name).await?;
         match target.kind {
@@ -179,6 +182,21 @@ impl Core {
             return Ok(RemovalTarget { kind: ConnectionKind::Github, connection_id: id.into(), name: "GitHub".into(), instance_id: None, login: Some(session.login) });
         }
         Err(Error::Input("This connection is gone. Reopen Settings.".into()))
+    }
+
+    /// The name of the instance `connection_id` belongs to, when it is turned off. Nothing is off while the list can't be read.
+    pub(super) fn off_name(&self, connection_id: &str) -> Option<String> {
+        let config = AppConfig::load(&self.data_dir);
+        let off = |i: &&connections::Instance| !i.enabled && i.bound_to.as_deref().unwrap_or(&i.id) == connection_id;
+        connections::is_live(&config).then(|| config.connections.iter().find(off).map(|i| i.display_name.clone())).flatten()
+    }
+
+    /// Turns away a write for a connection that is off: its drafts wait until it is on.
+    pub(super) fn refuse_while_off(&self, connection_id: &str) -> Result<()> {
+        match self.off_name(connection_id) {
+            Some(name) => Err(Error::Proposal(format!("{name} is off. This draft waits until you turn it on."))),
+            None => Ok(()),
+        }
     }
 
     async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
@@ -365,6 +383,21 @@ mod tests {
         assert_eq!(ids(&fx), ["jira"]);
         fx.core.bind_instance(connections::Binding::github("alfhen"));
         assert_eq!(ids(&fx), ["jira", "github_2"]);
+    }
+
+    #[tokio::test]
+    async fn a_removal_waits_for_a_draft_that_is_being_claimed_and_goes_ahead_once_it_is_done() {
+        let fx = adopted().await;
+        let review = draft_for(&fx, review_on_github(&fx)).await;
+        let claiming = fx.core.draft_gate.lock().await;
+
+        let waited = tokio::time::timeout(std::time::Duration::from_millis(100), fx.core.remove_instance("github")).await;
+
+        assert!(waited.is_err(), "the removal went ahead while a draft was being claimed");
+        assert_eq!(ids(&fx), ["jira", "github"]);
+        drop(claiming);
+        fx.core.remove_instance("github").await.unwrap();
+        assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
     }
 
     #[tokio::test]

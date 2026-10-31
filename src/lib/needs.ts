@@ -1,8 +1,8 @@
-import { type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
+import { type ConnectionInfo, type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
 import { permissionRequest } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
-import { inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
+import { heldNote, inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
 import { maskSecrets } from "./riskyText";
 import { pausedText } from "./workstreamPause";
 import { roleLabel, stepOf } from "./roles";
@@ -87,6 +87,8 @@ export interface NeedsInput {
   pausedAt?: Readonly<Record<string, string>>;
   /** A ticket's title by its key, when it is cached. */
   titleOf?(key: string): string | null | undefined;
+  /** The connections, so a draft for one that is off is left out of "Approve N safe drafts". */
+  connections?: readonly ConnectionInfo[];
 }
 
 /** One workstream's needs, or General's: what its row shows, and what expanding it lists. */
@@ -294,7 +296,7 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
  * while it is the latest run of its role on its ticket (`latestRuns`), and stays until the person deals with it: Retry, a
  * fix, or a Dismiss (`dismissed`); looking at it clears nothing. A finished run is a state, not a need.
  */
-export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf }: NeedsInput): Need[] {
+export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf, connections = [] }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
   const snapped = snapshotTitles(runs);
   const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
@@ -316,7 +318,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
   const out: Need[] = [];
   const latest = latestRuns(runs);
 
-  const repeated = new Set(repeatedComments([...proposals].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))).map((p) => p.id));
+  const repeated = new Set(repeatedComments([...proposals].filter((p) => !heldNote(p, connections)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || (a.id < b.id ? -1 : 1))).map((p) => p.id));
   for (const p of proposals) {
     if (!live(p) || AGENT_DRAFTS.has(p.intent.type)) continue;
     const workstreamId = draftWorkstream(p, open);
@@ -364,7 +366,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
       ifYouWait: "It stays here until you decide.",
       primary: action("approve", review ? "Post review" : p.intent.type === "comment" ? "Post comment" : "Approve"),
       secondary: [...edit, action("dismiss", "Skip")],
-      batchable: safeToBatch(p) && !repeated.has(p.id),
+      batchable: safeToBatch(p) && !repeated.has(p.id) && !heldNote(p, connections),
     });
   }
 

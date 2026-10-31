@@ -1,6 +1,7 @@
 import { openInWorkstreamLabel, type Need, type NeedActionId, type NeedGroup } from "../lib/needs";
 import type { Proposal, Run, WorkstreamView } from "../types";
 import { draftKeyAction } from "./draftKeys";
+import { heldNow } from "./draftHold";
 import { draftEdited } from "./workViewLogic";
 import type { Command } from "./commands";
 
@@ -97,7 +98,7 @@ export function contextCommands(subject: Subject | null, data: ContextData, deps
     if (!p) return [];
     const pending = p.state.type === "pending";
     const on = p.intent.type === "githubReview" ? "review" : "draft";
-    const approves = draftKeyAction(p, "a", true) === "approve";
+    const approves = draftKeyAction(p, "a", true) === "approve" && !heldNow(p);
     return [
       ...(pending ? [approves ? entry(`draft:${p.id}:approve`, p.intent.type === "githubReview" ? "Post this review" : "Approve this draft", () => deps.approveDraft(p), { icon: "✓", keywords: NEED_ENTRY.approve.keywords }) : entry(`draft:${p.id}:approve`, "Review and approve this draft", () => deps.openDraft(p), { icon: "✓", keywords: NEED_ENTRY.approve.keywords })] : []),
       ...(pending && draftKeyAction(p, "e") ? [entry(`draft:${p.id}:edit`, `Edit this ${on}`, () => deps.openDraft(p), { icon: "✎", keywords: NEED_ENTRY.edit.keywords })] : []),

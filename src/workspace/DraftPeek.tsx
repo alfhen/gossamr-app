@@ -9,6 +9,7 @@ import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { createdItemKey, draftAfter, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, placeOf, waitingCreates, type DraftFields, type DraftPlace } from "./draftTicket";
 import { askPip } from "./askPip";
+import { DraftAccount, useHeldNote } from "./draftHold";
 import { openTicketByKey } from "./jump";
 import { pipAsks } from "./runSheetLogic";
 import { FromRun } from "./RunProvenance";
@@ -97,6 +98,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
   const inProject = containers.filter((c) => c.ref.connectionId === fields.container.connectionId);
   const parent = p.intent.fields.parent;
   const priority = p.intent.fields.priority;
+  const held = useHeldNote(p);
 
   const slots: DraftSlots = {
     banner: (
@@ -201,6 +203,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
               )}
             </>
           )}
+          {open && <DraftAccount proposal={p} />}
         </div>
         {open || state.type === "applying" ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -212,7 +215,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
             <Button size="lg" disabled={working} onClick={onSkip}>
               Skip
             </Button>
-            <Button variant="primary" size="lg" disabled={working || state.type === "applying" || !fields.title.trim()} onClick={onCreate} aria-keyshortcuts="Meta+Enter Control+Enter">
+            <Button variant="primary" size="lg" disabled={working || state.type === "applying" || !!held || !fields.title.trim()} onClick={onCreate} aria-keyshortcuts="Meta+Enter Control+Enter">
               {working || state.type === "applying" ? (
                 "Working…"
               ) : (
@@ -369,7 +372,8 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
     });
   const createNow = useRef(create);
   createNow.current = create;
-  const ready = p.state.type === "pending" && !working && !!fields.title.trim();
+  const held = useHeldNote(p);
+  const ready = p.state.type === "pending" && !working && !held && !!fields.title.trim();
   const readyNow = useRef(ready);
   readyNow.current = ready;
 

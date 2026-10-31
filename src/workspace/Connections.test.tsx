@@ -154,7 +154,7 @@ describe("the connections list", () => {
     const off = { ...gh, enabled: false, status: githubSnapshot("off", "ada", CHECKED) };
     const out = view({ connections: [off] });
     expect(out).toContain("Off");
-    expect(out).toContain("Gossamr doesn&#x27;t sync it, Pip can&#x27;t see it and drafts for it wait.");
+    expect(out).toContain("Gossamr doesn&#x27;t sync it and drafts for it wait.");
     expect(out).not.toContain("Authenticated");
     expect(out).toMatch(/disabled=""[^>]*>Sync now/);
   });
