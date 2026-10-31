@@ -116,6 +116,14 @@ export class JiraBackend implements Backend {
     return invoke<ConnectionInfo[]>("connections_list", { refresh });
   }
 
+  connectionOpenTerminal(instanceId: string) {
+    return invoke<void>("connection_open_terminal", { instanceId });
+  }
+
+  connectionRename(instanceId: string, displayName: string) {
+    return invoke<void>("connection_rename", { instanceId, displayName });
+  }
+
   githubSignInOptions() {
     return invoke<GithubSignInOptions>("github_sign_in_options");
   }

@@ -50,6 +50,19 @@ describe("the desktop backend's wiring", () => {
     expect(jira).toMatch(/"code_review_access", \{ connectionId, repo \}/);
   });
 
+  it("opens Terminal on an instance's own fix, taking an instance id and no command from the page", () => {
+    const jira = read("./jira.ts");
+    const lib = read("../../src-tauri/src/lib.rs");
+    expect(jira).toContain('invoke<void>("connection_open_terminal", { instanceId })');
+    expect(lib).toContain("#[tauri::command(async)]\nfn connection_open_terminal(");
+    expect(lib).toContain("fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()>");
+    const handlers = lib.slice(lib.indexOf("generate_handler!"));
+    expect(handlers).toContain("connection_open_terminal,");
+    expect(handlers).toContain("connection_rename,");
+    expect(jira).toContain('invoke<void>("connection_rename", { instanceId, displayName })');
+    expect(lib).toContain("fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String)");
+  });
+
   it("reads a review draft's notes in the backend's words", () => {
     const rust = read("../../src-tauri/src/inbox/code.rs").replace(/"\s*\n\s*"/g, "");
     expect(rust).toContain(`pub const REVIEW_OUTDATED_NOTE: &str =\n    "${REVIEW_OUTDATED_NOTE}";`);

@@ -86,6 +86,10 @@ export interface Backend {
   cacheTransitions(ref: ItemRef): Promise<WorkMove[]>;
   /** The signed-in connections with their sync state and what the last probe found. With `refresh`, every instance is probed first. */
   connectionsList(refresh?: boolean): Promise<ConnectionInfo[]>;
+  /** Opens Terminal on the fix the last probe of instance `instanceId` found. The command is the one Gossamr holds for it, never a string from the page. */
+  connectionOpenTerminal(instanceId: string): Promise<void>;
+  /** Saves the name Settings shows for instance `instanceId`. */
+  connectionRename(instanceId: string, displayName: string): Promise<void>;
   /** Which ways of connecting GitHub work here. */
   githubSignInOptions(): Promise<GithubSignInOptions>;
   /** Validates a personal access token (classic or fine-grained) and connects the account it belongs to. */
