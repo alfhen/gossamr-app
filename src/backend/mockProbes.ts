@@ -11,7 +11,7 @@ export function githubSnapshot(state: GithubProbeState, login: string, checkedAt
   const found = { installed: true, version: "2.97.0", state, account: null, fix: null, checkedAt };
   switch (state) {
     case "ready":
-      return { ...found, account: login, message: `Signed in as ${login} on github.com` };
+      return { ...found, account: login, message: `gh is signed in as ${login} on github.com` };
     case "notSignedIn":
       return { ...found, message: `gh has no login for ${login} on github.com.`, fix: LOGIN_COMMAND };
     case "notFound":

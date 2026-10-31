@@ -20,7 +20,7 @@ test.describe("GitHub's status in Settings", () => {
     await openApp(page, "runs=empty&mockRepos=6");
     const card = await openGithub(page);
     await expect(card.locator("[data-probe]")).toHaveAttribute("data-probe", "ready");
-    await expect(card).toContainText("Signed in as ada on github.com");
+    await expect(card).toContainText("gh is signed in as ada on github.com");
 
     await probe(page, "notSignedIn");
     await expect(card.locator("[data-probe]")).toHaveAttribute("data-probe", "notSignedIn");
