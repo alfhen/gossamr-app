@@ -54,8 +54,8 @@ impl Core {
         self.with_app_db_for(scope, |db| db.finish_pip_turn(request_id, text, ok, error, session, usage)).await
     }
 
-    /// The signed-in account's turns in `conversation`, oldest first. Asked for `workspace`, it gives `general`'s, which
-    /// is where those turns now are.
+    /// The turns in `conversation`, oldest first, signed in or not. Asked for `workspace`, it gives `general`'s, which is
+    /// where those turns now are.
     pub async fn pip_turns(&self, conversation: &str) -> Result<Vec<PipTurn>> {
         let conversation = conversation_id(conversation);
         self.with_app_db(|db| db.pip_turns(&conversation)).await
@@ -128,23 +128,21 @@ mod tests {
         );
     }
 
+    async fn request_ids(fx: &crate::inbox::testing::Fixture, conversation: &str) -> Vec<String> {
+        fx.core.pip_turns(conversation).await.unwrap().into_iter().map(|t| t.request_id).collect()
+    }
+
     #[tokio::test]
-    async fn signing_out_forgets_the_conversations_and_a_late_finish_writes_nothing() {
+    async fn signing_out_keeps_the_conversations_and_a_late_finish_writes_nothing() {
         let fx = crate::inbox::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "workspace", "q1", "Hi", &TurnMeta::default(), "running").await.unwrap();
-        fx.core.pip_turn_begin(&fx.scope, "CA-1", "q2", "Hi", &TurnMeta::default(), "running").await.unwrap();
-        let cache = fx.dir.join("inbox-site-me.sqlite");
-        let legacy = rusqlite::Connection::open(&cache).unwrap();
-        legacy
-            .execute("INSERT INTO pip_turns (conversation, request_id, role, prompt, status, created_at) VALUES ('workspace', 'old', 'user', 'from before the move', 'done', '2026-10-01T10:00:00Z')", [])
-            .unwrap();
+        fx.core.pip_turn_begin(&fx.scope, "CA-1", "q2", "Hi", &TurnMeta::default(), "done").await.unwrap();
         fx.core.sign_out().await.unwrap();
-        assert!(fx.core.pip_turn_finish(&fx.scope, "q1", "late", true, None, None, None).await.is_err());
-        let left: i64 = legacy.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get(0)).unwrap();
-        assert_eq!(left, 0, "the copy a cache file kept from before the move goes too");
 
-        let rows = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
-        assert!(rows.pip_turns("workspace").unwrap().is_empty() && rows.pip_turns("CA-1").unwrap().is_empty());
+        assert!(fx.core.pip_turn_finish(&fx.scope, "q1", "late", true, None, None, None).await.is_err());
+        assert_eq!(request_ids(&fx, "general").await, ["q1"]);
+        assert_eq!(request_ids(&fx, "CA-1").await, ["q2"]);
+        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].text, "", "the late answer was not written");
     }
 
     #[tokio::test]

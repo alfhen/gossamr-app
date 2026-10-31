@@ -303,14 +303,6 @@ impl Core {
     pub async fn sign_out(&self) -> Result<()> {
         let _alone = self.sign_in.lock().await;
         let connection = self.auth.connection().await;
-        // While the identity still resolves: Pip's conversations are the person's own and go with them.
-        if connection.is_some() {
-            match self.with_db(|db| db.clear_pip_turns()).await {
-                Ok(()) | Err(Error::SiteChanged) | Err(Error::NotSignedIn) => {}
-                // Signing out never depends on the database; the conversations stay in the app database until the next sign-out.
-                Err(e) => eprintln!("couldn't forget Pip's conversations on sign-out: {e}"),
-            }
-        }
         self.auth.sign_out().await?;
         if let Some(c) = connection {
             self.registry.remove(&c.id);
@@ -943,7 +935,8 @@ mod tests {
                 self.begun.notify_one();
                 self.release.notified().await;
             }
-            let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
+            let cloud_id = if input.site == "acme" { "site".to_string() } else { input.site.clone() };
+            let site = Site { cloud_id, name: "Acme".into(), url: format!("https://{}.example", input.site) };
             let me = Account { account_id: input.email.clone(), name: input.email.clone(), avatar_url: None };
             Ok(crate::auth::Credentials { email: input.email.clone(), token: input.token.clone(), expires_on: "2999-01-01".into(), site, me })
         }
@@ -953,7 +946,11 @@ mod tests {
     }
 
     fn token_for(email: &str, token: &str) -> TokenSignIn {
-        TokenSignIn { site: "acme".into(), cloud_id: None, email: email.into(), token: token.into(), expires_on: "2999-01-01".into() }
+        token_for_site("acme", email, token)
+    }
+
+    fn token_for_site(site: &str, email: &str, token: &str) -> TokenSignIn {
+        TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: token.into(), expires_on: "2999-01-01".into() }
     }
 
     #[tokio::test]
@@ -976,6 +973,28 @@ mod tests {
         assert!(fx.core.auth.identity().await.is_none());
         assert!(fx.core.connection(&Scope { connection_id: "jira:site:b".into(), account_id: "b".into() }).is_err());
         assert_eq!(vault.get("jira-token"), None);
+    }
+
+    #[tokio::test]
+    async fn pips_conversations_are_still_there_after_signing_in_to_another_jira_site() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        let meta = crate::agent::TurnMeta::default();
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "In the first site", &meta, "done").await.unwrap();
+        fx.core.pip_turn_begin(&fx.scope, "ws:w1", "q2", "In a workstream", &meta, "done").await.unwrap();
+
+        fx.core.sign_out().await.unwrap();
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1, "readable while signed out");
+
+        fx.core.connect_jira(&token_for_site("beta", "b", "fast")).await.unwrap();
+        let (scope, _, _) = fx.core.auth.identity().await.unwrap();
+        assert_eq!(scope.connection_id, "jira:beta:b");
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1);
+        assert_eq!(fx.core.pip_turns("ws:w1").await.unwrap().len(), 1);
+        fx.core.pip_turn_begin(&scope, "general", "q3", "In the second site", &meta, "done").await.unwrap();
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 2);
     }
 
     #[tokio::test]

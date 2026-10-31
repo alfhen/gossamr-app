@@ -2,7 +2,7 @@
 //! `user`, or the supervisor's event lines, role `wake`) and Pip's answer. Only `insert_pip_turn` inserts; every later
 //! write is an update, so a turn whose rows were cleared stays gone.
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
 use super::Db;
@@ -192,22 +192,6 @@ impl Db {
         Ok(self.conn.execute("DELETE FROM pip_turns WHERE created_at < ?1", params![before])?)
     }
 
-    /// Forgets every conversation, including the copies a cache file kept from before they moved to the app database.
-    pub fn clear_pip_turns(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM main.pip_turns", [])?;
-        let in_cache = self.conn.query_row("SELECT 1 FROM cache.sqlite_master WHERE type = 'table' AND name = 'pip_turns'", [], |_| Ok(())).optional()?;
-        if in_cache.is_some() {
-            self.conn.execute("DELETE FROM cache.pip_turns", [])?;
-        }
-        Ok(())
-    }
-
-    /// Forgets every conversation in the app database, for a database opened without a cache file.
-    pub fn clear_app_pip_turns(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM main.pip_turns", [])?;
-        Ok(())
-    }
-
     /// Marks turns that were waiting or running when the app last closed as failed; nothing is left to finish them. A
     /// wake that never ran gives its facts back with a supervisor `wake_dropped` line each, so Pip is woken for them again.
     pub fn fail_interrupted_pip_turns(&self) -> Result<usize> {
@@ -349,15 +333,13 @@ mod tests {
     }
 
     #[test]
-    fn turns_older_than_the_horizon_are_pruned_and_clear_forgets_all() {
+    fn turns_older_than_the_horizon_are_pruned() {
         let db = Db::in_memory().unwrap();
         db.begin_pip_turn("workspace", "old", "p", &TurnMeta::default(), "running", "2026-06-01T00:00:00Z").unwrap();
         db.begin_pip_turn("workspace", "new", "p", &TurnMeta::default(), "running", "2026-09-30T00:00:00Z").unwrap();
         assert_eq!(db.prune_pip_turns("2026-07-01T00:00:00Z").unwrap(), 2);
         let left: Vec<String> = db.pip_turns("workspace").unwrap().into_iter().map(|t| t.request_id).collect();
         assert_eq!(left, ["new"]);
-        db.clear_pip_turns().unwrap();
-        assert_eq!(db.pip_turn_rows().unwrap(), 0);
     }
 
     #[test]
@@ -413,10 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn writes_after_a_clear_do_not_bring_a_turn_back() {
+    fn writes_after_a_turn_is_forgotten_do_not_bring_it_back() {
         let db = Db::in_memory().unwrap();
         db.begin_pip_turn("workspace", "q", "p", &TurnMeta::default(), "running", "t").unwrap();
-        db.clear_pip_turns().unwrap();
+        db.delete_pip_turn("q").unwrap();
         db.push_pip_turn_step("q", "step").unwrap();
         db.set_pip_turn_status("q", "running").unwrap();
         db.finish_pip_turn("q", "late", true, None, Some("s"), None).unwrap();

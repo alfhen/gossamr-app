@@ -243,8 +243,7 @@ impl Core {
         Ok(())
     }
 
-    /// Closes the pending drafts for the removed connection, and for Jira forgets Pip's conversations, which sign-out
-    /// used to clear. Says whether a closed draft was in a workstream.
+    /// Closes the pending drafts for the removed connection. Says whether a closed draft was in a workstream.
     async fn close_drafts_for(&self, target: &RemovalTarget) -> Result<bool> {
         let reason = format!("{} was removed.", target.name);
         let now = chrono::Utc::now();
@@ -255,9 +254,6 @@ impl Core {
                     let closed = proposals::retire(db, &p.id, &reason, now)?;
                     proposals::record(db, &closed, Actor::Person, "draft_retired", now);
                     workstreams |= closed.workstream().is_some();
-                }
-                if target.kind == ConnectionKind::Jira {
-                    db.clear_app_pip_turns()?;
                 }
                 Ok(workstreams)
             })
@@ -682,16 +678,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_jira_forgets_pips_conversations_and_removing_github_keeps_them() {
+    async fn removing_either_connection_keeps_pips_conversations() {
         let fx = adopted().await;
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "done").await.unwrap();
         let turns = || fx.core.with_app_db(|db| Ok(db.pip_turns("general")?.len()));
 
         fx.core.remove_instance("github").await.unwrap();
-        assert!(turns().await.unwrap() > 0);
+        assert_eq!(turns().await.unwrap(), 1);
 
         fx.core.remove_instance("jira").await.unwrap();
-        assert_eq!(turns().await.unwrap(), 0);
+        assert_eq!(turns().await.unwrap(), 1);
     }
 
     #[tokio::test]
