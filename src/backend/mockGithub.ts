@@ -103,7 +103,7 @@ export class MockGithub {
     /** "none" is a token that can't write to any pull request (`?mockReviewAccess=none`). */
     private readonly reviewWrites: "sample" | "none" = "sample",
   ) {
-    this.code = new MockCode(GITHUB_CONNECTION, now, GITHUB_LOGIN, (repo) => this.isWatched(repo));
+    this.code = new MockCode(GITHUB_CONNECTION, now, GITHUB_LOGIN, (repo) => this.isWatched(repo), () => this.offName);
     this.checkedAt = new Date(now).toISOString();
     if (connected) this.signIn();
   }
@@ -169,6 +169,7 @@ export class MockGithub {
     if (on && this.probe === "off") this.probe = "ready";
     this.on = on;
     this.checkedAt = new Date().toISOString();
+    this.code.linksChanged();
   }
 
   setProbe(state: GithubProbeState) {
@@ -199,13 +200,18 @@ export class MockGithub {
   /** What the backend's `runs_repos` returns: the chosen repositories, or the whole catalog when it is small, minus archived ones in a whole-catalog watch. */
   watchedRepos(): string[] {
     const state = this.watchState();
-    if (!state || state.needsChoice) return [];
+    if (!this.enabled || !state || state.needsChoice) return [];
     const names = state.chosen ? state.watches.filter((w) => !w.inaccessible).map((w) => w.container.externalId) : this.repos.filter((r) => !r.archived).map((r) => r.key);
     return names.sort((a, b) => a.localeCompare(b));
   }
 
+  /** The name `off_name` gives in the app while the connection is off. */
+  get offName() {
+    return this.enabled ? null : "GitHub";
+  }
+
   isWatched(repo: string) {
-    return this.watch?.isWatched(repo) ?? false;
+    return this.enabled && (this.watch?.isWatched(repo) ?? false);
   }
 
   /** The catalog, matching on name, fifty at a time, most recently pushed first. */

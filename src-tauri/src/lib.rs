@@ -358,6 +358,9 @@ async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, inst
     }
     core.probe_instance_now(&instance_id).await;
     wire::changed(&app, wire::Topic::Connections, &connection_id);
+    cache_changed(&app, &connection_id);
+    dev_links_changed(&app, &connection_id);
+    publish(&app, &core).await;
     Ok(())
 }
 

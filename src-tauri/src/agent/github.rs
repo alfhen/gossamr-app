@@ -116,9 +116,15 @@ fn unwatched(repo: &str) -> String {
 
 /// The connection that watches `repo` and the repository as GitHub spells it, or the refusal to give Pip.
 fn connection(st: &McpState, repo: &str) -> std::result::Result<(String, String), String> {
-    st.core
-        .code_connection_for(repo)
-        .map_err(|_| unwatched(repo))
+    st.core.code_connection_for(repo).map_err(|_| match st.core.off_code_name(Some(repo)) {
+        Ok(Some(name)) => off(&name),
+        Ok(None) => unwatched(repo),
+        Err(e) => e.to_string(),
+    })
+}
+
+fn off(name: &str) -> String {
+    format!("{name} is off, so its repositories are hidden from you. The person can turn it on in Settings.")
 }
 
 fn kind_word(c: &CodeChange) -> &'static str {
@@ -298,6 +304,9 @@ async fn dispatch(st: &McpState, run: &PipRun, name: &str, args: &Value) -> Repl
         "list_watched_repos" => {
             let repos = core.watched_code_repos().map_err(|e| e.to_string())?;
             if repos.is_empty() {
+                if let Some(name) = core.off_code_name(None).map_err(|e| e.to_string())? {
+                    return Err(off(&name));
+                }
                 return Ok("No repositories are watched. Ask the person to connect GitHub and choose repositories in Gossamr's settings.".into());
             }
             Ok(repos
@@ -322,6 +331,9 @@ async fn dispatch(st: &McpState, run: &PipRun, name: &str, args: &Value) -> Repl
                 out.push_str(&format!("GitHub couldn't be searched just now ({why}); this is what was cached earlier.\n"));
             }
             if links.is_empty() {
+                if let Some(name) = core.off_code_name(None).map_err(|e| e.to_string())? {
+                    out.push_str(&format!("{name} is off, so its repositories are hidden from you. "));
+                }
                 out.push_str(&format!("No pull request, branch or commit in the watched repositories names {key}. Work in a repository that isn't watched is invisible here."));
                 return Ok(out);
             }
@@ -516,6 +528,11 @@ async fn dispatch(st: &McpState, run: &PipRun, name: &str, args: &Value) -> Repl
                         .map(|(id, _)| id)
                         .collect();
                     ids.dedup();
+                    if ids.is_empty() {
+                        if let Some(name) = core.off_code_name(None).map_err(|e| e.to_string())? {
+                            return Err(off(&name));
+                        }
+                    }
                     for id in ids {
                         all.extend(
                             core.code_search_code(&id, query, None)
@@ -1024,6 +1041,34 @@ mod tests {
             )
             .await;
         assert!(shouted.starts_with("acme/webshop:src/main.rs"), "{shouted}");
+        assert_eq!(g.ok("list_watched_repos", json!({})).await, "acme/webshop");
+    }
+
+    #[tokio::test]
+    async fn pip_is_told_github_is_off_by_every_github_tool_until_it_is_on() {
+        let g = gh(vec![]).await;
+        g.lx.fx.core.adopt_instances().await;
+        let instance = crate::config::AppConfig::load(&g.lx.fx.dir).connections.into_iter().find(|i| i.kind == crate::tracker::ConnectionKind::Github).unwrap().id;
+        g.lx.fx.core.set_instance_enabled(&instance, false).await.unwrap();
+
+        for (name, args) in [
+            ("list_watched_repos", json!({})),
+            ("search_code", json!({ "query": "x" })),
+            ("search_code", json!({ "query": "x", "repo": "acme/webshop" })),
+            ("get_pull_request", json!({ "repo": "acme/webshop", "number": 1 })),
+            ("list_pull_requests", json!({ "repo": "acme/webshop" })),
+            ("list_review_comments", json!({ "repo": "acme/webshop", "number": 1 })),
+            ("read_repo_file", json!({ "repo": "acme/webshop", "path": "README.md" })),
+            ("list_repo_files", json!({ "repo": "acme/webshop" })),
+            ("list_commits", json!({ "repo": "acme/webshop" })),
+        ] {
+            let text = g.refused(name, args).await;
+            assert!(text.contains("is off, so its repositories are hidden from you") && !text.contains("Ask the person to watch"), "{name}: {text}");
+        }
+        let none = g.ok("ticket_changes", json!({ "key": "CA-208" })).await;
+        assert!(none.starts_with("GitHub is off, so its repositories are hidden from you. No pull request"), "{none}");
+
+        g.lx.fx.core.set_instance_enabled(&instance, true).await.unwrap();
         assert_eq!(g.ok("list_watched_repos", json!({})).await, "acme/webshop");
     }
 

@@ -803,6 +803,20 @@ async fn a_queued_run_is_not_launched_into_a_repository_that_is_no_longer_watche
     assert_eq!(rig.cli.launches(), 0);
 }
 
+#[tokio::test]
+async fn a_queued_run_still_launches_after_github_is_turned_off() {
+    let rig = ready().await;
+    rig.fx.core.adopt_instances().await;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    let github = crate::config::AppConfig::load(&rig.fx.dir).connections.into_iter().find(|i| i.kind == crate::tracker::ConnectionKind::Github).unwrap().id;
+
+    rig.fx.core.set_instance_enabled(&github, false).await.unwrap();
+    let launched = rig.svc.start_now(&run.id).await.unwrap();
+
+    assert!(matches!(launched.state, RunState::Launching | RunState::Working), "{:?}", launched.error);
+    assert_eq!(rig.cli.launches(), 1);
+}
+
 mod through_the_real_spawner {
     use super::*;
     use std::collections::BTreeSet;

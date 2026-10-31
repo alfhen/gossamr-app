@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { githubPostsTried, githubWrites, openApp, peekSheet, peekTicket, reviewDrafts, reviewedDraft, toast } from "./support/app";
+import { githubPostsTried, githubWrites, openApp, peekSheet, peekTicket, reviewDrafts, reviewedDraft, toast, WITH_REPOS } from "./support/app";
 
 async function openSettings(page: Page) {
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
@@ -179,6 +179,34 @@ test.describe("the Connections list", () => {
     await held.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
     expect(await githubPostsTried(page)).toBe(1);
+  });
+
+  test("hides the code linked to a ticket while GitHub is off, and shows it again once GitHub is on", async ({ page }) => {
+    await openApp(page, WITH_REPOS);
+    await peekTicket(page, "CA-402");
+    const code = peekSheet(page).getByRole("list", { name: "Linked code" });
+    const pullRequestFilter = page.getByRole("button", { name: /^Pull requests/ });
+    await expect(code).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(pullRequestFilter).toBeVisible();
+    await openSettings(page);
+    const github = rowOf(page, "GitHub").getByRole("switch", { name: "GitHub" });
+    await github.click();
+    await expect(github).not.toBeChecked();
+    await page.getByRole("button", { name: "All projects" }).click();
+    await expect(pullRequestFilter).toHaveCount(0);
+    await peekTicket(page, "CA-402");
+    await expect(code).toHaveCount(0);
+    await expect(peekSheet(page)).toContainText("GitHub is off. Turn it on to see the PRs for this ticket");
+    await expect(peekSheet(page)).not.toContainText("Connect GitHub");
+    await page.keyboard.press("Escape");
+    await openSettings(page);
+    await github.click();
+    await expect(github).toBeChecked();
+    await page.getByRole("button", { name: "All projects" }).click();
+    await expect(pullRequestFilter).toBeVisible();
+    await peekTicket(page, "CA-402");
+    await expect(code).toBeVisible();
   });
 
   test("opens the Connect GitHub sheet from the foot of the list, with the account already connected marked and the login command for another", async ({ page }) => {

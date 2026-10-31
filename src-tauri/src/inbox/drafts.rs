@@ -267,9 +267,10 @@ impl Core {
         }
     }
 
-    /// Agents work only in repositories the person watches, whoever drafted the run.
+    /// Agents work only in repositories the person watches, whoever drafted the run. Turning GitHub off doesn't stop
+    /// them: a run works in a local clone, so the choice of repositories is what counts here.
     pub(crate) fn require_watched_repo(&self, repo: &str) -> Result<()> {
-        if self.watched_code_repos()?.iter().any(|(_, r)| r.eq_ignore_ascii_case(repo)) {
+        if self.chosen_code_repos()?.iter().any(|r| r.eq_ignore_ascii_case(repo)) {
             Ok(())
         } else {
             Err(Error::Proposal(format!("{repo} isn't a repository you watch. Watch it in Settings first.")))
