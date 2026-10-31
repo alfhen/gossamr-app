@@ -24,6 +24,8 @@ const sampleData: ConnectionInfo = { ...github, id: "mock", instanceId: "jira", 
 const base: Proposal = { id: "p1", createdAt: "2026-10-01T10:00:00Z", updatedAt: "2026-10-01T10:00:00Z", origin: { type: "board" }, createdBy: "user", intent: { type: "comment", item: { ...itemRef("CA-1"), connectionId: jira.id }, body: docFromText("Hi") }, label: null, basis: null, state: { type: "pending" }, revisions: [], created: [], error: null, run: null };
 const review: Proposal = { ...base, id: "r1", intent: { type: "githubReview", connectionId: github.id, item: null, runId: "run-1", repo: "acme/webshop", number: 218, commitSha: "a1b2c3d4e5f6", summary: "Looks fine.", comments: [] } };
 
+const withComments: Proposal = { ...review, intent: { ...review.intent, comments: [{ path: "src/a.ts", line: 4, side: "RIGHT", body: "Why?" }, { path: "src/b.ts", line: 9, side: "RIGHT", body: "Nit." }] } as Proposal["intent"] };
+
 describe("a draft whose connection is off", () => {
   it("waits, and says so in the words the backend refuses it with", () => {
     expect(heldNote(review, [{ ...github, enabled: false }])).toBe("GitHub is off. This draft waits until you turn it on.");
@@ -102,6 +104,20 @@ describe("the cards of a draft that waits", () => {
     const post = renderToStaticMarkup(<ReviewDraft proposal={review} {...props} access={{ canPost: true, reason: null }} diff={sample()} />);
     expect(post).toContain("GitHub is off. This draft waits until you turn it on.");
     expect(approve(post)).toContain("disabled");
+  });
+
+  it("head a review Waiting and say once that GitHub is off, not that each comment's diff couldn't be read", () => {
+    seen([{ ...github, enabled: false }]);
+    const error = { status: "error" as const, error: "GitHub is off, so acme/webshop isn't read." };
+    const post = renderToStaticMarkup(<ReviewDraft proposal={withComments} {...props} access={{ canPost: true, reason: null }} diff={error} />);
+    expect(post).toContain("Waiting");
+    expect(post).not.toContain("Needs your approval");
+    expect(post).not.toContain("Couldn&#x27;t read the diff");
+    expect(post.match(/ is off<\/p>/g)).toHaveLength(1);
+    seen([github]);
+    const live = renderToStaticMarkup(<ReviewDraft proposal={withComments} {...props} access={{ canPost: true, reason: null }} diff={error} />);
+    expect(live).toContain("Needs your approval");
+    expect(live).toContain("Couldn&#x27;t read the diff: GitHub is off");
   });
 
   it("show how old the draft is beside the wait", () => {

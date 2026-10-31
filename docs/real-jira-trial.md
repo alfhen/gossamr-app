@@ -1,6 +1,6 @@
 # First trial against a real Jira site
 
-Gossamr's Jira calls were written from Atlassian's REST v3 documentation and tested against recorded-shape responses. None has run against a real site. This page is the safe order to try them in, and what to send back when one fails.
+Gossamr's Jira calls were written from Atlassian's REST v3 documentation and tested against recorded-shape responses. Sign-in and scopes have been checked on a real site (see [Scope check](#scope-check)), but what each write does to a ticket has not. This page is the safe order to try them in, and what to send back when one fails.
 
 ## Before you start
 
@@ -20,7 +20,7 @@ Gossamr signs in with a scoped Atlassian API token. Your organisation may limit 
 
 If the page doesn't fill in, **The page didn't fill in** lists the scopes to tick. If Gossamr can't look up the site's cloud id, it asks you for it.
 
-The three scopes are a best guess. A call that Jira refuses with 401 or 403 may need another scope; send it back with the call's name (see the end of this page).
+The three scopes cover every call Gossamr makes (see [Scope check](#scope-check)). If Jira still refuses a call with 401 or 403, send it back with the call's name (see the end of this page).
 
 ## What to try, in order
 
@@ -57,6 +57,15 @@ Keep workstreams in **Advise** for the whole trial. Do not use Manage or Autopil
 | Approve a link | `POST issueLink` | Direction: "A blocks B" must show as A blocks B on both tickets. If it is reversed, report it with both keys. |
 | Approve a priority, assignee or epic change | `PUT issue/{key}` | The field changes. Some projects do not have a priority field; Jira says so. |
 | Approve a rewrite | `PUT issue/{key}` | The description keeps its headings, lists, code and links. Tables, panels, images and macros become plain text; the draft warns about that. A ticket edited in Jira since the draft is refused. |
+
+## Scope check
+
+On 31 October 2026 a scoped token with only `read:jira-work`, `write:jira-work` and `read:jira-user` was tried against a real Jira Cloud site through `api.atlassian.com/ex/jira/{cloudId}`, with the cloud id from the site's `/_edge/tenant_info`.
+
+- **Reads all succeeded:** `myself`, `search/jql`, an issue with its changelog, `issue/{key}/changelog`, `issue/{key}/transitions?expand=transitions.fields`, `user/viewissue/search`, `issue/{key}/comment`, `project/search` (with and without `expand=insight`), `project/{key}/statuses`, `issue/createmeta/{project}/issuetypes`, `attachment/meta` and `attachment/content/{id}` (303 to the media service).
+- **Writes were sent with bodies Jira must reject, so nothing changed:** `POST issue/{key}/comment`, `PUT issue/{key}`, `POST issue/{key}/transitions`, `POST issue`, `POST issueLink` and a multipart `POST issue/{key}/attachments`. Each came back 400 or 404 with a validation message, not 401 or 403, so the scopes allow them.
+- **`/myself` gave the same account id** that Atlassian sign-in gave, so the connection id and its cache carry over.
+- **Not covered:** a transition with a screen of required fields (none of the tried issue's transitions had one), and what each write really does to a ticket. Steps 2 to 5 above still cover that.
 
 ## Reporting a failure
 

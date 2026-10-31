@@ -5,7 +5,7 @@ import { useAutoHeight } from "../components/autoHeight";
 import { PipGlyph } from "../components/PipGlyph";
 import { parseBlocks, plainMarkdown } from "../lib/markdown";
 import { hunkLinesAround } from "../lib/diffHunks";
-import { KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
+import { connectionOf, KEPT_EDITED, keptOlderReviews, REVIEW_OUTDATED_NOTE, reviewEditProblem } from "../lib/proposals";
 import { maskSecrets, newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/riskyText";
 import { PostingPause } from "./PostingPause";
 import type { ChangedFile, DiffSide, Proposal, ProposalEdit, ReviewComment } from "../types";
@@ -299,6 +299,10 @@ export function ReviewDraft({
   // Another edit takes the pause back: it said what the earlier words held.
   useEffect(() => setPause(null), [summary, JSON.stringify(comments)]);
   const waiting = useHeldNote(p);
+  const offName = useWorkspace((s) => {
+    const c = connectionOf(p, s.connections);
+    return c && !c.enabled && state === "pending" ? c.displayName : null;
+  });
   const approvable = open && !working && state !== "applying" && !problem && !waiting;
   const keys = useCardKeys(p, {
     // Posting by key is the Post review button's step, asked for Enter first, and only where the token can post.
@@ -334,7 +338,7 @@ export function ReviewDraft({
       <div className="flex items-center gap-2 bg-ws-pip-soft px-3 py-1.5 text-sm font-semibold text-ws-pip">
         <PipGlyph />
         {title}
-        <span className="ml-auto font-normal text-ws-ink3">{BADGE[state]}</span>
+        <span className="ml-auto font-normal text-ws-ink3">{waiting ? "Waiting" : BADGE[state]}</span>
       </div>
       <div className="grid gap-2 px-3 py-2.5">
         <p className="m-0 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm text-ws-ink2">
@@ -399,6 +403,7 @@ export function ReviewDraft({
           )}
         </label>
         {open && <ReviewPreview text={summary} label="the review summary" />}
+        {offName && !files && comments.length > 0 && <p className="m-0 text-xs text-ws-ink3">{offName} is off</p>}
         {comments.length > 0 && (
           <ul className="m-0 grid list-none gap-2 p-0">
             {comments.map((c, i) => {
@@ -420,7 +425,7 @@ export function ReviewDraft({
                     <p className="m-0 text-sm text-ws-ink3">Dropped: this comment won&apos;t be posted.</p>
                   ) : (
                     <>
-                      {files ? <ReviewHunk file={files.find((f) => f.path === c.path)} line={c.line} side={c.side} /> : <p className="m-0 text-xs text-ws-ink3">{diff.status === "error" ? `Couldn't read the diff: ${diff.error}` : "Loading the diff…"}</p>}
+                      {files ? <ReviewHunk file={files.find((f) => f.path === c.path)} line={c.line} side={c.side} /> : !offName && <p className="m-0 text-xs text-ws-ink3">{diff.status === "error" ? `Couldn't read the diff: ${diff.error}` : "Loading the diff…"}</p>}
                       {open ? (
                         <GrowingText
                           aria-label={`Comment on ${place}`}

@@ -196,6 +196,11 @@ describe("the connect GitHub sheet", () => {
     expect(out).toMatch(/<button[^>]*aria-label="Connect old"[^>]*disabled/);
   });
 
+  it("names the account gh has active as the one agents push as", () => {
+    const out = show({ found: found({ accounts: [{ login: "other", active: false, usable: true }, { login: "ada", active: true, usable: true }] }) });
+    expect(out).toContain("gh&#x27;s active account is ada.");
+  });
+
   it("says Connecting on the account being connected and keeps Done from closing mid-way", () => {
     const out = show({ connecting: "ada" });
     expect(out).toContain("Connecting…");
@@ -206,8 +211,9 @@ describe("the connect GitHub sheet", () => {
     const none = show({ found: found({ accounts: [], message: "gh has no login on github.com.", fix: "gh auth login -h github.com" }) });
     for (const text of ["gh has no login on github.com.", "gh auth login -h github.com", "Open Terminal", "I&#x27;ve run it, check again"]) expect(none).toContain(text);
     expect(none).not.toContain("Another account");
-    const missing = show({ found: found({ installed: false, accounts: [], message: "gh isn't installed.", fix: "brew install gh" }) });
+    const missing = show({ found: found({ installed: false, accounts: [], message: "gh isn't installed. Use the command below, or get the installer from cli.github.com.", fix: "brew install gh" }) });
     expect(missing).toContain("brew install gh");
+    expect(missing).toContain("cli.github.com");
     expect(missing).not.toContain("Open Terminal");
   });
 

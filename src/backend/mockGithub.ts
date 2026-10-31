@@ -143,7 +143,7 @@ export class MockGithub {
 
   /** What `gh` holds: the sample login, or nothing in each state where `gh` has none to give. */
   ghAccounts(): GhAccounts {
-    if (this.probe === "notFound") return { installed: false, accounts: [], message: "gh isn't installed.", fix: "brew install gh" };
+    if (this.probe === "notFound") return { installed: false, accounts: [], message: "gh isn't installed. Use the command below, or get the installer from cli.github.com.", fix: "brew install gh" };
     if (this.probe === "notSignedIn") return { installed: true, accounts: [], message: "gh has no login on github.com.", fix: GH_LOGIN_COMMAND };
     if (this.probe === "error") {
       const { message, fix } = githubSnapshot("error", GITHUB_LOGIN, this.checkedAt);

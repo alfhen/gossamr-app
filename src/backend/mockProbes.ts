@@ -9,28 +9,29 @@ const OFF_MESSAGE = "Off. Gossamr doesn't sync it and drafts for it wait.";
 
 /** What `src-tauri/src/probe.rs` finds for a GitHub instance in each state, so the page can be driven through all of them. */
 export function githubSnapshot(state: GithubProbeState, login: string, checkedAt: string): ProbeSnapshot {
-  const found = { installed: true, version: "2.97.0", state, account: null, fix: null, checkedAt };
+  const found = { installed: true, version: "2.97.0", state, account: null, activeLogin: login, message: "", detail: null, fix: null, checkedAt };
   switch (state) {
     case "ready":
       return { ...found, account: login, message: `gh is signed in as ${login} on github.com` };
     case "notSignedIn":
-      return { ...found, message: `gh has no login for ${login} on github.com.`, fix: GH_LOGIN_COMMAND };
+      return { ...found, activeLogin: null, message: `gh has no login for ${login} on github.com.`, fix: GH_LOGIN_COMMAND };
     case "notFound":
-      return { ...found, installed: false, version: null, message: "gh isn't installed.", fix: "brew install gh" };
+      return { ...found, installed: false, version: null, activeLogin: null, message: "gh isn't installed. Use the command below, or get the installer from cli.github.com.", fix: "brew install gh" };
     case "error":
-      return { ...found, account: login, message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.", fix: "gh auth status" };
+      return { ...found, account: login, activeLogin: null, message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.", fix: "gh auth status" };
     case "off":
-      return { ...found, message: OFF_MESSAGE };
+      return { ...found, activeLogin: null, message: OFF_MESSAGE };
   }
 }
 
 export const PROBE_STATES: readonly GithubProbeState[] = ["ready", "notSignedIn", "notFound", "error", "off"];
 
 /** What `src-tauri/src/probe.rs` finds for Jira when the token is about to run out or has been turned down. */
-export function jiraSnapshot(state: "expiresSoon" | "notSignedIn", checkedAt: string): ProbeSnapshot {
-  const found = { installed: true, version: null, state, account: "Alf Henderson", fix: null, checkedAt };
+export function jiraSnapshot(state: "ready" | "expiresSoon" | "notSignedIn", checkedAt: string): ProbeSnapshot {
+  const found = { installed: true, version: null, state, account: "Alf Henderson", activeLogin: null, detail: null, fix: null, checkedAt };
+  if (state === "ready") return { ...found, message: "Signed in as Alf Henderson" };
   return state === "expiresSoon"
-    ? { ...found, message: "Token expires in 9 days" }
+    ? { ...found, message: "Token expires in 9 days", detail: "Your Jira token expires on 7 Nov. Make a new one and paste it here." }
     : { ...found, account: null, message: "Jira turned down your token. Make a new one and paste it here." };
 }
 

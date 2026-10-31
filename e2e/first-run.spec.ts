@@ -59,6 +59,8 @@ test.describe("the first-run screen", () => {
     await form.getByLabel("API token").fill("token");
     await form.getByRole("button", { name: "Connect Jira" }).click();
     await expect(page).toHaveTitle("Work — Gossamr");
+    await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByRole("listitem", { name: "acme.atlassian.net connection" })).toContainText("Authenticated · Alf Henderson");
   });
 
   test("Cancel closes the form, and sample data leaves for the workspace", async ({ page }) => {
