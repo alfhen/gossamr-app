@@ -283,6 +283,7 @@ impl Core {
         self.auth.sign_out().await?;
         self.registry.remove(&connection.id);
         self.close_db();
+        self.settle_pip_turns_after_sign_out().await?;
         remove_db_files(&self.data_dir.join(db_file(&connection)));
         Ok(())
     }
@@ -688,6 +689,18 @@ mod tests {
 
         fx.core.remove_instance("jira").await.unwrap();
         assert_eq!(turns().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn removing_jira_fails_the_turn_it_cut_off_and_keeps_the_conversation() {
+        let fx = adopted().await;
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
+
+        fx.core.remove_instance("jira").await.unwrap();
+
+        let turns = fx.core.with_app_db(|db| db.pip_turns("general")).await.unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!((turns[0].status.as_str(), turns[0].error.as_deref()), ("failed", Some(crate::db::SIGNED_OUT)));
     }
 
     #[tokio::test]

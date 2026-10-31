@@ -128,6 +128,15 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn sign_out_fails_a_queued_turn() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &TurnMeta::default(), "queued").await.unwrap();
+        fx.core.sign_out().await.unwrap();
+        let q1 = fx.core.pip_turns("general").await.unwrap().remove(0);
+        assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::SIGNED_OUT)));
+    }
+
     async fn request_ids(fx: &crate::inbox::testing::Fixture, conversation: &str) -> Vec<String> {
         fx.core.pip_turns(conversation).await.unwrap().into_iter().map(|t| t.request_id).collect()
     }
@@ -142,7 +151,10 @@ mod tests {
         assert!(fx.core.pip_turn_finish(&fx.scope, "q1", "late", true, None, None, None).await.is_err());
         assert_eq!(request_ids(&fx, "general").await, ["q1"]);
         assert_eq!(request_ids(&fx, "CA-1").await, ["q2"]);
-        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].text, "", "the late answer was not written");
+        let q1 = fx.core.pip_turns("general").await.unwrap().remove(0);
+        assert_eq!(q1.text, "", "the late answer was not written");
+        assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::SIGNED_OUT)), "a turn cut off is not left running");
+        assert_eq!(fx.core.pip_turns("CA-1").await.unwrap()[0].status, "done");
     }
 
     #[tokio::test]

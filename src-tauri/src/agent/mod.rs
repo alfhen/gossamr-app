@@ -967,6 +967,7 @@ mod tests {
             }
             let turns = fx.core.pip_turns(GENERAL_CONVERSATION).await.unwrap();
             assert!(!turns.is_empty() && turns.iter().all(|t| t.text.is_empty()), "{turns:?}");
+            assert!(turns.iter().all(|t| (t.status.as_str(), t.error.as_deref()) == ("failed", Some(crate::db::SIGNED_OUT))), "{turns:?}");
         }
 
     mod queueing {

@@ -14,6 +14,8 @@ use crate::error::Result;
 pub const INTERRUPTED: &str = "Gossamr closed before Pip finished";
 /// Why a turn that was still waiting its turn when the app last closed is shown as failed: it never started.
 pub const NEVER_RAN: &str = "Gossamr closed before this question ran";
+/// What a turn cut off by signing out or removing the connection says.
+pub const SIGNED_OUT: &str = "You signed out before Pip finished";
 
 /// What a wake turn's `meta` holds: the `(run, key)` facts its event lines tell of.
 #[derive(Serialize, Deserialize)]
@@ -195,16 +197,22 @@ impl Db {
     /// Marks turns that were waiting or running when the app last closed as failed; nothing is left to finish them. A
     /// wake that never ran gives its facts back with a supervisor `wake_dropped` line each, so Pip is woken for them again.
     pub fn fail_interrupted_pip_turns(&self) -> Result<usize> {
-        self.fail_pip_turns(None)
+        self.fail_pip_turns(None, None)
+    }
+
+    /// Fails every waiting or running turn with `reason`, for when the connection that would have finished them is gone.
+    /// Facts a wake never delivered are given back, as for `fail_interrupted_pip_turns`.
+    pub fn fail_open_pip_turns(&self, reason: &str) -> Result<usize> {
+        self.fail_pip_turns(None, Some(reason))
     }
 
     /// `fail_interrupted_pip_turns` for just the turns `request_ids` names: the ones copied in from a cache file. Not the
     /// others, which this launch may be running right now.
     pub(super) fn fail_copied_pip_turns(&self, request_ids: &[String]) -> Result<usize> {
-        self.fail_pip_turns(Some(request_ids))
+        self.fail_pip_turns(Some(request_ids), None)
     }
 
-    fn fail_pip_turns(&self, only: Option<&[String]>) -> Result<usize> {
+    fn fail_pip_turns(&self, only: Option<&[String]>, reason: Option<&str>) -> Result<usize> {
         let wanted = |id: &str| only.is_none_or(|ids| ids.iter().any(|i| i == id));
         self.atomically(|db| {
             let mut stmt = db.conn.prepare(
@@ -227,7 +235,7 @@ impl Db {
             drop(stmt);
             let mut failed = 0;
             for (request_id, status) in open.into_iter().filter(|(id, _)| wanted(id)) {
-                let error = if status == "queued" { NEVER_RAN } else { INTERRUPTED };
+                let error = reason.unwrap_or(if status == "queued" { NEVER_RAN } else { INTERRUPTED });
                 failed += db.conn.execute("UPDATE pip_turns SET status = 'failed', error = ?2 WHERE request_id = ?1 AND role = 'pip'", params![request_id, error])?;
             }
             Ok(failed)
