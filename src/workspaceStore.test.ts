@@ -36,6 +36,25 @@ beforeEach(async () => {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+describe("connection probes", () => {
+  it("re-reads the connections when a probe finds something new", async () => {
+    const github = new MockBackend({ githubRepos: 6 });
+    await s().init(github);
+    await flush();
+    expect(s().connections.find((c) => c.kind === "github")?.status?.state).toBe("ready");
+    github.github.setProbe("notSignedIn");
+    await flush();
+    expect(s().connections.find((c) => c.kind === "github")?.status?.state).toBe("notSignedIn");
+  });
+
+  it("asks the backend to probe again only when told to refresh", async () => {
+    const list = vi.spyOn(backend, "connectionsList");
+    await s().refreshConnections();
+    await s().refreshConnections(true);
+    expect(list.mock.calls).toEqual([[false], [true]]);
+  });
+});
+
 describe("workspace store loading", () => {
   it("holds items, containers with workflows, drafts and identity by key", () => {
     expect(s().status).toBe("ready");

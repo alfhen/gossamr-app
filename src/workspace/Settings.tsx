@@ -11,6 +11,7 @@ import { keyInitials } from "./projects";
 import { disconnectGithub, useGithubUi } from "./githubUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
+import { ProbeStatus } from "./ProbeStatus";
 import { useEscBack } from "./escBack";
 import { Segmented } from "../components/Segmented";
 
@@ -100,6 +101,7 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
         <span className="shrink-0 text-ws-ink3">{count(projects, nounFor(c.kind))}</span>
       </div>
       <SyncStatus line={line} />
+      {c.status && <ProbeStatus status={c.status} now={now} />}
       <div className="flex gap-3 text-sm">
         <SyncNow c={c} />
         {c.kind === "jira" && (
@@ -140,6 +142,7 @@ export function GithubCardView({ c, watch, now, confirming, busy, onSync, onMana
       </div>
       <p className="m-0 text-sm text-ws-ink2">{watchSummary(watch, nounFor("github"))}</p>
       <SyncStatus line={line} />
+      {c.status && <ProbeStatus status={c.status} now={now} advisory />}
       <div className="flex flex-wrap gap-3 text-sm">
         <Button variant="quiet" size="sm" disabled={c.syncing} onClick={onSync}>
           Sync now

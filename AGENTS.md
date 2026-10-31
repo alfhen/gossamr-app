@@ -21,6 +21,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/domain/` | Shared types: items, proposals (drafts), runs, workstreams. `domain/run.rs` holds the agent's base brief (`render_prompt`) |
 | `src-tauri/src/db/` | SQLite: a cache file per connection, and `app.sqlite` for drafts, runs, workstreams and Pip's conversations. `db/schema.rs` holds the migrations |
 | `src-tauri/src/tracker/`, `codehost/`, `auth/` | Jira, GitHub and their sign-in |
+| `src-tauri/src/probe.rs`, `inbox/probes.rs` | What each connection instance says about itself (`gh`, Jira's `/myself`), and when it is asked |
 | `src-tauri/src/claude/` | Pip's turns (`claude -p`) |
 | `src-tauri/src/agent/` | The gossamr MCP server: Pip's tools and the agents' tools |
 | `src-tauri/src/runs/` | Agent runs: launch, track, answer, stop, clean up (`claude --bg --worktree`) |

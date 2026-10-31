@@ -23,6 +23,7 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 pub(crate) mod code;
 mod drafts;
 mod instances;
+mod probes;
 mod run_outcome;
 mod pip_runs;
 mod pip_turns;
@@ -41,6 +42,7 @@ mod watch;
 pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
 pub use run_outcome::{RunOutcome, SUMMARY_ONLY};
+pub use probes::Probe;
 pub use watch::{CatalogPage, WatchState};
 
 /// Events this old drop out of the inbox unless they are still unread.
@@ -158,6 +160,17 @@ pub struct ConnectionInfo {
     pub transient: bool,
     /// Atlassian ended the sign-in, so signing in again is the only way to sync.
     pub reauth: bool,
+    /// What the last probe of the instance found, once there is one.
+    pub status: Option<crate::probe::Snapshot>,
+}
+
+#[derive(Default)]
+struct Open {
+    /// `app.sqlite` alone, opened on first use and kept for the life of the app.
+    app: Option<Db>,
+    /// One cache per connection, opened for whichever is signed in. A connection is a site and an account, so two
+    /// people signing in to the same site on one Mac never see each other's tickets or inbox.
+    cache: Option<(String, Db)>,
 }
 
 #[derive(Default)]
@@ -180,6 +193,7 @@ pub struct Core {
     db: Mutex<Open>,
     last_error: Mutex<Option<String>>,
     reauth_needed: AtomicBool,
+    probes: probes::Probes,
     syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
@@ -214,6 +228,7 @@ impl Core {
             db: Mutex::new(Open::default()),
             last_error: Mutex::new(None),
             reauth_needed: AtomicBool::new(false),
+            probes: probes::Probes::default(),
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
@@ -706,6 +721,7 @@ impl Core {
                 error: self.last_error.lock().expect("error lock poisoned").clone(),
                 transient: false,
                 reauth: self.reauth_needed.load(Ordering::SeqCst),
+                status: None,
             });
         }
         out.extend(self.code_connections());
@@ -1181,6 +1197,11 @@ pub(crate) mod testing {
 
     /// The fixture with a scripted GitHub service in place of the real one.
     pub async fn fixture_with(code: Option<CodeService>) -> Fixture {
+        fixture_with_authenticator(code, None).await
+    }
+
+    /// `fixture_with`, signed in to Jira through `authenticator` instead of Atlassian.
+    pub async fn fixture_with_authenticator(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
@@ -1194,7 +1215,7 @@ pub(crate) mod testing {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
-        let mut core = Core::new(Arc::new(Auth::signed_in(http, creds.clone())), registry, dir.clone()).with_home(home.clone());
+        let mut core = Core::new(Arc::new(authenticator.map_or_else(|| Auth::signed_in(http, creds.clone()), |a| Auth::with_authenticator(a, creds.clone()))), registry, dir.clone()).with_home(home.clone());
         if let Some(code) = code {
             core = core.with_code(code);
         }

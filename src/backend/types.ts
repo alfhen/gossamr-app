@@ -83,8 +83,8 @@ export interface Backend {
   cacheComments(ref: ItemRef, refresh: boolean): Promise<WorkComment[]>;
   /** The moves open to one item right now. A tracker that reveals workflows per item is the only place to ask. */
   cacheTransitions(ref: ItemRef): Promise<WorkMove[]>;
-  /** The signed-in connections with their sync state. */
-  connectionsList(): Promise<ConnectionInfo[]>;
+  /** The signed-in connections with their sync state and what the last probe found. With `refresh`, every instance is probed first. */
+  connectionsList(refresh?: boolean): Promise<ConnectionInfo[]>;
   /** Which ways of connecting GitHub work here. */
   githubSignInOptions(): Promise<GithubSignInOptions>;
   /** Validates a personal access token (classic or fine-grained) and connects the account it belongs to. */
@@ -181,6 +181,8 @@ export interface Backend {
   /** Whether macOS Reduce transparency is on, which WebKit doesn't report to the page. */
   reduceTransparency(): Promise<boolean>;
   onDisplayChanged(listener: () => void): () => void;
+  /** Calls `listener` when a probe found something new about a connection; re-read `connectionsList`. */
+  onConnectionsChanged(listener: () => void): () => void;
   /** Saves the limits, clamped by the backend, and returns what was saved. */
   runsSetSettings(settings: AgentSettings): Promise<AgentSettings>;
   /** Removes a finished run's worktree with `claude rm`. Never forces: Claude refuses unpushed work and says so. */

@@ -111,8 +111,8 @@ export class JiraBackend implements Backend {
     return invoke<WorkMove[]>("cache_transitions", { item });
   }
 
-  connectionsList() {
-    return invoke<ConnectionInfo[]>("connections_list");
+  connectionsList(refresh = false) {
+    return invoke<ConnectionInfo[]>("connections_list", { refresh });
   }
 
   githubSignInOptions() {
@@ -289,6 +289,10 @@ export class JiraBackend implements Backend {
 
   reduceTransparency() {
     return invoke<boolean>("reduce_transparency");
+  }
+
+  onConnectionsChanged(listener: () => void) {
+    return onChanged("connections", () => listener());
   }
 
   onDisplayChanged(listener: () => void) {

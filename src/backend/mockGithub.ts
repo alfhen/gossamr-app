@@ -7,6 +7,7 @@ import type {
   Footprint,
   GithubSignInOptions,
   Intent,
+  ProbeState,
   PostedReview,
   ReviewAccess,
   ReviewComment,
@@ -15,6 +16,7 @@ import type {
   WatchState,
 } from "../types";
 import { MockCode } from "./mockCode";
+import { githubSnapshot } from "./mockProbes";
 import { MockWatch } from "./mockWatch";
 
 export const GITHUB_LOGIN = "ada";
@@ -85,6 +87,11 @@ export class MockGithub {
   private losing: "kept" | "dropped" | null = null;
   /** How many posts were asked for, refused ones included. */
   tried = 0;
+  /** What the probe of the GitHub instance finds, and when it last looked. */
+  private probe: ProbeState = "ready";
+  private checkedAt: string;
+  /** Called when `setProbe` changes what the probe found, as the backend's `connections` event would be sent. */
+  onProbeChanged: () => void = () => {};
 
   constructor(
     private readonly repoCount: number,
@@ -94,6 +101,7 @@ export class MockGithub {
     private readonly reviewWrites: "sample" | "none" = "sample",
   ) {
     this.code = new MockCode(GITHUB_CONNECTION, now, GITHUB_LOGIN, (repo) => this.isWatched(repo));
+    this.checkedAt = new Date(now).toISOString();
     if (connected) this.connect();
   }
 
@@ -144,7 +152,19 @@ export class MockGithub {
   }
 
   info(): ConnectionInfo {
-    return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false };
+    const status = githubSnapshot(this.probe, GITHUB_LOGIN, this.checkedAt);
+    return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: this.probe !== "off", kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
+  }
+
+  setProbe(state: ProbeState) {
+    this.probe = state;
+    this.checkedAt = new Date().toISOString();
+    this.onProbeChanged();
+  }
+
+  /** Asks again, as the refresh button does. */
+  recheck() {
+    this.checkedAt = new Date().toISOString();
   }
 
   watchState(): WatchState | null {

@@ -80,6 +80,11 @@ impl Error {
     pub fn needs_reauth(&self) -> bool {
         matches!(self, Error::ReauthRequired)
     }
+
+    /// A provider refused the credentials, which is the cue to ask the connection how it stands.
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, Error::ReauthRequired | Error::Api { status: 401, .. } | Error::CodeHost { status: 401, .. })
+    }
 }
 
 // Commands return errors to the frontend as plain messages.
@@ -103,5 +108,14 @@ mod tests {
         assert!(!Error::RateLimited { message: String::new(), retry_after_secs: 5 }.is_transient());
         assert!(!Error::NotSignedIn.is_transient() && !Error::Auth("no".into()).is_transient());
         assert!(!Error::ReauthRequired.is_transient() && Error::ReauthRequired.needs_reauth() && !Error::NotSignedIn.needs_reauth());
+    }
+
+    #[test]
+    fn a_refused_credential_is_unauthorized_and_a_failing_server_is_not() {
+        assert!(Error::ReauthRequired.is_unauthorized());
+        assert!(Error::Api { status: 401, message: String::new() }.is_unauthorized());
+        assert!(Error::CodeHost { status: 401, message: String::new() }.is_unauthorized());
+        assert!(!Error::Api { status: 503, message: String::new() }.is_unauthorized());
+        assert!(!Error::CodeHost { status: 403, message: String::new() }.is_unauthorized());
     }
 }

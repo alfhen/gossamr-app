@@ -36,6 +36,31 @@ describe("the mock GitHub connection", () => {
     ]);
   });
 
+  it("reports what the gh probe found, in each state the page can show", async () => {
+    const found = async (probe?: MockOptions["githubProbe"]) => (await new MockBackend({ githubRepos: 6, githubProbe: probe }).connectionsList()).find((c) => c.kind === "github")!.status!;
+    expect(await found()).toMatchObject({ state: "ready", installed: true, account: "ada", fix: null });
+    expect(await found("notSignedIn")).toMatchObject({ state: "notSignedIn", fix: "gh auth login -h github.com" });
+    expect(await found("notFound")).toMatchObject({ state: "notFound", installed: false, fix: "brew install gh" });
+    expect(await found("error")).toMatchObject({ state: "error", account: "ada" });
+  });
+
+  it("has no probe for the sample connection", async () => {
+    expect((await new MockBackend({ githubRepos: 6 }).connectionsList())[0].status).toBeNull();
+  });
+
+  it("tells the page when the probe finds something new, and asking again moves the checked time", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const heard = vi.fn();
+    b.onConnectionsChanged(heard);
+    const before = (await b.connectionsList())[1].status!.checkedAt;
+    b.github.setProbe("notFound");
+    expect(heard).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setTimeout(r, 5));
+    const again = (await b.connectionsList(true))[1].status!;
+    expect(again.state).toBe("notFound");
+    expect(again.checkedAt > before).toBe(true);
+  });
+
   it("connects through the gh import and the device flow, which must be started before it is polled", async () => {
     const gh = new MockBackend();
     expect((await gh.githubImportGhToken()).id).toBe(GH);
