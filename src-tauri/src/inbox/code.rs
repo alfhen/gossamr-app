@@ -207,6 +207,7 @@ impl Core {
         let connection = self.code.remember(session.clone());
         self.bind_instance(Binding::github(&session.login));
         self.drop_saved_token(&session.login);
+        self.probe_bound_now(&connection.id).await;
         self.registry.register(connection.clone());
         // So the catalog is known before the first sync, which a search of the watched repositories depends on.
         let _ = self.probe_code_catalog(&connection.id).await;
@@ -1284,6 +1285,19 @@ pub(crate) mod tests {
         assert!(fx.core.connections().await.unwrap().is_empty());
         assert!(fx.core.registry.connection("github:ann").is_none());
         assert!(matches!(fx.core.watch_set_mode("github:ann", WatchMode::Everything).await, Err(Error::NotSignedIn)));
+    }
+
+    #[tokio::test]
+    async fn connecting_an_account_gh_holds_makes_its_snapshot_ready_without_another_probe() {
+        let fx = fixture(REPOS).await;
+        fx.core.adopt_instances().await;
+        let status = r#"{"hosts":{"github.com":[{"state":"success","host":"github.com","login":"ann"}]}}"#;
+        let gh = fx.core.code.auth.gh_dirs()[0].join("gh");
+        std::fs::write(&gh, format!("#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\n[ \"$1 $2\" = \"auth token\" ] && {{ echo ghp_x; exit 0; }}\necho '{status}'\n")).unwrap();
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        let config = crate::config::AppConfig::load(&fx.dir);
+        let seen = fx.core.probe_snapshot(&config.connections[0]).unwrap();
+        assert_eq!((seen.state, seen.account.as_deref()), (crate::probe::State::Ready, Some("ann")));
     }
 
     #[tokio::test]

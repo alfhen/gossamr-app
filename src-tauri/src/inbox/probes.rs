@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use super::Core;
 use crate::config::AppConfig;
 use crate::connections::Instance;
-use crate::probe::{self, Snapshot};
+use crate::probe::{self, Snapshot, State};
 use crate::tracker::ConnectionKind;
 
 /// Why the instances are being probed.
@@ -81,6 +81,14 @@ impl Core {
         self.probes.snapshots.lock().expect("probe lock poisoned").insert(instance.id.clone(), Stored { bound_to: instance.bound_to.clone(), snapshot });
     }
 
+    /// Asks the instance bound to `connection_id` how it stands, because the person just connected that account.
+    pub(super) async fn probe_bound_now(&self, connection_id: &str) {
+        let config = AppConfig::load(&self.data_dir);
+        if let Some(instance) = config.connections.iter().find(|i| i.bound_to.as_deref() == Some(connection_id)) {
+            self.probe_instance_now(&instance.id.clone()).await;
+        }
+    }
+
     /// The last answer for `instance`, unless it was taken while the instance was bound to another connection.
     pub(super) fn probe_snapshot(&self, instance: &Instance) -> Option<Snapshot> {
         let snapshots = self.probes.snapshots.lock().expect("probe lock poisoned");
@@ -133,7 +141,7 @@ impl Core {
                 let host = instance.config.host.as_deref().unwrap_or("github.com");
                 let login = instance.config.login.as_deref().unwrap_or_default();
                 let snapshot = probe::github(self.code.auth.gh_dirs(), host, login, probe::TIMEOUT).await;
-                if snapshot.state == probe::State::Ready {
+                if snapshot.state == State::Ready {
                     self.drop_saved_token(login);
                 }
                 snapshot
@@ -151,7 +159,6 @@ mod tests {
     use crate::error::{Error, Result};
     use crate::inbox::testing::{fixture_with, fixture_with_authenticator};
     use crate::inbox::CodeService;
-    use crate::probe::State;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::Arc;
