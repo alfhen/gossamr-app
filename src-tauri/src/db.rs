@@ -588,6 +588,25 @@ mod tests {
         }
 
         #[test]
+        fn rows_a_release_from_before_the_move_wrote_to_a_copied_cache_are_kept_when_it_is_emptied() {
+            let (cache, app, dir, first) = legacy_cache_with("topped-up", &comment_on("jira:site:ann"));
+            let mut conn = Connection::open(&app).unwrap();
+            schema::migrate_app(&mut conn).unwrap();
+            conn.execute("INSERT INTO app_meta (k, v) VALUES (?1, '1')", [format!("copied:{}", cache.file_name().unwrap().to_string_lossy())]).unwrap();
+            drop(conn);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let later = create(&old, Draft::from_pip("later", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            drop(old);
+
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_some());
+            assert!(db.proposal(&first.id).unwrap().is_some());
+            drop(db);
+            assert_eq!(count(&cache, "proposals"), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
         fn a_cache_not_yet_copied_keeps_its_rows_when_opened_on_its_own() {
             let (cache, app, dir, p) = legacy_cache_with("on-its-own", &comment_on("jira:site:ann"));
             drop(Db::open(&cache).unwrap());
