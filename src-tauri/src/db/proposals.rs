@@ -54,8 +54,10 @@ impl Db {
     }
 
     pub fn proposal(&self, id: &str) -> Result<Option<Proposal>> {
-        let data: Option<String> =
-            self.conn.query_row("SELECT data FROM proposals WHERE id = ?1", params![id], |r| r.get(0)).optional()?;
+        let mut sql = String::from("SELECT data FROM proposals WHERE id = ?");
+        let mut args: Vec<Sql> = vec![Sql::Text(id.into())];
+        self.visible(&mut sql, &mut args);
+        let data: Option<String> = self.conn.query_row(&sql, params_from_iter(args), |r| r.get(0)).optional()?;
         Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
     }
 
@@ -81,6 +83,7 @@ impl Db {
             sql.push_str(" AND workstream = ?");
             args.push(Sql::Text(w.clone()));
         }
+        self.visible(&mut sql, &mut args);
         sql.push_str(" ORDER BY created_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(args), |r| r.get::<_, String>(0))?;
@@ -94,6 +97,9 @@ impl Db {
     /// Moves a pending proposal to `Applying` and returns it, or `None` when it wasn't pending. The state column is
     /// the guard, so two callers can't both start the same proposal.
     pub fn begin_applying(&self, id: &str, at: DateTime<Utc>) -> Result<Option<Proposal>> {
+        if self.proposal(id)?.is_none() {
+            return Ok(None);
+        }
         let tx = self.conn.unchecked_transaction()?;
         let claimed = tx.execute(
             "UPDATE proposals SET state = 'applying' WHERE id = ?1 AND state = 'pending'",
@@ -123,6 +129,9 @@ impl Db {
     /// Any other kind is refused and left as it was. `sending` is the post about to go out, stored with the claim as maybe
     /// posted, so a close before its answer comes leaves it to be looked for on GitHub; `None` keeps what the draft has.
     pub fn begin_posting_review(&self, id: &str, at: DateTime<Utc>, sending: Option<MaybePosted>) -> Result<Option<Proposal>> {
+        if self.proposal(id)?.is_none() {
+            return Ok(None);
+        }
         let tx = self.conn.unchecked_transaction()?;
         let claimed = tx.execute("UPDATE proposals SET state = 'applying' WHERE id = ?1 AND state = 'pending'", params![id])?;
         if claimed == 0 {

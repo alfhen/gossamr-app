@@ -134,10 +134,17 @@ mod tests {
         let fx = crate::inbox::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "workspace", "q1", "Hi", &TurnMeta::default(), "running").await.unwrap();
         fx.core.pip_turn_begin(&fx.scope, "CA-1", "q2", "Hi", &TurnMeta::default(), "running").await.unwrap();
+        let cache = fx.dir.join("inbox-site-me.sqlite");
+        let legacy = rusqlite::Connection::open(&cache).unwrap();
+        legacy
+            .execute("INSERT INTO pip_turns (conversation, request_id, role, prompt, status, created_at) VALUES ('workspace', 'old', 'user', 'from before the move', 'done', '2026-10-01T10:00:00Z')", [])
+            .unwrap();
         fx.core.sign_out().await.unwrap();
         assert!(fx.core.pip_turn_finish(&fx.scope, "q1", "late", true, None, None, None).await.is_err());
+        let left: i64 = legacy.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "the copy a cache file kept from before the move goes too");
 
-        let rows = crate::db::Db::open(&fx.dir.join("inbox-site-me.sqlite")).unwrap();
+        let rows = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
         assert!(rows.pip_turns("workspace").unwrap().is_empty() && rows.pip_turns("CA-1").unwrap().is_empty());
     }
 

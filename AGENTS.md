@@ -20,7 +20,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/lib.rs` | App setup and every Tauri command (`generate_handler!`) |
 | `src-tauri/src/wire.rs` | The four events Rust sends the page, and the topics of `changed` |
 | `src-tauri/src/domain/` | Shared types: items, proposals (drafts), runs, workstreams. `domain/run.rs` holds the agent's base brief (`render_prompt`) |
-| `src-tauri/src/db/` | SQLite. `db/schema.rs` holds the migrations |
+| `src-tauri/src/db/` | SQLite: a cache file per connection, and `app.sqlite` for drafts, runs, workstreams and Pip's conversations. `db/schema.rs` holds the migrations |
 | `src-tauri/src/tracker/`, `codehost/`, `auth/` | Jira, GitHub and their sign-in |
 | `src-tauri/src/claude/` | Pip's turns (`claude -p`) |
 | `src-tauri/src/agent/` | The gossamr MCP server: Pip's tools and the agents' tools |
@@ -70,7 +70,7 @@ pnpm e2e
 
 - **A new Tauri command:** prefer a parameter on an existing one when it is a variant of the same operation. Otherwise register it in `lib.rs`, add it to `Backend` in `src/backend/types.ts`, and implement it in `jira.ts` and the mock. `src/backend/wiring.test.ts` fails if the front end calls a command `lib.rs` does not register.
 - **A new thing the page re-reads:** the page hears four events (`changed`, `pip`, `snapshot`, `open-run`), all sent from `src-tauri/src/wire.rs`. Add a `Topic` there and in `src/backend/events.ts`, and listen to it through `onChanged`; do not add a fifth event. A Rust test and `src/backend/wiring.test.ts` fail if one appears.
-- **A schema change:** add a new step to the end of `STEPS` in `src-tauri/src/db/schema.rs`. Never edit a step that has shipped, because `PRAGMA user_version` counts the steps applied.
+- **A schema change:** add a new step to the end of `STEPS` (a connection's cache) or `APP_STEPS` (`app.sqlite`) in `src-tauri/src/db/schema.rs`. Never edit a step that has shipped, because `PRAGMA user_version` counts the steps applied. `Db` is the app database with a cache attached, so a table that exists in both is read from the app one; give app-only tables names the caches don't use. All accounts share `app.sqlite`, so `Db::for_connection` limits the drafts and runs a handle sees to the signed-in connection's (and the code host's); a query on those tables that bypasses `Db` would show one account's drafts to another.
 - **Types across the boundary:** Rust structs sent to the front end use `#[serde(rename_all = "camelCase")]` and match the TypeScript types field for field.
 - **Agent behaviour:** check it against `docs/agents-cli-findings.md`. If the CLI behaves differently, write down what you saw there.
 - **The app icon:** edit the SVGs in `brand/`, then run `./scripts/app-icon.sh`. Do not edit `src-tauri/icons/` by hand, and do not run `tauri icon` alone: it would put the full artwork in the 16 and 32 pt slots.

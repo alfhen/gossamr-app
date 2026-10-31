@@ -32,6 +32,8 @@ pub use pip_turns::INTERRUPTED;
 
 pub struct Db {
     conn: Connection,
+    /// The connection whose drafts and runs this handle may see; `None` sees all of them.
+    home: Option<String>,
 }
 
 impl Db {
@@ -42,15 +44,73 @@ impl Db {
         Self::init(Connection::open(path)?)
     }
 
-    #[cfg(test)]
-    pub fn in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
-    }
-
     fn init(mut conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         schema::migrate(&mut conn)?;
-        Ok(Self { conn })
+        Ok(Self { conn, home: None })
+    }
+
+    /// A cache file with the app database attached, which is where drafts, runs, workstreams and Pip's conversations
+    /// live. The app database is the main schema so its tables are found first; the cache's copies of them, left
+    /// from before the move, are never read.
+    pub fn open_with_app(cache: &Path, app: &Path) -> Result<Self> {
+        Self::open_with_app_steps(cache, app, schema::STEPS)
+    }
+
+    fn open_with_app_steps(cache: &Path, app: &Path, steps: &[&str]) -> Result<Self> {
+        let cache_str = cache.to_str().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("cache path is not valid UTF-8: {}", cache.display())))?;
+        let through = schema::CACHE_STEPS_WITH_APP_STATE.min(steps.len());
+        let mut file = Self::open_file(cache)?;
+        schema::apply(&mut file, &steps[..through])?;
+        drop(file);
+        if let Some(dir) = app.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let db = Self::attach(Connection::open(app)?, cache_str)?;
+        schema::adopt_cached_app_state(&db.conn, &cache.file_name().unwrap_or_default().to_string_lossy())?;
+        let mut file = Self::open_file(cache)?;
+        schema::apply(&mut file, steps)?;
+        Ok(db)
+    }
+
+    fn open_file(path: &Path) -> Result<Connection> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        Ok(conn)
+    }
+
+    /// Limits the drafts and runs this handle lists and claims to `connection_id`'s, and to the code host's, whose
+    /// drafts are made and posted through whichever account is signed in.
+    pub fn for_connection(mut self, connection_id: &str) -> Self {
+        self.home = Some(connection_id.to_string());
+        self
+    }
+
+    /// ` AND (connection_id = ? OR connection_id LIKE 'github:%')` and its argument, when this handle has a home.
+    fn visible(&self, sql: &mut String, args: &mut Vec<rusqlite::types::Value>) {
+        if let Some(home) = &self.home {
+            sql.push_str(" AND (connection_id = ? OR connection_id LIKE 'github:%')");
+            args.push(rusqlite::types::Value::Text(home.clone()));
+        }
+    }
+
+    fn attach(mut conn: Connection, cache: &str) -> Result<Self> {
+        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+        schema::migrate_app(&mut conn)?;
+        conn.execute("ATTACH DATABASE ?1 AS cache", [cache])?;
+        Ok(Self { conn, home: None })
+    }
+
+    #[cfg(test)]
+    pub fn in_memory() -> Result<Self> {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let uri = format!("file:cache{}?mode=memory&cache=shared", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+        let mut seed = Connection::open(&uri)?;
+        schema::migrate(&mut seed)?;
+        Self::attach(Connection::open_in_memory()?, &uri)
     }
 
     /// Runs raw SQL, for tests that need the database to refuse a write.
@@ -255,6 +315,19 @@ impl Db {
         )?;
         Ok(())
     }
+
+    /// Like `meta`, for what belongs to the app and not to a connection's cache.
+    pub fn app_meta(&self, k: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT v FROM app_meta WHERE k = ?1", params![k], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_app_meta(&self, k: &str, v: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_meta (k, v) VALUES (?1, ?2) ON CONFLICT(k) DO UPDATE SET v = ?2",
+            params![k, v],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -302,6 +375,230 @@ mod tests {
         assert_eq!(e.done_at.as_deref(), Some("2026-09-28T12:00:00Z"));
         assert!(e.snoozed_until.is_none() && !e.unread);
         assert!(db.set_done("missing", None).is_err());
+    }
+
+    mod app_database {
+        use super::*;
+
+        fn files(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+            let dir = std::env::temp_dir().join(format!("gossamr-app-db-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            (dir.join("inbox-site-me.sqlite"), dir.join("app.sqlite"), dir)
+        }
+
+        fn count(file: &std::path::Path, table: &str) -> i64 {
+            let conn = Connection::open(file).unwrap();
+            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+        }
+
+        const WORKSTREAM: &str = "INSERT INTO workstreams (id, connection_id, title, mode, created_at, data) VALUES ('w1', 'c', 'Fix it', 'open', '2026-10-01T10:00:00Z', '{}');";
+        const TURN: &str = "INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('general', 'q1', 'user', 'done', '2026-10-01T10:00:00Z');";
+
+        #[test]
+        fn app_state_is_written_to_the_app_file_and_cache_to_the_connections_file() {
+            let (cache, app, dir) = files("split");
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            db.execute_batch(&format!("{WORKSTREAM}{TURN}")).unwrap();
+            db.set_app_meta("pip_sessions", "[]").unwrap();
+            db.set_meta("last_sync_at", "2026-10-01T10:00:00Z").unwrap();
+            drop(db);
+
+            assert_eq!((count(&app, "workstreams"), count(&app, "pip_turns"), count(&app, "app_meta")), (1, 1, 2));
+            assert_eq!((count(&cache, "workstreams"), count(&cache, "pip_turns")), (0, 0));
+            assert_eq!(count(&cache, "meta"), 1);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_cache_that_held_app_state_hands_it_over_once_and_keeps_its_own_rows() {
+            let (cache, app, dir) = files("adopt");
+            {
+                let old = Db::open(&cache).unwrap();
+                old.execute_batch(&format!("{WORKSTREAM}{TURN}")).unwrap();
+                old.set_meta("claude:CA-1", r#"{"id":"s1"}"#).unwrap();
+                old.set_meta("pip_sessions", r#"["s1"]"#).unwrap();
+                old.set_meta("last_sync_at", "2026-10-01T10:00:00Z").unwrap();
+            }
+            drop(Db::open_with_app(&cache, &app).unwrap());
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            db.execute_batch("DELETE FROM workstreams;").unwrap();
+            drop(db);
+            let db = Db::open_with_app(&cache, &app).unwrap();
+
+            assert_eq!(db.app_meta("claude:CA-1").unwrap().as_deref(), Some(r#"{"id":"s1"}"#));
+            assert_eq!(db.app_meta("pip_sessions").unwrap().as_deref(), Some(r#"["s1"]"#));
+            assert_eq!(db.app_meta("last_sync_at").unwrap(), None, "cache bookkeeping stays with the cache");
+            drop(db);
+            assert_eq!((count(&app, "workstreams"), count(&app, "pip_turns")), (0, 1), "a workstream the app deleted is not copied back");
+            assert_eq!((count(&cache, "workstreams"), count(&cache, "pip_turns")), (1, 1), "the cache's own rows stay until a later step drops them");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn two_connections_files_share_one_app_database() {
+            let (cache, app, dir) = files("shared");
+            let other = dir.join("inbox-site-you.sqlite");
+            let db = Db::open_with_app(&cache, &app).unwrap();
+            db.execute_batch(WORKSTREAM).unwrap();
+            db.set_meta("last_sync_at", "mine").unwrap();
+            drop(db);
+
+            let db = Db::open_with_app(&other, &app).unwrap();
+            assert_eq!(db.conn.query_row("SELECT count(*) FROM workstreams", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+            assert_eq!(db.meta("last_sync_at").unwrap(), None);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    mod shared_app_database {
+        use super::*;
+        use crate::domain::fixtures::{item_ref, now, run_spec};
+        use crate::domain::{Doc, Intent, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState};
+        use crate::proposals::{create, Draft};
+
+        fn files(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+            let dir = std::env::temp_dir().join(format!("gossamr-shared-app-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            (dir.join("inbox-site-ann.sqlite"), dir.join("app.sqlite"), dir)
+        }
+
+        fn comment_on(connection: &str) -> Draft {
+            let item = ItemRef { connection_id: connection.into(), ..item_ref("1") };
+            Draft::from_pip("q", None, Intent::Comment { item, body: Doc::paragraph("hello") }, None)
+        }
+
+        fn review_on_github() -> Draft {
+            let intent = Intent::GithubReview {
+                connection_id: "github:ann".into(),
+                item: None,
+                run_id: "r1".into(),
+                repo: "acme/webshop".into(),
+                number: 218,
+                commit_sha: "a1b2c3d4e5f6".into(),
+                summary: "Review.".into(),
+                comments: vec![],
+            };
+            Draft::from_pip("q", None, intent, None)
+        }
+
+        fn run_of(id: &str, connection: &str) -> Run {
+            let spec = crate::domain::RunSpec { name: format!("name-{id}"), ..run_spec() };
+            Run::queued(id.into(), format!("p{id}"), connection.into(), None, spec, "f".into(), now())
+        }
+
+        #[test]
+        fn a_connection_cannot_list_read_or_claim_what_another_one_drafted_or_ran() {
+            let (ann_cache, app, dir) = files("isolation");
+            let ann = Db::open_with_app(&ann_cache, &app).unwrap().for_connection("jira:site:ann");
+            let hers = create(&ann, comment_on("jira:site:ann"), now()).unwrap();
+            let review = create(&ann, review_on_github(), now()).unwrap();
+            ann.insert_run(&run_of("ann-run", "jira:site:ann")).unwrap();
+
+            let bob = Db::open_with_app(&dir.join("inbox-site-bob.sqlite"), &app).unwrap().for_connection("jira:site:bob");
+            let ids = |db: &Db| db.proposals(&ProposalQuery::default()).unwrap().into_iter().map(|p| p.id).collect::<Vec<_>>();
+            assert_eq!(ids(&bob), vec![review.id.clone()], "the code host's drafts go through whoever is signed in");
+            assert!(bob.proposal(&hers.id).unwrap().is_none());
+            assert!(bob.begin_applying(&hers.id, now()).unwrap().is_none());
+            assert!(bob.runs(&RunQuery::default()).unwrap().is_empty());
+            assert!(bob.runs_with_pending_drafts().unwrap().is_empty());
+            assert_eq!(bob.release_interrupted(now()).unwrap(), 0);
+
+            assert_eq!(ann.proposal(&hers.id).unwrap().unwrap().state, ProposalState::Pending, "left as it was");
+            assert_eq!(ann.runs(&RunQuery::default()).unwrap().len(), 1);
+            assert!(bob.begin_posting_review(&review.id, now(), None).unwrap().is_some());
+            assert!(bob.begin_posting_review(&hers.id, now(), None).unwrap().is_none());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn a_connection_cannot_read_or_change_another_ones_run_by_its_id() {
+            let (ann_cache, app, dir) = files("run-ids");
+            let ann = Db::open_with_app(&ann_cache, &app).unwrap().for_connection("jira:site:ann");
+            let done = |id: &str| Run { state: RunState::Done, ..run_of(id, "jira:site:ann") };
+            let event = |id: &str| RunEvent { run_id: id.into(), seq: 0, at: now(), kind: "k".into(), text: "t".into(), detail: None };
+            for id in ["open", "archived"] {
+                ann.insert_run(&done(id)).unwrap();
+                ann.append_events(id, &[event(id)]).unwrap();
+            }
+            ann.archive_runs(&["archived".into()], now()).unwrap();
+            ann.put_run_message("open", "Later.", now()).unwrap();
+
+            let bob = Db::open_with_app(&dir.join("inbox-site-bob.sqlite"), &app).unwrap().for_connection("jira:site:bob");
+            assert!(bob.run("open").unwrap().is_none());
+            assert!(bob.run_by_start_key("popen").unwrap().is_none());
+            assert!(bob.run_events("open").unwrap().is_empty());
+            assert!(bob.run_messages_waiting().unwrap().is_empty());
+            assert!(!bob.save_run(&Run { last_detail: Some("bob's".into()), ..done("open") }).unwrap());
+            assert!(bob.archive_runs(&["open".into()], now()).unwrap().is_empty());
+            assert_eq!(bob.append_events("open", &[event("open")]).unwrap(), 0);
+            assert!(!bob.restore_run("archived").unwrap());
+            assert!(!bob.delete_archived_run("archived").unwrap());
+
+            let open = ann.run("open").unwrap().unwrap();
+            assert_eq!((open.last_detail, open.archived_at), (None, None), "left as it was");
+            assert_eq!(ann.run_events("open").unwrap().len(), 1);
+            assert_eq!(ann.run_messages_waiting().unwrap(), ["open"]);
+            assert!(ann.run("archived").unwrap().unwrap().archived_at.is_some());
+            assert_eq!(ann.run_events("archived").unwrap().len(), 1);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        fn legacy_cache_with(tag: &str, draft: &Draft) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, Proposal) {
+            let (cache, app, dir) = files(tag);
+            let old = Db::open(&cache).unwrap();
+            let p = create(&old, Draft::from_pip("q", None, draft.intent.clone(), None), now()).unwrap();
+            drop(old);
+            (cache, app, dir, p)
+        }
+
+        #[test]
+        fn drafts_still_open_in_a_copied_cache_are_retired_there_so_an_older_release_cannot_post_them_again() {
+            let (cache, app, dir, p) = legacy_cache_with("retire", &comment_on("jira:site:ann"));
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert_eq!(db.proposal(&p.id).unwrap().unwrap().state, ProposalState::Pending, "the app copy is still waiting for the person");
+            drop(db);
+
+            let old_release = Db::open(&cache).unwrap();
+            let stored = old_release.proposal(&p.id).unwrap().unwrap();
+            assert!(matches!(stored.state, ProposalState::Retired(_)), "{:?}", stored.state);
+            assert_eq!(old_release.release_interrupted(now()).unwrap(), 0);
+            assert!(old_release.proposals(&ProposalQuery { states: Some(vec![crate::domain::StateKind::Pending, crate::domain::StateKind::Applying]), ..Default::default() }).unwrap().is_empty());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn the_copy_happens_before_a_later_cache_step_drops_the_app_tables() {
+            let (cache, app, dir, p) = legacy_cache_with("order", &comment_on("jira:site:ann"));
+            let mut steps = schema::STEPS.to_vec();
+            steps.push("DROP TABLE proposals; DROP TABLE pip_turns;");
+
+            let db = Db::open_with_app_steps(&cache, &app, &steps).unwrap().for_connection("jira:site:ann");
+            assert_eq!(db.proposal(&p.id).unwrap().map(|p| p.id), Some(p.id.clone()));
+            drop(db);
+            let gone = Connection::open(&cache).unwrap().prepare("SELECT 1 FROM proposals").is_err();
+            assert!(gone, "the later step ran, after the copy");
+
+            let db = Db::open_with_app_steps(&cache, &app, &steps).unwrap();
+            assert!(db.proposal(&p.id).unwrap().is_some(), "a cache with the tables already gone is skipped, not an error");
+            drop(db);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn the_sessions_pip_started_are_merged_across_cache_files() {
+            let (ann_cache, app, dir) = files("sessions");
+            let bob_cache = dir.join("inbox-site-bob.sqlite");
+            for (file, sessions) in [(&ann_cache, r#"["s1","s2"]"#), (&bob_cache, r#"["s3","s1"]"#)] {
+                Db::open(file).unwrap().set_meta("pip_sessions", sessions).unwrap();
+            }
+            drop(Db::open_with_app(&ann_cache, &app).unwrap());
+            let db = Db::open_with_app(&bob_cache, &app).unwrap();
+            assert_eq!(db.app_meta("pip_sessions").unwrap().as_deref(), Some(r#"["s1","s2","s3"]"#));
+            drop(db);
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     mod needs_me {

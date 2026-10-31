@@ -706,7 +706,7 @@ impl AgentService {
                 recorded(this.core.pip_turn_finish(&scope, &run_id, &text, false, Some("Pip stopped"), session.as_deref(), None).await);
             }
             if let Some(id) = &session {
-                let _ = this.core.remember_claude_session(key.as_deref(), id).await;
+                let _ = this.core.remember_claude_session(&scope, key.as_deref(), id).await;
                 if let Some(ws) = &workstream_id {
                     recorded(this.core.set_workstream_session(&scope, ws, id).await);
                 }
@@ -960,7 +960,7 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            let rows = crate::db::Db::open(&fx.dir.join("inbox-site-me.sqlite")).unwrap();
+            let rows = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
             assert!(rows.pip_turns(GENERAL_CONVERSATION).unwrap().is_empty());
         }
 

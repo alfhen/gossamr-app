@@ -1,6 +1,6 @@
 //! The app-level list of runs that are alive, kept beside the account databases.
 //!
-//! Only one account's database is open at a time, so this is how the concurrency cap and "agents keep running"
+//! A database handle sees only the signed-in account's runs, so this is how the concurrency cap and "agents keep running"
 //! see the runs of every account. It is a hint: the account database and `claude agents` decide a run's state, and
 //! a missing or damaged file is simply empty.
 

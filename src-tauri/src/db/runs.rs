@@ -83,7 +83,7 @@ impl Db {
     }
 
     pub fn run_by_start_key(&self, start_key: &str) -> Result<Option<Run>> {
-        self.run_where("start_key = ?1", start_key)
+        self.run_where("start_key = ?", start_key)
     }
 
     /// Keeps `text` for the run's next `ask` call or the end of its turn, replacing one already waiting.
@@ -120,12 +120,32 @@ impl Db {
     /// The ids of the runs with a message waiting, oldest message first.
     pub fn run_messages_waiting(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare("SELECT run_id FROM run_messages ORDER BY queued_at, run_id")?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let mut waiting = Vec::new();
+        for id in stmt.query_map([], |r| r.get::<_, String>(0))? {
+            let id = id?;
+            if self.sees_run(&id)? {
+                waiting.push(id);
+            }
+        }
+        Ok(waiting)
+    }
+
+    /// Whether this handle may read or change run `id`: any id when it has no home, else only a run of its connection's.
+    fn sees_run(&self, id: &str) -> Result<bool> {
+        if self.home.is_none() {
+            return Ok(true);
+        }
+        let mut sql = String::from("SELECT 1 FROM runs WHERE id = ?");
+        let mut args = vec![Sql::Text(id.into())];
+        self.visible(&mut sql, &mut args);
+        Ok(self.conn.query_row(&sql, params_from_iter(args), |_| Ok(())).optional()?.is_some())
     }
 
     /// Replaces a stored run. Returns false when there is none with that id.
     pub fn save_run(&self, run: &Run) -> Result<bool> {
+        if !self.sees_run(&run.id)? {
+            return Ok(false);
+        }
         let n = self
             .conn
             .execute(
@@ -145,12 +165,14 @@ impl Db {
     }
 
     pub fn run(&self, id: &str) -> Result<Option<Run>> {
-        self.run_where("id = ?1", id)
+        self.run_where("id = ?", id)
     }
 
     fn run_where(&self, clause: &str, arg: &str) -> Result<Option<Run>> {
-        let row: Option<(String, Option<String>)> =
-            self.conn.query_row(&format!("SELECT data, archived_at FROM runs WHERE {clause}"), params![arg], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let mut sql = format!("SELECT data, archived_at FROM runs WHERE {clause}");
+        let mut args = vec![Sql::Text(arg.into())];
+        self.visible(&mut sql, &mut args);
+        let row: Option<(String, Option<String>)> = self.conn.query_row(&sql, params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         row.map(|(data, archived)| read_run(&data, archived.as_deref())).transpose()
     }
 
@@ -176,6 +198,7 @@ impl Db {
             sql.push_str(" AND json_extract(data, '$.spec.workstream') = ?");
             args.push(Sql::Text(w.clone()));
         }
+        self.visible(&mut sql, &mut args);
         sql.push_str(" ORDER BY queued_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
@@ -194,6 +217,9 @@ impl Db {
             let sql = format!("UPDATE runs SET archived_at = ? WHERE id = ? AND archived_at IS NULL AND state IN ({marks})");
             let mut done = Vec::new();
             for id in ids {
+                if !db.sees_run(id)? {
+                    continue;
+                }
                 let args = std::iter::once(Sql::Text(stamp(at))).chain(std::iter::once(Sql::Text(id.clone()))).chain(ARCHIVABLE.iter().map(|s| Sql::Text(s.as_str().into())));
                 if db.conn.execute(&sql, params_from_iter(args))? > 0 {
                     done.push(id.clone());
@@ -205,14 +231,14 @@ impl Db {
 
     /// Brings an archived run back. False when there was nothing archived under that id.
     pub fn restore_run(&self, id: &str) -> Result<bool> {
-        Ok(self.conn.execute("UPDATE runs SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL", params![id])? > 0)
+        Ok(self.sees_run(id)? && self.conn.execute("UPDATE runs SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL", params![id])? > 0)
     }
 
     /// Removes an archived run with its events and reports; an unarchived run is never touched. False when nothing was removed.
     pub fn delete_archived_run(&self, id: &str) -> Result<bool> {
         self.atomically(|db| {
             let archived: bool = db.conn.query_row("SELECT archived_at IS NOT NULL FROM runs WHERE id = ?1", params![id], |r| r.get(0)).optional()?.unwrap_or(false);
-            if !archived {
+            if !archived || !db.sees_run(id)? {
                 return Ok(false);
             }
             for table in ["run_events", "run_reports", "run_report_tokens", "run_messages"] {
@@ -224,14 +250,20 @@ impl Db {
 
     /// Ids of the runs that have a draft still waiting for the person.
     pub fn runs_with_pending_drafts(&self) -> Result<std::collections::HashSet<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT json_extract(data, '$.origin.runId') FROM proposals WHERE state = 'pending' AND json_extract(data, '$.origin.type') = 'run'")?;
-        let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+        let mut sql = String::from("SELECT DISTINCT json_extract(data, '$.origin.runId') FROM proposals WHERE state = 'pending' AND json_extract(data, '$.origin.type') = 'run'");
+        let mut args: Vec<Sql> = Vec::new();
+        self.visible(&mut sql, &mut args);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(args), |r| r.get::<_, Option<String>>(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?.into_iter().flatten().collect())
     }
 
     /// Stores events after the run's last one, numbering them itself. At most 500 are kept per run and `detail` is cut
     /// to 2 KB. Returns how many were stored.
     pub fn append_events(&self, run_id: &str, events: &[RunEvent]) -> Result<usize> {
+        if !self.sees_run(run_id)? {
+            return Ok(0);
+        }
         let tx = self.conn.unchecked_transaction()?;
         let last: Option<u32> = tx.query_row("SELECT max(seq) FROM run_events WHERE run_id = ?1", params![run_id], |r| r.get(0))?;
         let start = last.map_or(0, |n| n + 1);
@@ -249,6 +281,9 @@ impl Db {
     }
 
     pub fn run_events(&self, run_id: &str) -> Result<Vec<RunEvent>> {
+        if !self.sees_run(run_id)? {
+            return Ok(Vec::new());
+        }
         let mut stmt = self.conn.prepare("SELECT seq, at, kind, text, detail FROM run_events WHERE run_id = ?1 ORDER BY seq")?;
         let rows = stmt.query_map(params![run_id], |r| {
             let at: String = r.get(1)?;

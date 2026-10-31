@@ -2,7 +2,7 @@
 //! `user`, or the supervisor's event lines, role `wake`) and Pip's answer. Only `insert_pip_turn` inserts; every later
 //! write is an update, so a turn whose rows were cleared stays gone.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::Db;
@@ -192,8 +192,13 @@ impl Db {
         Ok(self.conn.execute("DELETE FROM pip_turns WHERE created_at < ?1", params![before])?)
     }
 
+    /// Forgets every conversation, including the copies a cache file kept from before they moved to the app database.
     pub fn clear_pip_turns(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM pip_turns", [])?;
+        self.conn.execute("DELETE FROM main.pip_turns", [])?;
+        let in_cache = self.conn.query_row("SELECT 1 FROM cache.sqlite_master WHERE type = 'table' AND name = 'pip_turns'", [], |_| Ok(())).optional()?;
+        if in_cache.is_some() {
+            self.conn.execute("DELETE FROM cache.pip_turns", [])?;
+        }
         Ok(())
     }
 
