@@ -178,7 +178,7 @@ mod tests {
     }
 
     fn run(state: RunState) -> Run {
-        let mut r = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), "db".into(), now() - Span::hours(3));
+        let mut r = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), now() - Span::hours(3));
         r.state = state;
         r.launched_at = (state != RunState::Queued).then(|| now() - Span::minutes(5));
         r

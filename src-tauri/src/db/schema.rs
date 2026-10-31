@@ -390,12 +390,25 @@ DELETE FROM items WHERE EXISTS (SELECT 1 FROM watched_containers w WHERE w.conne
 UPDATE sync_state SET full_at = NULL WHERE connection_id IN (SELECT connection_id FROM watched_containers WHERE depth = 'whole' AND unwatched_at IS NULL);
 DELETE FROM watched_containers WHERE unwatched_at IS NOT NULL;";
 
-pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST];
+/// The cache's copies of the app tables go once the app database holds their rows, which `Db::open_with_app` records
+/// (`copied:<cache file>` in `app_meta`) before it applies this step. A file opened any other way has nothing to copy.
+const DROP_APP_COPIES: &str = "
+DROP TABLE IF EXISTS proposals;
+DROP TABLE IF EXISTS runs;
+DROP TABLE IF EXISTS run_events;
+DROP TABLE IF EXISTS run_messages;
+DROP TABLE IF EXISTS run_reports;
+DROP TABLE IF EXISTS run_report_tokens;
+DROP TABLE IF EXISTS pip_turns;
+DROP TABLE IF EXISTS workstreams;
+DROP TABLE IF EXISTS workstream_events;
+DELETE FROM meta WHERE k LIKE 'claude:%' OR k = 'pip_sessions';";
+
+pub(crate) const STEPS: &[&str] = &[INBOX, CACHE, PROPOSALS, WATCH, CODE, LINKS, RUNS, RUN_REPORTS, PIP_TURNS, WORKSTREAMS, PROPOSAL_WORKSTREAMS, GENERAL_CONVERSATION, RUN_ARCHIVE, WAKE_LEDGER, RUN_START_KEYS, RETIRE_AGENT_DRAFTS, RUN_ROLES, WATCH_LIST, DROP_APP_COPIES];
 
 /// What Gossamr itself keeps, apart from any one connection's cache: drafts, runs and their reports, workstreams, Pip's
 /// conversations and the sessions Pip started. These are the final shapes of the tables the cache steps built up, so
-/// the rows of an existing cache copy across column for column. The cache files keep their own, now unused, copies of
-/// these tables until a later step drops them.
+/// the rows of an existing cache copy across column for column.
 const APP: &str = "
 CREATE TABLE proposals (
   id TEXT PRIMARY KEY,
@@ -512,10 +525,8 @@ const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages",
 const APP_META_KEYS: &str = "k LIKE 'claude:%'";
 
 /// How many of the cache's steps it takes to give its copies of the app tables their final shape. The copy into the
-/// app database reads them after these and before any later step, so a step that drops them cannot run first.
+/// app database reads them after these and before `DROP_APP_COPIES`, so that step cannot run first.
 pub const CACHE_STEPS_WITH_APP_STATE: usize = 18;
-
-const RETIRED_ON_COPY: &str = "Gossamr moved its drafts to a new database. Draft this again if it is still needed.";
 
 pub(crate) fn apply(conn: &mut Connection, steps: &[&str]) -> Result<()> {
     let applied: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -540,9 +551,8 @@ fn own_sessions(json: Option<String>) -> Vec<String> {
     json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-/// Copies the app state a cache file holds into the app database, once per cache file, then retires the drafts the
-/// cache still shows as open so a release from before the move cannot post them a second time. The cache keeps its
-/// rows: a later step deletes them, after a release has run on the copy. Needs the cache attached as `cache`. Returns
+/// Copies the app state a cache file holds into the app database, once per cache file. The cache keeps its rows until
+/// `DROP_APP_COPIES`, which the caller applies after this returns. Needs the cache attached as `cache`. Returns
 /// what the cache held that a closed app left half done.
 pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Adopted> {
     let marker = format!("copied:{cache_file}");
@@ -575,12 +585,6 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Ado
     if held.contains(&"proposals") {
         let mut stmt = tx.prepare("SELECT id FROM cache.proposals WHERE state = 'applying'")?;
         adopted.applying = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        drop(stmt);
-        tx.execute(
-            "UPDATE cache.proposals SET state = 'retired', data = json_set(data, '$.state', json_object('type', 'retired', 'reason', ?1))
-             WHERE state IN ('pending', 'applying')",
-            [RETIRED_ON_COPY],
-        )?;
     }
     tx.execute("INSERT INTO main.app_meta (k, v) VALUES (?1, '1')", [&marker])?;
     tx.commit()?;
@@ -619,6 +623,11 @@ fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// The shape a cache has when the app database copies from it, which is what the steps before `DROP_APP_COPIES` build.
+    fn migrate_to_copy_shape(conn: &mut Connection) -> Result<()> {
+        apply(conn, &STEPS[..CACHE_STEPS_WITH_APP_STATE])
+    }
+
     fn tables(conn: &Connection) -> Vec<String> {
         let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").unwrap();
         stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
@@ -631,7 +640,7 @@ mod tests {
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
         };
         let mut cache = Connection::open_in_memory().unwrap();
-        migrate(&mut cache).unwrap();
+        migrate_to_copy_shape(&mut cache).unwrap();
         let mut app = Connection::open_in_memory().unwrap();
         migrate_app(&mut app).unwrap();
         for table in APP_TABLES {
@@ -641,14 +650,36 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_file_gets_every_table_and_the_latest_version() {
+    fn a_fresh_file_gets_the_cache_tables_and_none_of_the_app_ones_at_the_latest_version() {
         let mut conn = Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let names = tables(&conn);
-        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "proposals", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links", "runs", "run_events", "run_reports", "run_report_tokens", "run_messages", "pip_turns", "workstreams", "workstream_events"] {
+        for t in ["tickets", "events", "activity", "seen", "meta", "items", "containers", "workflows", "cache_events", "sync_state", "watch_settings", "watched_containers", "container_catalog", "code_changes", "http_cache", "item_links"] {
             assert!(names.contains(&t.to_string()), "missing {t}");
         }
+        for t in APP_TABLES {
+            assert!(!names.contains(&t.to_string()), "{t} belongs to the app database");
+        }
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+    }
+
+    #[test]
+    fn dropping_the_app_copies_keeps_the_cache_and_removes_only_the_sessions_pip_started_from_meta() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO proposals (id, connection_id, state, created_at, updated_at, data) VALUES ('p', 'c', 'pending', 't', 't', '{}');
+             INSERT INTO meta (k, v) VALUES ('claude:CA-1', '{}'), ('pip_sessions', '[]'), ('last_sync_at', 't'), ('claude_note', 'x');
+             INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x');",
+        )
+        .unwrap();
+
+        migrate(&mut conn).unwrap();
+
+        assert!(!tables(&conn).contains(&"proposals".to_string()));
+        let kept: Vec<String> = conn.prepare("SELECT k FROM meta ORDER BY k").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert_eq!(kept, ["claude_note", "last_sync_at"]);
+        assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]
@@ -659,7 +690,7 @@ mod tests {
         conn.execute("INSERT INTO seen (ticket_key, at) VALUES ('CA-1', '2026-09-02T00:00:00Z')", []).unwrap();
         assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         assert_eq!(conn.query_row("SELECT count(*) FROM tickets", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM seen", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
@@ -674,7 +705,7 @@ mod tests {
         conn.pragma_update(None, "user_version", 2).unwrap();
         conn.execute("INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x')", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         assert!(tables(&conn).contains(&"proposals".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
@@ -696,7 +727,7 @@ mod tests {
         )
         .unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         for t in ["sync_state", "containers", "items"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
@@ -704,7 +735,7 @@ mod tests {
         for t in ["watch_settings", "watched_containers", "container_catalog"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
         for t in ["code_changes", "http_cache"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
@@ -720,12 +751,12 @@ mod tests {
         conn.execute("INSERT INTO watch_settings (connection_id, mode, updated_at) VALUES ('c', 'selected', 't')", []).unwrap();
         conn.execute("INSERT INTO container_catalog (connection_id, external_id, key, name, seen_at) VALUES ('c', 'CA', 'CA', 'Cats', 't')", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         assert!(tables(&conn).contains(&"code_changes".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM watch_settings", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM container_catalog", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -743,13 +774,13 @@ mod tests {
         .unwrap();
         conn.execute("INSERT INTO http_cache (connection_id, url, body, fetched_at) VALUES ('github:ann', 'u', '[]', 't')", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         assert!(tables(&conn).contains(&"item_links".to_string()));
         for t in ["code_changes", "http_cache"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -766,7 +797,7 @@ mod tests {
         .unwrap();
         conn.execute("INSERT INTO item_links (item_connection_id, item_id, item_key, connection_id, code_id, provenance, confidence, found_at) VALUES ('c', '1', 'A-1', 'g', 'x', 'branch', 1.0, 't')", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         for t in ["runs", "run_events"] {
             assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
@@ -775,7 +806,7 @@ mod tests {
         for t in ["proposals", "item_links"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -803,7 +834,7 @@ mod tests {
         run("closed", "w-closed", "done", "");
         conn.execute("INSERT INTO workstream_events (workstream_id, seq, at, actor, action) VALUES ('w-open', 0, 't', 'person', 'opened')", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let mut stmt = conn.prepare("SELECT workstream_id || ' ' || seq || ' ' || actor || ' ' || action || ' ' || COALESCE(run_id, '-') || ' ' || COALESCE(detail, '-') FROM workstream_events ORDER BY workstream_id, seq").unwrap();
         let rows: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
@@ -821,8 +852,8 @@ mod tests {
     #[test]
     fn a_fresh_file_is_at_version_twelve() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrate(&mut conn).unwrap();
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        migrate_to_copy_shape(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -841,18 +872,18 @@ mod tests {
         conn.execute("INSERT INTO run_reports (run_id, revision) VALUES ('r1', 2)", []).unwrap();
         assert!(!tables(&conn).contains(&"pip_turns".to_string()));
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         for t in ["runs", "proposals", "run_reports"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
         }
         assert!(tables(&conn).contains(&"pip_turns".to_string()));
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -868,7 +899,7 @@ mod tests {
         )
         .unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         for t in ["run_reports", "run_report_tokens"] {
             assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
@@ -880,13 +911,13 @@ mod tests {
     #[test]
     fn migrating_twice_changes_nothing() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
         conn.execute("INSERT INTO sync_state (connection_id, cursor) VALUES ('c', 'x')", []).unwrap();
         conn.execute("INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('workspace', 'q1', 'pip', 'done', 't')", []).unwrap();
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM sync_state", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM pip_turns", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -905,7 +936,7 @@ mod tests {
         conn.execute("INSERT INTO pip_turns (conversation, request_id, role, status, created_at) VALUES ('workspace', 'q1', 'pip', 'done', 't')", []).unwrap();
         assert!(!tables(&conn).contains(&"workstreams".to_string()));
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         for t in ["runs", "proposals", "pip_turns"] {
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 1, "{t}");
@@ -914,18 +945,18 @@ mod tests {
             assert!(tables(&conn).contains(&t.to_string()), "missing {t}");
             assert_eq!(conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{t}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
 
         conn.execute("INSERT INTO workstreams (id, connection_id, item_key, title, mode, created_at, data) VALUES ('w1', 'c', 'CA-1', 't', 'advise', 't', '{}')", []).unwrap();
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM workstreams", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
     fn one_open_workstream_per_ticket_but_any_number_closed_or_ticketless() {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
         let add = |id: &str, key: Option<&str>, closed: Option<&str>| {
             conn.execute(
                 "INSERT INTO workstreams (id, connection_id, item_key, title, mode, created_at, closed_at, data) VALUES (?1, 'c', ?2, 't', 'advise', 't', ?3, '{}')",
@@ -956,7 +987,7 @@ mod tests {
         add("empty", "{}");
         add("broken", "not json");
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let row = |id: &str| {
             conn.query_row("SELECT origin_kind, workstream FROM proposals WHERE id = ?1", [id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))).unwrap()
@@ -968,8 +999,8 @@ mod tests {
         assert_eq!(row("in-ws"), (some("chat"), some("w2")), "the origin's workstream wins");
         assert_eq!(row("empty"), (None, None));
         assert_eq!(row("broken"), (None, None));
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
-        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM proposals", [], |r| r.get::<_, i64>(0)).unwrap(), 6);
     }
 
@@ -994,13 +1025,13 @@ mod tests {
         add("CA-1", "q3");
         add("ws:w1", "q4");
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let in_conversation = |conn: &Connection, c: &str| conn.query_row("SELECT count(*) FROM pip_turns WHERE conversation = ?1", [c], |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!((in_conversation(&conn, "general"), in_conversation(&conn, "workspace")), (4, 0));
         assert_eq!((in_conversation(&conn, "CA-1"), in_conversation(&conn, "ws:w1")), (2, 2));
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
-        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(in_conversation(&conn, "general"), 4);
     }
 
@@ -1013,11 +1044,11 @@ mod tests {
         conn.pragma_update(None, "user_version", 12).unwrap();
         conn.execute("INSERT INTO runs (id, proposal_id, connection_id, kind, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('r1', 'p1', 'c', 'investigate', 'a/b', '/w', 'done', 't', 't', '{}')", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         assert_eq!(conn.query_row("SELECT archived_at FROM runs WHERE id = 'r1'", [], |r| r.get::<_, Option<String>>(0)).unwrap(), None);
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
-        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
@@ -1036,13 +1067,13 @@ mod tests {
             .unwrap();
         }
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let roles: Vec<(String, String)> = conn.prepare("SELECT id, role FROM runs ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         assert_eq!(roles, [("r1".to_string(), "investigate".to_string()), ("r2".to_string(), "build".to_string())]);
         assert!(conn.prepare("SELECT kind FROM runs").is_err(), "the column is the role now");
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
-        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
@@ -1065,7 +1096,7 @@ mod tests {
         insert("r2", "p2", "/w2", None);
         conn.execute("UPDATE runs SET archived_at = '2026-10-01T00:00:00Z' WHERE id = 'r2'", []).unwrap();
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let row = |id: &str| conn.query_row("SELECT proposal_id, start_key, short_id, archived_at, data FROM runs WHERE id = ?1", [id], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?))).unwrap();
         assert_eq!(row("r1"), (Some("p1".into()), "p1".into(), Some("aa11bb22".into()), None, "{\"id\":\"x\"}".into()));
@@ -1088,8 +1119,8 @@ mod tests {
         for index in ["runs_start", "runs_proposal", "runs_worktree", "runs_short", "runs_state", "runs_item", "runs_archived"] {
             assert_eq!(conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?1", [index], |r| r.get::<_, i64>(0)).unwrap(), 1, "{index}");
         }
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
-        migrate(&mut conn).unwrap();
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
+        migrate_to_copy_shape(&mut conn).unwrap();
         assert_eq!(conn.query_row("SELECT count(*) FROM runs", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
     }
 
@@ -1110,7 +1141,7 @@ mod tests {
         add("comment", "pending", "comment");
         add("sent", "applied", "startRun");
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let row = |id: &str| conn.query_row("SELECT state, data FROM proposals WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str::<serde_json::Value>(&r.get::<_, String>(1)?).unwrap()))).unwrap();
         for id in ["start", "follow", "answer"] {
@@ -1125,7 +1156,7 @@ mod tests {
         }
         assert_eq!(row("comment").0, "pending");
         assert_eq!(row("sent").0, "applied");
-        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), STEPS.len() as i64);
+        assert_eq!(conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), CACHE_STEPS_WITH_APP_STATE as i64);
     }
 
     #[test]
@@ -1143,7 +1174,7 @@ mod tests {
             .unwrap();
         }
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let left: Vec<String> = conn.prepare("SELECT container_id FROM watched_containers").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         assert_eq!(left, ["KEEP"]);
@@ -1183,7 +1214,7 @@ mod tests {
             conn.execute("INSERT INTO sync_state (connection_id, cursor, full_at) VALUES (?1, 'x', 'f')", [c]).unwrap();
         }
 
-        migrate(&mut conn).unwrap();
+        migrate_to_copy_shape(&mut conn).unwrap();
 
         let items: Vec<String> = conn.prepare("SELECT external_id FROM items ORDER BY external_id").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
         assert_eq!(items, ["INV-1", "OTHER-1", "WHOLE-OLD"]);

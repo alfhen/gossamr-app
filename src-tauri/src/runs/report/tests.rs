@@ -45,7 +45,7 @@ fn old_structured_reports_read_without_recreating_draft_fields() {
 }
 
 fn fixture_run(answer: Option<&str>, complete: bool) -> Run {
-    let mut run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), "db".into(), chrono::Utc::now());
+    let mut run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), chrono::Utc::now());
     run.result = answer.map(Into::into);
     run.result_complete = complete;
     run

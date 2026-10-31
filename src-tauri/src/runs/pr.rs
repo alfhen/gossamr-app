@@ -44,7 +44,7 @@ mod tests {
     use crate::domain::RunState;
 
     fn run() -> Run {
-        let mut r = Run::queued("r".into(), "p".into(), "c".into(), None, run_spec(), "f".into(), Utc::now());
+        let mut r = Run::queued("r".into(), "p".into(), "c".into(), None, run_spec(), Utc::now());
         r.state = RunState::Done;
         r
     }

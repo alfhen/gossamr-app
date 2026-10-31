@@ -148,7 +148,6 @@ const SESSION_PREFIX: &str = "Gossamr: ";
 
 fn entry_of(run: &Run) -> Entry {
     Entry {
-        db_file: run.db_file.clone(),
         run_id: run.id.clone(),
         expected_worktree: run.expected_worktree.clone(),
         short_id: run.short_id.clone(),

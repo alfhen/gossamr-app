@@ -17,7 +17,6 @@ const FILE: &str = "run-index.json";
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
-    pub db_file: String,
     pub run_id: String,
     pub expected_worktree: PathBuf,
     #[serde(default)]
@@ -110,7 +109,6 @@ mod tests {
 
     fn entry(run_id: &str, short: Option<&str>) -> Entry {
         Entry {
-            db_file: "inbox-a.sqlite".into(),
             run_id: run_id.into(),
             expected_worktree: format!("/c/.claude/worktrees/{run_id}").into(),
             short_id: short.and_then(ShortId::parse),
@@ -162,12 +160,21 @@ mod tests {
     }
 
     #[test]
+    fn an_index_written_with_a_database_file_still_loads() {
+        let d = dir("old-entries");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("run-index.json"), r#"[{"dbFile":"inbox-a.sqlite","runId":"r","expectedWorktree":"/x"}]"#).unwrap();
+        assert_eq!(RunIndex::load(&d).live(), vec![Entry { run_id: "r".into(), expected_worktree: "/x".into(), short_id: None, terminal: false }]);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
     fn a_short_id_that_is_not_one_makes_the_file_unreadable_rather_than_trusted() {
         let d = dir("badid");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join("run-index.json"),
-            r#"[{"dbFile":"f","runId":"r","expectedWorktree":"/x","shortId":"../../etc"}]"#,
+            r#"[{"runId":"r","expectedWorktree":"/x","shortId":"../../etc"}]"#,
         )
         .unwrap();
         assert!(RunIndex::load(&d).live().is_empty());

@@ -485,8 +485,6 @@ pub struct Run {
     /// Set with `error` when a launch fails; absent for failures the tracker saw after the session started.
     #[serde(default)]
     pub failure: Option<RunFailure>,
-    /// The database file of the account the run belongs to.
-    pub db_file: String,
     pub queued_at: DateTime<Utc>,
     pub launched_at: Option<DateTime<Utc>>,
     pub last_progress_at: DateTime<Utc>,
@@ -549,7 +547,7 @@ impl Run {
     }
 
     /// A run that has been approved and not started.
-    pub fn queued(id: String, proposal_id: String, connection_id: String, item: Option<ItemRef>, spec: RunSpec, db_file: String, at: DateTime<Utc>) -> Self {
+    pub fn queued(id: String, proposal_id: String, connection_id: String, item: Option<ItemRef>, spec: RunSpec, at: DateTime<Utc>) -> Self {
         Run {
             id,
             proposal_id,
@@ -573,7 +571,6 @@ impl Run {
             result_complete: false,
             error: None,
             failure: None,
-            db_file,
             queued_at: at,
             launched_at: None,
             last_progress_at: at,
@@ -593,9 +590,9 @@ impl Run {
     }
 
     /// A run Pip started while answering `request_id`, in the conversation of `workstream`. It has no draft behind it.
-    pub fn started_by_pip(id: String, connection_id: String, item: Option<ItemRef>, spec: RunSpec, db_file: String, request_id: &str, at: DateTime<Utc>) -> Self {
+    pub fn started_by_pip(id: String, connection_id: String, item: Option<ItemRef>, spec: RunSpec, request_id: &str, at: DateTime<Utc>) -> Self {
         let origin = Origin::Chat { request_id: request_id.into(), workstream: spec.workstream.clone() };
-        Run { created_by: CreatedBy::Pip, origin: Some(origin), ..Run::queued(id, String::new(), connection_id, item, spec, db_file, at) }
+        Run { created_by: CreatedBy::Pip, origin: Some(origin), ..Run::queued(id, String::new(), connection_id, item, spec, at) }
     }
 }
 
@@ -642,7 +639,7 @@ mod tests {
     }
 
     fn queued(spec: RunSpec) -> Run {
-        Run::queued("r".into(), "p".into(), "c".into(), None, spec, "f".into(), Utc::now())
+        Run::queued("r".into(), "p".into(), "c".into(), None, spec, Utc::now())
     }
 
     #[test]
@@ -973,7 +970,7 @@ mod tests {
         assert_eq!((old.created_by, old.origin.clone(), old.proposal_id.as_str()), (CreatedBy::User, None, "p"));
         assert!(serde_json::to_value(&old).unwrap().get("origin").is_none(), "a person's run stores no origin");
 
-        let by_pip = Run::started_by_pip("r2".into(), "c".into(), None, RunSpec { workstream: Some("w1".into()), ..spec() }, "f".into(), "req-1", Utc::now());
+        let by_pip = Run::started_by_pip("r2".into(), "c".into(), None, RunSpec { workstream: Some("w1".into()), ..spec() }, "req-1", Utc::now());
         assert_eq!((by_pip.created_by, by_pip.proposal_id.as_str(), by_pip.origin.clone()), (CreatedBy::Pip, "", Some(Origin::Chat { request_id: "req-1".into(), workstream: Some("w1".into()) })));
         assert_eq!(serde_json::from_value::<Run>(serde_json::to_value(&by_pip).unwrap()).unwrap(), by_pip);
     }

@@ -274,7 +274,7 @@ mod tests {
     }
 
     fn run(id: &str, kind: &str, state: RunState, mins: i64) -> Run {
-        let mut r = Run::queued(id.into(), format!("p-{id}"), "c".into(), None, RunSpec { role: Role::parse(kind).unwrap(), ..run_spec() }, "f".into(), at(mins));
+        let mut r = Run::queued(id.into(), format!("p-{id}"), "c".into(), None, RunSpec { role: Role::parse(kind).unwrap(), ..run_spec() }, at(mins));
         r.state = state;
         r
     }

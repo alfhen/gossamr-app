@@ -560,7 +560,6 @@ export interface Run {
   error: string | null;
   /** Set with `error` when a launch fails; absent for a run that stopped after it started. */
   failure?: RunFailure | null;
-  dbFile: string;
   queuedAt: string;
   launchedAt: string | null;
   lastProgressAt: string;

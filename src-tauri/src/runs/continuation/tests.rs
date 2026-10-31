@@ -7,7 +7,7 @@ use crate::runs::service::belongs_to;
 use crate::runs::testing::FakeCli;
 
 fn stopped_run() -> Run {
-    let mut run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), "db".into(), Utc::now() - Span::hours(3));
+    let mut run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, run_spec(), Utc::now() - Span::hours(3));
     run.state = RunState::Stopped;
     run.short_id = ShortId::parse("2afa0a22");
     run.last_progress_at = Utc::now() - Span::hours(1);

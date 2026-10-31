@@ -28,7 +28,7 @@ impl Drop for Scratch {
 
 fn run(id: &str, state: RunState, ended_days_ago: i64) -> Run {
     let now = Utc::now();
-    let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), None, run_spec(), "f".into(), now - Days::days(ended_days_ago + 1));
+    let mut r = Run::queued(id.into(), format!("p{id}"), "c".into(), None, run_spec(), now - Days::days(ended_days_ago + 1));
     r.state = state;
     r.ended_at = Some(now - Days::days(ended_days_ago));
     r

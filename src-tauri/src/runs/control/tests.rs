@@ -131,7 +131,7 @@ async fn a_run_waiting_on_the_person_can_be_stopped() {
 }
 
 fn other_account(run_id: &str, id: &str) -> Entry {
-    Entry { db_file: "inbox-other.sqlite".into(), run_id: run_id.into(), expected_worktree: format!("/elsewhere/{run_id}").into(), short_id: ShortId::parse(id), terminal: false }
+    Entry { run_id: run_id.into(), expected_worktree: format!("/elsewhere/{run_id}").into(), short_id: ShortId::parse(id), terminal: false }
 }
 
 #[tokio::test]
