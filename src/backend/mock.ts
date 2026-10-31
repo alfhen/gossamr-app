@@ -1095,6 +1095,16 @@ export class MockBackend implements Backend {
     this.connectionsListeners.forEach((l) => l());
   }
 
+  async connectionSetEnabled(instanceId: string, enabled: boolean) {
+    const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
+    if (!target) throw new Error("This connection is gone. Reopen Settings.");
+    if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be turned off.");
+    const posting = this.proposals.list({ states: ["applying"] }).some((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
+    if (!enabled && posting) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
+    this.github.setEnabled(enabled);
+    this.connectionsListeners.forEach((l) => l());
+  }
+
   async connectionRemove(instanceId: string) {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");

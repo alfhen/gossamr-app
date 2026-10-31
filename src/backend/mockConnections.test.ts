@@ -58,3 +58,47 @@ describe("the mock connection actions", () => {
     expect(await b.connectionsList()).toHaveLength(2);
   });
 });
+
+describe("the mock on/off switch", () => {
+  const github = async (b: MockBackend) => (await b.connectionsList()).find((c) => c.instanceId === "github")!;
+
+  it("turns GitHub off, so its row reads Off, and back on, so the probe answers again, telling the page each time", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    let told = 0;
+    b.onConnectionsChanged(() => told++);
+    await b.connectionSetEnabled("github", false);
+    expect(await github(b)).toMatchObject({ enabled: false, status: { state: "off" } });
+    await b.connectionSetEnabled("github", true);
+    expect(await github(b)).toMatchObject({ enabled: true, status: { state: "ready" } });
+    expect(told).toBe(2);
+  });
+
+  it("brings back the state the probe was in, and turns on a connection whose probe was forced off", async () => {
+    const b = new MockBackend({ githubRepos: 6, githubProbe: "notSignedIn" });
+    await b.connectionSetEnabled("github", false);
+    await b.connectionSetEnabled("github", true);
+    expect((await github(b)).status?.state).toBe("notSignedIn");
+    const forced = new MockBackend({ githubRepos: 6, githubProbe: "off" });
+    expect((await github(forced)).enabled).toBe(false);
+    await forced.connectionSetEnabled("github", true);
+    expect(await github(forced)).toMatchObject({ enabled: true, status: { state: "ready" } });
+  });
+
+  it("refuses to turn off while a review is being posted, and refuses the sample data and a connection that is gone", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const draft = b.proposals.draft({ type: "githubReview", connectionId: "github:ada", item: null, runId: "r1", repo: "acme/webshop", number: 1, commitSha: "abcdef1", summary: "Fine.", comments: [] }, "Review from Pip");
+    void b.proposals.postReview(draft.id, 0, () => new Promise(() => {}), async () => null);
+    await expect(b.connectionSetEnabled("github", false)).rejects.toThrow("posting a draft for GitHub right now");
+    expect((await github(b)).enabled).toBe(true);
+    await expect(b.connectionSetEnabled("jira", false)).rejects.toThrow("built in");
+    await expect(b.connectionSetEnabled("github_9", false)).rejects.toThrow("gone");
+  });
+
+  it("starts a new account on, even when the one removed was off", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await b.connectionSetEnabled("github", false);
+    await b.connectionRemove("github");
+    await b.githubConnectToken("ghp_x");
+    expect((await b.connectionsList()).find((c) => c.instanceId === "github_2")?.enabled).toBe(true);
+  });
+});

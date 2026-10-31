@@ -337,6 +337,15 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
     Ok(())
 }
 
+/// Turns an instance on or off, then asks it how it stands: Off for one just turned off, a real answer for one turned on.
+#[tauri::command]
+async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, instance_id: String, enabled: bool) -> Result<()> {
+    let connection_id = core.set_instance_enabled(&instance_id, enabled).await?;
+    core.probe_instance_now(&instance_id).await;
+    wire::changed(&app, wire::Topic::Connections, &connection_id);
+    Ok(())
+}
+
 /// Removes a connection instance: its token, cache and open drafts go, and its id is never used again.
 #[tauri::command]
 async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()> {
@@ -999,6 +1008,7 @@ pub fn run() {
             connections_list,
             connection_open_terminal,
             connection_rename,
+            connection_set_enabled,
             connection_remove,
             dev_links,
             code_pull_request,
