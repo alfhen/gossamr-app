@@ -560,10 +560,12 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Ado
     let marker = format!("copied:{cache_file}");
     let copied = conn.query_row("SELECT 1 FROM main.app_meta WHERE k = ?1", [&marker], |_| Ok(())).optional()?;
     if copied.is_some() {
+        let tx = conn.unchecked_transaction()?;
+        copy_cached_rows(&tx)?;
+        tx.commit()?;
         return Ok(Adopted::default());
     }
     let tx = conn.unchecked_transaction()?;
-    let mut held = Vec::new();
     let mut adopted = Adopted::default();
     if has_cached_table(&tx, "pip_turns")? {
         let mut stmt = tx.prepare(
@@ -572,18 +574,7 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Ado
         )?;
         adopted.pip_turns = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     }
-    for table in APP_TABLES {
-        let mut stmt = tx.prepare(&format!("SELECT name FROM pragma_table_info('{table}', 'cache')"))?;
-        let columns = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join(", ");
-        if columns.is_empty() {
-            continue;
-        }
-        tx.execute_batch(&format!("INSERT OR IGNORE INTO main.{table} ({columns}) SELECT {columns} FROM cache.{table};"))?;
-        held.push(*table);
-    }
-    if !held.is_empty() {
-        copy_cached_meta(&tx)?;
-    }
+    let held = copy_cached_rows(&tx)?;
     if held.contains(&"proposals") {
         let mut stmt = tx.prepare("SELECT id FROM cache.proposals WHERE state = 'applying'")?;
         adopted.applying = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -599,6 +590,25 @@ pub fn adopt_cached_app_state(conn: &Connection, cache_file: &str) -> Result<Ado
 pub struct Adopted {
     pub applying: Vec<String>,
     pub pip_turns: Vec<String>,
+}
+
+/// Copies the cache's app rows the app database lacks, so rows a release from before the move wrote to a cache that was
+/// already marked copied survive `CLEAR_APP_COPIES`. Returns the tables the cache held.
+fn copy_cached_rows(tx: &rusqlite::Transaction) -> Result<Vec<&'static str>> {
+    let mut held = Vec::new();
+    for table in APP_TABLES {
+        let mut stmt = tx.prepare(&format!("SELECT name FROM pragma_table_info('{table}', 'cache')"))?;
+        let columns = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?.join(", ");
+        if columns.is_empty() {
+            continue;
+        }
+        tx.execute_batch(&format!("INSERT OR IGNORE INTO main.{table} ({columns}) SELECT {columns} FROM cache.{table};"))?;
+        held.push(*table);
+    }
+    if !held.is_empty() {
+        copy_cached_meta(tx)?;
+    }
+    Ok(held)
 }
 
 fn has_cached_table(conn: &Connection, table: &str) -> Result<bool> {

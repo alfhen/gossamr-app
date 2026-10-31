@@ -27,7 +27,7 @@ pub use cache::{stamp, SyncState, Upserted};
 pub use runs::ARCHIVABLE;
 pub use code::CachedHttp;
 pub use proposals::is_for;
-pub use pip_turns::{PipTurn, NEVER_RAN, SIGNED_OUT};
+pub use pip_turns::{PipTurn, DISCONNECTED, NEVER_RAN, SIGNED_OUT};
 #[cfg(test)]
 pub use pip_turns::INTERRUPTED;
 
@@ -584,6 +584,25 @@ mod tests {
             let db = Db::open_with_app(&cache, &app).unwrap();
             assert!(db.proposal(&p.id).unwrap().is_some(), "a cache that was already emptied is skipped, not an error");
             drop(db);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn rows_a_release_from_before_the_move_wrote_to_a_copied_cache_are_kept_when_it_is_emptied() {
+            let (cache, app, dir, first) = legacy_cache_with("topped-up", &comment_on("jira:site:ann"));
+            let mut conn = Connection::open(&app).unwrap();
+            schema::migrate_app(&mut conn).unwrap();
+            conn.execute("INSERT INTO app_meta (k, v) VALUES (?1, '1')", [format!("copied:{}", cache.file_name().unwrap().to_string_lossy())]).unwrap();
+            drop(conn);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let later = create(&old, Draft::from_pip("later", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            drop(old);
+
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_some());
+            assert!(db.proposal(&first.id).unwrap().is_some());
+            drop(db);
+            assert_eq!(count(&cache, "proposals"), 0);
             let _ = std::fs::remove_dir_all(dir);
         }
 
