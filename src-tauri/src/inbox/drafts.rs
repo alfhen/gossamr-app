@@ -532,6 +532,12 @@ mod tests {
         fx.core.set_instance_enabled("jira", false).await.unwrap();
 
         assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_none());
+
+        // The recorder can't sync: reaching it is what panics.
+        fx.core.set_instance_enabled("jira", true).await.unwrap();
+        let core = fx.core.clone();
+        let reached = tokio::spawn(async move { core.sync_if_due(crate::sync::Trigger::Now).await }).await;
+        assert!(reached.err().is_some_and(|e| e.is_panic()), "once on, the loop asks the tracker again");
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { githubPostsTried, openApp, peekSheet, peekTicket, reviewDrafts, reviewedDraft, toast } from "./support/app";
+import { githubPostsTried, githubWrites, openApp, peekSheet, peekTicket, reviewDrafts, reviewedDraft, toast } from "./support/app";
 
 async function openSettings(page: Page) {
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
@@ -66,7 +66,7 @@ test.describe("the Connections list", () => {
     await expect(rowOf(page, "GitHub")).not.toContainText("Authenticated");
     await rowOf(page, "GitHub").getByRole("button").click();
     const detail = page.getByRole("region", { name: "GitHub details" });
-    await expect(detail).toContainText("Gossamr doesn't sync it, Pip can't see it and drafts for it wait.");
+    await expect(detail).toContainText("Gossamr doesn't sync it and drafts for it wait.");
     await expect(detail.getByRole("button", { name: "Sync now" })).toBeDisabled();
     await github.click();
     await expect(github).toBeChecked();
@@ -175,6 +175,10 @@ test.describe("the Connections list", () => {
     await peekTicket(page, "CA-402");
     await expect(held).toContainText("Posts as ada via GitHub");
     await expect(held.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(await githubPostsTried(page)).toBe(0);
+    await held.getByRole("button", { name: "Approve" }).click();
+    await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
+    expect(await githubPostsTried(page)).toBe(1);
   });
 
   test("opens the Connect GitHub sheet from the foot of the list, with the account already connected marked and the login command for another", async ({ page }) => {

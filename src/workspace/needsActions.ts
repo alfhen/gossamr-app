@@ -1,6 +1,7 @@
 import type { Need } from "../lib/needs";
 import { useWorkspace } from "../workspaceStore";
 import { draftKeyAction } from "./draftKeys";
+import { heldNow } from "./draftHold";
 import { liveDraft } from "./draftLive";
 import { keptEditsOfDraft } from "./DraftCard";
 import { draftDecisions } from "./DraftPreview";
@@ -123,12 +124,13 @@ export function keyPlan(need: Need, which: NeedKey): KeyPlan | null {
     switch (need.primary.id) {
       case "approve":
         // A draft its card approves in place (unless the card holds an edit or a pause, which only the card's own Post handles); a rewrite, a review the token can't be known to post and the rest open.
-        if (p && draftKeyAction(p, "a") === "approve" && !needsCard(p)) {
+        if (p && !heldNow(p) && draftKeyAction(p, "a") === "approve" && !needsCard(p)) {
           const decide = draftDecisions(p.id, p);
           return { type: "ask", text: `${need.kind === "question" ? "send" : "approve"} ${thing(need)}`, run: decide.approve };
         }
         // An edit or a pause is why a approves nothing here: the card does, so say so.
-        return { type: "open", edit: false, ...(p && draftKeyAction(p, "a") === "approve" ? { note: OPENED_NOT_POSTED } : {}) };
+        // A draft that waits for its connection is opened for its card to say so, and nothing else is claimed.
+        return { type: "open", edit: false, ...(p && !heldNow(p) && draftKeyAction(p, "a") === "approve" ? { note: OPENED_NOT_POSTED } : {}) };
       case "retry":
         return run ? { type: "ask", text: "retry this run", run: () => void useRuns.getState().retryLaunch(run.id) } : null;
       case "resume":

@@ -6,6 +6,12 @@ import type { ConnectionInfo, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { DraftCard } from "./DraftCard";
 import { heldNote } from "../lib/proposals";
+import { needGroups, needs } from "../lib/needs";
+import { batchCommands, contextCommands, type ContextDeps } from "./contextCommands";
+import { DraftPeekView } from "./DraftPeek";
+import { DraftPreview } from "./DraftPreview";
+import { fieldsOf } from "./draftTicket";
+import { keyPlan } from "./needsActions";
 import { postsAs } from "./draftHold";
 import { sample } from "./reviewSample";
 import { ReviewDraft } from "./ReviewDraft";
@@ -87,5 +93,79 @@ describe("the cards of a draft that waits", () => {
     expect(batchable([base])).toEqual([]);
     seen([jira]);
     expect(batchable([base]).map((p) => p.id)).toEqual(["p1"]);
+  });
+
+  it("follow the connections the step rail was drawn with, not only what the store holds now", () => {
+    seen([jira]);
+    expect(batchable([base], [{ ...jira, enabled: false }])).toEqual([]);
+  });
+});
+
+describe("every way to approve a draft that waits", () => {
+  beforeEach(() => vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} }));
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    seen([]);
+  });
+  const seen = (connections: ConnectionInfo[]) => {
+    useWorkspace.setState({ connections, proposals: {} });
+    Object.assign(useWorkspace.getInitialState(), { connections });
+  };
+  const comment = (id: string, text: string): Proposal => ({ ...base, id, intent: { ...base.intent, body: docFromText(text) } as Proposal["intent"] });
+  const drafts = [comment("c1", "One"), comment("c2", "Two"), comment("c3", "Three")];
+  const listed = (connections: ConnectionInfo[], proposals = drafts) => needs({ workstreams: [], runs: [], proposals, dismissed: new Set(), connections });
+  const deps = (): ContextDeps => ({ needAct: vi.fn(), openInWorkstream: vi.fn(), approveDraft: vi.fn(), openDraft: vi.fn(), skipDraft: vi.fn(), draftInWorkstream: vi.fn(), openRun: vi.fn(), pause: vi.fn(), resume: vi.fn(), openWorkstream: vi.fn(), approveSafe: vi.fn() });
+
+  it("leaves a held draft out of the Needs you batch and the palette's batch entry", () => {
+    const held = [{ ...jira, enabled: false }];
+    expect(needGroups(listed([jira]))[0].safeBatch).toHaveLength(3);
+    expect(needGroups(listed(held))[0].safeBatch).toHaveLength(0);
+    expect(batchCommands(needGroups(listed([jira])), { approveSafe: vi.fn() })).toHaveLength(1);
+    expect(batchCommands(needGroups(listed(held)), { approveSafe: vi.fn() })).toEqual([]);
+  });
+
+  it("counts only the drafts that are not held when one connection of two is off", () => {
+    const other: Proposal = { ...comment("c4", "Four"), intent: { ...base.intent, item: { ...itemRef("CB-1"), connectionId: "jira:d:v" }, body: docFromText("Four") } as Proposal["intent"] };
+    const connections = [{ ...jira, enabled: false }, { ...jira, id: "jira:d:v", instanceId: "jira_2" }];
+    expect(needGroups(listed(connections, [...drafts, other]))[0].safeBatch.map((n) => n.key)).toEqual(["draft:c4"]);
+  });
+
+  it("makes a on a held draft open its card, and approves in place once the connection is on", () => {
+    seen([{ ...jira, enabled: false }]);
+    useWorkspace.setState({ proposals: { c1: drafts[0] } });
+    const need = listed([jira], [drafts[0]])[0];
+    expect(keyPlan(need, "approve")).toEqual({ type: "open", edit: false });
+    seen([jira]);
+    useWorkspace.setState({ proposals: { c1: drafts[0] } });
+    expect(keyPlan(need, "approve")).toMatchObject({ type: "ask" });
+  });
+
+  it("offers Review and approve in the palette in place of Approve this draft while it waits", () => {
+    const entries = () => contextCommands({ type: "draft", id: "c1" }, { needs: [], proposals: { c1: drafts[0] }, runs: [], workstreams: [] }, deps()).map((c) => c.label);
+    seen([jira]);
+    expect(entries()[0]).toBe("Approve this draft");
+    seen([{ ...jira, enabled: false }]);
+    expect(entries()[0]).toBe("Review and approve this draft");
+  });
+
+  it("shows the wait on the compact card in the conversation and keeps its key from approving", () => {
+    seen([{ ...jira, enabled: false }]);
+    const html = renderToStaticMarkup(<DraftPreview proposal={base} statusName={null} targetTitle={null} onOpen={vi.fn()} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    expect(html).toContain("Acme Jira is off. This draft waits until you turn it on.");
+    seen([jira]);
+    const live = renderToStaticMarkup(<DraftPreview proposal={base} statusName={null} targetTitle={null} onOpen={vi.fn()} onApprove={vi.fn()} onSkip={vi.fn()} />);
+    expect(live).toContain("Posts as Alf Henderson via Acme Jira");
+  });
+
+  it("turns Create off on a ticket draft that waits, and says why", () => {
+    const create: Proposal = { ...base, id: "n1", intent: { type: "create", container: { connectionId: jira.id, externalId: "DEVOPS" }, fields: { title: "Rotate the keys", body: docFromText("Soon."), kind: "task", assignee: null, parent: null, priority: null, labels: [] }, link: null } };
+    const view = () => renderToStaticMarkup(<DraftPeekView proposal={create as never} fields={fieldsOf(create as never)} containers={[]} people={[]} working={false} error={null} onChange={vi.fn()} onCommit={vi.fn()} onCreate={vi.fn()} onSkip={vi.fn()} onClose={vi.fn()} />);
+    const button = (html: string) => html.match(/<button[^>]*>Create task[\s\S]*?<\/button>/)?.[0] ?? "";
+    seen([jira]);
+    expect(button(view())).not.toContain("disabled");
+    expect(view()).toContain("Posts as Alf Henderson via Acme Jira");
+    seen([{ ...jira, enabled: false }]);
+    expect(button(view())).toContain("disabled");
+    expect(view()).toContain("Acme Jira is off. This draft waits until you turn it on.");
   });
 });

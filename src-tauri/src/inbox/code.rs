@@ -651,6 +651,9 @@ impl Core {
             }
         }
         for id in self.code.connection_ids() {
+            if self.off_name(&id).is_some() {
+                continue;
+            }
             let repos = self.watched_repos(&id)?;
             if repos.is_empty() {
                 continue;
@@ -1756,6 +1759,23 @@ pub(crate) mod tests {
         assert_eq!(lx.core().dev_links(&lx.fx.item("CA-209")).unwrap().len(), 1, "now from the cache");
         let (_, changed_again) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
         assert!(changed_again.is_empty(), "nothing new the second time");
+    }
+
+    #[tokio::test]
+    async fn a_live_search_does_not_ask_a_github_that_is_off() {
+        let lx = linked(vec![("/search/issues".into(), vec![Reply::ok(ISSUES_KEY)]), ("/search/commits".into(), vec![Reply::ok("{\"items\":[]}")])], Some("repo")).await;
+        lx.core().adopt_instances().await;
+        lx.core().watch_set_mode("github:ann", WatchMode::Everything).await.unwrap();
+        let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        lx.core().set_instance_enabled(&instance, false).await.unwrap();
+
+        let (_, changed) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
+
+        assert!(changed.is_empty());
+        assert_eq!(lx.requests_to("/search"), 0);
+        lx.core().set_instance_enabled(&instance, true).await.unwrap();
+        lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
+        assert!(lx.requests_to("/search") > 0);
     }
 
     #[tokio::test]

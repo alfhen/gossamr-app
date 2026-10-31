@@ -4,6 +4,7 @@ import { itemKey } from "../lib/filter";
 import { REVIEW_OUTDATED_NOTE, targetOf, unreachable } from "../lib/proposals";
 import type { Proposal } from "../types";
 import { useWorkspace, workflowOfItem } from "../workspaceStore";
+import { DraftAccount, useHeldNote } from "./draftHold";
 import { draftStatus } from "./boardLogic";
 import { draftSummary, draftTitle, linkSentence, useEditedDraft } from "./DraftCard";
 import { collapsible, draftFacts, isCreate, showDraft } from "./draftTicket";
@@ -149,7 +150,8 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onAppr
   const revision = p.revisions[p.revisions.length - 1];
   const made = p.intent.type === "create" && state === "applied" ? p.created[0] : undefined;
   /** Whether a may decide the draft in place: not a review the token can't post. */
-  const canApprove = p.intent.type !== "githubReview" || canPost;
+  const held = useHeldNote(p);
+  const canApprove = (p.intent.type !== "githubReview" || canPost) && !held;
   const title = draftTitle(p);
   const titleId = useId();
   const review = p.intent.type === "githubReview" && state === "pending" ? p.intent : null;
@@ -268,6 +270,7 @@ function DraftPreviewCard({ proposal: p, statusName, targetTitle, onOpen, onAppr
               </Button>
             ))}
         </div>
+        <DraftAccount proposal={p} className="border-t border-ws-sep px-2.5 py-1 text-xs" />
         {warning && (
           <p data-preview-warning className="m-0 border-t border-ws-sep bg-ws-blocked-soft px-2.5 py-1 text-xs font-semibold text-ws-blocked">
             {warning}

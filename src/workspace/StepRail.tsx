@@ -97,7 +97,8 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
   /** Set by a confirm: the confirmation and the drafts go, so the keyboard lands on what came of them. */
   const refocus = useRef(false);
   useDraftsRev();
-  const together = batchable(counted);
+  const connections = useWorkspace((s) => s.connections);
+  const together = batchable(counted, connections);
   const leftOut = repeatedComments(counted.filter((p) => !draftEdited(p.id)));
   const edited = editedPending(counted).length;
   useEffect(() => {

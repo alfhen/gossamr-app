@@ -2,7 +2,7 @@ import { repeatedComments, safeToBatch } from "../lib/needs";
 import { isRunDraft } from "../lib/proposals";
 import { stageOf, type Step } from "../lib/roles";
 import { byQueue, REVIEW_POSTED, reviewPosted, STAGE_LABEL } from "../lib/workstreamStage";
-import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent } from "../types";
+import type { CodeChange, ConnectionInfo, Proposal, ReviewView, Run, WorkstreamEvent } from "../types";
 import { liveCounts, liveWords, needsPerson, runApproved, stateView, type Tone } from "./agentsLogic";
 import { keptEditsOfDraft } from "./DraftCard";
 import { heldNote } from "../lib/proposals";
@@ -80,9 +80,8 @@ export const editedPending = (drafts: readonly Proposal[]): Proposal[] => drafts
  * person edited is posted from its card, since approving here would post the stored text. A draft whose connection is off
  * waits.
  */
-export function batchable(drafts: readonly Proposal[]): Proposal[] {
+export function batchable(drafts: readonly Proposal[], connections: readonly ConnectionInfo[] = useWorkspace.getState().connections): Proposal[] {
   // Edited drafts go first, so an edited copy of a comment can't make its unedited twin count as the repeat.
-  const { connections } = useWorkspace.getState();
   const unedited = drafts.filter((p) => !draftEdited(p.id) && !heldNote(p, connections));
   const repeated = new Set(repeatedComments(unedited).map((p) => p.id));
   return unedited.filter((p) => p.state.type === "pending" && safeToBatch(p) && !repeated.has(p.id));

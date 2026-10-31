@@ -54,8 +54,9 @@ export function useNeedsYou(): Need[] {
   const proposals = useWorkspace((s) => s.proposals);
   const items = useWorkspace((s) => s.items);
   const peeked = useWorkspace((s) => s.peeked);
+  const connections = useWorkspace((s) => s.connections);
   const pausedAt = usePausedTimes();
-  return useMemo(() => buildNeeds({ workstreams, runs, proposals: Object.values(proposals), dismissed, pausedAt, titleOf: titlesOf(items, peeked) }), [workstreams, runs, proposals, dismissed, pausedAt, items, peeked]);
+  return useMemo(() => buildNeeds({ workstreams, runs, proposals: Object.values(proposals), dismissed, pausedAt, titleOf: titlesOf(items, peeked), connections }), [workstreams, runs, proposals, dismissed, pausedAt, items, peeked, connections]);
 }
 
 /** A ticket's title by its key; one peeked from outside the watched projects has its title in the peek. */
@@ -68,7 +69,7 @@ function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peek
 export function currentNeeds(): Need[] {
   const ws = useWorkspace.getState();
   const runs = useRuns.getState();
-  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: [...runs.runs, ...runs.archived], proposals: Object.values(ws.proposals), dismissed: runs.dismissed, pausedAt: lastRead, titleOf: titlesOf(ws.items, ws.peeked) });
+  return buildNeeds({ workstreams: useWorkstreams.getState().list, runs: [...runs.runs, ...runs.archived], proposals: Object.values(ws.proposals), dismissed: runs.dismissed, pausedAt: lastRead, titleOf: titlesOf(ws.items, ws.peeked), connections: ws.connections });
 }
 
 /** "1 thing needs you", "3 things need you": the one count, in the words the rail badge and the launcher say it. */

@@ -5,7 +5,7 @@ import type { AuthStatus } from "./auth";
 /** `gh` has no expiry to warn about. */
 export type GithubProbeState = Exclude<ProbeState, "expiresSoon">;
 
-const OFF_MESSAGE = "Off. Gossamr doesn't sync it, Pip can't see it and drafts for it wait.";
+const OFF_MESSAGE = "Off. Gossamr doesn't sync it and drafts for it wait.";
 
 /** What `src-tauri/src/probe.rs` finds for a GitHub instance in each state, so the page can be driven through all of them. */
 export function githubSnapshot(state: GithubProbeState, login: string, checkedAt: string): ProbeSnapshot {
