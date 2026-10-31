@@ -7,7 +7,6 @@ import type {
   Footprint,
   GithubSignInOptions,
   Intent,
-  ProbeState,
   PostedReview,
   ReviewAccess,
   ReviewComment,
@@ -16,7 +15,7 @@ import type {
   WatchState,
 } from "../types";
 import { MockCode } from "./mockCode";
-import { githubSnapshot } from "./mockProbes";
+import { githubSnapshot, type GithubProbeState } from "./mockProbes";
 import { MockWatch } from "./mockWatch";
 
 export const GITHUB_LOGIN = "ada";
@@ -88,7 +87,7 @@ export class MockGithub {
   /** How many posts were asked for, refused ones included. */
   tried = 0;
   /** What the probe of the GitHub instance finds, and when it last looked. */
-  private probe: ProbeState = "ready";
+  private probe: GithubProbeState = "ready";
   private checkedAt: string;
   /** Called when `setProbe` changes what the probe found, as the backend's `connections` event would be sent. */
   onProbeChanged: () => void = () => {};
@@ -156,7 +155,7 @@ export class MockGithub {
     return { id: GITHUB_CONNECTION, instanceId: "github", displayName: "GitHub", enabled: this.probe !== "off", kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
   }
 
-  setProbe(state: ProbeState) {
+  setProbe(state: GithubProbeState) {
     this.probe = state;
     this.checkedAt = new Date().toISOString();
     this.onProbeChanged();

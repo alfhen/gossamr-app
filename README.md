@@ -12,29 +12,13 @@ Built with Tauri 2, React, TypeScript and Tailwind CSS v4.
 
 ## Connecting Jira
 
-Gossamr signs in through your own Atlassian OAuth 2.0 (3LO) app:
+Gossamr signs in with an Atlassian API token that you make:
 
-1. Create an OAuth 2.0 integration at [developer.atlassian.com/console/myapps](https://developer.atlassian.com/console/myapps/).
-2. Under Permissions, add the Jira API with `read:jira-work`, `write:jira-work` and `read:jira-user`.
-3. Under Authorization, set the callback URL to `http://localhost:8723/callback`.
-4. Start the app, paste the client ID and secret, and click **Sign in with Atlassian**.
+1. Start the app and enter your Jira site, like `acme.atlassian.net`.
+2. Click **Create token**. Atlassian opens with the Jira app, the three scopes (`read:jira-work`, `write:jira-work`, `read:jira-user`) and the longest expiry your organisation allows already filled in. Press **Create** there and copy the token.
+3. Paste your email and the token into Gossamr, and check the expiry date. Atlassian doesn't report it, so it starts at a year from today. Gossamr warns you 14 days before.
 
-The client secret and tokens are stored in the macOS Keychain under `dk.alfhen.gossamr`. "Try it with sample data" skips all of this.
-
-### A company-owned Atlassian app
-
-An admin can register one app for a team instead of everyone making their own:
-
-1. Create an OAuth 2.0 (3LO) integration at [developer.atlassian.com/console/myapps](https://developer.atlassian.com/console/myapps/).
-2. Add the Jira API permissions `read:jira-work`, `write:jira-work` and `read:jira-user`. The app also requests `offline_access` so sign-ins last.
-3. Set the callback URL to `http://localhost:8723/callback`.
-4. Distribute the client ID and secret. Atlassian needs the secret to exchange and refresh tokens, so it ships with the app or the team's setup and can be extracted from either; use this for internal builds only.
-
-Gossamr looks for the client in this order, and the setup screen is skipped when one is found:
-
-- entered on the setup screen (kept in the Keychain)
-- the `GOSSAMR_ATLASSIAN_CLIENT_ID` and `GOSSAMR_ATLASSIAN_CLIENT_SECRET` environment variables when the app starts
-- the same two variables set when the app is built, which compile the client into the binary
+The token is kept in the macOS Keychain under `dk.alfhen.gossamr`. When it expires or is revoked, a banner offers **Make a new token**. If the page doesn't fill in, **The page didn't fill in** lists the scopes to tick. "Try it with sample data" skips all of this.
 
 ## The workspace
 

@@ -9,24 +9,18 @@ Gossamr's Jira calls were written from Atlassian's REST v3 documentation and tes
 - A few tickets you own (assigned to you or reported by you), in a project you can write to. Do not start on other people's tickets.
 - Claude Code installed and logged in, if you want to try Pip's agent runs. Not needed for the Jira checks.
 
-## Create the Atlassian app
+## Make a token
 
-You need an OAuth 2.0 (3LO) app. A company admin may have to create it, because some sites only let admins register apps. If you cannot open the console, ask them to follow these steps and send you the client ID and secret.
+Gossamr signs in with a scoped Atlassian API token. Your organisation may limit tokens or block them; if the token page says so, ask an admin.
 
-1. Open [developer.atlassian.com/console/myapps](https://developer.atlassian.com/console/myapps/) and create an **OAuth 2.0 integration**.
-2. Under **Permissions**, add the **Jira API** and configure these scopes: `read:jira-work`, `write:jira-work`, `read:jira-user`.
-3. The app also asks for `offline_access` itself, so that sign-in lasts. You do not add it by hand.
-4. Under **Authorization**, set the callback URL to `http://localhost:8723/callback`.
-5. Copy the client ID and secret from **Settings**.
-
-If another program on your Mac is using port 8723, close it first. The sign-in redirect needs that port.
-
-## First run
-
-1. `pnpm install`, then `pnpm tauri dev`.
-2. Paste the client ID and secret, and click **Sign in with Atlassian**.
-3. Approve the access in the browser. If you have several sites, pick the one you are testing on.
+1. Start the app (`pnpm install`, then `pnpm tauri dev`) and enter your Jira site, like `acme.atlassian.net`.
+2. Click **Create token**. The page opens with Jira, the scopes `read:jira-work`, `write:jira-work` and `read:jira-user`, and the longest expiry your organisation allows already filled in. Press **Create** and copy the token.
+3. Paste your email and the token, set the expiry date to the one on the token page, and click **Connect Jira**.
 4. Wait for the first sync to finish.
+
+If the page doesn't fill in, **The page didn't fill in** lists the scopes to tick. If Gossamr can't look up the site's cloud id, it asks you for it.
+
+The three scopes are a best guess. A call that Jira refuses with 401 or 403 may need another scope; send it back with the call's name (see the end of this page).
 
 ## What to try, in order
 

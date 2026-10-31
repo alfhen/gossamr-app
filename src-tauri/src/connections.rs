@@ -51,6 +51,11 @@ impl Binding {
         Self { kind: ConnectionKind::Jira, connection_id: connection_id.into(), name: site_name.into(), config: InstanceConfig { site: Some(host.into()), ..Default::default() } }
     }
 
+    pub fn with_email(mut self, email: &str) -> Self {
+        self.config.email = Some(email.into());
+        self
+    }
+
     pub fn github(login: &str) -> Self {
         let config = InstanceConfig { host: Some("github.com".into()), login: Some(login.into()), ..Default::default() };
         Self { kind: ConnectionKind::Github, connection_id: crate::tracker::Connection::github_id(login), name: login.into(), config }

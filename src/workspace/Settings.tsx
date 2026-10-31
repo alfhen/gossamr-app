@@ -9,6 +9,7 @@ import { useTabs } from "./tabsStore";
 import { agoText, count, nounFor, watchSummary } from "./watchLogic";
 import { keyInitials } from "./projects";
 import { disconnectGithub, useGithubUi } from "./githubUi";
+import { useJiraUi } from "./jiraUi";
 import { workContainers } from "./domains";
 import { WatchingSection } from "./WatchSettings";
 import { ProbeStatus } from "./ProbeStatus";
@@ -105,9 +106,14 @@ function ConnectionRow({ c, projects }: { c: ConnectionInfo; projects: number })
       <div className="flex gap-3 text-sm">
         <SyncNow c={c} />
         {c.kind === "jira" && (
-          <Button variant="quiet" size="sm" disabled={signingOut} onClick={() => void signOut()}>
-            Sign out
-          </Button>
+          <>
+            <Button variant="quiet" size="sm" onClick={() => useJiraUi.getState().openConnect()}>
+              New token
+            </Button>
+            <Button variant="quiet" size="sm" disabled={signingOut} onClick={() => void signOut()}>
+              Sign out
+            </Button>
+          </>
         )}
       </div>
     </li>

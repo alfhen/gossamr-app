@@ -31,6 +31,7 @@ import { Settings } from "./Settings";
 import { Header } from "./Header";
 import { ScreenBar } from "./ScreenBar";
 import { ConnectGithubDialog } from "./ConnectGithub";
+import { ConnectJiraDialog } from "./ConnectJira";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
@@ -343,6 +344,7 @@ export function Workspace({ backend }: { backend: Backend }) {
         {paletteOpen && <Palette />}
       </div>
       <ConnectGithubDialog />
+      <ConnectJiraDialog />
     </TicketLinksContext.Provider>
   );
 }

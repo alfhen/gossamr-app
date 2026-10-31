@@ -10,7 +10,7 @@ import { agoText } from "./watchLogic";
  */
 export function probeTone(status: Pick<ProbeSnapshot, "state">, advisory = false): "ok" | "unsure" | "error" {
   if (status.state === "ready" || status.state === "off") return "ok";
-  return status.state === "error" || advisory ? "unsure" : "error";
+  return status.state === "error" || status.state === "expiresSoon" || advisory ? "unsure" : "error";
 }
 
 const TONE = { ok: "text-ws-ink3", unsure: "text-ws-ink2", error: "text-ws-blocked" } as const;

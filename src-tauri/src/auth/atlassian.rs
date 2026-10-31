@@ -1,26 +1,12 @@
-//! Atlassian OAuth 2.0 (3LO): authorisation code with a client secret, the only grant the token endpoint accepts.
+//! Jira by scoped API token: Basic auth with the person's email and token, through the `api.atlassian.com` gateway.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use url::Url;
+use chrono::NaiveDate;
+use serde::Deserialize;
 
-use super::callback::Loopback;
-use super::{
-    json_or_error, unix_now, AccessToken, Account, AuthChallenge, AuthMethod, Authenticator, ClientSource, Credentials, Scope, Site, Tokens,
-};
+use super::{json_or_error, AccessToken, Account, Authenticator, Credentials, Scope, Site, TokenSignIn};
 use crate::error::{Error, Result};
-use crate::secrets;
 use crate::tracker::{Connection, ConnectionKind};
-
-/// Must match the callback URL registered on the Atlassian developer console exactly.
-const CALLBACK_PORT: u16 = 8723;
-pub const SCOPES: &str = "read:jira-work write:jira-work read:jira-user offline_access";
-const APP_KEY: &str = "oauth-app";
-
-const ENV_CLIENT_ID: &str = "GOSSAMR_ATLASSIAN_CLIENT_ID";
-const ENV_CLIENT_SECRET: &str = "GOSSAMR_ATLASSIAN_CLIENT_SECRET";
-const BUNDLED_CLIENT_ID: Option<&str> = option_env!("GOSSAMR_ATLASSIAN_CLIENT_ID");
-const BUNDLED_CLIENT_SECRET: Option<&str> = option_env!("GOSSAMR_ATLASSIAN_CLIENT_SECRET");
 
 /// The Atlassian site and account behind a Jira connection. Only the Jira adapter and this sign-in read the parts; the
 /// rest of Gossamr holds the `Scope` it makes.
@@ -51,124 +37,55 @@ impl SiteScope {
     }
 }
 
-pub fn redirect_uri() -> String {
-    format!("http://localhost:{CALLBACK_PORT}/callback")
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct OAuthApp {
-    pub client_id: String,
-    pub client_secret: String,
-}
-
-fn app_from(id: Option<&str>, secret: Option<&str>) -> Option<OAuthApp> {
-    let (id, secret) = (id?.trim(), secret?.trim());
-    (!id.is_empty() && !secret.is_empty()).then(|| OAuthApp { client_id: id.into(), client_secret: secret.into() })
-}
-
-/// The first source that has an app. What a person entered wins, so an existing sign-in keeps refreshing with the
-/// app that issued its tokens.
-fn pick(user: Option<OAuthApp>, managed: Option<OAuthApp>, bundled: Option<OAuthApp>) -> Option<(ClientSource, OAuthApp)> {
-    user.map(|a| (ClientSource::UserSupplied, a))
-        .or_else(|| managed.map(|a| (ClientSource::ManagedConfig, a)))
-        .or_else(|| bundled.map(|a| (ClientSource::Bundled, a)))
-}
-
-/// Finds the OAuth app to sign in with: entered on the setup screen, from the environment, or compiled in with
-/// `GOSSAMR_ATLASSIAN_CLIENT_ID` and `GOSSAMR_ATLASSIAN_CLIENT_SECRET` set at build time.
-#[derive(Clone)]
-pub struct ClientConfig;
-
-impl ClientConfig {
-    pub fn resolve(&self) -> Result<Option<(ClientSource, OAuthApp)>> {
-        let managed = app_from(std::env::var(ENV_CLIENT_ID).ok().as_deref(), std::env::var(ENV_CLIENT_SECRET).ok().as_deref());
-        let bundled = app_from(BUNDLED_CLIENT_ID, BUNDLED_CLIENT_SECRET);
-        Ok(pick(secrets::load(APP_KEY)?, managed, bundled))
+/// `acme`, `acme.atlassian.net` and `https://acme.atlassian.net/browse/X-1` all mean the host `acme.atlassian.net`.
+pub fn normalize_site(input: &str) -> Result<String> {
+    let bad = || Error::Input("Enter your Jira site, like acme.atlassian.net.".into());
+    let input = input.trim();
+    let host = input.split_once("://").map_or(input, |(_, rest)| rest).split(['/', '?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+    let host = if host.contains('.') { host } else { format!("{host}.atlassian.net") };
+    let labels_ok = host.split('.').all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    if host.starts_with('.') || !labels_ok {
+        return Err(bad());
     }
+    Ok(host)
+}
 
-    fn app(&self) -> Result<(ClientSource, OAuthApp)> {
-        self.resolve()?.ok_or(Error::NotConfigured)
+pub fn parse_expiry(date: &str, today: NaiveDate) -> Result<NaiveDate> {
+    let on = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| Error::Input("Enter the date the token expires.".into()))?;
+    if on < today {
+        return Err(Error::Input("That expiry date has passed.".into()));
     }
+    Ok(on)
+}
 
-    pub fn save(&self, app: OAuthApp) -> Result<()> {
-        let app = app_from(Some(&app.client_id), Some(&app.client_secret))
-            .ok_or_else(|| Error::Auth("client ID and secret are both required".into()))?;
-        secrets::save(APP_KEY, &app)
-    }
+fn valid_cloud_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 #[derive(Clone)]
 struct Endpoints {
-    /// Serves the consent page and the token endpoint.
-    auth: String,
+    /// Where `/_edge/tenant_info` is asked; the site itself unless a test points it elsewhere.
+    tenant: Option<String>,
     api: String,
 }
 
 impl Default for Endpoints {
     fn default() -> Self {
-        Self { auth: "https://auth.atlassian.com".into(), api: "https://api.atlassian.com".into() }
+        Self { tenant: None, api: "https://api.atlassian.com".into() }
     }
 }
 
 pub struct Atlassian {
     http: reqwest::Client,
-    client: ClientConfig,
     endpoints: Endpoints,
 }
 
 impl Atlassian {
-    pub fn new(http: reqwest::Client, client: ClientConfig) -> Self {
-        Self { http, client, endpoints: Endpoints::default() }
+    pub fn new(http: reqwest::Client) -> Self {
+        Self { http, endpoints: Endpoints::default() }
     }
 
-    async fn exchange(&self, app: &OAuthApp, grant: &[(&str, &str)], previous_refresh: Option<&str>) -> Result<Tokens> {
-        #[derive(Deserialize)]
-        struct TokenResponse {
-            access_token: String,
-            refresh_token: Option<String>,
-            expires_in: u64,
-        }
-        let mut body = serde_json::json!({
-            "client_id": app.client_id,
-            "client_secret": app.client_secret,
-            "redirect_uri": redirect_uri(),
-        });
-        for (k, v) in grant {
-            body[*k] = serde_json::Value::from(*v);
-        }
-        let res = self.http.post(format!("{}/oauth/token", self.endpoints.auth)).json(&body).send().await?;
-        let t: TokenResponse = json_or_error(res).await?;
-        let refresh_token = t
-            .refresh_token
-            .or_else(|| previous_refresh.map(String::from))
-            .ok_or_else(|| Error::Auth("no refresh token returned; is offline_access enabled?".into()))?;
-        Ok(Tokens { access_token: t.access_token, refresh_token, expires_at: unix_now() + t.expires_in })
-    }
-
-    async fn accessible_sites(&self, access_token: &str) -> Result<Vec<Site>> {
-        #[derive(Deserialize)]
-        struct Resource {
-            id: String,
-            name: String,
-            url: String,
-            #[serde(default)]
-            scopes: Vec<String>,
-        }
-        let res = self
-            .http
-            .get(format!("{}/oauth/token/accessible-resources", self.endpoints.api))
-            .bearer_auth(access_token)
-            .send()
-            .await?;
-        let resources: Vec<Resource> = json_or_error(res).await?;
-        Ok(resources
-            .into_iter()
-            .filter(|r| r.scopes.iter().any(|s| s.ends_with(":jira-work")))
-            .map(|r| Site { cloud_id: r.id, name: r.name, url: r.url })
-            .collect())
-    }
-
-    async fn myself(&self, access_token: &str, cloud_id: &str) -> Result<Account> {
+    async fn myself(&self, email: &str, token: &str, cloud_id: &str) -> Result<Account> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Myself {
@@ -177,90 +94,66 @@ impl Atlassian {
             #[serde(default)]
             avatar_urls: std::collections::HashMap<String, String>,
         }
-        let res = self
-            .http
-            .get(format!("{}/ex/jira/{cloud_id}/rest/api/3/myself", self.endpoints.api))
-            .bearer_auth(access_token)
-            .send()
-            .await?;
+        let res = self.http.get(format!("{}/ex/jira/{cloud_id}/rest/api/3/myself", self.endpoints.api)).basic_auth(email, Some(token)).send().await?;
         let me: Myself = json_or_error(res).await?;
         Ok(Account { account_id: me.account_id, name: me.display_name, avatar_url: me.avatar_urls.get("48x48").cloned() })
-    }
-
-    async fn identify(&self, tokens: Tokens) -> Result<Credentials> {
-        let site = self
-            .accessible_sites(&tokens.access_token)
-            .await?
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Auth("this account has no Jira sites the app can access".into()))?;
-        let me = self.myself(&tokens.access_token, &site.cloud_id).await?;
-        Ok(Credentials { tokens, site, me })
     }
 }
 
 #[async_trait]
 impl Authenticator for Atlassian {
-    fn methods(&self) -> Vec<AuthMethod> {
-        // The secret is required at the token endpoint, so PKCE can't stand in for it.
-        let client = self.client.resolve().ok().flatten().map(|(source, _)| source).unwrap_or(ClientSource::UserSupplied);
-        vec![AuthMethod::OAuthCode { client, pkce: false }]
-    }
-
-    async fn begin(&self, method: &AuthMethod) -> Result<AuthChallenge> {
-        if !matches!(method, AuthMethod::OAuthCode { .. }) {
-            return Err(Error::Auth("Atlassian doesn't offer that sign-in method".into()));
+    async fn find_cloud_id(&self, site: &str) -> Result<Option<String>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Tenant {
+            cloud_id: String,
         }
-        let (_, app) = self.client.app()?;
-        let loopback = Loopback::bind(CALLBACK_PORT).await?;
-        let url = authorize_url(&app, loopback.state(), &self.endpoints.auth).to_string();
-        Ok(AuthChallenge::Browser { url, loopback })
+        let host = normalize_site(site)?;
+        let base = self.endpoints.tenant.clone().unwrap_or_else(|| format!("https://{host}"));
+        let res = self.http.get(format!("{base}/_edge/tenant_info")).send().await.map_err(|_| Error::Input(format!("Gossamr couldn't reach {host}. Check the site.")))?;
+        Ok(json_or_error::<Tenant>(res).await.ok().map(|t| t.cloud_id).filter(|id| valid_cloud_id(id)))
     }
 
-    async fn complete(&self, challenge: AuthChallenge) -> Result<Credentials> {
-        let AuthChallenge::Browser { loopback, .. } = challenge;
-        let code = loopback.code().await?;
-        let (_, app) = self.client.app()?;
-        let tokens = self.exchange(&app, &[("grant_type", "authorization_code"), ("code", &code)], None).await?;
-        self.identify(tokens).await
-    }
-
-    async fn refresh(&self, current: &Credentials) -> Result<Credentials> {
-        let (_, app) = self.client.app()?;
-        let refresh = &current.tokens.refresh_token;
-        let tokens = self
-            .exchange(&app, &[("grant_type", "refresh_token"), ("refresh_token", refresh)], Some(refresh))
-            .await
-            .map_err(refresh_failure)?;
-        Ok(Credentials { tokens, ..current.clone() })
+    async fn connect(&self, input: &TokenSignIn) -> Result<Credentials> {
+        let host = normalize_site(&input.site)?;
+        let expires_on = parse_expiry(&input.expires_on, chrono::Local::now().date_naive())?;
+        let (email, token) = (input.email.trim(), input.token.trim());
+        if email.is_empty() || token.is_empty() {
+            return Err(Error::Input("Enter your email and the token.".into()));
+        }
+        let given = input.cloud_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+        let reported = match self.find_cloud_id(&host).await {
+            Ok(found) => found,
+            Err(e) if given.is_none() => return Err(e),
+            Err(_) => None,
+        };
+        let cloud_id = match (given, reported) {
+            (Some(given), Some(reported)) if !given.eq_ignore_ascii_case(&reported) => {
+                return Err(Error::Input(format!("That cloud id isn't the one {host} reports. Check the site.")));
+            }
+            (_, Some(reported)) => reported,
+            (Some(given), None) => given.to_string(),
+            (None, None) => return Err(Error::Input(format!("Gossamr couldn't find the cloud id of {host}. Enter it yourself."))),
+        };
+        if !valid_cloud_id(&cloud_id) {
+            return Err(Error::Input("That cloud id doesn't look right.".into()));
+        }
+        let me = self.myself(email, token, &cloud_id).await.map_err(|e| match e {
+            Error::Api { status: 401 | 403, .. } => Error::Input("Jira didn't accept that email and token. Check both, and that the token has the three scopes.".into()),
+            other => other,
+        })?;
+        Ok(Credentials {
+            email: email.into(),
+            token: token.into(),
+            expires_on: expires_on.to_string(),
+            site: Site { cloud_id, name: host.clone(), url: format!("https://{host}") },
+            me,
+        })
     }
 
     async fn whoami(&self, token: &AccessToken) -> Result<Account> {
-        self.myself(&token.access_token, &token.scope.cloud_id).await
+        self.myself(&token.email, &token.token, &token.scope.cloud_id).await
     }
-}
-
-/// Atlassian answers a refresh token it no longer honours (revoked, expired, spent elsewhere) with a 400, 401 or 403
-/// whose body varies (`invalid_grant`, `unauthorized_client`), and retrying can't fix it. Server errors and network
-/// failures say nothing about the token, so they pass through for the next sync to retry.
-fn refresh_failure(e: Error) -> Error {
-    match e {
-        Error::Api { status: 400 | 401 | 403, .. } => Error::ReauthRequired,
-        other => other,
-    }
-}
-
-fn authorize_url(app: &OAuthApp, state: &str, auth_base: &str) -> Url {
-    let mut url = Url::parse(&format!("{auth_base}/authorize")).expect("static URL");
-    url.query_pairs_mut()
-        .append_pair("audience", "api.atlassian.com")
-        .append_pair("client_id", &app.client_id)
-        .append_pair("scope", SCOPES)
-        .append_pair("redirect_uri", &redirect_uri())
-        .append_pair("state", state)
-        .append_pair("response_type", "code")
-        .append_pair("prompt", "consent");
-    url
 }
 
 #[cfg(test)]
@@ -272,11 +165,7 @@ mod tests {
 
     use super::*;
 
-    fn app(id: &str) -> OAuthApp {
-        OAuthApp { client_id: id.into(), client_secret: format!("{id}-secret") }
-    }
-
-    /// Answers each request with the JSON registered for its path and records `path body` for every request.
+    /// Answers each request with the JSON registered for its path (404 otherwise) and records the request head.
     async fn serve(routes: Vec<(&'static str, &'static str)>) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -285,41 +174,16 @@ mod tests {
         tokio::spawn(async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else { return };
-                let mut buf = Vec::new();
-                let mut chunk = [0u8; 4096];
-                let body_start = loop {
-                    let n = stream.read(&mut chunk).await.unwrap_or(0);
-                    buf.extend_from_slice(&chunk[..n]);
-                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break i + 4;
-                    }
-                    if n == 0 {
-                        break buf.len();
-                    }
-                };
-                let head = String::from_utf8_lossy(&buf[..body_start]).to_string();
-                let length = head
-                    .lines()
-                    .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok()))
-                    .unwrap_or(0);
-                while buf.len() < body_start + length {
-                    let n = stream.read(&mut chunk).await.unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                }
+                let mut buf = vec![0u8; 8192];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
                 let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
-                log.lock().unwrap().push(format!("{path} {}", String::from_utf8_lossy(&buf[body_start..])));
-                let (status, body) = routes
-                    .iter()
-                    .find(|(p, _)| *p == path)
-                    .map(|(_, b)| ("200 OK", *b))
-                    .unwrap_or(("404 Not Found", "{}"));
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
+                log.lock().unwrap().push(head);
+                let (status, body) = routes.iter().find(|(p, _)| *p == path).map(|(_, b)| match b.strip_prefix("401:") {
+                    Some(rest) => ("401 Unauthorized", rest),
+                    None => ("200 OK", *b),
+                }).unwrap_or(("404 Not Found", "{}"));
+                let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
@@ -328,140 +192,122 @@ mod tests {
 
     async fn atlassian(routes: Vec<(&'static str, &'static str)>) -> (Atlassian, Arc<Mutex<Vec<String>>>) {
         let (base, seen) = serve(routes).await;
-        let endpoints = Endpoints { auth: base.clone(), api: base };
-        (Atlassian { http: reqwest::Client::new(), client: ClientConfig, endpoints }, seen)
+        (Atlassian { http: reqwest::Client::new(), endpoints: Endpoints { tenant: Some(base.clone()), api: base } }, seen)
     }
 
-    fn stale() -> Credentials {
-        Credentials {
-            tokens: Tokens { access_token: "old-access".into(), refresh_token: "old-refresh".into(), expires_at: 1 },
-            site: Site { cloud_id: "c1".into(), name: "Acme".into(), url: "https://acme.atlassian.net".into() },
-            me: Account { account_id: "u1".into(), name: "Ann".into(), avatar_url: None },
+    fn sign_in(cloud_id: Option<&str>) -> TokenSignIn {
+        TokenSignIn {
+            site: "https://Acme.atlassian.net/jira".into(),
+            cloud_id: cloud_id.map(String::from),
+            email: " ann@acme.com ".into(),
+            token: " secret-token\n".into(),
+            expires_on: (chrono::Local::now().date_naive() + chrono::Days::new(365)).to_string(),
+        }
+    }
+
+    const ME: &str = r#"{"accountId":"u1","displayName":"Ann","avatarUrls":{"48x48":"https://a/48.png"}}"#;
+    const TENANT: &str = r#"{"cloudId":"c1-uuid"}"#;
+
+    #[test]
+    fn a_site_is_whatever_form_the_person_pastes_it_in() {
+        for typed in ["acme", "Acme.atlassian.net", " https://acme.atlassian.net/ ", "https://acme.atlassian.net/jira/software/projects/X?x=1"] {
+            assert_eq!(normalize_site(typed).unwrap(), "acme.atlassian.net", "{typed}");
+        }
+        assert_eq!(normalize_site("jira.acme.com").unwrap(), "jira.acme.com");
+    }
+
+    #[test]
+    fn a_site_that_is_not_a_host_is_refused() {
+        for typed in ["", "  ", "a b.atlassian.net", "acme.atlassian.net:99@evil.example", "-x.atlassian.net", ".net", "a..b"] {
+            assert!(normalize_site(typed).is_err(), "{typed:?}");
         }
     }
 
     #[test]
-    fn authorize_url_carries_all_required_parameters() {
-        let app = OAuthApp { client_id: "abc".into(), client_secret: "SECRET-VALUE".into() };
-        let url = authorize_url(&app, "xyz", "https://auth.atlassian.com");
-        assert_eq!(url.host_str(), Some("auth.atlassian.com"));
-        let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(q["audience"], "api.atlassian.com");
-        assert_eq!(q["client_id"], "abc");
-        assert_eq!(q["state"], "xyz");
-        assert_eq!(q["redirect_uri"], "http://localhost:8723/callback");
-        assert_eq!(q["response_type"], "code");
-        assert_eq!(q["scope"], "read:jira-work write:jira-work read:jira-user offline_access");
-        assert!(!url.as_str().contains("SECRET-VALUE"), "the client secret must never be in the browser URL");
-    }
-
-    #[test]
-    fn a_person_supplied_app_beats_the_environment_which_beats_the_bundled_one() {
-        let (source, chosen) = pick(Some(app("user")), Some(app("env")), Some(app("built"))).unwrap();
-        assert_eq!((source, chosen.client_id.as_str()), (ClientSource::UserSupplied, "user"));
-        let (source, chosen) = pick(None, Some(app("env")), Some(app("built"))).unwrap();
-        assert_eq!((source, chosen.client_id.as_str()), (ClientSource::ManagedConfig, "env"));
-        let (source, chosen) = pick(None, None, Some(app("built"))).unwrap();
-        assert_eq!((source, chosen.client_id.as_str()), (ClientSource::Bundled, "built"));
-        assert!(pick(None, None, None).is_none());
-    }
-
-    #[test]
-    fn an_app_needs_both_an_id_and_a_secret() {
-        assert!(app_from(Some("id"), None).is_none());
-        assert!(app_from(Some("id"), Some("  ")).is_none());
-        let a = app_from(Some(" id "), Some("secret\n")).unwrap();
-        assert_eq!((a.client_id.as_str(), a.client_secret.as_str()), ("id", "secret"));
+    fn an_expiry_must_be_a_date_that_has_not_passed() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        assert_eq!(parse_expiry("2026-10-30", today).unwrap(), today);
+        assert!(parse_expiry("2026-10-29", today).is_err());
+        assert!(parse_expiry("30 Oct", today).is_err());
     }
 
     #[tokio::test]
-    async fn only_the_oauth_code_method_is_offered_and_begun() {
+    async fn the_cloud_id_comes_from_the_site_without_signing_in() {
+        let (a, seen) = atlassian(vec![("/_edge/tenant_info", TENANT)]).await;
+        assert_eq!(a.find_cloud_id("acme").await.unwrap().as_deref(), Some("c1-uuid"));
+        assert!(!seen.lock().unwrap()[0].to_ascii_lowercase().contains("authorization"));
+    }
+
+    #[tokio::test]
+    async fn a_site_that_does_not_give_its_cloud_id_is_none_and_not_an_error() {
         let (a, _) = atlassian(vec![]).await;
-        assert!(matches!(a.methods().as_slice(), [AuthMethod::OAuthCode { pkce: false, .. }]));
-        let err = a.begin(&AuthMethod::ApiToken { fields: vec![] }).await.err().unwrap();
-        assert!(matches!(err, Error::Auth(_)));
+        assert_eq!(a.find_cloud_id("acme").await.unwrap(), None);
+        let (a, _) = atlassian(vec![("/_edge/tenant_info", r#"{"cloudId":"../../x"}"#)]).await;
+        assert_eq!(a.find_cloud_id("acme").await.unwrap(), None);
     }
 
     #[tokio::test]
-    async fn a_rotated_refresh_token_replaces_the_old_one_and_the_identity_is_kept() {
-        let (a, seen) = atlassian(vec![("/oauth/token", r#"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":3600}"#)]).await;
-        let client = OAuthApp { client_id: "id".into(), client_secret: "sec".into() };
-        let before = stale();
-        let tokens = a
-            .exchange(&client, &[("grant_type", "refresh_token"), ("refresh_token", &before.tokens.refresh_token)], Some(&before.tokens.refresh_token))
-            .await
-            .unwrap();
-        assert_eq!((tokens.access_token.as_str(), tokens.refresh_token.as_str()), ("new-access", "new-refresh"));
-        assert!(tokens.expires_at > unix_now() + 3500 && !tokens.needs_refresh(unix_now()));
-        let sent: serde_json::Value = serde_json::from_str(seen.lock().unwrap()[0].strip_prefix("/oauth/token ").unwrap()).unwrap();
-        assert_eq!(sent["grant_type"], "refresh_token");
-        assert_eq!(sent["refresh_token"], "old-refresh");
-        assert_eq!(sent["client_secret"], "sec");
+    async fn connecting_asks_myself_through_the_gateway_with_the_email_and_token_and_names_the_connection_after_the_site() {
+        let (a, seen) = atlassian(vec![("/_edge/tenant_info", TENANT), ("/ex/jira/c1-uuid/rest/api/3/myself", ME)]).await;
+        let c = a.connect(&sign_in(None)).await.unwrap();
+        assert_eq!((c.email.as_str(), c.token.as_str(), c.site.name.as_str(), c.site.url.as_str()), ("ann@acme.com", "secret-token", "acme.atlassian.net", "https://acme.atlassian.net"));
+        assert_eq!(c.connection().id, "jira:c1-uuid:u1");
+        assert_eq!(c.expires_on, sign_in(None).expires_on);
+        assert_eq!(c.me.avatar_url.as_deref(), Some("https://a/48.png"));
+        let myself = seen.lock().unwrap().iter().find(|h| h.contains("/myself")).cloned().unwrap();
+        let basic = myself.lines().find_map(|l| l.strip_prefix("authorization: Basic ")).expect("Basic auth");
+        assert_eq!(basic, "YW5uQGFjbWUuY29tOnNlY3JldC10b2tlbg==");
     }
 
     #[tokio::test]
-    async fn the_old_refresh_token_is_kept_when_none_comes_back() {
-        let (a, _) = atlassian(vec![("/oauth/token", r#"{"access_token":"new-access","expires_in":60}"#)]).await;
-        let client = OAuthApp { client_id: "id".into(), client_secret: "sec".into() };
-        let kept = a.exchange(&client, &[("grant_type", "refresh_token")], Some("old-refresh")).await.unwrap();
-        assert_eq!(kept.refresh_token, "old-refresh");
-        let err = a.exchange(&client, &[("grant_type", "authorization_code")], None).await.err().unwrap();
-        assert!(matches!(err, Error::Auth(_)), "a first sign-in without offline_access has nothing to refresh with");
-    }
-
-    #[test]
-    fn a_dead_refresh_token_asks_for_a_new_sign_in_and_other_failures_pass_through() {
-        for (status, body) in [
-            (403, r#"{"error":"unauthorized_client","error_description":"refresh_token is invalid"}"#),
-            (403, r#"{"error":"invalid_grant","error_description":"Unknown or invalid refresh token."}"#),
-            (400, r#"{"error":"invalid_grant"}"#),
-            (401, "unauthorized"),
-        ] {
-            assert!(refresh_failure(Error::Api { status, message: body.into() }).needs_reauth(), "{status} {body}");
-        }
-        for status in [429, 500, 502, 503] {
-            assert!(matches!(refresh_failure(Error::Api { status, message: "invalid_grant".into() }), Error::Api { .. }), "{status}");
-        }
-        assert!(matches!(refresh_failure(Error::Auth("no refresh token".into())), Error::Auth(_)));
+    async fn a_cloud_id_the_person_gives_is_used_when_the_site_does_not_say_otherwise() {
+        let (a, _) = atlassian(vec![("/ex/jira/given-1/rest/api/3/myself", ME)]).await;
+        assert_eq!(a.connect(&sign_in(Some("given-1"))).await.unwrap().site.cloud_id, "given-1");
+        let (a, _) = atlassian(vec![("/_edge/tenant_info", TENANT), ("/ex/jira/c1-uuid/rest/api/3/myself", ME)]).await;
+        assert_eq!(a.connect(&sign_in(Some("C1-UUID"))).await.unwrap().site.cloud_id, "c1-uuid");
     }
 
     #[tokio::test]
-    async fn a_rejected_refresh_surfaces_the_provider_error() {
+    async fn a_cloud_id_that_is_not_the_one_the_site_reports_is_refused_before_any_token_is_sent() {
+        let (a, seen) = atlassian(vec![("/_edge/tenant_info", TENANT), ("/ex/jira/other/rest/api/3/myself", ME)]).await;
+        let message = a.connect(&sign_in(Some("other"))).await.err().unwrap().to_string();
+        assert!(message.contains("acme.atlassian.net") && message.contains("cloud id"), "{message}");
+        assert!(seen.lock().unwrap().iter().all(|h| !h.contains("/myself")));
+    }
+
+    #[tokio::test]
+    async fn a_site_that_cannot_be_reached_says_so_and_does_not_ask_for_a_cloud_id() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let closed = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let a = Atlassian { http: reqwest::Client::new(), endpoints: Endpoints { tenant: Some(closed), api: "http://unused.invalid".into() } };
+        let message = a.find_cloud_id("acme").await.err().unwrap().to_string();
+        assert!(message.contains("couldn't reach acme.atlassian.net"), "{message}");
+        assert!(a.connect(&sign_in(None)).await.err().unwrap().to_string().contains("couldn't reach"));
+        assert!(a.find_cloud_id("not a site").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_site_with_no_findable_cloud_id_asks_for_it() {
         let (a, _) = atlassian(vec![]).await;
-        let client = OAuthApp { client_id: "id".into(), client_secret: "sec".into() };
-        let err = a.exchange(&client, &[("grant_type", "refresh_token")], Some("r")).await.err().unwrap();
-        assert!(matches!(err, Error::Api { status: 404, .. }));
+        let message = a.connect(&sign_in(None)).await.err().unwrap().to_string();
+        assert!(message.contains("cloud id"), "{message}");
     }
 
     #[tokio::test]
-    async fn signing_in_names_the_connection_after_the_site() {
-        let (a, seen) = atlassian(vec![
-            ("/oauth/token/accessible-resources", r#"[
-                {"id":"conf","name":"Wiki","url":"https://w.atlassian.net","scopes":["read:confluence-content.all"]},
-                {"id":"c1","name":"Acme","url":"https://acme.atlassian.net","scopes":["read:jira-work"]}]"#),
-            ("/ex/jira/c1/rest/api/3/myself", r#"{"accountId":"u1","displayName":"Ann","avatarUrls":{"48x48":"https://a/48.png"}}"#),
-        ])
-        .await;
-        let tokens = Tokens { access_token: "tok".into(), refresh_token: "r".into(), expires_at: unix_now() + 3600 };
-        let credentials = a.identify(tokens).await.unwrap();
-        let connection = credentials.connection();
-        assert_eq!((connection.id.as_str(), connection.display_name.as_str()), ("jira:c1:u1", "Acme"));
-        assert_eq!(credentials.me.avatar_url.as_deref(), Some("https://a/48.png"));
-        assert_eq!(seen.lock().unwrap().len(), 2);
+    async fn a_token_jira_refuses_says_what_to_check_and_other_failures_keep_jira_s_own_error() {
+        let (a, _) = atlassian(vec![("/ex/jira/c1-uuid/rest/api/3/myself", "401:{}")]).await;
+        let message = a.connect(&sign_in(Some("c1-uuid"))).await.err().unwrap().to_string();
+        assert!(message.contains("email and token"), "{message}");
+        let (a, _) = atlassian(vec![]).await;
+        assert!(matches!(a.connect(&sign_in(Some("c1-uuid"))).await.err().unwrap(), Error::Api { status: 404, .. }));
     }
 
     #[tokio::test]
     async fn asking_who_a_token_belongs_to_calls_myself_on_its_site_with_that_token() {
         let (a, seen) = atlassian(vec![("/ex/jira/c1/rest/api/3/myself", r#"{"accountId":"u1","displayName":"Ann"}"#)]).await;
-        let token = AccessToken { access_token: "tok".into(), scope: SiteScope { cloud_id: "c1".into(), account_id: "u1".into() } };
+        let token = AccessToken { email: "ann@acme.com".into(), token: "tok".into(), scope: SiteScope { cloud_id: "c1".into(), account_id: "u1".into() } };
         assert_eq!(a.whoami(&token).await.unwrap().name, "Ann");
         assert_eq!(seen.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn an_account_without_a_jira_site_cannot_sign_in() {
-        let (a, _) = atlassian(vec![("/oauth/token/accessible-resources", "[]")]).await;
-        let tokens = Tokens { access_token: "tok".into(), refresh_token: "r".into(), expires_at: 0 };
-        assert!(matches!(a.identify(tokens).await.err().unwrap(), Error::Auth(_)));
     }
 }

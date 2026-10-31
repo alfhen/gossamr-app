@@ -275,10 +275,10 @@ export function ConnectView(p: ConnectViewProps) {
   );
 }
 
-export function ConnectFrame({ children, onClose }: { children: ReactNode; onClose(): void }) {
+export function ConnectFrame({ children, onClose, label = "Connect GitHub" }: { children: ReactNode; onClose(): void; label?: string }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 pt-[10vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div role="dialog" aria-modal="true" aria-label="Connect GitHub" className="ws-pop mb-8 w-[min(520px,92vw)] rounded-[14px] border border-ws-sep2 bg-ws-win p-5 text-ws-ink shadow-ws-pop">
+      <div role="dialog" aria-modal="true" aria-label={label} className="ws-pop mb-8 w-[min(520px,92vw)] rounded-[14px] border border-ws-sep2 bg-ws-win p-5 text-ws-ink shadow-ws-pop">
         {children}
       </div>
     </div>

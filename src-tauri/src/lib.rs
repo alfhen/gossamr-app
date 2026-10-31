@@ -27,13 +27,12 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
-use tauri_plugin_opener::OpenerExt;
 
-use auth::{Auth, AuthStatus, DeviceStart, OAuthApp};
+use auth::{Auth, AuthStatus, DeviceStart, TokenSignIn};
 use agent::{AgentService, AskOutcome, AskRequest};
 use tracker::Move;
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, Probe, WatchState, WorkstreamView};
-use error::{Error, Result};
+use error::Result;
 use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
     WatchChange, WorkItem, Workstream, WorkstreamEvent,
@@ -183,22 +182,17 @@ async fn auth_status(core: State<'_, CoreState>) -> Result<AuthStatus> {
     core.auth.status().await
 }
 
+/// The cloud id a Jira site reports about itself, or `None` when the sheet has to ask for it.
 #[tauri::command]
-async fn save_oauth_app(core: State<'_, CoreState>, client_id: String, client_secret: String) -> Result<AuthStatus> {
-    core.auth.save_app(OAuthApp { client_id, client_secret })?;
-    core.auth.status().await
+async fn jira_cloud_id(core: State<'_, CoreState>, site: String) -> Result<Option<String>> {
+    core.auth.find_cloud_id(&site).await
 }
 
 #[tauri::command]
-async fn sign_in(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>) -> Result<AuthStatus> {
-    let status = core
-        .sign_in(|url| {
-            app.opener()
-                .open_url(url, None::<&str>)
-                .map_err(|e| Error::Auth(format!("couldn't open the browser: {e}")))
-        })
-        .await?;
+async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn) -> Result<AuthStatus> {
+    let status = core.connect_jira(&input).await?;
     core.wake.notify_one();
+    probe_in_background(&app, &core, Probe::Refresh);
     let runs = runs.inner().clone();
     tauri::async_runtime::spawn(async move { runs.recover().await });
     Ok(status)
@@ -957,8 +951,8 @@ pub fn run() {
             set_needs_badge,
             reduce_transparency,
             auth_status,
-            save_oauth_app,
-            sign_in,
+            jira_cloud_id,
+            jira_connect,
             sign_out,
             snapshot,
             cache_search,
