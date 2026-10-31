@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "./mock";
 import { itemRef } from "./mockConnector";
 
@@ -102,7 +102,49 @@ describe("the mock on/off switch", () => {
     await expect(b.proposalsPostReview(draft.id, 0)).rejects.toThrow("GitHub is off. This draft waits until you turn it on.");
     expect(b.proposals.get(draft.id)?.state).toEqual({ type: "pending" });
     await b.connectionSetEnabled("github", true);
+    b.github.finishRecheck();
     await expect(b.proposalsPostReview(draft.id, 0)).resolves.toBeDefined();
+  });
+
+  it("keeps a review from being posted until GitHub has synced since it was turned back on, then tells the page", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = new MockBackend({ githubRepos: 6 });
+      const draft = b.proposals.draft({ type: "githubReview", connectionId: "github:ada", item: null, runId: "r1", repo: "acme/webshop", number: 1, commitSha: "abcdef1", summary: "Fine.", comments: [] }, "Review from Pip");
+      await b.connectionSetEnabled("github", false);
+      expect((await github(b)).rechecking).toBe(false);
+      await b.connectionSetEnabled("github", true);
+      expect((await github(b)).rechecking).toBe(true);
+      await expect(b.proposalsPostReview(draft.id, 0)).rejects.toThrow("Checking this draft against GitHub.");
+      expect(b.proposals.get(draft.id)?.state).toEqual({ type: "pending" });
+      let told = 0;
+      b.onConnectionsChanged(() => told++);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await github(b)).rechecking).toBe(false);
+      expect(told).toBe(1);
+      await expect(b.proposalsPostReview(draft.id, 0)).resolves.toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the check until it is finished by hand when asked to, and ends it when GitHub is turned off again", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = new MockBackend({ githubRepos: 6, githubRecheck: "hold" });
+      await b.connectionSetEnabled("github", false);
+      await b.connectionSetEnabled("github", true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect((await github(b)).rechecking).toBe(true);
+      b.github.finishRecheck();
+      expect((await github(b)).rechecking).toBe(false);
+      await b.connectionSetEnabled("github", false);
+      await b.connectionSetEnabled("github", true);
+      await b.connectionSetEnabled("github", false);
+      expect((await github(b)).rechecking).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hides the code linked to a ticket while GitHub is off, tells the page, and shows it again on without asking GitHub", async () => {

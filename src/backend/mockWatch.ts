@@ -13,6 +13,8 @@ export interface MockOptions {
   githubRepos?: number;
   /** What the probe of the GitHub instance finds from the start (`?mockGithubProbe=notSignedIn`). */
   githubProbe?: GithubProbeState;
+  /** "hold" keeps the sample GitHub checking its drafts after it is turned back on until `finishGithubRecheck()` (`?mockGithubRecheck=hold`). */
+  githubRecheck?: "hold";
   /** What the sample Jira token is like from the start: close to its expiry, or turned down (`?mockJiraToken=expiring` or `refused`). */
   jiraToken?: "expiring" | "refused";
   /** Which scripted agent runs exist, and the moment their ages count back from. */
@@ -146,6 +148,8 @@ export interface MockHandle {
   /** Has the probe of the GitHub instance find `state`, and tells the page as a `connections` event does. */
   probeGithub(state: GithubProbeState): void;
   refuseGithubToken(): void;
+  /** Ends the sample GitHub's check of its waiting drafts after it was turned back on, as its first sync finishing does. */
+  finishGithubRecheck(): void;
   /** The next review post's answer is lost, as a 502: GitHub keeps the review when `kept`, and drops it otherwise. */
   loseNextReviewAnswer(kept: boolean): void;
 }
@@ -176,7 +180,7 @@ export interface MockClockParts {
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
   terminals?: readonly string[];
-  github?: { probe(state: GithubProbeState): void; refuseToken(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
+  github?: { probe(state: GithubProbeState): void; refuseToken(): void; finishRecheck(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
 declare global {
@@ -242,6 +246,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     githubPostsTried: () => github?.tried() ?? 0,
     probeGithub: (state) => github?.probe(state),
     refuseGithubToken: () => github?.refuseToken(),
+    finishGithubRecheck: () => github?.finishRecheck(),
     loseNextReviewAnswer: (kept) => github?.loseNextAnswer(kept),
   };
 }
@@ -262,7 +267,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. `?mockGithubRecheck=hold` keeps the sample GitHub checking its drafts after it is turned back on until `__gossamrMock.finishGithubRecheck()`. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -277,6 +282,7 @@ export function mockOptionsFromUrl(): MockOptions {
   if (repos) options.githubRepos = repos;
   const probe = params.get("mockGithubProbe");
   if (PROBE_STATES.some((s) => s === probe)) options.githubProbe = probe as GithubProbeState;
+  if (params.get("mockGithubRecheck") === "hold") options.githubRecheck = "hold";
   const jiraToken = params.get("mockJiraToken");
   if (jiraToken === "expiring" || jiraToken === "refused") options.jiraToken = jiraToken;
   const pace = count("pipPace");

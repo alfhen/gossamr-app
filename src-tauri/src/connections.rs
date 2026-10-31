@@ -34,6 +34,9 @@ pub struct Instance {
     /// The connection this instance signs in as. A hint: the vault and the databases say which connections exist.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bound_to: Option<String>,
+    /// When it was turned back on, until a sync that began after has checked its waiting drafts. Kept in the file so a restart doesn't lift the hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recheck_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// An account that an instance should be bound to. `name` is the Jira site's name or the GitHub login.
@@ -109,7 +112,7 @@ pub fn bind(config: &mut AppConfig, binding: Binding) {
         }
         None => {
             let id = next_id(config, binding.kind);
-            config.connections.push(Instance { id, kind: binding.kind, display_name, enabled: true, config: binding.config, bound_to: Some(binding.connection_id) });
+            config.connections.push(Instance { id, kind: binding.kind, display_name, enabled: true, config: binding.config, bound_to: Some(binding.connection_id), recheck_since: None });
         }
     }
 }

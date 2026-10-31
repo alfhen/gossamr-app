@@ -17,7 +17,7 @@ import { sample } from "./reviewSample";
 import { ReviewDraft } from "./ReviewDraft";
 import { batchable } from "./workViewLogic";
 
-const github: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null };
+const github: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
 const jira: ConnectionInfo = { ...github, id: "jira:c:u", instanceId: "jira", displayName: "Acme Jira", kind: "jira", workspace: "acme.atlassian.net", account: "Alf Henderson" };
 const sampleData: ConnectionInfo = { ...github, id: "mock", instanceId: "jira", displayName: "Sample data", kind: "mock" };
 
@@ -40,6 +40,22 @@ describe("a draft whose connection is off", () => {
     const onTicket: Proposal = { ...review, intent: { ...(review.intent as Extract<Proposal["intent"], { type: "githubReview" }>), item: { ...itemRef("CA-1"), connectionId: jira.id } } };
     expect(heldNote(onTicket, [jira, { ...github, enabled: false }])).not.toBeNull();
     expect(heldNote(onTicket, [{ ...jira, enabled: false }, github])).toBeNull();
+  });
+});
+
+describe("a draft whose connection was turned back on", () => {
+  it("waits for the first sync, and says so in the words the backend refuses it with", () => {
+    expect(heldNote(review, [{ ...github, rechecking: true }])).toBe("Checking this draft against GitHub.");
+    expect(heldNote(base, [{ ...jira, displayName: "Work Jira", rechecking: true }])).toBe("Checking this draft against Work Jira.");
+  });
+
+  it("says it is off, not that it is being checked, when it is off again", () => {
+    expect(heldNote(review, [{ ...github, enabled: false, rechecking: true }])).toBe("GitHub is off. This draft waits until you turn it on.");
+  });
+
+  it("is let go when the sync has finished or the draft has been decided", () => {
+    expect(heldNote(review, [{ ...github, rechecking: false }])).toBeNull();
+    expect(heldNote({ ...review, state: { type: "skipped" } }, [{ ...github, rechecking: true }])).toBeNull();
   });
 });
 
@@ -88,8 +104,22 @@ describe("the cards of a draft that waits", () => {
     expect(approve(post)).toContain("disabled");
   });
 
+  it("show how old the draft is beside the wait", () => {
+    vi.useFakeTimers({ now: new Date("2026-10-04T10:00:00Z"), toFake: ["Date"] });
+    seen([{ ...jira, rechecking: true }, { ...github, rechecking: true }]);
+    const comment = renderToStaticMarkup(<DraftCard proposal={base} {...props} />);
+    expect(comment).toContain("Checking this draft against Acme Jira. Made 3 days ago.");
+    expect(approve(comment)).toContain("disabled");
+    const post = renderToStaticMarkup(<ReviewDraft proposal={review} {...props} access={{ canPost: true, reason: null }} diff={sample()} />);
+    expect(post).toContain("Checking this draft against GitHub. Made 3 days ago.");
+    expect(approve(post)).toContain("disabled");
+    vi.useRealTimers();
+  });
+
   it("are left out of Approve N safe drafts", () => {
     seen([{ ...jira, enabled: false }]);
+    expect(batchable([base])).toEqual([]);
+    seen([{ ...jira, rechecking: true }]);
     expect(batchable([base])).toEqual([]);
     seen([jira]);
     expect(batchable([base]).map((p) => p.id)).toEqual(["p1"]);

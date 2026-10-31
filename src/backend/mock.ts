@@ -374,6 +374,7 @@ export class MockBackend implements Backend {
     this.jiraToken = options.jiraToken;
     this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
+    this.github.holdRecheck = options.githubRecheck === "hold";
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
@@ -428,7 +429,7 @@ export class MockBackend implements Backend {
       pip: { hold: holdMockPip, idle: mockPipIdle },
       tickets: { edit: (key, change) => this.editTicket(key, change) },
       terminals: this.terminals,
-      github: { probe: (state) => this.github.setProbe(state), refuseToken: () => this.github.refuseToken(), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept) },
+      github: { probe: (state) => this.github.setProbe(state), refuseToken: () => this.github.refuseToken(), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept), finishRecheck: () => this.github.finishRecheck() },
     });
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
@@ -1131,7 +1132,7 @@ export class MockBackend implements Backend {
     if (refresh) this.github.recheck();
     const refused = this.jiraToken === "refused";
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : null;
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status };
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: "Sample data", enabled: true, kind: "mock", workspace: "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
     const all = this.github.connected ? [sample, this.github.info()] : [sample];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }

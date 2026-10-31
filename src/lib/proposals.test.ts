@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Intent, Proposal, RunSpec } from "../types";
-import { draftExcerpt, draftsForTurn, earlierDrafts, inWorkstreamPane, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
+import { draftExcerpt, draftsForTurn, earlierDrafts, inWorkstreamPane, madeText, supersessionKey, targetOf, withoutRunDrafts } from "./proposals";
 import { docFromText } from "./docs";
 
 const ref = (key: string) => ({ connectionId: "c", externalId: key, key });
@@ -128,5 +128,23 @@ describe("draftExcerpt with an edit", () => {
   it("names a comment by its edited words when there are any", () => {
     const comment = { type: "comment", item: { connectionId: "c", key: "CA-1" }, body: docFromText("Stored") } as unknown as Intent;
     expect(draftExcerpt(comment, 40, { body: { text: "Edited" } })).toBe("Edited");
+  });
+});
+
+describe("madeText", () => {
+  const now = new Date("2026-10-10T12:00:00Z");
+  const at = (ms: number) => new Date(now.getTime() - ms).toISOString();
+  const MIN = 60_000;
+
+  it("counts minutes, hours and days in words", () => {
+    expect(madeText(at(5 * MIN), now)).toBe("Made 5 minutes ago");
+    expect(madeText(at(60 * MIN), now)).toBe("Made 1 hour ago");
+    expect(madeText(at(3 * 24 * 60 * MIN), now)).toBe("Made 3 days ago");
+  });
+
+  it("says just now, yesterday, and the date once it is a week old", () => {
+    expect(madeText(at(10_000), now)).toBe("Made just now");
+    expect(madeText(at(24 * 60 * MIN), now)).toBe("Made yesterday");
+    expect(madeText(at(20 * 24 * 60 * MIN), now)).toMatch(/^Made on \d+ \w+|^Made on \w+ \d+/);
   });
 });

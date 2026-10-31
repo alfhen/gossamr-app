@@ -318,10 +318,10 @@ pub(crate) mod testing {
             unimplemented!()
         }
         async fn followed(&self, _: u32, _: &ContainerScope, _: &SearchOptions) -> Result<Followed> {
-            unimplemented!()
+            Ok(Followed::default())
         }
         async fn children(&self, _: &[ItemRef], _: &SearchOptions) -> Result<Vec<WorkItem>> {
-            unimplemented!()
+            Ok(Vec::new())
         }
         async fn item(&self, item: &ItemRef, _: &str) -> Result<WorkItem> {
             if let Some(live) = self.live.lock().unwrap().clone() {
@@ -333,7 +333,7 @@ pub(crate) mod testing {
             Ok(fresh)
         }
         async fn containers(&self) -> Result<Vec<Container>> {
-            unimplemented!()
+            Ok(Vec::new())
         }
         async fn list_containers(&self, q: &ContainerQuery) -> Result<ContainerPage> {
             let all = self.catalog.lock().unwrap();
@@ -342,7 +342,7 @@ pub(crate) mod testing {
             Ok(ContainerPage { containers, next: None })
         }
         async fn containers_of(&self, _: &[ContainerRef]) -> Result<Vec<Container>> {
-            unimplemented!()
+            Ok(Vec::new())
         }
         async fn footprint(&self, _: u32) -> Result<Vec<Footprint>> {
             self.footprint_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

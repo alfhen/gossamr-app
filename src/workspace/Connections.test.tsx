@@ -7,7 +7,7 @@ import { SignInBannerView } from "./SignInBanner";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const CHECKED = "2026-10-30T11:57:00Z";
-const gh: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: githubSnapshot("ready", "ada", CHECKED) };
+const gh: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: githubSnapshot("ready", "ada", CHECKED), rechecking: false };
 const jira: ConnectionInfo = { ...gh, id: "jira:c:u", instanceId: "jira", displayName: "Acme Jira", kind: "jira", workspace: "acme.atlassian.net", account: "Alf Henderson", status: jiraSnapshot("expiresSoon", CHECKED) };
 
 const view = (over: Partial<ConnectionsViewProps> = {}) =>

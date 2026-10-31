@@ -8,6 +8,7 @@ async function openSettings(page: Page) {
 
 const rowOf = (page: Page, name: string) => page.getByRole("listitem", { name: `${name} connection` });
 const refuseToken = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { refuseGithubToken(): void } }).__gossamrMock.refuseGithubToken());
+const finishRecheck = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { finishGithubRecheck(): void } }).__gossamrMock.finishGithubRecheck());
 const probe = (page: Page, state: string) => page.evaluate((s) => (globalThis as unknown as { __gossamrMock: { probeGithub(state: string): void } }).__gossamrMock.probeGithub(s), state);
 
 test.describe("the Connections list", () => {
@@ -179,6 +180,29 @@ test.describe("the Connections list", () => {
     await held.getByRole("button", { name: "Approve" }).click();
     await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
     expect(await githubPostsTried(page)).toBe(1);
+  });
+
+  test("holds a review draft with its age until the first sync after GitHub is turned back on has checked it", async ({ page }) => {
+    const review = await reviewedDraft(page, "&mockGithubRecheck=hold");
+    await toast(page).getByRole("button", { name: "Dismiss" }).click();
+    await openSettings(page);
+    const github = rowOf(page, "GitHub").getByRole("switch", { name: "GitHub" });
+    await github.click();
+    await expect(github).not.toBeChecked();
+    await github.click();
+    await expect(github).toBeChecked();
+    await page.getByRole("button", { name: "All projects" }).click();
+    await peekTicket(page, "CA-402");
+    await expect(review).toContainText("Checking this draft against GitHub.");
+    await expect(review).toContainText("Made just now");
+    await expect(review).not.toContainText("Posts as");
+    await expect(review.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(await githubPostsTried(page)).toBe(0);
+    await finishRecheck(page);
+    await expect(review).toContainText("Posts as ada via GitHub");
+    await expect(review.getByRole("button", { name: "Approve" })).toBeEnabled();
+    await review.getByRole("button", { name: "Approve" }).click();
+    await expect.poll(async () => (await githubWrites(page)).length).toBe(1);
   });
 
   test("hides the code linked to a ticket while GitHub is off, and shows it again once GitHub is on", async ({ page }) => {
