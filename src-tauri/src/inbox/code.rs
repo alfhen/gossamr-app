@@ -612,6 +612,11 @@ impl Core {
             let head = match host.pull_request_change(repo, *number).await {
                 Ok(change) => Some(change),
                 Err(Error::CodeHost { status: 404, .. }) => None,
+                Err(Error::CodeHost { status: 403 | 410 | 451, .. }) => {
+                    let note = format!("Gossamr can't read {repo}#{number} on GitHub any more, so it can't check this review. Discard it.");
+                    changed |= self.note_review(&draft.id, note).await?;
+                    continue;
+                }
                 Err(e) => return Err(e),
             };
             let label = format!("{repo}#{number}");
@@ -625,29 +630,38 @@ impl Core {
             if retire.is_none() && !outdated {
                 continue;
             }
-            changed |= self
-                .with_app_db(|db| {
-                    let Some(mut p) = db.proposal(&draft.id)?.filter(|p| p.state == ProposalState::Pending && p.maybe_posted.is_none()) else { return Ok(false) };
-                    let at = Utc::now();
-                    match retire {
-                        Some(reason) => {
-                            p.state = ProposalState::Retired(reason);
-                            p.updated_at = at;
-                            db.save_proposal(&p)?;
-                            proposals::record(db, &p, Actor::Supervisor, "draft_retired", at);
-                        }
-                        None if p.error.as_deref() == Some(REVIEW_OUTDATED_NOTE) => return Ok(false),
-                        None => {
-                            p.error = Some(REVIEW_OUTDATED_NOTE.into());
-                            p.updated_at = at;
-                            db.save_proposal(&p)?;
-                        }
-                    }
-                    Ok(true)
-                })
-                .await?;
+            changed |= match retire {
+                Some(reason) => {
+                    self.with_app_db(|db| {
+                        let Some(mut p) = db.proposal(&draft.id)?.filter(|p| p.state == ProposalState::Pending && p.maybe_posted.is_none()) else { return Ok(false) };
+                        let at = Utc::now();
+                        p.state = ProposalState::Retired(reason);
+                        p.updated_at = at;
+                        db.save_proposal(&p)?;
+                        proposals::record(db, &p, Actor::Supervisor, "draft_retired", at);
+                        Ok(true)
+                    })
+                    .await?
+                }
+                None => self.note_review(&draft.id, REVIEW_HEAD_MOVED_NOTE.into()).await?,
+            };
         }
         Ok(changed)
+    }
+
+    /// Sets `note` as the error of pending review draft `id`, unless it already says that. Returns whether it changed.
+    async fn note_review(&self, id: &str, note: String) -> Result<bool> {
+        self.with_app_db(|db| {
+            let Some(mut p) = db.proposal(id)?.filter(|p| p.state == ProposalState::Pending && p.maybe_posted.is_none()) else { return Ok(false) };
+            if p.error.as_deref() == Some(note.as_str()) {
+                return Ok(false);
+            }
+            p.error = Some(note);
+            p.updated_at = Utc::now();
+            db.save_proposal(&p)?;
+            Ok(true)
+        })
+        .await
     }
 
     /// Asks the sync loop for a code sync now, as the Sync button does: a build that just pushed a branch has its pull
@@ -887,6 +901,9 @@ impl Core {
 
 pub const REVIEW_OUTDATED_NOTE: &str =
     "GitHub says this review's lines no longer match the pull request; it is outdated. Discard it or edit the comments and try again.";
+/// The error of a review whose pull request has new commits since it was written. It is not sent: it would name a
+/// commit that is no longer the head. An edit clears it.
+pub const REVIEW_HEAD_MOVED_NOTE: &str = "The pull request has new commits since this review was written. Discard it and ask Pip to review again.";
 /// The error a review draft keeps when a post may have reached GitHub though no answer said so. The draft keeps that
 /// post as `maybe_posted`, and its next post looks for it on GitHub first.
 pub const REVIEW_MAYBE_POSTED_NOTE: &str = "GitHub may have posted this review already; Gossamr checks the pull request before sending it again.";
@@ -995,6 +1012,9 @@ impl Core {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if let Intent::GithubReview { connection_id, .. } = &current.intent {
                     self.refuse_while_held(connection_id)?;
+                }
+                if current.state == ProposalState::Pending && current.error.as_deref() == Some(REVIEW_HEAD_MOVED_NOTE) {
+                    return Err(Error::Proposal(REVIEW_HEAD_MOVED_NOTE.into()));
                 }
                 if current.state == ProposalState::Pending && current.revisions.len() != seen {
                     return Err(Error::Proposal(REVIEW_CHANGED.into()));
@@ -2262,8 +2282,12 @@ mod review_tests {
 
         assert!(synced.rechecked && synced.reviews_changed);
         let back = fx.core.proposal(&p.id).await.unwrap().unwrap();
-        assert_eq!((back.state, back.error.as_deref()), (ProposalState::Pending, Some(REVIEW_OUTDATED_NOTE)));
+        assert_eq!((back.state, back.error.as_deref()), (ProposalState::Pending, Some(REVIEW_HEAD_MOVED_NOTE)));
         assert!(posts(&fx).is_empty());
+
+        let refused = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err();
+        assert!(refused.to_string().contains("new commits since this review was written"), "{refused}");
+        assert!(posts(&fx).is_empty(), "nothing is sent for a commit that is no longer the head");
     }
 
     #[tokio::test]
@@ -2290,6 +2314,23 @@ mod review_tests {
 
         assert!(synced.rechecked && !synced.reviews_changed);
         assert_eq!(fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap().state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_draft_on_a_pull_request_github_refuses_is_marked_and_does_not_fail_the_sync() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let connection_id = turned_back_on(&fx).await;
+        fx.github_route(PULL_ROUTE, vec![Reply::status(403, "{\"message\":\"Forbidden\"}")]);
+
+        let synced = fx.core.sync_code_at(&connection_id, Utc::now()).await.unwrap();
+
+        assert!(synced.rechecked && synced.reviews_changed);
+        assert!(!fx.core.is_rechecking(&connection_id));
+        let back = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        assert_eq!(back.state, ProposalState::Pending);
+        assert!(back.error.as_deref().unwrap().contains("can't read acme/webshop#12"), "{:?}", back.error);
+        assert!(posts(&fx).is_empty());
     }
 
     #[tokio::test]
