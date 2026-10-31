@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useDev } from "./devStore";
 import { useWorkspace } from "../workspaceStore";
 import { disconnectGithub } from "./githubUi";
 import { useToasts } from "./toasts";
@@ -14,6 +15,7 @@ describe("disconnecting GitHub", () => {
   it("still says it disconnected when re-reading the cache afterwards fails", async () => {
     const githubDisconnect = vi.fn().mockResolvedValue(undefined);
     const report = vi.fn();
+    const invalidate = vi.spyOn(useDev.getState(), "invalidate");
     useWorkspace.setState({
       backend: { githubDisconnect } as never,
       refreshConnections: vi.fn().mockResolvedValue(undefined),
@@ -24,6 +26,7 @@ describe("disconnecting GitHub", () => {
     await expect(disconnectGithub("github:ada", "ada")).resolves.toBe(true);
     expect(githubDisconnect).toHaveBeenCalledWith("github:ada");
     expect(report).toHaveBeenCalledWith("Couldn't refresh after disconnecting", expect.any(Error));
+    expect(invalidate).toHaveBeenCalled();
     expect(useToasts.getState().toasts.map((t) => t.text)).toContain("Disconnected ada. Its token and cached pull requests are gone.");
   });
 

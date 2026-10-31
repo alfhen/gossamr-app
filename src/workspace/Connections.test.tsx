@@ -39,6 +39,12 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
   );
 
 describe("the connections list", () => {
+  it("shows a switched-off connection as off in its detail, not its last probe", () => {
+    const out = view({ connections: [{ ...jira, enabled: false }], selectedId: jira.id });
+    expect(out).toContain("Off.");
+    expect(out).not.toContain("Make a new token");
+  });
+
   it("lists each connection with its status line and marks the selected one", () => {
     const out = view();
     expect(out).toContain("Acme Jira");
@@ -131,5 +137,13 @@ describe("the banner for a connection that is signed out", () => {
     const many = renderToStaticMarkup(<SignInBannerView lost={[jira, gh]} onFix={noop} />);
     expect(many).toContain("2 connections are signed out");
     expect(many).toContain("Open connections");
+  });
+});
+
+describe("the sign-in banner text", () => {
+  it("says Jira isn't syncing, not that nothing is", () => {
+    const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={vi.fn()} />);
+    expect(out).toContain("Jira isn&#x27;t syncing");
+    expect(out).not.toContain("nothing is syncing");
   });
 });

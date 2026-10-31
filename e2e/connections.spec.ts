@@ -24,7 +24,7 @@ test.describe("the Connections list", () => {
     await openSettings(page);
     await rowOf(page, "GitHub").getByRole("button").click();
     const detail = page.getByRole("region", { name: "GitHub details" });
-    await expect(detail).toContainText("Signed in as ada on github.com");
+    await expect(detail).toContainText("gh is signed in as ada on github.com");
     await expect(detail).toContainText("Drafts post as ada via GitHub.");
     await expect(detail).toContainText("Agents clone and push as whichever account gh has active.");
     await expect(page.getByRole("region", { name: "Sample data details" })).toHaveCount(0);
