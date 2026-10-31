@@ -38,21 +38,3 @@ export async function refreshAfterGithubChange() {
   await Promise.all([ws.refreshConnections(), ws.refreshWatch(), ws.refresh()]);
   useDev.getState().invalidate();
 }
-
-export async function disconnectGithub(connectionId: string, label: string): Promise<boolean> {
-  const backend = useWorkspace.getState().backend;
-  if (!backend) return false;
-  try {
-    await backend.githubDisconnect(connectionId);
-  } catch (e) {
-    useToasts.getState().push(`Couldn't disconnect ${label}: ${messageOf(e)}`);
-    return false;
-  }
-  try {
-    await refreshAfterGithubChange();
-  } catch (e) {
-    useWorkspace.getState().report("Couldn't refresh after disconnecting", e);
-  }
-  useToasts.getState().push(`Disconnected ${label}. Its token and cached pull requests are gone.`, "info");
-  return true;
-}

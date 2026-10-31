@@ -116,9 +116,17 @@ pub fn bind(config: &mut AppConfig, binding: Binding) {
 
 /// Removes the instance bound to `connection_id` and retires its id.
 pub fn unbind(config: &mut AppConfig, connection_id: &str) {
-    let Some(at) = config.connections.iter().position(|i| i.bound_to.as_deref() == Some(connection_id)) else { return };
+    if let Some(id) = config.connections.iter().find(|i| i.bound_to.as_deref() == Some(connection_id)).map(|i| i.id.clone()) {
+        remove(config, &id);
+    }
+}
+
+/// Removes the instance `id` and retires its id. Says whether it was there.
+pub fn remove(config: &mut AppConfig, id: &str) -> bool {
+    let Some(at) = config.connections.iter().position(|i| i.id == id) else { return false };
     let gone = config.connections.remove(at);
     config.retired_ids.push(gone.id);
+    true
 }
 
 /// Whether instances may be changed: they have been created from the sign-ins already there, and the list was readable.

@@ -124,6 +124,10 @@ export class JiraBackend implements Backend {
     return invoke<void>("connection_rename", { instanceId, displayName });
   }
 
+  connectionRemove(instanceId: string) {
+    return invoke<void>("connection_remove", { instanceId });
+  }
+
   githubSignInOptions() {
     return invoke<GithubSignInOptions>("github_sign_in_options");
   }
@@ -142,10 +146,6 @@ export class JiraBackend implements Backend {
 
   githubDevicePoll() {
     return invoke<ConnectionInfo>("github_connect", { source: { via: "device" } });
-  }
-
-  githubDisconnect(connectionId: string) {
-    return invoke<void>("github_disconnect", { connectionId });
   }
 
   devLinks(item: ItemRef) {

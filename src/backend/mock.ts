@@ -1095,6 +1095,19 @@ export class MockBackend implements Backend {
     this.connectionsListeners.forEach((l) => l());
   }
 
+  async connectionRemove(instanceId: string) {
+    const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
+    if (!target) throw new Error("This connection is gone. Reopen Settings.");
+    if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
+    const reason = `${target.displayName} was removed.`;
+    for (const d of this.proposals.list({ states: ["pending"] })) {
+      if (d.intent.type === "githubReview" && d.intent.connectionId === target.id) this.proposals.retire(d.id, reason);
+    }
+    this.names.delete(instanceId);
+    this.github.disconnect(target.id);
+    this.connectionsListeners.forEach((l) => l());
+  }
+
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
     if (refresh) this.github.recheck();
     const refused = this.jiraToken === "refused";
@@ -1160,10 +1173,6 @@ export class MockBackend implements Backend {
     if (this.device.outcome === "denied") throw new Error("access_denied");
     if (this.device.outcome === "expired") throw new Error("the code expired before it was entered; start again");
     return this.github.devicePoll();
-  }
-
-  async githubDisconnect(connectionId: string) {
-    this.github.disconnect(connectionId);
   }
 
   onCacheChanged(listener: (c: CacheChanged) => void) {
