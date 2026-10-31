@@ -910,6 +910,8 @@ export interface ConnectionInfo {
   reauth: boolean;
   /** What the last probe found; null until the first one finishes, and for the sample connection. */
   status: ProbeSnapshot | null;
+  /** It was turned back on and its first sync hasn't finished, so its waiting drafts can't be approved yet. */
+  rechecking: boolean;
 }
 
 /**

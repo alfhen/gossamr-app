@@ -162,6 +162,8 @@ pub struct ConnectionInfo {
     pub reauth: bool,
     /// What the last probe of the instance found, once there is one.
     pub status: Option<crate::probe::Snapshot>,
+    /// It was turned back on and its first sync hasn't finished, so its waiting drafts are still being checked.
+    pub rechecking: bool,
 }
 
 #[derive(Default)]
@@ -197,6 +199,8 @@ pub struct Core {
     sign_in: tokio::sync::Mutex<()>,
     /// Held while a draft is claimed for posting and while a connection is turned off, so a draft can't be claimed after the check that said its connection was on.
     draft_gate: tokio::sync::Mutex<()>,
+    /// Connections turned back on whose first sync hasn't finished, with the moment each was turned on. Their drafts can't be approved yet.
+    rechecking: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
     pub focus: Notify,
 }
@@ -231,6 +235,7 @@ impl Core {
             wake: Notify::new(),
             sign_in: tokio::sync::Mutex::new(()),
             draft_gate: tokio::sync::Mutex::new(()),
+            rechecking: Mutex::new(HashMap::new()),
             focus: Notify::new(),
         }
     }
@@ -457,6 +462,9 @@ impl Core {
             })
         })
         .await
+        .inspect(|_| {
+            self.finish_recheck(&connection_id, started);
+        })
     }
 
     /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.
@@ -739,6 +747,7 @@ impl Core {
                 transient: false,
                 reauth: self.reauth_needed.load(Ordering::SeqCst),
                 status: None,
+                rechecking: false,
             });
         }
         out.extend(self.code_connections());

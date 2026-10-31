@@ -379,7 +379,7 @@ impl Core {
         let tracker = self.tracker(&scope)?;
         let claimed = {
             let _gate = self.draft_gate.lock().await;
-            self.refuse_while_off(&scope.connection_id)?;
+            self.refuse_while_held(&scope.connection_id)?;
             self.with_db_for(&scope, |db| proposals::begin(db, id, Utc::now())).await?
         };
         let outcome = proposals::execute(tracker.as_ref(), &claimed).await;
@@ -522,7 +522,26 @@ mod tests {
         assert!(fx.tracker.intents().is_empty());
         assert_eq!(fx.core.proposal(&drafted.id).await.unwrap().unwrap().state, ProposalState::Pending);
 
-        fx.core.set_instance_enabled("jira", true).await.unwrap();
+        let connection_id = fx.core.set_instance_enabled("jira", true).await.unwrap();
+        fx.core.finish_recheck(&connection_id, Utc::now());
+        assert_eq!(fx.core.approve_proposal(&drafted.id).await.unwrap().state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_draft_for_a_jira_turned_back_on_waits_for_its_first_sync_and_is_then_applied() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.adopt_instances().await;
+        let drafted = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        let connection_id = fx.core.set_instance_enabled("jira", true).await.unwrap();
+
+        let refused = fx.core.approve_proposal(&drafted.id).await.unwrap_err();
+
+        assert!(refused.to_string().contains("Checking this draft against"), "{refused}");
+        assert!(fx.tracker.intents().is_empty());
+        assert_eq!(fx.core.proposal(&drafted.id).await.unwrap().unwrap().state, ProposalState::Pending);
+
+        assert!(fx.core.finish_recheck(&connection_id, Utc::now()));
         assert_eq!(fx.core.approve_proposal(&drafted.id).await.unwrap().state, ProposalState::Applied);
     }
 

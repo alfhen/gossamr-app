@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use crate::proposals;
 use crate::secrets;
 use crate::tracker::{Connection, ConnectionKind};
+use chrono::Utc;
 
 const NAME_LIMIT: usize = 60;
 
@@ -127,6 +128,7 @@ impl Core {
         if !enabled {
             self.refuse_while_posting(&connection_id, &instance.display_name).await?;
         }
+        let changed = instance.enabled != enabled;
         AppConfig::update_if(&self.data_dir, |config| match config.connections.iter_mut().find(|i| i.id == instance_id) {
             Some(instance) if instance.enabled != enabled => {
                 instance.enabled = enabled;
@@ -134,6 +136,14 @@ impl Core {
             }
             _ => false,
         })?;
+        if changed {
+            let mut rechecking = self.rechecking.lock().expect("recheck lock poisoned");
+            if enabled {
+                rechecking.insert(connection_id.clone(), Utc::now());
+            } else {
+                rechecking.remove(&connection_id);
+            }
+        }
         Ok(connection_id)
     }
 
@@ -164,6 +174,7 @@ impl Core {
             }
             self.probes_forget(id);
         }
+        self.rechecking.lock().expect("recheck lock poisoned").remove(&target.connection_id);
         Ok(Removed { connection_id: target.connection_id, kind: target.kind, workstreams })
     }
 
@@ -199,11 +210,30 @@ impl Core {
         }
     }
 
-    /// Turns away a write for a connection that is off: its drafts wait until it is on.
-    pub(super) fn refuse_while_off(&self, connection_id: &str) -> Result<()> {
-        match self.off_name(connection_id) {
-            Some(name) => Err(Error::Proposal(format!("{name} is off. This draft waits until you turn it on."))),
-            None => Ok(()),
+    /// Why a draft for `connection_id` can't be approved yet: its connection is off, or was turned back on and hasn't
+    /// synced since. The page words the same notes in `heldNote` (src/lib/proposals.ts).
+    pub(super) fn refuse_while_held(&self, connection_id: &str) -> Result<()> {
+        if let Some(name) = self.off_name(connection_id) {
+            return Err(Error::Proposal(format!("{name} is off. This draft waits until you turn it on.")));
+        }
+        if self.is_rechecking(connection_id) {
+            let name = AppConfig::load(&self.data_dir).connections.iter().find(|i| i.bound_to.as_deref().unwrap_or(&i.id) == connection_id).map(|i| i.display_name.clone());
+            return Err(Error::Proposal(format!("Checking this draft against {}.", name.as_deref().unwrap_or("the connection"))));
+        }
+        Ok(())
+    }
+
+    pub(super) fn is_rechecking(&self, connection_id: &str) -> bool {
+        self.rechecking.lock().expect("recheck lock poisoned").contains_key(connection_id)
+    }
+
+    /// A sync that began at `started` finished well. It ends the recheck only if the connection was turned on before the
+    /// sync began; one that was already running when the connection was turned off and on again saw nothing of the new state.
+    pub(super) fn finish_recheck(&self, connection_id: &str, started: chrono::DateTime<Utc>) -> bool {
+        let mut rechecking = self.rechecking.lock().expect("recheck lock poisoned");
+        match rechecking.get(connection_id) {
+            Some(turned_on) if *turned_on <= started => rechecking.remove(connection_id).is_some(),
+            _ => false,
         }
     }
 
@@ -287,6 +317,7 @@ impl Core {
                 info.instance_id = instance.id.clone();
                 info.display_name = instance.display_name.clone();
                 info.enabled = instance.enabled;
+                info.rechecking = self.is_rechecking(&info.id);
                 info.status = self.probe_snapshot(instance);
             }
         }
@@ -445,6 +476,42 @@ mod tests {
         assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), false)]);
         assert_eq!(fx.core.set_instance_enabled("github", true).await.unwrap(), "github:alfhen");
         assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), true)]);
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_back_on_holds_its_drafts_until_a_sync_that_began_after_it_has_finished() {
+        let fx = adopted().await;
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+        let before_on = Utc::now();
+        let connection_id = fx.core.set_instance_enabled("github", true).await.unwrap();
+
+        let held = fx.core.refuse_while_held(&connection_id).unwrap_err();
+        assert!(held.to_string().contains("Checking this draft against GitHub."), "{held}");
+        assert!(!fx.core.finish_recheck(&connection_id, before_on), "a sync that began before the connection was turned on saw none of it");
+        assert!(fx.core.refuse_while_held(&connection_id).is_err());
+
+        assert!(fx.core.finish_recheck(&connection_id, Utc::now()));
+        fx.core.refuse_while_held(&connection_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_instance_that_was_never_off_is_not_rechecked_when_it_is_turned_on_again() {
+        let fx = adopted().await;
+
+        let connection_id = fx.core.set_instance_enabled("github", true).await.unwrap();
+
+        assert!(!fx.core.is_rechecking(&connection_id));
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_off_again_ends_its_recheck_and_the_draft_says_it_is_off() {
+        let fx = adopted().await;
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+        let connection_id = fx.core.set_instance_enabled("github", true).await.unwrap();
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+
+        assert!(!fx.core.is_rechecking(&connection_id));
+        assert!(fx.core.refuse_while_held(&connection_id).unwrap_err().to_string().contains("is off"));
     }
 
     #[tokio::test]

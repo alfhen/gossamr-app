@@ -129,6 +129,7 @@ fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<(St
         transient,
         reauth: false,
         status: None,
+        rechecking: false,
     }
 }
 
@@ -370,6 +371,8 @@ pub struct CodeSynced {
     pub changed: bool,
     /// Whether the set of work items linked to code changed.
     pub links_changed: bool,
+    /// The sync checked the drafts that were waiting since the connection was turned on.
+    pub rechecked: bool,
 }
 
 /// A pull request to read in full.
@@ -587,7 +590,7 @@ impl Core {
         })?;
         match stop {
             Some(e) => Err(e),
-            None => Ok(CodeSynced { changed, links_changed }),
+            None => Ok(CodeSynced { changed, links_changed, rechecked: self.finish_recheck(id, started) }),
         }
     }
 
@@ -935,7 +938,7 @@ impl Core {
             .with_app_db_for(&scope, |db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if let Intent::GithubReview { connection_id, .. } = &current.intent {
-                    self.refuse_while_off(connection_id)?;
+                    self.refuse_while_held(connection_id)?;
                 }
                 if current.state == ProposalState::Pending && current.revisions.len() != seen {
                     return Err(Error::Proposal(REVIEW_CHANGED.into()));
@@ -1716,6 +1719,23 @@ pub(crate) mod tests {
         assert_eq!(lx.core().sync_code_if_due(Trigger::Now).await.len(), 1);
     }
 
+    #[tokio::test]
+    async fn a_github_turned_back_on_is_checking_its_drafts_until_its_first_sync_has_finished() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.core().adopt_instances().await;
+        let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        let rechecking = || async { lx.core().connections().await.unwrap().into_iter().find(|c| c.kind == ConnectionKind::Github).unwrap().rechecking };
+        lx.core().set_instance_enabled(&instance, false).await.unwrap();
+        assert!(!rechecking().await, "off is its own note, not a check");
+
+        lx.core().set_instance_enabled(&instance, true).await.unwrap();
+        assert!(rechecking().await);
+
+        let synced = lx.core().sync_code_if_due(Trigger::Now).await;
+        assert!(synced[0].1.as_ref().unwrap().rechecked);
+        assert!(!rechecking().await);
+    }
+
     fn webshop_pulls(lx: &Linked) -> HashMap<u64, CodeChange> {
         let changes = lx.core().with_code_db("github:ann", |db| db.code_changes("github:ann")).unwrap();
         changes.into_iter().filter(|c| c.repo == "acme/webshop").map(|c| (c.number.unwrap(), c)).collect()
@@ -2141,7 +2161,28 @@ mod review_tests {
         assert!(posts(&fx).is_empty());
         assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending);
 
-        fx.core.set_instance_enabled(&instance, true).await.unwrap();
+        let connection_id = fx.core.set_instance_enabled(&instance, true).await.unwrap();
+        fx.core.finish_recheck(&connection_id, Utc::now());
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!(done.state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_review_for_a_connection_turned_back_on_waits_for_its_first_sync_and_then_posts() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        fx.core.adopt_instances().await;
+        let p = drafted(&fx).await;
+        let instance = AppConfig::load(&fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        fx.core.set_instance_enabled(&instance, false).await.unwrap();
+        let connection_id = fx.core.set_instance_enabled(&instance, true).await.unwrap();
+
+        let refused = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err();
+
+        assert!(refused.to_string().contains("Checking this draft against GitHub."), "{refused}");
+        assert!(posts(&fx).is_empty());
+        assert_eq!(fx.core.proposal(&p.id).await.unwrap().unwrap().state, ProposalState::Pending);
+
+        assert!(fx.core.finish_recheck(&connection_id, Utc::now()));
         let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!(done.state, ProposalState::Applied);
     }
