@@ -447,6 +447,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_draft_another_account_left_in_the_shared_app_database_can_be_neither_listed_nor_approved() {
+        let fx = crate::inbox::testing::fixture().await;
+        let mut elsewhere = fx.item("CA-1");
+        elsewhere.connection_id = "jira:other:you".into();
+        let theirs = fx
+            .core
+            .with_db_for(&fx.scope, |db| {
+                crate::proposals::create(db, Draft::from_pip("q", None, Intent::Comment { item: elsewhere, body: Doc::paragraph("not for this site") }, None), Utc::now())
+            })
+            .await
+            .unwrap();
+        let mine = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap(), vec![mine]);
+        assert!(fx.core.proposal(&theirs.id).await.unwrap().is_none());
+        let err = fx.core.approve_proposal(&theirs.id).await.unwrap_err();
+        assert!(err.to_string().contains("no longer exists"), "{err}");
+        assert!(fx.tracker.intents().is_empty(), "nothing reached this account's tracker");
+
+        let app = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
+        assert_eq!(app.proposal(&theirs.id).unwrap().unwrap().state, ProposalState::Pending, "and the other account's draft is untouched");
+    }
+
+    #[tokio::test]
     async fn a_hand_made_new_item_draft_is_pending_and_stays_in_its_connection() {
         use crate::domain::{ContainerRef, ItemKind, NewItem};
         let fx = crate::inbox::testing::fixture().await;
@@ -785,10 +809,14 @@ mod tests {
     #[tokio::test]
     async fn the_person_rewords_and_drops_review_comments_but_never_moves_or_adds_one() {
         let fx = crate::inbox::testing::fixture().await;
+        let mut intent = review(vec![at(42, "No backoff."), at(17, "Nit: name.")]);
+        if let Intent::GithubReview { item, .. } = &mut intent {
+            *item = Some(fx.item("CA-1"));
+        }
         let draft = Draft {
             origin: Origin::Run { run_id: "run-1".into(), short_id: None, workstream: None },
             created_by: CreatedBy::Agent,
-            intent: review(vec![at(42, "No backoff."), at(17, "Nit: name.")]),
+            intent,
             label: None,
             basis: None,
         };

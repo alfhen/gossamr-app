@@ -54,7 +54,7 @@ const LAST_SYNC: &str = "last_sync_at";
 const CACHE_BACKFILLED: &str = "cache_backfilled";
 const EVENTS_BACKFILLED: &str = "events_backfilled";
 const PIP_SESSIONS: &str = "pip_sessions";
-const OWN_SESSIONS_KEPT: usize = 50;
+pub(crate) const OWN_SESSIONS_KEPT: usize = 50;
 const ANNOUNCED_NEEDS: &str = "announced_needs";
 
 /// Events after this are new since the previous sync (or, before the first sync, from the last 24 hours).
@@ -78,7 +78,11 @@ fn ago(d: Duration) -> String {
     (Utc::now() - d).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Separate files per site and account, so two people signing in on one Mac never see each other's inbox.
+/// Drafts, runs, workstreams and Pip's conversations, shared by every connection.
+const APP_DB: &str = "app.sqlite";
+
+/// Separate cache files per site and account, so two people signing in on one Mac never see each other's tickets. Drafts
+/// and runs share `APP_DB`; `Db::for_connection` keeps each account's out of the other's view.
 fn db_file(connection: &Connection) -> String {
     let safe = |s: &str| s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect::<String>();
     format!("inbox-{}-{}.sqlite", safe(&connection.workspace), safe(&connection.account))
@@ -269,7 +273,7 @@ impl Core {
         if connection.is_some() {
             match self.with_db(|db| db.clear_pip_turns()).await {
                 Ok(()) | Err(Error::SiteChanged) | Err(Error::NotSignedIn) => {}
-                // Signing out never depends on the database; the rows stay in this account's own file.
+                // Signing out never depends on the database; the conversations stay in the app database until the next sign-out.
                 Err(e) => eprintln!("couldn't forget Pip's conversations on sign-out: {e}"),
             }
         }
@@ -300,7 +304,7 @@ impl Core {
         let mut guard = self.db.lock().expect("db lock poisoned");
         let connection = self.connection(scope)?;
         if guard.as_ref().map(|(open, _)| *open != connection.id).unwrap_or(true) {
-            let db = Db::open(&self.data_dir.join(db_file(&connection)))?;
+            let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?.for_connection(&connection.id);
             backfill_cache(&db, &connection)?;
             db.release_interrupted(Utc::now())?;
             db.fail_interrupted_pip_turns()?;
@@ -688,17 +692,17 @@ impl Core {
 
     /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.
     /// Sessions recorded by earlier versions, which ran in a user-chosen folder, never enter this list.
-    pub async fn remember_claude_session(&self, key: Option<&str>, session_id: &str) -> Result<()> {
-        self.with_db(|db| {
+    pub async fn remember_claude_session(&self, scope: &Scope, key: Option<&str>, session_id: &str) -> Result<()> {
+        self.with_db_for(scope, |db| {
             if let Some(key) = key {
-                db.set_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
+                db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
             }
             let mut own: Vec<String> =
-                db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             own.retain(|s| s != session_id);
             own.insert(0, session_id.to_string());
             own.truncate(OWN_SESSIONS_KEPT);
-            db.set_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
+            db.set_app_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
         })
         .await
     }
@@ -707,7 +711,7 @@ impl Core {
     /// last sessions it started, or the session of an open workstream, which stays resumable however long it runs.
     pub async fn is_pip_session(&self, session_id: &str) -> Result<bool> {
         self.with_db(|db| {
-            let own: Vec<String> = db.meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+            let own: Vec<String> = db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             Ok(own.iter().any(|s| s == session_id) || db.is_open_workstream_session(session_id)?)
         })
         .await
@@ -738,13 +742,13 @@ mod tests {
     async fn only_sessions_started_in_the_sandbox_can_be_resumed() {
         let fx = super::testing::fixture().await;
         fx.core
-            .with_db(|db| db.set_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
+            .with_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
             .await
             .unwrap();
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
 
-        fx.core.remember_claude_session(Some("CA-1"), "new-1").await.unwrap();
-        fx.core.remember_claude_session(None, "ws-1").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "new-1").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "ws-1").await.unwrap();
         assert!(fx.core.is_pip_session("new-1").await.unwrap() && fx.core.is_pip_session("ws-1").await.unwrap());
         assert!(!fx.core.is_pip_session("old-1").await.unwrap());
     }
@@ -753,11 +757,11 @@ mod tests {
     async fn a_workstream_s_session_stays_resumable_however_many_others_are_remembered() {
         let fx = super::testing::fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.remember_claude_session(None, "ws-session").await.unwrap();
-        fx.core.remember_claude_session(None, "loose-session").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "ws-session").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "loose-session").await.unwrap();
         fx.core.set_workstream_session(&fx.scope, &ws.id, "ws-session").await.unwrap();
         for n in 0..60 {
-            fx.core.remember_claude_session(None, &format!("other-{n}")).await.unwrap();
+            fx.core.remember_claude_session(&fx.scope, None, &format!("other-{n}")).await.unwrap();
         }
         assert!(fx.core.is_pip_session("ws-session").await.unwrap(), "pinned by its workstream");
         assert!(!fx.core.is_pip_session("loose-session").await.unwrap(), "the list itself still keeps only the last 50");
