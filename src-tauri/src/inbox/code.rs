@@ -726,11 +726,13 @@ impl Core {
         Err(refused(repo))
     }
 
-    /// The name of a GitHub connection that is off: the one that follows `repo` when one is given, else any.
+    /// The name of a GitHub connection that is off and hides something: the one that follows `repo` when one is given,
+    /// else any that has repositories chosen.
     pub fn off_code_name(&self, repo: Option<&str>) -> Result<Option<String>> {
         for id in self.code.connection_ids() {
             let Some(name) = self.off_name(&id) else { continue };
-            if repo.is_none_or(|repo| self.chosen_repos(&id).is_ok_and(|repos| is_watched_repo(&repos, repo))) {
+            let repos = self.chosen_repos(&id)?;
+            if repo.map_or(!repos.is_empty(), |repo| is_watched_repo(&repos, repo)) {
                 return Ok(Some(name));
             }
         }
