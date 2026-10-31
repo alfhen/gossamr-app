@@ -77,9 +77,6 @@ impl Snapshot {
         if self.state == State::Error && self.account.is_none() {
             self.account = previous.and_then(|p| p.account.clone());
         }
-        if self.state == State::Error && self.active_login.is_none() {
-            self.active_login = previous.and_then(|p| p.active_login.clone());
-        }
         self
     }
 }
@@ -478,9 +475,9 @@ mod tests {
     }
 
     #[test]
-    fn a_gh_probe_that_could_not_tell_keeps_the_active_login_found_before() {
+    fn a_gh_probe_that_could_not_tell_does_not_name_the_active_login_found_before() {
         let before = Snapshot { active_login: Some("alfhen".into()), ..Snapshot::new(State::Ready, "") };
-        assert_eq!(Snapshot::new(State::Error, "").keeping_account_of(Some(&before)).active_login.as_deref(), Some("alfhen"));
+        assert_eq!(Snapshot::new(State::Error, "").keeping_account_of(Some(&before)).active_login, None);
         assert_eq!(Snapshot::new(State::NotSignedIn, "").keeping_account_of(Some(&before)).active_login, None);
     }
 

@@ -14,11 +14,11 @@ export function githubSnapshot(state: GithubProbeState, login: string, checkedAt
     case "ready":
       return { ...found, account: login, message: `gh is signed in as ${login} on github.com` };
     case "notSignedIn":
-      return { ...found, message: `gh has no login for ${login} on github.com.`, fix: GH_LOGIN_COMMAND };
+      return { ...found, activeLogin: null, message: `gh has no login for ${login} on github.com.`, fix: GH_LOGIN_COMMAND };
     case "notFound":
       return { ...found, installed: false, version: null, activeLogin: null, message: "gh isn't installed. Use the command below, or get the installer from cli.github.com.", fix: "brew install gh" };
     case "error":
-      return { ...found, account: login, message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.", fix: "gh auth status" };
+      return { ...found, account: login, activeLogin: null, message: "gh didn't answer in time. If macOS is asking for Keychain access, allow it, then check again.", fix: "gh auth status" };
     case "off":
       return { ...found, activeLogin: null, message: OFF_MESSAGE };
   }
