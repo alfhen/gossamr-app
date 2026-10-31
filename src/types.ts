@@ -1010,16 +1010,6 @@ export interface AssignedElsewhere {
   strays: Stray[];
 }
 
-/** Which ways of connecting GitHub work in this build and on this Mac. */
-export interface GithubSignInOptions {
-  /** A client id is configured, so the browser device flow can be used. */
-  deviceFlow: boolean;
-  /** The GitHub CLI is installed, so its token can be imported when the person asks. */
-  ghCli: boolean;
-  /** A pasted personal access token always works. */
-  token: boolean;
-}
-
 /** One login `gh` holds on github.com. `usable` is false only when GitHub refused its token. */
 export interface GhAccount {
   login: string;
@@ -1033,14 +1023,6 @@ export interface GhAccounts {
   accounts: GhAccount[];
   message: string | null;
   fix: string | null;
-}
-
-/** The code the person enters at `verificationUri` to authorise the app. The token never reaches the page. */
-export interface DeviceStart {
-  userCode: string;
-  verificationUri: string;
-  expiresIn: number;
-  interval: number;
 }
 
 // ---- Code hosting (GitHub), mirroring src-tauri/src/domain/code.rs ----

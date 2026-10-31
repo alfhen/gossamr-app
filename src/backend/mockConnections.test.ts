@@ -36,7 +36,7 @@ describe("the mock connection actions", () => {
     expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira"]);
     expect(b.proposals.get(draft.id)?.state).toEqual({ type: "retired", reason: "GitHub was removed." });
     expect(told).toBe(1);
-    await b.githubConnectToken("ghp_x");
+    await b.githubConnect();
     expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2"]);
   });
 
@@ -98,7 +98,7 @@ describe("the mock on/off switch", () => {
     const b = new MockBackend({ githubRepos: 6 });
     await b.connectionSetEnabled("github", false);
     await b.connectionRemove("github");
-    await b.githubConnectToken("ghp_x");
+    await b.githubConnect();
     expect((await b.connectionsList()).find((c) => c.instanceId === "github_2")?.enabled).toBe(true);
   });
 });

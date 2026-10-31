@@ -28,9 +28,7 @@ import type {
   ConnectionInfo,
   DevLink,
   DevLinksChanged,
-  DeviceStart,
   GhAccounts,
-  GithubSignInOptions,
   WorkComment,
   WorkContainer,
   WorkIdentity,
@@ -133,16 +131,8 @@ export class JiraBackend implements Backend {
     return invoke<void>("connection_remove", { instanceId });
   }
 
-  githubSignInOptions() {
-    return invoke<GithubSignInOptions>("github_sign_in_options");
-  }
-
-  githubConnectToken(token: string) {
-    return invoke<ConnectionInfo>("github_connect", { source: { via: "token", token } });
-  }
-
-  githubImportGhToken(login?: string) {
-    return invoke<ConnectionInfo>("github_connect", { source: { via: "ghCli", login } });
+  githubConnect(login?: string) {
+    return invoke<ConnectionInfo>("github_connect", { login });
   }
 
   githubAccounts() {
@@ -151,14 +141,6 @@ export class JiraBackend implements Backend {
 
   githubOpenLogin() {
     return invoke<void>("github_open_login");
-  }
-
-  githubDeviceStart() {
-    return invoke<DeviceStart>("github_device_start");
-  }
-
-  githubDevicePoll() {
-    return invoke<ConnectionInfo>("github_connect", { source: { via: "device" } });
   }
 
   devLinks(item: ItemRef) {

@@ -20,7 +20,7 @@ const EVENTS: &str = include_str!("fixtures/events.json");
 const NO_ITEMS: &str = "{\"items\":[]}";
 
 fn host(server: &Server) -> GithubHost {
-    GithubHost::new(reqwest::Client::new(), &server.base, "tok", "github:ann", "ann", Arc::new(Mutex::new(Db::in_memory().unwrap())))
+    GithubHost::new(reqwest::Client::new(), &server.base, Arc::new(crate::auth::FixedToken("tok")), "github:ann", "ann", Arc::new(Mutex::new(Db::in_memory().unwrap())))
 }
 
 fn query(text: &str) -> ContainerQuery {

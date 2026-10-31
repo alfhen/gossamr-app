@@ -29,6 +29,13 @@ pub struct CodeAccount {
     pub scopes: Option<Vec<String>>,
 }
 
+impl CodeAccount {
+    /// Whether the token can read notifications, which classic tokens grant with `notifications` or `repo`.
+    pub fn can_read_notifications(&self) -> bool {
+        self.scopes.as_ref().is_some_and(|s| s.iter().any(|s| s == "notifications" || s == "repo"))
+    }
+}
+
 /// Pull requests of one repository.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PullList {

@@ -53,7 +53,7 @@ export function actingAs(c: Pick<ConnectionInfo, "kind" | "workspace" | "account
 /** What Remove tells you it deletes, before it does. */
 export function removalWarning(c: Pick<ConnectionInfo, "kind" | "displayName" | "workspace">): string {
   if (c.kind === "github") {
-    return `Remove ${c.displayName}? Gossamr deletes the pull requests and branches it cached for ${c.workspace}, forgets its token and closes the drafts that post as ${c.workspace}. Your gh login and GitHub stay as they are.`;
+    return `Remove ${c.displayName}? Gossamr deletes the pull requests and branches it cached for ${c.workspace} and closes the drafts that post as ${c.workspace}. Your gh login and GitHub stay as they are.`;
   }
   return `Remove ${c.displayName}? Gossamr deletes the tickets it cached and your conversations with Pip, forgets your token and closes the drafts for it. Jira stays as it is.`;
 }
