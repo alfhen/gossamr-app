@@ -95,7 +95,7 @@ describe("the connections list", () => {
   it("says who drafts post as, and which account agents push as", () => {
     const out = view();
     expect(out).toContain("Drafts post as ada via GitHub.");
-    expect(out).toContain("Agents clone and push as whichever account gh has active.");
+    expect(out).toContain("Agents clone and push with your own git and gh setup, which may be a different account.");
   });
 
   it("offers Remove in place of Disconnect and Sign out, and asks before it deletes", () => {

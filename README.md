@@ -9,6 +9,7 @@ Built with Tauri 2, React, TypeScript and Tailwind CSS v4.
 - macOS with Xcode Command Line Tools
 - Rust (stable) and Node 22 with pnpm
 - [Claude Code](https://code.claude.com) installed and logged in, for Pip and agents
+- [GitHub CLI](https://cli.github.com) (`gh`) installed and logged in, to connect GitHub
 
 ## Connecting Jira
 
@@ -20,13 +21,22 @@ Gossamr signs in with an Atlassian API token that you make:
 
 The token is kept in the macOS Keychain under `dk.alfhen.gossamr`. When it expires or is revoked, a banner offers **Make a new token**. If the page doesn't fill in, **The page didn't fill in** lists the scopes to tick. "Try it with sample data" skips all of this.
 
+## Connecting GitHub
+
+Gossamr signs in through `gh`. It never asks for a GitHub token and never stores one: each time it needs a token, it asks `gh` for the one it holds for that account. A token an earlier version saved stays in the Keychain until that account is connected through `gh`; **Remove** deletes it at once.
+
+1. Install `gh` (`brew install gh`) and run `gh auth login -h github.com` in a terminal.
+2. In Gossamr, open Settings › Connections and choose **Connect GitHub**. It lists the accounts `gh` knows. For an account that isn't there yet, **Another account** shows the login command, with Copy and Open Terminal.
+
+The token is only as safe as `gh` keeps it: in the macOS Keychain, or in plain text in `hosts.yml` if you signed in to `gh` with `--insecure-storage`. Gossamr also gets every scope `gh` holds. If `gh` has no login for the account, or isn't installed, the connection shows **Not signed in** or **Not found** with the command to run in its details, and a banner says so. Gossamr never signs out or switches accounts. **Open Terminal** opens Terminal running `gh auth login -h github.com` for you to finish, and signing in a new account makes it `gh`'s active account; `gh auth switch` changes it back. Your agents run with your shell environment and git setup, so they clone and push with whatever credentials git and `gh` find there (git's credential helper or SSH key, an exported `GH_TOKEN`, otherwise `gh`'s active account). That may not be the account a Gossamr connection reads, and when it is the same account, GitHub's audit log can't tell what you approved in Gossamr from what an agent did on its own.
+
 ## The workspace
 
 The app opens in the workspace, with Inbox, Board, List and Work over the local cache, with a rail of projects and saved views, tabs, a command palette (`⌘K`), a peek sheet for one ticket and Pip, the assistant, docked on the right (`⌘J`). `⌘R` (View > Reload) reloads the window; it only redraws the page and restarts nothing in the app. Everything is read from the local cache, so it starts with the last data when offline. The assistant only proposes: dropping a card on a column, a comment written in the peek sheet and Pip's suggestions all become drafts, and nothing is written to Jira until you approve one.
 
 - **Board:** one section per project with that project's own statuses. Jira only reveals the moves open to a ticket one ticket at a time, so when you pick a card up the app asks Jira where it can go and dims the other columns.
 - **Workstreams and agents:** a workstream is the work on one ticket. You or Pip open one, and inside it Pip starts Claude Code agents, each with a role Pip names (planner, builder, reviewer or anything else). **Work** lists every workstream with its agents, their state, role and last message. Its one filter shows Needs you. Agents report in prose; Pip reads the report on the wake and writes any drafts. There are no automatic drafts or required report headings. Pip can draft a comment or a description rewrite with a collapsed `Gossamr Plan` section. You see a before-and-after diff, and approve, edit, skip or discuss it with Pip. Pull requests open on GitHub. Review drafts keep their diff hunks in Gossamr, name the reviewer and the commit it read; only your approval posts a comment review. See [the product guide](docs/product.md) for the draft rules and safety boundaries.
-- **Settings:** your connections (Jira and each GitHub account), with each one's status, name, last sync and watched projects or repositories, and how many agents run at once. **Remove** on a connection deletes what Gossamr cached for it and the token it stored, and closes the drafts that target it. Your `gh` login stays as it is.
+- **Settings:** your connections (Jira and each GitHub account), with each one's status, name, last sync and watched projects or repositories, and how many agents run at once. The switch on a connection turns it off: Gossamr stops syncing it, its items leave your views, Pip can't see it, and its drafts wait until you turn it back on. Agents still clone and push through `gh` and git, and runs already queued still start. What it cached is kept. **Remove** on a connection deletes what Gossamr cached for it and the token it stored, and closes the drafts that target it. Your `gh` login stays as it is.
 - **Errors** that don't block anything (a failed sync, a move that couldn't be checked) appear as a toast in the corner.
 
 ### Mock mode

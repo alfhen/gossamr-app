@@ -86,7 +86,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
     <div className="grid gap-3.5">
       <div>
         <h2 className="font-display m-0 text-lg font-semibold">Connect GitHub</h2>
-        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. Agents clone and push as the account gh has active.</p>
+        <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. Agents clone and push with your own git and gh setup, which may be a different account.</p>
       </div>
       {!found && (
         <p role="status" className="m-0 text-ws-ink3">
