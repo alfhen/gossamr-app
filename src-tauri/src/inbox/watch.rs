@@ -254,6 +254,9 @@ impl Core {
         }
         let scope = self.scope().await?;
         self.own_connection(&scope, connection_id)?;
+        if self.off_name(connection_id).is_some() {
+            return Ok(Vec::new());
+        }
         let cached: Option<CachedFootprint> = self.with_db_for(&scope, |db| meta_json(db, FOOTPRINT)).await?;
         if let Some(c) = cached.filter(|c| !refresh && parse_time(&c.at).is_some_and(|at| Utc::now() - at < FOOTPRINT_TTL)) {
             return Ok(c.rows);
@@ -716,6 +719,7 @@ mod tests {
             assert!(refused.is_some_and(|e| e.to_string().contains("is off, so its items are hidden")));
         }
         assert!(fx.core.with_db_for(&fx.scope, |db| db.item(&item)).await.unwrap().is_some(), "the cache is kept");
+        assert!(fx.core.watch_suggestions("jira:site:me", true).await.unwrap().is_empty(), "no project suggestions from an off Jira");
 
         fx.core.set_instance_enabled("jira", true).await.unwrap();
         assert_eq!(shown(&fx).await, before);
