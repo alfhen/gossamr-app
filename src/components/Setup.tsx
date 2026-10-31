@@ -33,10 +33,12 @@ function GithubRow({ api }: { api: FirstRunApi }) {
   const [checking, setChecking] = useState(true);
   const [copied, setCopied] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const live = useRef(true);
 
   const check = async () => {
     setChecking(true);
+    setProblem(null);
     try {
       const found = await api.github();
       if (live.current) setSnapshot(found);
@@ -66,27 +68,31 @@ function GithubRow({ api }: { api: FirstRunApi }) {
 
   const openTerminal = async () => {
     setProblem(null);
+    setOpening(true);
     try {
       await api.openTerminal();
     } catch (e) {
-      setProblem(`Couldn't open Terminal: ${messageOf(e)}`);
+      if (live.current) setProblem(`Couldn't open Terminal: ${messageOf(e)}`);
+    } finally {
+      if (live.current) setOpening(false);
     }
   };
 
-  return <GithubRowView snapshot={snapshot} checking={checking} copied={copied} problem={problem} onCopy={(c) => void copy(c)} onOpenTerminal={() => void openTerminal()} onCheck={() => void check()} />;
+  return <GithubRowView snapshot={snapshot} checking={checking} copied={copied} opening={opening} problem={problem} onCopy={(c) => void copy(c)} onOpenTerminal={() => void openTerminal()} onCheck={() => void check()} />;
 }
 
 export interface GithubRowViewProps {
   snapshot: ProbeSnapshot | null;
   checking: boolean;
   copied: boolean;
+  opening?: boolean;
   problem: string | null;
   onCopy(command: string): void;
   onOpenTerminal(): void;
   onCheck(): void;
 }
 
-export function GithubRowView({ snapshot, checking, copied, problem, onCopy, onOpenTerminal, onCheck }: GithubRowViewProps) {
+export function GithubRowView({ snapshot, checking, copied, opening = false, problem, onCopy, onOpenTerminal, onCheck }: GithubRowViewProps) {
   const line = statusLine({ kind: "github", account: "", status: snapshot, enabled: true }, checking);
   const ready = snapshot?.state === "ready";
   return (
@@ -94,7 +100,7 @@ export function GithubRowView({ snapshot, checking, copied, problem, onCopy, onO
       {snapshot && !checking && (
         <>
           <p data-probe={snapshot.state} className="m-0 text-sm text-ws-ink2">
-            {ready ? `${snapshot.message}. Gossamr reads GitHub through gh.` : snapshot.message}
+            {ready ? `${snapshot.message}. Agents use this account to clone and push.` : snapshot.message}
           </p>
           {snapshot.fix && (
             <div className="flex flex-wrap items-center gap-2">
@@ -102,7 +108,7 @@ export function GithubRowView({ snapshot, checking, copied, problem, onCopy, onO
               <Button size="sm" onClick={() => onCopy(snapshot.fix as string)}>
                 {copied ? "Copied" : "Copy"}
               </Button>
-              <Button size="sm" onClick={onOpenTerminal}>
+              <Button size="sm" disabled={opening} onClick={onOpenTerminal}>
                 Open Terminal
               </Button>
             </div>
@@ -134,7 +140,7 @@ function JiraRow({ api, onSignedIn }: { api: FirstRunApi; onSignedIn: (s: AuthSt
       line={{ text: "Not connected", tone: "quiet" }}
       action={
         !open && (
-          <Button variant="primary" onClick={() => setOpen(true)}>
+          <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
             Connect Jira
           </Button>
         )

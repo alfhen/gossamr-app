@@ -31,7 +31,8 @@ export function mockFirstRun(initial: GithubProbeState): FirstRunApi {
   terminals.length = 0;
   const github = async () => {
     const found = githubSnapshot(state, "ada", new Date().toISOString());
-    return state === "notSignedIn" ? { ...found, message: "gh has no login on github.com." } : found;
+    if (state === "notSignedIn") return { ...found, message: "gh has no login on github.com." };
+    return state === "error" ? { ...found, account: null } : found;
   };
   globalThis.__gossamrFirstRun = { setGithub: (next) => void (state = next), terminals: () => terminals };
   return {

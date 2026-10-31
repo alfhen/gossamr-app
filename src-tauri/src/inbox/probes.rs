@@ -41,6 +41,8 @@ pub(super) struct Probes {
     rebound: AtomicBool,
     /// Held while probing, so two triggers never run `gh` at once; it keeps when the last probe finished.
     last: tokio::sync::Mutex<Option<Instant>>,
+    /// What the first-run screen last showed for `gh`, so Open Terminal runs the command on screen.
+    first_run: Mutex<Option<Snapshot>>,
 }
 
 impl Core {
@@ -97,9 +99,17 @@ impl Core {
             .ok_or_else(|| crate::error::Error::Input("There's nothing to run for this connection. Check it again.".into()))
     }
 
-    /// What `gh` says before any connection exists, for the first-run screen. Nothing is kept: the screen asks again after the person runs the fix.
+    /// What `gh` says before any connection exists, for the first-run screen. The answer is kept for `first_run_fix`.
     pub async fn first_run_github(&self) -> Snapshot {
-        probe::github_first_run(self.code.auth.gh_dirs(), "github.com", probe::TIMEOUT).await
+        let found = probe::github_first_run(self.code.auth.gh_dirs(), "github.com", probe::TIMEOUT).await;
+        *self.probes.first_run.lock().expect("probe lock poisoned") = Some(found.clone());
+        found
+    }
+
+    /// The command that fixes what the first-run screen last showed, without asking `gh` again.
+    pub fn first_run_fix(&self) -> crate::error::Result<String> {
+        let shown = self.probes.first_run.lock().expect("probe lock poisoned").clone();
+        shown.and_then(|s| s.fix).ok_or_else(|| crate::error::Error::Input("There's nothing to run. Check again.".into()))
     }
 
     pub(super) fn probes_forget(&self, instance_id: &str) {
@@ -350,6 +360,21 @@ mod tests {
         assert_eq!(fx.core.fix_command("github").unwrap(), "gh auth login -h github.com");
         assert!(fx.core.fix_command("jira").is_err());
         assert!(fx.core.fix_command("github_9").is_err());
+    }
+
+    #[tokio::test]
+    async fn the_first_run_command_is_the_fix_the_screen_last_showed_and_gh_is_not_asked_again() {
+        let (fx, gh) = fixture_with_gh("first-run-fix").await;
+        assert!(fx.core.first_run_fix().is_err(), "nothing was shown yet");
+        std::fs::write(gh.join("gh"), "#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\necho '{\"hosts\":{\"github.com\":[{\"state\":\"success\",\"active\":true,\"host\":\"github.com\",\"login\":\"alfhen\"}]}}'\n").unwrap();
+        assert!(fx.core.first_run_github().await.fix.is_none());
+        assert!(fx.core.first_run_fix().is_err(), "a signed-in gh has nothing to run");
+
+        std::fs::write(gh.join("gh"), "#!/bin/sh\n[ \"$1\" = \"--version\" ] && exit 0\necho '{\"hosts\":{}}'\n").unwrap();
+        assert_eq!(fx.core.first_run_github().await.fix.as_deref(), Some("gh auth login -h github.com"));
+
+        std::fs::write(gh.join("gh"), "#!/bin/sh\nexit 1\n").unwrap();
+        assert_eq!(fx.core.first_run_fix().unwrap(), "gh auth login -h github.com");
     }
 
     #[tokio::test]

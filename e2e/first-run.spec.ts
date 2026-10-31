@@ -9,6 +9,8 @@ test.describe("the first-run screen", () => {
     await expect(page.getByRole("heading", { name: "Connect your accounts" })).toBeVisible();
     await expect(gh(page)).toContainText("Authenticated · ada");
     await expect(gh(page)).toContainText("gh is signed in as ada on github.com");
+    await expect(gh(page)).toContainText("Agents use this account to clone and push.");
+    await expect(gh(page)).not.toContainText("reads GitHub");
     await expect(gh(page).locator("code")).toHaveCount(0);
     await expect(page.getByRole("listitem", { name: "Jira" })).toContainText("Not connected");
     await expect(page.getByRole("button", { name: "Connect Jira" })).toBeVisible();
@@ -36,6 +38,16 @@ test.describe("the first-run screen", () => {
     await page.goto("/?firstRun=notFound");
     await expect(gh(page)).toContainText("Not found · gh");
     await expect(gh(page).locator("code")).toHaveText("brew install gh");
+  });
+
+  test("shows what went wrong with gh, with the command and a way to check again", async ({ page }) => {
+    await page.goto("/?firstRun=error");
+    await expect(gh(page).locator("code")).toHaveText("gh auth status");
+    await expect(gh(page).getByRole("button", { name: "Copy" })).toBeVisible();
+    await expect(gh(page).getByRole("button", { name: "Open Terminal" })).toBeVisible();
+    await setGithub(page, "ready");
+    await gh(page).getByRole("button", { name: "I've run it, check again" }).click();
+    await expect(gh(page)).toContainText("Authenticated · ada");
   });
 
   test("Connect Jira opens the form, and a connected token leaves for the workspace", async ({ page }) => {

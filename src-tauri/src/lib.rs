@@ -335,11 +335,10 @@ async fn first_run_github(core: State<'_, CoreState>) -> Result<probe::Snapshot>
     Ok(core.first_run_github().await)
 }
 
-/// Opens Terminal on the fix the first-run screen shows, asked of `gh` again. The command comes from the probe, never from the page.
-#[tauri::command]
-async fn first_run_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>) -> Result<()> {
-    let fix = core.first_run_github().await.fix.ok_or_else(|| error::Error::Input("There's nothing to run. Check again.".into()))?;
-    runs.open_fix(&fix)
+/// Opens Terminal on the fix the first-run screen last showed. The command comes from that probe, never from the page.
+#[tauri::command(async)]
+fn first_run_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>) -> Result<()> {
+    runs.open_fix(&core.first_run_fix()?)
 }
 
 /// Saves the name Settings shows for an instance.

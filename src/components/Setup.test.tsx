@@ -13,6 +13,8 @@ describe("the first-run GitHub line", () => {
     const out = view();
     expect(out).toContain("Authenticated · ada");
     expect(out).toContain("gh is signed in as ada on github.com");
+    expect(out).toContain("Agents use this account to clone and push.");
+    expect(out).not.toContain("reads GitHub");
     expect(out).not.toContain("<code");
     expect(out).not.toContain("check again");
   });
@@ -34,6 +36,19 @@ describe("the first-run GitHub line", () => {
     const out = view({ checking: true, snapshot: null });
     expect(out).toContain("Checking…");
     expect(out).not.toContain("<code");
+  });
+
+  it("hides the old answer while it checks again", () => {
+    const out = view({ checking: true, snapshot: githubSnapshot("notSignedIn", "ada", CHECKED) });
+    expect(out).toContain("Checking…");
+    expect(out).not.toContain("<code");
+    expect(out).not.toContain("Open Terminal");
+  });
+
+  it("disables Open Terminal while Terminal is being opened", () => {
+    const snapshot = githubSnapshot("notSignedIn", "ada", CHECKED);
+    expect(view({ snapshot })).not.toMatch(/<button[^>]*disabled[^>]*>Open Terminal/);
+    expect(view({ snapshot, opening: true })).toMatch(/<button[^>]*disabled[^>]*>Open Terminal/);
   });
 
   it("says Copied after the command was copied and shows a problem opening Terminal", () => {
