@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { itemKey } from "../lib/filter";
 import { leftOutLabel, repeatedComments, REPEATED_COMMENT_NOTE } from "../lib/needs";
-import { inWorkstreamPane } from "../lib/proposals";
+import { heldNote, inWorkstreamPane } from "../lib/proposals";
 import { stageOf } from "../lib/roles";
 import type { CodeChange, Proposal, ReviewView, Run, WorkstreamEvent, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -99,7 +99,7 @@ export function StepDrafts({ step, drafts, inPane = [], approve, initialConfirmi
   useDraftsRev();
   const connections = useWorkspace((s) => s.connections);
   const together = batchable(counted, connections);
-  const leftOut = repeatedComments(counted.filter((p) => !draftEdited(p.id)));
+  const leftOut = repeatedComments(counted.filter((p) => !draftEdited(p.id) && !heldNote(p, connections)));
   const edited = editedPending(counted).length;
   useEffect(() => {
     if (!outcome || !refocus.current) return;

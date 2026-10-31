@@ -118,7 +118,8 @@ fn unwatched(repo: &str) -> String {
 fn connection(st: &McpState, repo: &str) -> std::result::Result<(String, String), String> {
     st.core.code_connection_for(repo).map_err(|_| match st.core.off_code_name(Some(repo)) {
         Ok(Some(name)) => off(&name),
-        _ => unwatched(repo),
+        Ok(None) => unwatched(repo),
+        Err(e) => e.to_string(),
     })
 }
 
@@ -330,6 +331,9 @@ async fn dispatch(st: &McpState, run: &PipRun, name: &str, args: &Value) -> Repl
                 out.push_str(&format!("GitHub couldn't be searched just now ({why}); this is what was cached earlier.\n"));
             }
             if links.is_empty() {
+                if let Some(name) = core.off_code_name(None).map_err(|e| e.to_string())? {
+                    out.push_str(&format!("{name} is off, so its repositories are hidden from you. "));
+                }
                 out.push_str(&format!("No pull request, branch or commit in the watched repositories names {key}. Work in a repository that isn't watched is invisible here."));
                 return Ok(out);
             }
@@ -1061,6 +1065,8 @@ mod tests {
             let text = g.refused(name, args).await;
             assert!(text.contains("is off, so its repositories are hidden from you") && !text.contains("Ask the person to watch"), "{name}: {text}");
         }
+        let none = g.ok("ticket_changes", json!({ "key": "CA-208" })).await;
+        assert!(none.starts_with("GitHub is off, so its repositories are hidden from you. No pull request"), "{none}");
 
         g.lx.fx.core.set_instance_enabled(&instance, true).await.unwrap();
         assert_eq!(g.ok("list_watched_repos", json!({})).await, "acme/webshop");
