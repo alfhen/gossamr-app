@@ -308,13 +308,17 @@ impl Core {
             self.registry.remove(&c.id);
         }
         self.close_db();
-        self.settle_pip_turns_after_sign_out().await
+        self.settle_pip_turns(crate::db::SIGNED_OUT).await;
+        Ok(())
     }
 
     /// Late writes for a connection that has left the registry are refused, so the turns it was running would stay
     /// open until the next launch.
-    async fn settle_pip_turns_after_sign_out(&self) -> Result<()> {
-        self.with_app_db(|db| db.fail_open_pip_turns(crate::db::SIGNED_OUT).map(drop)).await
+    /// Bookkeeping only: a failure is logged and never blocks signing out or removing a connection.
+    async fn settle_pip_turns(&self, reason: &str) {
+        if let Err(e) = self.with_app_db(|db| db.fail_open_pip_turns(reason).map(drop)).await {
+            eprintln!("couldn't fail the Pip turns that were still open: {e}");
+        }
     }
 
     async fn identity(&self) -> Result<(Scope, Site, Account)> {

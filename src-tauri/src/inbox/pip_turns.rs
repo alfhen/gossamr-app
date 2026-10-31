@@ -137,6 +137,17 @@ mod tests {
         assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::SIGNED_OUT)));
     }
 
+    #[tokio::test]
+    async fn sign_out_succeeds_when_the_app_database_cannot_be_opened() {
+        let fx = crate::inbox::testing::fixture().await;
+        let app = fx.dir.join("app.sqlite");
+        let _ = std::fs::remove_file(&app);
+        std::fs::create_dir(&app).unwrap();
+        fx.core.db.lock().unwrap().app = None;
+        fx.core.sign_out().await.unwrap();
+        assert!(fx.core.auth.connection().await.is_none());
+    }
+
     async fn request_ids(fx: &crate::inbox::testing::Fixture, conversation: &str) -> Vec<String> {
         fx.core.pip_turns(conversation).await.unwrap().into_iter().map(|t| t.request_id).collect()
     }
