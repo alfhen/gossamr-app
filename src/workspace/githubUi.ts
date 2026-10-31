@@ -35,6 +35,9 @@ export async function refreshAfterGithubChange() {
   // Another token may write where the last couldn't, or not where it could.
   useReviewAccess.getState().forgetAll();
   const ws = useWorkspace.getState();
-  await Promise.all([ws.refreshConnections(), ws.refreshWatch(), ws.refresh()]);
-  useDev.getState().invalidate();
+  try {
+    await Promise.all([ws.refreshConnections(), ws.refreshWatch(), ws.refresh()]);
+  } finally {
+    useDev.getState().invalidate();
+  }
 }

@@ -6,7 +6,7 @@ import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
-import { actingAs, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
+import { actingAs, OFF_DETAIL, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
@@ -115,6 +115,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const loud = s !== null && probeDecides(c) && (s.state === "notSignedIn" || s.state === "notFound");
   const jira = c.kind !== "github";
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
+  if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
   if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : "Not checked yet."}</p>;
   return (
     <>
@@ -330,11 +331,12 @@ export function ConnectionsSection({ now }: { now: Date }) {
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [pending, setPending] = useState<string[]>([]);
   const [toggling, setToggling] = useState<string[]>([]);
   const current = connections.find((c) => c.id === selectedId) ?? connections[0];
   const select = (id: string) => {
     setConfirming(null);
+    setCopied(false);
     useConnectionsUi.getState().select(id);
   };
   const check = async () => {
@@ -382,7 +384,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       now={now}
       checking={checking}
       confirming={confirming}
-      busy={busy}
+      busy={current && pending.includes(current.id) ? current.id : null}
       copied={copied}
       toggling={toggling}
       onSelect={select}
@@ -406,12 +408,12 @@ export function ConnectionsSection({ now }: { now: Date }) {
       onRemove={() => {
         const target = connections.find((c) => c.id === confirming);
         if (!target) return;
-        setBusy(target.id);
+        setPending((ids) => [...ids, target.id]);
         void removeConnection(target)
           .then((ok) => {
-            if (ok) setConfirming(null);
+            if (ok) setConfirming((now) => (now === target.id ? null : now));
           })
-          .finally(() => setBusy(null));
+          .finally(() => setPending((ids) => ids.filter((id) => id !== target.id)));
       }}
       onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
