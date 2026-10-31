@@ -324,7 +324,7 @@ async fn probe_connections(app: &AppHandle, core: &Core, why: Probe) {
 }
 
 /// Opens Terminal on the fix the instance's last probe found. The command comes from that snapshot, never from the page.
-#[tauri::command]
+#[tauri::command(async)]
 fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()> {
     runs.open_fix(&core.fix_command(&instance_id)?)
 }
