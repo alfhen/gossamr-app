@@ -215,7 +215,7 @@ impl Core {
         Self {
             auth,
             registry,
-            code: CodeService::new(crate::net::client(), CodeService::default_store()),
+            code: CodeService::new(crate::net::client()),
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
             db: Mutex::new(Open::default()),
@@ -1235,7 +1235,7 @@ pub(crate) mod testing {
 
     /// `fixture_watching` with more GitHub routes scripted: replies come in order and the last repeats.
     pub async fn fixture_watching_with(repos: &[&str], extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>) -> Fixture {
-        use crate::auth::{GithubAuth, MemoryStore};
+        use crate::auth::GithubAuth;
         use crate::codehost::github::testserver::{serve, Reply};
         use crate::codehost::github::GithubHost;
 
@@ -1254,15 +1254,15 @@ pub(crate) mod testing {
         let server = serve(routes).await;
         let http = reqwest::Client::new();
         let (base, factory_http) = (server.base.clone(), http.clone());
-        let auth = GithubAuth::for_test(http, Arc::new(MemoryStore::default()), &server.base, None, vec![]);
+        let auth = GithubAuth::for_test(http, &server.base, crate::auth::fake_gh("ghp_x"));
         let code = CodeService::with_factory(
             auth,
-            Box::new(move |s, db| Arc::new(GithubHost::new(factory_http.clone(), &base, &s.token, &Connection::github_id(&s.login), &s.login, db))),
+            Box::new(move |s, credentials, db| Arc::new(GithubHost::new(factory_http.clone(), &base, credentials, &Connection::github_id(&s.login), &s.login, db))),
         );
         let mut fx = fixture_with(Some(code)).await;
         fx.github = Some(server.seen.clone());
         fx.github_routes = Some(server.routes.clone());
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         fx
     }
 

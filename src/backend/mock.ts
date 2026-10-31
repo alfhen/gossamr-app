@@ -371,7 +371,6 @@ export class MockBackend implements Backend {
   constructor(options: MockOptions = {}) {
     this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
-    this.device = options.device ?? { delayMs: 0, outcome: "authorised" };
     this.jiraToken = options.jiraToken;
     this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
@@ -435,7 +434,6 @@ export class MockBackend implements Backend {
     this.proposals.keep(KEPT_DRAFTS, (p) => p.origin.type === "chat" && mockPipTurns.has(p.origin.requestId));
   }
 
-  private readonly device: NonNullable<MockOptions["device"]>;
   private readonly connectionsListeners = new Set<() => void>();
 
   /** Drafts live in memory; `proposals.draft` stands in for the assistant. */
@@ -1163,16 +1161,8 @@ export class MockBackend implements Backend {
     if (!this.github.isWatched(repo)) throw new Error(`${repo} isn't one of the repositories you watch, so it isn't read.`);
   }
 
-  async githubSignInOptions() {
-    return this.github.signInOptions();
-  }
-
-  async githubConnectToken(token: string) {
-    return this.github.connectToken(token);
-  }
-
-  async githubImportGhToken(login?: string) {
-    return this.github.importGhToken(login);
+  async githubConnect(login?: string) {
+    return this.github.connect(login);
   }
 
   async githubAccounts() {
@@ -1181,17 +1171,6 @@ export class MockBackend implements Backend {
 
   async githubOpenLogin() {
     this.terminals.push(GH_LOGIN_COMMAND);
-  }
-
-  async githubDeviceStart() {
-    return this.github.deviceStart();
-  }
-
-  async githubDevicePoll() {
-    await new Promise((resolve) => setTimeout(resolve, this.device.delayMs));
-    if (this.device.outcome === "denied") throw new Error("access_denied");
-    if (this.device.outcome === "expired") throw new Error("the code expired before it was entered; start again");
-    return this.github.devicePoll();
   }
 
   onCacheChanged(listener: (c: CacheChanged) => void) {

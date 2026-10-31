@@ -18,6 +18,7 @@ use url::form_urlencoded;
 use self::http::Api;
 use self::wire::{IssueSearch, Owner, Pull, Repo, RepoSearch, User, UserEvent};
 use super::{CodeAccount, CodeHost, Notices, PullList, Refreshed, ReviewAccess, ReviewComments};
+use crate::auth::CredentialSource;
 use crate::db::Db;
 use crate::domain::{
     ChangedFile, CodeChange, CodeFile, CodeHit, CommitQuery, ContainerPage, ContainerQuery, ContainerRef, Footprint, PostedReview, PullRequestDetail,
@@ -46,8 +47,8 @@ pub struct GithubHost {
 }
 
 impl GithubHost {
-    pub fn new(http: reqwest::Client, base: &str, token: &str, connection_id: &str, login: &str, db: Arc<Mutex<Db>>) -> Self {
-        Self { api: Api::new(http, base, token, connection_id, db), connection_id: connection_id.into(), login: login.into(), owners: Mutex::new(None) }
+    pub fn new(http: reqwest::Client, base: &str, credentials: Arc<dyn CredentialSource>, connection_id: &str, login: &str, db: Arc<Mutex<Db>>) -> Self {
+        Self { api: Api::new(http, base, credentials, connection_id, db), connection_id: connection_id.into(), login: login.into(), owners: Mutex::new(None) }
     }
 
     /// The person's login and the organisations they belong to, which is where a repository search looks.

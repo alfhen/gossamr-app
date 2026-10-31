@@ -74,10 +74,12 @@ describe("the desktop backend's wiring", () => {
   it("connects a GitHub account by the login gh holds and opens Terminal on a login command only Rust knows", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");
-    expect(jira).toContain('invoke<ConnectionInfo>("github_connect", { source: { via: "ghCli", login } })');
+    expect(jira).toContain('invoke<ConnectionInfo>("github_connect", { login })');
     expect(jira).toContain('invoke<GhAccounts>("github_gh_accounts")');
     expect(jira).toContain('invoke<void>("github_open_login")');
-    expect(lib).toContain("GhCli { login: Option<String> }");
+    expect(lib).toContain("async fn github_connect(app: AppHandle, core: State<'_, CoreState>, login: Option<String>) -> Result<ConnectionInfo>");
+    expect(lib.slice(lib.indexOf("generate_handler!"))).toContain("github_connect,");
+    for (const gone of ["github_device_start", "github_sign_in_options", "GithubSource"]) expect(lib).not.toContain(gone);
     expect(lib).toContain("fn github_open_login(runs: State<'_, RunsState>) -> Result<()>");
     expect(lib.slice(lib.indexOf("generate_handler!"))).toContain("github_gh_accounts,");
   });
@@ -97,6 +99,14 @@ describe("the desktop backend's wiring", () => {
     expect(lib).toContain("async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()>");
     expect(jira).not.toContain("github_disconnect");
     expect(lib).not.toContain("async fn github_disconnect");
+  });
+
+  it("checks a connection again when a GitHub sync is refused for its token", () => {
+    const lib = read("../../src-tauri/src/lib.rs");
+    const loop = lib.slice(lib.indexOf("core.sync_code_if_due(trigger)"));
+    const failure = loop.slice(loop.indexOf("Err(e) => {"), loop.indexOf("publish(&app, &core).await;"));
+    expect(failure).toContain("e.is_unauthorized()");
+    expect(failure).toContain("probe_in_background(&app, &core, Probe::Unauthorized)");
   });
 
   it("reads a review draft's notes in the backend's words", () => {

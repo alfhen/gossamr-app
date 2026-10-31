@@ -28,6 +28,9 @@ pub enum Error {
     Claude(String),
     #[error("{0}")]
     Proposal(String),
+    /// `gh` could not give a token, so nothing was sent to the host. `message` is already written for the person.
+    #[error("{0}")]
+    Credentials(String),
     /// A code host refused or failed a request; `message` is already written for the person.
     #[error("{message}")]
     CodeHost { status: u16, message: String },
