@@ -24,6 +24,7 @@ impl Core {
     /// it (an issue link or its parent). Nothing here asks the network.
     pub async fn ticket_for_agent(&self, run: &Run, key: &str) -> Result<TicketRead> {
         let Some(own) = run.item.as_ref() else { return Ok(TicketRead::NotLinked) };
+        self.refuse_hidden(&own.connection_id)?;
         let key = key.trim();
         let reachable = self
             .with_db(|db| {

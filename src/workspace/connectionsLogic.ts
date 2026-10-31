@@ -4,7 +4,10 @@ import { agoText } from "./watchLogic";
 
 export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
 
-export const OFF_DETAIL = "Off. Gossamr doesn't sync it and drafts for it wait. What's cached is kept.";
+export const OFF_DETAIL = "Off. Gossamr doesn't sync it and drafts for it wait. You and Pip don't see its items. What's cached is kept.";
+
+/** Whether any GitHub account is on. Code links, the code filters and the Development section appear only then: an off connection is hidden, and what it cached comes back when it is on. */
+export const showsCode = (connections: readonly Pick<ConnectionInfo, "kind" | "enabled">[]) => connections.some((c) => c.kind === "github" && c.enabled);
 
 /** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. */
 export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind">) => c.kind !== "mock" && c.instanceId !== c.id;

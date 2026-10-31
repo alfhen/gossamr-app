@@ -402,6 +402,15 @@ impl Core {
     /// The repositories a connection follows: the ones chosen, or every repository of a catalog small enough to watch
     /// whole. A large catalog nobody has chosen from yields none, and archived repositories are left out of a whole-catalog watch.
     pub fn watched_repos(&self, id: &str) -> Result<Vec<String>> {
+        if self.off_name(id).is_some() {
+            return Ok(Vec::new());
+        }
+        self.chosen_repos(id)
+    }
+
+    /// Like `watched_repos`, and still the answer while the connection is off: a sync and the links read it so that the
+    /// cache stays whole until the connection is on again.
+    fn chosen_repos(&self, id: &str) -> Result<Vec<String>> {
         self.with_code_db(id, |db| {
             let set = db.watch_set(id)?;
             let catalog = || -> Result<Vec<String>> { Ok(db.catalog_search(id, "", usize::MAX >> 1)?.into_iter().filter(|c| !c.archived).map(|c| c.container_ref.external_id).collect()) };
@@ -416,6 +425,9 @@ impl Core {
     }
 
     pub(super) fn require_watched(&self, id: &str, repo: &str) -> Result<()> {
+        if let Some(name) = self.off_name(id) {
+            return Err(Error::CodeHost { status: 403, message: format!("{name} is off, so {repo} isn't read.") });
+        }
         if is_watched_repo(&self.watched_repos(id)?, repo) {
             Ok(())
         } else {
@@ -433,7 +445,7 @@ impl Core {
 
     /// Rebuilds the links of a connection from its cached changes. Returns whether they changed.
     fn rediscover(&self, id: &str, known: &KnownKeys) -> Result<bool> {
-        let repos = self.watched_repos(id)?;
+        let repos = self.chosen_repos(id)?;
         self.with_code_db(id, |db| {
             let before = db.link_signature(id)?;
             let originals: Vec<CodeChange> = db.code_changes(id)?.into_iter().filter(|c| is_watched_repo(&repos, &c.repo)).collect();
@@ -549,7 +561,7 @@ impl Core {
         let me = self.code.session(id)?.login;
         let host = self.code_host(id).await?;
         self.probe_code_catalog(id).await?;
-        let repos = self.watched_repos(id)?;
+        let repos = self.chosen_repos(id)?;
         let since = started - Duration::days(PR_WINDOW_DAYS);
         let (mut changed, mut stop) = (false, None);
         for repo in &repos {
@@ -1759,6 +1771,32 @@ pub(crate) mod tests {
         assert_eq!(lx.core().dev_links(&lx.fx.item("CA-209")).unwrap().len(), 1, "now from the cache");
         let (_, changed_again) = lx.core().dev_links_live(&lx.fx.item("CA-209")).await.unwrap();
         assert!(changed_again.is_empty(), "nothing new the second time");
+    }
+
+    #[tokio::test]
+    async fn a_github_that_is_off_hides_its_repositories_and_links_and_shows_them_again_without_a_sync() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.core().adopt_instances().await;
+        lx.sync().await;
+        let ca208 = lx.fx.item("CA-208");
+        let (watched, links, fetched) = (lx.core().watched_repo_names().unwrap(), lx.core().dev_links(&ca208).unwrap(), lx.requests_to("/pulls"));
+        assert!(!watched.is_empty() && !links.is_empty());
+        let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+
+        lx.core().set_instance_enabled(&instance, false).await.unwrap();
+
+        assert!(lx.core().watched_repo_names().unwrap().is_empty());
+        assert!(lx.core().dev_links(&ca208).unwrap().is_empty());
+        for refused in [lx.core().code_pull_request(&CodeRef { connection_id: "github:ann".into(), repo: "acme/webshop".into(), number: 208 }).await.err(), lx.core().code_pull_requests("github:ann", "acme/webshop").await.err()] {
+            assert!(refused.is_some_and(|e| e.to_string().contains("is off, so acme/webshop isn't read")));
+        }
+        assert!(lx.core().code_connection_for("acme/webshop").is_err());
+        assert_eq!(lx.core().with_code_db("github:ann", |db| Ok(db.code_changes("github:ann")?.len())).unwrap(), 4, "the cache is kept");
+
+        lx.core().set_instance_enabled(&instance, true).await.unwrap();
+        assert_eq!(lx.core().watched_repo_names().unwrap(), watched);
+        assert_eq!(lx.core().dev_links(&ca208).unwrap(), links);
+        assert_eq!(lx.requests_to("/pulls"), fetched, "nothing was fetched to bring them back");
     }
 
     #[tokio::test]

@@ -185,10 +185,18 @@ impl Core {
     }
 
     /// The name of the instance `connection_id` belongs to, when it is turned off. Nothing is off while the list can't be read.
-    pub(super) fn off_name(&self, connection_id: &str) -> Option<String> {
+    pub fn off_name(&self, connection_id: &str) -> Option<String> {
         let config = AppConfig::load(&self.data_dir);
         let off = |i: &&connections::Instance| !i.enabled && i.bound_to.as_deref().unwrap_or(&i.id) == connection_id;
         connections::is_live(&config).then(|| config.connections.iter().find(off).map(|i| i.display_name.clone())).flatten()
+    }
+
+    /// Turns away a read of a connection that is off: its items are hidden from the views, from Pip and from agents.
+    pub(super) fn refuse_hidden(&self, connection_id: &str) -> Result<()> {
+        match self.off_name(connection_id) {
+            Some(name) => Err(Error::Input(format!("{name} is off, so its items are hidden. Turn it on in Settings to read them."))),
+            None => Ok(()),
+        }
     }
 
     /// Turns away a write for a connection that is off: its drafts wait until it is on.

@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent } from "react";
 import { ALL, and, containerKey, describeFilter } from "../lib/filter";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
+import { showsCode } from "./connectionsLogic";
 import type { CodeFilterKind, ContainerRef, WorkContainer, WorkFilter } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { usePopover } from "./Popover";
@@ -91,7 +92,7 @@ export function FilterBar() {
   const savedViews = useTabs((s) => s.savedViews);
   const { setFilter, saveView } = useTabs.getState();
   const [text, setText] = useState("");
-  const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const hasGithub = useWorkspace((s) => showsCode(s.connections));
   const activeCode = new Set(filterChips(tab.filter).flatMap((c) => (c.type === "code" ? [c.check] : [])));
   const toggleCode = (check: CodeFilterKind) => {
     const chip: WorkFilter = { type: "code", check };

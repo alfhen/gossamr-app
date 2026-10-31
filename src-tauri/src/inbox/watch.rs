@@ -215,6 +215,7 @@ impl Core {
 
     /// Containers matching `query` in the tracker's whole catalog, each with whether it is watched.
     pub async fn find_containers(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<(ContainerSummary, bool)>> {
+        self.refuse_hidden(&scope.connection_id)?;
         let id = scope.connection_id.clone();
         let set = self.watch_set_of(scope).await?;
         let q = ContainerQuery { query: query.trim().into(), cursor: None, limit };
@@ -380,6 +381,9 @@ impl Core {
         if item.connection_id != self.connection(&scope)?.id {
             return Err(Error::SiteChanged);
         }
+        if self.off_name(&item.connection_id).is_some() {
+            return Ok(None);
+        }
         let (set, last_sync) = self.with_db_for(&scope, |db| Ok((db.watch_set(&item.connection_id)?, db.meta(LAST_SYNC)?))).await?;
         let fetched = match self.tracker(&scope)?.item(item, &unread_cutoff(last_sync.as_deref())).await {
             Ok(i) => i,
@@ -394,6 +398,9 @@ impl Core {
     /// The watched cached item, or a live read of it. A failed read is `None`: this stands in for a cache lookup.
     pub async fn cache_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
         let scope = self.scope().await?;
+        if self.off_name(&item.connection_id).is_some() {
+            return Ok(None);
+        }
         let cached = self
             .with_db_for(&scope, |db| Ok(db.item(item)?.filter(|i| db.watch_set(&item.connection_id).is_ok_and(|w| w.is_watched(&i.container.external_id)))))
             .await?;
@@ -415,7 +422,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
-    use crate::domain::{ContainerSummary, Filter, WatchSource};
+    use crate::domain::{ContainerSummary, FeedQuery, Filter, WatchSource};
     use crate::inbox::testing::{fixture, Fixture};
 
     fn summary(key: &str) -> ContainerSummary {
@@ -647,6 +654,45 @@ mod tests {
         assert_eq!(first.map(|(id, s)| (id, s.len())), Some(("jira:site:me".to_string(), 1)));
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"]), stray("FIN", &["FIN-1"])];
         assert!(fx.core.radar_if_due().await.unwrap().is_none(), "asked again within the interval");
+    }
+
+    #[tokio::test]
+    async fn a_jira_that_is_off_leaves_every_view_and_comes_back_whole_without_a_fetch() {
+        let fx = fixture().await;
+        fx.core.adopt_instances().await;
+        fx.add_item(2).await;
+        let item = fx.item("CA-1");
+        let everything = Filter::And { filters: vec![] };
+        let feed = FeedQuery::default();
+        let shown = |fx: &Fixture| {
+            let fx = fx.core.clone();
+            let (item, everything, feed) = (item.clone(), everything.clone(), feed.clone());
+            async move {
+                (
+                    fx.cache_search(&everything, true).await.unwrap().len(),
+                    fx.cache_containers(true).await.unwrap().len(),
+                    fx.snapshot().await.unwrap().tickets.len(),
+                    fx.cache_item(&item).await.unwrap().is_some(),
+                    fx.cache_people().await.unwrap().len(),
+                    fx.cache_feed(&feed).await.unwrap().entries.len(),
+                )
+            }
+        };
+        let before = shown(&fx).await;
+        assert!(before.0 == 2 && before.1 > 0 && before.2 > 0 && before.3 && before.4 > 0, "{before:?}");
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        assert_eq!(shown(&fx).await, (0, 0, 0, false, 0, 0));
+        assert!(fx.core.search_cached(&fx.scope, &everything).await.unwrap().is_empty());
+        assert!(fx.core.cache_comments(&item, true).await.unwrap().is_empty());
+        assert!(fx.core.cache_transitions(&item).await.unwrap().is_empty());
+        for refused in [fx.core.work_item(&fx.scope, "CA-1").await.err(), fx.core.find_containers(&fx.scope, "CA", 5).await.err(), fx.core.transitions(&fx.scope, "CA-1").await.err()] {
+            assert!(refused.is_some_and(|e| e.to_string().contains("is off, so its items are hidden")));
+        }
+        assert!(fx.core.with_db_for(&fx.scope, |db| db.item(&item)).await.unwrap().is_some(), "the cache is kept");
+
+        fx.core.set_instance_enabled("jira", true).await.unwrap();
+        assert_eq!(shown(&fx).await, before);
     }
 
     #[tokio::test]

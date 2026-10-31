@@ -12,6 +12,7 @@ import { SectionCard } from "./PeekParts";
 import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
 import { messageOf, useToasts } from "./toasts";
+import { showsCode } from "./connectionsLogic";
 import { agoText, watchedReposLine } from "./watchLogic";
 import { Button } from "../components/Button";
 
@@ -298,6 +299,17 @@ export function DevelopmentView(p: DevelopmentViewProps) {
   );
 }
 
+export function GithubOffNote({ onOpenSettings }: { onOpenSettings(): void }) {
+  return (
+    <div role="note" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed border-ws-sep2 bg-ws-bar px-3 py-1.5 text-sm text-ws-ink2">
+      <span className="min-w-0 flex-1">GitHub is off. Turn it on to see the PRs for this ticket</span>
+      <Button variant="plain" size="sm" onClick={onOpenSettings}>
+        Open Settings
+      </Button>
+    </div>
+  );
+}
+
 export function ConnectBanner({ onConnect }: { onConnect(): void }) {
   return (
     <div role="note" className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-dashed border-ws-sep2 bg-ws-bar px-3 py-1.5 text-sm text-ws-ink2">
@@ -314,7 +326,8 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
   const backend = useBackend();
   const ref: ItemRef = item.item;
   const key = itemKey(ref);
-  const hasGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const hasGithub = useWorkspace((s) => showsCode(s.connections));
+  const hasOffGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const watch = useWorkspace((s) => s.watch);
   const codeStates = useMemo(() => codeWatch(watch), [watch]);
   const [links, setLinks] = useState<DevLink[] | null>(null);
@@ -388,6 +401,7 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
     );
   };
 
+  if (!hasGithub && hasOffGithub) return <GithubOffNote onOpenSettings={() => useTabs.getState().openSettings("connections")} />;
   if (!hasGithub) return <ConnectBanner onConnect={() => useGithubUi.getState().openConnect()} />;
 
   return (

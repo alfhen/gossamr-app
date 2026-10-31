@@ -634,6 +634,20 @@ async fn read_ticket_gives_the_runs_own_ticket_and_linked_ones_as_data_and_refus
 }
 
 #[tokio::test]
+async fn read_ticket_finds_nothing_while_the_jira_is_off_and_reads_again_once_it_is_on() {
+    let t = live("ticket-off").await;
+    t.rig.fx.core.adopt_instances().await;
+    let run = t.rig.launched(1).await;
+    t.rig.fx.core.set_instance_enabled("jira", false).await.unwrap();
+
+    let (text, is_error) = t.call(&run, "read_ticket", json!({ "key": "CA-1" })).await;
+    assert!(is_error && text.contains("is off, so its items are hidden"), "{text}");
+
+    t.rig.fx.core.set_instance_enabled("jira", true).await.unwrap();
+    assert!(!t.call(&run, "read_ticket", json!({ "key": "CA-1" })).await.1);
+}
+
+#[tokio::test]
 async fn a_run_may_make_only_so_many_calls_to_the_tools_that_read_and_wait() {
     let t = live("cap").await;
     let side = AgentSide::new(t.rig.fx.core.clone());

@@ -276,6 +276,11 @@ export class MockCode {
     return found;
   }
 
+  /** The links shown for every item changed, as when the connection behind them is turned off or on. */
+  linksChanged() {
+    this.listeners.forEach((l) => l({ connectionId: this.connectionId }));
+  }
+
   onDevLinksChanged(listener: (c: DevLinksChanged) => void) {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
