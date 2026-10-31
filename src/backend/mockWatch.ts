@@ -119,6 +119,8 @@ export interface MockHandle {
   loseRun(id: string): void;
   /** The run ids Terminal was opened on (`runsAttach`), oldest first. */
   attached(): string[];
+  /** The commands Terminal was opened on from a connection's detail, oldest first. */
+  connectionTerminals(): string[];
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
   /** What was written to Jira, oldest first: the draft, the kind of write, its ticket and, for a comment, its text as posted. */
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
@@ -174,6 +176,7 @@ export interface MockClockParts {
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(key: string, change: TicketEdit): void };
+  terminals?: readonly string[];
   github?: { probe(state: GithubProbeState): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
@@ -191,7 +194,7 @@ declare global {
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github, draftReview }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github, terminals, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -209,6 +212,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     blockRun: (id) => void runs.block(id),
     loseRun: (id) => void runs.lose(id),
     attached: () => [...runs.attached],
+    connectionTerminals: () => [...(terminals ?? [])],
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent), ...(w.intent.type === "comment" ? { text: docText(w.intent.body) } : {}) })),
     draftReview,
     reviewDrafts: () =>

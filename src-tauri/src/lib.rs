@@ -323,6 +323,20 @@ async fn probe_connections(app: &AppHandle, core: &Core, why: Probe) {
     }
 }
 
+/// Opens Terminal on the fix the instance's last probe found. The command comes from that snapshot, never from the page.
+#[tauri::command(async)]
+fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()> {
+    runs.open_fix(&core.fix_command(&instance_id)?)
+}
+
+/// Saves the name Settings shows for an instance.
+#[tauri::command]
+fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String) -> Result<()> {
+    let connection_id = core.rename_instance(&instance_id, &display_name)?;
+    wire::changed(&app, wire::Topic::Connections, &connection_id);
+    Ok(())
+}
+
 fn probe_in_background(app: &AppHandle, core: &CoreState, why: Probe) {
     let (app, core) = (app.clone(), core.clone());
     tauri::async_runtime::spawn(async move { probe_connections(&app, &core, why).await });
@@ -972,6 +986,8 @@ pub fn run() {
             cache_comments,
             cache_transitions,
             connections_list,
+            connection_open_terminal,
+            connection_rename,
             dev_links,
             code_pull_request,
             code_review_access,

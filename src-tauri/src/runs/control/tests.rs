@@ -300,6 +300,27 @@ async fn attach_writes_the_file_for_the_stored_run_and_opens_it() {
 }
 
 #[tokio::test]
+async fn a_fix_opens_in_the_terminal_the_person_chose_from_a_private_script_with_no_apple_events() {
+    let rig = ready().await;
+    rig.svc.set_settings(crate::config::AgentSettings { terminal: TerminalChoice::ITerm, ..Default::default() }).unwrap();
+    rig.svc.open_fix("gh auth login -h github.com").unwrap();
+    let opened = rig.opened.0.lock().unwrap().clone();
+    assert_eq!(*rig.opened.1.lock().unwrap(), [TerminalChoice::ITerm]);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(std::fs::read_to_string(&opened[0]).unwrap(), "#!/bin/zsh\ngh auth login -h github.com\n");
+    assert_eq!(std::fs::metadata(&opened[0]).unwrap().permissions().mode() & 0o777, 0o700);
+}
+
+#[tokio::test]
+async fn a_fix_with_anything_but_plain_words_is_never_written_or_opened() {
+    let rig = ready().await;
+    for bad in ["", "  ", "gh auth login -h x; rm -rf ~", "gh auth login -h $(id)", "gh auth login -h `id`", "gh -h 'x'", "gh\nrm x", "gh auth login -h a|b", "gh auth login -h a&b", "gh -h a>b"] {
+        assert!(rig.svc.open_fix(bad).is_err(), "{bad:?}");
+    }
+    assert!(rig.opened.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn attach_refuses_a_run_without_a_session_or_with_a_hostile_stored_path() {
     let rig = ready().await;
     let queued = rig.queued(1).await;
