@@ -766,6 +766,8 @@ mod tests {
         fx.core.set_instance_enabled(&instance, false).await.unwrap();
 
         assert_eq!(waiting(&fx, &ws.id).await, None);
+        assert!(fx.core.pull_head_of(&build).unwrap().is_none(), "Pip is not shown the pull request of a connection that is off");
+        assert!(fx.core.run_outcome(&build.id).await.unwrap().change.is_none(), "nor is the run page");
     }
 
     #[tokio::test]
