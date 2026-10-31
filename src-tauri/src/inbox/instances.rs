@@ -128,22 +128,14 @@ impl Core {
         if !enabled {
             self.refuse_while_posting(&connection_id, &instance.display_name).await?;
         }
-        let changed = instance.enabled != enabled;
         AppConfig::update_if(&self.data_dir, |config| match config.connections.iter_mut().find(|i| i.id == instance_id) {
             Some(instance) if instance.enabled != enabled => {
                 instance.enabled = enabled;
+                instance.recheck_since = enabled.then(Utc::now);
                 true
             }
             _ => false,
         })?;
-        if changed {
-            let mut rechecking = self.rechecking.lock().expect("recheck lock poisoned");
-            if enabled {
-                rechecking.insert(connection_id.clone(), Utc::now());
-            } else {
-                rechecking.remove(&connection_id);
-            }
-        }
         Ok(connection_id)
     }
 
@@ -174,7 +166,6 @@ impl Core {
             }
             self.probes_forget(id);
         }
-        self.rechecking.lock().expect("recheck lock poisoned").remove(&target.connection_id);
         Ok(Removed { connection_id: target.connection_id, kind: target.kind, workstreams })
     }
 
@@ -224,17 +215,24 @@ impl Core {
     }
 
     pub(super) fn is_rechecking(&self, connection_id: &str) -> bool {
-        self.rechecking.lock().expect("recheck lock poisoned").contains_key(connection_id)
+        let config = AppConfig::load(&self.data_dir);
+        connections::is_live(&config) && config.connections.iter().any(|i| i.bound_to.as_deref().unwrap_or(&i.id) == connection_id && i.recheck_since.is_some())
     }
 
     /// A sync that began at `started` finished well. It ends the recheck only if the connection was turned on before the
     /// sync began; one that was already running when the connection was turned off and on again saw nothing of the new state.
     pub(super) fn finish_recheck(&self, connection_id: &str, started: chrono::DateTime<Utc>) -> bool {
-        let mut rechecking = self.rechecking.lock().expect("recheck lock poisoned");
-        match rechecking.get(connection_id) {
-            Some(turned_on) if *turned_on <= started => rechecking.remove(connection_id).is_some(),
-            _ => false,
+        let mut finished = false;
+        let saved = AppConfig::update_if(&self.data_dir, |config| {
+            let waiting = config.connections.iter_mut().find(|i| i.bound_to.as_deref().unwrap_or(&i.id) == connection_id && i.recheck_since.is_some_and(|on| on <= started));
+            finished = waiting.map(|i| i.recheck_since = None).is_some();
+            finished
+        });
+        if let Err(e) = saved {
+            eprintln!("couldn't save that the drafts were checked: {e}");
+            return false;
         }
+        finished
     }
 
     async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {

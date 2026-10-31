@@ -199,8 +199,6 @@ pub struct Core {
     sign_in: tokio::sync::Mutex<()>,
     /// Held while a draft is claimed for posting and while a connection is turned off, so a draft can't be claimed after the check that said its connection was on.
     draft_gate: tokio::sync::Mutex<()>,
-    /// Connections turned back on whose first sync hasn't finished, with the moment each was turned on. Their drafts can't be approved yet.
-    rechecking: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
     pub focus: Notify,
 }
@@ -235,7 +233,6 @@ impl Core {
             wake: Notify::new(),
             sign_in: tokio::sync::Mutex::new(()),
             draft_gate: tokio::sync::Mutex::new(()),
-            rechecking: Mutex::new(HashMap::new()),
             focus: Notify::new(),
         }
     }
@@ -452,8 +449,17 @@ impl Core {
             let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after)?;
             db.set_meta(LAST_SYNC, &stamp(started))?;
             let containers_changed = pulled.containers.is_some();
-            // A draft that can't be re-judged must not stop the items from syncing.
-            let revised = proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()).unwrap_or_default();
+            // A draft that can't be re-judged must not stop the items from syncing, but it keeps the connection's drafts held.
+            let revised = match proposals::reconcile_pending(db, &identity_of(&connection_id, &me), Utc::now()) {
+                Ok(revised) => {
+                    self.finish_recheck(&connection_id, started);
+                    revised
+                }
+                Err(e) => {
+                    eprintln!("couldn't re-judge the waiting drafts of {connection_id}: {e}");
+                    0
+                }
+            };
             Ok(Synced {
                 connection_id: connection_id.clone(),
                 changed: stored.upserted.any() || containers_changed,
@@ -462,9 +468,6 @@ impl Core {
             })
         })
         .await
-        .inspect(|_| {
-            self.finish_recheck(&connection_id, started);
-        })
     }
 
     /// Re-reads one issue after a write so the UI shows the result without waiting for the next sync.

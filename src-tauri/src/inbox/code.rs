@@ -19,7 +19,7 @@ use crate::codehost::{CodeHost, PullList};
 use crate::db::{stamp, Db};
 use crate::domain::{
     clip, Actor, ChangedFile, CheckState, CodeChange, CodeChangeState, CodeFile, CodeHit, CommitQuery, ContainerQuery, ContainerSummary, CreatedBy,
-    DevLink, Event, Footprint, Intent, ItemRef, MaybePosted, Origin, Proposal, ProposalState, PullRequestDetail, ReviewComment, TreeEntry, WatchChange,
+    DevLink, Event, Footprint, Intent, ItemRef, MaybePosted, Origin, Proposal, ProposalQuery, ProposalState, StateKind, PullRequestDetail, ReviewComment, TreeEntry, WatchChange,
     WatchMode, WatchSet, WorkstreamEvent, AUTO_EVERYTHING_MAX,
 };
 use crate::error::{Error, Result};
@@ -373,6 +373,8 @@ pub struct CodeSynced {
     pub links_changed: bool,
     /// The sync checked the drafts that were waiting since the connection was turned on.
     pub rechecked: bool,
+    /// The sync retired or outdated a review draft.
+    pub reviews_changed: bool,
 }
 
 /// A pull request to read in full.
@@ -588,10 +590,64 @@ impl Core {
             db.prune_code_changes(id, &repos, &stamp(started - Duration::days(UNWATCH_GRACE_DAYS)))?;
             db.set_meta(LAST_SYNC, &stamp(started))
         })?;
-        match stop {
-            Some(e) => Err(e),
-            None => Ok(CodeSynced { changed, links_changed, rechecked: self.finish_recheck(id, started) }),
+        if let Some(e) = stop {
+            return Err(e);
         }
+        let reviews_changed = if self.is_rechecking(id) { self.recheck_reviews(host.as_ref(), id).await? } else { false };
+        Ok(CodeSynced { changed, links_changed, rechecked: self.finish_recheck(id, started), reviews_changed })
+    }
+
+    /// Looks again at each pending review draft of `id` on GitHub, which is the check a connection turned back on owes
+    /// them: a pull request that is closed or gone retires its draft, and a head that moved past the reviewed commit
+    /// marks it outdated. Any other failure is returned, so the drafts stay held. Returns whether a draft changed.
+    async fn recheck_reviews(&self, host: &dyn CodeHost, id: &str) -> Result<bool> {
+        let query = ProposalQuery { states: Some(vec![StateKind::Pending]), ..Default::default() };
+        let waiting = self.with_app_db(|db| db.proposals(&query)).await?;
+        let mut changed = false;
+        for draft in waiting {
+            let Intent::GithubReview { connection_id, repo, number, commit_sha, .. } = &draft.intent else { continue };
+            if connection_id != id || draft.maybe_posted.is_some() {
+                continue;
+            }
+            let head = match host.pull_request_change(repo, *number).await {
+                Ok(change) => Some(change),
+                Err(Error::CodeHost { status: 404, .. }) => None,
+                Err(e) => return Err(e),
+            };
+            let label = format!("{repo}#{number}");
+            let retire = match &head {
+                Some(change) if change.state == CodeChangeState::Merged => Some(format!("{label} was merged while GitHub was off")),
+                Some(change) if change.state == CodeChangeState::Closed => Some(format!("{label} was closed while GitHub was off")),
+                Some(_) => None,
+                None => Some(format!("{label} is no longer on GitHub")),
+            };
+            let outdated = head.as_ref().is_some_and(|change| change.sha.as_deref() != Some(commit_sha.as_str()));
+            if retire.is_none() && !outdated {
+                continue;
+            }
+            changed |= self
+                .with_app_db(|db| {
+                    let Some(mut p) = db.proposal(&draft.id)?.filter(|p| p.state == ProposalState::Pending && p.maybe_posted.is_none()) else { return Ok(false) };
+                    let at = Utc::now();
+                    match retire {
+                        Some(reason) => {
+                            p.state = ProposalState::Retired(reason);
+                            p.updated_at = at;
+                            db.save_proposal(&p)?;
+                            proposals::record(db, &p, Actor::Supervisor, "draft_retired", at);
+                        }
+                        None if p.error.as_deref() == Some(REVIEW_OUTDATED_NOTE) => return Ok(false),
+                        None => {
+                            p.error = Some(REVIEW_OUTDATED_NOTE.into());
+                            p.updated_at = at;
+                            db.save_proposal(&p)?;
+                        }
+                    }
+                    Ok(true)
+                })
+                .await?;
+        }
+        Ok(changed)
     }
 
     /// Asks the sync loop for a code sync now, as the Sync button does: a build that just pushed a branch has its pull
@@ -2185,6 +2241,81 @@ mod review_tests {
         assert!(fx.core.finish_recheck(&connection_id, Utc::now()));
         let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
         assert_eq!(done.state, ProposalState::Applied);
+    }
+
+    async fn turned_back_on(fx: &Fixture) -> String {
+        fx.core.adopt_instances().await;
+        let instance = AppConfig::load(&fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
+        fx.core.set_instance_enabled(&instance, false).await.unwrap();
+        fx.core.set_instance_enabled(&instance, true).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_review_whose_head_moved_while_github_was_off_comes_back_outdated_after_the_first_sync() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let connection_id = turned_back_on(&fx).await;
+        fx.github_route(PULL_ROUTE, vec![pull_reply_at(12, "open", Some("acme/webshop"), "main", "def4567890ab")]);
+
+        assert!(fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.is_err());
+        let synced = fx.core.sync_code_at(&connection_id, Utc::now()).await.unwrap();
+
+        assert!(synced.rechecked && synced.reviews_changed);
+        let back = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        assert_eq!((back.state, back.error.as_deref()), (ProposalState::Pending, Some(REVIEW_OUTDATED_NOTE)));
+        assert!(posts(&fx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_review_of_a_pull_request_merged_while_github_was_off_is_retired_by_the_first_sync() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let connection_id = turned_back_on(&fx).await;
+        fx.github_route(PULL_ROUTE, vec![pull_reply(12, "closed", Some("acme/webshop"), "main")]);
+
+        fx.core.sync_code_at(&connection_id, Utc::now()).await.unwrap();
+
+        let back = fx.core.proposal(&p.id).await.unwrap().unwrap();
+        assert!(matches!(&back.state, ProposalState::Retired(why) if why.contains("acme/webshop#12 was closed")), "{:?}", back.state);
+        assert!(posts(&fx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_review_that_is_still_current_is_left_alone_and_let_go_by_the_first_sync() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let connection_id = turned_back_on(&fx).await;
+
+        let synced = fx.core.sync_code_at(&connection_id, Utc::now()).await.unwrap();
+
+        assert!(synced.rechecked && !synced.reviews_changed);
+        assert_eq!(fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap().state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_review_stays_held_while_github_cannot_say_where_its_pull_request_is() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let connection_id = turned_back_on(&fx).await;
+        fx.github_route(PULL_ROUTE, vec![Reply::status(502, "")]);
+
+        assert!(fx.core.sync_code_at(&connection_id, Utc::now()).await.is_err());
+
+        assert!(fx.core.is_rechecking(&connection_id));
+        assert!(fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap_err().to_string().contains("Checking this draft against GitHub."));
+    }
+
+    #[tokio::test]
+    async fn a_hold_survives_the_app_being_closed_and_opened_again() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![pull_route(), (FILES_ROUTE, vec![files_reply()]), (POST_ROUTE, vec![posted_reply()])]).await;
+        let p = drafted(&fx).await;
+        let connection_id = turned_back_on(&fx).await;
+
+        fx.core.restart();
+
+        assert!(fx.core.is_rechecking(&connection_id));
+        assert!(fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.is_err());
+        assert!(AppConfig::load(&fx.dir).connections.iter().any(|i| i.recheck_since.is_some()), "the moment is kept in config.json");
     }
 
     #[tokio::test]

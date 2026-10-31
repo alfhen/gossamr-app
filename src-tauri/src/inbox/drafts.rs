@@ -541,8 +541,26 @@ mod tests {
         assert!(fx.tracker.intents().is_empty());
         assert_eq!(fx.core.proposal(&drafted.id).await.unwrap().unwrap().state, ProposalState::Pending);
 
-        assert!(fx.core.finish_recheck(&connection_id, Utc::now()));
+        fx.core.sync_if_due(crate::sync::Trigger::Now).await.expect("a sync was due").unwrap();
+        assert!(!fx.core.is_rechecking(&connection_id));
         assert_eq!(fx.core.approve_proposal(&drafted.id).await.unwrap().state, ProposalState::Applied);
+    }
+
+    #[tokio::test]
+    async fn a_jira_sync_that_could_not_re_judge_the_drafts_keeps_them_held() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.adopt_instances().await;
+        let drafted = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        let connection_id = fx.core.set_instance_enabled("jira", true).await.unwrap();
+        let cache = std::fs::read_dir(&fx.dir).unwrap().map(|e| e.unwrap().path()).find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("inbox-") && n.to_string_lossy().ends_with(".sqlite"))).unwrap();
+        let broken = rusqlite::Connection::open(cache).unwrap().execute("UPDATE items SET data = 'not json' WHERE external_id = ?1", [&fx.item("CA-1").external_id]).unwrap();
+        assert_eq!(broken, 1, "the ticket the draft targets is cached");
+
+        fx.core.sync_if_due(crate::sync::Trigger::Now).await.expect("a sync was due").unwrap();
+
+        assert!(fx.core.is_rechecking(&connection_id));
+        assert!(fx.core.approve_proposal(&drafted.id).await.unwrap_err().to_string().contains("Checking this draft against"));
     }
 
     #[tokio::test]
@@ -553,11 +571,8 @@ mod tests {
 
         assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_none());
 
-        // The recorder can't sync: reaching it is what panics.
         fx.core.set_instance_enabled("jira", true).await.unwrap();
-        let core = fx.core.clone();
-        let reached = tokio::spawn(async move { core.sync_if_due(crate::sync::Trigger::Now).await }).await;
-        assert!(reached.err().is_some_and(|e| e.is_panic()), "once on, the loop asks the tracker again");
+        assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_some_and(|synced| synced.is_ok()), "once on, the loop asks the tracker again");
     }
 
     #[tokio::test]
