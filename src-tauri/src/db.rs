@@ -70,6 +70,7 @@ impl Db {
         db.fail_copied_pip_turns(&adopted.pip_turns)?;
         let mut file = Self::open_file(cache)?;
         schema::apply(&mut file, schema::STEPS)?;
+        schema::clear_app_copies(&mut file)?;
         Ok(db)
     }
 
@@ -603,6 +604,30 @@ mod tests {
             assert!(db.proposal(&first.id).unwrap().is_some());
             drop(db);
             assert_eq!(count(&cache, "proposals"), 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn rows_a_release_from_before_the_move_writes_to_an_emptied_cache_are_copied_once_and_what_the_app_then_deletes_stays_deleted() {
+            let (cache, app, dir, first) = legacy_cache_with("written-after-clear", &comment_on("jira:site:ann"));
+            drop(Db::open_with_app(&cache, &app).unwrap());
+            assert_eq!(cache_version(&cache), schema::STEPS.len() as i64);
+            let old = Db::open_before_the_move(&cache).unwrap();
+            let later = create(&old, Draft::from_pip("later", None, comment_on("jira:site:ann").intent, None), now()).unwrap();
+            old.execute_batch("INSERT INTO workstreams (id, connection_id, title, mode, created_at, data) VALUES ('w1', 'jira:site:ann', 'Fix it', 'open', '2026-10-01T10:00:00Z', '{}');").unwrap();
+            drop(old);
+
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_some());
+            assert!(db.proposal(&first.id).unwrap().is_some());
+            drop(db);
+            assert_eq!((count(&cache, "proposals"), count(&cache, "workstreams")), (0, 0));
+
+            Db::open_app(&app).unwrap().execute_batch(&format!("DELETE FROM proposals WHERE id = '{}'; DELETE FROM workstreams;", later.id)).unwrap();
+            let db = Db::open_with_app(&cache, &app).unwrap().for_connection("jira:site:ann");
+            assert!(db.proposal(&later.id).unwrap().is_none());
+            drop(db);
+            assert_eq!(count(&app, "workstreams"), 0);
             let _ = std::fs::remove_dir_all(dir);
         }
 
