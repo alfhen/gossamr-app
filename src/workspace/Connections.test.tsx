@@ -115,10 +115,11 @@ describe("the connections list", () => {
     expect(out).toContain("Your gh login and GitHub stay as they are.");
   });
 
-  it("says what Remove deletes for Jira, including your conversations with Pip", () => {
+  it("says what Remove deletes for Jira, and not your conversations with Pip, which stay", () => {
     const out = view({ confirming: jira.id, selectedId: jira.id });
-    expect(out).toContain("Remove Acme Jira? Gossamr deletes the tickets it cached and your conversations with Pip, forgets your token and closes the drafts for it.");
+    expect(out).toContain("Remove Acme Jira? Gossamr deletes the tickets it cached, forgets your token and closes the drafts for it.");
     expect(out).toContain("Jira stays as it is.");
+    expect(out).not.toContain("conversations with Pip");
   });
 
   it("shows the confirmation on the connection it was asked for, never on the one that takes its place", () => {
