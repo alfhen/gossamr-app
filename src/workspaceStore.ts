@@ -85,7 +85,8 @@ interface WorkspaceState {
   loadComments(ref: ItemRef): Promise<void>;
   /** The statuses `item` can move to now, or null when the tracker couldn't say. Answers are kept while the status holds. */
   loadMoves(item: WorkItem): Promise<StatusDef[] | null>;
-  refreshConnections(): Promise<void>;
+  /** Re-reads the connections; with `refresh`, every instance is probed first. */
+  refreshConnections(refresh?: boolean): Promise<void>;
   /** Starts the Jira sign-in again; does nothing while one is already open. */
   reconnect(): Promise<void>;
   syncNow(): Promise<void>;
@@ -157,6 +158,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       get().refresh().catch((e) => get().report("Couldn't refresh", e));
       void get().refreshConnections();
     });
+    const offConnections = backend.onConnectionsChanged(() => void get().refreshConnections());
     const offProposals = backend.onProposalsChanged(() => get().refreshProposals().catch((e) => get().report("Couldn't load drafts", e)));
     const offSnapshot = backend.subscribe(() => {
       void get().refreshConnections();
@@ -177,6 +179,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     stop = () => {
       offStrays();
       offCache();
+      offConnections();
       offProposals();
       offSnapshot();
       offWatch();
@@ -338,11 +341,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     return job;
   },
 
-  async refreshConnections() {
+  async refreshConnections(refresh = false) {
     const backend = get().backend;
     if (!backend) return;
     try {
-      const connections = await backend.connectionsList();
+      const connections = await backend.connectionsList(refresh);
       if (backend !== get().backend) return;
       set({ connections });
       const dead = connections.some((c) => c.reauth);

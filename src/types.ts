@@ -873,6 +873,21 @@ export interface WorkMove {
   to: StatusDef;
 }
 
+/** How a connection stands, from the last probe of its instance (`src-tauri/src/probe.rs`). */
+export type ProbeState = "ready" | "notSignedIn" | "notFound" | "error" | "off";
+
+export interface ProbeSnapshot {
+  /** The command line tool the connection signs in through is there. */
+  installed: boolean;
+  version: string | null;
+  state: ProbeState;
+  account: string | null;
+  message: string;
+  /** The command that fixes it. */
+  fix: string | null;
+  checkedAt: string;
+}
+
 /** A signed-in connection and how its sync is going. */
 export interface ConnectionInfo {
   id: string;
@@ -893,6 +908,8 @@ export interface ConnectionInfo {
   transient: boolean;
   /** Atlassian ended the sign-in; signing in again is the only way this connection syncs. */
   reauth: boolean;
+  /** What the last probe found; null until the first one finishes, and for the sample connection. */
+  status: ProbeSnapshot | null;
 }
 
 /**

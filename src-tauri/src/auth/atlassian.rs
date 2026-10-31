@@ -6,7 +6,7 @@ use url::Url;
 
 use super::callback::Loopback;
 use super::{
-    json_or_error, unix_now, Account, AuthChallenge, AuthMethod, Authenticator, ClientSource, Credentials, Scope, Site, Tokens,
+    json_or_error, unix_now, AccessToken, Account, AuthChallenge, AuthMethod, Authenticator, ClientSource, Credentials, Scope, Site, Tokens,
 };
 use crate::error::{Error, Result};
 use crate::secrets;
@@ -234,6 +234,10 @@ impl Authenticator for Atlassian {
             .map_err(refresh_failure)?;
         Ok(Credentials { tokens, ..current.clone() })
     }
+
+    async fn whoami(&self, token: &AccessToken) -> Result<Account> {
+        self.myself(&token.access_token, &token.scope.cloud_id).await
+    }
 }
 
 /// Atlassian answers a refresh token it no longer honours (revoked, expired, spent elsewhere) with a 400, 401 or 403
@@ -444,6 +448,14 @@ mod tests {
         assert_eq!((connection.id.as_str(), connection.display_name.as_str()), ("jira:c1:u1", "Acme"));
         assert_eq!(credentials.me.avatar_url.as_deref(), Some("https://a/48.png"));
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn asking_who_a_token_belongs_to_calls_myself_on_its_site_with_that_token() {
+        let (a, seen) = atlassian(vec![("/ex/jira/c1/rest/api/3/myself", r#"{"accountId":"u1","displayName":"Ann"}"#)]).await;
+        let token = AccessToken { access_token: "tok".into(), scope: SiteScope { cloud_id: "c1".into(), account_id: "u1".into() } };
+        assert_eq!(a.whoami(&token).await.unwrap().name, "Ann");
+        assert_eq!(seen.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
