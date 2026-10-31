@@ -54,6 +54,7 @@ describe("the desktop backend's wiring", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");
     expect(jira).toContain('invoke<void>("connection_open_terminal", { instanceId })');
+    expect(lib).toContain("#[tauri::command(async)]\nfn connection_open_terminal(");
     expect(lib).toContain("fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()>");
     const handlers = lib.slice(lib.indexOf("generate_handler!"));
     expect(handlers).toContain("connection_open_terminal,");

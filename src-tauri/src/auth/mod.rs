@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 use crate::secrets;
 use crate::tracker::Connection;
 
-pub use github::{find_gh_in, DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
+pub use github::{find_gh_in, SessionSource, DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
 #[cfg(test)]
 pub use github::{MemoryStore, SessionSource};
 pub use atlassian::{Atlassian, SiteScope};
