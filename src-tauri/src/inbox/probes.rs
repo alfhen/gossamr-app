@@ -6,8 +6,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::Core;
-use crate::auth::GithubSession;
-use crate::codehost::CodeAccount;
 use crate::config::AppConfig;
 use crate::connections::Instance;
 use crate::probe::{self, Snapshot};
@@ -125,18 +123,6 @@ impl Core {
         self.probes.rebound.store(true, Ordering::Relaxed);
     }
 
-    async fn validate_session(&self, session: GithubSession) -> Option<crate::error::Result<CodeAccount>> {
-        let auth = &self.code.auth;
-        let check = async {
-            let session = auth.fresh(session).await.map_err(|e| match e {
-                crate::error::Error::Auth(_) => crate::error::Error::ReauthRequired,
-                e => e,
-            })?;
-            auth.validate(&session.token).await
-        };
-        tokio::time::timeout(probe::TIMEOUT, check).await.ok()
-    }
-
     async fn probe_instance(&self, instance: &Instance) -> Snapshot {
         if !instance.enabled {
             return Snapshot::off();
@@ -146,11 +132,11 @@ impl Core {
             ConnectionKind::Github => {
                 let host = instance.config.host.as_deref().unwrap_or("github.com");
                 let login = instance.config.login.as_deref().unwrap_or_default();
-                // Sync uses the stored copy of the token whatever imported it, so that copy is what is judged.
-                match self.code.auth.session(login) {
-                    Some(session) => probe::github_token(login, self.validate_session(session).await),
-                    None => probe::github(self.code.auth.gh_dirs(), host, login, probe::TIMEOUT).await,
+                let snapshot = probe::github(self.code.auth.gh_dirs(), host, login, probe::TIMEOUT).await;
+                if snapshot.state == probe::State::Ready {
+                    self.drop_saved_token(login);
                 }
+                snapshot
             }
         }
     }
@@ -161,7 +147,7 @@ mod tests {
     use super::*;
     use crate::auth::GithubAuth;
     use crate::connections::{self, Binding};
-    use crate::auth::{AccessToken, Account, Authenticator, Credentials, SessionSource, TokenSignIn};
+    use crate::auth::{AccessToken, Account, Authenticator, Credentials, TokenSignIn};
     use crate::error::{Error, Result};
     use crate::inbox::testing::{fixture_with, fixture_with_authenticator};
     use crate::inbox::CodeService;
@@ -303,8 +289,8 @@ mod tests {
     async fn fixture_with_gh(name: &str) -> (crate::inbox::testing::Fixture, PathBuf) {
         let gh_dir = std::env::temp_dir().join(format!("gossamr-probes-{name}-{}", std::process::id()));
         gh_saying(&gh_dir, "alfhen", "success");
-        let auth = GithubAuth::for_test(reqwest::Client::new(), Arc::new(crate::auth::MemoryStore::default()), "http://unused.invalid", None, vec![gh_dir.clone()]);
-        let fx = fixture_with(Some(CodeService::with_factory(auth, Box::new(|_, _| unreachable!("no GitHub session")))))
+        let auth = GithubAuth::for_test(reqwest::Client::new(), "http://unused.invalid", vec![gh_dir.clone()]);
+        let fx = fixture_with(Some(CodeService::with_factory(auth, Box::new(|_, _, _| unreachable!("no GitHub session")))))
             .await;
         fx.core.adopt_instances().await;
         fx.core.bind_instance(Binding::github("alfhen"));
@@ -392,66 +378,22 @@ mod tests {
         assert!(snapshot_of(&fx.core, "github").is_none());
     }
 
-    /// A fixture with a token-connected `ann` whose GitHub is `replies`, and no `gh` anywhere.
-    async fn fixture_with_token_session(routes: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>, expires_at: Option<u64>) -> crate::inbox::testing::Fixture {
-        fixture_with_session(routes, expires_at, SessionSource::Token).await
-    }
-
-    async fn fixture_with_session(routes: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>, expires_at: Option<u64>, source: SessionSource) -> crate::inbox::testing::Fixture {
-        use crate::codehost::github::testserver::serve;
-        let server = serve(routes).await;
-        let store = Arc::new(crate::auth::MemoryStore::default());
-        crate::auth::TokenStore::save(&*store, &GithubSession { login: "ann".into(), name: None, avatar_url: None, token: "ghp_x".into(), source, scopes: None, refresh_token: expires_at.map(|_| "r1".into()), expires_at }).unwrap();
-        let auth = GithubAuth::for_test(reqwest::Client::new(), store, &server.base, Some("cid"), vec![PathBuf::from("/nonexistent")]);
-        std::mem::forget(server);
-        let fx = fixture_with(Some(CodeService::with_factory(auth, Box::new(|_, _| unreachable!("no host needed"))))).await;
-        fx.core.adopt_instances().await;
-        fx.core.bind_instance(Binding::github("ann"));
-        fx
-    }
-
     #[tokio::test]
-    async fn a_token_connected_account_is_probed_with_its_token_and_needs_no_gh() {
-        use crate::codehost::github::testserver::Reply;
-        let user = include_str!("../codehost/github/fixtures/user.json");
-        let fx = fixture_with_token_session(vec![("/user", vec![Reply::ok(user)])], None).await;
-        fx.core.probe_connections(Probe::Launch).await;
-        let seen = snapshot_of(&fx.core, "github").unwrap();
-        assert_eq!((seen.state, seen.account.as_deref(), seen.installed), (State::Ready, Some("ann"), true));
+    async fn a_token_an_earlier_build_saved_is_deleted_once_gh_holds_the_login_and_kept_while_it_does_not() {
+        let vault = crate::secrets::fake::Fake::default();
+        vault.put("github-logins", r#"["alfhen"]"#);
+        vault.put("github:alfhen", "{}");
+        let _installed = crate::secrets::fake::install(&vault);
+        let (fx, gh) = fixture_with_gh("saved-token").await;
 
-        let fx = fixture_with_token_session(vec![("/user", vec![Reply::status(401, r#"{"message":"Bad credentials"}"#)])], None).await;
+        gh_saying(&gh, "someone-else", "success");
         fx.core.probe_connections(Probe::Launch).await;
         assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::NotSignedIn));
-    }
+        assert!(vault.get("github:alfhen").is_some(), "gh can't sign this account in, so the saved token is all that is left of it");
 
-    #[tokio::test]
-    async fn an_account_imported_from_gh_is_judged_by_the_copy_it_syncs_with_not_by_gh() {
-        use crate::codehost::github::testserver::Reply;
-        let user = include_str!("../codehost/github/fixtures/user.json");
-        let fx = fixture_with_session(vec![("/user", vec![Reply::ok(user)])], None, SessionSource::GhCli).await;
-        fx.core.probe_connections(Probe::Launch).await;
-        let seen = snapshot_of(&fx.core, "github").unwrap();
-        assert_eq!((seen.state, seen.account.as_deref()), (State::Ready, Some("ann")), "no gh is installed, and the copy still works");
-
-        let fx = fixture_with_session(vec![("/user", vec![Reply::status(401, r#"{"message":"Bad credentials"}"#)])], None, SessionSource::GhCli).await;
-        fx.core.probe_connections(Probe::Launch).await;
-        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::NotSignedIn));
-    }
-
-    #[tokio::test]
-    async fn an_expired_browser_sign_in_whose_refresh_is_refused_is_not_signed_in() {
-        use crate::codehost::github::testserver::Reply;
-        let refused = Reply::ok(r#"{"error":"bad_refresh_token","error_description":"The refresh token passed is incorrect or expired."}"#);
-        let fx = fixture_with_token_session(vec![("/login/oauth/access_token", vec![refused])], Some(1)).await;
-        fx.core.probe_connections(Probe::Launch).await;
-        assert_eq!(snapshot_of(&fx.core, "github").map(|s| (s.state, s.account)), Some((State::NotSignedIn, None)));
-    }
-
-    #[tokio::test]
-    async fn an_expired_browser_sign_in_whose_refresh_hits_a_server_error_is_only_an_error_and_keeps_the_account() {
-        use crate::codehost::github::testserver::Reply;
-        let fx = fixture_with_token_session(vec![("/login/oauth/access_token", vec![Reply::status(502, "<html>Bad gateway</html>")])], Some(1)).await;
-        fx.core.probe_connections(Probe::Launch).await;
-        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::Error));
+        gh_saying(&gh, "alfhen", "success");
+        fx.core.probe_connections(Probe::Refresh).await;
+        assert_eq!(snapshot_of(&fx.core, "github").map(|s| s.state), Some(State::Ready));
+        assert_eq!(vault.get("github:alfhen"), None);
     }
 }

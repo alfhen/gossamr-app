@@ -27,12 +27,10 @@ import type {
   ConnectionInfo,
   DevLink,
   DevLinksChanged,
-  DeviceStart,
   FeedPage,
   FeedQuery,
   Footprint,
   GhAccounts,
-  GithubSignInOptions,
   PullRequestDetail,
   ReviewAccess,
   Stray,
@@ -95,20 +93,12 @@ export interface Backend {
   connectionSetEnabled(instanceId: string, enabled: boolean): Promise<void>;
   /** Removes instance `instanceId`: its cache and the token Gossamr stored go, drafts that target it are closed with a reason, and its id is never used again. Refuses while one of its drafts is being posted. */
   connectionRemove(instanceId: string): Promise<void>;
-  /** Which ways of connecting GitHub work here. */
-  githubSignInOptions(): Promise<GithubSignInOptions>;
-  /** Validates a personal access token (classic or fine-grained) and connects the account it belongs to. */
-  githubConnectToken(token: string): Promise<ConnectionInfo>;
-  /** Connects with the token `gh auth token` prints for `login`, or for the active account with none. Runs `gh` only when this is called. */
-  githubImportGhToken(login?: string): Promise<ConnectionInfo>;
+  /** Connects the account `gh` holds for `login`, or its active account with none. Gossamr reads `gh`'s token as it needs it and keeps none. */
+  githubConnect(login?: string): Promise<ConnectionInfo>;
   /** The logins `gh` holds on github.com, asked of `gh` each time. */
   githubAccounts(): Promise<GhAccounts>;
   /** Opens Terminal on `gh auth login`. */
   githubOpenLogin(): Promise<void>;
-  /** Starts the browser device flow: show `userCode`, open `verificationUri`, then await `githubDevicePoll`. */
-  githubDeviceStart(): Promise<DeviceStart>;
-  /** Resolves with the connection once the code is authorised; rejects if it expires or is denied. */
-  githubDevicePoll(): Promise<ConnectionInfo>;
   /** The pull requests, branches and commits that name a work item, from the cache. Instant; only watched repositories. Strongest first. */
   devLinks(item: ItemRef): Promise<DevLink[]>;
   /** Searches the watched repositories for the item's key, caches what it finds and returns the links. Slower; for when a person opens the item. */

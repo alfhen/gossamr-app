@@ -8,8 +8,9 @@ use chrono::{DateTime, Duration, Utc};
 use super::watch::{CatalogEntry, CatalogPage, WatchRow, WatchState};
 use super::{now_iso, Core};
 use crate::auth::Scope;
-use crate::connections::Binding;
-use crate::auth::{DeviceStart, GithubAuth, GithubSession, KeychainStore, TokenStore};
+use crate::config::AppConfig;
+use crate::connections::{self, Binding};
+use crate::auth::{CredentialSource, GithubAuth, GithubSession};
 use crate::codehost::diff::{commentable, relative_path};
 use crate::codehost::events::{derive, from_notice, recent};
 use crate::codehost::github::{GithubHost, API_BASE};
@@ -54,7 +55,7 @@ pub(super) fn github_db_file(login: &str) -> String {
     format!("github-{safe}.sqlite")
 }
 
-type HostFactory = Box<dyn Fn(&GithubSession, Arc<Mutex<Db>>) -> Arc<dyn CodeHost> + Send + Sync>;
+type HostFactory = Box<dyn Fn(&GithubSession, Arc<dyn CredentialSource>, Arc<Mutex<Db>>) -> Arc<dyn CodeHost> + Send + Sync>;
 
 /// The GitHub connections, their databases and the hosts that talk to GitHub for them.
 pub struct CodeService {
@@ -63,19 +64,18 @@ pub struct CodeService {
     sessions: Mutex<HashMap<String, GithubSession>>,
     dbs: Mutex<HashMap<String, Arc<Mutex<Db>>>>,
     hosts: Mutex<HashMap<String, Arc<dyn CodeHost>>>,
-    device: tokio::sync::Mutex<Option<crate::auth::DeviceChallenge>>,
     /// The last failed sync per connection, and whether it was transient.
     errors: Mutex<HashMap<String, (String, bool)>>,
     syncing: Mutex<HashSet<String>>,
 }
 
 impl CodeService {
-    pub fn new(http: reqwest::Client, store: Arc<dyn TokenStore>) -> Self {
+    pub fn new(http: reqwest::Client) -> Self {
         let client = http.clone();
-        let factory: HostFactory = Box::new(move |s, db| {
-            Arc::new(GithubHost::new(client.clone(), API_BASE, &s.token, &Connection::github_id(&s.login), &s.login, db))
+        let factory: HostFactory = Box::new(move |s, credentials, db| {
+            Arc::new(GithubHost::new(client.clone(), API_BASE, credentials, &Connection::github_id(&s.login), &s.login, db))
         });
-        Self::with_factory(GithubAuth::new(http, store), factory)
+        Self::with_factory(GithubAuth::new(http), factory)
     }
 
     pub fn with_factory(auth: GithubAuth, factory: HostFactory) -> Self {
@@ -85,18 +85,9 @@ impl CodeService {
             sessions: Mutex::new(HashMap::new()),
             dbs: Mutex::new(HashMap::new()),
             hosts: Mutex::new(HashMap::new()),
-            device: tokio::sync::Mutex::new(None),
             errors: Mutex::new(HashMap::new()),
             syncing: Mutex::new(HashSet::new()),
         }
-    }
-
-    pub fn sign_in_options(&self) -> crate::auth::SignInOptions {
-        self.auth.options()
-    }
-
-    pub fn default_store() -> Arc<dyn TokenStore> {
-        Arc::new(KeychainStore)
     }
 
     fn remember(&self, session: GithubSession) -> Connection {
@@ -108,6 +99,14 @@ impl CodeService {
 
     pub(super) fn session(&self, id: &str) -> Result<GithubSession> {
         self.sessions.lock().expect("session lock poisoned").get(id).cloned().ok_or(Error::NotSignedIn)
+    }
+
+    /// The logins connected this run, in connection id order.
+    pub fn connected_logins(&self) -> Vec<String> {
+        let sessions = self.sessions.lock().expect("session lock poisoned");
+        let mut ids: Vec<&String> = sessions.keys().collect();
+        ids.sort();
+        ids.into_iter().map(|id| sessions[id].login.clone()).collect()
     }
 
     pub fn connection_ids(&self) -> Vec<String> {
@@ -146,15 +145,32 @@ fn parse_time(s: &str) -> Option<DateTime<Utc>> {
 }
 
 impl Core {
-    pub fn code_sign_in_options(&self) -> crate::auth::SignInOptions {
-        self.code.sign_in_options()
+    /// The logins to register at launch: the GitHub instances in `config.json`, or until they are adopted the logins an
+    /// earlier build saved a token for.
+    fn github_logins(&self) -> Vec<String> {
+        let config = AppConfig::load(&self.data_dir);
+        if !connections::is_live(&config) {
+            return self.code.auth.logins();
+        }
+        config.connections.iter().filter(|i| i.kind == ConnectionKind::Github).filter_map(|i| i.config.login.clone()).collect()
     }
 
-    /// Registers the GitHub sign-ins kept in the Keychain.
+    /// Registers the GitHub accounts Gossamr is connected to. `gh` is not asked until one is used.
     pub async fn restore_code(&self) {
-        for session in self.code.auth.restore() {
-            let connection = self.code.remember(session);
+        for login in self.github_logins() {
+            let connection = self.code.remember(GithubSession { login, name: None });
             self.registry.register(connection);
+        }
+    }
+
+    /// Deletes the token an earlier build saved for `login`, once `gh` is known to hold the login. Until the
+    /// connections are adopted the saved logins are what adopts them, so nothing is deleted.
+    pub(super) fn drop_saved_token(&self, login: &str) {
+        if !connections::is_live(&AppConfig::load(&self.data_dir)) {
+            return;
+        }
+        if let Err(e) = self.code.auth.forget_saved_token(login) {
+            eprintln!("couldn't remove the GitHub token saved for {login}: {e}");
         }
     }
 
@@ -175,24 +191,22 @@ impl Core {
         f(&guard)
     }
 
-    /// The host for a connection, after renewing its token when it is about to expire.
+    /// The host for a connection. It asks `gh` for a token with every request.
     pub(super) async fn code_host(&self, id: &str) -> Result<Arc<dyn CodeHost>> {
         if let Some(h) = self.code.hosts.lock().expect("host lock poisoned").get(id) {
             return Ok(h.clone());
         }
-        let session = self.code.auth.fresh(self.code.session(id)?).await?;
-        let session = self.code.sessions.lock().expect("session lock poisoned").entry(id.to_string()).and_modify(|s| *s = session.clone()).or_insert(session).clone();
-        let host = (self.code.factory)(&session, self.code_db(id)?);
-        // A token that expires soon must not be served from a host built with the old one.
-        if session.expires_at.is_none() {
-            self.code.hosts.lock().expect("host lock poisoned").insert(id.to_string(), host.clone());
-        }
+        let session = self.code.session(id)?;
+        let credentials = self.code.auth.credentials(&session.login);
+        let host = (self.code.factory)(&session, credentials, self.code_db(id)?);
+        self.code.hosts.lock().expect("host lock poisoned").insert(id.to_string(), host.clone());
         Ok(host)
     }
 
     async fn connected(&self, session: GithubSession) -> Result<super::ConnectionInfo> {
         let connection = self.code.remember(session.clone());
         self.bind_instance(Binding::github(&session.login));
+        self.drop_saved_token(&session.login);
         self.registry.register(connection.clone());
         // So the catalog is known before the first sync, which a search of the watched repositories depends on.
         let _ = self.probe_code_catalog(&connection.id).await;
@@ -202,35 +216,17 @@ impl Core {
         Ok(connected)
     }
 
-    pub async fn github_connect_token(&self, token: &str) -> Result<super::ConnectionInfo> {
-        let session = self.code.auth.connect_token(token).await?;
+    /// Connects the account `gh` holds for `login`, or its active account with none named.
+    pub async fn github_connect(&self, login: Option<&str>) -> Result<super::ConnectionInfo> {
+        let session = self.code.auth.connect(login).await?;
         self.connected(session).await
     }
 
-    pub async fn github_import_gh_token(&self, login: Option<&str>) -> Result<super::ConnectionInfo> {
-        let session = self.code.auth.import_gh_token(login).await?;
-        self.connected(session).await
-    }
-
-    pub async fn github_device_start(&self) -> Result<DeviceStart> {
-        let challenge = self.code.auth.device_start().await?;
-        let start = challenge.start.clone();
-        *self.code.device.lock().await = Some(challenge);
-        Ok(start)
-    }
-
-    /// Waits for the code from `github_device_start` to be authorised, then connects.
-    pub async fn github_device_poll(&self) -> Result<super::ConnectionInfo> {
-        let challenge = self.code.device.lock().await.clone().ok_or_else(|| Error::Auth("start signing in first".into()))?;
-        let session = self.code.auth.device_wait(&challenge).await;
-        *self.code.device.lock().await = None;
-        self.connected(session?).await
-    }
-
-    /// Forgets the account: its token leaves the Keychain and its cached data is deleted.
+    /// Forgets the account: any token an earlier build saved leaves the Keychain and its cached data is deleted. `gh`
+    /// keeps its login.
     pub async fn github_disconnect(&self, connection_id: &str) -> Result<()> {
         let session = self.code.session(connection_id)?;
-        self.code.auth.disconnect(&session.login)?;
+        self.code.auth.forget_saved_token(&session.login)?;
         self.code.sessions.lock().expect("session lock poisoned").remove(connection_id);
         self.code.hosts.lock().expect("host lock poisoned").remove(connection_id);
         self.code.dbs.lock().expect("db map lock poisoned").remove(connection_id);
@@ -509,13 +505,15 @@ impl Core {
 
     /// Reads the notification threads aimed at the person, when the token may and GitHub's poll interval allows.
     async fn sync_notifications(&self, host: &dyn CodeHost, id: &str, repos: &[String]) -> Result<bool> {
-        let session = self.code.session(id)?;
-        if !session.can_read_notifications() {
-            return Ok(false);
-        }
         let due = self.with_code_db(id, |db| Ok(db.meta(NOTIFICATIONS_NEXT)?.and_then(|s| parse_time(&s)).is_none_or(|at| Utc::now() >= at)))?;
         if !due {
             return Ok(false);
+        }
+        // A token that can't be read at all just doesn't feed Activity with notifications.
+        match host.me().await {
+            Ok(me) if me.can_read_notifications() => {}
+            Ok(_) | Err(Error::CodeHost { .. }) => return Ok(false),
+            Err(e) => return Err(e),
         }
         let read = match host.notifications().await {
             Ok(r) => r,
@@ -1017,7 +1015,6 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::auth::{Auth, GithubAuth};
-    use crate::auth::MemoryStore;
     use crate::codehost::github::testserver::{serve, Reply, Server};
     use crate::domain::WatchSource;
     use crate::tracker::Registry;
@@ -1027,7 +1024,6 @@ pub(crate) mod tests {
 
     struct Fx {
         core: Core,
-        store: Arc<MemoryStore>,
         server: Server,
         dir: std::path::PathBuf,
     }
@@ -1056,24 +1052,23 @@ pub(crate) mod tests {
             ("/users/ann/events", vec![Reply::ok("[]")]),
         ])
         .await;
-        let store = Arc::new(MemoryStore::default());
         let http = reqwest::Client::new();
         let base = server.base.clone();
         let factory_http = http.clone();
-        let auth = GithubAuth::for_test(http.clone(), store.clone(), &server.base, None, vec![]);
+        let auth = GithubAuth::for_test(http.clone(), &server.base, crate::auth::fake_gh("ghp_x"));
         let code = CodeService::with_factory(
             auth,
-            Box::new(move |s, db| Arc::new(GithubHost::new(factory_http.clone(), &base, &s.token, &Connection::github_id(&s.login), &s.login, db))),
+            Box::new(move |s, credentials, db| Arc::new(GithubHost::new(factory_http.clone(), &base, credentials, &Connection::github_id(&s.login), &s.login, db))),
         );
         let registry = Registry::new(|_| unreachable!("no tracker for GitHub"));
         let core = Core::new(Arc::new(Auth::signed_out(http)), registry, dir.clone()).with_code(code);
-        Fx { core, store, server, dir }
+        Fx { core, server, dir }
     }
 
     #[tokio::test]
-    async fn connecting_a_token_registers_a_github_connection_and_lists_it() {
+    async fn connecting_through_gh_registers_a_github_connection_and_lists_it() {
         let fx = fixture(REPOS).await;
-        let connected = fx.core.github_connect_token("ghp_x").await.unwrap();
+        let connected = fx.core.github_connect(Some("ann")).await.unwrap();
         assert_eq!((connected.id.as_str(), connected.kind, connected.workspace.as_str(), connected.account.as_str()), ("github:ann", ConnectionKind::Github, "ann", "Ann Example"));
         assert_eq!(fx.core.registry.connection("github:ann").unwrap().kind, ConnectionKind::Github);
         let listed = fx.core.connections().await.unwrap();
@@ -1082,18 +1077,29 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn sign_ins_in_the_keychain_come_back_at_launch_and_two_accounts_can_coexist() {
+    async fn the_accounts_in_config_json_come_back_at_launch_without_asking_gh_and_two_can_coexist() {
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
-        let other = fixture(REPOS).await;
-        other.store.save(&fx.store.load("ann").unwrap().unwrap()).unwrap();
-        let mut bot = fx.store.load("ann").unwrap().unwrap();
-        bot.login = "acme-bot".into();
-        other.store.save(&bot).unwrap();
-        other.core.restore().await;
-        let ids: Vec<String> = other.core.connections().await.unwrap().into_iter().map(|c| c.id).collect();
+        fx.core.adopt_instances().await;
+        fx.core.bind_instance(Binding::github("ann"));
+        fx.core.bind_instance(Binding::github("acme-bot"));
+        std::fs::write(fx.core.code.auth.gh_dirs()[0].join("gh"), "#!/bin/sh\nexit 1\n").unwrap();
+        let relaunched = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker")), fx.dir.clone())
+            .with_code(CodeService::with_factory(GithubAuth::for_test(reqwest::Client::new(), "http://unused.invalid", Vec::new()), Box::new(|_, _, _| unreachable!("no host is built"))));
+        relaunched.restore().await;
+        let ids: Vec<String> = relaunched.connections().await.unwrap().into_iter().map(|c| c.id).collect();
         assert_eq!(ids, ["github:acme-bot", "github:ann"]);
         assert_ne!(github_db_file("ann"), github_db_file("acme-bot"));
+    }
+
+    #[tokio::test]
+    async fn before_the_accounts_are_adopted_the_logins_an_earlier_build_saved_come_back_at_launch() {
+        let fake = crate::secrets::fake::Fake::default();
+        fake.put("github-logins", r#"["ann","acme-bot"]"#);
+        let _vault = crate::secrets::fake::install(&fake);
+        let fx = fixture(REPOS).await;
+        fx.core.restore().await;
+        let ids: Vec<String> = fx.core.connections().await.unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(ids, ["github:acme-bot", "github:ann"]);
     }
 
     fn instance_ids(fx: &Fx) -> Vec<(String, String)> {
@@ -1103,13 +1109,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn existing_github_sign_ins_become_instances_in_the_order_they_were_saved_and_list_under_them() {
-        let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        let fake = crate::secrets::fake::Fake::default();
+        fake.put("github-logins", r#"["ann","acme-bot"]"#);
+        let _vault = crate::secrets::fake::install(&fake);
         let other = fixture(REPOS).await;
-        let mut bot = fx.store.load("ann").unwrap().unwrap();
-        other.store.save(&bot).unwrap();
-        bot.login = "acme-bot".into();
-        other.store.save(&bot).unwrap();
         other.core.restore().await;
         other.core.adopt_instances().await;
         assert_eq!(instance_ids(&other), [("github".to_string(), "github:ann".to_string()), ("github_2".to_string(), "github:acme-bot".to_string())]);
@@ -1129,7 +1132,7 @@ pub(crate) mod tests {
         fake.deny_reads_of("vault");
         let _vault = crate::secrets::fake::install(&fake);
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         fx.core.adopt_instances().await;
         assert_eq!(crate::config::AppConfig::load(&fx.dir).version, 0);
         assert!(instance_ids(&fx).is_empty());
@@ -1144,11 +1147,11 @@ pub(crate) mod tests {
     async fn connecting_and_disconnecting_accounts_keeps_the_instances_and_never_reuses_an_id() {
         let fx = fixture(REPOS).await;
         fx.core.adopt_instances().await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         assert_eq!(instance_ids(&fx), [("github".to_string(), "github:ann".to_string())]);
         fx.core.github_disconnect("github:ann").await.unwrap();
         assert!(instance_ids(&fx).is_empty());
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         assert_eq!(instance_ids(&fx), [("github_2".to_string(), "github:ann".to_string())]);
     }
 
@@ -1156,7 +1159,7 @@ pub(crate) mod tests {
     async fn connecting_returns_the_instance_the_account_is_listed_under() {
         let fx = fixture(REPOS).await;
         fx.core.adopt_instances().await;
-        let connected = fx.core.github_connect_token("ghp_x").await.unwrap();
+        let connected = fx.core.github_connect(None).await.unwrap();
         assert_eq!((connected.id.as_str(), connected.instance_id.as_str(), connected.display_name.as_str()), ("github:ann", "github", "GitHub"));
         let listed = fx.core.connections().await.unwrap();
         assert_eq!((listed[0].instance_id.as_str(), listed[0].display_name.as_str()), ("github", "GitHub"));
@@ -1165,19 +1168,19 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_config_file_that_isnt_json_is_not_replaced_at_launch_and_nothing_is_adopted_from_it() {
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
         fx.core.adopt_instances().await;
         fx.core.adopt_instances().await;
         assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope", "signing in doesn't replace it either");
     }
 
     #[tokio::test]
     async fn adopting_leaves_config_json_byte_for_byte_once_it_has_run() {
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         let text = r#"{"version":1,"connections":[],"retiredIds":[],"agents":{"maxRuns":"2"},"futureKey":true}"#;
         std::fs::write(fx.dir.join("config.json"), text).unwrap();
         fx.core.adopt_instances().await;
@@ -1189,8 +1192,8 @@ pub(crate) mod tests {
         let fake = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&fake);
         let fx = fixture(REPOS).await;
-        let keychain = GithubAuth::for_test(reqwest::Client::new(), Arc::new(crate::auth::KeychainStore), &fx.server.base, None, vec![]);
-        let code = CodeService::with_factory(keychain, Box::new(|_, _| unreachable!("no host is built")));
+        let keychain = GithubAuth::for_test(reqwest::Client::new(), &fx.server.base, vec![]);
+        let code = CodeService::with_factory(keychain, Box::new(|_, _, _| unreachable!("no host is built")));
         let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker")), fx.dir.clone()).with_code(code);
         fake.deny_reads_of("github-logins");
         core.adopt_instances().await;
@@ -1212,7 +1215,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_connection_without_an_instance_lists_as_its_own() {
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         let listed = fx.core.connections().await.unwrap();
         assert_eq!((listed[0].instance_id.as_str(), listed[0].display_name.as_str(), listed[0].enabled), ("github:ann", "ann", true));
         assert!(instance_ids(&fx).is_empty(), "before the sign-ins are adopted nothing is written");
@@ -1221,7 +1224,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_small_catalog_is_watched_whole_without_asking() {
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         let [state] = fx.core.watch_state().await.unwrap().try_into().unwrap();
         assert_eq!((state.chosen, state.needs_choice, state.catalog_size), (false, false, Some(3)));
     }
@@ -1229,7 +1232,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_catalog_over_twelve_repositories_waits_for_the_person_to_choose() {
         let fx = fixture(&many(13)).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         let [state] = fx.core.watch_state().await.unwrap().try_into().unwrap();
         assert_eq!((state.chosen, state.needs_choice, state.catalog_size), (false, true, Some(13)));
 
@@ -1246,7 +1249,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn the_catalog_marks_watched_repositories_and_suggestions_are_kept_for_a_while() {
         let fx = fixture(&many(13)).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         fx.core.watch_set_mode("github:ann", WatchMode::Selected).await.unwrap();
         fx.core.watch_set_containers("github:ann", &[WatchChange { container_id: "acme/r1".into(), watched: Some(true), ..Default::default() }]).await.unwrap();
         let page = fx.core.watch_catalog("github:ann", "", None).await.unwrap();
@@ -1265,14 +1268,18 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn disconnecting_forgets_the_token_and_deletes_the_cache() {
+    async fn disconnecting_forgets_a_token_an_earlier_build_saved_and_deletes_the_cache() {
+        let fake = crate::secrets::fake::Fake::default();
+        fake.put("github-logins", r#"["ann"]"#);
+        fake.put("github:ann", "{}");
+        let _vault = crate::secrets::fake::install(&fake);
         let fx = fixture(REPOS).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         fx.core.watch_state().await.unwrap();
         let file = fx.dir.join(github_db_file("ann"));
         assert!(file.exists());
         fx.core.github_disconnect("github:ann").await.unwrap();
-        assert!(fx.store.logins().unwrap().is_empty());
+        assert_eq!((fake.get("github:ann"), fx.core.code.auth.logins().is_empty()), (None, true));
         assert!(!file.exists());
         assert!(fx.core.connections().await.unwrap().is_empty());
         assert!(fx.core.registry.connection("github:ann").is_none());
@@ -1280,10 +1287,32 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn starting_the_device_flow_without_a_client_id_fails_and_polling_without_starting_does_too() {
+    async fn a_token_an_earlier_build_saved_is_deleted_once_gh_connects_the_login_and_not_before_adoption() {
+        let fake = crate::secrets::fake::Fake::default();
+        fake.put("github-logins", r#"["ann"]"#);
+        fake.put("github:ann", "{}");
+        let _vault = crate::secrets::fake::install(&fake);
         let fx = fixture(REPOS).await;
-        assert!(fx.core.github_device_start().await.is_err());
-        assert!(fx.core.github_device_poll().await.is_err());
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        assert!(fake.get("github:ann").is_some(), "the saved logins are what adopts the account, so they stay until then");
+
+        fx.core.adopt_instances().await;
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        assert_eq!(fake.get("github:ann"), None);
+        assert!(fx.core.code.auth.logins().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gh_losing_the_login_fails_the_next_request_as_unauthorised_and_gh_getting_it_back_needs_no_reconnecting() {
+        let fx = fixture(REPOS).await;
+        fx.core.github_connect(Some("ann")).await.unwrap();
+        let gh = fx.core.code.auth.gh_dirs()[0].join("gh");
+        let working = std::fs::read_to_string(&gh).unwrap();
+        std::fs::write(&gh, "#!/bin/sh\nexit 1\n").unwrap();
+        let err = fx.core.watch_catalog("github:ann", "", None).await.unwrap_err();
+        assert!(err.is_unauthorized() && err.to_string().contains("gh auth login -h github.com"), "{err}");
+        std::fs::write(&gh, working).unwrap();
+        assert!(fx.core.watch_catalog("github:ann", "", None).await.is_ok());
     }
 
     // ---- sync, links and reads, with a Jira connection that knows the project `CA` ----
@@ -1344,13 +1373,12 @@ pub(crate) mod tests {
         // Later entries win for a repeated target, so callers can override any default.
         routes.reverse();
         let server = serve(routes.iter().map(|(t, r)| (t.as_str(), r.clone())).collect()).await;
-        let store = Arc::new(MemoryStore::default());
         let http = reqwest::Client::new();
         let (base, factory_http) = (server.base.clone(), http.clone());
-        let auth = GithubAuth::for_test(http, store, &server.base, None, vec![]);
-        let code = CodeService::with_factory(auth, Box::new(move |s, db| Arc::new(GithubHost::new(factory_http.clone(), &base, &s.token, &Connection::github_id(&s.login), &s.login, db))));
+        let auth = GithubAuth::for_test(http, &server.base, crate::auth::fake_gh("ghp_x"));
+        let code = CodeService::with_factory(auth, Box::new(move |s, credentials, db| Arc::new(GithubHost::new(factory_http.clone(), &base, credentials, &Connection::github_id(&s.login), &s.login, db))));
         let fx = fixture_with(Some(code)).await;
-        fx.core.github_connect_token("ghp_x").await.unwrap();
+        fx.core.github_connect(None).await.unwrap();
         Linked { fx, server }
     }
 

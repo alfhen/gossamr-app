@@ -28,7 +28,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
-use auth::{Auth, AuthStatus, DeviceStart, TokenSignIn};
+use auth::{Auth, AuthStatus, TokenSignIn};
 use agent::{AgentService, AskOutcome, AskRequest};
 use tracker::Move;
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, Probe, WatchState, WorkstreamView};
@@ -381,25 +381,11 @@ fn probe_in_background(app: &AppHandle, core: &CoreState, why: Probe) {
     tauri::async_runtime::spawn(async move { probe_connections(&app, &core, why).await });
 }
 
-/// How a GitHub account is connected: a pasted token, the token `gh auth token` prints for `login` or, with none, for the
-/// active account (run now, because the person asked), or the code `github_device_start` showed once it was authorised in the browser.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", tag = "via")]
-enum GithubSource {
-    Token { token: String },
-    GhCli { login: Option<String> },
-    Device,
-}
-
-/// Connects the account `source` names, and its repositories become watchable. Device resolves when the code was
-/// authorised, or fails when it expired or was denied.
+/// Connects the account `gh` holds for `login`, or its active account with none named, and its repositories become
+/// watchable. Gossamr reads the token from `gh` as it needs it and keeps none.
 #[tauri::command]
-async fn github_connect(app: AppHandle, core: State<'_, CoreState>, source: GithubSource) -> Result<ConnectionInfo> {
-    let connected = match source {
-        GithubSource::Token { token } => core.github_connect_token(&token).await?,
-        GithubSource::GhCli { login } => core.github_import_gh_token(login.as_deref()).await?,
-        GithubSource::Device => core.github_device_poll().await?,
-    };
+async fn github_connect(app: AppHandle, core: State<'_, CoreState>, login: Option<String>) -> Result<ConnectionInfo> {
+    let connected = core.github_connect(login.as_deref()).await?;
     watch_changed(&app, &connected.id);
     Ok(connected)
 }
@@ -414,18 +400,6 @@ async fn github_gh_accounts(core: State<'_, CoreState>) -> Result<probe::GhAccou
 #[tauri::command(async)]
 fn github_open_login(runs: State<'_, RunsState>) -> Result<()> {
     runs.open_fix(probe::GH_LOGIN_COMMAND)
-}
-
-/// Which ways of connecting GitHub work here: the device flow needs a client id, `gh` must be installed.
-#[tauri::command]
-fn github_sign_in_options(core: State<'_, CoreState>) -> auth::SignInOptions {
-    core.code_sign_in_options()
-}
-
-/// Starts the device flow: show `userCode` and open `verificationUri`, then call `github_connect` with `via: device`.
-#[tauri::command]
-async fn github_device_start(core: State<'_, CoreState>) -> Result<DeviceStart> {
-    core.github_device_start().await
 }
 
 /// The pull requests, branches and commits that name a work item, from the cache: instant, and only watched repositories.
@@ -947,10 +921,10 @@ pub fn run() {
             if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
                 eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
             }
-            let code = inbox::CodeService::new(http.clone(), inbox::CodeService::default_store());
+            let code = inbox::CodeService::new(http.clone());
             let core: CoreState = Arc::new(Core::new(auth, registry, data_dir).with_code(code));
-            tauri::async_runtime::block_on(core.restore());
             tauri::async_runtime::block_on(core.adopt_instances());
+            tauri::async_runtime::block_on(core.restore());
             app.manage(core.clone());
             probe_in_background(app.handle(), &core, Probe::Launch);
 
@@ -1041,8 +1015,6 @@ pub fn run() {
             code_review_access,
             code_pull_diff,
             github_connect,
-            github_sign_in_options,
-            github_device_start,
             github_gh_accounts,
             github_open_login,
             proposals_list,

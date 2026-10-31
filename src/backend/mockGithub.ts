@@ -3,10 +3,8 @@ import type {
   ConnectionInfo,
   ContainerRef,
   ContainerSummary,
-  DeviceStart,
   Footprint,
   GhAccounts,
-  GithubSignInOptions,
   Intent,
   PostedReview,
   ReviewAccess,
@@ -76,7 +74,6 @@ export class MockGithub {
   private watch: MockWatch | null = null;
   private repos: ContainerSummary[] = [];
   private listeners = new Set<(c: WatchChanged) => void>();
-  private pendingDevice = false;
   /** The sample pull requests, branches and commits, tied to the sample tickets. Empty reads until connected. */
   readonly code: MockCode;
   /** Every review posted, oldest first: the only writes the sample GitHub takes, each from a draft the person approved. */
@@ -108,34 +105,24 @@ export class MockGithub {
   ) {
     this.code = new MockCode(GITHUB_CONNECTION, now, GITHUB_LOGIN, (repo) => this.isWatched(repo));
     this.checkedAt = new Date(now).toISOString();
-    if (connected) this.connect();
+    if (connected) this.signIn();
   }
 
   get connected() {
     return this.watch !== null;
   }
 
-  private connect() {
+  private signIn() {
     const size = Math.max(this.repoCount, SAMPLE.length);
     this.repos = Array.from({ length: size }, (_, i) => repoSummary(GITHUB_CONNECTION, i, this.now));
     this.watch = new MockWatch(GITHUB_CONNECTION, size);
     this.listeners.forEach((l) => l({ connectionId: GITHUB_CONNECTION }));
   }
 
-  signInOptions(): GithubSignInOptions {
-    return { deviceFlow: true, ghCli: true, token: true };
-  }
-
-  connectToken(token: string): ConnectionInfo {
-    if (!token.trim()) throw new Error("paste a GitHub token first");
-    if (token.trim() === "bad") throw new Error("GitHub didn't accept the token. It may have expired or been revoked; connect again.");
-    if (!this.connected) this.connect();
-    return this.info();
-  }
-
-  importGhToken(login?: string): ConnectionInfo {
-    if (login && !this.ghAccounts().accounts.some((a) => a.login === login && a.usable)) throw new Error(`gh has no token for ${login}. Run \`gh auth login\` in a terminal, then try again`);
-    if (!this.connected) this.connect();
+  connect(login?: string): ConnectionInfo {
+    const held = this.ghAccounts().accounts;
+    if (login ? !held.some((a) => a.login === login && a.usable) : !held.length) throw new Error(`gh has no token${login ? ` for ${login}` : ""}. Run \`gh auth login -h github.com\` in a terminal.`);
+    if (!this.connected) this.signIn();
     this.tokenRefused = false;
     return this.info();
   }
@@ -156,18 +143,6 @@ export class MockGithub {
       return { installed: true, accounts: [], message, fix };
     }
     return { installed: true, accounts: [{ login: GITHUB_LOGIN, active: true, usable: true }], message: null, fix: null };
-  }
-
-  deviceStart(): DeviceStart {
-    this.pendingDevice = true;
-    return { userCode: "WDJB-MJHT", verificationUri: "https://github.com/login/device", expiresIn: 900, interval: 5 };
-  }
-
-  devicePoll(): ConnectionInfo {
-    if (!this.pendingDevice) throw new Error("start signing in first");
-    this.pendingDevice = false;
-    if (!this.connected) this.connect();
-    return this.info();
   }
 
   disconnect(connectionId: string) {

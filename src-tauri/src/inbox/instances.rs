@@ -55,8 +55,9 @@ fn clean_name(name: &str) -> Result<String> {
 }
 
 impl Core {
-    /// Creates the instances for the Jira and GitHub sign-ins restored from the Keychain, once. It leaves `config.json`
-    /// alone unless there is something to adopt, and does nothing while any of the sign-ins it reads failed to load.
+    /// Creates the instances for the Jira sign-in and the GitHub accounts already there, once: those an earlier build
+    /// saved a token for and those connected this run. It leaves `config.json` alone unless there is something to
+    /// adopt, and does nothing while any of the sign-ins it reads failed to load.
     pub async fn adopt_instances(&self) {
         let config = AppConfig::load(&self.data_dir);
         if let Some(problem) = &config.connections_error {
@@ -75,7 +76,14 @@ impl Core {
             eprintln!("couldn't read the saved GitHub sign-ins, so the connections aren't adopted yet: {e}");
         }
         let readable = secrets::is_ready() && !self.auth.restore_failed() && logins.is_ok();
-        let github = logins.unwrap_or_default().iter().map(|login| Binding::github(login)).collect();
+        // An account connected before the first adoption has no saved token to find it by.
+        let mut logins = logins.unwrap_or_default();
+        for login in self.code.connected_logins() {
+            if !logins.iter().any(|l| l.eq_ignore_ascii_case(&login)) {
+                logins.push(login);
+            }
+        }
+        let github = logins.iter().map(|login| Binding::github(login)).collect();
         let adopted = AppConfig::update_if(&self.data_dir, |config| connections::adopt(config, readable, jira, github));
         if let Err(e) = adopted {
             eprintln!("couldn't save the connections to config.json: {e}");
@@ -202,14 +210,14 @@ impl Core {
         .await
     }
 
-    /// Forgets the GitHub token and deletes the account's cache, whether or not its session loaded at launch.
+    /// Forgets any GitHub token an earlier build saved and deletes the account's cache, whether or not its session loaded at launch.
     async fn forget_github(&self, target: &RemovalTarget) -> Result<()> {
         match self.github_disconnect(&target.connection_id).await {
             Err(Error::NotSignedIn) => {}
             done => return done,
         }
         let Some(login) = target.login.as_deref() else { return Ok(()) };
-        self.code.auth.disconnect(login)?;
+        self.code.auth.forget_saved_token(login)?;
         self.registry.remove(&target.connection_id);
         remove_db_files(&self.data_dir.join(super::code::github_db_file(login)));
         Ok(())
@@ -461,51 +469,24 @@ mod tests {
         assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
     }
 
-    use crate::auth::{GithubAuth, GithubSession, TokenStore};
+    use crate::auth::GithubAuth;
     use crate::inbox::code::{github_db_file, CodeService};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
 
-    /// A GitHub token store whose delete can be refused, as the Keychain does when you deny its prompt.
-    #[derive(Default)]
-    struct Keychain {
-        held: crate::auth::MemoryStore,
-        refuse_deletes: AtomicBool,
-    }
-
-    impl TokenStore for Keychain {
-        fn logins(&self) -> Result<Vec<String>> {
-            self.held.logins()
-        }
-        fn load(&self, login: &str) -> Result<Option<GithubSession>> {
-            self.held.load(login)
-        }
-        fn save(&self, session: &GithubSession) -> Result<()> {
-            self.held.save(session)
-        }
-        fn delete(&self, login: &str) -> Result<()> {
-            if self.refuse_deletes.load(Ordering::SeqCst) {
-                return Err(Error::Keychain(keyring::Error::NoStorageAccess("denied".into())));
-            }
-            self.held.delete(login)
-        }
-    }
-
-    /// Jira and GitHub's `ann` both connected and adopted. With `restored` false, the GitHub token is in the Keychain but
-    /// its session didn't load at launch.
-    async fn with_github(restored: bool) -> (crate::inbox::testing::Fixture, Arc<Keychain>) {
-        let keychain = Arc::new(Keychain::default());
-        keychain
-            .save(&GithubSession { login: "ann".into(), name: None, avatar_url: None, token: "t".into(), source: crate::auth::SessionSource::Token, scopes: None, refresh_token: None, expires_at: None })
-            .unwrap();
-        let auth = GithubAuth::for_test(reqwest::Client::new(), keychain.clone(), "http://unused.invalid", None, vec![]);
-        let code = CodeService::with_factory(auth, Box::new(|_, _| unreachable!("nothing here talks to GitHub")));
+    /// Jira and GitHub's `ann` both connected and adopted. `ann` has a token an earlier build saved. With `restored`
+    /// false, the account didn't load at launch.
+    async fn with_github(restored: bool) -> (crate::inbox::testing::Fixture, crate::secrets::fake::Fake, crate::secrets::fake::Installed) {
+        let vault = crate::secrets::fake::Fake::default();
+        vault.put("github-logins", r#"["ann"]"#);
+        vault.put("github:ann", "{}");
+        let installed = crate::secrets::fake::install(&vault);
+        let auth = GithubAuth::for_test(reqwest::Client::new(), "http://unused.invalid", Vec::new());
+        let code = CodeService::with_factory(auth, Box::new(|_, _, _| unreachable!("nothing here talks to GitHub")));
         let fx = fixture_with_authenticator(Some(code), None).await;
         if restored {
             fx.core.restore().await;
         }
         fx.core.adopt_instances().await;
-        (fx, keychain)
+        (fx, vault, installed)
     }
 
     fn review_on_ann(fx: &crate::inbox::testing::Fixture) -> Intent {
@@ -530,14 +511,14 @@ mod tests {
 
     #[tokio::test]
     async fn removing_github_forgets_its_session_and_token_and_deletes_every_cache_file() {
-        let (fx, keychain) = with_github(true).await;
+        let (fx, vault, _installed) = with_github(true).await;
         leave_cache(&fx);
         let review = draft_for(&fx, review_on_ann(&fx)).await;
 
         let removed = fx.core.remove_instance("github").await.unwrap();
 
         assert_eq!(removed, Removed { connection_id: "github:ann".into(), kind: ConnectionKind::Github, workstreams: false });
-        assert!(keychain.logins().unwrap().is_empty());
+        assert_eq!((vault.get("github:ann"), fx.core.code.auth.logins().is_empty()), (None, true));
         assert!(fx.core.code.connection_ids().is_empty());
         assert!(cache_files(&fx).iter().all(|f| !f.exists()));
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
@@ -546,28 +527,28 @@ mod tests {
 
     #[tokio::test]
     async fn removing_a_github_account_whose_session_didnt_load_still_forgets_its_token_and_cache() {
-        let (fx, keychain) = with_github(false).await;
+        let (fx, vault, _installed) = with_github(false).await;
         leave_cache(&fx);
         assert_eq!(ids(&fx), ["jira", "github"]);
 
         fx.core.remove_instance("github").await.unwrap();
 
-        assert!(keychain.logins().unwrap().is_empty());
+        assert_eq!((vault.get("github:ann"), fx.core.code.auth.logins().is_empty()), (None, true));
         assert!(cache_files(&fx).iter().all(|f| !f.exists()));
         assert_eq!(ids(&fx), ["jira"]);
     }
 
     #[tokio::test]
     async fn a_github_token_that_wont_delete_leaves_the_connection_and_its_drafts_as_they_were() {
-        let (fx, keychain) = with_github(true).await;
+        let (fx, vault, _installed) = with_github(true).await;
         leave_cache(&fx);
         let review = draft_for(&fx, review_on_ann(&fx)).await;
-        keychain.refuse_deletes.store(true, Ordering::SeqCst);
+        vault.deny_writes(true);
 
         assert!(fx.core.remove_instance("github").await.is_err());
 
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Pending);
-        assert_eq!(keychain.logins().unwrap(), ["ann"]);
+        assert_eq!(fx.core.code.auth.logins(), ["ann"]);
         assert_eq!(fx.core.code.connection_ids(), ["github:ann"]);
         assert!(cache_files(&fx).iter().all(|f| f.exists()));
         assert_eq!(ids(&fx), ["jira", "github"]);
@@ -605,14 +586,14 @@ mod tests {
 
     #[tokio::test]
     async fn connections_can_be_removed_by_connection_id_while_the_list_cant_be_read() {
-        let (fx, keychain) = with_github(true).await;
+        let (fx, vault, _installed) = with_github(true).await;
         let review = draft_for(&fx, review_on_ann(&fx)).await;
         std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
 
         fx.core.remove_instance("github:ann").await.unwrap();
         fx.core.remove_instance("jira:site:me").await.unwrap();
 
-        assert!(keychain.logins().unwrap().is_empty());
+        assert_eq!((vault.get("github:ann"), fx.core.code.auth.logins().is_empty()), (None, true));
         assert!(fx.core.auth.connection().await.is_none());
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
         assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");

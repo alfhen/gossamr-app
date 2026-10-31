@@ -1,10 +1,11 @@
 //! Jira sign-in behind an `Authenticator`, and the signed-in session Core reads credentials from.
 
 mod atlassian;
+mod gh;
 mod github;
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
@@ -15,9 +16,10 @@ use crate::error::{Error, Result};
 use crate::secrets;
 use crate::tracker::Connection;
 
-pub use github::{find_gh_in, DeviceChallenge, DeviceStart, SignInOptions, GithubAuth, GithubSession, KeychainStore, TokenStore};
+pub use gh::{find_gh_in, CredentialSource};
 #[cfg(test)]
-pub use github::{MemoryStore, SessionSource};
+pub use gh::{fake_gh, FixedToken};
+pub use github::{GithubAuth, GithubSession};
 pub use atlassian::{Atlassian, SiteScope};
 
 const TOKEN_KEY: &str = "jira-token";
@@ -25,24 +27,6 @@ const TOKEN_KEY: &str = "jira-token";
 const RETIRED_KEYS: [&str; 2] = ["session", "oauth-app"];
 /// Days before a token's expiry that Gossamr starts saying so.
 pub const EXPIRY_WARNING_DAYS: i64 = 14;
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TokenField {
-    pub name: String,
-    pub label: String,
-    pub secret: bool,
-}
-
-/// A way to sign in, in the terms the setup screen needs. GitHub offers all three until it signs in through `gh`.
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AuthMethod {
-    DeviceFlow { client_id: String },
-    ApiToken { fields: Vec<TokenField> },
-    /// Import the token the GitHub CLI holds, when the person asks.
-    GhCli,
-}
 
 /// What the Connect Jira sheet sends.
 #[derive(Clone, Deserialize)]
@@ -251,10 +235,6 @@ pub async fn json_or_error<T: DeserializeOwned>(res: reqwest::Response) -> Resul
     Err(Error::Api { status: status.as_u16(), message })
 }
 
-fn unix_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
@@ -271,34 +251,11 @@ mod tests {
         }
     }
 
-    fn github(login: &str) -> GithubSession {
-        GithubSession {
-            login: login.into(),
-            name: None,
-            avatar_url: None,
-            token: "t".into(),
-            source: github::SessionSource::Token,
-            scopes: None,
-            refresh_token: None,
-            expires_at: None,
-        }
-    }
-
-    #[test]
-    fn a_saved_token_names_its_connection_after_the_site_and_the_account() {
-        let c = credentials();
-        assert_eq!(c.connection().id, "jira:c1:u1");
-        assert_eq!(c.connection().display_name, "acme.atlassian.net");
-        assert_eq!(c.scope(), Scope { connection_id: "jira:c1:u1".into(), account_id: "u1".into() });
-        assert_eq!(c.site_scope(), SiteScope { cloud_id: "c1".into(), account_id: "u1".into() });
-    }
-
     fn restore_everything() -> (bool, usize) {
         let http = reqwest::Client::new();
         let auth = Auth::load(http.clone());
         let signed_in = auth.session.try_lock().unwrap().is_some();
-        let restored = GithubAuth::new(http, Arc::new(KeychainStore)).restore();
-        (signed_in, restored.len())
+        (signed_in, GithubAuth::new(http).logins().len())
     }
 
     #[test]
@@ -306,9 +263,7 @@ mod tests {
         let fake = secrets::fake::Fake::default();
         let _installed = secrets::fake::install(&fake);
         secrets::save(TOKEN_KEY, &credentials()).unwrap();
-        let store = KeychainStore;
-        store.save(&github("ann")).unwrap();
-        store.save(&github("bob")).unwrap();
+        secrets::save("github-logins", &vec!["ann", "bob"]).unwrap();
 
         let _relaunched = secrets::fake::install(&fake);
         fake.reset_counts();
@@ -324,7 +279,7 @@ mod tests {
         fake.put("session", old);
         fake.put("oauth-app", r#"{"client_id":"id","client_secret":"secret"}"#);
         fake.put("github-logins", r#"["ann"]"#);
-        fake.put("github:ann", &serde_json::to_string(&github("ann")).unwrap());
+        fake.put("github:ann", "{}");
         assert_eq!(restore_everything(), (false, 1));
         for retired in ["session", "oauth-app"] {
             assert_eq!(fake.get(retired), None);

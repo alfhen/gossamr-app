@@ -15,8 +15,6 @@ export interface MockOptions {
   githubProbe?: GithubProbeState;
   /** What the sample Jira token is like from the start: close to its expiry, or turned down (`?mockJiraToken=expiring` or `refused`). */
   jiraToken?: "expiring" | "refused";
-  /** How the device flow ends once the sample waits for it: authorised after `delayMs`, or refused or expired. */
-  device?: { delayMs: number; outcome: "authorised" | "denied" | "expired" };
   /** Which scripted agent runs exist, and the moment their ages count back from. */
   /** How long the scripted Pip waits between words, in ms (a step takes six times as long); unset keeps its usual pace. */
   pipPace?: number;
@@ -264,7 +262,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories, and `?mockDevice=denied`, `expired` or `slow` makes the GitHub device flow wait 4 seconds and end that way. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -284,8 +282,6 @@ export function mockOptionsFromUrl(): MockOptions {
   const pace = count("pipPace");
   if (pace) options.pipPace = pace;
   if (params.get("mockReviewAccess") === "none") options.reviewAccess = "none";
-  const outcome = params.get("mockDevice");
-  if (outcome === "denied" || outcome === "expired" || outcome === "slow") options.device = { delayMs: 4000, outcome: outcome === "slow" ? "authorised" : outcome };
   const seed = params.get("runs");
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.

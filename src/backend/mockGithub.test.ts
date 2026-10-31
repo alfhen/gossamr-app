@@ -13,14 +13,11 @@ describe("the mock GitHub connection", () => {
     const b = new MockBackend();
     expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
     expect(await b.watchGet()).toHaveLength(1);
-    expect(await b.githubSignInOptions()).toEqual({ deviceFlow: true, ghCli: true, token: true });
   });
 
-  it("connects with a pasted token, refuses a bad one, and lists 14 repositories that wait for a choice", async () => {
+  it("connects through gh, and lists 14 repositories that wait for a choice", async () => {
     const b = new MockBackend();
-    await expect(b.githubConnectToken("bad")).rejects.toThrow("didn't accept the token");
-    await expect(b.githubConnectToken("  ")).rejects.toThrow();
-    const connection = await b.githubConnectToken("ghp_x");
+    const connection = await b.githubConnect();
     expect([connection.id, connection.kind, connection.workspace]).toEqual([GH, "github", "ada"]);
     expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock", GH]);
     const state = (await b.watchGet()).find((s) => s.connectionId === GH)!;
@@ -29,7 +26,7 @@ describe("the mock GitHub connection", () => {
 
   it("lists each connection under its Settings row", async () => {
     const b = new MockBackend();
-    await b.githubConnectToken("ghp_x");
+    await b.githubConnect();
     expect((await b.connectionsList()).map((c) => [c.instanceId, c.displayName, c.enabled])).toEqual([
       ["jira", "Sample data", true],
       ["github", "GitHub", true],
@@ -61,17 +58,6 @@ describe("the mock GitHub connection", () => {
     expect(again.checkedAt > before).toBe(true);
   });
 
-  it("connects through the gh import and the device flow, which must be started before it is polled", async () => {
-    const gh = new MockBackend();
-    expect((await gh.githubImportGhToken()).id).toBe(GH);
-
-    const device = new MockBackend();
-    await expect(device.githubDevicePoll()).rejects.toThrow("start signing in first");
-    const start = await device.githubDeviceStart();
-    expect([start.userCode, start.verificationUri]).toEqual(["WDJB-MJHT", "https://github.com/login/device"]);
-    expect((await device.githubDevicePoll()).id).toBe(GH);
-  });
-
   it("lists the account gh holds, and lists none in each state where gh has none to give", async () => {
     const listed = async (probe?: MockOptions["githubProbe"]) => new MockBackend({ githubRepos: 6, githubProbe: probe }).githubAccounts();
     expect(await listed()).toEqual({ installed: true, accounts: [{ login: "ada", active: true, usable: true }], message: null, fix: null });
@@ -82,9 +68,15 @@ describe("the mock GitHub connection", () => {
 
   it("connects the login gh holds, and refuses one it doesn't", async () => {
     const b = new MockBackend();
-    await expect(b.githubImportGhToken("someone")).rejects.toThrow("gh has no token for someone");
+    await expect(b.githubConnect("someone")).rejects.toThrow("gh has no token for someone");
     expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
-    expect((await b.githubImportGhToken("ada")).id).toBe(GH);
+    expect((await b.githubConnect("ada")).id).toBe(GH);
+  });
+
+  it("connects nothing while gh has no login to give", async () => {
+    const b = new MockBackend({ githubProbe: "notSignedIn" });
+    await expect(b.githubConnect()).rejects.toThrow("gh has no token");
+    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
   });
 
   it("opens Terminal on the login command", async () => {

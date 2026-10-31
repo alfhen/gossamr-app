@@ -9,6 +9,7 @@ use reqwest::header::{HeaderMap, ACCEPT, IF_MODIFIED_SINCE, IF_NONE_MATCH};
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 
+use crate::auth::CredentialSource;
 use crate::db::{stamp, CachedHttp, Db};
 use crate::error::{is_transport_failure, Error, Result};
 
@@ -49,7 +50,7 @@ pub struct Page {
 pub struct Api {
     http: reqwest::Client,
     base: String,
-    token: String,
+    credentials: Arc<dyn CredentialSource>,
     connection_id: String,
     db: Arc<Mutex<Db>>,
     limits: Mutex<HashMap<String, Limit>>,
@@ -119,7 +120,7 @@ pub fn error_for(status: u16, h: &HeaderMap, body: &str, now: i64) -> Error {
         return Error::RateLimited { message: format!("GitHub is limiting requests; {when}."), retry_after_secs: secs };
     }
     match status {
-        401 => Error::CodeHost { status, message: "GitHub didn't accept the token. It may have expired or been revoked; connect again.".into() },
+        401 => Error::CodeHost { status, message: "GitHub didn't accept the token gh gave. It may have expired or been revoked; run `gh auth login -h github.com` to sign in again.".into() },
         403 => Error::CodeHost { status, message: format!("GitHub refused this: {message}. The token may be missing a permission for it.") },
         404 => Error::CodeHost { status, message: "GitHub couldn't find that, or the token can't see it.".into() },
         _ => Error::CodeHost { status, message: format!("GitHub returned {status}: {message}") },
@@ -127,8 +128,13 @@ pub fn error_for(status: u16, h: &HeaderMap, body: &str, now: i64) -> Error {
 }
 
 impl Api {
-    pub fn new(http: reqwest::Client, base: &str, token: &str, connection_id: &str, db: Arc<Mutex<Db>>) -> Self {
-        Self { http, base: base.trim_end_matches('/').into(), token: token.into(), connection_id: connection_id.into(), db, limits: Mutex::new(HashMap::new()) }
+    pub fn new(http: reqwest::Client, base: &str, credentials: Arc<dyn CredentialSource>, connection_id: &str, db: Arc<Mutex<Db>>) -> Self {
+        Self { http, base: base.trim_end_matches('/').into(), credentials, connection_id: connection_id.into(), db, limits: Mutex::new(HashMap::new()) }
+    }
+
+    /// After a 401, the token `gh` gives now, when it differs from the one just refused: `gh` may have renewed it since.
+    async fn renewed(&self, refused: &str) -> Result<Option<String>> {
+        Ok(Some(self.credentials.token().await?).filter(|now| now != refused))
     }
 
     /// Sends the request, trying again after a failure in transit or a 502, 503 or 504. Only reads are sent through
@@ -198,10 +204,11 @@ impl Api {
         // The same URL answers differently per media type, so each is cached apart.
         let key = if accept == JSON { url.clone() } else { format!("{url}#{accept}") };
         let cached = self.cached(&key);
-        let (status, h, body) = self
-            .fetch(|| {
-                let mut req = self.http.get(&url).bearer_auth(&self.token).header(ACCEPT, accept).header("X-GitHub-Api-Version", API_VERSION);
-                if let Some(c) = &cached {
+        let (url_ref, cached_ref) = (&url, &cached);
+        let send = |token: String| {
+            self.fetch(move || {
+                let mut req = self.http.get(url_ref).bearer_auth(&token).header(ACCEPT, accept).header("X-GitHub-Api-Version", API_VERSION);
+                if let Some(c) = cached_ref {
                     if let Some(etag) = &c.etag {
                         req = req.header(IF_NONE_MATCH, etag);
                     } else if let Some(since) = &c.last_modified {
@@ -210,7 +217,15 @@ impl Api {
                 }
                 req
             })
-            .await?;
+        };
+        let token = self.credentials.token().await?;
+        let mut answer = send(token.clone()).await?;
+        if answer.0 == StatusCode::UNAUTHORIZED {
+            if let Some(renewed) = self.renewed(&token).await? {
+                answer = send(renewed).await?;
+            }
+        }
+        let (status, h, body) = answer;
         self.note_limits(&h);
         let poll_interval = header(&h, "x-poll-interval").and_then(|v| v.parse().ok());
         let scopes = header(&h, "x-oauth-scopes").map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
@@ -239,7 +254,15 @@ impl Api {
     pub async fn post_json(&self, target: &str, body: &serde_json::Value) -> Result<(u16, HeaderMap, String)> {
         let url = self.url(target);
         self.guard(&url)?;
-        let res = self.http.post(&url).bearer_auth(&self.token).header(ACCEPT, JSON).header("X-GitHub-Api-Version", API_VERSION).json(body).send().await?;
+        let send = |token: &str| self.http.post(&url).bearer_auth(token).header(ACCEPT, JSON).header("X-GitHub-Api-Version", API_VERSION).json(body).send();
+        let token = self.credentials.token().await?;
+        let mut res = send(&token).await?;
+        // A 401 means GitHub did not act on it, so sending again with a renewed token cannot post twice.
+        if res.status() == StatusCode::UNAUTHORIZED {
+            if let Some(renewed) = self.renewed(&token).await? {
+                res = send(&renewed).await?;
+            }
+        }
         let (status, headers) = (res.status().as_u16(), res.headers().clone());
         let text = res.text().await?;
         self.note_limits(&headers);
@@ -285,7 +308,7 @@ mod tests {
     }
 
     fn api(base: &str) -> Api {
-        Api::new(reqwest::Client::new(), base, "tok", "github:ann", Arc::new(Mutex::new(Db::in_memory().unwrap())))
+        Api::new(reqwest::Client::new(), base, Arc::new(crate::auth::FixedToken("tok")), "github:ann", Arc::new(Mutex::new(Db::in_memory().unwrap())))
     }
 
     #[test]
@@ -401,6 +424,78 @@ mod tests {
         let server = serve(vec![("/bad", vec![Reply::status(401, "{\"message\":\"Bad credentials\"}")])]).await;
         let err = api(&server.base).get("/bad").await.unwrap_err();
         assert!(err.to_string().contains("didn't accept the token"), "{err}");
+    }
+
+    /// Hands out the next token each time it is asked, repeating the last.
+    struct Renewing {
+        tokens: Vec<&'static str>,
+        asked: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl CredentialSource for Renewing {
+        async fn token(&self) -> Result<String> {
+            let n = self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.tokens[n.min(self.tokens.len() - 1)].into())
+        }
+    }
+
+    fn api_with(base: &str, tokens: Vec<&'static str>) -> Api {
+        let credentials = Arc::new(Renewing { tokens, asked: Default::default() });
+        Api::new(reqwest::Client::new(), base, credentials, "github:ann", Arc::new(Mutex::new(Db::in_memory().unwrap())))
+    }
+
+    #[tokio::test]
+    async fn every_request_asks_for_the_token_again() {
+        let server = serve(vec![("/a", vec![Reply::ok("1")])]).await;
+        let api = api_with(&server.base, vec!["one", "two", "three"]);
+        for _ in 0..3 {
+            api.get("/a").await.unwrap();
+        }
+        let sent: Vec<_> = (0..3).map(|n| server.header_of(n, "authorization").unwrap()).collect();
+        assert_eq!(sent, ["Bearer one", "Bearer two", "Bearer three"]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_that_gh_has_renewed_since_is_sent_once_more_with_the_new_one() {
+        let server = serve(vec![("/a", vec![Reply::status(401, "{\"message\":\"Bad credentials\"}"), Reply::ok("{}")])]).await;
+        api_with(&server.base, vec!["old", "new"]).get("/a").await.unwrap();
+        assert_eq!((server.header_of(0, "authorization").as_deref(), server.header_of(1, "authorization").as_deref()), (Some("Bearer old"), Some("Bearer new")));
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_that_gh_still_holds_is_not_sent_again() {
+        let server = serve(vec![("/a", vec![Reply::status(401, "{\"message\":\"Bad credentials\"}")])]).await;
+        let err = api_with(&server.base, vec!["same"]).get("/a").await.unwrap_err();
+        assert!(err.is_unauthorized(), "{err}");
+        assert_eq!(server.targets().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_post_refused_for_its_token_is_sent_once_more_only_with_a_renewed_one() {
+        let server = serve(vec![("POST /w", vec![Reply::status(401, "{}"), Reply::ok("{}")])]).await;
+        let (status, ..) = api_with(&server.base, vec!["old", "new"]).post_json("/w", &serde_json::json!({})).await.unwrap();
+        assert_eq!((status, server.targets().len()), (200, 2));
+
+        let server = serve(vec![("POST /w", vec![Reply::status(401, "{}")])]).await;
+        let (status, ..) = api_with(&server.base, vec!["same"]).post_json("/w", &serde_json::json!({})).await.unwrap();
+        assert_eq!((status, server.targets().len()), (401, 1));
+    }
+
+    #[tokio::test]
+    async fn no_token_from_gh_fails_the_request_before_anything_is_sent() {
+        struct Nothing;
+        #[async_trait::async_trait]
+        impl CredentialSource for Nothing {
+            async fn token(&self) -> Result<String> {
+                Err(Error::CodeHost { status: 401, message: "gh has no token".into() })
+            }
+        }
+        let server = serve(vec![("/a", vec![Reply::ok("{}")])]).await;
+        let api = Api::new(reqwest::Client::new(), &server.base, Arc::new(Nothing), "github:ann", Arc::new(Mutex::new(Db::in_memory().unwrap())));
+        assert!(api.get("/a").await.unwrap_err().is_unauthorized());
+        assert!(api.post_json("/a", &serde_json::json!({})).await.is_err());
+        assert!(server.targets().is_empty());
     }
 
     #[tokio::test]

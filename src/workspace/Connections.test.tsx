@@ -109,9 +109,9 @@ describe("the connections list", () => {
     expect(view({ confirming: jira.id, selectedId: jira.id })).toContain("alertdialog");
   });
 
-  it("says what Remove deletes for GitHub: the cache, the token and the drafts, and that gh is untouched", () => {
+  it("says what Remove deletes for GitHub: the cache and the drafts, and that gh is untouched", () => {
     const out = view({ confirming: gh.id });
-    expect(out).toContain("Remove GitHub? Gossamr deletes the pull requests and branches it cached for ada, forgets its token and closes the drafts that post as ada.");
+    expect(out).toContain("Remove GitHub? Gossamr deletes the pull requests and branches it cached for ada and closes the drafts that post as ada.");
     expect(out).toContain("Your gh login and GitHub stay as they are.");
   });
 
