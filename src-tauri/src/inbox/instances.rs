@@ -106,6 +106,27 @@ impl Core {
         renamed.ok_or_else(|| Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
+    /// Turns `instance_id` on or off, and returns the connection (or instance) to tell the page about. Turning off refuses
+    /// while one of its drafts is being posted. The cache and the token stay either way.
+    pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
+        let _alone = self.sign_in.lock().await;
+        let config = AppConfig::load(&self.data_dir);
+        let instance = connections::is_live(&config).then(|| config.connections.iter().find(|i| i.id == instance_id)).flatten();
+        let Some(instance) = instance else { return Err(Error::Input("This connection is gone. Reopen Settings.".into())) };
+        let connection_id = instance.bound_to.clone().unwrap_or_else(|| instance.id.clone());
+        if !enabled {
+            self.refuse_while_posting(&connection_id, &instance.display_name).await?;
+        }
+        AppConfig::update_if(&self.data_dir, |config| match config.connections.iter_mut().find(|i| i.id == instance_id) {
+            Some(instance) if instance.enabled != enabled => {
+                instance.enabled = enabled;
+                true
+            }
+            _ => false,
+        })?;
+        Ok(connection_id)
+    }
+
     /// Removes `instance_id`: the token Gossamr stored is forgotten, its cache is deleted, drafts that target it are
     /// closed with a reason and its id is retired. A draft being posted stops it before anything is deleted. Drafts are
     /// closed last, so a removal that fails leaves them open. `instance_id` may also be a connection no instance
@@ -113,7 +134,7 @@ impl Core {
     pub async fn remove_instance(&self, instance_id: &str) -> Result<Removed> {
         let _alone = self.sign_in.lock().await;
         let target = self.removal_target(instance_id).await?;
-        self.refuse_while_posting(&target).await?;
+        self.refuse_while_posting(&target.connection_id, &target.name).await?;
         match target.kind {
             ConnectionKind::Github => self.forget_github(&target).await?,
             ConnectionKind::Jira => self.forget_jira(&target.connection_id).await?,
@@ -151,10 +172,10 @@ impl Core {
         Err(Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
-    async fn refuse_while_posting(&self, target: &RemovalTarget) -> Result<()> {
-        let posting = self.with_app_db(|db| open_drafts_for(db, &target.connection_id).map(|mine| mine.iter().any(|p| p.state == ProposalState::Applying))).await?;
+    async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
+        let posting = self.with_app_db(|db| open_drafts_for(db, connection_id).map(|mine| mine.iter().any(|p| p.state == ProposalState::Applying))).await?;
         if posting {
-            return Err(Error::Input(format!("Gossamr is posting a draft for {} right now. Try again in a moment.", target.name)));
+            return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
         }
         Ok(())
     }
@@ -354,6 +375,90 @@ mod tests {
         let fx = adopted().await;
         assert!(matches!(fx.core.remove_instance("github_9").await, Err(Error::Input(_))));
         assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    fn enabled(fx: &crate::inbox::testing::Fixture) -> Vec<(String, bool)> {
+        AppConfig::load(&fx.core.data_dir()).connections.into_iter().map(|i| (i.id, i.enabled)).collect()
+    }
+
+    async fn jira_row(fx: &crate::inbox::testing::Fixture) -> ConnectionInfo {
+        fx.core.connections().await.unwrap().into_iter().find(|c| c.instance_id == "jira").unwrap()
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_off_and_on_saves_it_and_names_the_connection_to_refresh() {
+        let fx = adopted().await;
+        assert_eq!(fx.core.set_instance_enabled("github", false).await.unwrap(), "github:alfhen");
+        assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), false)]);
+        assert_eq!(fx.core.set_instance_enabled("github", true).await.unwrap(), "github:alfhen");
+        assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), true)]);
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_off_keeps_its_drafts_its_token_and_its_cache() {
+        let fx = adopted().await;
+        let review = draft_for(&fx, review_on_github(&fx)).await;
+        let cache = fx.dir.join(db_file(&fx.core.auth.connection().await.unwrap()));
+
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+
+        assert_eq!(state_of(&fx, &review.id).await, ProposalState::Pending);
+        assert!(cache.exists());
+        assert!(fx.core.auth.connection().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn the_row_says_off_as_soon_as_the_instance_is_turned_off_and_asks_again_when_it_is_turned_on() {
+        let fx = adopted().await;
+        fx.core.probe_connections(super::super::Probe::Launch).await;
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        fx.core.probe_instance_now("jira").await;
+        let off = jira_row(&fx).await;
+        assert!(!off.enabled);
+        assert_eq!(off.status.map(|s| s.state), Some(crate::probe::State::Off));
+
+        fx.core.set_instance_enabled("jira", true).await.unwrap();
+        fx.core.probe_instance_now("jira").await;
+        let on = jira_row(&fx).await;
+        assert!(on.enabled);
+        assert_ne!(on.status.map(|s| s.state), Some(crate::probe::State::Off));
+    }
+
+    #[tokio::test]
+    async fn a_draft_being_posted_keeps_the_instance_on_but_turning_it_on_never_waits() {
+        let fx = adopted().await;
+        let posting = draft_for(&fx, review_on_github(&fx)).await;
+        fx.core.with_app_db(|db| db.begin_posting_review(&posting.id, chrono::Utc::now(), None)).await.unwrap();
+
+        let refused = fx.core.set_instance_enabled("github", false).await.unwrap_err();
+
+        assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft for GitHub right now")), "{refused}");
+        assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), true)]);
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        fx.core.set_instance_enabled("jira", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_back_on_is_never_refused_for_a_draft_being_posted() {
+        let fx = adopted().await;
+        let posting = draft_for(&fx, review_on_github(&fx)).await;
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+        fx.core.with_app_db(|db| db.begin_posting_review(&posting.id, chrono::Utc::now(), None)).await.unwrap();
+
+        fx.core.set_instance_enabled("github", true).await.unwrap();
+
+        assert_eq!(enabled(&fx), [("jira".into(), true), ("github".into(), true)]);
+    }
+
+    #[tokio::test]
+    async fn turning_off_an_instance_that_is_gone_or_while_the_list_cant_be_read_says_so_and_changes_nothing() {
+        let fx = adopted().await;
+        assert!(matches!(fx.core.set_instance_enabled("github_9", false).await, Err(Error::Input(_))));
+        std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
+        assert!(matches!(fx.core.set_instance_enabled("github", false).await, Err(Error::Input(_))));
+        assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
     }
 
     use crate::auth::{GithubAuth, GithubSession, TokenStore};

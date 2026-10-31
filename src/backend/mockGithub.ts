@@ -90,6 +90,7 @@ export class MockGithub {
   private instances = 1;
   /** What the probe of the GitHub instance finds, and when it last looked. */
   private probe: GithubProbeState = "ready";
+  private on = true;
   private checkedAt: string;
   /** Called when `setProbe` changes what the probe found, as the backend's `connections` event would be sent. */
   onProbeChanged: () => void = () => {};
@@ -148,14 +149,26 @@ export class MockGithub {
   disconnect(connectionId: string) {
     if (connectionId !== GITHUB_CONNECTION) return;
     this.instances++;
+    this.on = true;
     this.watch = null;
     this.repos = [];
     this.listeners.forEach((l) => l({ connectionId }));
   }
 
   info(): ConnectionInfo {
-    const status = githubSnapshot(this.probe, GITHUB_LOGIN, this.checkedAt);
-    return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.probe !== "off", kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
+    const status = githubSnapshot(this.enabled ? this.probe : "off", GITHUB_LOGIN, this.checkedAt);
+    return { id: GITHUB_CONNECTION, instanceId: this.instances === 1 ? "github" : `github_${this.instances}`, displayName: "GitHub", enabled: this.enabled, kind: "github", workspace: GITHUB_LOGIN, url: `https://github.com/${GITHUB_LOGIN}`, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status };
+  }
+
+  get enabled() {
+    return this.on && this.probe !== "off";
+  }
+
+  /** Turning it on after the probe was forced to "off" leaves it with nothing to be wrong, so it reads as ready. */
+  setEnabled(on: boolean) {
+    if (on && this.probe === "off") this.probe = "ready";
+    this.on = on;
+    this.checkedAt = new Date().toISOString();
   }
 
   setProbe(state: GithubProbeState) {

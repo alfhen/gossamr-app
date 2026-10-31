@@ -53,6 +53,26 @@ test.describe("the Connections list", () => {
     await expect(rowOf(page, "GitHub")).toContainText("Off");
   });
 
+  test("turns GitHub off from its row, says Off in the list and the detail, and turns it back on", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
+    await openSettings(page);
+    await expect(rowOf(page, "Sample data").getByRole("switch")).toHaveCount(0);
+    const github = rowOf(page, "GitHub").getByRole("switch", { name: "GitHub" });
+    await expect(github).toBeChecked();
+    await github.click();
+    await expect(github).not.toBeChecked();
+    await expect(rowOf(page, "GitHub")).toContainText("Off");
+    await expect(rowOf(page, "GitHub")).not.toContainText("Authenticated");
+    await rowOf(page, "GitHub").getByRole("button").click();
+    const detail = page.getByRole("region", { name: "GitHub details" });
+    await expect(detail).toContainText("Gossamr doesn't sync it, Pip can't see it and drafts for it wait.");
+    await expect(detail.getByRole("button", { name: "Sync now" })).toBeDisabled();
+    await github.click();
+    await expect(github).toBeChecked();
+    await expect(rowOf(page, "GitHub")).toContainText("Authenticated · ada");
+    await expect(detail.getByRole("button", { name: "Sync now" })).toBeEnabled();
+  });
+
   test("copies the command that fixes a connection", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await openApp(page, "runs=empty&mockRepos=6&mockGithubProbe=notFound");

@@ -63,6 +63,14 @@ describe("the desktop backend's wiring", () => {
     expect(lib).toContain("fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String)");
   });
 
+  it("turns an instance on or off by its instance id, and the page can't name a command or a connection id", () => {
+    const jira = read("./jira.ts");
+    const lib = read("../../src-tauri/src/lib.rs");
+    expect(jira).toContain('invoke<void>("connection_set_enabled", { instanceId, enabled })');
+    expect(lib).toContain("async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, instance_id: String, enabled: bool) -> Result<()>");
+    expect(lib.slice(lib.indexOf("generate_handler!"))).toContain("connection_set_enabled,");
+  });
+
   it("removes a connection by its instance id, and has no other way to disconnect or sign out of one in the page", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");

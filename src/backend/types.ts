@@ -90,6 +90,8 @@ export interface Backend {
   connectionOpenTerminal(instanceId: string): Promise<void>;
   /** Saves the name Settings shows for instance `instanceId`. */
   connectionRename(instanceId: string, displayName: string): Promise<void>;
+  /** Turns instance `instanceId` on or off, then probes it. Its cache, token and drafts stay. Turning off refuses while one of its drafts is being posted. */
+  connectionSetEnabled(instanceId: string, enabled: boolean): Promise<void>;
   /** Removes instance `instanceId`: its cache and the token Gossamr stored go, drafts that target it are closed with a reason, and its id is never used again. Refuses while one of its drafts is being posted. */
   connectionRemove(instanceId: string): Promise<void>;
   /** Which ways of connecting GitHub work here. */

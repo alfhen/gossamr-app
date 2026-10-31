@@ -71,6 +71,16 @@ impl Core {
         changed
     }
 
+    /// Asks `instance_id` alone how it stands, because the person just turned it on or off.
+    pub async fn probe_instance_now(&self, instance_id: &str) {
+        let _one_at_a_time = self.probes.last.lock().await;
+        let config = AppConfig::load(&self.data_dir);
+        let Some(instance) = config.connections.iter().find(|i| i.id == instance_id) else { return };
+        let previous = self.probe_snapshot(instance);
+        let snapshot = self.probe_instance(instance).await.keeping_account_of(previous.as_ref());
+        self.probes.snapshots.lock().expect("probe lock poisoned").insert(instance.id.clone(), Stored { bound_to: instance.bound_to.clone(), snapshot });
+    }
+
     /// The last answer for `instance`, unless it was taken while the instance was bound to another connection.
     pub(super) fn probe_snapshot(&self, instance: &Instance) -> Option<Snapshot> {
         let snapshots = self.probes.snapshots.lock().expect("probe lock poisoned");

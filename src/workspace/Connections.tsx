@@ -1,10 +1,12 @@
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Button } from "../components/Button";
+import { Switch } from "../components/Switch";
 import { nameProblem, NAME_LIMIT } from "../lib/connectionName";
 import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
-import { actingAs, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
+import { setConnectionEnabled } from "./connectionToggle";
+import { actingAs, canSwitch, OFF_DETAIL, oldestCheck, probeDecides, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
@@ -40,6 +42,8 @@ export interface ConnectionsViewProps {
   /** The connection being removed. */
   busy: string | null;
   copied: boolean;
+  /** The instances whose switch was just pressed and whose answer hasn't come back. */
+  toggling: string[];
   onSelect(id: string): void;
   onCheck(): void;
   onSync(): void;
@@ -52,20 +56,30 @@ export interface ConnectionsViewProps {
   onAskRemove(): void;
   onCancel(): void;
   onRemove(): void;
+  onToggle(c: ConnectionInfo, on: boolean): void;
   onConnectGithub(): void;
 }
 
-function Row({ c, selected, checking, onSelect }: { c: ConnectionInfo; selected: boolean; checking: boolean; onSelect(): void }) {
+interface RowProps {
+  c: ConnectionInfo;
+  selected: boolean;
+  checking: boolean;
+  pending: boolean;
+  onSelect(): void;
+  onToggle(on: boolean): void;
+}
+
+function Row({ c, selected, checking, pending, onSelect, onToggle }: RowProps) {
   const line = statusLine(c, checking);
   return (
-    <li aria-label={`${c.displayName} connection`} className="border-b border-ws-sep last:border-b-0">
+    <li aria-label={`${c.displayName} connection`} className="flex items-center gap-3 border-b border-ws-sep last:border-b-0">
       <button
         type="button"
         data-connection={c.id}
         aria-current={selected || undefined}
         tabIndex={selected ? 0 : -1}
         onClick={onSelect}
-        className={`flex w-full items-center gap-3 px-2 py-2.5 text-left outline-offset-[-2px] ${selected ? "ws-lens-row" : "hover:bg-ws-hover"}`}
+        className={`flex min-w-0 flex-1 items-center gap-3 px-2 py-2.5 text-left outline-offset-[-2px] ${selected ? "ws-lens-row" : "hover:bg-ws-hover"}`}
       >
         <span aria-hidden className="grid size-8 shrink-0 place-items-center rounded-full bg-ws-sel text-xs font-bold text-ws-ink2">
           {badgeText(c)}
@@ -78,6 +92,11 @@ function Row({ c, selected, checking, onSelect }: { c: ConnectionInfo; selected:
           </span>
         </span>
       </button>
+      {canSwitch(c) && (
+        <span className="shrink-0 pr-2">
+          <Switch checked={c.enabled} pending={pending} onChange={onToggle} aria-label={c.displayName} />
+        </span>
+      )}
     </li>
   );
 }
@@ -96,7 +115,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const loud = s !== null && probeDecides(c) && (s.state === "notSignedIn" || s.state === "notFound");
   const jira = c.kind !== "github";
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
-  if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">Off.</p>;
+  if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
   if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : "Not checked yet."}</p>;
   return (
     <>
@@ -246,7 +265,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           {sync.text}
         </p>
         <div>
-          <Button variant="quiet" size="sm" disabled={c.syncing} onClick={p.onSync}>
+          <Button variant="quiet" size="sm" disabled={c.syncing || !c.enabled} onClick={p.onSync}>
             Sync now
           </Button>
         </div>
@@ -274,6 +293,7 @@ export function ConnectionsView(p: ConnectionsViewProps) {
   const selected = p.connections.find((c) => c.id === p.selectedId) ?? p.connections[0];
   const checked = oldestCheck(p.connections);
   const onKeyDown = (ev: KeyboardEvent) => {
+    if ((ev.target as HTMLElement).closest('[role="switch"]')) return;
     const next = rowAfter(p.connections.map((c) => c.id), selected?.id ?? null, ev.key);
     if (!next) return;
     ev.preventDefault();
@@ -291,7 +311,7 @@ export function ConnectionsView(p: ConnectionsViewProps) {
       </div>
       <ul ref={list} aria-label="Connections" onKeyDown={onKeyDown} className="m-0 grid list-none gap-0 border-y border-ws-sep p-0">
         {p.connections.map((c) => (
-          <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} onSelect={() => p.onSelect(c.id)} />
+          <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} pending={p.toggling.includes(c.instanceId)} onSelect={() => p.onSelect(c.id)} onToggle={(on) => p.onToggle(c, on)} />
         ))}
       </ul>
       {selected && <Detail key={selected.id} c={selected} p={p} />}
@@ -313,6 +333,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [pending, setPending] = useState<string[]>([]);
+  const [toggling, setToggling] = useState<string[]>([]);
   const current = connections.find((c) => c.id === selectedId) ?? connections[0];
   const select = (id: string) => {
     setConfirming(null);
@@ -334,6 +355,14 @@ export function ConnectionsSection({ now }: { now: Date }) {
       await backend.connectionOpenTerminal(c.instanceId);
     } catch (e) {
       useWorkspace.getState().report("Couldn't open Terminal", e);
+    }
+  };
+  const toggle = async (c: ConnectionInfo, on: boolean) => {
+    setToggling((now) => [...now, c.instanceId]);
+    try {
+      await setConnectionEnabled(c, on);
+    } finally {
+      setToggling((now) => now.filter((id) => id !== c.instanceId));
     }
   };
   const rename = async (c: ConnectionInfo | undefined, name: string) => {
@@ -358,6 +387,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       confirming={confirming}
       busy={current && pending.includes(current.id) ? current.id : null}
       copied={copied}
+      toggling={toggling}
       onSelect={select}
       onCheck={() => void check()}
       onSync={() => void useWorkspace.getState().syncNow()}
@@ -386,6 +416,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
           })
           .finally(() => setPending((ids) => ids.filter((id) => id !== target.id)));
       }}
+      onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
     />
   );
