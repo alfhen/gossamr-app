@@ -540,8 +540,8 @@ fn provider_add_model(core: State<'_, CoreState>, instance_id: String, model: St
 
 /// The instance and model Pip and new agents use when nothing narrower says. With `set`, saves them first, checked as a run's choice would be.
 #[tauri::command]
-fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaults>) -> Result<model_choice::ModelDefaults> {
-    core.model_defaults(set)
+fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaultsSet>) -> Result<model_choice::ModelDefaults> {
+    core.model_defaults(set.map(Into::into))
 }
 
 /// Removes a finished run's worktree with `claude rm`, never forcing it.

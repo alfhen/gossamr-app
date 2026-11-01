@@ -77,7 +77,7 @@ pub struct ProviderConfig {
     /// The folder holding this instance's CLI login, as typed (`~` kept). None means the CLI's own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
-    /// Model ids the person added to this instance's list. Read through `model_choice::custom_models`, which drops any that break the id rule.
+    /// Model ids the person added to this instance's list. Read through `model_choice::model_list`, which drops any that break the id rule.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub custom_models: Vec<String>,
     /// Settings a later build wrote that this one doesn't read. They are saved back as they were.

@@ -2,7 +2,7 @@
 //! the resolver that says whether a choice can run now.
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::config::AppConfig;
 use crate::connections::{Driver, ProviderInstance};
@@ -119,17 +119,44 @@ impl ModelDefaults {
     }
 }
 
-/// A key that is absent or unreadable keeps its default, so one bad value can't reset the rest of `config.json`. A `null` stays cleared.
-impl<'de> Deserialize<'de> for ModelDefaults {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let stored = Value::deserialize(deserializer)?;
+impl ModelDefaults {
+    /// Reads the `models` value of `config.json`. A key that is absent keeps its default and a `null` stays cleared.
+    /// A key that is there but unreadable is cleared, so the work asks to be picked again instead of running on another
+    /// login, and its raw value is returned so a save can write it back.
+    pub fn from_file(stored: Option<&Value>) -> (Self, Map<String, Value>) {
         let fallback = Self::default();
-        let read = |key: &str, fallback: Option<ModelChoice>| match stored.get(key) {
-            Some(Value::Null) => None,
-            Some(value) => serde_json::from_value(value.clone()).ok().or(fallback),
+        let mut unreadable = Map::new();
+        let mut read = |key: &str, fallback: Option<ModelChoice>| match stored.and_then(|s| s.get(key)) {
             None => fallback,
+            Some(Value::Null) => None,
+            Some(value) => serde_json::from_value(value.clone()).unwrap_or_else(|_| {
+                unreadable.insert(key.into(), value.clone());
+                None
+            }),
         };
-        Ok(Self { pip: read("pip", fallback.pip), agents: read("agents", fallback.agents) })
+        let (pip, agents) = (read("pip", fallback.pip), read("agents", fallback.agents));
+        (Self { pip, agents }, unreadable)
+    }
+}
+
+/// What the page sends to `model_defaults`. Both keys are required (`null` clears one) and nothing is guessed for a
+/// key that is missing or malformed, so the person's earlier choice is never swapped for a default they didn't pick.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelDefaultsSet {
+    #[serde(deserialize_with = "required")]
+    pub pip: Option<ModelChoice>,
+    #[serde(deserialize_with = "required")]
+    pub agents: Option<ModelChoice>,
+}
+
+fn required<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<ModelChoice>, D::Error> {
+    Option::deserialize(deserializer)
+}
+
+impl From<ModelDefaultsSet> for ModelDefaults {
+    fn from(set: ModelDefaultsSet) -> Self {
+        Self { pip: set.pip, agents: set.agents }
     }
 }
 
@@ -180,7 +207,7 @@ pub enum Resolution {
     Unavailable(Reason),
 }
 
-/// Whether `choice` names a model the instance lists and an effort from the fixed list, for a use its driver runs.
+/// Whether `choice` names a model the instance lists and, for Pip only, an effort from the fixed list, for a use its driver runs.
 pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice) -> Result<ProviderInstance, Reason> {
     let provider = config.providers.iter().find(|p| p.id == choice.instance_id).ok_or(Reason::Removed)?;
     if !use_.allowed_on(provider.driver) {
@@ -188,7 +215,7 @@ pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice) -> Resu
     }
     let listed = model_list(provider).iter().any(|m| m.id == choice.model);
     let allowed_here = use_ == Use::Agents || choice.model != DEFAULT_MODEL;
-    let effort_ok = choice.effort.as_deref().is_none_or(|e| EFFORTS.contains(&e));
+    let effort_ok = choice.effort.as_deref().is_none_or(|e| use_ == Use::Pip && EFFORTS.contains(&e));
     if listed && allowed_here && effort_ok {
         Ok(provider.clone())
     } else {
@@ -204,17 +231,19 @@ pub fn resolve(config: &AppConfig, use_: Use, choice: Option<&ModelChoice>, stan
         Ok(provider) => provider,
         Err(reason) => return Resolution::Unavailable(reason),
     };
-    let standing = standing(&provider);
     let blocked = if !provider.enabled {
         Some(Reason::Off)
-    } else if !standing.shell_readable {
-        Some(Reason::NoShellSetup)
-    } else if !standing.binary_found {
-        Some(Reason::NotFound(provider.driver))
-    } else if !standing.signed_in {
-        Some(Reason::NotSignedIn)
     } else {
-        None
+        let standing = standing(&provider);
+        if !standing.shell_readable {
+            Some(Reason::NoShellSetup)
+        } else if !standing.binary_found {
+            Some(Reason::NotFound(provider.driver))
+        } else if !standing.signed_in {
+            Some(Reason::NotSignedIn)
+        } else {
+            None
+        }
     };
     match blocked {
         Some(reason) => Resolution::Unavailable(reason),
@@ -330,8 +359,13 @@ mod tests {
     fn an_instance_that_is_off_is_off_before_anything_else_about_it_is_asked() {
         let mut config = config();
         config.providers[1].enabled = false;
-        let nothing = Standing { shell_readable: false, binary_found: false, signed_in: false };
-        assert_eq!(reason(&config, Use::Pip, &pick("claude_2", "sonnet"), nothing), Reason::Off);
+        let asked = std::cell::Cell::new(0);
+        let choice = pick("claude_2", "sonnet");
+        let resolution = resolve(&config, Use::Pip, Some(&choice), |_| {
+            asked.set(asked.get() + 1);
+            Standing { shell_readable: false, binary_found: false, signed_in: false }
+        });
+        assert_eq!((resolution, asked.get()), (Resolution::Unavailable(Reason::Off), 0));
         assert_eq!(Reason::Off.words(Use::Pip, "Claude personal"), "Pip runs on Claude personal, which is off. Turn it on in Settings or pick another.");
         assert_eq!(Reason::Off.words(Use::Agents, "Claude personal"), "Waits for Claude personal, which is off.");
     }
@@ -392,6 +426,12 @@ mod tests {
     }
 
     #[test]
+    fn agents_take_no_effort() {
+        let choice = ModelChoice { effort: Some("high".into()), ..pick("claude", "opus") };
+        assert_eq!(reason(&config(), Use::Agents, &choice, READY), Reason::BadModel);
+    }
+
+    #[test]
     fn a_hostile_model_string_never_resolves() {
         let config = config();
         for hostile in ["--dangerously-skip-permissions", "sonnet --allowedTools Bash", "sonnet\n--model x", "sonnet; rm -rf ~", "$(id)", "Sonnet", " sonnet", "sonnet\0", "../../etc/passwd", &"a".repeat(5000)] {
@@ -424,14 +464,41 @@ mod tests {
     }
 
     #[test]
-    fn defaults_read_back_as_written_and_a_bad_half_falls_back_without_touching_the_other() {
-        let read = |json: &str| serde_json::from_str::<ModelDefaults>(json).unwrap();
+    fn defaults_read_back_as_written_and_an_unreadable_half_is_cleared_and_kept_aside() {
+        let read = |json: &str| ModelDefaults::from_file(Some(&serde_json::from_str(json).unwrap()));
         let mine = ModelDefaults { pip: Some(pick("claude_2", "opus")), agents: None };
-        assert_eq!(read(&serde_json::to_string(&mine).unwrap()), mine);
-        let half = read(r#"{"pip":{"instanceId":7},"agents":{"instanceId":"claude_2","model":"haiku"}}"#);
-        assert_eq!((half.pip, half.agents), (ModelDefaults::default().pip, Some(pick("claude_2", "haiku"))));
-        assert_eq!(read("{}"), ModelDefaults::default());
-        assert_eq!(read("5"), ModelDefaults::default());
+        assert_eq!(read(&serde_json::to_string(&mine).unwrap()), (mine, Map::new()));
+        let (half, kept) = read(r#"{"pip":{"instanceId":"claude_2","model":{"id":"opus","ctx":"1m"}},"agents":{"instanceId":"claude_2","model":"haiku"}}"#);
+        assert_eq!((half.pip, half.agents), (None, Some(pick("claude_2", "haiku"))));
+        assert_eq!(kept.keys().collect::<Vec<_>>(), ["pip"]);
+        assert_eq!(read("{}").0, ModelDefaults::default());
+        assert_eq!(ModelDefaults::from_file(None).0, ModelDefaults::default());
+        assert_eq!(read("5").0, ModelDefaults::default());
+    }
+
+    #[test]
+    fn a_default_that_is_unreadable_is_never_resolved_onto_another_login() {
+        let mut config = config();
+        config.models = ModelDefaults::from_file(Some(&serde_json::json!({ "pip": { "instanceId": "claude_2", "model": 5 } }))).0;
+        assert_eq!(resolve(&config, Use::Pip, None, |_| READY), Resolution::Unavailable(Reason::Removed));
+    }
+
+    #[test]
+    fn what_the_page_sets_needs_both_keys_and_readable_choices() {
+        let parse = |json: &str| serde_json::from_str::<ModelDefaultsSet>(json);
+        let ok = parse(r#"{"pip":{"instanceId":"claude_2","model":"opus","effort":"high"},"agents":null}"#).unwrap();
+        assert_eq!(ModelDefaults::from(ok), ModelDefaults { pip: Some(ModelChoice { effort: Some("high".into()), ..pick("claude_2", "opus") }), agents: None });
+        for bad in [
+            r#"{"agents":{"instanceId":"claude","model":"default"}}"#,
+            r#"{"pip":{"instanceId":"claude_2","model":"opus"}}"#,
+            r#"{"pip":{"instanceId":"claude_2","model":"opus","effort":3},"agents":null}"#,
+            r#"{"pip":{"instanceId":"claude_2"},"agents":null}"#,
+            r#"{"pip":null,"agents":null,"extra":1}"#,
+            "{}",
+            "5",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

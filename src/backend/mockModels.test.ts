@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelChoice } from "../types";
 import { MockBackend } from "./mock";
 
 describe("the mock model lists and defaults", () => {
@@ -34,7 +35,18 @@ describe("the mock model lists and defaults", () => {
     await expect(b.modelSetDefaults({ pip: { instanceId: "claude", model: "--model" }, agents })).rejects.toThrow("Pick a model for Pip.");
     await expect(b.modelSetDefaults({ pip: { instanceId: "claude", model: "sonnet", effort: "extreme" }, agents })).rejects.toThrow("Pick a model for Pip.");
     await expect(b.modelSetDefaults({ pip: { instanceId: "gone", model: "sonnet" }, agents })).rejects.toThrow("Pick which Claude");
+    await expect(b.modelSetDefaults({ pip: before.pip, agents: { instanceId: "gone", model: "default" } })).rejects.toThrow("That instance was removed. Pick another.");
+    await expect(b.modelSetDefaults({ pip: before.pip, agents: { instanceId: "claude", model: "opus", effort: "high" } })).rejects.toThrow("Pick a model for this run.");
     expect(await b.modelDefaults()).toEqual(before);
+  });
+
+  it("takes a null effort as none and stops at 20 added models", async () => {
+    const b = new MockBackend();
+    const pip = { instanceId: "claude", model: "sonnet", effort: null } as unknown as ModelChoice;
+    await b.modelSetDefaults({ pip, agents: { instanceId: "claude", model: "default" } });
+    for (let n = 0; n < 20; n++) await b.providerAddModel("claude", `m${n}`);
+    await expect(b.providerAddModel("claude", "one-more")).rejects.toThrow("Keep it to 20");
+    expect(await b.providerAddModel("claude", "M3")).toHaveLength(25);
   });
 
   it("clears the defaults that named a removed instance", async () => {

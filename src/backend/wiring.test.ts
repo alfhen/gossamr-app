@@ -58,7 +58,7 @@ describe("the desktop backend's wiring", () => {
     expect(jira).toContain('invoke<ModelDefaults>("model_defaults", { set: defaults })');
     expect(lib).toContain("fn provider_models(core: State<'_, CoreState>, instance_id: String)");
     expect(lib).toContain("fn provider_add_model(core: State<'_, CoreState>, instance_id: String, model: String)");
-    expect(lib).toContain("fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaults>)");
+    expect(lib).toContain("fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaultsSet>)");
   });
 
   it("opens Terminal on an instance's own fix, taking an instance id and no command from the page", () => {

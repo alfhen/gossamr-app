@@ -42,12 +42,12 @@ impl Core {
             for (use_, choice) in [(Use::Pip, &set.pip), (Use::Agents, &set.agents)] {
                 let Some(choice) = choice else { continue };
                 if let Err(reason) = model_choice::check_choice(config, use_, choice) {
-                    let name = config.providers.iter().find(|p| p.id == choice.instance_id).map_or(choice.instance_id.as_str(), |p| p.display_name.as_str());
+                    let name = config.providers.iter().find(|p| p.id == choice.instance_id).map_or("That instance", |p| p.display_name.as_str());
                     refusal = Some(Error::Input(reason.words(use_, name)));
                     return false;
                 }
             }
-            config.models = set.clone();
+            config.set_models(set.clone());
             true
         })?;
         refusal.map_or(Ok(set), Err)
@@ -111,7 +111,7 @@ mod tests {
     async fn a_default_that_could_not_run_is_refused_and_the_old_one_stays() {
         let fx = crate::inbox::testing::fixture().await;
         let before = fx.core.model_defaults(None).unwrap();
-        for (pip, agents) in [(pick("claude", "default"), pick("claude", "default")), (pick("gone", "sonnet"), pick("claude", "default")), (pick("claude", "sonnet"), pick("claude", "--model"))] {
+        for (pip, agents) in [(pick("claude", "default"), pick("claude", "default")), (pick("gone", "sonnet"), pick("claude", "default")), (pick("claude", "sonnet"), pick("claude", "--model")), (pick("claude", "sonnet"), ModelChoice { effort: Some("high".into()), ..pick("claude", "opus") })] {
             let refused = fx.core.model_defaults(Some(ModelDefaults { pip: Some(pip), agents: Some(agents) }));
             assert!(matches!(refused, Err(Error::Input(_))), "{refused:?}");
         }
