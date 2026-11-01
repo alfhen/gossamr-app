@@ -349,7 +349,7 @@ impl Core {
     /// The provider instances as Settings rows, after the connections. A list that can't be read gives none.
     pub(super) fn provider_rows(&self) -> Vec<ConnectionInfo> {
         let config = AppConfig::load(&self.data_dir);
-        if let Some(problem) = &config.providers_error {
+        if let Some(problem) = config.providers_error.as_ref().or(config.connections_error.as_ref()) {
             eprintln!("{problem}");
             return Vec::new();
         }
@@ -902,6 +902,16 @@ mod tests {
         for id in ["claude", "github", "github_9", ""] {
             assert!(matches!(fx.core.require_jira(id), Err(Error::Input(_))), "{id:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_connections_block_shows_no_provider_rows() {
+        let fx = adopted().await;
+        let dir = fx.core.data_dir();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        file["connections"] = serde_json::json!("broken");
+        std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
+        assert!(fx.core.provider_rows().is_empty());
     }
 
     #[tokio::test]

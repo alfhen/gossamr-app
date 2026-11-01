@@ -202,6 +202,12 @@ describe("a provider in the list", () => {
     for (const word of ["Sync now", "Manage projects", "Manage repositories", ">Site<", ">Host<"]) expect(out).not.toContain(word);
     expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
   });
+
+  it("says no check runs instead of Not checked yet", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    expect(out).toContain("No check runs for this provider.");
+    expect(out).not.toContain("Not checked yet");
+  });
 });
 
 describe("the banner for a connection that is signed out", () => {

@@ -137,7 +137,7 @@ fn next_id(config: &AppConfig, kind: ConnectionKind) -> String {
     let highest = taken
         .filter_map(|id| match id.strip_prefix(name)? {
             "" => Some(1),
-            rest => rest.strip_prefix('_')?.parse::<u32>().ok(),
+            rest => rest.strip_prefix('_')?.parse::<u64>().ok().filter(|n| *n < u64::MAX),
         })
         .max();
     match highest {
@@ -326,6 +326,13 @@ mod tests {
         config.connections.push(Instance { id: "github_5".into(), kind: ConnectionKind::Github, display_name: "G".into(), enabled: true, config: InstanceConfig::default(), bound_to: None, recheck_since: None });
         config.retired_ids.push("github_6".into());
         assert_eq!(next_id(&config, ConnectionKind::Github), "github_7");
+    }
+
+    #[test]
+    fn an_id_with_the_largest_suffix_does_not_wrap_the_next_id() {
+        let mut config = AppConfig::default();
+        config.providers.push(provider(&format!("github_{}", u64::MAX), Driver::Claude));
+        assert_eq!(next_id(&config, ConnectionKind::Github), "github");
     }
 
     #[test]
