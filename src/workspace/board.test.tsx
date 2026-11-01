@@ -6,7 +6,7 @@ import type { WorkItem } from "../types";
 import { itemsByFilter, useWorkspace } from "../workspaceStore";
 import { BoardView } from "./BoardView";
 import { BulkBar } from "./BulkBar";
-import { GhostCard, ItemCard, type ItemCardProps } from "./ItemCard";
+import { cardId, GhostCard, ItemCard, type ItemCardProps } from "./ItemCard";
 import { useTabs, type Tab } from "./tabsStore";
 
 const s = () => useWorkspace.getState();
@@ -200,5 +200,13 @@ describe("BoardView", () => {
 
   it("says when nothing matches", () => {
     expect(board([])).toContain("Nothing matches this filter");
+  });
+
+  it("gives the same ticket key on two connections two different card ids", () => {
+    const here = s().items["mock:DEVOPS-473"];
+    const there = { ...here, item: { ...here.item, connectionId: "jira:other:acct" } };
+    expect(cardId(here.item)).toBe("card-mock:DEVOPS-473");
+    expect(cardId(there.item)).not.toBe(cardId(here.item));
+    expect(render(card({}, there))).toContain(`id="${cardId(there.item)}"`);
   });
 });

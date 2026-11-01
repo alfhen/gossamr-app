@@ -63,7 +63,8 @@ impl Core {
     }
 
     fn change_of(&self, run: &Run) -> Result<Option<CodeChange>> {
-        self.change_in(run, |id| self.watched_repos(id))
+        let off = self.off_names();
+        self.change_in(run, |id| self.watched_repos_in(&off, id))
     }
 
     fn change_in(&self, run: &Run, repos: impl Fn(&str) -> Result<Vec<String>>) -> Result<Option<CodeChange>> {
