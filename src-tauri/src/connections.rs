@@ -47,12 +47,39 @@ pub enum Driver {
     Codex,
 }
 
+impl Driver {
+    pub fn runs_pip(self) -> bool {
+        matches!(self, Self::Claude)
+    }
+
+    pub fn runs_agents(self) -> bool {
+        matches!(self, Self::Claude)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+        }
+    }
+
+    pub fn binary(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProviderConfig {
     /// The folder holding this instance's CLI login, as typed (`~` kept). None means the CLI's own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// Model ids the person added to this instance's list. Read through `model_choice::custom_models`, which drops any that break the id rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub custom_models: Vec<String>,
     /// Settings a later build wrote that this one doesn't read. They are saved back as they were.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -199,11 +226,12 @@ pub fn provider_mut<'a>(config: &'a mut AppConfig, id: &str) -> Option<&'a mut P
     providers_live(config).then(|| config.providers.iter_mut().find(|p| p.id == id)).flatten()
 }
 
-/// Removes the provider instance `id` and retires its id. Nothing on disk is touched, including its config folder.
+/// Removes the provider instance `id` and retires its id, and clears the Settings defaults that named it. Nothing on disk is touched, including its config folder.
 pub fn remove_provider(config: &mut AppConfig, id: &str) -> bool {
     let Some(at) = config.providers.iter().position(|p| p.id == id) else { return false };
     let gone = config.providers.remove(at);
     config.retired_ids.push(gone.id);
+    config.models.clear_instance(id);
     true
 }
 

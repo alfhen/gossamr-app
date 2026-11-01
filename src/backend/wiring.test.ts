@@ -50,6 +50,17 @@ describe("the desktop backend's wiring", () => {
     expect(jira).toMatch(/"code_review_access", \{ connectionId, repo \}/);
   });
 
+  it("sends the model commands the argument names they take", () => {
+    const jira = read("./jira.ts");
+    const lib = read("../../src-tauri/src/lib.rs");
+    expect(jira).toContain('invoke<ModelOption[]>("provider_models", { instanceId })');
+    expect(jira).toContain('invoke<ModelOption[]>("provider_add_model", { instanceId, model })');
+    expect(jira).toContain('invoke<ModelDefaults>("model_defaults", { set: defaults })');
+    expect(lib).toContain("fn provider_models(core: State<'_, CoreState>, instance_id: String)");
+    expect(lib).toContain("fn provider_add_model(core: State<'_, CoreState>, instance_id: String, model: String)");
+    expect(lib).toContain("fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaults>)");
+  });
+
   it("opens Terminal on an instance's own fix, taking an instance id and no command from the page", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");

@@ -41,7 +41,7 @@ fn remove_db_files(path: &std::path::Path) {
     }
 }
 
-fn not_a_provider() -> Error {
+pub(super) fn not_a_provider() -> Error {
     Error::Input("This isn't a provider. Reopen Settings.".into())
 }
 

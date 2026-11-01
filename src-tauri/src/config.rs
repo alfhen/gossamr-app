@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::connections::{self, Instance, ProviderInstance, VERSION};
 use crate::error::Result;
+use crate::model_choice::ModelDefaults;
 use crate::runs::notices::NoticeMode;
 
 const FILE: &str = "config.json";
@@ -65,6 +66,8 @@ pub struct AppConfig {
     /// The clone the person chose for a repository (`owner/name`) when several match.
     pub picked_clones: HashMap<String, PathBuf>,
     pub agents: AgentSettings,
+    /// Which instance and model Pip and new agents use when nothing narrower says.
+    pub models: ModelDefaults,
     /// Which version of the instance list was written; 0 until the sign-ins already there have been adopted.
     #[serde(skip_deserializing)]
     pub version: u32,
@@ -270,6 +273,19 @@ mod tests {
         assert!(broken.connections_error.is_some());
         std::fs::write(dir.join(FILE), "{}").unwrap();
         assert_eq!(AppConfig::load(&dir), fresh());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn model_defaults_round_trip_and_an_unreadable_one_does_not_reset_the_other_settings() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-models-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2},"models":{"pip":{"instanceId":["claude"]},"agents":null}}"#).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.agents.max_runs, loaded.models.pip.clone(), loaded.models.agents.clone()), (2, ModelDefaults::default().pip, None));
+        loaded.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), loaded, "a cleared default stays cleared");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

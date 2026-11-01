@@ -22,6 +22,8 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  ModelDefaults,
+  ModelOption,
   CleanupResult,
   Snapshot,
   CodeRef,
@@ -289,6 +291,22 @@ export class JiraBackend implements Backend {
 
   runsSettings() {
     return invoke<AgentSettings>("agent_settings", { settings: null });
+  }
+
+  providerModels(instanceId: string) {
+    return invoke<ModelOption[]>("provider_models", { instanceId });
+  }
+
+  providerAddModel(instanceId: string, model: string) {
+    return invoke<ModelOption[]>("provider_add_model", { instanceId, model });
+  }
+
+  modelDefaults() {
+    return invoke<ModelDefaults>("model_defaults", { set: null });
+  }
+
+  modelSetDefaults(defaults: ModelDefaults) {
+    return invoke<ModelDefaults>("model_defaults", { set: defaults });
   }
 
   reduceTransparency() {
