@@ -113,10 +113,7 @@ impl Jira {
     ) -> Result<reqwest::Response> {
         let mut limited = 0;
         loop {
-            let creds = self.auth.credentials().await?;
-            if &creds.scope != scope {
-                return Err(Error::SiteChanged);
-            }
+            let creds = self.auth.credentials_for(scope).await?;
             let url = format!("{}/ex/jira/{}/rest/api/3/{path}", self.base, scope.cloud_id);
             let res = build(client.request(method.clone(), url).basic_auth(&creds.email, Some(&creds.token))).send().await?;
             if res.status() == StatusCode::UNAUTHORIZED {

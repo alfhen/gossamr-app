@@ -136,7 +136,10 @@ impl Core {
             return Snapshot::off();
         }
         match instance.kind {
-            ConnectionKind::Jira => probe::jira(self.auth.whoami(probe::TIMEOUT).await, self.auth.expires_on().await, chrono::Local::now().date_naive()),
+            ConnectionKind::Jira => {
+                let account = instance.bound_to.as_deref().unwrap_or_default();
+                probe::jira(self.auth.whoami(account, probe::TIMEOUT).await, self.auth.expires_on(account).await, chrono::Local::now().date_naive())
+            }
             ConnectionKind::Github => {
                 let host = instance.config.host.as_deref().unwrap_or("github.com");
                 let login = instance.config.login.as_deref().unwrap_or_default();
