@@ -442,8 +442,8 @@ export class JiraBackend implements Backend {
     return auth.cloudId(site);
   }
 
-  jiraConnect(input: TokenSignIn) {
-    return auth.connect(input);
+  jiraConnect(input: TokenSignIn, instanceId?: string) {
+    return auth.connect(input, instanceId);
   }
 
   openUrl(url: string) {

@@ -186,8 +186,39 @@ describe("the connections list", () => {
   });
 });
 
+describe("a provider in the list", () => {
+  const claude: ConnectionInfo = { ...gh, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider", driver: "claude", workspace: "", account: "", status: null };
+
+  it("is not offered Jira's Change account or GitHub's Sign in again", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    expect(out).toContain('aria-label="Claude details"');
+    expect(out).not.toContain("Change account");
+    expect(out).not.toContain("Sign in again");
+    expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Change account");
+  });
+
+  it("has no Sync, Watching or Site sections, which belong to tickets and code", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    for (const word of ["Sync now", "Manage projects", "Manage repositories", ">Site<", ">Host<"]) expect(out).not.toContain(word);
+    expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
+  });
+
+  it("says in the detail pane that no check runs", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    expect(out).toContain("No check runs for this provider.");
+  });
+});
+
 describe("the banner for a connection that is signed out", () => {
   const noop = vi.fn();
+
+  it("never offers a provider the Jira token", () => {
+    const claude: ConnectionInfo = { ...gh, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider" };
+    const out = renderToStaticMarkup(<SignInBannerView lost={[claude]} onFix={noop} />);
+    expect(out).toContain("Claude is signed out");
+    expect(out).toContain("Open connections");
+    expect(out).not.toContain("Make a new token");
+  });
 
   it("shows nothing while every connection is signed in", () => {
     expect(renderToStaticMarkup(<SignInBannerView lost={[]} onFix={noop} />)).toBe("");

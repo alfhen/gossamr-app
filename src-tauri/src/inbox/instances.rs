@@ -3,7 +3,7 @@
 
 use super::{db_file, ConnectionInfo, Core};
 use crate::config::AppConfig;
-use crate::connections::{self, Binding};
+use crate::connections::{self, Binding, RowKind};
 use crate::db::is_for;
 use crate::domain::{Actor, ProposalQuery, ProposalState, StateKind};
 use crate::error::{Error, Result};
@@ -41,6 +41,10 @@ fn remove_db_files(path: &std::path::Path) {
     }
 }
 
+fn not_a_provider() -> Error {
+    Error::Input("This isn't a provider. Reopen Settings.".into())
+}
+
 fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
@@ -62,6 +66,9 @@ impl Core {
     /// failed to load.
     pub async fn adopt_instances(&self) {
         let config = AppConfig::load(&self.data_dir);
+        if let Some(problem) = &config.providers_error {
+            eprintln!("{problem}");
+        }
         if let Some(problem) = &config.connections_error {
             eprintln!("{problem}");
             return;
@@ -104,6 +111,9 @@ impl Core {
     /// Saves the name Settings shows for `instance_id`, and returns the connection (or instance) to tell the page about.
     pub fn rename_instance(&self, instance_id: &str, name: &str) -> Result<String> {
         let name = clean_name(name)?;
+        if self.is_provider(instance_id) {
+            return self.provider_rename(instance_id, &name);
+        }
         let mut renamed = None;
         AppConfig::update_if(&self.data_dir, |config| {
             let Some(instance) = connections::is_live(config).then(|| config.connections.iter_mut().find(|i| i.id == instance_id)).flatten() else {
@@ -119,6 +129,9 @@ impl Core {
     /// Turns `instance_id` on or off, and returns the connection (or instance) to tell the page about. Turning off refuses
     /// while one of its drafts is being posted. The cache and the token stay either way.
     pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
+        if self.is_provider(instance_id) {
+            return self.provider_set_enabled(instance_id, enabled);
+        }
         let _alone = self.sign_in.lock().await;
         let _gate = self.draft_gate.lock().await;
         let config = AppConfig::load(&self.data_dir);
@@ -286,6 +299,83 @@ impl Core {
         self.settle_pip_turns(crate::db::DISCONNECTED).await;
         remove_db_files(&self.data_dir.join(db_file(&connection)));
         Ok(())
+    }
+
+    pub fn is_provider(&self, instance_id: &str) -> bool {
+        AppConfig::load(&self.data_dir).providers.iter().any(|p| p.id == instance_id)
+    }
+
+    /// Refuses an id that isn't a Jira instance, so a provider's or GitHub's row can't be signed in as Jira.
+    pub fn require_jira(&self, instance_id: &str) -> Result<()> {
+        let config = AppConfig::load(&self.data_dir);
+        match config.connections.iter().find(|i| i.id == instance_id) {
+            Some(instance) if instance.kind == ConnectionKind::Jira => Ok(()),
+            _ => Err(Error::Input("That isn't a Jira connection.".into())),
+        }
+    }
+
+    pub fn provider_rename(&self, instance_id: &str, name: &str) -> Result<String> {
+        let name = clean_name(name)?;
+        self.change_provider(instance_id, |provider| provider.display_name = name)
+    }
+
+    pub fn provider_set_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
+        self.change_provider(instance_id, |provider| provider.enabled = enabled)
+    }
+
+    /// Removes a provider instance and retires its id. Its config folder and the login in it stay on disk.
+    pub fn provider_remove(&self, instance_id: &str) -> Result<()> {
+        let mut removed = false;
+        AppConfig::update_if(&self.data_dir, |config| {
+            removed = connections::providers_live(config) && connections::remove_provider(config, instance_id);
+            removed
+        })?;
+        removed.then_some(()).ok_or_else(not_a_provider)?;
+        self.probes_forget(instance_id);
+        Ok(())
+    }
+
+    fn change_provider(&self, instance_id: &str, change: impl FnOnce(&mut connections::ProviderInstance)) -> Result<String> {
+        let mut changed = false;
+        AppConfig::update_if(&self.data_dir, |config| {
+            let Some(provider) = connections::provider_mut(config, instance_id) else { return false };
+            change(provider);
+            changed = true;
+            true
+        })?;
+        changed.then(|| instance_id.to_string()).ok_or_else(not_a_provider)
+    }
+
+    /// The provider instances as Settings rows, after the connections. A list that can't be read gives none.
+    pub(super) fn provider_rows(&self) -> Vec<ConnectionInfo> {
+        let config = AppConfig::load(&self.data_dir);
+        if let Some(problem) = config.providers_error.as_ref().or(config.connections_error.as_ref()) {
+            eprintln!("{problem}");
+            return Vec::new();
+        }
+        config
+            .providers
+            .into_iter()
+            .map(|p| ConnectionInfo {
+                instance_id: p.id.clone(),
+                id: p.id,
+                display_name: p.display_name,
+                enabled: p.enabled,
+                kind: RowKind::Provider,
+                driver: Some(p.driver),
+                config_dir: p.config.config_dir,
+                workspace: String::new(),
+                url: String::new(),
+                account: String::new(),
+                last_sync_at: None,
+                syncing: false,
+                error: None,
+                transient: false,
+                reauth: false,
+                status: None,
+                rechecking: false,
+            })
+            .collect()
     }
 
     fn try_change_instances(&self, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
@@ -716,5 +806,123 @@ mod tests {
         assert!(fx.core.auth.connection().await.is_none());
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
         assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
+    }
+
+    fn provider_ids(fx: &crate::inbox::testing::Fixture) -> Vec<String> {
+        AppConfig::load(&fx.core.data_dir()).providers.into_iter().map(|p| p.id).collect()
+    }
+
+    fn add_provider(fx: &crate::inbox::testing::Fixture, id: &str, folder: Option<&std::path::Path>) {
+        AppConfig::update(&fx.core.data_dir(), |config| {
+            config.providers.push(connections::ProviderInstance {
+                id: id.into(),
+                driver: connections::Driver::Claude,
+                display_name: "Claude personal".into(),
+                enabled: true,
+                config: connections::ProviderConfig { config_dir: folder.map(|f| f.display().to_string()), ..Default::default() },
+                extra: Default::default(),
+            });
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_list_ends_with_the_provider_rows_which_carry_the_driver_and_the_folder() {
+        let fx = adopted().await;
+        add_provider(&fx, "claude_2", Some(std::path::Path::new("/tmp/claude-two")));
+        let rows = fx.core.settings_rows().await.unwrap();
+        let shown: Vec<_> = rows.iter().map(|c| (c.instance_id.as_str(), c.kind)).collect();
+        assert_eq!(shown, [("jira", RowKind::Jira), ("claude", RowKind::Provider), ("claude_2", RowKind::Provider)]);
+        let second = rows.last().unwrap();
+        assert_eq!((second.driver, second.config_dir.as_deref(), second.status.is_none(), second.display_name.as_str()), (Some(connections::Driver::Claude), Some("/tmp/claude-two"), true, "Claude personal"));
+        let json = serde_json::to_value(&rows[0]).unwrap();
+        assert!(json.get("driver").is_none() && json.get("configDir").is_none());
+        assert_eq!(serde_json::to_value(second).unwrap()["driver"], "claude");
+    }
+
+    #[tokio::test]
+    async fn a_provider_can_be_renamed_and_turned_off_and_on_through_the_instance_commands() {
+        let fx = adopted().await;
+        assert_eq!(fx.core.rename_instance("claude", "  Work Claude ").unwrap(), "claude");
+        assert_eq!(fx.core.set_instance_enabled("claude", false).await.unwrap(), "claude");
+        let row = |fx: &crate::inbox::testing::Fixture| AppConfig::load(&fx.core.data_dir()).providers.into_iter().find(|p| p.id == "claude").map(|p| (p.display_name, p.enabled));
+        assert_eq!(row(&fx), Some(("Work Claude".into(), false)));
+        fx.core.set_instance_enabled("claude", true).await.unwrap();
+        assert_eq!(row(&fx).map(|r| r.1), Some(true));
+        assert!(matches!(fx.core.rename_instance("claude", "  "), Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn removing_a_provider_retires_its_id_and_deletes_nothing_on_disk() {
+        let fx = adopted().await;
+        let folder = fx.core.data_dir().join("claude-two-login");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(".credentials.json"), "{}").unwrap();
+        add_provider(&fx, "claude_2", Some(&folder));
+        fx.core.provider_remove("claude_2").unwrap();
+        assert_eq!(provider_ids(&fx), ["claude"]);
+        assert!(AppConfig::load(&fx.core.data_dir()).retired_ids.contains(&"claude_2".to_string()));
+        assert!(folder.join(".credentials.json").exists());
+        assert_eq!(ids(&fx), ["jira", "github"], "the connections are untouched");
+    }
+
+    #[tokio::test]
+    async fn removing_every_provider_leaves_the_list_empty_after_a_relaunch() {
+        let fx = adopted().await;
+        fx.core.provider_remove("claude").unwrap();
+        fx.core.adopt_instances().await;
+        assert!(provider_ids(&fx).is_empty());
+        assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
+    }
+
+    #[tokio::test]
+    async fn the_provider_commands_refuse_an_id_that_is_not_a_provider() {
+        let fx = adopted().await;
+        let before = (names(&fx), enabled(&fx));
+        for id in ["jira", "github", "github_9"] {
+            assert!(matches!(fx.core.provider_rename(id, "Other"), Err(Error::Input(_))), "{id}");
+            assert!(matches!(fx.core.provider_set_enabled(id, false), Err(Error::Input(_))), "{id}");
+            assert!(matches!(fx.core.provider_remove(id), Err(Error::Input(_))), "{id}");
+        }
+        assert_eq!((names(&fx), enabled(&fx)), before);
+        assert_eq!(provider_ids(&fx), ["claude"]);
+    }
+
+    #[tokio::test]
+    async fn a_provider_row_cannot_be_removed_as_a_connection_and_a_connection_cannot_be_removed_as_a_provider() {
+        let fx = adopted().await;
+        assert!(matches!(fx.core.remove_instance("claude").await, Err(Error::Input(_))));
+        assert_eq!(provider_ids(&fx), ["claude"]);
+    }
+
+    #[tokio::test]
+    async fn jira_connect_refuses_an_id_that_is_not_a_jira_instance() {
+        let fx = adopted().await;
+        assert!(fx.core.require_jira("jira").is_ok());
+        for id in ["claude", "github", "github_9", ""] {
+            assert!(matches!(fx.core.require_jira(id), Err(Error::Input(_))), "{id:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_connections_block_shows_no_provider_rows() {
+        let fx = adopted().await;
+        let dir = fx.core.data_dir();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        file["connections"] = serde_json::json!("broken");
+        std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
+        assert!(fx.core.provider_rows().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_providers_list_that_cant_be_read_shows_no_provider_rows_and_changes_nothing() {
+        let fx = adopted().await;
+        let dir = fx.core.data_dir();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        file["providers"] = serde_json::json!([{ "id": "claude", "driver": "gemini" }]);
+        std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
+        assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
+        assert!(matches!(fx.core.provider_set_enabled("claude", false), Err(Error::Input(_))));
+        assert!(matches!(fx.core.rename_instance("claude", "Other"), Err(Error::Input(_))));
     }
 }

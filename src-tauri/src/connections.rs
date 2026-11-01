@@ -39,6 +39,64 @@ pub struct Instance {
     pub recheck_since: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// The coding CLI a provider instance runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Driver {
+    Claude,
+    Codex,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ProviderConfig {
+    /// The folder holding this instance's CLI login, as typed (`~` kept). None means the CLI's own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
+    /// Settings a later build wrote that this one doesn't read. They are saved back as they were.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One login of a coding CLI. It sits in `providers` beside `connections` and has no cache or `boundTo`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInstance {
+    pub id: String,
+    pub driver: Driver,
+    pub display_name: String,
+    pub enabled: bool,
+    pub config: ProviderConfig,
+    /// Keys a later build wrote on the instance that this one doesn't read. They are saved back as they were.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// What a row of Settings is: a connection of either kind, or a provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RowKind {
+    Jira,
+    Github,
+    Provider,
+}
+
+impl From<ConnectionKind> for RowKind {
+    fn from(kind: ConnectionKind) -> Self {
+        match kind {
+            ConnectionKind::Jira => Self::Jira,
+            ConnectionKind::Github => Self::Github,
+        }
+    }
+}
+
+/// The instance every install starts with. It runs what runs today, so it has no folder.
+pub fn default_claude() -> ProviderInstance {
+    ProviderInstance { id: DEFAULT_CLAUDE.into(), driver: Driver::Claude, display_name: "Claude".into(), enabled: true, config: ProviderConfig::default(), extra: Default::default() }
+}
+
+pub const DEFAULT_CLAUDE: &str = "claude";
+
 /// An account that an instance should be bound to. `name` is the Jira site's name or the GitHub login.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
@@ -75,11 +133,11 @@ fn kind_name(kind: ConnectionKind) -> &'static str {
 /// `jira`, `github`, then `github_2`, `github_3`. A removed instance's id is retired, so an id never names two rows.
 fn next_id(config: &AppConfig, kind: ConnectionKind) -> String {
     let name = kind_name(kind);
-    let taken = config.connections.iter().map(|i| i.id.as_str()).chain(config.retired_ids.iter().map(String::as_str));
+    let taken = config.connections.iter().map(|i| i.id.as_str()).chain(config.providers.iter().map(|p| p.id.as_str())).chain(config.retired_ids.iter().map(String::as_str));
     let highest = taken
         .filter_map(|id| match id.strip_prefix(name)? {
             "" => Some(1),
-            rest => rest.strip_prefix('_')?.parse::<u32>().ok(),
+            rest => rest.strip_prefix('_')?.parse::<u64>().ok().filter(|n| *n < u64::MAX),
         })
         .max();
     match highest {
@@ -128,6 +186,23 @@ pub fn unbind(config: &mut AppConfig, connection_id: &str) {
 pub fn remove(config: &mut AppConfig, id: &str) -> bool {
     let Some(at) = config.connections.iter().position(|i| i.id == id) else { return false };
     let gone = config.connections.remove(at);
+    config.retired_ids.push(gone.id);
+    true
+}
+
+/// Whether providers may be changed. A removal retires an id, which lives in the connections block, so that has to be readable too.
+pub fn providers_live(config: &AppConfig) -> bool {
+    config.providers_error.is_none() && config.connections_error.is_none()
+}
+
+pub fn provider_mut<'a>(config: &'a mut AppConfig, id: &str) -> Option<&'a mut ProviderInstance> {
+    providers_live(config).then(|| config.providers.iter_mut().find(|p| p.id == id)).flatten()
+}
+
+/// Removes the provider instance `id` and retires its id. Nothing on disk is touched, including its config folder.
+pub fn remove_provider(config: &mut AppConfig, id: &str) -> bool {
+    let Some(at) = config.providers.iter().position(|p| p.id == id) else { return false };
+    let gone = config.providers.remove(at);
     config.retired_ids.push(gone.id);
     true
 }
@@ -237,5 +312,56 @@ mod tests {
         adopt(&mut config, true, Some(Binding::jira("jira:c1:a1", "Acme", "https://acme.atlassian.net")), Vec::new());
         let json = serde_json::to_value(&config.connections[0]).unwrap();
         assert_eq!(json, serde_json::json!({ "id": "jira", "kind": "jira", "displayName": "Acme", "enabled": true, "config": { "site": "acme.atlassian.net" }, "boundTo": "jira:c1:a1" }));
+    }
+
+    fn provider(id: &str, driver: Driver) -> ProviderInstance {
+        ProviderInstance { id: id.into(), driver, display_name: id.into(), enabled: true, config: ProviderConfig::default(), extra: Default::default() }
+    }
+
+    #[test]
+    fn ids_are_counted_across_connections_and_providers_and_retired_ids() {
+        let mut config = AppConfig::default();
+        config.providers.push(provider("jira_3", Driver::Claude));
+        assert_eq!(next_id(&config, ConnectionKind::Jira), "jira_4");
+        config.connections.push(Instance { id: "github_5".into(), kind: ConnectionKind::Github, display_name: "G".into(), enabled: true, config: InstanceConfig::default(), bound_to: None, recheck_since: None });
+        config.retired_ids.push("github_6".into());
+        assert_eq!(next_id(&config, ConnectionKind::Github), "github_7");
+    }
+
+    #[test]
+    fn an_id_with_the_largest_suffix_does_not_wrap_the_next_id() {
+        let mut config = AppConfig::default();
+        config.providers.push(provider(&format!("github_{}", u64::MAX), Driver::Claude));
+        assert_eq!(next_id(&config, ConnectionKind::Github), "github");
+    }
+
+    #[test]
+    fn removing_a_provider_retires_its_id_and_leaves_the_others() {
+        let mut config = AppConfig::default();
+        config.providers = vec![provider("claude", Driver::Claude), provider("claude_2", Driver::Claude)];
+        assert!(remove_provider(&mut config, "claude"));
+        assert!(!remove_provider(&mut config, "claude"));
+        assert_eq!((config.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), config.retired_ids.clone()), (vec!["claude_2"], vec!["claude".to_string()]));
+    }
+
+    #[test]
+    fn a_provider_serializes_in_the_shape_config_json_documents() {
+        let json = serde_json::to_value(default_claude()).unwrap();
+        assert_eq!(json, serde_json::json!({ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "config": {} }));
+        let codex: ProviderInstance = serde_json::from_str(r#"{"id":"codex","driver":"codex","displayName":"Codex","enabled":true,"config":{"configDir":"~/.codex-work"}}"#).unwrap();
+        assert_eq!((codex.driver, codex.config.config_dir.as_deref()), (Driver::Codex, Some("~/.codex-work")));
+    }
+
+    #[test]
+    fn providers_cant_be_changed_while_either_list_is_unreadable() {
+        let mut config = AppConfig::default();
+        config.providers.push(provider("claude", Driver::Claude));
+        assert!(provider_mut(&mut config, "claude").is_some());
+        assert!(provider_mut(&mut config, "jira").is_none());
+        config.connections_error = Some("broken".into());
+        assert!(provider_mut(&mut config, "claude").is_none());
+        config.connections_error = None;
+        config.providers_error = Some("broken".into());
+        assert!(provider_mut(&mut config, "claude").is_none());
     }
 }
