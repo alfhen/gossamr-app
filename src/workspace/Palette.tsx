@@ -18,6 +18,7 @@ import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
 import { useGithubUi } from "./githubUi";
+import { useJiraUi } from "./jiraUi";
 import { openPull } from "./openPull";
 import { openOnAgents, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
@@ -202,7 +203,8 @@ export function appActions(): CommandActions {
       if (draft) openNeed(draft);
       else (tabs.setRoute("agents"), useRuns.getState().setFilter({ needs: true }));
     },
-    connectGithub: () => useGithubUi.getState().openConnect(),
+    addGithub: () => useGithubUi.getState().openConnect(),
+    addJira: () => useJiraUi.getState().openConnect(),
     manageRepositories: () => tabs.openSettings("watching"),
     openPull: (ref) => void openPull(ref),
     newTab: () => void tabs.openTab(),
@@ -308,6 +310,7 @@ export function Palette() {
   const watch = useWorkspace((s) => s.watch);
   const proposals = useWorkspace((s) => s.proposals);
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
+  const jira = useWorkspace((s) => s.connections.some((c) => c.kind === "jira"));
   const unread = useActivity((s) => s.unread);
   const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);
@@ -343,6 +346,7 @@ export function Palette() {
       view: tab.view,
       unreadActivity: unread,
       github,
+      jira,
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onAgents: useTabs.getState().route === "agents",
@@ -364,7 +368,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject]);
+  }, [containers, items, watch, proposals, github, jira, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject]);
 
   // A new ticket's project and title are steps back to the search.
   const prompting = step.type === "project" || step.type === "title";

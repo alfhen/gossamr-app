@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
 import { ConnectionsView, type ConnectionsViewProps } from "./Connections";
+import { addEntries } from "./connectionsLogic";
 import { SignInBannerView } from "./SignInBanner";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
@@ -35,6 +36,8 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onRemove={vi.fn()}
       onToggle={vi.fn()}
       onConnectGithub={vi.fn()}
+      addable={addEntries([])}
+      onAdd={vi.fn()}
       {...over}
     />,
   );
@@ -61,8 +64,8 @@ describe("the connections list", () => {
     expect(view({ selectedId: jira.id })).toContain('aria-label="Acme Jira details"');
   });
 
-  it("falls back to the first connection when the selected one is gone", () => {
-    expect(view({ selectedId: "github:gone" })).toContain('aria-label="Acme Jira details"');
+  it("falls back to the first connection shown when the selected one is gone", () => {
+    expect(view({ selectedId: "github:gone" })).toContain('aria-label="GitHub details"');
   });
 
   it("offers the command that fixes a connection, to copy and then check again", () => {
@@ -243,5 +246,33 @@ describe("the sign-in banner text", () => {
     const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={vi.fn()} />);
     expect(out).toContain("Jira isn&#x27;t syncing");
     expect(out).not.toContain("nothing is syncing");
+  });
+});
+
+describe("the + Add button and the groups", () => {
+  it("groups the rows under Code and Tickets, with the group headings as plain text", () => {
+    const out = view();
+    expect(out.indexOf(">Code<")).toBeLessThan(out.indexOf("GitHub connection"));
+    expect(out.indexOf("GitHub connection")).toBeLessThan(out.indexOf(">Tickets<"));
+    expect(out.indexOf(">Tickets<")).toBeLessThan(out.indexOf("Acme Jira connection"));
+    expect(out).not.toContain(">Models<");
+  });
+
+  it("shows a Models group when provider rows are shown", () => {
+    const claude: ConnectionInfo = { ...gh, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider", driver: "claude" };
+    expect(view({ connections: [jira, gh, claude] })).toContain(">Models<");
+  });
+
+  it("puts + Add beside Check all, secondary once a connection exists and primary before", () => {
+    const withOne = view();
+    expect(withOne).toMatch(/aria-haspopup="menu"[^>]*ws-btn--secondary[^>]*>\+ Add</);
+    expect(withOne.indexOf("Check all")).toBeLessThan(withOne.indexOf("+ Add"));
+    expect(view({ connections: [{ ...gh, kind: "mock" }] })).toMatch(/aria-haspopup="menu"[^>]*ws-btn--primary[^>]*>\+ Add</);
+  });
+
+  it("has no footer button for connecting GitHub", () => {
+    const out = view();
+    expect(out).not.toContain("Connect another GitHub account");
+    expect(out).not.toContain("behind each ticket");
   });
 });

@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { isTauri } from "@tauri-apps/api/core";
 import { describe, expect, it, vi } from "vitest";
-import { ConnectJiraView, sameAccount, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
+import { MockBackend } from "../backend/mock";
+import { JiraBackend } from "../backend/jira";
+import { auth } from "../backend/auth";
+import { ConnectJiraView, sameAccount, signInApi, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
 
 const VALUES: JiraFormValues = { site: " acme.atlassian.net ", cloudId: "", email: " ann@acme.com ", token: " tok ", expiresOn: "2027-10-30" };
 const IDLE: SiteLookup = { state: "idle" };
@@ -107,5 +111,25 @@ describe("whether a new token is for the account already signed in", () => {
     expect(sameAccount(status("c1", "u1"), status("c1", "u2"))).toBe(false);
     expect(sameAccount(null, status("c1", "u1"))).toBe(false);
     expect(sameAccount({ site: null, me: null, email: null, expiresOn: null }, status("c1", "u1"))).toBe(false);
+  });
+});
+
+vi.mock("@tauri-apps/api/core", async (orig) => ({ ...(await orig<object>()), isTauri: vi.fn(() => false) }));
+
+describe("where the Connect Jira sheet signs in", () => {
+  it("uses the workspace backend in a browser", () => {
+    const mock = new MockBackend();
+    expect(signInApi(mock)).toBe(mock);
+  });
+
+  it("sends the desktop's sample workspace to the real sign-in, so a token never reaches the mock", () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    try {
+      expect(signInApi(new MockBackend())).toMatchObject({ jiraStatus: auth.status, jiraCloudId: auth.cloudId, jiraConnect: auth.connect });
+      const real = new JiraBackend();
+      expect(signInApi(real)).toBe(real);
+    } finally {
+      vi.mocked(isTauri).mockReturnValue(false);
+    }
   });
 });
