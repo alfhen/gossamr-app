@@ -300,6 +300,7 @@ impl Core {
         self.restore_code().await;
     }
 
+    #[cfg(test)]
     pub async fn sign_out(&self) -> Result<()> {
         let _alone = self.sign_in.lock().await;
         let connection = self.auth.connection().await;

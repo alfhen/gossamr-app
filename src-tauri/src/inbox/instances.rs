@@ -11,6 +11,7 @@ use crate::proposals;
 use crate::secrets;
 use crate::tracker::{Connection, ConnectionKind};
 use chrono::Utc;
+use std::collections::HashMap;
 
 const NAME_LIMIT: usize = 60;
 
@@ -20,6 +21,15 @@ pub struct Removed {
     pub connection_id: String,
     pub kind: ConnectionKind,
     pub workstreams: bool,
+}
+
+/// Which connections are off and what their instances are called, as `Core::off_names` read them.
+pub struct OffNames(HashMap<String, String>);
+
+impl OffNames {
+    pub fn name(&self, connection_id: &str) -> Option<&str> {
+        self.0.get(connection_id).map(String::as_str)
+    }
 }
 
 struct RemovalTarget {
@@ -186,11 +196,22 @@ impl Core {
         Err(Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
+    /// The instances that are turned off, read from `config.json` once. A request that looks at several connections takes
+    /// one of these instead of calling `off_name` for each.
+    pub fn off_names(&self) -> OffNames {
+        let config = AppConfig::load(&self.data_dir);
+        let mut names = HashMap::new();
+        if connections::is_live(&config) {
+            for i in config.connections.iter().filter(|i| !i.enabled) {
+                names.entry(i.bound_to.clone().unwrap_or_else(|| i.id.clone())).or_insert_with(|| i.display_name.clone());
+            }
+        }
+        OffNames(names)
+    }
+
     /// The name of the instance `connection_id` belongs to, when it is turned off. Nothing is off while the list can't be read.
     pub fn off_name(&self, connection_id: &str) -> Option<String> {
-        let config = AppConfig::load(&self.data_dir);
-        let off = |i: &&connections::Instance| !i.enabled && i.bound_to.as_deref().unwrap_or(&i.id) == connection_id;
-        connections::is_live(&config).then(|| config.connections.iter().find(off).map(|i| i.display_name.clone())).flatten()
+        self.off_names().name(connection_id).map(String::from)
     }
 
     /// Turns away a read of a connection that is off: its items are hidden from the views, from Pip and from agents.
@@ -553,6 +574,21 @@ mod tests {
 
         fx.core.set_instance_enabled("jira", false).await.unwrap();
         fx.core.set_instance_enabled("jira", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn one_read_of_the_off_instances_names_each_connection_that_is_off_and_none_while_the_list_cant_be_read() {
+        let fx = adopted().await;
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+
+        let off = fx.core.off_names();
+
+        assert_eq!(off.name("github:alfhen"), Some("GitHub"));
+        assert_eq!(off.name("jira"), None);
+        assert_eq!(fx.core.off_name("github:alfhen").as_deref(), Some("GitHub"));
+
+        std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
+        assert_eq!(fx.core.off_names().name("github:alfhen"), None);
     }
 
     #[tokio::test]

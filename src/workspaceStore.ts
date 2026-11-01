@@ -464,8 +464,8 @@ function clearSyncing() {
   useWorkspace.setState((s) => ({ connections: s.connections.map((c) => ({ ...c, syncing: false })) }));
 }
 
-function keyToRef(key: string): ItemRef {
-  const at = key.indexOf(":");
+export function keyToRef(key: string): ItemRef {
+  const at = key.lastIndexOf(":");
   const externalId = key.slice(at + 1);
   return { connectionId: key.slice(0, at), externalId, key: externalId };
 }
