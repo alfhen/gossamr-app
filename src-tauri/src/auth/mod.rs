@@ -22,7 +22,7 @@ pub use gh::{fake_gh, FixedToken};
 pub use github::{GithubAuth, GithubSession};
 pub use atlassian::{Atlassian, SiteScope};
 
-/// Where an earlier build kept its one Jira token. Each account's token is now `TOKEN_PREFIX` plus its connection id.
+/// Where an earlier build kept its one Jira token; `restore_sessions` moves it to `TOKEN_PREFIX` plus its connection id.
 const TOKEN_KEY: &str = "jira-token";
 const TOKEN_PREFIX: &str = "jira-token:";
 /// What an earlier build kept for Atlassian sign-in. Nothing reads these now.
@@ -130,13 +130,32 @@ pub struct AccessToken {
 
 pub struct Auth {
     authenticator: Arc<dyn Authenticator>,
-    /// The signed-in accounts in the order they were added; the first is the primary.
+    /// The signed-in accounts ordered by `Saved::added`; the first is the primary.
     sessions: Mutex<Vec<Credentials>>,
     restore_failed: bool,
 }
 
 fn token_key(connection_id: &str) -> String {
     format!("{TOKEN_PREFIX}{connection_id}")
+}
+
+/// What the vault holds for one account. `added` keeps the order accounts were added in, because listing the keys
+/// gives alphabetical order; the lowest is the primary. Tokens saved before it existed read as 0.
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    #[serde(default)]
+    added: u64,
+    #[serde(flatten)]
+    credentials: Credentials,
+}
+
+fn saved_op(added: u64, credentials: &Credentials) -> Result<secrets::Op> {
+    secrets::Op::save(&token_key(&credentials.connection_id()), &Saved { added, credentials: credentials.clone() })
+}
+
+/// The `added` of the account saved under `key`.
+fn added_of(key: &str) -> Result<Option<u64>> {
+    Ok(secrets::load::<Saved>(key)?.map(|s| s.added))
 }
 
 /// The sessions saved in the Keychain, and whether any of them was there but couldn't be read.
@@ -149,19 +168,22 @@ fn restore_sessions() -> (Vec<Credentials>, bool) {
         }
     };
     let mut failed = false;
-    let mut sessions = Vec::new();
+    let mut saved = Vec::new();
     for key in &keys {
-        match secrets::load::<Credentials>(key) {
-            Ok(found) => sessions.extend(found),
+        match secrets::load::<Saved>(key) {
+            Ok(found) => saved.extend(found),
             Err(e) => {
                 eprintln!("couldn't restore a saved Jira token: {e}");
                 failed = true;
             }
         }
     }
+    saved.sort_by_key(|s| s.added);
+    let mut sessions: Vec<Credentials> = saved.into_iter().map(|s| s.credentials).collect();
     match secrets::load::<Credentials>(TOKEN_KEY) {
-        Ok(Some(old)) => move_old_token(old, &keys, &mut sessions),
-        Ok(None) => {}
+        Ok(Some(old)) if keys.is_empty() => move_old_token(old, &mut sessions),
+        Ok(Some(_)) if !failed => forget_old_token(),
+        Ok(_) => {}
         Err(e) => {
             eprintln!("couldn't restore the saved Jira token: {e}");
             failed = true;
@@ -170,18 +192,22 @@ fn restore_sessions() -> (Vec<Credentials>, bool) {
     (sessions, failed)
 }
 
-/// Moves the token that an earlier build saved as `jira-token` to its connection's own key. A key the connection
-/// already has is never overwritten, and a failed write leaves the old key whole so the move runs again next launch.
-fn move_old_token(old: Credentials, keys: &[String], sessions: &mut Vec<Credentials>) {
-    let key = token_key(&old.connection_id());
-    if keys.contains(&key) {
-        return;
-    }
-    let moved = secrets::Op::save(&key, &old).and_then(|save| secrets::apply(&[save, secrets::Op::delete(TOKEN_KEY)]));
+/// Moves the token that an earlier build saved as `jira-token` to its connection's own key. A failed write leaves the
+/// old key whole so the move runs again next launch.
+fn move_old_token(old: Credentials, sessions: &mut Vec<Credentials>) {
+    let moved = saved_op(1, &old).and_then(|save| secrets::apply(&[save, secrets::Op::delete(TOKEN_KEY)]));
     if let Err(e) = moved {
         eprintln!("couldn't move the saved Jira token to its own key: {e}");
     }
     sessions.push(old);
+}
+
+/// Once any account has its own key, `jira-token` is stale: restoring it after the last key goes would sign the person
+/// back in to an account they left.
+fn forget_old_token() {
+    if let Err(e) = secrets::delete(TOKEN_KEY) {
+        eprintln!("couldn't remove the stale Jira token: {e}");
+    }
 }
 
 impl Auth {
@@ -243,21 +269,34 @@ impl Auth {
     pub async fn connect(&self, input: &TokenSignIn) -> Result<Connection> {
         let credentials = self.authenticator.connect(input).await?;
         let connection = credentials.connection();
-        let replaced: Vec<String> = self.sessions.lock().await.iter().map(Credentials::connection_id).filter(|id| *id != connection.id).collect();
-        let mut ops = vec![secrets::Op::save(&token_key(&connection.id), &credentials)?];
-        ops.extend(replaced.iter().map(|id| secrets::Op::delete(&token_key(id))));
+        let mut replaced: Vec<String> = self.sessions.lock().await.iter().map(|s| token_key(&s.connection_id())).collect();
+        match secrets::keys_with_prefix(TOKEN_PREFIX) {
+            Ok(keys) => replaced.extend(keys),
+            Err(e) => eprintln!("couldn't list the saved Jira tokens to replace: {e}"),
+        }
+        replaced.retain(|key| *key != token_key(&connection.id));
+        replaced.sort();
+        replaced.dedup();
+        let mut ops = vec![saved_op(1, &credentials)?];
+        ops.extend(replaced.iter().map(|key| secrets::Op::delete(key)));
+        ops.push(secrets::Op::delete(TOKEN_KEY));
         secrets::apply(&ops)?;
         *self.sessions.lock().await = vec![credentials];
         Ok(connection)
     }
 
     /// Checks `input` against Jira and, only if it works, keeps it beside the earlier sign-ins. An account that is
-    /// already signed in gets the new token in its place. Nothing calls it until `jira_connect` can add an account.
+    /// already signed in gets the new token in its place.
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn add(&self, input: &TokenSignIn) -> Result<Connection> {
         let credentials = self.authenticator.connect(input).await?;
         let connection = credentials.connection();
-        secrets::save(&token_key(&connection.id), &credentials)?;
+        let key = token_key(&connection.id);
+        let added = match added_of(&key)? {
+            Some(added) => added,
+            None => secrets::keys_with_prefix(TOKEN_PREFIX)?.iter().filter_map(|k| added_of(k).ok().flatten()).max().unwrap_or(0) + 1,
+        };
+        secrets::apply(&[saved_op(added, &credentials)?])?;
         let mut sessions = self.sessions.lock().await;
         match sessions.iter_mut().find(|s| s.connection_id() == connection.id) {
             Some(existing) => *existing = credentials,
@@ -268,7 +307,11 @@ impl Auth {
 
     /// Forgets the token of `connection_id`. Nothing happens to the other accounts.
     pub async fn disconnect(&self, connection_id: &str) -> Result<()> {
-        secrets::delete(&token_key(connection_id))?;
+        let mut ops = vec![secrets::Op::delete(&token_key(connection_id))];
+        if secrets::load::<Credentials>(TOKEN_KEY)?.is_some_and(|old| old.connection_id() == connection_id) {
+            ops.push(secrets::Op::delete(TOKEN_KEY));
+        }
+        secrets::apply(&ops)?;
         self.sessions.lock().await.retain(|s| s.connection_id() != connection_id);
         Ok(())
     }
@@ -704,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_for_another_connection_does_not_block_the_move() {
+    fn the_old_token_is_not_restored_beside_accounts_that_already_have_keys_and_is_forgotten() {
         let fake = secrets::fake::Fake::default();
         let _vault = launch_with_old_token_only(&fake);
         let other = account("globex", "ann2", "t-ann2");
@@ -712,8 +755,22 @@ mod tests {
         let _relaunched = secrets::fake::install(&fake);
         let (sessions, _) = restore_sessions();
 
-        assert_eq!(sessions.len(), 2);
-        assert!(vault_holds(&token_key("jira:c1:u1")) && vault_holds(&token_key("jira:globex:ann2")) && !vault_holds(TOKEN_KEY));
+        assert_eq!(sessions.iter().map(Credentials::connection_id).collect::<Vec<_>>(), ["jira:globex:ann2"]);
+        assert!(!vault_holds(TOKEN_KEY) && !vault_holds(&token_key("jira:c1:u1")));
+    }
+
+    #[test]
+    fn the_old_token_is_kept_while_a_saved_token_cant_be_read() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = launch_with_old_token_only(&fake);
+        let other = account("globex", "ann2", "t-ann2");
+        secrets::save(&token_key(&other.connection_id()), &other).unwrap();
+        secrets::save(&token_key("jira:c1:u1"), &"not credentials").unwrap();
+        let _relaunched = secrets::fake::install(&fake);
+        let (sessions, failed) = restore_sessions();
+
+        assert_eq!((sessions.len(), failed), (1, true));
+        assert!(vault_holds(TOKEN_KEY));
     }
 
     #[test]
@@ -727,5 +784,79 @@ mod tests {
 
         assert_eq!((sessions.len(), sessions[0].token.as_str()), (1, "newer"));
         assert_eq!(secrets::load::<Credentials>(&token_key("jira:c1:u1")).unwrap().unwrap().token, "newer");
+        assert!(!vault_holds(TOKEN_KEY));
+    }
+
+    fn relaunch_after_a_failed_move(fake: &secrets::fake::Fake) -> (secrets::fake::Installed, Auth) {
+        fake.deny_writes(true);
+        let vault = secrets::fake::install(fake);
+        let (sessions, _) = restore_sessions();
+        fake.deny_writes(false);
+        (vault, Auth::with_sessions(Arc::new(Roster(vec![account("globex", "ann2", "t-ann2")])), sessions))
+    }
+
+    #[tokio::test]
+    async fn signing_out_after_a_failed_move_stays_signed_out_on_the_next_launch() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = launch_with_old_token_only(&fake);
+        let (_launch, auth) = relaunch_after_a_failed_move(&fake);
+        auth.disconnect("jira:c1:u1").await.unwrap();
+
+        assert!(!vault_holds(TOKEN_KEY));
+        let _next_launch = secrets::fake::install(&fake);
+        assert_eq!(restore_sessions().0.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn connecting_another_account_after_a_failed_move_leaves_one_session_on_the_next_launch() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = launch_with_old_token_only(&fake);
+        let (_launch, auth) = relaunch_after_a_failed_move(&fake);
+        let globex = account("globex", "ann2", "t-ann2");
+        auth.connect(&sign_in_as(&globex)).await.unwrap();
+
+        assert!(!vault_holds(TOKEN_KEY));
+        let _next_launch = secrets::fake::install(&fake);
+        let (sessions, _) = restore_sessions();
+        assert_eq!(sessions.iter().map(Credentials::connection_id).collect::<Vec<_>>(), ["jira:globex:ann2"]);
+    }
+
+    #[tokio::test]
+    async fn disconnecting_another_account_keeps_the_old_token_that_was_not_moved() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = launch_with_old_token_only(&fake);
+        let (_launch, auth) = relaunch_after_a_failed_move(&fake);
+        auth.disconnect("jira:globex:ann2").await.unwrap();
+
+        assert!(vault_holds(TOKEN_KEY));
+    }
+
+    #[tokio::test]
+    async fn connect_removes_tokens_the_vault_holds_that_this_run_never_loaded() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let [ann, bob, globex] = two_on_acme_one_on_globex();
+        secrets::save(&token_key(&ann.connection_id()), &ann).unwrap();
+        let auth = Auth::with_sessions(Arc::new(Roster(vec![bob.clone(), globex])), vec![]);
+        auth.connect(&sign_in_as(&bob)).await.unwrap();
+
+        assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:bob"]);
+    }
+
+    #[tokio::test]
+    async fn the_primary_is_the_account_added_first_after_a_relaunch() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let [ann, bob, globex] = two_on_acme_one_on_globex();
+        let auth = Auth::with_sessions(Arc::new(Roster(vec![ann.clone(), bob.clone(), globex.clone()])), vec![]);
+        for c in [&globex, &bob, &ann] {
+            auth.add(&sign_in_as(c)).await.unwrap();
+        }
+        auth.add(&sign_in_as(&bob)).await.unwrap();
+        assert_eq!(auth.connection().await.unwrap().id, "jira:globex:ann2");
+
+        let _relaunched = secrets::fake::install(&fake);
+        let (sessions, _) = restore_sessions();
+        assert_eq!(sessions.iter().map(Credentials::connection_id).collect::<Vec<_>>(), ["jira:globex:ann2", "jira:acme:bob", "jira:acme:ann"]);
     }
 }
