@@ -243,6 +243,45 @@ These are the results of the step 0 spikes for `docs/simplification-proposal.md`
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.
 
+## Two signed-in folders at once (step o10, owner check, not yet run)
+
+Step o10 of [docs/connections-proposal.md](connections-proposal.md) (7.3, 15). The proposal says each `CLAUDE_CONFIG_DIR` has its own daemon, Keychain login and job list. Nobody has watched two signed-in folders side by side. Step r13 (runs tracked per instance) is built on that claim, so the owner checks it by hand first and fills in the results table below. A builder or an agent does not run this: it needs two real Claude logins and spends a little of each account.
+
+### What to do
+
+Use two folders that are not `~/.claude` and not each other, for example `~/.claude-a` and `~/.claude-b`, and a throwaway git repository (`git init` and one commit) under `~/Code`. Each step uses a plain Terminal, not Gossamr, with no `CLAUDE_CONFIG_DIR` set in the shell except as written. Replace `X` with `A` or `B`.
+
+1. **Sign in.** `CLAUDE_CONFIG_DIR=~/.claude-X claude auth login`, using two different accounts if you have them. Then `CLAUDE_CONFIG_DIR=~/.claude-X claude auth status --json`. Record `configDirectory` and `projectsDirectory` for each, and whether the two accounts differ.
+2. **Keychain.** List the Claude Code items without reading their secrets: `security dump-keychain | grep -i 'claude code'` (never add `-d`, `-g` or `-w`). Record how many items there are and whether their names differ between A and B. Then run `auth status --json` for A again and check that it still shows A's account.
+3. **Trust the repository in each folder.** Run `claude` in the throwaway repository with `CLAUDE_CONFIG_DIR=~/.claude-X`, accept the trust prompt and exit.
+4. **Launch one agent per folder, in A then B.** `CLAUDE_CONFIG_DIR=~/.claude-X claude --bg --name o10-X -- "Say OK and stop."` from the throwaway repository. Record whether stdout says `Starting background service…` for B as well as for A. Then `ps -axo pid,ppid,etime,command | grep -i '[c]laude'` and record the daemon processes. Check whether each folder has its own `daemon.lock`.
+5. **List.** With both daemons running, `CLAUDE_CONFIG_DIR=~/.claude-X claude agents --json --all` for each. Record which sessions each lists, and the short ids. Write down whether A's list ever shows `o10-B` or the other way round, and whether the two short ids are the same.
+6. **Cross-folder control.** `CLAUDE_CONFIG_DIR=~/.claude-B claude stop <A's short id>`. Record what it says. Then list B's agent and check that it is untouched.
+7. **Stop and resume, one folder at a time.** For A: `claude stop <id>`, list until it shows `stopped`, wait 6 s, then `claude --bg --resume <sessionId> -- "Say OK again."`. Record whether the listing keeps the same `id` and `sessionId` (a continued session) or shows a new id (a copy). While A is stopped and resumed, list B and check that B's agent did not change. Repeat for B.
+8. **Daemon exit.** `claude rm <id>` for each agent (retry for about 4 s if it is refused after a stop). Then watch the `ps` line from step 4: record whether stopping A's last session leaves B's daemon running, and how long each daemon takes to exit.
+9. **Clean up.** Delete the throwaway repository. Keep or delete the two folders as you like.
+
+### Results
+
+Fill in one row per question, with the Claude Code version (`claude --version`) and the date.
+
+| Question | Result | Seen on |
+|---|---|---|
+| Two daemons, one per folder (step 4) | Not yet run | |
+| Two separate Keychain logins, each still right after the other signs in (steps 1, 2) | Not yet run | |
+| Each list shows only its own folder's agents (step 5) | Not yet run | |
+| Short ids can repeat across folders (step 5) | Not yet run | |
+| `stop` in the wrong folder does nothing to the other agent (step 6) | Not yet run | |
+| Stop then resume continues the session in each folder, with the other running (step 7) | Not yet run | |
+| One daemon exits without the other (step 8) | Not yet run | |
+
+### What each answer changes in r13
+
+- **Everything stays apart.** r13 is built as written in 7.3: one `claude agents --json --all` per instance with live runs, and runs keyed by `(instance, short id)`.
+- **The daemon is shared, or a list shows the other folder's agents.** The tracker has to filter a listing by folder, and `belongs_to` must not match on a short id alone. Rewrite the Tracking paragraph of 7.3 before building r13.
+- **A login leaks across folders or one sign-in replaces the other.** Two Claude instances cannot run agents side by side. Keep the "Until then" rule (agents on the default instance only) and rework sections 6.3 and 7.3 of the proposal before building r13.
+- **A resume starts a copy only when the other daemon is busy.** Add the other instance's activity to the resume settle time in `runs/`, and write the new figure here.
+
 ## Running the real tests
 
 ```
