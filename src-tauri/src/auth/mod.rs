@@ -349,6 +349,11 @@ impl Auth {
         self.sessions.lock().await.first().map(Credentials::connection)
     }
 
+    /// Every signed-in connection, the primary first.
+    pub async fn connections(&self) -> Vec<Connection> {
+        self.sessions.lock().await.iter().map(Credentials::connection).collect()
+    }
+
     /// The day the saved token of `connection_id` expires, as the person said.
     pub async fn expires_on(&self, connection_id: &str) -> Option<NaiveDate> {
         let sessions = self.sessions.lock().await;
