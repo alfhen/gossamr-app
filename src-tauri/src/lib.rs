@@ -191,7 +191,7 @@ async fn jira_cloud_id(core: State<'_, CoreState>, site: String) -> Result<Optio
 #[tauri::command]
 async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn, instance_id: Option<String>) -> Result<AuthStatus> {
     if let Some(id) = instance_id {
-        core.require_jira(&id)?;
+        core.require_jira(&id).await?;
     }
     let status = core.connect_jira(&input).await?;
     core.wake.notify_one();
