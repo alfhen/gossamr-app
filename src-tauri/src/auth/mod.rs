@@ -121,6 +121,22 @@ pub struct Scope {
     pub account_id: String,
 }
 
+/// A signed-in Jira account as Core reads it, without its token.
+#[derive(Clone)]
+pub struct SignedIn {
+    pub scope: Scope,
+    pub connection: Connection,
+    pub site: Site,
+    pub me: Account,
+    pub email: String,
+}
+
+impl SignedIn {
+    pub fn identity(self) -> (Scope, Site, Account) {
+        (self.scope, self.site, self.me)
+    }
+}
+
 /// What the Jira client needs for one request.
 pub struct AccessToken {
     pub email: String,
@@ -339,12 +355,22 @@ impl Auth {
         Ok(())
     }
 
+    /// Every signed-in account, in the order they were added.
+    pub async fn accounts(&self) -> Vec<SignedIn> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .iter()
+            .map(|s| SignedIn { scope: s.scope(), connection: s.connection(), site: s.site.clone(), me: s.me.clone(), email: s.email.clone() })
+            .collect()
+    }
+
     /// The primary session's site and account, if any.
     pub async fn identity(&self) -> Option<(Scope, Site, Account)> {
         self.sessions.lock().await.first().map(|s| (s.scope(), s.site.clone(), s.me.clone()))
     }
 
     /// The primary connection, if any.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn connection(&self) -> Option<Connection> {
         self.sessions.lock().await.first().map(Credentials::connection)
     }
