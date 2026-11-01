@@ -202,15 +202,6 @@ async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_
 }
 
 #[tauri::command]
-async fn sign_out(app: AppHandle, core: State<'_, CoreState>) -> Result<()> {
-    core.sign_out().await?;
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.set_badge_count(None);
-    }
-    Ok(())
-}
-
-#[tauri::command]
 async fn snapshot(core: State<'_, CoreState>) -> Result<Snapshot> {
     core.snapshot().await
 }
@@ -1016,7 +1007,6 @@ pub fn run() {
             auth_status,
             jira_cloud_id,
             jira_connect,
-            sign_out,
             snapshot,
             cache_search,
             cache_item,

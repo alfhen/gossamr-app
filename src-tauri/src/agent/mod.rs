@@ -951,13 +951,13 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_sign_out_mid_turn_writes_nothing_afterwards() {
+        async fn removing_jira_mid_turn_writes_nothing_afterwards() {
             let fx = fixture().await;
             let gate = Arc::new(Notify::new());
             let svc = service(&fx, Fake { events: vec![text("secret")], gate: Some(gate.clone()), refuse: false }).await;
             svc.ask(ask("q1"), Arc::new(|_| {})).await.unwrap();
             tokio::time::sleep(Duration::from_millis(30)).await;
-            fx.core.sign_out().await.unwrap();
+            fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
             gate.notify_one();
             for _ in 0..100 {
                 if svc.live.lock().unwrap().is_empty() {
@@ -967,7 +967,7 @@ mod tests {
             }
             let turns = fx.core.pip_turns(GENERAL_CONVERSATION).await.unwrap();
             assert!(!turns.is_empty() && turns.iter().all(|t| t.text.is_empty()), "{turns:?}");
-            assert!(turns.iter().all(|t| (t.status.as_str(), t.error.as_deref()) == ("failed", Some(crate::db::SIGNED_OUT))), "{turns:?}");
+            assert!(turns.iter().all(|t| (t.status.as_str(), t.error.as_deref()) == ("failed", Some(crate::db::DISCONNECTED))), "{turns:?}");
         }
 
     mod queueing {

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 
+use super::instances::OffNames;
 use super::watch::{CatalogEntry, CatalogPage, WatchRow, WatchState};
 use super::{now_iso, Core};
 use crate::auth::Scope;
@@ -409,7 +410,11 @@ impl Core {
     /// The repositories a connection follows: the ones chosen, or every repository of a catalog small enough to watch
     /// whole. A large catalog nobody has chosen from yields none, and archived repositories are left out of a whole-catalog watch.
     pub fn watched_repos(&self, id: &str) -> Result<Vec<String>> {
-        if self.off_name(id).is_some() {
+        self.watched_repos_in(&self.off_names(), id)
+    }
+
+    pub(super) fn watched_repos_in(&self, off: &OffNames, id: &str) -> Result<Vec<String>> {
+        if off.name(id).is_some() {
             return Ok(Vec::new());
         }
         self.chosen_repos(id)
@@ -718,9 +723,10 @@ impl Core {
 
     /// The code changes cached for a work item, from every GitHub connection, in repositories that are watched.
     pub fn dev_links(&self, item: &ItemRef) -> Result<Vec<DevLink>> {
+        let off = self.off_names();
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
-            let repos = self.watched_repos(&id)?;
+            let repos = self.watched_repos_in(&off, &id)?;
             out.extend(self.with_code_db(&id, |db| db.dev_links(item))?.into_iter().filter(|l| is_watched_repo(&repos, &l.change.repo)));
         }
         newest_first(&mut out);
@@ -737,11 +743,9 @@ impl Core {
                 known = KnownKeys::new([(prefix, item.connection_id.as_str())]);
             }
         }
+        let off = self.off_names();
         for id in self.code.connection_ids() {
-            if self.off_name(&id).is_some() {
-                continue;
-            }
-            let repos = self.watched_repos(&id)?;
+            let repos = self.watched_repos_in(&off, &id)?;
             if repos.is_empty() {
                 continue;
             }
@@ -775,9 +779,10 @@ impl Core {
     /// The connection that watches `repo` (compared without regard to case) and the repository as it is spelled there.
     /// A repository of a connection that is off is refused as off, not as unwatched.
     pub fn code_connection_for(&self, repo: &str) -> Result<(String, String)> {
+        let off = self.off_names();
         for id in self.code.connection_ids() {
             if let Some(found) = self
-                .watched_repos(&id)?
+                .watched_repos_in(&off, &id)?
                 .into_iter()
                 .find(|r| r.eq_ignore_ascii_case(repo))
             {
@@ -804,11 +809,12 @@ impl Core {
     /// The name of a GitHub connection that is off and hides something: the one that follows `repo` when one is given,
     /// else any that has repositories chosen.
     pub fn off_code_name(&self, repo: Option<&str>) -> Result<Option<String>> {
+        let off = self.off_names();
         for id in self.code.connection_ids() {
-            let Some(name) = self.off_name(&id) else { continue };
+            let Some(name) = off.name(&id) else { continue };
             let repos = self.chosen_repos(&id)?;
             if repo.map_or(!repos.is_empty(), |repo| is_watched_repo(&repos, repo)) {
-                return Ok(Some(name));
+                return Ok(Some(name.to_string()));
             }
         }
         Ok(None)
@@ -816,10 +822,11 @@ impl Core {
 
     /// Every watched repository with the connection that watches it.
     pub fn watched_code_repos(&self) -> Result<Vec<(String, String)>> {
+        let off = self.off_names();
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
             out.extend(
-                self.watched_repos(&id)?
+                self.watched_repos_in(&off, &id)?
                     .into_iter()
                     .map(|r| (id.clone(), r)),
             );

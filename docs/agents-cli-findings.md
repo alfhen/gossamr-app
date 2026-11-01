@@ -243,11 +243,11 @@ These are the results of the step 0 spikes for `docs/simplification-proposal.md`
 
 `real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_work_is_refused` (scratch config, signed out) stops two sessions and removes them straight away. The clean one was removed on the first try (0 waits, 0.7 s): the lock refusal described above did not appear for a signed-out session that never did model work, so the retry loop is covered by the scripted CLI and was not seen firing for real in this run. The session with a commit that was never pushed was refused with stdout text ending in a suggestion to run `claude rm <id> --discard-unpushed`, and its worktree and branch were left in place. Gossamr returns that text unchanged and never passes the flag. Not checked: the lock refusal for a session that was doing model work when stopped.
 
-## Two signed-in folders at once (step o10, owner check, not yet run)
+## Two signed-in folders at once (step o10, owner check)
 
 Step o10 of [docs/connections-proposal.md](connections-proposal.md) (7.3, 15). The proposal says each `CLAUDE_CONFIG_DIR` has its own daemon, Keychain login and job list. Nobody has watched two signed-in folders side by side. Step r13 (runs tracked per instance) is built on that claim, so the owner checks it by hand first and fills in the results table below. A builder or an agent does not run this: it needs two real Claude logins and spends a little of each account.
 
-Merging this section does not finish o10. Keep o10 open, and do not start r13, while any row of the results table reads "Not yet run".
+The check ran on 1 November 2026 on the owner's Mac, on the two folders that were already signed in there, not on two new ones: A was the default folder (`~/.claude`, run with `CLAUDE_CONFIG_DIR` unset) and B was `~/.claude-personal`. Steps 1 and 9 (sign in and out) were skipped, so both logins stayed as they were. The agents ran from `~/Code`, which both folders trust, with `--model haiku`, and only agents named `o10-*` were stopped or removed.
 
 ### Setup
 
@@ -286,16 +286,18 @@ Fill in one row per question, with the Claude Code version (`cl a --version`) an
 
 | Question | Result | Seen on |
 |---|---|---|
-| Two daemons, one per folder (step 4) | Not yet run | |
-| Two separate Keychain logins, each still right after the other signs in (steps 1, 2) | Not yet run | |
-| The default login and its Keychain items are unchanged (steps 0, 2, 9) | Not yet run | |
-| Each list shows only its own folder's agents (step 5) | Not yet run | |
-| The two short ids were different, or the same (step 5) | Not yet run | |
-| `stop` in the wrong folder does nothing to the other folder's agent, checked in both lists (step 6) | Not yet run | |
-| Stop then resume continues the session in each folder, with the other folder busy (step 7) | Not yet run | |
-| If a resume started a copy: was the other folder's agent working at the time (step 7) | Not yet run | |
-| Removing A's last agent leaves B's daemon and agents running (step 8) | Not yet run | |
-| Each daemon exits by itself, and how long it takes (step 8) | Not yet run | |
+| Two daemons, one per folder (step 4) | Yes. One `claude daemon run` per folder, each with its own `daemon.lock` and its own socket folder under `/tmp/cc-daemon-<uid>/` (`05e98c5b` for A, `e70e52b7` for B). `--bg` printed `backgrounded · <id> · <name>` for both. | Claude Code 2.1.316, 1 Nov 2026 |
+| Two separate Keychain logins, each still right after the other signs in (steps 1, 2) | Yes. A uses `Claude Code-credentials`, B uses `Claude Code-credentials-e70e52b7` (the suffix matches B's socket folder). Each `auth status` showed its own account. Sign-in was not repeated. | Claude Code 2.1.316, 1 Nov 2026 |
+| The default login and its Keychain items are unchanged (steps 0, 2, 9) | Yes. Same item names and count before and after; both logins still signed in. **But** `CLAUDE_CONFIG_DIR=~/.claude` set explicitly reads as signed out (`loggedIn: false`), because the Keychain item name follows the variable, not the path. The default folder must be run with the variable unset. | Claude Code 2.1.316, 1 Nov 2026 |
+| Each list shows only its own folder's agents (step 5) | Yes. A listed only `o10-a`, B only `o10-b`. | Claude Code 2.1.316, 1 Nov 2026 |
+| The two short ids were different, or the same (step 5) | Different (`2411fb8f`, `06892996`). | Claude Code 2.1.316, 1 Nov 2026 |
+| `stop` in the wrong folder does nothing to the other folder's agent, checked in both lists (step 6) | Yes. `stop <A's id>` in B said "No job matching"; both agents stayed `blocked`. | Claude Code 2.1.316, 1 Nov 2026 |
+| Stop then resume continues the session in each folder, with the other folder busy (step 7) | Not tested as written: the resume passed `--model haiku`, and Claude said the session "keeps its own saved options, so the flags you passed started a copy". A resume with flags always starts a copy; only a flag-free `--bg --resume <id>` continues the session. The other folder was not affected either way. | Claude Code 2.1.316, 1 Nov 2026 |
+| If a resume started a copy: was the other folder's agent working at the time (step 7) | The copy came from the flags, not from the other folder: B's busy agent was `done` when A resumed, and A's busy agent was `working` when B resumed; both resumes copied. | Claude Code 2.1.316, 1 Nov 2026 |
+| Removing A's last agent leaves B's daemon and agents running (step 8) | Yes. B's agents were still listed and B's daemon pid was unchanged. | Claude Code 2.1.316, 1 Nov 2026 |
+| Each daemon exits by itself, and how long it takes (step 8) | Not measured: both daemons also host the owner's own long-running sessions, so neither could empty. Their idle spares exited within 30 s. | Claude Code 2.1.316, 1 Nov 2026 |
+
+**Outcome:** everything stays apart, so r13 is built as written in 7.3. Two rules follow for every step that launches Claude: an instance with no folder runs with `CLAUDE_CONFIG_DIR` unset (never set to `~/.claude`), and a resume passes no flags, so a run's model is fixed when it starts.
 
 ### What each answer changes in r13
 
