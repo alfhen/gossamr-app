@@ -327,12 +327,14 @@ impl Core {
     }
 
     /// Refuses an id that isn't a Jira instance, so a provider's or GitHub's row can't be signed in as Jira.
-    pub fn require_jira(&self, instance_id: &str) -> Result<()> {
+    /// A Jira row not yet in the list is named by its connection id, so that is accepted too.
+    pub async fn require_jira(&self, instance_id: &str) -> Result<()> {
         let config = AppConfig::load(&self.data_dir);
-        match config.connections.iter().find(|i| i.id == instance_id) {
-            Some(instance) if instance.kind == ConnectionKind::Jira => Ok(()),
-            _ => Err(Error::Input("That isn't a Jira connection.".into())),
+        let listed = config.connections.iter().any(|i| i.kind == ConnectionKind::Jira && (i.id == instance_id || i.bound_to.as_deref() == Some(instance_id)));
+        if listed || self.auth.connections().await.iter().any(|c| c.id == instance_id) {
+            return Ok(());
         }
+        Err(Error::Input("That isn't a Jira connection.".into()))
     }
 
     pub fn provider_rename(&self, instance_id: &str, name: &str) -> Result<String> {
@@ -934,10 +936,26 @@ mod tests {
     #[tokio::test]
     async fn jira_connect_refuses_an_id_that_is_not_a_jira_instance() {
         let fx = adopted().await;
-        assert!(fx.core.require_jira("jira").is_ok());
+        assert!(fx.core.require_jira("jira").await.is_ok());
         for id in ["claude", "github", "github_9", ""] {
-            assert!(matches!(fx.core.require_jira(id), Err(Error::Input(_))), "{id:?}");
+            assert!(matches!(fx.core.require_jira(id).await, Err(Error::Input(_))), "{id:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn jira_connect_accepts_a_signed_in_jira_connection_that_has_no_instance_yet() {
+        let fx = fixture_with_authenticator(None, None).await;
+        let connection_id = fx.core.auth.connection().await.unwrap().id;
+        assert!(AppConfig::load(&fx.core.data_dir()).connections.is_empty());
+        assert!(fx.core.require_jira(&connection_id).await.is_ok());
+        assert!(matches!(fx.core.require_jira("github").await, Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn jira_connect_accepts_the_connection_id_an_instance_is_bound_to() {
+        let fx = adopted().await;
+        let connection_id = fx.core.auth.connection().await.unwrap().id;
+        assert!(fx.core.require_jira(&connection_id).await.is_ok());
     }
 
     #[tokio::test]
