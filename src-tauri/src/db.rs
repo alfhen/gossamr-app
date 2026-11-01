@@ -29,8 +29,6 @@ pub use code::CachedHttp;
 pub use proposals::is_for;
 pub use pip_turns::{PipTurn, DISCONNECTED, NEVER_RAN};
 #[cfg(test)]
-pub use pip_turns::SIGNED_OUT;
-#[cfg(test)]
 pub use pip_turns::INTERRUPTED;
 
 pub struct Db {

@@ -129,23 +129,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sign_out_fails_a_queued_turn() {
+    async fn removing_jira_fails_a_queued_turn() {
         let fx = crate::inbox::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &TurnMeta::default(), "queued").await.unwrap();
-        fx.core.sign_out().await.unwrap();
+        fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
         let q1 = fx.core.pip_turns("general").await.unwrap().remove(0);
-        assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::SIGNED_OUT)));
+        assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::DISCONNECTED)));
     }
 
     #[tokio::test]
-    async fn sign_out_succeeds_when_the_app_database_cannot_be_opened() {
+    async fn removing_jira_is_refused_and_changes_nothing_when_the_app_database_cannot_be_opened() {
         let fx = crate::inbox::testing::fixture().await;
         let app = fx.dir.join("app.sqlite");
         let _ = std::fs::remove_file(&app);
         std::fs::create_dir(&app).unwrap();
         fx.core.db.lock().unwrap().app = None;
-        fx.core.sign_out().await.unwrap();
-        assert!(fx.core.auth.connection().await.is_none());
+        assert!(fx.core.remove_instance(&fx.scope.connection_id).await.is_err());
+        assert!(fx.core.auth.connection().await.is_some());
+        assert!(fx.core.connection(&fx.scope).is_ok());
     }
 
     async fn request_ids(fx: &crate::inbox::testing::Fixture, conversation: &str) -> Vec<String> {
@@ -153,23 +154,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_out_keeps_the_conversations_and_a_late_finish_writes_nothing() {
+    async fn removing_jira_keeps_the_conversations_and_a_late_finish_writes_nothing() {
         let fx = crate::inbox::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "workspace", "q1", "Hi", &TurnMeta::default(), "running").await.unwrap();
         fx.core.pip_turn_begin(&fx.scope, "CA-1", "q2", "Hi", &TurnMeta::default(), "done").await.unwrap();
-        fx.core.sign_out().await.unwrap();
+        fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
 
         assert!(fx.core.pip_turn_finish(&fx.scope, "q1", "late", true, None, None, None).await.is_err());
         assert_eq!(request_ids(&fx, "general").await, ["q1"]);
         assert_eq!(request_ids(&fx, "CA-1").await, ["q2"]);
         let q1 = fx.core.pip_turns("general").await.unwrap().remove(0);
         assert_eq!(q1.text, "", "the late answer was not written");
-        assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::SIGNED_OUT)), "a turn cut off is not left running");
+        assert_eq!((q1.status.as_str(), q1.error.as_deref()), ("failed", Some(crate::db::DISCONNECTED)), "a turn cut off is not left running");
         assert_eq!(fx.core.pip_turns("CA-1").await.unwrap()[0].status, "done");
     }
 
     #[tokio::test]
-    async fn a_database_that_cannot_open_does_not_stop_signing_out() {
+    async fn a_database_that_cannot_open_does_not_stop_removing_jira() {
         let fx = crate::inbox::testing::fixture().await;
         fx.core.close_db();
         // Something that is not a database where the account's file should be.
@@ -178,7 +179,7 @@ mod tests {
         std::fs::create_dir_all(&path).unwrap();
         assert!(fx.core.with_db_for(&fx.scope, |_| Ok(())).await.is_err(), "the broken file must really fail to open");
 
-        fx.core.sign_out().await.unwrap();
-        assert!(matches!(fx.core.with_db(|_| Ok(())).await, Err(crate::error::Error::NotSignedIn)), "the person is signed out");
+        fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
+        assert!(matches!(fx.core.with_db(|_| Ok(())).await, Err(crate::error::Error::NotSignedIn)), "jira is disconnected");
     }
 }

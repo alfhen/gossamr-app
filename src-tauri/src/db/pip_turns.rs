@@ -14,9 +14,6 @@ use crate::error::Result;
 pub const INTERRUPTED: &str = "Gossamr closed before Pip finished";
 /// Why a turn that was still waiting its turn when the app last closed is shown as failed: it never started.
 pub const NEVER_RAN: &str = "Gossamr closed before this question ran";
-/// What a turn cut off by signing out says.
-#[cfg(test)]
-pub const SIGNED_OUT: &str = "You signed out before Pip finished";
 /// What a turn cut off by removing the Jira connection says.
 pub const DISCONNECTED: &str = "Jira was disconnected before Pip finished";
 
