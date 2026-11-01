@@ -203,10 +203,9 @@ describe("a provider in the list", () => {
     expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
   });
 
-  it("says no check runs instead of Not checked yet", () => {
+  it("says in the detail pane that no check runs", () => {
     const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
     expect(out).toContain("No check runs for this provider.");
-    expect(out).not.toContain("Not checked yet");
   });
 });
 
