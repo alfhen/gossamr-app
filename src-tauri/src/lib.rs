@@ -973,7 +973,7 @@ pub fn run() {
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
             let service = runs::service::RunService::new(
                     core.clone(),
-                    Arc::new(runs::toolchain::SystemToolchain::default()),
+                    Arc::new(runs::toolchain::SystemToolchain::new(core.shell())),
                     runs::index::RunIndex::load(&core.data_dir()),
                     runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),

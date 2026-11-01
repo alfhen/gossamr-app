@@ -17,6 +17,7 @@ use crate::domain::{
 use crate::model::{CachedTicket, Person, Snapshot, Status, Ticket, Transition};
 use crate::proposals;
 use crate::runs::ask::Asks;
+use crate::runs::env::ShellCapture;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
@@ -24,6 +25,7 @@ pub(crate) mod code;
 mod drafts;
 mod instances;
 mod probes;
+mod providers;
 mod run_outcome;
 mod pip_runs;
 mod pip_turns;
@@ -193,6 +195,8 @@ pub struct Core {
     last_error: Mutex<Option<String>>,
     reauth_needed: AtomicBool,
     probes: probes::Probes,
+    /// The person's shell environment, which provider instances without a folder take their login from.
+    shell: Arc<ShellCapture>,
     syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
@@ -232,6 +236,7 @@ impl Core {
             last_error: Mutex::new(None),
             reauth_needed: AtomicBool::new(false),
             probes: probes::Probes::default(),
+            shell: Arc::default(),
             syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
@@ -243,6 +248,11 @@ impl Core {
         }
     }
 
+    /// The capture the run service shares, so the shell is read once for probes, Pip and agents.
+    pub fn shell(&self) -> Arc<ShellCapture> {
+        self.shell.clone()
+    }
+
     pub fn asks(&self) -> &Asks {
         &self.asks
     }
@@ -250,6 +260,12 @@ impl Core {
     #[cfg(test)]
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = home.canonicalize().ok();
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_shell(mut self, shell: ShellCapture) -> Self {
+        self.shell = Arc::new(shell);
         self
     }
 
@@ -1373,6 +1389,15 @@ pub(crate) mod testing {
 
     /// `fixture_with`, signed in to Jira through `authenticator` instead of Atlassian.
     pub async fn fixture_with_authenticator(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>) -> Fixture {
+        fixture_built(code, authenticator, None).await
+    }
+
+    /// `fixture`, with `shell` as the captured shell environment and the data folder inside the home folder, as on a Mac.
+    pub async fn fixture_with_shell(shell: ShellCapture) -> Fixture {
+        fixture_built(None, None, Some(shell)).await
+    }
+
+    async fn fixture_built(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>, shell: Option<ShellCapture>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
@@ -1386,7 +1411,12 @@ pub(crate) mod testing {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
-        let mut core = Core::new(Arc::new(authenticator.map_or_else(|| Auth::signed_in(http, creds.clone()), |a| Auth::with_authenticator(a, creds.clone()))), registry, dir.clone()).with_home(home.clone());
+        let data_dir = if shell.is_some() { home.join("data") } else { dir.clone() };
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let mut core = Core::new(Arc::new(authenticator.map_or_else(|| Auth::signed_in(http, creds.clone()), |a| Auth::with_authenticator(a, creds.clone()))), registry, data_dir).with_home(home.clone());
+        if let Some(shell) = shell {
+            core = core.with_shell(shell);
+        }
         if let Some(code) = code {
             core = core.with_code(code);
         }

@@ -6,6 +6,7 @@
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStringExt;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::process::Command;
@@ -36,9 +37,17 @@ impl RunEnv {
 
     #[cfg(test)]
     pub fn with(mut self, key: &str, value: &str) -> Self {
-        self.vars.retain(|(k, _)| k != OsStr::new(key));
-        self.vars.push((key.into(), value.into()));
+        self.set(key, value);
         self
+    }
+
+    pub fn set(&mut self, key: &str, value: impl Into<OsString>) {
+        self.remove(key);
+        self.vars.push((key.into(), value.into()));
+    }
+
+    pub fn remove(&mut self, key: &str) {
+        self.vars.retain(|(k, _)| k != OsStr::new(key));
     }
 
     pub fn len(&self) -> usize {
@@ -95,6 +104,33 @@ pub async fn capture(shell: &str) -> Result<RunEnv> {
     RunEnv::parse(&out.stdout)
         .filter(|e| e.len() > 0)
         .ok_or_else(|| Error::Claude("Couldn't read your shell environment: it printed no variables.".into()))
+}
+
+/// Captures the shell environment on first use and keeps it. A failure is tried again next time, so fixing the shell
+/// doesn't need a restart.
+#[derive(Default)]
+pub struct ShellCapture {
+    /// None reads `$SHELL` at each capture.
+    shell: Option<String>,
+    found: tokio::sync::Mutex<Option<Arc<RunEnv>>>,
+}
+
+impl ShellCapture {
+    #[cfg(test)]
+    pub fn with_shell(shell: &str) -> Self {
+        Self { shell: Some(shell.into()), found: Default::default() }
+    }
+
+    pub async fn get(&self) -> Result<Arc<RunEnv>> {
+        let mut found = self.found.lock().await;
+        if let Some(env) = &*found {
+            return Ok(env.clone());
+        }
+        let shell = self.shell.clone().unwrap_or_else(|| std::env::var("SHELL").unwrap_or_default());
+        let env = Arc::new(capture(&shell).await?);
+        *found = Some(env.clone());
+        Ok(env)
+    }
 }
 
 #[cfg(test)]
@@ -170,6 +206,19 @@ mod tests {
         let failing = script(&dir, "failing", "printf '\\0GOSSAMR_ENV_BEGIN\\0A=1\\0'; exit 3");
         assert!(capture(&failing).await.is_err());
         assert!(capture("/nonexistent/shell").await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_failed_capture_is_tried_again_and_a_good_one_is_kept() {
+        let dir = scratch("again");
+        let sh = script(&dir, "fakeshell", &format!("[ -e {0}/ok ] || exit 1; printf '\\0GOSSAMR_ENV_BEGIN\\0PATH=/p\\0'", dir.display()));
+        let shell = ShellCapture::with_shell(&sh);
+        assert!(shell.get().await.is_err());
+        std::fs::write(dir.join("ok"), "").unwrap();
+        assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/p");
+        std::fs::remove_file(dir.join("ok")).unwrap();
+        assert!(shell.get().await.is_ok(), "the first good capture is reused");
         let _ = std::fs::remove_dir_all(dir);
     }
 
