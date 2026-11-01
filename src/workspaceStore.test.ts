@@ -13,6 +13,7 @@ import {
   itemByRef,
   itemsByFilter,
   itemsInContainer,
+  keyToRef,
   knownMoves,
   nameOf,
   needsMeItems,
@@ -503,5 +504,15 @@ describe("a new Jira token after Jira turned the old one down", () => {
     await show(dead());
     await show({ ...dead(), error: null as never, reauth: false });
     expect(s().reauth).toBe(false);
+  });
+});
+
+describe("keyToRef", () => {
+  it("reads a connection id that has colons in it as the connection, and the rest as the key", () => {
+    expect(keyToRef("jira:cloud:acct:TAF-12")).toEqual({ connectionId: "jira:cloud:acct", externalId: "TAF-12", key: "TAF-12" });
+  });
+
+  it("reads a simple connection id the same way", () => {
+    expect(keyToRef("mock:DEVOPS-473")).toEqual({ connectionId: "mock", externalId: "DEVOPS-473", key: "DEVOPS-473" });
   });
 });

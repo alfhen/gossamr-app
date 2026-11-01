@@ -307,20 +307,9 @@ impl Core {
         self.restore_code().await;
     }
 
-    pub async fn sign_out(&self) -> Result<()> {
-        let _alone = self.sign_in.lock().await;
-        if let Some(c) = self.auth.connection().await {
-            self.auth.disconnect(&c.id).await?;
-            self.registry.remove(&c.id);
-        }
-        self.close_db();
-        self.settle_pip_turns(crate::db::SIGNED_OUT).await;
-        Ok(())
-    }
-
     /// Late writes for a connection that has left the registry are refused, so the turns it was running would stay
     /// open until the next launch.
-    /// Bookkeeping only: a failure is logged and never blocks signing out or removing a connection.
+    /// Bookkeeping only: a failure is logged and never blocks removing a connection.
     async fn settle_pip_turns(&self, reason: &str) {
         if let Err(e) = self.with_app_db(|db| db.fail_open_pip_turns(reason).map(drop)).await {
             eprintln!("couldn't fail the Pip turns that were still open: {e}");
@@ -979,7 +968,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_connect_still_waiting_on_jira_cannot_undo_a_sign_out_pressed_meanwhile() {
+    async fn a_connect_still_waiting_on_jira_cannot_undo_a_removal_pressed_meanwhile() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
@@ -989,11 +978,11 @@ mod tests {
         let connecting = tokio::spawn(async move { core.connect_jira(&token_for("b", "slow")).await });
         gated.begun.notified().await;
         let core = fx.core.clone();
-        let signing_out = tokio::spawn(async move { core.sign_out().await });
+        let removing = tokio::spawn(async move { core.remove_instance("jira:site:b").await });
         tokio::task::yield_now().await;
         gated.release.notify_one();
         connecting.await.unwrap().unwrap();
-        signing_out.await.unwrap().unwrap();
+        removing.await.unwrap().unwrap();
 
         assert!(fx.core.auth.identity().await.is_none());
         assert!(fx.core.connection(&Scope { connection_id: "jira:site:b".into(), account_id: "b".into() }).is_err());
@@ -1016,7 +1005,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pips_conversations_are_still_there_after_signing_in_to_another_jira_site() {
+    async fn pips_conversations_are_still_there_after_removing_jira_and_connecting_another_site() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
@@ -1025,8 +1014,8 @@ mod tests {
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "In the first site", &meta, "done").await.unwrap();
         fx.core.pip_turn_begin(&fx.scope, "ws:w1", "q2", "In a workstream", &meta, "done").await.unwrap();
 
-        fx.core.sign_out().await.unwrap();
-        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1, "readable while signed out");
+        fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1, "readable while disconnected");
 
         fx.core.connect_jira(&token_for_site("beta", "b", "fast")).await.unwrap();
         let (scope, _, _) = fx.core.auth.identity().await.unwrap();
