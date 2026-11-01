@@ -116,7 +116,7 @@ Measured against the window colour (`ws-win`):
 | `ws-review` | 5.5 | 7.6 |
 | `ws-warn` | 3.6 | 7.4 |
 
-So: against the window, body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-ink3` on `ws-side` and `ws-bar` is about 4.2, so in the sidebar and rail it stays for short meta only. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
+So: against the window, body, secondary and meta text, indigo, blocked and review pass AA in both themes. Light-mode `ws-ink3` on `ws-side` and `ws-bar` is about 4.2, so there it is for icons and large text only, and other text takes `ws-ink2`. Light-mode `ws-warn` is below 4.5 too: it is for icons and fills, and text about a warning stays in ink.
 
 ## Type
 
@@ -215,7 +215,7 @@ Distances stay small: 40 px for a sheet, 6 px and a 0.98 scale for a popover, 1 
 | Resize handle | The indigo line fades in, 120 ms | | |
 | Running agent | A ring grows from the status dot and fades, 1.8 s, ease-out, looping | Stops when the run stops | The only motion on a working run |
 | Pending control | A small spinner inside the control | Replaced by the result | Only inside the switch or button that is waiting |
-| Pip at work | A web in the answer's place: eight spokes, then the spiral, with Pip crawling it in and back out, a dew bead, 6 s, looping | Lifts 14 px and fades, 500 ms, as the answer appears | `pip-work`, `pip-web-*`, `pip-crawl` in `pip.css`. A spider word (Spinning, Weaving, Untangling, Following a thread, Tying a knot, Mending the web, Gathering dew, Testing the silk, Casting a line, Reeling in) changes every 2.6 s in shuffled order, never the same twice running, and is hidden from screen readers. Under it a plain line of what Pip is doing, with the time after 5 s, is a polite live region. The time is hidden from screen readers, so they are not told it every second, and it counts from when Pip began, not from when a queued question was asked. With the pane closed a glass chip beside the launcher carries the same word |
+| Pip at work | A web in the answer's place: eight spokes, then the spiral, with Pip crawling it in and back out, a dew bead, 6 s, looping | Lifts 14 px and fades, 500 ms, as the answer appears | `pip-work`, `pip-web-*`, `pip-crawl` in `pip.css`. A spider word (Spinning, Weaving, Untangling, Following a thread, Tying a knot, Mending the web, Gathering dew, Testing the silk, Casting a line, Reeling in) changes every 2.6 s in shuffled order, never the same twice running, and is hidden from screen readers. Under it a plain line of what Pip is doing, with the time after 5 s, is a polite live region. The time is hidden from screen readers, so they are not told it every second, and it counts from when Pip began, not from when a queued question was asked. A turn restored after a reload has no start time, so its clock counts from when it was asked. With the pane closed a glass chip beside the launcher carries the same word |
 | Cobweb on hover or selection | | Shrinks to 0.4, turns −10° and fades, 500 ms | It clears the card for the person to read |
 | Wither tint | Deepens across 600 ms as a stage is reached | | |
 
