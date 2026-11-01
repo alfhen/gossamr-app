@@ -121,6 +121,11 @@ impl ShellCapture {
         Self { shell: Some(shell.into()), found: Default::default() }
     }
 
+    /// Drops a kept capture, so the next `get` reads the shell again.
+    pub async fn forget(&self) {
+        *self.found.lock().await = None;
+    }
+
     pub async fn get(&self) -> Result<Arc<RunEnv>> {
         let mut found = self.found.lock().await;
         if let Some(env) = &*found {
@@ -219,6 +224,20 @@ mod tests {
         assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/p");
         std::fs::remove_file(dir.join("ok")).unwrap();
         assert!(shell.get().await.is_ok(), "the first good capture is reused");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_forgotten_capture_is_read_again() {
+        let dir = scratch("forget");
+        let sh = script(&dir, "fakeshell", &format!("printf '\\0GOSSAMR_ENV_BEGIN\\0PATH=%s\\0' \"$(cat {0}/path)\"", dir.display()));
+        std::fs::write(dir.join("path"), "/one").unwrap();
+        let shell = ShellCapture::with_shell(&sh);
+        assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/one");
+        std::fs::write(dir.join("path"), "/two").unwrap();
+        assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/one");
+        shell.forget().await;
+        assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/two");
         let _ = std::fs::remove_dir_all(dir);
     }
 

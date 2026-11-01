@@ -8,7 +8,6 @@ use crate::runs::provider_folder::Places;
 impl Core {
     /// The state of every provider instance, in order. The folder rules run on the list as it is now, and a failed
     /// capture of the shell makes the instance without a folder unavailable, never the app's own environment.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn provider_states(&self) -> Vec<(String, ProviderState)> {
         let config = AppConfig::load(&self.data_dir);
         if config.providers.is_empty() || config.providers_error.is_some() || config.connections_error.is_some() {
@@ -17,6 +16,15 @@ impl Core {
         let shell = self.shell.get().await.inspect_err(|e| eprintln!("{e}")).ok();
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
         states(&config.providers, &places, shell.as_deref())
+    }
+
+    /// Runs the folder rules on `config.json` as it is now and logs each instance that fails them.
+    pub async fn check_providers(&self) {
+        for (id, state) in self.provider_states().await {
+            if let ProviderState::Error(problem) = state {
+                eprintln!("provider {id}: {problem}");
+            }
+        }
     }
 }
 
@@ -95,7 +103,7 @@ mod tests {
         add(&fx.core, "claude_2", Some("/tmp/outside-home"));
         add(&fx.core, "claude_3", Some("~/.claude-ok"));
         let states = fx.core.provider_states().await;
-        assert!(matches!(&states[1].1, ProviderState::Error(e) if e.starts_with("This folder can't be used.")), "{:?}", states[1]);
+        assert!(matches!(&states[1].1, ProviderState::Error(e) if e.starts_with("This folder can't be used: ")), "{:?}", states[1]);
         assert!(matches!(states[2].1, ProviderState::Ready(_)));
     }
 }

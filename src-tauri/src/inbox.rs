@@ -248,7 +248,8 @@ impl Core {
         }
     }
 
-    /// The capture the run service shares, so the shell is read once for probes, Pip and agents.
+    /// The capture that probes and agents share, so the shell is read once. Pip keeps the app's own environment and takes
+    /// only its login variables from a provider instance.
     pub fn shell(&self) -> Arc<ShellCapture> {
         self.shell.clone()
     }

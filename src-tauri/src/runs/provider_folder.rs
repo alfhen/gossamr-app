@@ -59,6 +59,9 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
         if let Ok(real) = head.canonicalize() {
             return Ok(rest.iter().rev().fold(real, |acc, part| acc.join(part)));
         }
+        if !rest.is_empty() && head.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err("It goes through a link to a folder that doesn't exist.".into());
+        }
         let (Some(name), Some(parent)) = (head.file_name(), head.parent()) else {
             return Err("It has a .. in a part that doesn't exist yet.".into());
         };
@@ -94,20 +97,28 @@ fn locate(typed: &str, places: &Places) -> Result<Located, String> {
     Ok(Located::of(real))
 }
 
-/// The folders the CLI uses when it is not told one, which only the instance without a folder may have.
+const DRIVERS: [Driver; 2] = [Driver::Claude, Driver::Codex];
+
+/// The folders the CLI uses when it is not told one, which only the instance without a folder may have. Without the
+/// shell its `CODEX_HOME` is unknown, so `~/.codex` is refused rather than risk the login the CLI would use.
 fn usual_folders(driver: Driver, home: &Path, shell: Option<&RunEnv>) -> Vec<PathBuf> {
     let from_shell = shell.and_then(|s| s.get(driver.folder_variable())).filter(|v| !v.is_empty()).map(PathBuf::from);
     match (driver, from_shell) {
         (Driver::Claude, shell_folder) => [home.join(".claude")].into_iter().chain(shell_folder).collect(),
         (Driver::Codex, Some(shell_folder)) => vec![shell_folder],
-        (Driver::Codex, None) if shell.is_some() => vec![home.join(".codex")],
-        // Without the shell, its CODEX_HOME can't be known, so no folder is taken for the usual one.
-        (Driver::Codex, None) => Vec::new(),
+        (Driver::Codex, None) => vec![home.join(".codex")],
     }
 }
 
+/// The driver whose usual folder `folder` is. Both drivers' folders count: each CLI keeps files with the same names at
+/// the root of its folder.
+fn usual_owner(folder: &Located, home: &Path, shell: Option<&RunEnv>) -> Option<Driver> {
+    DRIVERS.into_iter().find(|&driver| usual_folders(driver, home, shell).iter().filter_map(|f| resolve(f).ok()).map(Located::of).any(|u| u.is(folder)))
+}
+
 /// The problem with each provider instance whose folder can't be used, by instance id. The first instance to claim a
-/// folder or the no-folder place keeps it; a later one is the problem.
+/// folder or the no-folder place keeps it; a later one is the problem. A folder is claimed for every driver, not only
+/// the one that took it.
 pub fn problems(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> HashMap<String, String> {
     let mut found = HashMap::new();
     let mut taken: Vec<(Driver, Located)> = Vec::new();
@@ -116,17 +127,17 @@ pub fn problems(providers: &[ProviderInstance], places: &Places, shell: Option<&
             None => providers[..at].iter().find(|q| q.driver == p.driver && q.config.config_dir.is_none()).map(|q| format!("Your usual setup is already added as {}.", q.display_name)),
             Some(typed) => match locate(typed, places) {
                 Err(problem) => Some(problem),
-                Ok(folder) => {
-                    let usual = places.home.into_iter().flat_map(|home| usual_folders(p.driver, home, shell)).filter_map(|f| resolve(&f).ok()).map(Located::of);
-                    if usual.into_iter().any(|u| u.is(&folder)) {
-                        Some("That's your usual setup. Choose My usual setup instead.".into())
-                    } else if taken.iter().any(|(driver, other)| *driver == p.driver && other.is(&folder)) {
-                        Some(format!("Another {} already uses this folder.", p.driver.label()))
-                    } else {
-                        taken.push((p.driver, folder));
-                        None
-                    }
-                }
+                Ok(folder) => match places.home.and_then(|home| usual_owner(&folder, home, shell)) {
+                    Some(owner) if owner == p.driver => Some("That's your usual setup. Choose My usual setup instead.".into()),
+                    Some(owner) => Some(format!("That's the usual folder of {}. Choose another folder.", owner.label())),
+                    None => match taken.iter().find(|(_, other)| other.is(&folder)) {
+                        Some((owner, _)) => Some(format!("Another {} already uses this folder.", owner.label())),
+                        None => {
+                            taken.push((p.driver, folder));
+                            None
+                        }
+                    },
+                },
             },
         };
         if let Some(problem) = problem {
@@ -264,11 +275,12 @@ mod tests {
         let set = RunEnv::from_pairs([("CODEX_HOME", rig.folder(".codex-shell"))]);
         assert_eq!(rig.problem_with(Driver::Codex, "~/.codex", Some(&set)), None, "dot-codex is stored as typed when the shell sets another");
         assert!(rig.problem_with(Driver::Codex, "~/.codex-shell", Some(&set)).is_some());
-        assert_eq!(rig.problem_with(Driver::Codex, "~/.codex", None), None, "without the shell nothing is known to be the usual folder");
+        assert!(rig.problem_with(Driver::Codex, "~/.codex", None).is_some(), "without the shell ~/.codex may be the usual folder");
+        assert_eq!(rig.problem_with(Driver::Codex, "~/.codex-work", None), None);
     }
 
     #[test]
-    fn two_instances_of_one_driver_cannot_share_a_folder_whatever_its_case_or_spelling() {
+    fn two_instances_cannot_share_a_folder_whatever_its_driver_case_or_spelling() {
         let rig = Rig::new("dup");
         std::fs::create_dir_all(rig.home.join("shared")).unwrap();
         let list = [
@@ -276,12 +288,33 @@ mod tests {
             provider("b", Driver::Claude, Some(&rig.folder("SHARED"))),
             provider("c", Driver::Claude, Some("~/shared/../shared")),
             provider("d", Driver::Codex, Some("~/shared")),
+            provider("e", Driver::Codex, Some("~/own")),
         ];
         let found = problems(&list, &rig.places(), None);
         let mut ids: Vec<_> = found.keys().cloned().collect();
         ids.sort();
-        assert_eq!(ids, ["b", "c"], "the first keeps the folder and another driver may use it");
+        assert_eq!(ids, ["b", "c", "d"], "the first keeps the folder, whatever driver asks later");
         assert_eq!(found["b"], "Another Claude already uses this folder.");
+        assert_eq!(found["d"], "Another Claude already uses this folder.");
+    }
+
+    #[test]
+    fn a_driver_cannot_take_the_other_drivers_usual_folder() {
+        let rig = Rig::new("cross");
+        let shell = RunEnv::from_pairs([("CLAUDE_CONFIG_DIR", rig.folder(".claude-shell")), ("CODEX_HOME", rig.folder(".codex-shell"))]);
+        for (driver, folder) in [(Driver::Claude, "~/.codex-shell"), (Driver::Codex, "~/.claude"), (Driver::Codex, "~/.claude-shell")] {
+            let problem = rig.problem_with(driver, folder, Some(&shell)).unwrap_or_default();
+            assert!(problem.starts_with("That's the usual folder of"), "{driver:?} {folder}: {problem}");
+        }
+        assert!(rig.problem_with(Driver::Claude, "~/.codex", None).is_some(), "without the shell too");
+    }
+
+    #[test]
+    fn a_dangling_symlinked_parent_is_refused() {
+        let rig = Rig::new("dangling");
+        symlink(rig.root.join("unmounted"), rig.home.join("hop")).unwrap();
+        assert!(rig.problem(Driver::Claude, "~/hop/work").unwrap().contains("link"));
+        assert!(rig.problem(Driver::Claude, "~/hop").unwrap().contains("link"));
     }
 
     #[test]

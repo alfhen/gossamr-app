@@ -24,6 +24,7 @@ impl Unavailable {
 /// What an instance can be used for. Only `Ready` may start a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderState {
+    Off,
     Error(String),
     Unavailable(Unavailable),
     Ready(ProviderEnv),
@@ -45,8 +46,8 @@ impl std::fmt::Debug for ProviderEnv {
 impl ProviderEnv {
     /// An instance with a folder runs as the login in it: the folder variable is set and every other login variable is
     /// removed, so a key the shell exports can't override it. Without a folder the login is the shell's, which has to be
-    /// known.
-    pub fn resolve(instance: &ProviderInstance, shell: Option<&RunEnv>, home: &Path) -> std::result::Result<Self, Unavailable> {
+    /// known. Private, so the folder rules in `states` can't be skipped.
+    fn resolve(instance: &ProviderInstance, shell: Option<&RunEnv>, home: &Path) -> std::result::Result<Self, Unavailable> {
         let driver = instance.driver;
         let vars = match instance.config.config_dir.as_deref() {
             Some(typed) => {
@@ -75,7 +76,7 @@ impl ProviderEnv {
 }
 
 /// The state of every provider instance, in order. A folder that fails the rules in `provider_folder` is an error
-/// whatever the shell says.
+/// whatever the shell says, and an instance that is turned off is never ready.
 pub fn states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
     let problems = provider_folder::problems(providers, places, shell);
     let home = places.home.unwrap_or(Path::new(""));
@@ -83,7 +84,9 @@ pub fn states(providers: &[ProviderInstance], places: &Places, shell: Option<&Ru
         .iter()
         .map(|p| {
             let state = match problems.get(&p.id) {
-                Some(problem) => ProviderState::Error(format!("This folder can't be used. {problem}")),
+                _ if !p.enabled => ProviderState::Off,
+                Some(problem) if p.config.config_dir.is_some() => ProviderState::Error(format!("This folder can't be used: {problem}")),
+                Some(problem) => ProviderState::Error(problem.clone()),
                 None => ProviderEnv::resolve(p, shell, home).map_or_else(ProviderState::Unavailable, ProviderState::Ready),
             };
             (p.id.clone(), state)
@@ -142,6 +145,31 @@ mod tests {
         assert!(resolved(&instance("claude_2", Driver::Claude, Some("~/.claude-work")), None).is_some());
         let none = ProviderEnv::resolve(&instance("claude", Driver::Claude, None), None, Path::new("/Users/x"));
         assert_eq!(none, Err(Unavailable::NoShellSetup));
+    }
+
+    #[test]
+    fn a_folder_that_fails_the_rules_never_becomes_a_ready_environment() {
+        let places = Places { home: Some(Path::new("/Users/x")), data_dir: Path::new("/Users/x/data") };
+        let shell = shell();
+        for folder in ["/tmp/shared", "relative/dir", "~/it's", "~", "/Users/x/.claude"] {
+            let states = states(&[instance("a", Driver::Claude, Some(folder))], &places, Some(&shell));
+            assert!(matches!(&states[0].1, ProviderState::Error(e) if e.starts_with("This folder can't be used: ")), "{folder}: {states:?}");
+        }
+    }
+
+    #[test]
+    fn an_instance_that_is_off_is_never_ready() {
+        let places = Places { home: Some(Path::new("/Users/x")), data_dir: Path::new("/Users/x/data") };
+        let mut off = instance("a", Driver::Claude, Some("~/.claude-work"));
+        off.enabled = false;
+        assert_eq!(states(&[off], &places, Some(&shell()))[0].1, ProviderState::Off);
+    }
+
+    #[test]
+    fn a_second_instance_without_a_folder_gets_the_problem_without_the_folder_prefix() {
+        let places = Places { home: Some(Path::new("/Users/x")), data_dir: Path::new("/Users/x/data") };
+        let list = [instance("a", Driver::Claude, None), instance("b", Driver::Claude, None)];
+        assert_eq!(states(&list, &places, Some(&shell()))[1].1, ProviderState::Error("Your usual setup is already added as a.".into()));
     }
 
     #[test]

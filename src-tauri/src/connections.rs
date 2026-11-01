@@ -73,8 +73,23 @@ impl Driver {
     /// The variables that pick which account the CLI runs as, the folder variable first.
     pub fn login_variables(self) -> &'static [&'static str] {
         match self {
-            Self::Claude => &["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"],
-            Self::Codex => &["CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY"],
+            Self::Claude => &[
+                "CLAUDE_CONFIG_DIR",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_FEDERATION_RULE_ID",
+                "ANTHROPIC_ORGANIZATION_ID",
+                "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY",
+                "ANTHROPIC_FOUNDRY_API_KEY",
+                "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+                "ANTHROPIC_FOUNDRY_RESOURCE",
+                "ANTHROPIC_FOUNDRY_BASE_URL",
+            ],
+            Self::Codex => &["CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"],
         }
     }
 }

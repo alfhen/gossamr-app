@@ -1005,6 +1005,8 @@ pub fn run() {
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
 
+            let checked = core.clone();
+            tauri::async_runtime::spawn(async move { checked.check_providers().await });
             spawn_sync_loop(app.handle().clone(), core);
             Ok(())
         })

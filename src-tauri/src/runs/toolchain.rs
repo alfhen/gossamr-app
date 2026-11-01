@@ -51,7 +51,10 @@ impl ToolchainSource for SystemToolchain {
         }
         let env = self.shell.get().await.map_err(|e| ToolchainError::NoEnvironment(e.to_string()))?;
         let on = env.clone();
-        let binary = tokio::task::spawn_blocking(move || find_binary(Driver::Claude, &on)).await.ok().flatten().ok_or(ToolchainError::ClaudeMissing)?;
+        let Some(binary) = tokio::task::spawn_blocking(move || find_binary(Driver::Claude, &on)).await.ok().flatten() else {
+            self.shell.forget().await;
+            return Err(ToolchainError::ClaudeMissing);
+        };
         let t = Toolchain { cli: Arc::new(SystemCli::new(binary, env.clone())), env };
         *found = Some(t.clone());
         Ok(t)
