@@ -294,10 +294,13 @@ impl Core {
         self.jira_status().await
     }
 
-    /// The site and account of the primary connection, so the page labels the session with the account it shows.
+    /// The site and account of the primary connection, so the page labels the session with the account it shows. A
+    /// token no connection is registered for is not shown: every Jira call would refuse it.
     pub async fn jira_status(&self) -> Result<AuthStatus> {
-        let primary = self.primary().await.ok().map(|p| p.connection.id);
-        self.auth.status(primary.as_deref()).await
+        match self.primary().await {
+            Ok(primary) => self.auth.status(Some(&primary.connection.id)).await,
+            Err(_) => Ok(AuthStatus::default()),
+        }
     }
 
     /// Registers `connection`, and drops each of `previous` that is another account: a registered connection is the
@@ -1334,6 +1337,8 @@ mod tests {
         assert!(fx.core.connection(&fx.scope).is_err());
         assert!(fx.core.connection(&second).is_err());
         assert_eq!(fx.core.auth.accounts().await.len(), 2, "both tokens are still held");
+        let status = fx.core.jira_status().await.unwrap();
+        assert!(status.site.is_none() && status.me.is_none(), "an unregistered token is not shown as signed in");
     }
 
     #[tokio::test(flavor = "multi_thread")]

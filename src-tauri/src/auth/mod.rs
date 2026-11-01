@@ -103,7 +103,7 @@ pub trait Authenticator: Send + Sync {
     async fn whoami(&self, token: &AccessToken) -> Result<Account>;
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatus {
     pub site: Option<Site>,
