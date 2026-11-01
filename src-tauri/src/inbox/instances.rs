@@ -1,7 +1,7 @@
 //! Core's side of the connection instances: creating them from the sign-ins already there, keeping them in step with
 //! signing in and out, and naming each connection by its instance.
 
-use super::{db_file, ConnectionInfo, Core};
+use super::{ConnectionInfo, Core};
 use crate::config::AppConfig;
 use crate::connections::{self, Binding, RowKind};
 use crate::db::is_for;
@@ -45,7 +45,7 @@ fn open_drafts_for(db: &crate::db::Db, connection_id: &str) -> Result<Vec<crate:
     Ok(db.proposals(&open)?.into_iter().filter(|p| is_for(p, connection_id)).collect())
 }
 
-fn remove_db_files(path: &std::path::Path) {
+pub(super) fn remove_db_files(path: &std::path::Path) {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
     }
@@ -86,10 +86,7 @@ impl Core {
         if config.version >= connections::VERSION {
             return;
         }
-        let jira = match (self.auth.connection().await, self.auth.identity().await) {
-            (Some(Connection { id, .. }), Some((_, site, _))) => Some(Binding::jira(&id, &site.name, &site.url)),
-            _ => None,
-        };
+        let jira: Vec<Binding> = self.auth.accounts().await.iter().map(|s| Binding::jira(&s.connection.id, &s.site.name, &s.site.url).with_email(&s.email)).collect();
         let logins = self.code.auth.try_logins();
         if let Err(e) = &logins {
             eprintln!("couldn't read the saved GitHub sign-ins, so the connections aren't adopted yet: {e}");
@@ -102,6 +99,7 @@ impl Core {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn bind_instance(&self, binding: Binding) {
         if let Err(e) = self.try_bind_instance(binding) {
             eprintln!("couldn't save the connections to config.json: {e}");
@@ -109,9 +107,18 @@ impl Core {
         self.probes_rebound();
     }
 
-    /// Binds the instance for `binding` when the connections are live, and reports a failed write.
+    /// Binds the instance for `binding` when the connections are live, and reports a failed write or an account that
+    /// already has an instance.
     pub(super) fn try_bind_instance(&self, binding: Binding) -> Result<()> {
-        self.try_change_instances(|config| connections::bind(config, binding))
+        self.try_change_instances_checked(|config| connections::bind(config, binding))
+    }
+
+    /// Points the instance of the accounts `replaced` at `binding`'s account.
+    pub(super) fn rebind_instance(&self, replaced: Vec<String>, binding: Binding) {
+        if let Err(e) = self.try_change_instances_checked(|config| connections::rebind(config, &replaced, binding)) {
+            eprintln!("couldn't save the connections to config.json: {e}");
+        }
+        self.probes_rebound();
     }
 
     pub(super) fn unbind_instance(&self, connection_id: &str) {
@@ -200,7 +207,8 @@ impl Core {
             let login = instance.config.login.clone();
             return Ok(RemovalTarget { kind: instance.kind, connection_id, name: instance.display_name.clone(), instance_id: Some(instance.id.clone()), login });
         }
-        if let Some(connection) = self.auth.connection().await.filter(|c| c.id == id) {
+        if let Some(session) = self.auth.accounts().await.into_iter().find(|s| s.connection.id == id) {
+            let connection = session.connection;
             return Ok(RemovalTarget { kind: ConnectionKind::Jira, connection_id: connection.id, name: connection.display_name, instance_id: None, login: None });
         }
         if let Ok(session) = self.code.session(id) {
@@ -308,17 +316,22 @@ impl Core {
         Ok(())
     }
 
-    /// Forgets the Jira token and deletes the site's cache, if `connection_id` is the signed-in connection.
+    /// Forgets the Jira token of `connection_id` and deletes its cache. The cache goes even when no token was loaded
+    /// (the Keychain item couldn't be read, or an earlier removal got as far as the token), so adding the account again
+    /// starts empty.
     async fn forget_jira(&self, connection_id: &str) -> Result<()> {
-        let Some(connection) = self.auth.connection().await else { return Ok(()) };
-        if connection.id != connection_id {
-            return Err(Error::Input("Jira is signed in to another account now. Reopen Settings.".into()));
+        let held = self.auth.accounts().await.into_iter().map(|s| s.connection).find(|c| c.id == connection_id);
+        if held.is_some() {
+            self.auth.disconnect(connection_id).await?;
         }
-        self.auth.disconnect(&connection.id).await?;
+        let Some(connection) = held.or_else(|| Connection::from_jira_id(connection_id)) else { return Ok(()) };
         self.registry.remove(&connection.id);
-        self.close_db();
-        self.settle_pip_turns(crate::db::DISCONNECTED).await;
-        remove_db_files(&self.data_dir.join(db_file(&connection)));
+        self.jira_sync.lock().expect("sync lock poisoned").remove(&connection.id);
+        // Turns don't record their connection yet, so with another one signed in they can't be told apart from its own.
+        if !self.auth.accounts().await.iter().any(|s| self.registry.connection(&s.connection.id).is_some()) {
+            self.settle_pip_turns(crate::db::DISCONNECTED).await;
+        }
+        self.delete_cache(&connection);
         Ok(())
     }
 
@@ -399,6 +412,15 @@ impl Core {
             .collect()
     }
 
+    fn try_change_instances_checked(&self, change: impl FnOnce(&mut AppConfig) -> std::result::Result<(), connections::AlreadyBound>) -> Result<()> {
+        let mut refused = false;
+        self.try_change_instances(|config| refused = change(config).is_err())?;
+        if refused {
+            return Err(Error::Input(connections::ALREADY_HAVE_ACCOUNT.into()));
+        }
+        Ok(())
+    }
+
     fn try_change_instances(&self, change: impl FnOnce(&mut AppConfig)) -> Result<()> {
         AppConfig::update_if(&self.data_dir, |config| {
             let live = connections::is_live(config);
@@ -433,6 +455,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inbox::db_file;
     use crate::domain::{CreatedBy, Intent, Origin, Proposal};
     use crate::inbox::testing::fixture_with_authenticator;
     use crate::proposals::Draft;
@@ -446,6 +469,15 @@ mod tests {
 
     fn names(fx: &crate::inbox::testing::Fixture) -> Vec<String> {
         AppConfig::load(&fx.core.data_dir()).connections.into_iter().map(|i| i.display_name).collect()
+    }
+
+    #[tokio::test]
+    async fn adopting_several_signed_in_accounts_makes_an_instance_for_each_bound_to_its_own() {
+        let (fx, _) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let config = AppConfig::load(&fx.core.data_dir());
+        let rows: Vec<_> = config.connections.iter().map(|i| (i.id.as_str(), i.display_name.as_str(), i.bound_to.as_deref(), i.config.email.as_deref())).collect();
+        assert_eq!(rows, [("jira", "Acme", Some("jira:site:me"), Some("me@example.com")), ("jira_2", "Beta", Some("jira:beta:bo"), Some("bo@example.com"))]);
     }
 
     #[tokio::test]

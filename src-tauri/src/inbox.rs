@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
-use crate::connections::{Binding, Driver, RowKind};
-use crate::auth::{Account, Auth, AuthStatus, Scope, Site, TokenSignIn};
+use crate::config::AppConfig;
+use crate::connections::{self, Binding, Driver, RowKind};
+use crate::auth::{Account, Auth, AuthStatus, Scope, Site, SignedIn, TokenSignIn};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
 use crate::events::{changes_since, derive, my_actions, NewEvent};
@@ -176,9 +176,17 @@ pub struct ConnectionInfo {
 struct Open {
     /// `app.sqlite` alone, opened on first use and kept for the life of the app.
     app: Option<Db>,
-    /// One cache per connection, opened for whichever is signed in. A connection is a site and an account, so two
-    /// people signing in to the same site on one Mac never see each other's tickets or inbox.
-    cache: Option<(String, Db)>,
+    /// One cache per connection, each open from first use until the connection is removed. A connection is a site and
+    /// an account, so two people signing in to the same site on one Mac never see each other's tickets or inbox.
+    cache: HashMap<String, Db>,
+}
+
+/// How one Jira connection's sync is going.
+#[derive(Clone, Default)]
+struct JiraSync {
+    error: Option<String>,
+    reauth: bool,
+    syncing: bool,
 }
 
 pub struct Core {
@@ -190,10 +198,8 @@ pub struct Core {
     home: Option<PathBuf>,
     /// The databases, behind one lock so the app database is never written from two handles at once.
     db: Mutex<Open>,
-    last_error: Mutex<Option<String>>,
-    reauth_needed: AtomicBool,
+    jira_sync: Mutex<HashMap<String, JiraSync>>,
     probes: probes::Probes,
-    syncing: AtomicBool,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
     radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
@@ -229,10 +235,8 @@ impl Core {
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
             db: Mutex::new(Open::default()),
-            last_error: Mutex::new(None),
-            reauth_needed: AtomicBool::new(false),
+            jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
-            syncing: AtomicBool::new(false),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
             asks: Asks::default(),
@@ -277,31 +281,48 @@ impl Core {
         self.data_dir.clone()
     }
 
-    /// Signs in with an API token and registers the resulting connection.
+    /// Signs in with an API token and registers the resulting connection. Replaces every earlier sign-in.
     pub async fn connect_jira(&self, input: &TokenSignIn) -> Result<AuthStatus> {
         let _alone = self.sign_in.lock().await;
-        let previous = self.auth.connection().await;
+        let previous: Vec<Connection> = self.auth.accounts().await.into_iter().map(|s| s.connection).collect();
         let connection = self.auth.connect(input).await?;
-        if let Some((_, site, _)) = self.auth.identity().await {
-            self.bind_instance(Binding::jira(&connection.id, &site.name, &site.url).with_email(input.email.trim()));
+        if let Some(now) = self.auth.accounts().await.into_iter().find(|s| s.connection.id == connection.id) {
+            let binding = Binding::jira(&connection.id, &now.site.name, &now.site.url).with_email(input.email.trim());
+            self.rebind_instance(previous.iter().map(|c| c.id.clone()).collect(), binding);
         }
-        self.replace_connection(previous, connection);
-        self.auth.status().await
+        self.replace_connections(previous, connection);
+        self.jira_status().await
     }
 
-    /// Registers `connection`, and drops `previous` if it was another account: a registered connection is the proof
-    /// `with_app_db_for` relies on that its scope is still signed in.
-    fn replace_connection(&self, previous: Option<Connection>, connection: Connection) {
-        if let Some(previous) = previous.filter(|p| p.id != connection.id) {
-            self.registry.remove(&previous.id);
+    /// The site and account of the primary connection, so the page labels the session with the account it shows.
+    pub async fn jira_status(&self) -> Result<AuthStatus> {
+        let primary = self.primary().await.ok().map(|p| p.connection.id);
+        self.auth.status(primary.as_deref()).await
+    }
+
+    /// Registers `connection`, and drops each of `previous` that is another account: a registered connection is the
+    /// proof `with_app_db_for` relies on that its scope is still signed in.
+    fn replace_connections(&self, previous: Vec<Connection>, connection: Connection) {
+        for gone in previous.into_iter().filter(|p| p.id != connection.id) {
+            self.registry.remove(&gone.id);
+            self.close_cache(&gone.id);
+            self.jira_sync.lock().expect("sync lock poisoned").remove(&gone.id);
         }
         self.registry.register(connection);
     }
 
-    /// Registers the connection restored from the Keychain, if any.
+    /// Registers the connections restored from the Keychain that an instance is bound to. A token no instance is bound
+    /// to stays in the vault, unregistered. Before the first adoption the first session is registered.
     pub async fn restore(&self) {
-        if let Some(connection) = self.auth.connection().await {
-            self.registry.register(connection);
+        let signed_in = self.auth.accounts().await;
+        let config = AppConfig::load(&self.data_dir);
+        let registered: Vec<SignedIn> = if connections::is_live(&config) {
+            signed_in.into_iter().filter(|s| config.connections.iter().any(|i| i.bound_to.as_deref() == Some(s.connection.id.as_str()))).collect()
+        } else {
+            signed_in.into_iter().take(1).collect()
+        };
+        for session in registered {
+            self.registry.register(session.connection);
         }
         self.restore_code().await;
     }
@@ -315,8 +336,31 @@ impl Core {
         }
     }
 
+    /// The primary connection: the first signed-in account that is on, or the first one when all are off. Work that
+    /// isn't about a particular connection starts here.
+    pub async fn primary(&self) -> Result<SignedIn> {
+        let registered: Vec<SignedIn> = self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).collect();
+        if registered.len() > 1 {
+            let off = self.off_names();
+            if let Some(on) = registered.iter().find(|s| off.name(&s.connection.id).is_none()) {
+                return Ok(on.clone());
+            }
+        }
+        registered.into_iter().next().ok_or(Error::NotSignedIn)
+    }
+
     async fn identity(&self) -> Result<(Scope, Site, Account)> {
-        self.auth.identity().await.ok_or(Error::NotSignedIn)
+        Ok(self.primary().await?.identity())
+    }
+
+    /// The registered connection of `scope` and the site and account it is signed in as. A scope that is no longer
+    /// registered, or whose account has changed, is refused: work started for it must not run as another account.
+    async fn identity_for(&self, scope: &Scope) -> Result<(Connection, Site, Account)> {
+        let Some(connection) = self.registry.connection(&scope.connection_id) else {
+            return Err(if self.auth.accounts().await.is_empty() { Error::NotSignedIn } else { Error::SiteChanged });
+        };
+        let signed_in = self.auth.accounts().await.into_iter().find(|s| s.connection.id == connection.id && &s.scope == scope);
+        signed_in.map(|s| (connection, s.site, s.me)).ok_or(Error::SiteChanged)
     }
 
     async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
@@ -324,22 +368,22 @@ impl Core {
         self.with_db_for(&scope, f).await
     }
 
-    /// Runs `f` against `scope`'s database, but only if that site and account are still the signed-in ones. Work
-    /// that fetched data before someone signed in elsewhere must not land in the new session's database.
+    /// Runs `f` against `scope`'s database, but only if that connection is still registered and signed in as that
+    /// account. Work that fetched data before the connection was removed or replaced must not land in a reopened file.
     async fn with_db_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let (current, _, _) = self.identity().await?;
-        if &current != scope {
+        let (connection, _, _) = self.identity_for(scope).await?;
+        let mut open = self.db.lock().expect("db lock poisoned");
+        // Removal unregisters before `delete_cache` takes this lock, so a caller that waited on it must look again.
+        if self.registry.connection(&connection.id).is_none() {
             return Err(Error::SiteChanged);
         }
-        let connection = self.connection(scope)?;
-        let mut open = self.db.lock().expect("db lock poisoned");
         self.open_app(&mut open)?;
-        if open.cache.as_ref().map(|(id, _)| *id != connection.id).unwrap_or(true) {
+        if !open.cache.contains_key(&connection.id) {
             let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?.for_connection(&connection.id);
             backfill_cache(&db, &connection)?;
-            open.cache = Some((connection.id.clone(), db));
+            open.cache.insert(connection.id.clone(), db);
         }
-        f(&open.cache.as_ref().expect("opened above").1)
+        f(&open.cache[&connection.id])
     }
 
     /// The app database, opened on first use, which is also when what a closed app left half done is settled. That must
@@ -377,9 +421,17 @@ impl Core {
         self.with_db_for(scope, |db| db.atomically(f)).await
     }
 
-    /// Lets go of the signed-in connection's cache. The app database stays open: recovery runs once per launch.
-    pub fn close_db(&self) {
-        self.db.lock().expect("db lock poisoned").cache = None;
+    /// Lets go of `connection_id`'s open cache. The app database stays open: recovery runs once per launch.
+    fn close_cache(&self, connection_id: &str) {
+        self.db.lock().expect("db lock poisoned").cache.remove(connection_id);
+    }
+
+    /// Closes `connection`'s cache and deletes its files under one hold of the database lock, so nothing can reopen
+    /// the file between the two.
+    fn delete_cache(&self, connection: &Connection) {
+        let mut open = self.db.lock().expect("db lock poisoned");
+        open.cache.remove(&connection.id);
+        instances::remove_db_files(&self.data_dir.join(db_file(connection)));
     }
 
     /// What quitting and opening the app does to the databases.
@@ -388,60 +440,70 @@ impl Core {
         *self.db.lock().expect("db lock poisoned") = Open::default();
     }
 
-    pub fn set_error(&self, e: Option<String>) {
-        self.reauth_needed.store(false, Ordering::SeqCst);
-        *self.last_error.lock().expect("error lock poisoned") = e;
+    fn sync_state(&self, connection_id: &str) -> JiraSync {
+        self.jira_sync.lock().expect("sync lock poisoned").get(connection_id).cloned().unwrap_or_default()
+    }
+
+    fn update_sync(&self, connection_id: &str, f: impl FnOnce(&mut JiraSync)) {
+        f(self.jira_sync.lock().expect("sync lock poisoned").entry(connection_id.into()).or_default());
+    }
+
+    pub fn set_error(&self, connection_id: &str, e: Option<String>) {
+        self.update_sync(connection_id, |state| (state.error, state.reauth) = (e, false));
     }
 
     /// Records a failed sync, remembering whether only a new sign-in can fix it.
-    pub fn set_sync_failure(&self, e: &Error) {
-        self.set_error(Some(e.to_string()));
-        self.reauth_needed.store(e.needs_reauth(), Ordering::SeqCst);
+    pub fn set_sync_failure(&self, connection_id: &str, e: &Error) {
+        self.update_sync(connection_id, |state| (state.error, state.reauth) = (Some(e.to_string()), e.needs_reauth()));
     }
 
-    /// Runs a sync if `trigger` says this connection is due one, and records how it went for the backoff.
-    pub async fn sync_if_due(&self, trigger: Trigger) -> Option<Result<Synced>> {
-        let (scope, _, _) = self.auth.identity().await?;
-        let id = scope.connection_id;
-        if self.off_name(&id).is_some() {
-            return None;
+    /// Syncs each Jira connection that is on and due. Each has its own schedule, so one that is rate limited waits alone.
+    pub async fn sync_if_due(&self, trigger: Trigger) -> Vec<(String, Result<Synced>)> {
+        let mut out = Vec::new();
+        for session in self.auth.accounts().await {
+            let id = session.connection.id.clone();
+            if self.registry.connection(&id).is_none() || self.off_name(&id).is_some() {
+                continue;
+            }
+            let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
+            if !due {
+                continue;
+            }
+            self.update_sync(&id, |state| state.syncing = true);
+            let result = self.sync(&session.scope).await;
+            self.update_sync(&id, |state| state.syncing = false);
+            {
+                let mut schedules = self.schedules.lock().expect("schedule lock poisoned");
+                let schedule = schedules.entry(id.clone()).or_default();
+                schedule.finished(Utc::now(), result.is_ok());
+                if let Err(Error::RateLimited { retry_after_secs, .. }) = &result {
+                    schedule.defer(Utc::now() + Duration::seconds(i64::try_from(*retry_after_secs).unwrap_or(i64::MAX / 1000)));
+                }
+            }
+            out.push((id, result));
         }
-        let due = self.schedules.lock().expect("schedule lock poisoned").entry(id.clone()).or_default().due(Utc::now(), trigger);
-        if !due {
-            return None;
-        }
-        self.syncing.store(true, Ordering::SeqCst);
-        let result = self.sync().await;
-        self.syncing.store(false, Ordering::SeqCst);
-        let mut schedules = self.schedules.lock().expect("schedule lock poisoned");
-        let schedule = schedules.entry(id).or_default();
-        schedule.finished(Utc::now(), result.is_ok());
-        if let Err(Error::RateLimited { retry_after_secs, .. }) = &result {
-            schedule.defer(Utc::now() + Duration::seconds(i64::try_from(*retry_after_secs).unwrap_or(i64::MAX / 1000)));
-        }
-        drop(schedules);
-        Some(result)
+        out
     }
 
     /// Fetches what changed since the last sync (or everything, when due) and stores it in the cache.
-    pub async fn sync(&self) -> Result<Synced> {
-        let (scope, _, me) = self.identity().await?;
+    pub async fn sync(&self, scope: &Scope) -> Result<Synced> {
+        let (_, _, me) = self.identity_for(scope).await?;
         let connection_id = scope.connection_id.clone();
         let started = Utc::now();
         let (previous, state, known_epics, watch) = self
-            .with_db_for(&scope, |db| {
+            .with_db_for(scope, |db| {
                 let last = db.meta(LAST_SYNC)?;
                 let epics = db.epic_ids_synced_since(&connection_id, &stamp(started - Duration::days(1)))?;
                 Ok((last, db.sync_state(&connection_id)?, epics, db.watch_set(&connection_id)?))
             })
             .await?;
         let unread_after = unread_cutoff(previous.as_deref());
-        let tracker = self.tracker(&scope)?;
-        let (watch, watch_changed) = self.settle_watch_mode(&scope, tracker.as_ref(), watch).await?;
+        let tracker = self.tracker(scope)?;
+        let (watch, watch_changed) = self.settle_watch_mode(scope, tracker.as_ref(), watch).await?;
         let plan = sync::plan(&state, started);
         let pulled = sync::pull(tracker.as_ref(), &connection_id, plan, &state, &known_epics, &unread_after, started, &watch).await?;
 
-        self.with_db_for(&scope, |db| {
+        self.with_db_for(scope, |db| {
             let stored = sync::store(db, &connection_id, &me.account_id, &pulled, plan, started, &unread_after)?;
             db.set_meta(LAST_SYNC, &stamp(started))?;
             let containers_changed = pulled.containers.is_some();
@@ -497,7 +559,7 @@ impl Core {
 
     pub async fn snapshot(&self) -> Result<Snapshot> {
         let (scope, site, me) = self.identity().await?;
-        let sync_error = self.last_error.lock().expect("error lock poisoned").clone();
+        let sync_error = self.sync_state(&scope.connection_id).error;
         // The identity above labels the snapshot, so the data must come from that same account's database.
         self.with_db_for(&scope.clone(), |db| {
             let last_sync = db.meta(LAST_SYNC)?;
@@ -596,7 +658,7 @@ impl Core {
     /// would post the comment twice; the next sync picks the change up instead.
     async fn after_write(&self, scope: &Scope, key: &str) {
         if let Err(e) = self.refresh(scope, key).await {
-            self.set_error(Some(format!("Saved, but couldn't refresh {key}: {e}")));
+            self.set_error(&scope.connection_id, Some(format!("Saved, but couldn't refresh {key}: {e}")));
             self.wake.notify_one();
         }
     }
@@ -624,10 +686,7 @@ impl Core {
     }
 
     async fn search_cached_with(&self, scope: &Scope, filter: &Filter, include_unwatched: bool) -> Result<Vec<WorkItem>> {
-        let (current, _, me) = self.identity().await?;
-        if &current != scope {
-            return Err(Error::SiteChanged);
-        }
+        let (_, _, me) = self.identity_for(scope).await?;
         let connection_id = scope.connection_id.clone();
         if self.off_name(&connection_id).is_some() {
             return Ok(Vec::new());
@@ -728,9 +787,10 @@ impl Core {
     /// The signed-in connection with how its sync is going.
     pub async fn connections(&self) -> Result<Vec<ConnectionInfo>> {
         let mut out = Vec::new();
-        if let Some((scope, site, me)) = self.auth.identity().await {
+        if let Ok((scope, site, me)) = self.identity().await {
             let connection = self.connection(&scope)?;
             let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
+            let sync = self.sync_state(&connection.id);
             out.push(ConnectionInfo {
                 instance_id: connection.id.clone(),
                 display_name: site.name.clone(),
@@ -743,10 +803,10 @@ impl Core {
                 url: site.url,
                 account: me.name,
                 last_sync_at,
-                syncing: self.syncing.load(Ordering::SeqCst),
-                error: self.last_error.lock().expect("error lock poisoned").clone(),
+                syncing: sync.syncing,
+                error: sync.error,
                 transient: false,
-                reauth: self.reauth_needed.load(Ordering::SeqCst),
+                reauth: sync.reauth,
                 status: None,
                 rechecking: false,
             });
@@ -905,7 +965,7 @@ mod tests {
     async fn changing_the_signed_in_connection_does_not_run_recovery_again() {
         let fx = super::testing::fixture().await;
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
-        fx.core.close_db();
+        fx.core.close_cache(&fx.scope.connection_id);
         fx.core.with_db_for(&fx.scope, |_| Ok(())).await.unwrap();
         assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "running", "the app is still open, so nothing was cut off");
 
@@ -922,8 +982,8 @@ mod tests {
         let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
         let other = Account { account_id: "someone-else".into(), name: "Else".into(), avatar_url: None };
         let creds = Credentials { email: "me@example.com".into(), token: "t".into(), expires_on: "2999-01-01".into(), site, me: other };
-        let previous = fx.core.auth.connection().await;
-        fx.core.replace_connection(previous, creds.connection());
+        let previous = vec![fx.core.connection(&fx.scope).unwrap()];
+        fx.core.replace_connections(previous, creds.connection());
 
         let finished = fx.core.pip_turn_finish(&fx.scope, "q1", "A's answer", true, None, None, None).await;
         assert!(matches!(finished, Err(Error::SiteChanged)), "{finished:?}");
@@ -1136,12 +1196,205 @@ mod tests {
     #[tokio::test]
     async fn only_a_dead_sign_in_marks_the_connection_for_reauth_and_a_good_sync_clears_it() {
         let fx = super::testing::fixture().await;
-        fx.core.set_sync_failure(&Error::Api { status: 503, message: "down".into() });
+        fx.core.set_sync_failure(&fx.scope.connection_id, &Error::Api { status: 503, message: "down".into() });
         assert!(!fx.core.connections().await.unwrap()[0].reauth);
-        fx.core.set_sync_failure(&Error::ReauthRequired);
+        fx.core.set_sync_failure(&fx.scope.connection_id, &Error::ReauthRequired);
         assert!(fx.core.connections().await.unwrap()[0].reauth);
-        fx.core.set_error(None);
+        fx.core.set_error(&fx.scope.connection_id, None);
         assert!(!fx.core.connections().await.unwrap()[0].reauth);
+    }
+
+    #[tokio::test]
+    async fn the_primary_is_the_first_account_that_is_on_and_scope_and_identity_follow_it() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        assert_eq!(fx.core.primary().await.unwrap().scope, fx.scope);
+        assert_eq!(fx.core.scope().await.unwrap(), fx.scope);
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        assert_eq!(fx.core.scope().await.unwrap(), second);
+        assert_eq!(fx.core.identity().await.unwrap().0, second);
+
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        assert_eq!(fx.core.scope().await.unwrap(), fx.scope, "with every account off the first is still the primary");
+    }
+
+    #[tokio::test]
+    async fn every_registered_connection_has_its_own_cache_and_a_changed_account_is_refused() {
+        use crate::tracker::testing::sample_ticket;
+
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        let connection = fx.core.connection(&second).unwrap();
+        let item = tracker::item_from_ticket(&connection, &sample_ticket()).unwrap();
+        let at = item.item.clone();
+        fx.core.with_db_for(&second, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+
+        assert!(fx.core.with_db_for(&second, |db| db.item(&at)).await.unwrap().is_some());
+        assert!(fx.core.with_db_for(&fx.scope, |db| db.item(&at)).await.unwrap().is_none(), "the first account's cache never saw it");
+        assert_eq!(fx.core.db.lock().unwrap().cache.len(), 2, "both stay open");
+        for scope in [&fx.scope, &second] {
+            assert!(fx.dir.join(db_file(&fx.core.connection(scope).unwrap())).exists());
+        }
+
+        let changed = Scope { connection_id: second.connection_id.clone(), account_id: "someone-else".into() };
+        assert!(matches!(fx.core.with_db_for(&changed, |_| Ok(())).await, Err(Error::SiteChanged)));
+    }
+
+    #[tokio::test]
+    async fn sync_errors_and_reauth_are_kept_per_connection() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.set_sync_failure(&fx.scope.connection_id, &Error::ReauthRequired);
+        let (first, other) = (fx.core.sync_state(&fx.scope.connection_id), fx.core.sync_state(&second.connection_id));
+        assert!(first.reauth && first.error.is_some());
+        assert!(!other.reauth && other.error.is_none());
+
+        fx.core.set_error(&second.connection_id, Some("down".into()));
+        fx.core.set_error(&fx.scope.connection_id, None);
+        assert_eq!(fx.core.sync_state(&second.connection_id).error.as_deref(), Some("down"));
+        assert!(!fx.core.sync_state(&fx.scope.connection_id).reauth);
+    }
+
+    #[tokio::test]
+    async fn the_sync_loop_and_the_radar_go_over_every_connection_that_is_on() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let synced: Vec<String> = fx.core.sync_if_due(Trigger::Now).await.into_iter().map(|(id, _)| id).collect();
+        assert_eq!(synced, [fx.scope.connection_id.clone(), second.connection_id.clone()]);
+        fx.core.radar_if_due().await;
+        assert_eq!(fx.core.radar.lock().unwrap().len(), 2);
+
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        fx.core.radar.lock().unwrap().clear();
+        let synced: Vec<String> = fx.core.sync_if_due(Trigger::Now).await.into_iter().map(|(id, _)| id).collect();
+        fx.core.radar_if_due().await;
+        assert_eq!(synced, std::slice::from_ref(&fx.scope.connection_id));
+        assert_eq!(fx.core.radar.lock().unwrap().keys().collect::<Vec<_>>(), [&fx.scope.connection_id]);
+    }
+
+    #[tokio::test]
+    async fn restoring_registers_the_accounts_an_instance_is_bound_to_and_leaves_the_other_tokens_alone() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+        fx.core.registry.remove(&second.connection_id);
+
+        fx.core.restore().await;
+        assert!(fx.core.connection(&second).is_ok());
+        assert!(fx.core.connection(&fx.scope).is_err(), "no instance is bound to it");
+        assert_eq!(fx.core.auth.accounts().await.len(), 2, "its token is still held");
+        assert_eq!(fx.core.scope().await.unwrap(), second);
+    }
+
+    #[tokio::test]
+    async fn restoring_before_the_instances_exist_registers_only_the_first_account() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.registry.remove(&fx.scope.connection_id);
+        fx.core.registry.remove(&second.connection_id);
+
+        fx.core.restore().await;
+        assert!(fx.core.connection(&fx.scope).is_ok());
+        assert!(fx.core.connection(&second).is_err());
+    }
+
+    #[tokio::test]
+    async fn an_account_removed_and_added_again_starts_from_an_empty_cache() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        let scope = Scope { connection_id: "jira:site:b".into(), account_id: "b".into() };
+        let sign_in = token_for("b", "fast");
+
+        fx.core.connect_jira(&sign_in).await.unwrap();
+        let item = tracker::item_from_ticket(&fx.core.connection(&scope).unwrap(), &crate::tracker::testing::sample_ticket()).unwrap();
+        let at = item.item.clone();
+        fx.core.with_db_for(&scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        let file = fx.dir.join(db_file(&fx.core.connection(&scope).unwrap()));
+        assert!(file.exists());
+
+        fx.core.remove_instance(&scope.connection_id).await.unwrap();
+        assert!(!file.exists());
+        assert!(fx.core.db.lock().unwrap().cache.is_empty());
+
+        fx.core.connect_jira(&sign_in).await.unwrap();
+        assert!(fx.core.with_db_for(&scope, |db| db.item(&at)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn restoring_with_a_live_list_registers_nothing_when_no_instance_is_bound_to_a_token() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.unbind_instance(&second.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+        fx.core.registry.remove(&second.connection_id);
+
+        fx.core.restore().await;
+        assert!(fx.core.connection(&fx.scope).is_err());
+        assert!(fx.core.connection(&second).is_err());
+        assert_eq!(fx.core.auth.accounts().await.len(), 2, "both tokens are still held");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_write_that_waited_on_the_db_lock_through_a_removal_does_not_recreate_the_cache() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        let file = fx.dir.join(db_file(&fx.core.connection(&second).unwrap()));
+        let runtime = tokio::runtime::Handle::current();
+        let held = fx.core.db.lock().unwrap();
+        let outcome = std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| runtime.block_on(fx.core.with_db_for(&second, |_| Ok(()))));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            fx.core.registry.remove(&second.connection_id);
+            drop(held);
+            waiting.join().unwrap()
+        });
+
+        assert!(matches!(outcome, Err(Error::SiteChanged)));
+        assert!(!file.exists());
+        assert!(!fx.core.db.lock().unwrap().cache.contains_key(&second.connection_id));
+    }
+
+    #[tokio::test]
+    async fn removing_an_instance_whose_token_is_gone_still_deletes_its_cache() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let file = fx.dir.join(db_file(&fx.core.connection(&second).unwrap()));
+        fx.core.with_db_for(&second, |_| Ok(())).await.unwrap();
+        assert!(file.exists());
+        fx.core.auth.disconnect(&second.connection_id).await.unwrap();
+
+        fx.core.remove_instance("jira_2").await.unwrap();
+        assert!(!file.exists());
+        assert!(fx.core.db.lock().unwrap().cache.keys().all(|id| id != &second.connection_id));
+    }
+
+    #[tokio::test]
+    async fn removing_one_account_leaves_the_other_signed_in_and_its_cache_alone() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let gone = db_file(&fx.core.connection(&second).unwrap());
+        fx.core.with_db_for(&second, |_| Ok(())).await.unwrap();
+
+        fx.core.remove_instance("jira_2").await.unwrap();
+        assert!(fx.core.connection(&second).is_err());
+        assert!(!fx.dir.join(gone).exists());
+        assert_eq!(fx.core.auth.accounts().await.len(), 1);
+        assert!(fx.core.cache_item(&fx.item("CA-1")).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn signing_in_through_connect_jira_points_the_one_instance_at_the_new_account() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+
+        fx.core.connect_jira(&token_for("b", "fast")).await.unwrap();
+        let config = AppConfig::load(&fx.core.data_dir());
+        let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
+        assert_eq!((jira.id.as_str(), jira.bound_to.as_deref(), jira.config.email.as_deref()), ("jira", Some("jira:site:b"), Some("b")));
     }
 
     #[test]
@@ -1362,12 +1615,44 @@ pub(crate) mod testing {
 
     /// `fixture_with`, signed in to Jira through `authenticator` instead of Atlassian.
     pub async fn fixture_with_authenticator(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>) -> Fixture {
+        fixture_signed_in_to(code, authenticator, vec![credentials("site", "Acme", "me", "Me")]).await
+    }
+
+    /// The fixture signed in to two Jira accounts on two sites, both registered, with the first as the primary. The
+    /// returned scope is the second account's; it has no cached items.
+    pub async fn fixture_with_two_jira() -> (Fixture, Scope) {
+        let second = credentials("beta", "Beta", "bo", "Bo");
+        let scope = second.scope();
+        let fx = fixture_signed_in_to(None, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second]).await;
+        (fx, scope)
+    }
+
+    /// Answers `whoami` as the account the token belongs to, and scripts nothing else.
+    struct Echo;
+
+    #[async_trait::async_trait]
+    impl crate::auth::Authenticator for Echo {
+        async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
+            Err(Error::Auth("this fixture signs in nowhere".into()))
+        }
+        async fn whoami(&self, token: &crate::auth::AccessToken) -> Result<Account> {
+            Ok(Account { account_id: token.scope.account_id.clone(), name: token.scope.account_id.clone(), avatar_url: None })
+        }
+    }
+
+    fn credentials(cloud_id: &str, site_name: &str, account_id: &str, name: &str) -> Credentials {
+        let site = Site { cloud_id: cloud_id.into(), name: site_name.into(), url: format!("https://{}.example", site_name.to_lowercase()) };
+        let me = Account { account_id: account_id.into(), name: name.into(), avatar_url: None };
+        Credentials { email: format!("{account_id}@example.com"), token: "t".into(), expires_on: "2999-01-01".into(), site, me }
+    }
+
+    async fn fixture_signed_in_to(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>, sessions: Vec<Credentials>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
-        let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
-        let me = Account { account_id: "me".into(), name: "Me".into(), avatar_url: None };
-        let creds = Credentials { email: "me@example.com".into(), token: "t".into(), expires_on: "2999-01-01".into(), site, me };
-        let scope = creds.scope();
+        let scope = sessions[0].scope();
         let http = reqwest::Client::new();
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
@@ -1375,12 +1660,16 @@ pub(crate) mod testing {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
-        let mut core = Core::new(Arc::new(authenticator.map_or_else(|| Auth::signed_in(http, creds.clone()), |a| Auth::with_authenticator(a, creds.clone()))), registry, dir.clone()).with_home(home.clone());
+        let connections: Vec<Connection> = sessions.iter().map(Credentials::connection).collect();
+        let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::new(http)));
+        let mut core = Core::new(Arc::new(Auth::with_sessions(authenticator, sessions)), registry, dir.clone()).with_home(home.clone());
         if let Some(code) = code {
             core = core.with_code(code);
         }
         let core = Arc::new(core);
-        core.registry.register(creds.connection());
+        for connection in connections {
+            core.registry.register(connection);
+        }
 
         let fx = Fixture { core, scope, tracker, dir, home, github: None, github_routes: None };
         fx.add_item(1).await;

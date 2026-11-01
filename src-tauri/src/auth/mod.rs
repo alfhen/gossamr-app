@@ -121,6 +121,22 @@ pub struct Scope {
     pub account_id: String,
 }
 
+/// A signed-in Jira account as Core reads it, without its token.
+#[derive(Clone)]
+pub struct SignedIn {
+    pub scope: Scope,
+    pub connection: Connection,
+    pub site: Site,
+    pub me: Account,
+    pub email: String,
+}
+
+impl SignedIn {
+    pub fn identity(self) -> (Scope, Site, Account) {
+        (self.scope, self.site, self.me)
+    }
+}
+
 /// What the Jira client needs for one request.
 pub struct AccessToken {
     pub email: String,
@@ -249,10 +265,13 @@ impl Auth {
         Self::with_authenticator(Arc::new(Atlassian::new(http)), credentials)
     }
 
-    /// The primary session's site and account.
-    pub async fn status(&self) -> Result<AuthStatus> {
+    /// The site and account of the session for `connection_id`, or of the first one when none is named.
+    pub async fn status(&self, connection_id: Option<&str>) -> Result<AuthStatus> {
         let sessions = self.sessions.lock().await;
-        let primary = sessions.first();
+        let primary = match connection_id {
+            Some(id) => sessions.iter().find(|s| s.connection_id() == id),
+            None => sessions.first(),
+        };
         Ok(AuthStatus {
             site: primary.map(|s| s.site.clone()),
             me: primary.map(|s| s.me.clone()),
@@ -339,12 +358,23 @@ impl Auth {
         Ok(())
     }
 
-    /// The primary session's site and account, if any.
+    /// Every signed-in account, in the order they were added.
+    pub async fn accounts(&self) -> Vec<SignedIn> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .iter()
+            .map(|s| SignedIn { scope: s.scope(), connection: s.connection(), site: s.site.clone(), me: s.me.clone(), email: s.email.clone() })
+            .collect()
+    }
+
+    /// The first session's site and account, if any. `Core::primary` is the connection work runs as.
+    #[cfg(test)]
     pub async fn identity(&self) -> Option<(Scope, Site, Account)> {
         self.sessions.lock().await.first().map(|s| (s.scope(), s.site.clone(), s.me.clone()))
     }
 
     /// The primary connection, if any.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn connection(&self) -> Option<Connection> {
         self.sessions.lock().await.first().map(Credentials::connection)
     }
@@ -620,7 +650,7 @@ mod tests {
         }
 
         assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:ann", "jira-token:jira:acme:bob", "jira-token:jira:globex:ann2"]);
-        assert_eq!(auth.status().await.unwrap().me.unwrap().account_id, "ann");
+        assert_eq!(auth.status(None).await.unwrap().me.unwrap().account_id, "ann");
         assert_eq!(auth.connection().await.unwrap().id, "jira:acme:ann");
         assert_eq!(auth.identity().await.unwrap().0.account_id, "ann");
     }

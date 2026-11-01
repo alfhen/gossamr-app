@@ -447,12 +447,19 @@ impl Core {
         }
     }
 
-    /// The project keys of the signed-in tracker, which are what a key in a branch or title may name.
+    /// The project keys of every Jira connection that is on, each read from its own cache.
     async fn known_keys(&self) -> KnownKeys {
-        let Some((scope, _, _)) = self.auth.identity().await else { return KnownKeys::default() };
-        let connection = scope.connection_id;
-        let keys = self.with_db(|db| db.project_keys(&connection)).await.unwrap_or_default();
-        KnownKeys::new(keys.iter().map(|k| (k.as_str(), connection.as_str())))
+        let off = self.off_names();
+        let mut projects: Vec<(String, String)> = Vec::new();
+        for session in self.auth.accounts().await {
+            let id = session.connection.id;
+            if self.registry.connection(&id).is_none() || off.name(&id).is_some() {
+                continue;
+            }
+            let keys = self.with_db_for(&session.scope, |db| db.project_keys(&id)).await.unwrap_or_default();
+            projects.extend(keys.into_iter().map(|key| (key, id.clone())));
+        }
+        KnownKeys::new(projects.iter().map(|(key, id)| (key.as_str(), id.as_str())))
     }
 
     /// Rebuilds the links of a connection from its cached changes. Returns whether they changed.
@@ -2619,5 +2626,27 @@ mod review_tests {
         let p = drafted(&fx).await;
         let of_item = fx.core.proposals(&ProposalQuery { item: Some(fx.item("CA-1")), ..Default::default() }).await.unwrap();
         assert!(of_item.iter().any(|d| d.id == p.id), "{of_item:?}");
+    }
+
+    #[tokio::test]
+    async fn project_keys_are_read_from_every_jira_connection_that_is_on() {
+        use crate::domain::{ContainerRef, ContainerSummary};
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let entry = ContainerSummary {
+            container_ref: ContainerRef { connection_id: second.connection_id.clone(), external_id: "10".into() },
+            key: "BETA".into(),
+            name: "Beta".into(),
+            kind: None,
+            archived: false,
+            last_active: None,
+            item_hint: None,
+        };
+        fx.core.with_db_for(&second, |db| db.catalog_upsert(&second.connection_id, &[entry], "2026-09-29T12:00:00Z")).await.unwrap();
+
+        assert_eq!(fx.core.known_keys().await.item("BETA-1").map(|i| i.connection_id), Some(second.connection_id.clone()));
+
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        assert!(fx.core.known_keys().await.item("BETA-1").is_none(), "a connection that is off adds no keys");
     }
 }

@@ -46,6 +46,13 @@ impl Connection {
         Self { id: Self::github_id(login), kind: ConnectionKind::Github, workspace: login.into(), account: login.into(), display_name: display_name.into() }
     }
 
+    /// The Jira connection that `SiteScope::connection_id` made `id` from, which is all its cache file name needs.
+    pub fn from_jira_id(id: &str) -> Option<Self> {
+        let (workspace, account) = id.strip_prefix("jira:")?.split_once(':')?;
+        (!workspace.is_empty() && !account.is_empty())
+            .then(|| Self { id: id.into(), kind: ConnectionKind::Jira, workspace: workspace.into(), account: account.into(), display_name: String::new() })
+    }
+
     pub fn github_id(login: &str) -> String {
         format!("github:{}", login.to_ascii_lowercase())
     }
