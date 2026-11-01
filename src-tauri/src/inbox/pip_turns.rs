@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_jira_is_refused_and_changes_nothing_when_the_app_database_cannot_be_opened() {
+    async fn removing_jira_is_refused_when_the_app_database_cannot_be_opened_to_check_for_posting() {
         let fx = crate::inbox::testing::fixture().await;
         let app = fx.dir.join("app.sqlite");
         let _ = std::fs::remove_file(&app);
@@ -147,6 +147,19 @@ mod tests {
         assert!(fx.core.remove_instance(&fx.scope.connection_id).await.is_err());
         assert!(fx.core.auth.connection().await.is_some());
         assert!(fx.core.connection(&fx.scope).is_ok());
+    }
+
+    #[tokio::test]
+    async fn removing_jira_still_succeeds_when_failing_its_open_turns_fails() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core.pip_turn_begin(&fx.scope, "workspace", "q1", "Hi", &TurnMeta::default(), "running").await.unwrap();
+        fx.core.with_app_db(|db| db.execute_batch("CREATE TRIGGER no_settle BEFORE UPDATE ON pip_turns BEGIN SELECT RAISE(ABORT, 'refused'); END;")).await.unwrap();
+
+        fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
+
+        assert!(fx.core.auth.connection().await.is_none(), "the token is forgotten");
+        assert!(fx.core.connection(&fx.scope).is_err(), "the connection left the registry");
+        assert!(!crate::config::AppConfig::load(&fx.dir).connections.iter().any(|i| i.id == fx.scope.connection_id), "the instance is gone from config.json");
     }
 
     async fn request_ids(fx: &crate::inbox::testing::Fixture, conversation: &str) -> Vec<String> {
