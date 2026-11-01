@@ -820,6 +820,25 @@ export interface AgentSettings {
   notifications?: NoticeMode;
 }
 
+/** Which provider instance and model a piece of work runs on. `model` is an id from `Backend.providerModels`; `effort` is one of low, medium, high, xhigh or max. */
+export interface ModelChoice {
+  instanceId: string;
+  model: string;
+  effort?: string;
+}
+
+/** A model an instance offers. "default" passes no `--model`. */
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
+/** What Pip and new agents use when nothing narrower says. A default is `null` after its instance was removed. */
+export interface ModelDefaults {
+  pip: ModelChoice | null;
+  agents: ModelChoice | null;
+}
+
 /** System notices for each new thing in Needs you ("workstream", the stored name), or none. */
 export type NoticeMode = "workstream" | "off";
 

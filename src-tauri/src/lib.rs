@@ -12,6 +12,7 @@ mod events;
 mod inbox;
 mod legacy;
 mod model;
+mod model_choice;
 mod net;
 mod notify;
 mod probe;
@@ -514,6 +515,24 @@ fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSett
         Some(settings) => runs.set_settings(settings),
         None => Ok(runs.settings()),
     }
+}
+
+/// The models a provider instance offers: the driver's own, then the ones added to it.
+#[tauri::command]
+fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Result<Vec<model_choice::ModelOption>> {
+    core.provider_models(&instance_id)
+}
+
+/// Adds a model id to a provider instance's list and returns the list. An id that breaks the id rule is refused.
+#[tauri::command]
+fn provider_add_model(core: State<'_, CoreState>, instance_id: String, model: String) -> Result<Vec<model_choice::ModelOption>> {
+    core.provider_add_model(&instance_id, &model)
+}
+
+/// The instance and model Pip and new agents use when nothing narrower says. With `set`, saves them first, checked as a run's choice would be.
+#[tauri::command]
+fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaultsSet>) -> Result<model_choice::ModelDefaults> {
+    core.model_defaults(set.map(Into::into))
 }
 
 /// Removes a finished run's worktree with `claude rm`, never forcing it.
@@ -1043,6 +1062,9 @@ pub fn run() {
             proposals_approve,
             proposals_post_review,
             agent_settings,
+            provider_models,
+            provider_add_model,
+            model_defaults,
             runs_cleanup,
             runs_archive,
             runs_clear_preview,
