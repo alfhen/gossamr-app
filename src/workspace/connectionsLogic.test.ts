@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { actingAs, canSwitch, isSignedOut, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
@@ -146,5 +146,56 @@ describe("removalWarning", () => {
     const text = removalWarning({ kind: "provider", displayName: "Claude", workspace: "" });
     expect(text).toContain("stay on disk");
     expect(text).not.toMatch(/token|ticket/);
+  });
+});
+
+describe("the + Add entries", () => {
+  const ids = (cs: ConnectionInfo[], providers: boolean) => addEntries(cs, providers).map((e) => e.id);
+
+  it("offers GitHub and Jira when nothing is connected", () => {
+    expect(ids([], false)).toEqual(["github", "jira"]);
+  });
+
+  it("keeps offering another GitHub account", () => {
+    expect(ids([base], false)).toEqual(["github", "jira"]);
+  });
+
+  it("stops offering Jira once a Jira connection exists, even one that is off", () => {
+    expect(ids([jira()], false)).toEqual(["github"]);
+    expect(ids([jira({ enabled: false })], false)).toEqual(["github"]);
+  });
+
+  it("still offers Jira next to the sample data", () => {
+    expect(ids([{ ...base, kind: "mock" }], false)).toEqual(["github", "jira"]);
+  });
+
+  it("offers Claude only when provider rows are shown, and never Codex while it cannot run agents", () => {
+    expect(ids([], false)).not.toContain("claude");
+    expect(ids([], true)).toEqual(["github", "jira", "claude"]);
+  });
+
+  it("puts each entry under its group", () => {
+    expect(addEntries([], true).map((e) => [e.id, e.group])).toEqual([["github", "Code"], ["jira", "Tickets"], ["claude", "Models"]]);
+  });
+});
+
+describe("the grouped list", () => {
+  it("groups rows under Code, Tickets and Models, keeping each group's order", () => {
+    const mock = { ...base, id: "mock", kind: "mock" as const };
+    const groups = groupedConnections([jira(), claude(), mock, base]);
+    expect(groups.map((g) => [g.group, g.rows.map((c) => c.id)])).toEqual([["Code", ["github:ada"]], ["Tickets", ["jira:c:u", "mock"]], ["Models", ["claude"]]]);
+  });
+
+  it("leaves out a group with no rows", () => {
+    expect(groupedConnections([base]).map((g) => g.group)).toEqual(["Code"]);
+    expect(groupedConnections([])).toEqual([]);
+  });
+});
+
+describe("hasRealConnection", () => {
+  it("counts GitHub and Jira, not the sample data or a provider", () => {
+    expect(hasRealConnection([{ ...base, kind: "mock" }, claude()])).toBe(false);
+    expect(hasRealConnection([base])).toBe(true);
+    expect(hasRealConnection([jira()])).toBe(true);
   });
 });

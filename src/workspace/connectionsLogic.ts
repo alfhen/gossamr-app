@@ -11,9 +11,49 @@ export const providersShown = false;
 
 const providersAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("providers") === "1";
 
+const providersOn = () => providersShown || providersAsked();
+
 /** The rows Settings and the rest of the page work with. */
-export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersShown || providersAsked()): T[] =>
+export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersOn()): T[] =>
   shown ? [...connections] : connections.filter((c) => c.kind !== "provider");
+
+export type ConnectionGroup = "Code" | "Tickets" | "Models";
+
+export const ADD_GROUPS: readonly ConnectionGroup[] = ["Code", "Tickets", "Models"];
+
+export const groupOf = (kind: ConnectionInfo["kind"]): ConnectionGroup => (kind === "github" ? "Code" : kind === "provider" ? "Models" : "Tickets");
+
+/** The rows under their group headings, in the order Settings shows them. Empty groups are left out. */
+export function groupedConnections<T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[]): { group: ConnectionGroup; rows: T[] }[] {
+  return ADD_GROUPS.map((group) => ({ group, rows: connections.filter((c) => groupOf(c.kind) === group) })).filter((g) => g.rows.length > 0);
+}
+
+/** What each driver can run. Codex's agent runner is not built yet, so it stays out of + Add until `runsAgents` turns true. */
+export const DRIVER_CAPABILITIES = {
+  claude: { runsPip: true, runsAgents: true },
+  codex: { runsPip: false, runsAgents: false },
+} as const;
+
+export type AddEntryId = "github" | "jira" | "claude" | "codex";
+
+export interface AddEntry {
+  id: AddEntryId;
+  group: ConnectionGroup;
+  label: string;
+  line: string;
+}
+
+/** What + Add and the palette offer. Jira only while there is no Jira connection; the Models entries only once provider rows are shown and the driver can run something. */
+export function addEntries(connections: readonly Pick<ConnectionInfo, "kind">[], providers = providersOn()): AddEntry[] {
+  const entries: AddEntry[] = [{ id: "github", group: "Code", label: "GitHub account", line: "Pull requests, branches and checks." }];
+  if (!connections.some((c) => c.kind === "jira")) entries.push({ id: "jira", group: "Tickets", label: "Jira account", line: "Tickets from one Jira site." });
+  if (providers && DRIVER_CAPABILITIES.claude.runsAgents) entries.push({ id: "claude", group: "Models", label: "Claude", line: "A login that Pip and agents can run on." });
+  if (providers && DRIVER_CAPABILITIES.codex.runsAgents) entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login that agents can run on." });
+  return entries;
+}
+
+/** Whether a GitHub or Jira connection exists. The sample data and providers don't count. */
+export const hasRealConnection = (connections: readonly Pick<ConnectionInfo, "kind">[]) => connections.some((c) => c.kind === "github" || c.kind === "jira");
 
 /** Whether any GitHub account is on. Code links, the code filters and the Development section appear only then: an off connection is hidden, and what it cached comes back when it is on. */
 export const showsCode = (connections: readonly Pick<ConnectionInfo, "kind" | "enabled">[]) => connections.some((c) => c.kind === "github" && c.enabled);

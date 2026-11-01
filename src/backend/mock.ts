@@ -1126,6 +1126,12 @@ export class MockBackend implements Backend {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
+    if (target.kind === "jira") {
+      this.jiraAccount = { site: null, me: null, email: null, expiresOn: null };
+      this.names.delete(instanceId);
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
     if (target.kind === "provider") {
       this.claude = null;
       this.names.delete(instanceId);
@@ -1146,7 +1152,7 @@ export class MockBackend implements Backend {
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: true, kind: "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: true, kind: site ? "jira" : "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
     const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
     const all = [sample, ...(this.github.connected ? [this.github.info()] : []), ...claude];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));

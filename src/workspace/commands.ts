@@ -9,7 +9,7 @@ import { isWorkConnection } from "./domains";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
-export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
+export type CommandGroup = "Create" | "Projects" | "Views" | "Layout" | "Go to" | "Filters" | "Theme" | "App" | "Tickets" | "GitHub" | "Connections" | "Agents" | "Workstreams" | "Ask Pip" | "This item";
 
 export const PIP_ICON = "pip";
 
@@ -41,7 +41,8 @@ export interface CommandActions {
   openTicket(key: string): void;
   openActivity(): void;
   openDrafts(): void;
-  connectGithub(): void;
+  addGithub(): void;
+  addJira(): void;
   manageRepositories(): void;
   /** Opens the pull request's ticket when one is known, else its page on GitHub. */
   openPull(ref: PullRef): void;
@@ -72,6 +73,8 @@ export interface CommandContext {
   unreadActivity: number;
   /** A GitHub account is connected. */
   github?: boolean;
+  /** A Jira account is connected. */
+  jira?: boolean;
   /** How many things need the person (Needs you's one count), for the hint beside "Show what needs me". */
   needsYou?: number;
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
@@ -130,7 +133,8 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
         )
       : []),
     { id: "filter:clear", group: "Filters", icon: "⏷", label: "Clear filters", keywords: "reset remove", run: a.clearFilters },
-    { id: "github:connect", group: "GitHub", icon: "↗", label: ctx.github ? "Connect another GitHub account" : "Connect GitHub", keywords: "sign in token pull requests code", run: a.connectGithub },
+    { id: "connection:add-github", group: "Connections", icon: "＋", label: "Add GitHub account", keywords: "connect sign in pull requests code", run: a.addGithub },
+    ...(ctx.jira ? [] : [{ id: "connection:add-jira", group: "Connections" as const, icon: "＋", label: "Add Jira account", keywords: "connect sign in token tickets", run: a.addJira }]),
     ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
     { id: "agents:needs", group: "Agents", icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },

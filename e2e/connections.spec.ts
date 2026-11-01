@@ -6,6 +6,10 @@ async function openSettings(page: Page) {
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
 }
 
+const addAccount = async (page: Page, kind: "GitHub" | "Jira") => {
+  await page.getByRole("button", { name: "+ Add" }).click();
+  await page.getByRole("menuitem", { name: new RegExp(`^${kind} account`) }).click();
+};
 const rowOf = (page: Page, name: string) => page.getByRole("listitem", { name: `${name} connection` });
 const refuseToken = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { refuseGithubToken(): void } }).__gossamrMock.refuseGithubToken());
 const finishRecheck = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { finishGithubRecheck(): void } }).__gossamrMock.finishGithubRecheck());
@@ -19,6 +23,29 @@ test.describe("the Connections list", () => {
     await expect(rowOf(page, "GitHub")).toContainText("Authenticated · ada");
     await expect(page.getByRole("region", { name: "Sample data details" })).toBeVisible();
     await expect(page.getByRole("region", { name: "GitHub details" })).toHaveCount(0);
+  });
+
+  test("groups the rows under Code and Tickets, and arrow keys walk them in that order", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
+    await openSettings(page);
+    const list = page.getByRole("list", { name: "Connections" });
+    await expect(list).toContainText("Code");
+    await expect(list).toContainText("Tickets");
+    await expect(list).not.toContainText("Models");
+    const text = (await list.innerText()).replace(/\s+/g, " ");
+    expect(text.indexOf("Code")).toBeLessThan(text.indexOf("GitHub"));
+    expect(text.indexOf("GitHub")).toBeLessThan(text.indexOf("Tickets"));
+    expect(text.indexOf("Tickets")).toBeLessThan(text.indexOf("Sample data"));
+    await list.locator('[data-connection="mock"]').focus();
+    await page.keyboard.press("ArrowUp");
+    await expect(page.getByRole("region", { name: "GitHub details" })).toBeVisible();
+  });
+
+  test("shows the Models group with the provider rows on providers=1", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openSettings(page);
+    await expect(page.getByRole("list", { name: "Connections" })).toContainText("Models");
+    await expect(rowOf(page, "Claude")).toBeVisible();
   });
 
   test("hides the provider rows unless the page is opened with providers=1", async ({ page }) => {
@@ -59,12 +86,12 @@ test.describe("the Connections list", () => {
   test("moves between rows with the arrow keys", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
-    await rowOf(page, "Sample data").getByRole("button").focus();
+    await rowOf(page, "GitHub").getByRole("button").focus();
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByRole("region", { name: "GitHub details" })).toBeVisible();
-    await expect(rowOf(page, "GitHub").getByRole("button")).toBeFocused();
-    await page.keyboard.press("ArrowUp");
     await expect(page.getByRole("region", { name: "Sample data details" })).toBeVisible();
+    await expect(rowOf(page, "Sample data").getByRole("button")).toBeFocused();
+    await page.keyboard.press("ArrowUp");
+    await expect(page.getByRole("region", { name: "GitHub details" })).toBeVisible();
   });
 
   test("follows the probe: the row and the detail change when gh stands differently", async ({ page }) => {
@@ -257,10 +284,45 @@ test.describe("the Connections list", () => {
     await expect(code).toBeVisible();
   });
 
-  test("opens the Connect GitHub sheet from the foot of the list, with the account already connected marked and the login command for another", async ({ page }) => {
+  test("opens + Add with Code and Tickets entries, closes it on Escape and keeps the menu out of the footer", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
-    await page.getByRole("button", { name: "Connect another GitHub account" }).click();
+    await expect(page.getByRole("button", { name: /^Connect (another )?GitHub/ })).toHaveCount(0);
+    const add = page.getByRole("button", { name: "+ Add" });
+    await add.click();
+    const menu = page.getByRole("menu", { name: "Add a connection" });
+    await expect(menu.getByRole("group", { name: "Code" }).getByRole("menuitem")).toHaveText(/GitHub accountPull requests, branches and checks\./);
+    await expect(menu.getByRole("group", { name: "Tickets" }).getByRole("menuitem")).toHaveText(/Jira accountTickets from one Jira site\./);
+    await expect(menu.getByRole("group", { name: "Models" })).toHaveCount(0);
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitem", { name: /^Jira account/ })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+    await expect(add).toBeFocused();
+  });
+
+  test("opens the Connect Jira sheet from + Add", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await openSettings(page);
+    await addAccount(page, "Jira");
+    await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
+  });
+
+  test("offers Add GitHub account and Add Jira account in the palette", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await page.keyboard.press("ControlOrMeta+k");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("add");
+    await expect(palette.getByRole("option", { name: /Add Jira account/ })).toBeVisible();
+    await palette.getByRole("option", { name: /Add GitHub account/ }).click();
+    await expect(page.getByRole("dialog", { name: "Connect GitHub" })).toBeVisible();
+  });
+
+  test("opens the Connect GitHub sheet from + Add, with the account already connected marked and the login command for another", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
+    await openSettings(page);
+    await addAccount(page, "GitHub");
     const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
     const accounts = sheet.getByRole("list", { name: "Accounts gh knows" });
     await expect(accounts).toContainText("ada");
@@ -275,7 +337,7 @@ test.describe("the Connections list", () => {
     await openApp(page, "runs=empty");
     await openSettings(page);
     await expect(rowOf(page, "GitHub")).toHaveCount(0);
-    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await addAccount(page, "GitHub");
     const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
     await expect(sheet.getByRole("textbox")).toHaveCount(0);
     await expect(sheet.getByText("Active in gh")).toBeVisible();
@@ -309,7 +371,7 @@ test.describe("the Connections list", () => {
   test("closes the sheet with Escape", async ({ page }) => {
     await openApp(page, "runs=empty");
     await openSettings(page);
-    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await addAccount(page, "GitHub");
     await expect(page.getByRole("dialog", { name: "Connect GitHub" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Connect GitHub" })).toHaveCount(0);
@@ -318,7 +380,7 @@ test.describe("the Connections list", () => {
   test("says gh has no login, with the command to copy and open in Terminal", async ({ page }) => {
     await openApp(page, "runs=empty&mockGithubProbe=notSignedIn");
     await openSettings(page);
-    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await addAccount(page, "GitHub");
     const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
     await expect(sheet).toContainText("gh has no login on github.com.");
     await expect(sheet.getByRole("list", { name: "Accounts gh knows" })).toHaveCount(0);
@@ -329,7 +391,7 @@ test.describe("the Connections list", () => {
   test("opens Terminal only on the login command, not on a fix the sheet shows for a gh that didn't answer", async ({ page }) => {
     await openApp(page, "runs=empty&mockGithubProbe=error");
     await openSettings(page);
-    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await addAccount(page, "GitHub");
     const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
     await expect(sheet.getByText("gh auth status", { exact: true })).toBeVisible();
     await expect(sheet.getByRole("button", { name: "Copy" })).toBeVisible();
@@ -339,7 +401,7 @@ test.describe("the Connections list", () => {
   test("says gh isn't installed, with how to install it and no Terminal button", async ({ page }) => {
     await openApp(page, "runs=empty&mockGithubProbe=notFound");
     await openSettings(page);
-    await page.getByRole("button", { name: "Connect GitHub" }).click();
+    await addAccount(page, "GitHub");
     const sheet = page.getByRole("dialog", { name: "Connect GitHub" });
     await expect(sheet).toContainText("gh isn't installed. Use the command below, or get the installer from cli.github.com.");
     await expect(sheet.getByText("brew install gh")).toBeVisible();

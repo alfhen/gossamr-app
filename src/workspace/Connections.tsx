@@ -6,7 +6,8 @@ import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
-import { actingAs, canSwitch, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
+import { AddMenu } from "./AddMenu";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type AddEntry, type AddEntryId, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { isJira } from "./domains";
 import { useGithubUi } from "./githubUi";
@@ -70,6 +71,9 @@ export interface ConnectionsViewProps {
   onRemove(): void;
   onToggle(c: ConnectionInfo, on: boolean): void;
   onConnectGithub(): void;
+  /** What + Add offers. */
+  addable: readonly AddEntry[];
+  onAdd(id: AddEntryId): void;
 }
 
 interface RowProps {
@@ -310,35 +314,37 @@ export function ConnectionsView(p: ConnectionsViewProps) {
   const list = useRef<HTMLUListElement>(null);
   const selected = p.connections.find((c) => c.id === p.selectedId) ?? p.connections[0];
   const checked = oldestCheck(p.connections);
+  const groups = groupedConnections(p.connections);
   const onKeyDown = (ev: KeyboardEvent) => {
     if ((ev.target as HTMLElement).closest('[role="switch"]')) return;
-    const next = rowAfter(p.connections.map((c) => c.id), selected?.id ?? null, ev.key);
+    const next = rowAfter(groups.flatMap((g) => g.rows.map((c) => c.id)), selected?.id ?? null, ev.key);
     if (!next) return;
     ev.preventDefault();
     p.onSelect(next);
     requestAnimationFrame(() => list.current?.querySelector<HTMLElement>(`[data-connection="${next}"]`)?.focus());
   };
-  const hasGithub = p.connections.some((c) => c.kind === "github");
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-3 text-sm text-ws-ink3">
         <span>{checked ? `Checked ${agoText(checked, p.now)}` : ""}</span>
-        <Button variant="quiet" size="sm" disabled={p.checking} onClick={p.onCheck}>
-          Check all
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="quiet" size="sm" disabled={p.checking} onClick={p.onCheck}>
+            Check all
+          </Button>
+          <AddMenu entries={p.addable} primary={!hasRealConnection(p.connections)} onAdd={p.onAdd} />
+        </div>
       </div>
       <ul ref={list} aria-label="Connections" onKeyDown={onKeyDown} className="m-0 grid list-none gap-0 border-y border-ws-sep p-0">
-        {p.connections.map((c) => (
-          <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} pending={p.toggling.includes(c.instanceId)} onSelect={() => p.onSelect(c.id)} onToggle={(on) => p.onToggle(c, on)} />
-        ))}
+        {groups.flatMap(({ group, rows }) => [
+          <li key={`group:${group}`} role="presentation" className="px-2 pt-3 pb-1 text-sm font-semibold text-ws-ink2">
+            {group}
+          </li>,
+          ...rows.map((c) => (
+            <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} pending={p.toggling.includes(c.instanceId)} onSelect={() => p.onSelect(c.id)} onToggle={(on) => p.onToggle(c, on)} />
+          )),
+        ])}
       </ul>
       {selected && <Detail key={selected.id} c={selected} p={p} />}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3">
-        <span className="min-w-0 flex-1 text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</span>
-        <Button variant={hasGithub ? "secondary" : "primary"} onClick={p.onConnectGithub}>
-          {hasGithub ? "Connect another GitHub account" : "Connect GitHub"}
-        </Button>
-      </div>
     </div>
   );
 }
@@ -436,6 +442,9 @@ export function ConnectionsSection({ now }: { now: Date }) {
       }}
       onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
+      // Claude and Codex have no sheet to open yet.
+      addable={addEntries(connections).filter((e) => e.group !== "Models")}
+      onAdd={(id) => (id === "github" ? useGithubUi.getState().openConnect() : useJiraUi.getState().openConnect())}
     />
   );
 }

@@ -121,3 +121,26 @@ test.describe("a Jira token close to its expiry", () => {
     await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
   });
 });
+
+test.describe("adding Jira from + Add", () => {
+  test("opens the Connect Jira sheet while no Jira is connected", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await openSettings(page);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await page.getByRole("menuitem", { name: /^Jira account/ }).click();
+    await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
+  });
+
+  test("leaves Jira out of the menu once a token is connected", async ({ page }) => {
+    await openApp(page, "runs=empty&mockJiraToken=refused");
+    await page.getByRole("button", { name: "Make a new token" }).click();
+    const sheet = page.getByRole("dialog", { name: "Connect Jira" });
+    await sheet.getByLabel("API token").fill("good-token");
+    await sheet.getByRole("button", { name: "Connect Jira" }).click();
+    await expect(sheet).toHaveCount(0);
+    await openSettings(page);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await expect(page.getByRole("menuitem", { name: /^GitHub account/ })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /^Jira account/ })).toHaveCount(0);
+  });
+});

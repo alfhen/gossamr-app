@@ -19,6 +19,15 @@ describe("the mock connection actions", () => {
     expect((await b.connectionsList())[0]).toMatchObject({ displayName: "acme.atlassian.net", status: { state: "ready", account: "Alf Henderson" } });
   });
 
+  it("lists a connected Jira as a Jira row, and the sample again once it is removed", async () => {
+    const b = new MockBackend();
+    expect((await b.connectionsList())[0].kind).toBe("mock");
+    await b.jiraConnect({ site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" });
+    expect((await b.connectionsList())[0].kind).toBe("jira");
+    await b.connectionRemove("jira");
+    expect((await b.connectionsList())[0]).toMatchObject({ kind: "mock", displayName: "Sample data" });
+  });
+
   it("renames an instance, trimmed, and tells the page", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     let told = 0;
