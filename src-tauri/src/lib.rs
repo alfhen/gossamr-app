@@ -189,7 +189,10 @@ async fn jira_cloud_id(core: State<'_, CoreState>, site: String) -> Result<Optio
 }
 
 #[tauri::command]
-async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn) -> Result<AuthStatus> {
+async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn, instance_id: Option<String>) -> Result<AuthStatus> {
+    if let Some(id) = instance_id {
+        core.require_jira(&id)?;
+    }
     let status = core.connect_jira(&input).await?;
     core.wake.notify_one();
     probe_in_background(&app, &core, Probe::Refresh);
@@ -313,7 +316,7 @@ async fn connections_list(app: AppHandle, core: State<'_, CoreState>, refresh: b
     if refresh {
         probe_connections(&app, &core, Probe::Refresh).await;
     }
-    core.connections().await
+    core.settings_rows().await
 }
 
 /// Asks each instance how it stands, and tells the page about the ones that answered differently.
@@ -367,6 +370,11 @@ async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, inst
 /// Removes a connection instance: its token, cache and open drafts go, and its id is never used again.
 #[tauri::command]
 async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()> {
+    if core.is_provider(&instance_id) {
+        core.provider_remove(&instance_id)?;
+        wire::changed(&app, wire::Topic::Connections, &instance_id);
+        return Ok(());
+    }
     let removed = core.remove_instance(&instance_id).await?;
     let connection_id = removed.connection_id;
     if let Some(win) = app.get_webview_window("main").filter(|_| removed.kind == tracker::ConnectionKind::Jira) {

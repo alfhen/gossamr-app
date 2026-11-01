@@ -4,6 +4,7 @@ import type { Backend } from "./backend/types";
 import { ALL, compileFilter, containerKey, itemKey, usesCode, type FilterContext, type QueryLookup } from "./lib/filter";
 import { draftSaid, targetOf } from "./lib/proposals";
 import { movesAreOpaque } from "./workspace/boardLogic";
+import { shownConnections } from "./workspace/connectionsLogic";
 import { workContainers } from "./workspace/domains";
 import { useDev } from "./workspace/devStore";
 import type { CodeSummary } from "./lib/devLinks";
@@ -343,7 +344,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const backend = get().backend;
     if (!backend) return;
     try {
-      const connections = await backend.connectionsList(refresh);
+      const connections = shownConnections(await backend.connectionsList(refresh));
       if (backend !== get().backend) return;
       set({ connections });
       set({ reauth: connections.some((c) => c.reauth) });

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, SecondsFormat, Utc};
 use tokio::sync::Notify;
 
-use crate::connections::Binding;
+use crate::connections::{Binding, Driver, RowKind};
 use crate::auth::{Account, Auth, AuthStatus, Scope, Site, TokenSignIn};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
@@ -147,7 +147,13 @@ pub struct ConnectionInfo {
     pub instance_id: String,
     pub display_name: String,
     pub enabled: bool,
-    pub kind: tracker::ConnectionKind,
+    pub kind: RowKind,
+    /// Which CLI a provider row runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver: Option<Driver>,
+    /// A provider's config folder as typed; none for its CLI's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
     /// The site or organisation.
     pub workspace: String,
     pub url: String,
@@ -742,7 +748,9 @@ impl Core {
                 display_name: site.name.clone(),
                 enabled: true,
                 id: connection.id,
-                kind: connection.kind,
+                kind: connection.kind.into(),
+                driver: None,
+                config_dir: None,
                 workspace: site.name,
                 url: site.url,
                 account: me.name,
@@ -758,6 +766,13 @@ impl Core {
         out.extend(self.code_connections());
         self.name_instances(&mut out);
         Ok(out)
+    }
+
+    /// Every row Settings lists: the connections, then the providers.
+    pub async fn settings_rows(&self) -> Result<Vec<ConnectionInfo>> {
+        let mut rows = self.connections().await?;
+        rows.extend(self.provider_rows());
+        Ok(rows)
     }
 
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {

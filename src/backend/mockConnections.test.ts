@@ -67,6 +67,27 @@ describe("the mock connection actions", () => {
   });
 });
 
+describe("the mock provider instance", () => {
+  it("lists no provider unless asked, and one default Claude row when asked, after the others", async () => {
+    expect((await new MockBackend({ githubRepos: 6 }).connectionsList()).map((c) => c.kind)).toEqual(["mock", "github"]);
+    const rows = await new MockBackend({ githubRepos: 6, providers: true }).connectionsList();
+    expect(rows.map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
+    expect(rows[2]).toMatchObject({ kind: "provider", driver: "claude", displayName: "Claude", enabled: true, status: null });
+    expect(rows[2].configDir).toBeUndefined();
+  });
+
+  it("renames, turns off and on, and removes it without touching the others", async () => {
+    const b = new MockBackend({ githubRepos: 6, providers: true });
+    await b.connectionRename("claude", " Work Claude ");
+    await b.connectionSetEnabled("claude", false);
+    expect((await b.connectionsList()).find((c) => c.instanceId === "claude")).toMatchObject({ displayName: "Work Claude", enabled: false });
+    await b.connectionSetEnabled("claude", true);
+    expect((await b.connectionsList()).find((c) => c.instanceId === "claude")?.enabled).toBe(true);
+    await b.connectionRemove("claude");
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github"]);
+  });
+});
+
 describe("the mock on/off switch", () => {
   const github = async (b: MockBackend) => (await b.connectionsList()).find((c) => c.instanceId === "github")!;
 
