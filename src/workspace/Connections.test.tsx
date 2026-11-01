@@ -64,8 +64,8 @@ describe("the connections list", () => {
     expect(view({ selectedId: jira.id })).toContain('aria-label="Acme Jira details"');
   });
 
-  it("falls back to the first connection when the selected one is gone", () => {
-    expect(view({ selectedId: "github:gone" })).toContain('aria-label="Acme Jira details"');
+  it("falls back to the first connection shown when the selected one is gone", () => {
+    expect(view({ selectedId: "github:gone" })).toContain('aria-label="GitHub details"');
   });
 
   it("offers the command that fixes a connection, to copy and then check again", () => {

@@ -16,13 +16,13 @@ const finishRecheck = (page: Page) => page.evaluate(() => (globalThis as unknown
 const probe = (page: Page, state: string) => page.evaluate((s) => (globalThis as unknown as { __gossamrMock: { probeGithub(state: string): void } }).__gossamrMock.probeGithub(s), state);
 
 test.describe("the Connections list", () => {
-  test("shows one row for each connection with how it stands, and the detail of the first", async ({ page }) => {
+  test("shows one row for each connection with how it stands, and the detail of the first one shown", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await expect(rowOf(page, "Sample data")).toContainText("Sample tickets");
     await expect(rowOf(page, "GitHub")).toContainText("Authenticated · ada");
-    await expect(page.getByRole("region", { name: "Sample data details" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "GitHub details" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "GitHub details" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Sample data details" })).toHaveCount(0);
   });
 
   test("groups the rows under Code and Tickets, and arrow keys walk them in that order", async ({ page }) => {

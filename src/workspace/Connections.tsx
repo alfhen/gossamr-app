@@ -312,9 +312,9 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
 
 export function ConnectionsView(p: ConnectionsViewProps) {
   const list = useRef<HTMLUListElement>(null);
-  const selected = p.connections.find((c) => c.id === p.selectedId) ?? p.connections[0];
-  const checked = oldestCheck(p.connections);
   const groups = groupedConnections(p.connections);
+  const selected = p.connections.find((c) => c.id === p.selectedId) ?? groups[0]?.rows[0];
+  const checked = oldestCheck(p.connections);
   const onKeyDown = (ev: KeyboardEvent) => {
     if ((ev.target as HTMLElement).closest('[role="switch"]')) return;
     const next = rowAfter(groups.flatMap((g) => g.rows.map((c) => c.id)), selected?.id ?? null, ev.key);
@@ -358,7 +358,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [pending, setPending] = useState<string[]>([]);
   const [toggling, setToggling] = useState<string[]>([]);
-  const current = connections.find((c) => c.id === selectedId) ?? connections[0];
+  const current = connections.find((c) => c.id === selectedId) ?? groupedConnections(connections)[0]?.rows[0];
   const select = (id: string) => {
     setConfirming(null);
     setCopied(false);
@@ -444,7 +444,10 @@ export function ConnectionsSection({ now }: { now: Date }) {
       onConnectGithub={() => useGithubUi.getState().openConnect()}
       // Claude and Codex have no sheet to open yet.
       addable={addEntries(connections).filter((e) => e.group !== "Models")}
-      onAdd={(id) => (id === "github" ? useGithubUi.getState().openConnect() : useJiraUi.getState().openConnect())}
+      onAdd={(id) => {
+        if (id === "github") useGithubUi.getState().openConnect();
+        else if (id === "jira") useJiraUi.getState().openConnect();
+      }}
     />
   );
 }

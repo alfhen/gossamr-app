@@ -64,6 +64,7 @@ import { MockRuns, STOPPABLE } from "./mockRuns";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
+import { isJira } from "../workspace/domains";
 import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
 import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
@@ -363,6 +364,7 @@ export class MockBackend implements Backend {
   readonly connector: MockConnector;
   private jiraToken: MockOptions["jiraToken"];
   private jiraAccount: AuthStatus;
+  private jiraEnabled = true;
 
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
@@ -1116,6 +1118,11 @@ export class MockBackend implements Backend {
       this.connectionsListeners.forEach((l) => l());
       return;
     }
+    if (target.kind === "jira") {
+      this.jiraEnabled = enabled;
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
     const posting = this.proposals.list({ states: ["applying"] }).some((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
     if (!enabled && posting) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
     this.github.setEnabled(enabled);
@@ -1128,6 +1135,7 @@ export class MockBackend implements Backend {
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
     if (target.kind === "jira") {
       this.jiraAccount = { site: null, me: null, email: null, expiresOn: null };
+      this.jiraEnabled = true;
       this.names.delete(instanceId);
       this.connectionsListeners.forEach((l) => l());
       return;
@@ -1152,7 +1160,7 @@ export class MockBackend implements Backend {
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: true, kind: site ? "jira" : "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: site ? this.jiraEnabled : true, kind: site ? "jira" : "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
     const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
     const all = [sample, ...(this.github.connected ? [this.github.info()] : []), ...claude];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
@@ -1266,7 +1274,7 @@ export class MockBackend implements Backend {
   }
 
   async jiraConnect(input: TokenSignIn, instanceId?: string) {
-    if (instanceId !== undefined && (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.kind !== "mock") throw new Error("That isn't a Jira connection.");
+    if (instanceId !== undefined && !isJira((await this.connectionsList()).find((c) => c.instanceId === instanceId)?.kind)) throw new Error("That isn't a Jira connection.");
     const host = mockJiraHost(input.site);
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
