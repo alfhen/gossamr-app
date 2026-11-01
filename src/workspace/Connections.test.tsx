@@ -196,6 +196,12 @@ describe("a provider in the list", () => {
     expect(out).not.toContain("Sign in again");
     expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Change account");
   });
+
+  it("has no Sync, Watching or Site sections, which belong to tickets and code", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    for (const word of ["Sync now", "Manage projects", "Manage repositories", ">Site<", ">Host<"]) expect(out).not.toContain(word);
+    expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
+  });
 });
 
 describe("the banner for a connection that is signed out", () => {

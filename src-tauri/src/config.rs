@@ -152,9 +152,19 @@ impl AppConfig {
         };
         match serde_json::from_value::<Vec<ProviderInstance>>(stored.clone()) {
             Ok(list) if has_duplicate_ids(&list) => self.lock_providers(dir, bytes, stored, "two of them share an id".into()),
-            Ok(list) => self.providers = list,
+            Ok(list) if self.names_a_connection(&list) => self.lock_providers(dir, bytes, stored, "one of them shares an id with a connection".into()),
+            Ok(list) => {
+                self.providers = list;
+                if self.connections_error.is_some() {
+                    self.unreadable_providers = Some(stored.clone());
+                }
+            }
             Err(e) => self.lock_providers(dir, bytes, stored, e.to_string()),
         }
+    }
+
+    fn names_a_connection(&self, list: &[ProviderInstance]) -> bool {
+        list.iter().any(|p| self.connections.iter().any(|i| i.id == p.id || i.bound_to.as_deref() == Some(p.id.as_str())) || self.retired_ids.contains(&p.id))
     }
 
     fn lock_providers(&mut self, dir: &Path, bytes: &[u8], stored: &Value, why: String) {
@@ -530,7 +540,8 @@ mod tests {
                 driver: connections::Driver::Codex,
                 display_name: "Codex work".into(),
                 enabled: false,
-                config: connections::ProviderConfig { config_dir: Some("~/.codex-work".into()) },
+                config: connections::ProviderConfig { config_dir: Some("~/.codex-work".into()), ..Default::default() },
+                extra: Default::default(),
             });
         })
         .unwrap();
@@ -549,6 +560,8 @@ mod tests {
             ("driver", r#"[{"id":"x","driver":"gemini","displayName":"X","enabled":true,"config":{}}]"#),
             ("shape", r#"{"claude":true}"#),
             ("field", r#"[{"id":"claude","driver":"claude","enabled":true,"config":{}}]"#),
+            ("connection", r#"[{"id":"github","driver":"claude","displayName":"A","enabled":true,"config":{}}]"#),
+            ("retired", r#"[{"id":"github_2","driver":"claude","displayName":"A","enabled":true,"config":{}}]"#),
             ("twice", r#"[{"id":"claude","driver":"claude","displayName":"A","enabled":true,"config":{}},{"id":"claude","driver":"codex","displayName":"B","enabled":true,"config":{}}]"#),
         ] {
             let dir = scratch(&format!("providers-broken-{name}"));
@@ -564,6 +577,34 @@ mod tests {
             assert_eq!((saved["agents"]["maxRuns"].clone(), saved["connections"].as_array().map(Vec::len)), (5.into(), Some(1)), "{name}");
             std::fs::remove_dir_all(&dir).unwrap();
         }
+    }
+
+    #[test]
+    fn keys_a_later_build_added_to_a_provider_survive_a_change_made_here() {
+        let dir = scratch("providers-unknown-keys");
+        let providers = serde_json::json!([{ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "accentColor": "teal", "config": { "configDir": "~/.claude-work", "customModels": ["fable-x"] } }]);
+        std::fs::write(dir.join(FILE), format!(r#"{{{INSTANCES},"providers":{providers}}}"#)).unwrap();
+        AppConfig::update(&dir, |c| {
+            c.providers[0].display_name = "Work".into();
+            c.agents.max_runs = 3;
+        })
+        .unwrap();
+        let saved = saved_value(&dir)["providers"][0].clone();
+        assert_eq!((saved["displayName"].clone(), saved["accentColor"].clone(), saved["config"]["customModels"].clone()), ("Work".into(), "teal".into(), serde_json::json!(["fable-x"])));
+        assert_eq!(saved["config"]["configDir"], "~/.claude-work");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn providers_are_written_back_word_for_word_while_the_connections_come_from_a_newer_build() {
+        let dir = scratch("providers-newer-file");
+        let providers = serde_json::json!([{ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "environment": {"A": "b"}, "config": { "customModels": ["fable-x"] } }]);
+        std::fs::write(dir.join(FILE), serde_json::json!({ "version": 2, "connections": [], "providers": providers }).to_string()).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert!(loaded.connections_error.is_some() && loaded.providers_error.is_none());
+        AppConfig::update(&dir, |c| c.agents.max_runs = 4).unwrap();
+        assert_eq!(saved_value(&dir)["providers"], providers);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

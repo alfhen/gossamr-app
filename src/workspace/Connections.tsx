@@ -248,7 +248,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
       )}
       {!sample && (
         <Field label="Account">
-          <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>
+          {c.kind !== "provider" && <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>}
           <div className="flex flex-wrap gap-2">
             {isJira(c.kind) && (
               <Button variant="quiet" size="sm" onClick={p.onNewToken}>
@@ -274,25 +274,29 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           )}
         </Field>
       )}
-      <Field label="Sync">
-        <p role={sync.tone === "ok" ? undefined : "status"} className={`m-0 text-sm ${sync.tone === "error" ? "text-ws-blocked" : "text-ws-ink2"}`}>
-          {sync.text}
-        </p>
-        <div>
-          <Button variant="quiet" size="sm" disabled={c.syncing || !c.enabled} onClick={p.onSync}>
-            Sync now
-          </Button>
-        </div>
-      </Field>
-      <Field label="Watching">
-        <p className="m-0">{watchSummary(watch, nounFor(c.kind))}</p>
-        <div>
-          <Button variant="quiet" size="sm" onClick={p.onManage}>
-            {c.kind === "github" ? "Manage repositories" : "Manage projects"}
-          </Button>
-        </div>
-      </Field>
-      {!sample && <Field label={c.kind === "github" ? "Host" : "Site"}>{c.kind === "github" ? "github.com" : c.workspace}</Field>}
+      {c.kind !== "provider" && (
+        <>
+        <Field label="Sync">
+          <p role={sync.tone === "ok" ? undefined : "status"} className={`m-0 text-sm ${sync.tone === "error" ? "text-ws-blocked" : "text-ws-ink2"}`}>
+            {sync.text}
+          </p>
+          <div>
+            <Button variant="quiet" size="sm" disabled={c.syncing || !c.enabled} onClick={p.onSync}>
+              Sync now
+            </Button>
+          </div>
+        </Field>
+        <Field label="Watching">
+          <p className="m-0">{watchSummary(watch, nounFor(c.kind))}</p>
+          <div>
+            <Button variant="quiet" size="sm" onClick={p.onManage}>
+              {c.kind === "github" ? "Manage repositories" : "Manage projects"}
+            </Button>
+          </div>
+        </Field>
+        {!sample && <Field label={c.kind === "github" ? "Host" : "Site"}>{c.kind === "github" ? "github.com" : c.workspace}</Field>}
+        </>
+      )}
       {actingAs(c).map((line) => (
         <p key={line} className="m-0 border-b border-ws-sep py-2.5 text-sm text-ws-ink2 last:border-b-0">
           {line}
@@ -417,7 +421,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       onOpenTerminal={() => void openTerminal(current)}
       onRename={(name) => rename(current, name)}
       onManage={() => useTabs.getState().openSettings("watching")}
-      onNewToken={() => useJiraUi.getState().openConnect()}
+      onNewToken={() => useJiraUi.getState().openConnect(current?.instanceId)}
       onAskRemove={() => setConfirming(current?.id ?? null)}
       onCancel={() => setConfirming(null)}
       onRemove={() => {

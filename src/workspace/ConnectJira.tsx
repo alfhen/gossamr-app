@@ -175,12 +175,14 @@ async function open(url: string) {
 export function ConnectJiraForm({
   api,
   initial,
+  instanceId,
   onConnected,
   onCancel,
   onBusy,
 }: {
   api: JiraConnectApi;
   initial?: Partial<JiraFormValues>;
+  instanceId?: string;
   onConnected(status: AuthStatus): void;
   onCancel?(): void;
   onBusy?(busy: boolean): void;
@@ -247,7 +249,7 @@ export function ConnectJiraForm({
         setError("Enter the site's cloud id.");
         return working(false);
       }
-      onConnected(await api.jiraConnect(input));
+      onConnected(await api.jiraConnect(input, instanceId));
     } catch (e) {
       setError(messageOf(e));
       working(false);
@@ -288,6 +290,7 @@ export function ConnectJiraForm({
 export function ConnectJiraDialog() {
   const shown = useJiraUi((s) => s.connectOpen);
   const close = useJiraUi((s) => s.closeConnect);
+  const instanceId = useJiraUi((s) => s.connectInstanceId);
   const backend = useBackend();
   const [current, setCurrent] = useState<AuthStatus | null>(null);
   const busy = useRef(false);
@@ -333,6 +336,7 @@ export function ConnectJiraDialog() {
         <ConnectJiraForm
           key={current?.site?.name ?? "new"}
           api={backend}
+          instanceId={instanceId}
           initial={{ site: current?.site?.name ?? "", email: current?.email ?? "" }}
           onConnected={connected}
           onCancel={close}

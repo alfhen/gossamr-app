@@ -356,6 +356,10 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
 #[tauri::command]
 async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, instance_id: String, enabled: bool) -> Result<()> {
     let connection_id = core.set_instance_enabled(&instance_id, enabled).await?;
+    if core.is_provider(&instance_id) {
+        wire::changed(&app, wire::Topic::Connections, &connection_id);
+        return Ok(());
+    }
     if enabled {
         core.wake.notify_one();
     }

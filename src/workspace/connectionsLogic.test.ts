@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { actingAs, canSwitch, isSignedOut, oldestCheck, providersShown, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
+import { actingAs, canSwitch, isSignedOut, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
@@ -138,5 +138,13 @@ describe("when code shows", () => {
 
   it("shows code when one of two GitHub accounts is on", () => {
     expect(showsCode([{ ...base, enabled: false }, base])).toBe(true);
+  });
+});
+
+describe("removalWarning", () => {
+  it("says a provider's folder and login stay on disk and mentions no tickets or token", () => {
+    const text = removalWarning({ kind: "provider", displayName: "Claude", workspace: "" });
+    expect(text).toContain("stay on disk");
+    expect(text).not.toMatch(/token|ticket/);
   });
 });

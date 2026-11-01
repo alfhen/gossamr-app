@@ -53,6 +53,9 @@ pub struct ProviderConfig {
     /// The folder holding this instance's CLI login, as typed (`~` kept). None means the CLI's own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// Settings a later build wrote that this one doesn't read. They are saved back as they were.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// One login of a coding CLI. It sits in `providers` beside `connections` and has no cache or `boundTo`.
@@ -64,6 +67,9 @@ pub struct ProviderInstance {
     pub display_name: String,
     pub enabled: bool,
     pub config: ProviderConfig,
+    /// Keys a later build wrote on the instance that this one doesn't read. They are saved back as they were.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What a row of Settings is: a connection of either kind, or a provider.
@@ -86,7 +92,7 @@ impl From<ConnectionKind> for RowKind {
 
 /// The instance every install starts with. It runs what runs today, so it has no folder.
 pub fn default_claude() -> ProviderInstance {
-    ProviderInstance { id: DEFAULT_CLAUDE.into(), driver: Driver::Claude, display_name: "Claude".into(), enabled: true, config: ProviderConfig::default() }
+    ProviderInstance { id: DEFAULT_CLAUDE.into(), driver: Driver::Claude, display_name: "Claude".into(), enabled: true, config: ProviderConfig::default(), extra: Default::default() }
 }
 
 pub const DEFAULT_CLAUDE: &str = "claude";
@@ -309,7 +315,7 @@ mod tests {
     }
 
     fn provider(id: &str, driver: Driver) -> ProviderInstance {
-        ProviderInstance { id: id.into(), driver, display_name: id.into(), enabled: true, config: ProviderConfig::default() }
+        ProviderInstance { id: id.into(), driver, display_name: id.into(), enabled: true, config: ProviderConfig::default(), extra: Default::default() }
     }
 
     #[test]
@@ -335,7 +341,7 @@ mod tests {
     fn a_provider_serializes_in_the_shape_config_json_documents() {
         let json = serde_json::to_value(default_claude()).unwrap();
         assert_eq!(json, serde_json::json!({ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "config": {} }));
-        let codex: ProviderInstance = serde_json::from_str(r#"{"id":"codex","driver":"codex","displayName":"Codex","enabled":true,"config":{"configDir":"~/.codex-work","somethingNew":1}}"#).unwrap();
+        let codex: ProviderInstance = serde_json::from_str(r#"{"id":"codex","driver":"codex","displayName":"Codex","enabled":true,"config":{"configDir":"~/.codex-work"}}"#).unwrap();
         assert_eq!((codex.driver, codex.config.config_dir.as_deref()), (Driver::Codex, Some("~/.codex-work")));
     }
 

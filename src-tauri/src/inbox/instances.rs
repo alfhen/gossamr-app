@@ -819,7 +819,8 @@ mod tests {
                 driver: connections::Driver::Claude,
                 display_name: "Claude personal".into(),
                 enabled: true,
-                config: connections::ProviderConfig { config_dir: folder.map(|f| f.display().to_string()) },
+                config: connections::ProviderConfig { config_dir: folder.map(|f| f.display().to_string()), ..Default::default() },
+                extra: Default::default(),
             });
         })
         .unwrap();

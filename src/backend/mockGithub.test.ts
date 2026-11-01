@@ -11,7 +11,7 @@ const GH = "github:ada";
 describe("the mock GitHub connection", () => {
   it("is signed out until a sign-in command runs", async () => {
     const b = new MockBackend();
-    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
+    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock", "provider"]);
     expect(await b.watchGet()).toHaveLength(1);
   });
 
@@ -19,7 +19,7 @@ describe("the mock GitHub connection", () => {
     const b = new MockBackend();
     const connection = await b.githubConnect();
     expect([connection.id, connection.kind, connection.workspace]).toEqual([GH, "github", "ada"]);
-    expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock", GH]);
+    expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock", GH, "claude"]);
     const state = (await b.watchGet()).find((s) => s.connectionId === GH)!;
     expect([state.chosen, state.needsChoice, state.catalogSize]).toEqual([false, true, 13]);
   });
@@ -30,6 +30,7 @@ describe("the mock GitHub connection", () => {
     expect((await b.connectionsList()).map((c) => [c.instanceId, c.displayName, c.enabled])).toEqual([
       ["jira", "Sample data", true],
       ["github", "GitHub", true],
+      ["claude", "Claude", true],
     ]);
   });
 
@@ -69,14 +70,14 @@ describe("the mock GitHub connection", () => {
   it("connects the login gh holds, and refuses one it doesn't", async () => {
     const b = new MockBackend();
     await expect(b.githubConnect("someone")).rejects.toThrow("gh has no token for someone");
-    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
+    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock", "provider"]);
     expect((await b.githubConnect("ada")).id).toBe(GH);
   });
 
   it("connects nothing while gh has no login to give", async () => {
     const b = new MockBackend({ githubProbe: "notSignedIn" });
     await expect(b.githubConnect()).rejects.toThrow("gh has no token");
-    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock"]);
+    expect((await b.connectionsList()).map((c) => c.kind)).toEqual(["mock", "provider"]);
   });
 
   it("opens Terminal on the login command", async () => {
@@ -142,7 +143,7 @@ describe("the mock GitHub connection", () => {
     const changed = vi.fn();
     b.onWatchChanged(changed);
     await b.connectionRemove("github");
-    expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock"]);
+    expect((await b.connectionsList()).map((c) => c.id)).toEqual(["mock", "claude"]);
     expect(await b.watchGet()).toHaveLength(1);
     expect(changed).toHaveBeenCalledWith({ connectionId: GH });
   });

@@ -375,7 +375,6 @@ export class MockBackend implements Backend {
     this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
     this.github.holdRecheck = options.githubRecheck === "hold";
-    if (options.providers) this.claude = { enabled: true };
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
@@ -1092,7 +1091,7 @@ export class MockBackend implements Backend {
   readonly terminals: string[] = [];
   private readonly names = new Map<string, string>();
   /** The default Claude provider instance, until it is removed. */
-  private claude: { enabled: boolean } | null = null;
+  private claude: { enabled: boolean } | null = { enabled: true };
 
   async connectionOpenTerminal(instanceId: string) {
     const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
@@ -1260,7 +1259,8 @@ export class MockBackend implements Backend {
     return host.startsWith("unknown") ? null : mockCloudId(host);
   }
 
-  async jiraConnect(input: TokenSignIn) {
+  async jiraConnect(input: TokenSignIn, instanceId?: string) {
+    if (instanceId !== undefined && (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.kind !== "mock") throw new Error("That isn't a Jira connection.");
     const host = mockJiraHost(input.site);
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");

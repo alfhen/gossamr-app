@@ -25,6 +25,7 @@ test.describe("the Connections list", () => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await expect(rowOf(page, "GitHub")).toBeVisible();
+    await expect(page.getByRole("list", { name: "Connections" }).getByRole("listitem")).toHaveCount(2);
     await expect(rowOf(page, "Claude")).toHaveCount(0);
   });
 

@@ -41,11 +41,11 @@ describe("the mock connection actions", () => {
     let told = 0;
     b.onConnectionsChanged(() => told++);
     await b.connectionRemove("github");
-    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira"]);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "claude"]);
     expect(b.proposals.get(draft.id)?.state).toEqual({ type: "retired", reason: "GitHub was removed." });
     expect(told).toBe(1);
     await b.githubConnect();
-    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2"]);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2", "claude"]);
   });
 
   it("refuses to remove GitHub while one of its reviews is being posted, and leaves every draft as it was", async () => {
@@ -56,28 +56,37 @@ describe("the mock connection actions", () => {
     void b.proposals.postReview(posting.id, 0, () => new Promise(() => {}), async () => null);
     await expect(b.connectionRemove("github")).rejects.toThrow("posting a draft for GitHub right now");
     expect(b.proposals.get(waiting.id)?.state).toEqual({ type: "pending" });
-    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github"]);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
   });
 
   it("refuses the sample data and an instance that is gone", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     await expect(b.connectionRemove("jira")).rejects.toThrow("built in");
     await expect(b.connectionRemove("github_9")).rejects.toThrow("gone");
-    expect(await b.connectionsList()).toHaveLength(2);
+    expect(await b.connectionsList()).toHaveLength(3);
   });
 });
 
 describe("the mock provider instance", () => {
-  it("lists no provider unless asked, and one default Claude row when asked, after the others", async () => {
-    expect((await new MockBackend({ githubRepos: 6 }).connectionsList()).map((c) => c.kind)).toEqual(["mock", "github"]);
-    const rows = await new MockBackend({ githubRepos: 6, providers: true }).connectionsList();
+  it("always lists one default Claude row, after the others", async () => {
+    const rows = await new MockBackend({ githubRepos: 6 }).connectionsList();
     expect(rows.map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
     expect(rows[2]).toMatchObject({ kind: "provider", driver: "claude", displayName: "Claude", enabled: true, status: null });
     expect(rows[2].configDir).toBeUndefined();
   });
 
+  it("refuses a Jira sign-in started from a row that is not the Jira one", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const input = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+    await expect(b.jiraConnect(input, "claude")).rejects.toThrow("isn't a Jira connection");
+    await expect(b.jiraConnect(input, "github")).rejects.toThrow("isn't a Jira connection");
+    expect((await b.connectionsList())[0].displayName).toBe("Sample data");
+    await b.jiraConnect(input, "jira");
+    expect((await b.connectionsList())[0].displayName).toBe("acme.atlassian.net");
+  });
+
   it("renames, turns off and on, and removes it without touching the others", async () => {
-    const b = new MockBackend({ githubRepos: 6, providers: true });
+    const b = new MockBackend({ githubRepos: 6 });
     await b.connectionRename("claude", " Work Claude ");
     await b.connectionSetEnabled("claude", false);
     expect((await b.connectionsList()).find((c) => c.instanceId === "claude")).toMatchObject({ displayName: "Work Claude", enabled: false });
