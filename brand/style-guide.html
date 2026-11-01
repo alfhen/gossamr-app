@@ -17,6 +17,7 @@
     --ink3: #776e62;
     --accent: #4b55c0;
     --accent-soft: rgb(75 85 192 / 0.1);
+    --prominent: #4b55c0;
     --pip: #16737a;
     --pip-soft: rgb(22 115 122 / 0.1);
     --pip2: #5f54b8;
@@ -217,7 +218,7 @@
   .draft .who { font-size: 11px; color: var(--pip); font-weight: 600; }
   .btns { display: flex; gap: 8px; margin-top: 10px; }
   .btn { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary { background: var(--prominent); border-color: var(--prominent); color: #fff; }
   .ask { font: 600 12px var(--sans); border: 0; border-radius: 14px; padding: 3px 10px; color: #fff; background: linear-gradient(135deg, #16737a, #5f54b8); }
 
   .dos { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -264,7 +265,7 @@
   .demo .pad { position: relative; background: var(--win); border: 1px solid var(--sep); border-radius: 8px; min-height: 150px; padding: 14px; overflow: hidden; }
   .demo .acts { display: flex; flex-wrap: wrap; gap: 8px; }
   .demo button { font: 600 12px var(--sans); border-radius: 6px; padding: 5px 12px; border: 1px solid var(--sep2); background: var(--win); color: var(--ink); cursor: pointer; }
-  .demo button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .demo button.primary { background: var(--prominent); border-color: var(--prominent); color: #fff; }
 
   .curves svg { width: 100%; height: auto; display: block; }
   .curves .track { position: relative; height: 18px; margin: 6px 0; }
@@ -286,7 +287,7 @@
   .dcard.evap { opacity: 0; filter: blur(4px); transition: opacity 200ms ease, filter 200ms ease; }
 
   .badge-demo { display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  .nbadge { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: #fff; font: 700 12px var(--sans); transition: transform 1070ms var(--spring-drop); }
+  .nbadge { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--prominent); color: #fff; font: 700 12px var(--sans); transition: transform 1070ms var(--spring-drop); }
   .nbadge.swell { transform: scale(1.12); transition: transform 120ms ease-out; }
 
   .rings { display: flex; gap: 40px; justify-content: center; align-items: center; height: 100%; min-height: 120px; }
@@ -560,6 +561,7 @@
       <tr><td><code>ws-blocked</code></td><td>#bf4339</td><td>#e77d72</td><td>Failed, blocked</td></tr>
       <tr><td><code>ws-review</code></td><td>#7d4cb8</td><td>#bf9cec</td><td>In review</td></tr>
       <tr><td><code>ws-warn</code></td><td>#b07614</td><td>#d6a04a</td><td>Needs attention (icons and fills only)</td></tr>
+      <tr><td><code>prominent</code></td><td>#4b55c0</td><td>#4b55c0</td><td>The fill of the main action and of "needs you" counts, under white text (6.3:1). A fill only: indigo text uses <code>ws-accent</code></td></tr>
     </tbody>
   </table></div>
 
@@ -586,13 +588,15 @@
   <div class="scroll"><table>
     <thead><tr><th></th><th>Light</th><th>Dark</th><th>Rule</th></tr></thead>
     <tbody>
-      <tr><td><code>ws-ink</code></td><td>16.6</td><td>15.9</td><td rowspan="2">Any text</td></tr>
-      <tr><td><code>ws-ink2</code></td><td>6.8</td><td>8.7</td></tr>
-      <tr><td><code>ws-accent</code></td><td>5.3</td><td>5.5</td><td>Links and buttons</td></tr>
-      <tr><td><code>ws-ink3</code></td><td>3.2</td><td>4.4</td><td>Meta, icons, large or bold text only</td></tr>
+      <tr><td><code>ws-ink</code></td><td>14.0</td><td>13.5</td><td rowspan="2">Any text</td></tr>
+      <tr><td><code>ws-ink2</code></td><td>6.7</td><td>7.8</td></tr>
+      <tr><td><code>ws-ink3</code></td><td>4.7</td><td>4.9</td><td>Meta on the window; on the sidebar and bars (about 4.2 in light) only icons and large text, and other text there takes <code>ws-ink2</code></td></tr>
+      <tr><td><code>ws-accent</code></td><td>5.8</td><td>6.5</td><td>Links and indigo text</td></tr>
       <tr><td><code>ws-pip</code></td><td>5.2</td><td>9.0</td><td>Pip text</td></tr>
       <tr><td><code>ws-done</code></td><td>4.7</td><td>7.8</td><td>Done text</td></tr>
-      <tr><td><code>ws-warn</code></td><td>2.9</td><td></td><td>Icons and fills; the words stay in ink</td></tr>
+      <tr><td><code>ws-blocked</code></td><td>4.8</td><td>6.3</td><td>Failed and blocked text</td></tr>
+      <tr><td><code>ws-review</code></td><td>5.5</td><td>7.6</td><td>In review text</td></tr>
+      <tr><td><code>ws-warn</code></td><td>3.6</td><td>7.4</td><td>Icons and fills; the words stay in ink</td></tr>
     </tbody>
   </table></div>
 </div></section>
