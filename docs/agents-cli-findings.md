@@ -263,3 +263,42 @@ Each test creates its own config directory and repository under `GOSSAMR_SCRATCH
 ## Session names
 
 Gossamr titles every session it starts `Gossamr: <ticket key> <kind>` (for example `Gossamr: CE-773 investigate`) so it is recognisable in `claude agents`, `claude attach` and the desktop sessions. `--name` carries the title; `--worktree`, the folder and the `worktree-<slug>` branch keep the plain slug, and the run spec and its digest are untouched (the prefix is added where the launch request is built). Verified on 2.1.286 by `real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug` (ignored, scratch config): a colon and a space in `--name` arrive as one argument, the `backgrounded \u00b7 <id> \u00b7 <name>` line prints the name whole, `claude agents --json` returns it unchanged, and the worktree and branch use the slug. Nothing reads a session's name to find a run: runs are matched by worktree path or short id, `--resume` keeps the saved name, and the `name` fields of the listing and of the launch output are not used outside tests. Sessions started before this keep their old titles.
+
+## Codex smoke test (step c0 of docs/connections-proposal.md, owner runs it)
+
+Status: **not run.** The build Mac has no `codex`, and every check below needs a real Codex login. Builders do not run this section and do not write results into it. The owner does, then fills in the Result column and the decisions at the end. The commands are a starting point built from the Codex source (`codex-rs/exec/src/cli.rs`); if a flag or config key has another name in the installed version, write the real one down.
+
+Record first: `codex --version`, the date, and how you signed in (`codex login` with ChatGPT, or an API key).
+
+Setup, once:
+
+```
+export SCRATCH=$(mktemp -d)
+git init -q "$SCRATCH/repo" && cd "$SCRATCH/repo" && git commit -q --allow-empty -m init
+export CODEX_HOME=$SCRATCH/codex-home   # a throwaway folder, so your own ~/.codex stays out of the test
+codex login
+```
+
+Put a hook-free `config.toml` with one MCP server of your own in `$CODEX_HOME`, so C1 can show whether it leaks. Delete `$SCRATCH` at the end.
+
+### The checks
+
+| # | Row in 8.1 | What to run | Passes when | Result |
+|---|---|---|---|---|
+| C1 | Pip lockdown: MCP tools only | `codex exec --json --skip-git-repo-check --ignore-user-config --sandbox read-only -c features.shell_tool=false -C "$SCRATCH/repo" "Run the shell command ls / and tell me what it printed. If you have no shell tool, say NO SHELL."` Then ask it to list every tool it has, and to read a file by path. Run it again without `--ignore-user-config` to see the difference. | The events hold no `command_execution` item. The model reports no shell and no file, patch or web tool. The MCP server from `$CODEX_HOME/config.toml` is absent with `--ignore-user-config` and present without it. | Not run |
+| C2 | MCP calls without a human | Add a stdio test server: `-c 'mcp_servers.t.command="npx"' -c 'mcp_servers.t.args=["-y","@modelcontextprotocol/server-everything"]'`. Ask for its `echo` tool. Run once as is, and once with `-c 'mcp_servers.t.default_tools_approval_mode="approve"'`. | Without the key the call is cancelled. With it the call finishes and its result is in the events. Write down the event name and status of each. | Not run |
+| C3 | System prompt | `-c 'developer_instructions="End every reply with the word PINEAPPLE."'`. Also try `-c model_instructions_file=<abs path>`. Then resume the thread (C5) and check the instruction still applies. | The reply ends with PINEAPPLE, with and without `--ignore-user-config`, and after a resume. Write down which key works and whether the other one is safe to use. | Not run |
+| C4 | Survives Gossamr quitting | macOS has no `setsid` command. Start in a Terminal window: `perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' codex exec --json ... "Wait 60 seconds with sleep 60, then say DONE" > "$SCRATCH/events.jsonl" 2>&1 & echo $! > "$SCRATCH/pid"` with `--sandbox workspace-write`. Close the window at once. | `kill -0 $(cat "$SCRATCH/pid")` still succeeds, and `events.jsonl` ends with `turn.completed` and DONE. Write down whether the pid is the `codex` node launcher or the real binary, because Gossamr records one pid. | Not run |
+| C5 | Message a running agent | Start a long turn as in C4 and note the `thread_id` from `thread.started`. Send SIGINT to the pid. Then run `codex exec resume <thread id> --json "Also say HELLO at the end."` in the same folder. | The first process exits on SIGINT with its events intact. The resume keeps the earlier context, reports the same thread id, and does not need the sandbox flags again (or does: write down which). If SIGINT leaves the process running, try SIGTERM and write that down. | Not run |
+| C6 | Commit and push from the worktree | Clone a throwaway GitHub repo you own. `git worktree add ../wt -b smoke`. In `../wt` run `codex exec --json --sandbox workspace-write "Create a file, commit it, push the branch."`, then again with `--sandbox danger-full-access`, then with `workspace-write` plus `-c 'sandbox_workspace_write.network_access=true'` and `-c 'sandbox_workspace_write.writable_roots=["<clone>/.git"]'`. | Write down, for each setting, whether the commit and the push worked and what error came back. A worktree keeps its git data under the main clone's `.git/worktrees/`, which sits outside the worktree, so expect the first setting to fail at the commit. | Not run |
+
+Also write down anything else you saw: login prompts, folder-trust questions, warnings on stderr, the shape of `thread.started`, `item.*` and `turn.completed`, and whether `-o <file>` holds the final answer.
+
+### Decisions
+
+These are the two outputs of c0. Later steps read them from here.
+
+| Decision | Rule | Answer |
+|---|---|---|
+| Pip may run on Codex | Yes only if C1, C2 and C3 all pass and each lockdown flag has a name Gossamr can test (rule 3). If not, Codex runs agents only and c2 is skipped. | Not decided |
+| Sandbox for agents | The narrowest setting from C6 that can commit and push. If none can, say that Gossamr commits and pushes for the agent. | Not decided |
