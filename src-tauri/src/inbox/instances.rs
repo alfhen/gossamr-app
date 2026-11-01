@@ -9,7 +9,7 @@ use crate::domain::{Actor, ProposalQuery, ProposalState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::secrets;
-use crate::tracker::ConnectionKind;
+use crate::tracker::{Connection, ConnectionKind};
 use chrono::Utc;
 use std::collections::HashMap;
 
@@ -316,10 +316,15 @@ impl Core {
         Ok(())
     }
 
-    /// Forgets the Jira token of `connection_id` and deletes its cache. A connection that isn't signed in has nothing to forget.
+    /// Forgets the Jira token of `connection_id` and deletes its cache. The cache goes even when no token was loaded
+    /// (the Keychain item couldn't be read, or an earlier removal got as far as the token), so adding the account again
+    /// starts empty.
     async fn forget_jira(&self, connection_id: &str) -> Result<()> {
-        let Some(connection) = self.auth.accounts().await.into_iter().map(|s| s.connection).find(|c| c.id == connection_id) else { return Ok(()) };
-        self.auth.disconnect(&connection.id).await?;
+        let held = self.auth.accounts().await.into_iter().map(|s| s.connection).find(|c| c.id == connection_id);
+        if held.is_some() {
+            self.auth.disconnect(connection_id).await?;
+        }
+        let Some(connection) = held.or_else(|| Connection::from_jira_id(connection_id)) else { return Ok(()) };
         self.registry.remove(&connection.id);
         self.jira_sync.lock().expect("sync lock poisoned").remove(&connection.id);
         // Turns don't record their connection yet, so with another one signed in they can't be told apart from its own.

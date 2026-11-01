@@ -265,10 +265,13 @@ impl Auth {
         Self::with_authenticator(Arc::new(Atlassian::new(http)), credentials)
     }
 
-    /// The primary session's site and account.
-    pub async fn status(&self) -> Result<AuthStatus> {
+    /// The site and account of the session for `connection_id`, or of the first one when none is named.
+    pub async fn status(&self, connection_id: Option<&str>) -> Result<AuthStatus> {
         let sessions = self.sessions.lock().await;
-        let primary = sessions.first();
+        let primary = match connection_id {
+            Some(id) => sessions.iter().find(|s| s.connection_id() == id),
+            None => sessions.first(),
+        };
         Ok(AuthStatus {
             site: primary.map(|s| s.site.clone()),
             me: primary.map(|s| s.me.clone()),
@@ -364,7 +367,8 @@ impl Auth {
             .collect()
     }
 
-    /// The primary session's site and account, if any.
+    /// The first session's site and account, if any. `Core::primary` is the connection work runs as.
+    #[cfg(test)]
     pub async fn identity(&self) -> Option<(Scope, Site, Account)> {
         self.sessions.lock().await.first().map(|s| (s.scope(), s.site.clone(), s.me.clone()))
     }
@@ -646,7 +650,7 @@ mod tests {
         }
 
         assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:ann", "jira-token:jira:acme:bob", "jira-token:jira:globex:ann2"]);
-        assert_eq!(auth.status().await.unwrap().me.unwrap().account_id, "ann");
+        assert_eq!(auth.status(None).await.unwrap().me.unwrap().account_id, "ann");
         assert_eq!(auth.connection().await.unwrap().id, "jira:acme:ann");
         assert_eq!(auth.identity().await.unwrap().0.account_id, "ann");
     }

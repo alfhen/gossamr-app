@@ -179,7 +179,7 @@ fn use_freed_slot(service: &RunsState) {
 
 #[tauri::command]
 async fn auth_status(core: State<'_, CoreState>) -> Result<AuthStatus> {
-    core.auth.status().await
+    core.jira_status().await
 }
 
 /// The cloud id a Jira site reports about itself, or `None` when the sheet has to ask for it.

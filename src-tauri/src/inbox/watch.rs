@@ -111,7 +111,7 @@ impl Core {
     }
 
     async fn jira_watch_state(&self) -> Result<Vec<WatchState>> {
-        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(Vec::new()) };
+        let Ok((scope, _, _)) = self.identity().await else { return Ok(Vec::new()) };
         let id = self.connection(&scope)?.id;
         let state = self
             .with_db_for(&scope, |db| {
@@ -301,7 +301,8 @@ impl Core {
     }
 
     /// Runs the check for assigned items in unwatched containers of each Jira connection that is on and due, and
-    /// returns the ones that are new since its last check. A check that fails is tried again at the next interval. It only reads keys, and never adds a container to the watch set.
+    /// returns the ones that are new since its last check. A check that fails is tried again at the next interval. It
+    /// only reads keys, and never adds a container to the watch set.
     pub async fn radar_if_due(&self) -> Vec<(String, Vec<Stray>)> {
         let mut found = Vec::new();
         for session in self.auth.accounts().await {
@@ -744,5 +745,16 @@ mod tests {
         fx.core.set_instance_enabled("jira", true).await.unwrap();
         assert_eq!(fx.core.radar_if_due().await.pop().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
         assert_eq!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_watching_pane_follows_the_primary_connection() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+
+        let states = fx.core.watch_state().await.unwrap();
+        assert_eq!(states.iter().map(|s| s.connection_id.as_str()).collect::<Vec<_>>(), [second.connection_id.as_str()]);
     }
 }

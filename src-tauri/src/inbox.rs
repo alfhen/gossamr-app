@@ -281,7 +281,7 @@ impl Core {
         self.data_dir.clone()
     }
 
-    /// Signs in with an API token and registers the resulting connection. It still replaces every earlier sign-in.
+    /// Signs in with an API token and registers the resulting connection. Replaces every earlier sign-in.
     pub async fn connect_jira(&self, input: &TokenSignIn) -> Result<AuthStatus> {
         let _alone = self.sign_in.lock().await;
         let previous: Vec<Connection> = self.auth.accounts().await.into_iter().map(|s| s.connection).collect();
@@ -291,7 +291,13 @@ impl Core {
             self.rebind_instance(previous.iter().map(|c| c.id.clone()).collect(), binding);
         }
         self.replace_connections(previous, connection);
-        self.auth.status().await
+        self.jira_status().await
+    }
+
+    /// The site and account of the primary connection, so the page labels the session with the account it shows.
+    pub async fn jira_status(&self) -> Result<AuthStatus> {
+        let primary = self.primary().await.ok().map(|p| p.connection.id);
+        self.auth.status(primary.as_deref()).await
     }
 
     /// Registers `connection`, and drops each of `previous` that is another account: a registered connection is the
@@ -306,17 +312,15 @@ impl Core {
     }
 
     /// Registers the connections restored from the Keychain that an instance is bound to. A token no instance is bound
-    /// to stays in the vault, unregistered. Until instances exist, or when none is bound to a token, the first one is
-    /// registered as it always was.
+    /// to stays in the vault, unregistered. Before the first adoption the first session is registered.
     pub async fn restore(&self) {
         let signed_in = self.auth.accounts().await;
         let config = AppConfig::load(&self.data_dir);
-        let bound: Vec<SignedIn> = if connections::is_live(&config) {
-            signed_in.iter().filter(|s| config.connections.iter().any(|i| i.bound_to.as_deref() == Some(s.connection.id.as_str()))).cloned().collect()
+        let registered: Vec<SignedIn> = if connections::is_live(&config) {
+            signed_in.into_iter().filter(|s| config.connections.iter().any(|i| i.bound_to.as_deref() == Some(s.connection.id.as_str()))).collect()
         } else {
-            Vec::new()
+            signed_in.into_iter().take(1).collect()
         };
-        let registered = if bound.is_empty() { signed_in.into_iter().take(1).collect() } else { bound };
         for session in registered {
             self.registry.register(session.connection);
         }
@@ -369,6 +373,10 @@ impl Core {
     async fn with_db_for<T>(&self, scope: &Scope, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let (connection, _, _) = self.identity_for(scope).await?;
         let mut open = self.db.lock().expect("db lock poisoned");
+        // Removal unregisters before `delete_cache` takes this lock, so a caller that waited on it must look again.
+        if self.registry.connection(&connection.id).is_none() {
+            return Err(Error::SiteChanged);
+        }
         self.open_app(&mut open)?;
         if !open.cache.contains_key(&connection.id) {
             let db = Db::open_with_app(&self.data_dir.join(db_file(&connection)), &self.data_dir.join(APP_DB))?.for_connection(&connection.id);
@@ -1279,7 +1287,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restoring_before_the_instances_exist_registers_the_first_account_as_before() {
+    async fn restoring_before_the_instances_exist_registers_only_the_first_account() {
         let (fx, second) = super::testing::fixture_with_two_jira().await;
         fx.core.registry.remove(&fx.scope.connection_id);
         fx.core.registry.remove(&second.connection_id);
@@ -1311,6 +1319,54 @@ mod tests {
 
         fx.core.connect_jira(&sign_in).await.unwrap();
         assert!(fx.core.with_db_for(&scope, |db| db.item(&at)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn restoring_with_a_live_list_registers_nothing_when_no_instance_is_bound_to_a_token() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.unbind_instance(&second.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+        fx.core.registry.remove(&second.connection_id);
+
+        fx.core.restore().await;
+        assert!(fx.core.connection(&fx.scope).is_err());
+        assert!(fx.core.connection(&second).is_err());
+        assert_eq!(fx.core.auth.accounts().await.len(), 2, "both tokens are still held");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_write_that_waited_on_the_db_lock_through_a_removal_does_not_recreate_the_cache() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        let file = fx.dir.join(db_file(&fx.core.connection(&second).unwrap()));
+        let runtime = tokio::runtime::Handle::current();
+        let held = fx.core.db.lock().unwrap();
+        let outcome = std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| runtime.block_on(fx.core.with_db_for(&second, |_| Ok(()))));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            fx.core.registry.remove(&second.connection_id);
+            drop(held);
+            waiting.join().unwrap()
+        });
+
+        assert!(matches!(outcome, Err(Error::SiteChanged)));
+        assert!(!file.exists());
+        assert!(!fx.core.db.lock().unwrap().cache.contains_key(&second.connection_id));
+    }
+
+    #[tokio::test]
+    async fn removing_an_instance_whose_token_is_gone_still_deletes_its_cache() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let file = fx.dir.join(db_file(&fx.core.connection(&second).unwrap()));
+        fx.core.with_db_for(&second, |_| Ok(())).await.unwrap();
+        assert!(file.exists());
+        fx.core.auth.disconnect(&second.connection_id).await.unwrap();
+
+        fx.core.remove_instance("jira_2").await.unwrap();
+        assert!(!file.exists());
+        assert!(fx.core.db.lock().unwrap().cache.keys().all(|id| id != &second.connection_id));
     }
 
     #[tokio::test]
