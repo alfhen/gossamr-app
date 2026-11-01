@@ -47,6 +47,53 @@ pub enum Driver {
     Codex,
 }
 
+impl Driver {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+        }
+    }
+
+    pub fn binary(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+
+    /// The variable that points the CLI at its login folder.
+    pub fn folder_variable(self) -> &'static str {
+        match self {
+            Self::Claude => "CLAUDE_CONFIG_DIR",
+            Self::Codex => "CODEX_HOME",
+        }
+    }
+
+    /// The variables that pick which account the CLI runs as, the folder variable first.
+    pub fn login_variables(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &[
+                "CLAUDE_CONFIG_DIR",
+                "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_FEDERATION_RULE_ID",
+                "ANTHROPIC_ORGANIZATION_ID",
+                "CLAUDE_CODE_USE_BEDROCK",
+                "CLAUDE_CODE_USE_VERTEX",
+                "CLAUDE_CODE_USE_FOUNDRY",
+                "ANTHROPIC_FOUNDRY_API_KEY",
+                "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+                "ANTHROPIC_FOUNDRY_RESOURCE",
+                "ANTHROPIC_FOUNDRY_BASE_URL",
+            ],
+            Self::Codex => &["CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"],
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProviderConfig {

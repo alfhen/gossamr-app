@@ -166,6 +166,7 @@ Rules Rust checks when a folder is added, and again each time `config.json` is l
 - Only one instance of a driver may have no folder. "Your usual setup is already added as <driver name>."
 - Claude: `~/.claude`, and the folder the default instance resolves to (6.3), are refused, with "That's your usual setup. Choose My usual setup instead." Setting `CLAUDE_CONFIG_DIR=~/.claude` is not the same as leaving it unset: the CLI then reads `.claude.json` from inside the folder and looks for a different Keychain login.
 - Codex: the folder the default instance resolves to (the shell's `CODEX_HOME`, else `~/.codex`) is refused with "That's your usual setup. Choose My usual setup instead." Any other folder, `~/.codex` included when the shell sets a different `CODEX_HOME`, is stored as typed.
+- Either driver: the usual folder of the other driver is refused too, and no folder may be shared by instances of different drivers, because both CLIs keep `sessions/` and `history.jsonl` at the root of their folder. When the capture failed, the shell's `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are unknown, so `~/.codex` is refused as well, and adding a folder or opening a sign-in Terminal waits for a capture.
 
 A folder that fails a rule at load puts its instance in `error` ("This folder can't be used: …"). An instance in `error` spawns nothing: no probe, no Pip, no run, no Terminal script.
 
@@ -177,8 +178,8 @@ Gossamr creates a missing folder with mode 0700 when it is added, because `codex
 
 | Driver | Login variables |
 |---|---|
-| Claude | `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` |
-| Codex | `CODEX_HOME`, `CODEX_API_KEY`, `OPENAI_API_KEY` |
+| Claude | `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_RESOURCE`, `ANTHROPIC_FOUNDRY_BASE_URL` |
+| Codex | `CODEX_HOME`, `CODEX_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` |
 
 - **No folder (the default).** The login variables are the ones the captured shell environment has. The capture is wired into `Core` in step p2, not later.
 - **A folder.** The folder variable is set and every other login variable is removed, so a key the shell exports can't override the folder's login. The detail pane says so when the shell has one: "Your shell sets ANTHROPIC_API_KEY. Claude personal doesn't use it."
@@ -206,7 +207,7 @@ The probe's `fix` for a provider is display text only. Open Terminal on a provid
 
 ```sh
 #!/bin/zsh
-unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_FEDERATION_RULE_ID ANTHROPIC_ORGANIZATION_ID CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY ANTHROPIC_FOUNDRY_API_KEY ANTHROPIC_FOUNDRY_AUTH_TOKEN ANTHROPIC_FOUNDRY_RESOURCE ANTHROPIC_FOUNDRY_BASE_URL
 export CLAUDE_CONFIG_DIR='/Users/alf/.claude-personal'
 exec '/opt/homebrew/bin/claude' auth login
 ```
