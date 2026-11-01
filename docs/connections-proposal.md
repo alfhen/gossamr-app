@@ -18,6 +18,8 @@ Several Jira accounts work at once. Tickets from all of them appear in the Inbox
 
 Claude runs Pip and agents. Codex gets its probe, folder and sign-in early, and its runner is scheduled work (steps c0 to c6). Codex shows in **+ Add** once Gossamr can run agents on it. Section 8 says why and what that takes.
 
+Agents always work in Gossamr's own clone of a repository, in `~/Gossamr/agents`, never in `~/Code` or another folder the person keeps code in (Section 16). Trusting that clone for a Claude login is one click in Gossamr (Section 17).
+
 ## 2. What is built
 
 The first version of this proposal is built. Its text is in git at `c3df66c`, with the research on `gh` and scoped Atlassian tokens.
@@ -66,6 +68,8 @@ What Gossamr does differently:
 7. **No automatic switching between logins.** A different login is a different account, plan and data. A choice that can't run fails or waits, and says why.
 8. **Several Jira accounts.** Any number of accounts and sites. Work takes its connection from the thing it is about (the draft, the run, the ticket, the workstream), never from "the signed-in one". Where nothing says, the **primary** connection is used: the first Jira instance in the list that is on.
 9. **Each step leaves `main` working.** `Core::scope()` stays, as the primary, until its last caller moves. A feature the backend doesn't honour yet stays out of the UI. Provider rows stay hidden until runs honour their instance (r14), and the second Jira account stays hidden until every path takes its connection from the work (j26).
+10. **Agents work only in Gossamr's own clones.** Every new agent session runs in `~/Gossamr/agents/<owner>/<repo>`, which Gossamr clones and fetches itself. Gossamr no longer scans `~/Code`, `~/Developer` or `~/src`. Runs already working in those folders keep going until they finish (Section 16).
+11. **Trust is one click, for one clone and one login.** Gossamr writes Claude's trust entry for a clone in its work folder, for the login the run uses, only when the person clicks Trust on that run. Terminal stays as the fallback (Section 17). This changes AGENTS.md rule 4, which today says Gossamr never answers the trust question.
 
 ## 5. The instance record
 
@@ -215,7 +219,7 @@ Both paths go through `quotable`, the folder is checked again by the rules in 6.
 
 Gossamr stores no Claude or Codex token. The status after a sign-in comes only from the next probe. Remove leaves the login and the folder alone; the remove confirmation says so. There is no Sign out button: the detail pane shows the sign-out command for the person to run.
 
-A fresh Claude folder has trusted no repository. An agent's first run in a clone under a new folder stops with the trust question, as it does today for a new clone (`NeedsTrust`).
+A fresh Claude folder has trusted no repository. An agent's first run in a clone under a new folder stops before it starts (`NeedsTrust`), and its card offers "Trust this clone for Claude personal" (Section 17).
 
 ### 6.5 Probes
 
@@ -307,7 +311,7 @@ There is no fallback to another instance.
 - **Launch.** The launch passes `--model` unless the model is "Default". `--bg` with `--model` is checked (`docs/agents-cli-findings.md`, the step 0 spikes ran with `--model haiku`). `--effort` with `--bg` is not checked, so agents pass none.
 - **Toolchain per instance.** `ToolchainSource` gains `for_instance(id)`. Its `SystemCli` applies the captured shell environment with the instance's login variables (6.3). An unknown or removed id is an error; it never falls back to `get()`. `get()` stays as the default instance, so the tests built on `FixedToolchain` keep working. The git and `gh` environment (`Git::new(tc.env)`) stays the captured one, without the folder.
 - **One daemon per folder.** Claude keeps `daemon.lock`, `jobs/`, `projects/` and `sessions/` in each folder, so each instance has its own background daemon and its own `claude agents` list. The rule in `runs/env.rs` still holds per folder: every `claude` for one instance gets exactly the same environment. Step o10 checks this with two signed-in folders before any run launches on a second instance.
-- **Tracking.** Everything that asks the daemon goes per instance in one step (r13), before any run can launch on a second instance: the tracker's poll, `recover()`, `finder.rs` `unready` (which tells Pip whether agents can start), `sweep_agent_files`, `control.rs` `disk`, answer, resume, stop, remove, clean-up, final answer and continuation. The `RunService` caches of `configDirectory` and `projectsDirectory` become maps by instance. The tracker calls `claude agents --json --all` once per instance that has live runs. A short id is unique only within one daemon, so `RunIndex` and `belongs_to` key runs by `(instance, short id)`.
+- **Tracking.** Everything that asks the daemon goes per instance in one step (r13), before any run can launch on a second instance: the tracker's poll, `recover()`, `finder.rs` `unready` (which tells Pip whether agents can start), `sweep_agent_files`, `control.rs` `disk`, answer, resume, stop, remove, clean-up, final answer and continuation, and the trust pre-flight and the trust write (Section 17), through `RunService::toolchain_of(run)`. r11 makes the `RunService` caches of `configDirectory` and `projectsDirectory` maps by instance; r13 reads them by the run's instance. The tracker calls `claude agents --json --all` once per instance that has live runs. A short id is unique only within one daemon, so `RunIndex` and `belongs_to` key runs by `(instance, short id)`.
 - **Until then.** From r12 until r13 lands, the resolver gives `Unavailable(CantRun)` to agents on any instance but the default, so no run can launch where the tracker can't see it.
 - **Terminal.** The attach, trust and permission-mode scripts export the run's folder and use its binary (6.4).
 - **Limits.** The concurrency cap (`maxRuns`) stays one number across all instances.
@@ -515,6 +519,8 @@ Settings › Safety's second promise becomes "Agents run with the Claude Code se
 - **Tokens never cross connections.** A Jira request uses the credentials of its own scope. A draft posts only through its own connection. A Pip turn reads and drafts in one connection, which Rust checks.
 - **No automatic switching.** Running a job on another login would move billing and data without the person. Nothing falls back, including when the shell environment can't be read.
 - **The agent MCP file** (mode 0600, token per run) is unchanged.
+- **Gossamr's work folder.** Agents work only in clones Gossamr made, and Gossamr reads no other code folder (16.8).
+- **Trust is written for one folder and one login, on a click.** Gossamr edits one key in the run's login's `.claude.json`, which can also hold account details and an API key. It never logs, copies or backs up that file (17.8).
 
 ## 12. The six rules
 
@@ -523,7 +529,7 @@ Settings › Safety's second promise becomes "Agents run with the Claude Code se
 | 1. Nothing writes without you | Unchanged. Each draft posts as its own Jira account. |
 | 2. Secrets in the Keychain | One Jira token per connection, in the Keychain. Gossamr stores no Claude or Codex login; they stay in each CLI's own store. The wording adds that. |
 | 3. Pip stays locked down | Unchanged on every Claude instance. Pip runs on Codex only if its lockdown matches (c0, c2). |
-| 4. Agents use your own setup | Now "the setup in the config folder of the login they run on". Step d28 changes the text. |
+| 4. Agents use your own setup | Now "the setup in the config folder of the login they run on". Agents work in Gossamr's own clones (t1). Gossamr answers the trust question only when you click Trust on a run, for that run's clone in `~/Gossamr/agents` and that run's login (t2 changes the text; d28 keeps it). |
 | 5. Ticket text is data | Unchanged. The site name in the brief is Gossamr's, not the ticket's. |
 | 6. No shortcuts while typing | The "+ Add" menu and pickers follow it. |
 
@@ -539,6 +545,10 @@ Settings › Safety's second promise becomes "Agents run with the Claude Code se
 - **Moving a conversation or run between folders.** A session lives in its folder.
 - **Pip across sites in one turn.** Section 9.6.
 - **A repository pinned to a Jira connection.** Until a collision needs it.
+- **Agents in the person's own clones.** Section 16. There is no setting to bring it back.
+- **A work folder the person chooses.** `~/Gossamr/agents` is fixed. A path from `config.json` would reach `git` and the trust file.
+- **Deleting a whole clone from Gossamr.** Reveal in Finder shows it; the next run clones again.
+- **Untrusting from Gossamr.** The trust entry stays until the person edits Claude's file or removes the clone.
 
 ## 14. Build plan
 
@@ -581,8 +591,10 @@ Each step is one pull request from `main`, under about 600 changed lines of non-
 | c4 | Codex launch and supervision | | c1, c3 | ~600 |
 | c5 | Codex answer, resume, stop and clean-up | | c4 | ~500 |
 | c6 | Codex final answer, Terminal and UI | UI | c5, r14 | ~400 |
+| t1 | Agents work only in Gossamr's own clones | UI | none | ~600 |
+| t2 | One-click trust for a clone | UI | t1 | ~500 |
 
-Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) and the owner checks (o10, c0). After p1, routing (r7) and the "+ Add" menu (p5) can start. Within the tracks, p5 and p2, r9 and r11, j18 and j19, and j20, j21, j23 and j24 can be built in parallel. The Codex steps follow the rest; c2 is skipped if c0 says Pip can't be locked down on Codex.
+Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) and the owner checks (o10, c0). After p1, routing (r7) and the "+ Add" menu (p5) can start. Within the tracks, p5 and p2, r9 and r11, j18 and j19, and j20, j21, j23 and j24 can be built in parallel. The Codex steps follow the rest; c2 is skipped if c0 says Pip can't be locked down on Codex. t1 can start at any time beside the other tracks, and t2 follows it. Neither waits for r11 to r13 (17.4).
 
 ### Step details
 
@@ -608,9 +620,9 @@ Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) an
 
 **r11. A toolchain per instance.** `ToolchainSource::for_instance(id)`, an error for an unknown or removed id; `SystemCli` applies the captured environment with the instance's login variables; git keeps the captured environment. `config_dir` and `projects_dir` become maps by instance. The `.command` scripts in `runs/control.rs` take the instance's `unset` and `export` lines (6.4) and binary. `NotSignedIn`, `ClaudeMissing` and `NeedsTrust` carry the instance name. `get()` stays as the default instance. Restate the comment in `runs/env.rs` for one daemon per folder.
 
-**r12. Runs record and launch with an instance and model.** `Run.runs_on` (an `APP_STEPS` column), set when a run is queued from the workstream's choice, else the Settings default. A `workstreams.agents_model` column and `workstreams_set_model`. `runs_set_model(id, choice)` as a compare-and-set under the `launching` lock, and the launcher reads `runs_on` again under it. Launch through `for_instance` with `--model` unless "Default". Preflight per instance. Until r13, any instance but the default is `Unavailable(CantRun)` for agents. An unavailable choice makes a queued run wait, with its reason in the run's status; it starts once the reason clears, and a removed instance waits for a new choice (7.4). Remove is refused while an instance has live runs; a finished run on a removed instance is cleaned up with git alone. Mirror the commands and fields. Notes: touches `runs/service.rs` with j21; whichever lands second merges `main` first.
+**r12. Runs record and launch with an instance and model.** `Run.runs_on` (an `APP_STEPS` column), set when a run is queued from the workstream's choice, else the Settings default. A `workstreams.agents_model` column and `workstreams_set_model`. `runs_set_model(id, choice)` as a compare-and-set under the `launching` lock, and the launcher reads `runs_on` again under it. Launch through `for_instance` with `--model` unless "Default". Preflight per instance. `RunService::toolchain_of(run)` (t2 adds it; if t2 hasn't landed, this step adds it) returns `for_instance(runs_on)` and is the only way a run's launch, check, trust pre-flight and trust write get a toolchain; a test checks that a run with `runs_on` set gets that instance's environment and never `get()`. Until r13, any instance but the default is `Unavailable(CantRun)` for agents. An unavailable choice makes a queued run wait, with its reason in the run's status; it starts once the reason clears, and a removed instance waits for a new choice (7.4). Remove is refused while an instance has live runs; a finished run on a removed instance is cleaned up with git alone. Mirror the commands and fields. Notes: touches `runs/service.rs` with j21; whichever lands second merges `main` first.
 
-**r13. Runs tracked per instance.** `RunIndex` and `belongs_to` keyed by `(instance, short id)`. The tracker polls `claude agents` per instance with live runs. `recover()`, `finder.rs` `unready`, `sweep_agent_files`, `control.rs` `disk`, answer, resume, stop, remove, clean-up, final answer and continuation use the run's instance. Messages and answers to a run on an off instance wait. Lift r12's limit to the default instance. Tests with two `FakeCli` instances that reuse a short id, and a restart while a run on `claude_2` is Launching. Notes: touches `runs/tracker.rs` with j21.
+**r13. Runs tracked per instance.** `RunIndex` and `belongs_to` keyed by `(instance, short id)`. The tracker polls `claude agents` per instance with live runs. `recover()`, `finder.rs` `unready`, `sweep_agent_files`, `control.rs` `disk`, answer, resume, stop, remove, clean-up, final answer and continuation use the run's instance, and so do t2's trust pre-flight and trust write if t2 has landed (both already go through `toolchain_of`). Messages and answers to a run on an off instance wait. Lift r12's limit to the default instance. Tests with two `FakeCli` instances that reuse a short id, a restart while a run on `claude_2` is Launching, and (once t2 is in) a trust write for a run on the second instance that changes only that instance's `.claude.json` in its temp folder. Notes: touches `runs/tracker.rs` with j21.
 
 **r14. Run and Settings pickers, provider rows shown.** "Runs on … · …" with Change on a queued run's card and sheet, and "Ran on …" after. "New agents use" on the workstream sheet. "Pip uses" and "New agents use" under Models in Connections. The help in `failureHelp.ts`, `RunSheet.tsx`, `AgentParts.tsx` and `RunCleanup.tsx` names the instance. Safety's second promise as in 10.5. The Models section of a provider's detail, with Add model…. Set `providersShown` to true, which shows the provider rows, their switch and Remove, and the Claude entry in **+ Add** and the palette. The signed-out banner for providers (10.4). Mock and e2e for a queued run's change and for the provider rows.
 
@@ -640,9 +652,13 @@ Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) an
 
 **j27. Site chips, Account filter, Rail labels, multi-site e2e.** The site chip on cards, rows, peeks and drafts, and the Account filter (9.3). Rail project groups labelled with the site when keys repeat. The ambiguous PR link text. The drawer's connection control for Pip (9.6). A new e2e feature suite `multi-jira.spec.ts` on `?jira=2`.
 
-**d28. Rules, README and findings.** AGENTS.md rules 2 and 4 (Section 12) and its layout table. The README's Connections section: adding a Claude and a second Jira. `docs/agents-cli-findings.md`: one daemon per config folder, with o10's result. Mark this plan's steps done here.
+**d28. Rules, README and findings.** AGENTS.md rules 2 and 4 (Section 12) and its layout table. Rule 4 keeps the work-folder and trust sentences t1 and t2 put there. The README's Connections section: adding a Claude and a second Jira. `docs/agents-cli-findings.md`: one daemon per config folder, with o10's result. Mark this plan's steps done here.
 
 **c0 to c6.** As in 8.2. c0 and o10 are the only steps waiting on the owner. c6 adds Codex to the README.
+
+**t1. Agents work only in Gossamr's own clones.** Section 16. *Rust.* `fresh::work_path(home, repo)` (16.2), used by `plan`, `resolve_clone`, `check()`, `prepare` and later `trust`. `finder.rs` `plan` returns `work_path` always: the base from the clone's `origin/HEAD` when it exists, else from `git ls-remote --symref` (and `gh repo view` on a sign-in failure); the worktree name from `existing_names`, or with no names taken when there is no clone yet. `resolve_clone` accepts a missing path only when it equals `work_path` for the run's repository, and any existing path must be inside the work folder. `RunService::prepare(run)` on every path to `spawn`: `start`, and `launch_waiting` before `start_waiting` for each run that may start; outside the launch lock; the repository's async lock (in place of the `cloning` set) and its file lock under `~/Gossamr/agents/.locks`; then `ensure_clone`, which clones into a temp folder and renames it into place, removes only its own temp folder, and fetches (`--prune`, 30 s, at most once per two minutes per repository) only when the clone's local config passes the allow list in 16.8; Gossamr's git calls in the clone pin `core.hooksPath`, `core.fsmonitor` and `protocol.ext.allow`. A failure in `prepare` is written only if the run, loaded again under the launch lock, is still in the state it was. `check()` leaves a run Queued while its repository's lock is held, and refuses a new session outside the work folder. `RunFailure` gains `OutsideWorkFolder { path }` and `CloneOccupied { path }` (a stored `noClone` still reads); `Run.inWorkFolder` is worked out when a run is read. After `prepare`, the run stores `git config user.email` and `user.signingkey` from inside the clone (16.4). A new command `runs_reveal_work_folder`, and the work folder's commit address and an `includeIf` flag on `agent_settings`. Delete `find_clones`, `default_roots`, `CloneCache`, `RunService.roots` (and the `roots` parameter of `RunService::new`), the commands `runs_clones`, `runs_pick_clone` and `runs_clone_fresh`, `pickedClones` in `AppConfig`, and `control.rs` `trust_folder`. Drop "or clone into ~/Code yourself" from the occupied words. *Mirror* the removed and new commands, the new failure types and `inWorkFolder` and the commit address in `types.ts`, `jira.ts` and the mock. *Front end:* `CloneActions` becomes the one button "Ask Pip to start it again" for `outsideWorkFolder`; `failureHelp.ts` picks Retry for `noClone`, Ask Pip for `outsideWorkFolder`, "move it, then Retry" for `cloneOccupied`, and the 16.3 words in place of any Terminal trust step when `inWorkFolder` is false; `RunWhere` labels and text for both kinds of run; the run card's "Cloning acme/webshop…" and "Commits as …"; the "Where agents work" section in Settings › Agents (16.6). The mock's sample clones move to `/Users/sample/Gossamr/agents/…`, with one sample run left in `~/Code` for the legacy text. *Docs:* README "Pip and agents" with the `includeIf` advice, AGENTS.md rule 4's sentence about where agents work, and a line in `docs/agents-cli-findings.md`. *Test rig:* the shared rig's clone moves to `fx.home/Gossamr/agents/acme/webshop`, `RunService::new` loses `roots` at every call site (`lib.rs`, `rig.rs`, `service/tests.rs`, `tracker/tests.rs`, `control/tests.rs`, `real_tests.rs`), the ignored real tests get `with_home(scratch)` and clones under the scratch work folder (never run by builders), `domain::fixtures::run_spec` moves to a work-folder path, and one rig helper makes a deliberately legacy run with a clone at `fx.home/Code/webshop`. *Tests:* `plan` returns the work-folder path when `~/Code` holds a clone of the repository; `work_path` with a linked `~/Gossamr` and with a repository named in mixed case gives one real path that `check()` accepts after the clone is made; a queued run and a Retry set up in `~/Code` fail with `OutsideWorkFolder`, while a working run there is still tracked, answered, messaged and stopped; two runs on a new repository clone once, the second waiting; a workstream run plus a `launch_waiting` call during a slow clone gives exactly one launch, after the clone ends; two `RunService`s sharing one `HOME` clone once and neither deletes the other's folder; a failed fetch is noted and the launch goes on; a local `credential.helper` or `url.*.insteadOf` in the clone skips the fetch, and the fake git records no fetch; the fetch isn't repeated within two minutes; a failed clone fails the run with `NoClone`, leaves no temp folder, and Retry clones again; `resolve_clone` refuses any other missing path; the occupied path gives `CloneOccupied` and is left in place; the commit address comes from the clone's own folder. Update the e2e specs that name `~/Code` clones (`agent-steps`, `needs-you`). Notes: touches `runs/service.rs` with r12 and j21, `finder.rs` with r13 and `control.rs` with r11; whichever lands second merges `main` first. It waits for no step. If it passes 600 lines, the commit address (16.4) and Reveal in Finder move to a follow-up pull request before t2.
+
+**t2. One-click trust for a clone.** Section 17. A new `runs/trust.rs`: `config_file(env, auth)` (17.4, including the two variables that give no file), `trusted(file, folder)` read-only, and `trust(file, folder)` with every check, Claude's lock and the rename in 17.5. `serde_json`'s `raw_value` feature and `indexmap` (with `serde`) as direct dependencies; not `preserve_order`. A test that pins `RunSpec::digest()` for the fixture spec. The pre-flight in `check()`, from the same toolchain and `auth status` answer as the launch (17.3). A `trust` parameter on `runs_start` for a retry: only for a failed run whose failure is `UntrustedFolder` with its own `clone_path` in the work folder; it writes the entry for the run's login, records a `trust_saved` event and retries through `prepare`. `RunService::toolchain_of(run)` (17.4), or r12's if r12 landed first. Leftover temp files removed at start-up for the config folders Gossamr knows. `Purpose::Trust` stays for Terminal. Mirror the parameter as `runsRetryLaunch(id, { trust })` in `types.ts`, `jira.ts` and the mock (`?runsUntrusted=1` as today, and `?mockTrust=refused` to script a refusal). Front end: `failureHelp.ts` gains the act `trust` with the words in 17.6, shown only when `inWorkFolder` is true, and Terminal becomes the second button; `AgentParts.tsx`, `RunSheet.tsx` and `runsStore` handle it; `needs.ts` says "needs its clone trusted". Docs: AGENTS.md rule 4, the README's trust paragraph, `docs/product.md`, and the "Folder trust" section of `docs/agents-cli-findings.md` with the 17.2 facts. Tests, all on temp folders with `HOME` and `CLAUDE_CONFIG_DIR` set in a fake `RunEnv`, never the real files: the file for each environment in 17.4, including `CLAUDE_CONFIG_DIR=~/.claude`, `CLAUDE_CODE_CUSTOM_OAUTH_URL` and `CLAUDE_CODE_IGNORE_PERSISTED_TRUST`; a `configDirectory` that disagrees; `.config.json` present; a missing file, a link, a file over the limit; each wrong shape; already trusted writes nothing; key order and every other key's bytes kept; the mode kept; a lock folder already there makes it wait, then refuse after 3 s and leave that folder alone; a fake writer that takes the same lock folder and does its own read, change and rename, run against `trust()` many times, after which both changes are always there; the lock folder gone after each way out; a stale `.claude.json.gossamr-*` file removed; the folder checks (a `~/Code` clone, the work folder itself, a worktree, a link, an unwatched repository, a linked `~/Gossamr`); a run not failed for trust is refused; a legacy run failed untrusted gets no trust button; the pre-flight fails fast on a missing entry and launches on an unreadable file, a file it can't name or a trusted parent; Pip's and the agents' tool lists have nothing that trusts. The ignored real test U5 trusts through `trust()` in its scratch config. Unit tests for the card, and the `needs-you` e2e spec and a new case for the click and for a refusal. Notes: touches `control.rs`, `failure.rs` and `service.rs` with r11 to r13; 17.4 says how either order works, and r12 and r13's step texts name `toolchain_of`. After it merges, the owner trusts one real clone with the default login and one with a second folder, each while a Claude session is open in that login, and records in the findings that the entry stayed and `--bg` started. Builders never touch a real config.
 
 ## 15. Risks and open questions
 
@@ -650,7 +666,12 @@ Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) an
 - **Two daemons at once.** Claude keeps a daemon per folder, and Gossamr's real tests already run one in a scratch folder beside the person's own. Two signed-in folders side by side haven't been watched. o10 checks it before r13, the one step built on it.
 - **The shell environment can't be read.** Pip and runs on the default instance are then refused until it can (6.3). Agents already need it today; Pip did not.
 - **`--effort` with `--bg`** is unchecked, so agents don't pass it.
-- **A new folder trusts no repository.** Each clone asks once per folder, through the existing trust flow.
+- **A new folder trusts no repository.** Each clone asks once per login, and the person answers with one click (Section 17).
+- **A second copy of each repository.** Gossamr's clone sits beside the person's own in `~/Code`, and costs its disk space again. Gossamr never deletes whole clones.
+- **Claude's trust key can change.** Gossamr writes a key it doesn't own. A file in a shape it doesn't expect is refused, and a launch still refused after a write offers Terminal (17.3).
+- **Writing a file Claude rewrites.** Gossamr takes the lock Claude's own saves take (`<file>.lock`) and Claude re-reads the file under that lock, so neither writer loses the other's change (17.5). If a later Claude release stops using that lock, the confirming re-read is the only guard left. The owner's check after t2 watches it with real sessions open.
+- **Cloning without a click.** Gossamr now clones a watched repository the first time an agent needs it (16.2). It runs nothing from the repository, but it uses disk and network the person didn't press a button for. *For the owner to confirm:* the other choice keeps a Clone button on the first run of each repository.
+- **Git identity by folder.** A person who picks their commit address or key by folder (`includeIf "gitdir:~/Code/acme/"` in `~/.gitconfig`) gets the global address in `~/Gossamr/agents` until they add a rule for it. Gossamr shows who agents commit as and warns (16.4), but it never edits `~/.gitconfig`.
 - **Downgrades.** An older build ignores `providers` and `models` and drops them when it saves. Its connection switches keep working. Added provider instances are lost; the default comes back on upgrade.
 - **The built-in model ids age.** Fable's full id will go stale; `customModels` covers a new one until the list is updated.
 - **The primary Jira connection** is the first in the list that is on. There is no way to reorder yet; adding one is a small step if the order matters.
@@ -658,3 +679,206 @@ Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) an
 - **Two sites with the same project key** link PRs to both, marked as unsure, until a repository can be pinned to one.
 - **Usage limits.** A login that runs out of usage fails its turn. Gossamr says which login, and doesn't move the work.
 - **Linear** stays on hold. When it comes it is a fourth kind beside Jira, with the same per-connection scope.
+
+## 16. Gossamr's work folder
+
+### 16.1 What changes
+
+Today `plan` (`runs/finder.rs`) scans `~/Code`, `~/Developer` and `~/src` one level deep for a clone of the repository (`repo.rs` `find_clones`). It uses the clone the person picked, else the first by path, and offers a clone into `~/Gossamr/agents/<owner>/<repo>` only when it finds none. Agents then make their worktrees and `worktree-<name>` branches inside the person's own clone, beside their Claude Code sessions, T3 Code threads and anything else that works in that folder.
+
+From t1, every new agent session runs in Gossamr's own clone: `~/Gossamr/agents/<owner>/<repo>`, the **work folder** (`fresh::agents_root`). Gossamr never starts a session in a folder it didn't make.
+
+| | Today | From t1 |
+|---|---|---|
+| Where a new run goes | The picked clone, else the first found under the roots | `~/Gossamr/agents/<owner>/<repo>`, always |
+| Who makes that clone | The person, with Clone it, when no clone was found | Gossamr, when a run on that repository is about to launch |
+| Choose clone | Lists the clones found | Gone |
+| `pickedClones` in `config.json` | Read | Ignored, and dropped on the next save |
+| Worktrees and `worktree-*` branches | In the person's clone | In Gossamr's clone |
+
+### 16.2 Making and refreshing the clone
+
+- **One path per repository.** `fresh::work_path(home, repo)` is the only place the path is worked out. It makes `~/Gossamr/agents` if it is missing, takes its real path, and joins `<owner>/<repo>` in lower case. When the clone already exists, it returns the clone's real path, which is the case macOS keeps on disk. So a linked `~/Gossamr`, or a repository proposed as `Acme/WebShop` and later as `acme/webshop`, gives one path, and it is the path Claude's trust lookup and `check()` see. `resolve_clone`, `check()`, `prepare` and `trust` all compare against it, and the folder test is "its parent's parent is the real `agents_root`, and its last two parts match the repository without case".
+- **Plan.** Pip's start tool gets `work_path(home, repo)` as the path, and the run is queued with it. The spec is never rewritten later, because `clonePath` is part of the digest. The base is the clone's `origin/HEAD` when the clone exists. When it doesn't, the base comes from `git ls-remote --symref -- https://github.com/<repo>.git HEAD` (10 s, `GIT_TERMINAL_PROMPT=0`), and on a sign-in failure from `gh repo view <repo> --json defaultBranchRef`. Pip's tool doesn't wait for the clone itself, because a clone can take two minutes and the tool call is cut sooner.
+- **Queue.** `resolve_clone` (`inbox/drafts.rs`) accepts a folder that doesn't exist yet only when it is exactly `work_path` for the run's repository. Any other path must exist and be inside the work folder.
+- **Before every launch.** `RunService::prepare(run)` runs on every path that can reach `spawn`: `start` (a new run and Retry), and `launch_waiting` for each run it is about to try (a run in an open workstream, or one waiting for a slot, that a cheap check without the lock says may start). It runs before the launch lock is taken, so a slow clone holds up only runs on the same repository. It takes the repository's lock, then calls `ensure_clone`. A missing clone is cloned. An existing one gets `git fetch --prune --quiet origin` (30 s), unless Gossamr fetched it in the last two minutes, so the tracker's polls don't fetch for runs that stay queued.
+- **The repository's lock.** One per repository, held in two places: an async lock in `RunService` (the `cloning` set becomes a map of these), so a second run on a new repository waits for the first clone instead of failing; and a file lock (`std::fs::File::lock`) on `~/Gossamr/agents/.locks/<owner>__<repo>`, so a second Gossamr process (a `tauri dev` build beside the installed app) takes turns too.
+- **The clone itself.** `git clone` goes into a new temp folder beside the target (`.<repo>.cloning-<random>`), and is renamed into place under the file lock once it is complete. A failed clone removes only that temp folder. Gossamr never removes the target path, so a clone another process is making, or one an agent is working in, is never deleted.
+- **`check()` waits for a clone being made.** It tries the repository's lock without waiting. If the lock is held, the run is left Queued, not launched and not failed, and the clone's end starts it. A missing clone at that point fails with `NoClone`, and Retry clones again.
+- **A failure in `prepare`** is written only after the run is loaded again under the launch lock and is still in the state it was (Queued, or Failed for a Retry), so it never overwrites a launch that started meanwhile.
+- **The clone's own folder is never checked out again or reset.** The brief already makes each agent fetch and check out `origin/<base>` in its own worktree (`render_prompt`), so a fresh fetch is all a launch needs, and nothing in the clone's folder is overwritten.
+- **Timeline.** "Cloning acme/webshop into ~/Gossamr/agents" while it lasts. A fetch that fails or is skipped (offline, signed out, settings Gossamr didn't make, 16.8) doesn't stop the launch: "Couldn't update Gossamr's clone of acme/webshop: <reason>. The agent starts from what was fetched before." A clone that fails fails the run with `NoClone` and the clone error's words, and Retry clones again.
+- **`check()`** keeps its checks (a clone, its real path, the origin) and adds one: a new session's clone must be inside the work folder. One that isn't fails with `OutsideWorkFolder` (16.3).
+
+### 16.3 Runs that already use `~/Code`
+
+| Run | What happens |
+|---|---|
+| Working, asking, or waiting on a permission | Nothing changes. The tracker, answer, message, stop and attach use the worktree and clone stored on the run. |
+| Done or stopped, with a session | Resume, message, final answer and continuation keep working in its worktree. They carry on a session that exists; they don't start one. |
+| Queued with no session, or failed with no session (Retry) | Refused at launch with a new failure, `OutsideWorkFolder { path }`: "This agent was set up in ~/Code/webshop, before Gossamr kept its own clones. Ask Pip to start it again, and it will use Gossamr's clone." The button is "Ask Pip to start it again", with no Retry. The run's spec isn't rewritten, because the clone is part of what was approved. |
+| Failed untrusted before the upgrade | The same words and button. The trust buttons (Section 17) don't show, because a retry would be refused. |
+| Archived | Unchanged. Gossamr removes only worktrees in `~/Gossamr/agents`, and says it leaves the others. |
+| After a restart | `recover()` finds each run by its session and worktree, as today. |
+
+The failure kinds stay apart, so the page picks its buttons from `failure.type` alone: `NoClone` (a clone that failed or went missing: Retry), `OutsideWorkFolder` (legacy: Ask Pip), and `CloneOccupied { path }` (something else at the path: move it, then Retry). A stored `{"type":"noClone"}` still reads. Each run also carries `inWorkFolder`, worked out in Rust when it is read and never stored, so `RunWhere` and the untrusted card show the legacy text without the page knowing the home folder.
+
+### 16.4 Which GitHub account clones, and who commits
+
+The same credentials the agents push with (rule 4): git's credential helper or SSH key, an exported `GH_TOKEN`, and on a sign-in failure `gh repo clone` with `gh`'s active account. This is what `ensure_clone` does today.
+
+It is not the GitHub connection's login through `gh auth token -u`. That token would have to be handed to git, which rule 2 rules out, and a clone fetched as one account but pushed from as another would fail late, in the middle of an agent's work. The "pushes as" line the run view already shows (`actingAs`) is also who clones. When git can't read the repository, the run says "Git couldn't sign in to GitHub: …", as today.
+
+Who commits can change with the move. Git picks `user.email` and a signing key by folder when `~/.gitconfig` has `includeIf "gitdir:…"` rules, and the person's own clone may set its own `user.email`. In `~/Gossamr/agents` neither applies until the person adds a rule for it. So:
+
+- After `prepare`, Gossamr reads `git config user.email` and `user.signingkey` inside the clone and stores them on the run. The run's card and sheet say "Commits as alf@acme.com · pushes as alfhen".
+- Settings › Agents › Where agents work shows the address git uses there, and, when `git config --global --get-regexp '^includeif\.gitdir'` lists rules, says: "Your git settings choose an address by folder. Add a rule for ~/Gossamr/agents/<owner>/ to use it in Gossamr's clones too." The README says the same.
+- Gossamr never edits `~/.gitconfig`.
+
+### 16.5 What the roots scan is for
+
+Nothing. `find_clones`, `default_roots`, `CloneCache`, `RunService.roots`, the commands `runs_clones`, `runs_pick_clone` and `runs_clone_fresh`, and `pickedClones` go. `control.rs` `trust_folder`, which nothing calls, goes too. Gossamr no longer reads `~/Code`, `~/Developer` or `~/src`.
+
+### 16.6 What the person sees
+
+- **Settings › Agents**, a new section "Where agents work": "Agents work in Gossamr's own clones in ~/Gossamr/agents, one per repository, each agent in its own worktree and branch. Gossamr clones a repository the first time an agent works on it, and fetches before each agent starts. Your clones in ~/Code and other folders aren't used or changed, so Claude Code, T3 Code and your own work there stay apart." Then the commit address from 16.4, and Reveal in Finder. Reveal is a new command, `runs_reveal_work_folder`, that makes the folder if it is missing and reveals it from Rust; the page passes no path.
+- **Run sheet, "Where it runs".** The clone row is "Gossamr's clone it was made from", and the text "A worktree of Gossamr's own clone of acme/webshop. Your own clones are not touched, and stopping keeps everything it wrote." For a run with `inWorkFolder` false: "Your clone it was made from", and "This agent started in your own clone, before Gossamr kept its own. It keeps working there until it's done."
+- **Run card** while the clone is made: "Cloning acme/webshop…". After: "Commits as …".
+- **A run set up in `~/Code` that hasn't started:** the words in 16.3 and "Ask Pip to start it again".
+- **README**, "Pip and agents": a paragraph that says the same as Settings, and the `includeIf` advice.
+
+### 16.7 Edge cases
+
+- **Something else at the path.** A folder that isn't a clone of the repository: `CloneOccupied`, "~/Gossamr/agents/acme/webshop already exists and isn't a clone of acme/webshop. Move it away, then retry." Gossamr never removes what it didn't make.
+- **A linked work folder.** `work_path` resolves the link when the run is queued, so the run stores the real path and keeps it. If the link is changed to point elsewhere after that, `check()` fails the run with `NoClone` ("isn't its real path any more"), and Pip starts a new one.
+- **The same repository in another letter case.** One folder, through `work_path`.
+- **The person edits in Gossamr's clone.** Nothing resets it. Agents start their worktrees from `origin/<base>` anyway.
+- **Two GitHub accounts watch the same repository.** One clone. Which account clones is 16.4.
+- **A repository the person stops watching.** Its clone stays. No new run can start there, because runs need a watched repository.
+- **Two Gossamr processes.** The file lock in 16.2 makes them take turns, and neither deletes the other's clone.
+- **Disk.** Each repository the person also keeps in `~/Code` is cloned again. Gossamr never deletes a whole clone; Reveal in Finder shows where they are, and the next run clones again after the person deletes one.
+
+### 16.8 Security
+
+- **Cloning starts without a click,** only for a repository the person watches. The folder is built from a checked `owner/name` and must sit inside the work folder (`make_parent`).
+- **What Gossamr's own git calls run.** Every clone, fetch and read Gossamr makes in the clone runs with `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never` and `GIT_TERMINAL_PROMPT=0`, and nothing is checked out after the clone's own.
+- **The clone's settings can be changed by agents.** Agents' worktrees share the clone's `.git/config`, and an agent's `git config` writes it. A fetch honours settings such as `credential.helper`, `core.sshCommand`, `url.*.insteadOf`, `remote.origin.uploadpack` and `include.path`, which could run a program. So before each fetch, `prepare` reads `git config --local --list` and fetches only when every key is one `git clone` and Claude's worktrees write (`core.repositoryformatversion`, `core.filemode`, `core.bare`, `core.logallrefupdates`, `core.ignorecase`, `core.precomposeunicode`, `remote.origin.url`, `remote.origin.fetch`, `branch.*.remote`, `branch.*.merge`) and `remote.origin.url` is still `https://github.com/<repo>.git`. Otherwise it skips the fetch and says so on the timeline, naming the keys, never their values. Reading the config and the origin runs no program, so the origin is checked before the fetch.
+- **Gossamr's token from `gh` still never reaches git.**
+- **No path comes from the page.** The clone path is worked out in Rust from the repository name, and Reveal in Finder takes no path.
+- **Gossamr reads less of the disk.** It no longer lists the person's code folders.
+
+## 17. One-click trust
+
+### 17.1 Today
+
+Agents run as `claude --bg --worktree` (`runs/cli.rs`). Claude refuses a folder its login hasn't trusted: "Workspace not trusted. Run `claude` in <dir> once and accept the trust prompt, then retry." Gossamr stores that as `RunFailure::UntrustedFolder` (`runs/failure.rs`), and the card offers "Trust this folder in Terminal", which opens Terminal running `claude` in the clone (`control.rs` `open_claude`). The person accepts the question, closes Terminal and presses Retry. AGENTS.md rule 4 says Gossamr never answers the question itself.
+
+### 17.2 What Claude stores
+
+Checked on the owner's Mac with Claude Code 2.1.316:
+
+- There is no command that trusts a folder. `claude -p` skips the question; `--bg` doesn't.
+- Trust is kept per login and per exact path, as `projects["<absolute path>"].hasTrustDialogAccepted: true` in the login's global config: `~/.claude.json` when `CLAUDE_CONFIG_DIR` is unset, `<CLAUDE_CONFIG_DIR>/.claude.json` when it is set. Claude's own refusal in other places says the same: "or set projects[<path>].hasTrustDialogAccepted: true in <file>".
+- Claude looks trust up by the real path of the folder's repository, so a trusted clone covers the worktrees made in it (U5 in the findings). A trusted parent (`~/Code`) doesn't trust a new folder inside it.
+- `CLAUDE_CONFIG_DIR=~/.claude` set on purpose reads as signed out (o10). The default login runs with the variable unset.
+- With `CLAUDE_CODE_CUSTOM_OAUTH_URL` set, the file is `.claude-custom-oauth.json` instead. With `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` set, Claude ignores every stored trust entry. Neither changes `configDirectory`.
+- Claude Code rewrites the file often while sessions run. Every save takes a lock first: it makes the folder `<file>.lock` (the `proper-lockfile` package, which counts a lock older than 10 s as stale), reads the file again under the lock, applies its change, writes a temp file and renames it into place.
+- The file can also hold account details and, for a login by API key, the key.
+- Claude asks because a repository's `.claude/settings.json`, hooks and MCP servers can run code.
+
+### 17.3 The design
+
+1. **Pre-flight.** In `check()`, after `auth status`, Gossamr works out the run's login's file (17.4) from the same toolchain and the same `auth status` answer, reads it read-only and looks up the clone's real path. `true` launches. A missing or `false` entry, with no folder above it trusted either, fails the run at once with `NeedsTrust`, without starting `claude`. A file it can't read, can't name (17.4) or doesn't recognise, or a trusted folder above, launches as today, and Claude's answer decides.
+2. **The card.** "Trust this clone for Claude" is the first button, for a run whose `inWorkFolder` is true. One click writes the entry and retries the run. "Trust in Terminal instead" stays as the second button, with the command to copy. A run set up in `~/Code` gets the words in 16.3 instead.
+3. **The write**, in 17.5.
+4. **The retry.** When Claude still refuses after a write that was confirmed, the one-click button goes away for that run and Terminal comes first: "Claude still doesn't trust it. Its settings may have changed in a new version. Trust it in Terminal."
+
+No new command: Retry gains a parameter, `runs_start(id, retry: true, trust: true)` (`runsRetryLaunch(id, { trust: true })` on the page). With `trust`, it is refused unless the run failed with `UntrustedFolder` and the folder is the run's own `clone_path` in the work folder. It writes the entry for the run's login, records a `trust_saved` event, then retries the run as Retry does (through `prepare`, 16.2). The page sends only the run id, never a path. `control.rs` `trust_folder`, which nothing calls, goes in t1; `Purpose::Trust` stays for the Terminal script.
+
+### 17.4 Which file, per provider instance
+
+The file follows the environment the launch will give `claude`: the `RunEnv` of `RunService::toolchain_of(run)`, the one helper that gives a run its toolchain for the launch, `check()`, the pre-flight and the trust write.
+
+| The run's environment | File |
+|---|---|
+| `CLAUDE_CONFIG_DIR` unset or empty | `$HOME/.claude.json`, with `HOME` from that environment |
+| `CLAUDE_CONFIG_DIR=<dir>` | `<dir>/.claude.json` |
+| `CLAUDE_CODE_CUSTOM_OAUTH_URL` set (any value) | None: Gossamr can't tell |
+| `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` set (any value) | None: a trust entry would do nothing |
+
+`CLAUDE_CONFIG_DIR=~/.claude` set in the shell gives `~/.claude/.claude.json`, because that is what the CLI reads then. Gossamr follows the environment and never guesses. "None" means the pre-flight launches and lets Claude decide, and Trust is refused with the "can't tell" words in 17.5.
+
+Two more checks, before the pre-flight reads and before a write:
+
+- The `auth status --json` that `check()` already runs, with the same toolchain, reports `configDirectory`. It must be `<dir>` when the variable is set and `$HOME/.claude` when it isn't. Otherwise Gossamr can't tell. No cached `configDirectory` is used for this, so the check follows whatever toolchain the run gets.
+- If `<dir>/.config.json` (or `~/.claude/.config.json` for the default) exists, a name older Claude Code releases used for these settings, Gossamr can't tell which file Claude reads.
+
+How this fits steps r11 to r13, in either order:
+
+| When | `toolchain_of(run)` gives |
+|---|---|
+| Before r12 | `tools.get()`: the captured shell environment, one login |
+| From r11 | `for_instance(id)` exists (and the `configDirectory` caches become maps), but runs don't name an instance yet, so still `get()` |
+| From r12 | `for_instance(runs_on)`. Until r13 only the default instance launches, so only its file is written. r12's step text says so and tests it. |
+| From r13 | Unchanged; r13 adds the test that a trust write for a run on a second instance changes only that instance's file |
+
+If t2 lands first, it adds `toolchain_of` returning `tools.get()`, and r12 changes its body. If r12 lands first, it adds `toolchain_of` and t2 uses it. Because the pre-flight and the write take the file from the same `auth status` answer as the launch, a run can't be checked against one login and launched on another. The name on the button is the run's instance's name, "Claude" until r14 shows other instances. `NeedsTrust` names the instance from r11, as 7.3 says.
+
+### 17.5 Writing it safely
+
+1. **The folder.** The run's stored `clone_path`. It must be its own real path, inside the real work folder with its last two parts matching the run's repository (`work_path`, 16.2), a clone whose origin matches, a repository the person watches, not a link, and pass `quotable`. Never a parent, a worktree, or a path from the page.
+2. **The file.** From 17.4. A regular file, not a link, owned by the person, at most 16 MiB. A missing file is refused: Claude makes it the first time it runs for that login.
+3. **Leftovers.** Any `.claude.json.gossamr-*` file in that folder, owned by the person, is removed first (one a crash left behind). Gossamr also does this at start-up for each config folder it knows.
+4. **Take Claude's lock.** `mkdir <file>.lock`, where `<file>` is the file's real path, as Claude's lock package names it. If the folder exists, the lock is held: try again every 100 ms for up to 3 s, then refuse. Gossamr never removes a lock it didn't make, stale or not; Claude's own processes break a stale one.
+5. **Under the lock,** which Gossamr keeps for well under a second:
+   - Read the bytes and check the shape. The parse keeps every byte Gossamr doesn't change: the top level is read as an ordered map of raw values (`IndexMap<String, Box<RawValue>>`; `indexmap` with `serde` is already in the build, and `serde_json`'s `raw_value` feature adds a type and changes nothing else), and so are `projects` and the folder's entry. The top level must be an object; `projects` absent or an object; the folder's entry absent or an object; `hasTrustDialogAccepted` absent or a boolean. Anything else is refused. When it is already `true`, nothing is written.
+   - The new text: the same keys in the same order, with `projects["<folder>"].hasTrustDialogAccepted = true` and every other value's bytes as they were. Written with two-space indents, as Claude writes it; Claude lays it out again on its next save.
+   - Write it to a temp file beside it (`.claude.json.gossamr-<random>`), created new with the original's mode, sync it, and rename it over the file.
+   - Remove the lock folder.
+6. **Confirm.** One second later, read the file again: it must parse, with the entry `true`. If not, Gossamr goes round once more from step 4, then refuses.
+7. **One write at a time** per file inside Gossamr too, under an async lock.
+
+`serde_json`'s `preserve_order` feature is not used. Cargo would turn it on for the whole app, which changes the key order of every `json!` object, and with it `RunSpec::digest()` for every stored run. t2 adds a test that pins the fixture spec's digest, so a later feature change can't move it silently.
+
+Nothing from the file is logged or put into an error. Errors name the kind of problem. There is no backup copy, which would be one more copy of a file that may hold a key.
+
+When Gossamr refuses, the card says why and Terminal becomes the first button:
+
+| Why | The card says |
+|---|---|
+| Not a clone in the work folder | "Gossamr trusts only its own clones in ~/Gossamr/agents." |
+| File missing | "Claude hasn't made its settings for Claude personal yet. Trust it in Terminal." |
+| A link, not yours, too big, or another shape | "Claude's settings file isn't in a form Gossamr can safely change. Trust it in Terminal." |
+| No file in 17.4, `configDirectory` disagrees, or `.config.json` exists | "Gossamr can't tell which settings file Claude personal uses. Trust it in Terminal." |
+| Claude's lock held for 3 s, or the entry gone after the confirm | "Claude was saving its settings while Gossamr saved the trust. Try again, or trust it in Terminal." |
+| Instance off or removed (from r12) | The words in 7.1 |
+
+### 17.6 What the person sees
+
+On the run's card, its sheet and its row in Needs you, for a clone in the work folder:
+
+- **Line:** "Claude hasn't trusted Gossamr's clone of acme/webshop yet."
+- **Sheet:** "Trusting a folder lets the repository's own Claude settings run with the agent: the hooks, MCP servers and permission rules in its .claude folder and .mcp.json. They run on your Mac as you. Trust it only if you'd run this repository's code yourself. Gossamr trusts this one folder, for Claude only, and then starts the agent."
+- **Buttons:** "Trust this clone for Claude" (busy: "Trusting…"), "Trust in Terminal instead", Retry.
+- **Needs you:** "<agent> needs its clone trusted".
+- **After a refusal:** the reason from 17.5, and Terminal comes first.
+
+### 17.7 Edge cases
+
+- **Trusted for one login, run on another.** The pre-flight reads the other login's file and asks again, naming that instance.
+- **Trusted in Terminal meanwhile.** The pre-flight sees it. Retry with `trust` finds it already `true`, writes nothing and retries.
+- **Two runs on the same clone fail at once.** The first click writes; the second finds it trusted.
+- **A newer Claude changes the shape.** The shape check refuses, or the retry is refused again (17.3, step 4). Either way the card offers Terminal.
+- **A file managed by a dotfiles tool**, so a link. Refused, Terminal.
+- **The clone deleted and cloned again.** The trust entry stays with the path. The path is the repository's owner and name, and its origin is checked before each launch, so only a clone of that repository can use it.
+- **Runs set up in `~/Code`.** They never launch again (16.3), so they never reach this. One that failed untrusted before the upgrade shows the 16.3 words, not the trust buttons.
+
+### 17.8 Security
+
+- **Only a click.** Retry with `trust` is a Tauri command behind a button on a failed run. Pip and agents have no tool that trusts; a test checks both tool lists.
+- **One folder.** The run's own clone in the work folder, of a repository the person watches. Never a parent, never `~/Code`, never a path from the page.
+- **One login.** The run's, picked by its environment (17.4).
+- **The person reads what trust allows** before the click (17.6).
+- **One key changes.** No other key in the file is touched: no allowed tools, no MCP approvals, no onboarding flags.
+- **The file can hold secrets.** It is never logged, copied or backed up. The temp file exists only while the lock is held, has the same mode, and becomes the file; a leftover from a crash is removed before the next write and at start-up.
+- **Rule 4 changes** to: "It never edits `~/.claude`, and answers Claude's folder-trust question only when you click Trust on a run, for that run's clone in `~/Gossamr/agents` and that run's login." The `cli.rs` tests that no restricting or bypassing flag is passed stay as they are.
