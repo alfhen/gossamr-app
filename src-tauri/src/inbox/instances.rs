@@ -301,7 +301,7 @@ impl Core {
         if connection.id != connection_id {
             return Err(Error::Input("Jira is signed in to another account now. Reopen Settings.".into()));
         }
-        self.auth.sign_out().await?;
+        self.auth.disconnect(&connection.id).await?;
         self.registry.remove(&connection.id);
         self.close_db();
         self.settle_pip_turns(crate::db::DISCONNECTED).await;

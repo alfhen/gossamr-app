@@ -970,7 +970,22 @@ mod tests {
 
         assert!(fx.core.auth.identity().await.is_none());
         assert!(fx.core.connection(&Scope { connection_id: "jira:site:b".into(), account_id: "b".into() }).is_err());
-        assert_eq!(vault.get("jira-token"), None);
+        assert!(crate::secrets::keys_with_prefix("jira-token:").unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_second_account_through_connect_jira_still_leaves_exactly_one_session() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+
+        fx.core.connect_jira(&token_for("a", "fast")).await.unwrap();
+        fx.core.connect_jira(&token_for("b", "fast")).await.unwrap();
+
+        assert_eq!(crate::secrets::keys_with_prefix("jira-token:").unwrap(), ["jira-token:jira:site:b"]);
+        assert_eq!(fx.core.auth.connection().await.unwrap().id, "jira:site:b");
+        assert!(fx.core.connection(&Scope { connection_id: "jira:site:a".into(), account_id: "a".into() }).is_err());
     }
 
     #[tokio::test]
