@@ -898,7 +898,11 @@ export interface ConnectionInfo {
   instanceId: string;
   displayName: string;
   enabled: boolean;
-  kind: "jira" | "github" | "mock";
+  kind: "jira" | "github" | "mock" | "provider";
+  /** Which CLI a provider row runs. Absent on the others. */
+  driver?: "claude" | "codex";
+  /** The folder a provider's login is kept in, as typed. Absent when it uses its CLI's own default. */
+  configDir?: string;
   /** The site or organisation; for GitHub, the account's login. */
   workspace: string;
   url: string | null;

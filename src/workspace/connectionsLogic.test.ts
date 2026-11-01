@@ -1,11 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { actingAs, isSignedOut, oldestCheck, rowAfter, showsCode, statusLine } from "./connectionsLogic";
+import { actingAs, canSwitch, isSignedOut, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
 const github = (state: Parameters<typeof githubSnapshot>[0]): ConnectionInfo => ({ ...base, status: githubSnapshot(state, "ada", CHECKED) });
+const claude = (over: Partial<ConnectionInfo> = {}): ConnectionInfo => ({ ...base, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider", driver: "claude", workspace: "", ...over });
 const jira = (over: Partial<ConnectionInfo> = {}): ConnectionInfo => ({ ...base, id: "jira:c:u", instanceId: "jira", displayName: "Acme Jira", kind: "jira", workspace: "acme.atlassian.net", ...over });
 
 describe("a connection's line in the list", () => {
@@ -66,6 +67,39 @@ describe("a connection that is signed out", () => {
   });
 });
 
+describe("a provider row", () => {
+  it("is never signed out as far as the Jira banner goes, whatever its probe finds", () => {
+    expect(isSignedOut(claude({ reauth: true }))).toBe(false);
+    expect(isSignedOut(claude({ status: jiraSnapshot("notSignedIn", CHECKED) }))).toBe(false);
+    expect(isSignedOut(claude({ status: githubSnapshot("notFound", "x", CHECKED) }))).toBe(false);
+  });
+
+  it("is its own instance, so it has a switch", () => {
+    expect(canSwitch(claude())).toBe(true);
+    expect(canSwitch({ ...base, kind: "mock" })).toBe(false);
+    expect(canSwitch({ ...base, id: "github:ada", instanceId: "github:ada" })).toBe(false);
+  });
+
+  it("is hidden until providers are shown", () => {
+    const rows = [jira(), claude(), github("ready")];
+    expect(providersShown).toBe(false);
+    expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira", "github"]);
+    expect(shownConnections(rows, true).map((c) => c.kind)).toEqual(["jira", "provider", "github"]);
+  });
+
+  it("is shown when the sample backend is opened with ?providers=1", () => {
+    const rows = [jira(), claude()];
+    try {
+      vi.stubGlobal("location", { search: "?providers=1" });
+      expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira", "provider"]);
+      vi.stubGlobal("location", { search: "?providers=0" });
+      expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("the list's keys and times", () => {
   const ids = ["a", "b", "c"];
 
@@ -104,5 +138,13 @@ describe("when code shows", () => {
 
   it("shows code when one of two GitHub accounts is on", () => {
     expect(showsCode([{ ...base, enabled: false }, base])).toBe(true);
+  });
+});
+
+describe("removalWarning", () => {
+  it("says a provider's folder and login stay on disk and mentions no tickets or token", () => {
+    const text = removalWarning({ kind: "provider", displayName: "Claude", workspace: "" });
+    expect(text).toContain("stay on disk");
+    expect(text).not.toMatch(/token|ticket/);
   });
 });

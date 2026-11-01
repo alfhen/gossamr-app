@@ -10,7 +10,7 @@ use super::watch::{CatalogEntry, CatalogPage, WatchRow, WatchState};
 use super::{now_iso, Core};
 use crate::auth::Scope;
 use crate::config::AppConfig;
-use crate::connections::{self, Binding};
+use crate::connections::{self, Binding, RowKind};
 use crate::auth::{CredentialSource, GithubAuth, GithubSession};
 use crate::codehost::diff::{commentable, relative_path};
 use crate::codehost::events::{derive, from_notice, recent};
@@ -120,7 +120,9 @@ fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<(St
         instance_id: session.connection().id,
         display_name: session.login.clone(),
         enabled: true,
-        kind: ConnectionKind::Github,
+        kind: RowKind::Github,
+        driver: None,
+        config_dir: None,
         workspace: session.login.clone(),
         url: format!("https://github.com/{}", session.login),
         account: session.name.clone().unwrap_or_else(|| session.login.clone()),
@@ -1222,7 +1224,7 @@ pub(crate) mod tests {
     async fn connecting_through_gh_registers_a_github_connection_and_lists_it() {
         let fx = fixture(REPOS).await;
         let connected = fx.core.github_connect(Some("ann")).await.unwrap();
-        assert_eq!((connected.id.as_str(), connected.kind, connected.workspace.as_str(), connected.account.as_str()), ("github:ann", ConnectionKind::Github, "ann", "Ann Example"));
+        assert_eq!((connected.id.as_str(), connected.kind, connected.workspace.as_str(), connected.account.as_str()), ("github:ann", RowKind::Github, "ann", "Ann Example"));
         assert_eq!(fx.core.registry.connection("github:ann").unwrap().kind, ConnectionKind::Github);
         let listed = fx.core.connections().await.unwrap();
         assert_eq!(listed.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["github:ann"]);
@@ -1809,7 +1811,7 @@ pub(crate) mod tests {
         let lx = linked(vec![], Some("repo")).await;
         lx.core().adopt_instances().await;
         let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
-        let rechecking = || async { lx.core().connections().await.unwrap().into_iter().find(|c| c.kind == ConnectionKind::Github).unwrap().rechecking };
+        let rechecking = || async { lx.core().connections().await.unwrap().into_iter().find(|c| c.kind == RowKind::Github).unwrap().rechecking };
         lx.core().set_instance_enabled(&instance, false).await.unwrap();
         assert!(!rechecking().await, "off is its own note, not a check");
 

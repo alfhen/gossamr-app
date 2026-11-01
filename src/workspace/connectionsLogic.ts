@@ -6,11 +6,20 @@ export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
 
 export const OFF_DETAIL = "Off. Gossamr doesn't sync it and drafts for it wait. You and Pip don't see its items. What's cached is kept.";
 
+/** Provider rows stay out of Settings until runs honour their instance. The sample backend shows them with `?providers=1`. */
+export const providersShown = false;
+
+const providersAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("providers") === "1";
+
+/** The rows Settings and the rest of the page work with. */
+export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersShown || providersAsked()): T[] =>
+  shown ? [...connections] : connections.filter((c) => c.kind !== "provider");
+
 /** Whether any GitHub account is on. Code links, the code filters and the Development section appear only then: an off connection is hidden, and what it cached comes back when it is on. */
 export const showsCode = (connections: readonly Pick<ConnectionInfo, "kind" | "enabled">[]) => connections.some((c) => c.kind === "github" && c.enabled);
 
-/** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. */
-export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind">) => c.kind !== "mock" && c.instanceId !== c.id;
+/** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. A provider is its own instance. */
+export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind">) => c.kind === "provider" || (c.kind !== "mock" && c.instanceId !== c.id);
 
 /** The one line a connection's row in the list shows. */
 export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status" | "enabled">, checking: boolean): { text: string; tone: LineTone } {
@@ -35,9 +44,9 @@ export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status"
   }
 }
 
-/** A connection that is on and that Gossamr can no longer sign in as. For GitHub that includes a `gh` that isn't installed. */
+/** A Jira or GitHub connection that is on and that Gossamr can no longer sign in as. For GitHub that includes a `gh` that isn't installed. A provider never counts: the Jira banner is not about it. */
 export function isSignedOut(c: Pick<ConnectionInfo, "kind" | "enabled" | "reauth" | "status">): boolean {
-  return c.enabled && (c.reauth || c.status?.state === "notSignedIn" || (c.kind === "github" && c.status?.state === "notFound"));
+  return c.kind !== "provider" && c.enabled && (c.reauth || c.status?.state === "notSignedIn" || (c.kind === "github" && c.status?.state === "notFound"));
 }
 
 /** When the oldest probe among `connections` ran: the time "Checked 3m ago" at the top of the list can promise. */
@@ -62,6 +71,7 @@ export function removalWarning(c: Pick<ConnectionInfo, "kind" | "displayName" | 
   if (c.kind === "github") {
     return `Remove ${c.displayName}? Gossamr deletes the pull requests and branches it cached for ${c.workspace} and closes the drafts that post as ${c.workspace}. Your gh login and GitHub stay as they are.`;
   }
+  if (c.kind === "provider") return `Remove ${c.displayName}? Its folder and the login in it stay on disk.`;
   return `Remove ${c.displayName}? Gossamr deletes the tickets it cached, forgets your token and closes the drafts for it. Jira stays as it is.`;
 }
 

@@ -42,7 +42,7 @@ export function mockFirstRun(initial: GithubProbeState): FirstRunApi {
       if (fix) terminals.push(fix);
     },
     jiraCloudId: (site) => jira.jiraCloudId(site),
-    jiraConnect: (input) => jira.jiraConnect(input),
+    jiraConnect: (input, instanceId) => jira.jiraConnect(input, instanceId),
     sampleBackend: () => jira,
   };
 }

@@ -1090,6 +1090,8 @@ export class MockBackend implements Backend {
   /** The commands Terminal was opened on, oldest first. */
   readonly terminals: string[] = [];
   private readonly names = new Map<string, string>();
+  /** The default Claude provider instance, until it is removed. */
+  private claude: { enabled: boolean } | null = { enabled: true };
 
   async connectionOpenTerminal(instanceId: string) {
     const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
@@ -1109,6 +1111,11 @@ export class MockBackend implements Backend {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be turned off.");
+    if (target.kind === "provider") {
+      this.claude = { enabled };
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
     const posting = this.proposals.list({ states: ["applying"] }).some((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
     if (!enabled && posting) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
     this.github.setEnabled(enabled);
@@ -1119,6 +1126,12 @@ export class MockBackend implements Backend {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
+    if (target.kind === "provider") {
+      this.claude = null;
+      this.names.delete(instanceId);
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
     const reason = `${target.displayName} was removed.`;
     const mine = this.proposals.list({ states: ["pending", "applying"] }).filter((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
     if (mine.some((d) => d.state.type === "applying")) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
@@ -1134,7 +1147,8 @@ export class MockBackend implements Backend {
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
     const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: true, kind: "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
-    const all = this.github.connected ? [sample, this.github.info()] : [sample];
+    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
+    const all = [sample, ...(this.github.connected ? [this.github.info()] : []), ...claude];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }
 
@@ -1245,7 +1259,8 @@ export class MockBackend implements Backend {
     return host.startsWith("unknown") ? null : mockCloudId(host);
   }
 
-  async jiraConnect(input: TokenSignIn) {
+  async jiraConnect(input: TokenSignIn, instanceId?: string) {
+    if (instanceId !== undefined && (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.kind !== "mock") throw new Error("That isn't a Jira connection.");
     const host = mockJiraHost(input.site);
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");

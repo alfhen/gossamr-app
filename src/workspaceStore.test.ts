@@ -48,6 +48,12 @@ describe("connection probes", () => {
     expect(s().connections.find((c) => c.kind === "github")?.status?.state).toBe("notSignedIn");
   });
 
+  it("keeps the provider rows the backend lists out of the store while they are hidden", async () => {
+    expect((await backend.connectionsList()).map((c) => c.kind)).toContain("provider");
+    await s().refreshConnections();
+    expect(s().connections.map((c) => c.kind)).not.toContain("provider");
+  });
+
   it("asks the backend to probe again only when told to refresh", async () => {
     const list = vi.spyOn(backend, "connectionsList");
     await s().refreshConnections();

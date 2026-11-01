@@ -257,6 +257,6 @@ export interface Backend {
   /** The cloud id a Jira site reports about itself, or null when the person has to give it. Rejects when the site can't be reached. */
   jiraCloudId(site: string): Promise<string | null>;
   /** Checks the token against Jira and, only if it works, keeps it in place of the earlier one. */
-  jiraConnect(input: TokenSignIn): Promise<AuthStatus>;
+  jiraConnect(input: TokenSignIn, instanceId?: string): Promise<AuthStatus>;
   openUrl(url: string): Promise<void>;
 }

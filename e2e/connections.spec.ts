@@ -21,6 +21,30 @@ test.describe("the Connections list", () => {
     await expect(page.getByRole("region", { name: "GitHub details" })).toHaveCount(0);
   });
 
+  test("hides the provider rows unless the page is opened with providers=1", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
+    await openSettings(page);
+    await expect(rowOf(page, "GitHub")).toBeVisible();
+    await expect(page.getByRole("list", { name: "Connections" }).getByRole("listitem")).toHaveCount(2);
+    await expect(rowOf(page, "Claude")).toHaveCount(0);
+  });
+
+  test("lists the default Claude after the others, and turns it off and on from its row", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openSettings(page);
+    const rows = page.getByRole("list", { name: "Connections" }).getByRole("listitem");
+    await expect(rows).toHaveCount(3);
+    await expect(rows.last()).toHaveAccessibleName("Claude connection");
+    const claude = rowOf(page, "Claude").getByRole("switch", { name: "Claude" });
+    await expect(claude).toBeChecked();
+    await claude.click();
+    await expect(claude).not.toBeChecked();
+    await expect(rowOf(page, "Claude")).toContainText("Off");
+    await claude.click();
+    await expect(claude).toBeChecked();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
   test("opens the detail of the row you pick, with who drafts post as", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
