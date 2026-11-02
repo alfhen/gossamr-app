@@ -545,6 +545,9 @@ export interface Run {
   expectedWorktree: string;
   /** Whether its clone is in Gossamr's work folder, `~/Gossamr/agents`. False for a run an earlier release set up in the person's own clone. Read as true when absent. */
   inWorkFolder?: boolean;
+  /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
+  commitEmail?: string | null;
+  signingKey?: string | null;
   state: RunState;
   shortId: string | null;
   sessionId: string | null;
@@ -798,6 +801,16 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
+}
+
+/** Who git commits as in `~/Gossamr/agents`, and whether the person's git settings choose that by folder. */
+export interface WorkFolderGit {
+  /** The address in their global git settings; null when there is none. */
+  globalEmail: string | null;
+  /** The address git commits with inside the newest clone of each owner; empty until Gossamr has made a clone. */
+  owners: { owner: string; commitEmail: string | null }[];
+  /** Their git settings choose an address by folder, and no clone in the work folder gets any but the global one. */
+  includeIf: boolean;
 }
 
 /** Which provider instance and model a piece of work runs on. `model` is an id from `Backend.providerModels`; `effort` is one of low, medium, high, xhigh or max. */

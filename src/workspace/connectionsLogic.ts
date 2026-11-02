@@ -58,11 +58,16 @@ export const hasRealConnection = (connections: readonly Pick<ConnectionInfo, "ki
 /** Whether any GitHub account is on. Code links, the code filters and the Development section appear only then: an off connection is hidden, and what it cached comes back when it is on. */
 export const showsCode = (connections: readonly Pick<ConnectionInfo, "kind" | "enabled">[]) => connections.some((c) => c.kind === "github" && c.enabled);
 
-/** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. A provider is its own instance. */
-export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind">) => c.kind === "provider" || (c.kind !== "mock" && c.instanceId !== c.id);
+/** The one placeholder row standing in for a providers list that could not be read: a provider with no driver and a problem in `error`. */
+export const isUnreadableProviders = (c: Pick<ConnectionInfo, "kind"> & Partial<Pick<ConnectionInfo, "driver" | "error">>) => c.kind === "provider" && !c.driver && !!c.error;
+
+/** Only a row backed by an instance in config.json can be turned off; the others carry their connection id as `instanceId`. A provider is its own instance, except the unreadable-providers row. */
+export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind"> & Partial<Pick<ConnectionInfo, "driver" | "error">>) =>
+  (c.kind === "provider" && !isUnreadableProviders(c)) || (c.kind !== "mock" && c.kind !== "provider" && c.instanceId !== c.id);
 
 /** The one line a connection's row in the list shows. */
-export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status" | "enabled">, checking: boolean): { text: string; tone: LineTone } {
+export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status" | "enabled"> & Partial<Pick<ConnectionInfo, "driver" | "error">>, checking: boolean): { text: string; tone: LineTone } {
+  if (isUnreadableProviders(c)) return { text: c.error!, tone: "error" };
   if (c.kind === "mock" && !c.status) return { text: "Sample tickets · nothing is sent anywhere", tone: "quiet" };
   if (!c.enabled || c.status?.state === "off") return { text: "Off", tone: "quiet" };
   const s = c.status;

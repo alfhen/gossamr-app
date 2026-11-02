@@ -644,12 +644,20 @@ export class MockBackend implements Backend {
     if (isTauri()) await revealItemInDir(path);
   }
 
+  async runsRevealWorkFolder() {
+    this.runs.workFolderReveals += 1;
+  }
+
   async runsDisk(id: string) {
     return this.runs.disk(id);
   }
 
   async runsSettings() {
     return this.runs.settings();
+  }
+
+  async runsWorkFolderGit() {
+    return this.runs.workFolderGit();
   }
 
   async setNeedsBadge(_count: number) {}
@@ -1174,6 +1182,8 @@ export class MockBackend implements Backend {
   private readonly names = new Map<string, string>();
   /** The default Claude provider instance, until it is removed. */
   private claude: { enabled: boolean } | null = { enabled: true };
+  /** Set to show the placeholder row the real backend returns when the providers list can't be read. */
+  providersProblem: string | null = null;
   private readonly models = new MockModels((instanceId) => instanceId === "claude" && this.claude !== null);
 
   async providerModels(instanceId: string) {
@@ -1286,8 +1296,9 @@ export class MockBackend implements Backend {
       const message = a.problem === "refused" ? "Jira turned down your token. Make a new one to keep syncing" : a.problem === "offline" ? `Can't reach ${host}. Gossamr tries again at the next sync.` : null;
       return { id: a.connector.connectionId, instanceId: a.instanceId, displayName: shared ? `${host} (${a.status.email})` : host, enabled: a.enabled, kind: "jira", workspace: host, url: a.status.site?.url ?? null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: message, transient: a.problem === "offline", reauth: a.problem === "refused", status: jiraSnapshot(a.problem === "refused" ? "notSignedIn" : "ready", new Date().toISOString()), rechecking: false };
     });
-    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
-    const all = [sample, ...accounts, ...(this.github.connected ? [this.github.info()] : []), ...claude];
+    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: "", account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
+    const unreadable: ConnectionInfo[] = this.providersProblem ? [{ ...sample, id: "providers", instanceId: "providers", displayName: "Models", enabled: false, kind: "provider", workspace: "", url: "", account: "", error: this.providersProblem, reauth: false, status: null }] : [];
+    const all = [sample, ...accounts, ...(this.github.connected ? [this.github.info()] : []), ...claude, ...unreadable];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }
 

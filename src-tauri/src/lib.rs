@@ -511,6 +511,20 @@ fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSett
     }
 }
 
+/// Who git commits as in Gossamr's clones, and whether the person's git settings choose that by folder. None when git
+/// can't be asked. It runs git, so Settings asks for it apart from the settings themselves.
+#[tauri::command]
+async fn agent_work_folder_git(runs: State<'_, RunsState>) -> Result<Option<runs::limits::WorkFolderGit>> {
+    Ok(runs.work_folder_git().await)
+}
+
+/// Shows `~/Gossamr/agents` in Finder, making it first. The page names no folder.
+#[tauri::command]
+fn runs_reveal_work_folder(runs: State<'_, RunsState>) -> Result<()> {
+    let folder = runs.make_work_folder()?;
+    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| error::Error::Claude(format!("Finder didn't open it: {e}")))
+}
+
 /// The models a provider instance offers: the driver's own, then the ones added to it.
 #[tauri::command]
 fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Result<Vec<model_choice::ModelOption>> {
@@ -586,15 +600,16 @@ async fn runs_start(runs: State<'_, RunsState>, id: String, retry: bool) -> Resu
 /// Opens a workstream on a cached ticket, or with no ticket and a title. A ticket with an open one gets that one back.
 #[tauri::command]
 async fn workstreams_open(app: AppHandle, core: State<'_, CoreState>, item: Option<ItemRef>, title: Option<String>) -> Result<Workstream> {
-    let ws = core.open_workstream(&core.scope().await?, item, title).await?;
+    let scope = core.scope_for_new_workstream(item.as_ref()).await?;
+    let ws = core.open_workstream(&scope, item, title).await?;
     workstreams_changed(&app, &ws.connection_id);
     Ok(ws)
 }
 
-/// The signed-in account's workstreams with their derived stages, newest first.
+/// Every connection's workstreams with their derived stages, newest first.
 #[tauri::command]
 async fn workstreams_list(core: State<'_, CoreState>, include_closed: Option<bool>) -> Result<Vec<WorkstreamView>> {
-    core.workstreams(&core.scope().await?, include_closed.unwrap_or(false)).await
+    core.all_workstreams(include_closed.unwrap_or(false)).await
 }
 
 /// What the person does to a workstream's state: close it, reopen a closed one (the page's Undo of Close, and a closed
@@ -610,7 +625,7 @@ enum WorkstreamState {
 
 #[tauri::command]
 async fn workstreams_set_state(app: AppHandle, core: State<'_, CoreState>, agent: State<'_, AgentState>, id: String, state: WorkstreamState) -> Result<Workstream> {
-    let scope = core.scope().await?;
+    let scope = core.workstream_scope(&id).await?;
     let ws = match state {
         WorkstreamState::Close => core.close_workstream(&scope, &id).await?,
         WorkstreamState::Reopen => core.reopen_workstream(&scope, &id).await?,
@@ -627,7 +642,7 @@ async fn workstreams_set_state(app: AppHandle, core: State<'_, CoreState>, agent
 /// The person dismisses a question Pip asked in the workstream.
 #[tauri::command]
 async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<bool> {
-    let scope = core.scope().await?;
+    let scope = core.workstream_scope(&id).await?;
     let cleared = core.clear_pip_ask(&scope, &id, "dismissed").await?;
     workstreams_changed(&app, &scope.connection_id);
     Ok(cleared)
@@ -637,7 +652,7 @@ async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id:
 /// Returns what moved, which the page's Undo hands back to `workstreams_undo`.
 #[tauri::command]
 async fn workstreams_adopt(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<inbox::Adoptable> {
-    let scope = core.scope().await?;
+    let scope = core.workstream_scope(&id).await?;
     let moved = core.adopt_into_workstream(&scope, &id).await?;
     let connection = scope.connection_id.clone();
     workstreams_changed(&app, &connection);
@@ -649,7 +664,8 @@ async fn workstreams_adopt(app: AppHandle, core: State<'_, CoreState>, id: Strin
 /// The person's Undo of "Bring them here", a moment after it. Refused once anything else happened in it, or after a minute.
 #[tauri::command]
 async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String, undo: inbox::WorkstreamUndo) -> Result<Workstream> {
-    let ws = core.undo_workstream(&core.scope().await?, &id, &undo).await?;
+    let scope = core.workstream_scope(&id).await?;
+    let ws = core.undo_workstream(&scope, &id, &undo).await?;
     workstreams_changed(&app, &ws.connection_id);
     // Taking back "Bring them here" moves runs and drafts, which the page reads too.
     runs_changed(&app, &ws.connection_id);
@@ -660,7 +676,8 @@ async fn workstreams_undo(app: AppHandle, core: State<'_, CoreState>, id: String
 /// A workstream's audit, oldest first.
 #[tauri::command]
 async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Vec<WorkstreamEvent>> {
-    core.workstream_events(&core.scope().await?, &id).await
+    let scope = core.workstream_scope(&id).await?;
+    core.workstream_events(&scope, &id).await
 }
 
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
@@ -693,7 +710,7 @@ async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::Stop
 /// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
 #[tauri::command]
 async fn workstreams_stop(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, agent: State<'_, AgentState>, id: String) -> Result<runs::control::StopAll> {
-    let scope = core.scope().await?;
+    let scope = core.workstream_scope(&id).await?;
     let result = runs.stop_workstream(&scope, &id).await;
     if result.is_ok() {
         use_freed_slot(&runs);
@@ -1055,6 +1072,8 @@ pub fn run() {
             workstreams_stop,
             runs_open_terminal,
             runs_disk,
+            runs_reveal_work_folder,
+            agent_work_folder_git,
             runs_events,
             runs_keep_running,
             runs_list,
