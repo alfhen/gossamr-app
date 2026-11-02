@@ -113,6 +113,8 @@ impl AppConfig {
     /// says so, and saving writes the list back as it was. A file that can't be read at all, or isn't JSON, is never
     /// replaced: `save` and `update` fail while `connections_error` is set.
     pub fn load(dir: &Path) -> Self {
+        #[cfg(test)]
+        LOADS.with(|n| n.set(n.get() + 1));
         let bytes = match std::fs::read(dir.join(FILE)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self { providers: vec![connections::default_claude()], ..Self::default() },
@@ -272,6 +274,19 @@ fn back_up(dir: &Path, bytes: &[u8]) {
     if let Err(e) = std::fs::write(&backup, bytes) {
         eprintln!("couldn't copy {FILE} to {BACKUP}: {e}");
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times `AppConfig::load` ran on this thread while `f` ran.
+#[cfg(test)]
+pub(crate) fn loads_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    let before = LOADS.with(|n| n.get());
+    let out = f();
+    (out, LOADS.with(|n| n.get()) - before)
 }
 
 #[cfg(test)]

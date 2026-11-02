@@ -437,10 +437,11 @@ impl Core {
     }
 
     pub(super) fn require_watched(&self, id: &str, repo: &str) -> Result<()> {
-        if let Some(name) = self.off_name(id) {
+        let off = self.off_names();
+        if let Some(name) = off.name(id) {
             return Err(Error::CodeHost { status: 403, message: format!("{name} is off, so {repo} isn't read.") });
         }
-        if is_watched_repo(&self.watched_repos(id)?, repo) {
+        if is_watched_repo(&self.watched_repos_in(&off, id)?, repo) {
             Ok(())
         } else {
             Err(refused(repo))
@@ -744,9 +745,9 @@ impl Core {
                 known = KnownKeys::new([(prefix, item.connection_id.as_str())]);
             }
         }
-        let off = self.off_names();
         for id in self.code.connection_ids() {
-            let repos = self.watched_repos_in(&off, &id)?;
+            // Read per connection, not once up front: the awaits below can outlast a toggle in Settings.
+            let repos = self.watched_repos(&id)?;
             if repos.is_empty() {
                 continue;
             }
@@ -790,7 +791,7 @@ impl Core {
                 return Ok((id, found));
             }
         }
-        match self.off_code_name(Some(repo))? {
+        match self.off_code_name_in(&off, Some(repo))? {
             Some(name) => Err(Error::CodeHost { status: 403, message: format!("{name} is off, so {repo} isn't read.") }),
             None => Err(refused(repo)),
         }
@@ -810,7 +811,10 @@ impl Core {
     /// The name of a GitHub connection that is off and hides something: the one that follows `repo` when one is given,
     /// else any that has repositories chosen.
     pub fn off_code_name(&self, repo: Option<&str>) -> Result<Option<String>> {
-        let off = self.off_names();
+        self.off_code_name_in(&self.off_names(), repo)
+    }
+
+    fn off_code_name_in(&self, off: &OffNames, repo: Option<&str>) -> Result<Option<String>> {
         for id in self.code.connection_ids() {
             let Some(name) = off.name(&id) else { continue };
             let repos = self.chosen_repos(&id)?;
@@ -1734,6 +1738,30 @@ pub(crate) mod tests {
         assert_eq!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
         lx.core().watch_set_containers("github:ann", &[WatchChange { container_id: "acme/webshop".into(), watched: Some(false), ..Default::default() }]).await.unwrap();
         assert!(lx.core().dev_links(&lx.fx.item("CA-208")).unwrap().is_empty(), "unwatching hides what was cached at once");
+    }
+
+    #[tokio::test]
+    async fn a_check_of_one_repository_reads_the_config_once_whether_or_not_a_connection_is_off() {
+        let lx = linked(vec![], Some("repo")).await;
+        lx.sync().await;
+        let core = lx.core();
+        core.adopt_instances().await;
+        let instance = crate::config::AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == crate::tracker::ConnectionKind::Github).unwrap().id;
+
+        let (watched, reads) = crate::config::loads_during(|| core.require_watched("github:ann", "acme/webshop"));
+        assert!(watched.is_ok());
+        assert_eq!(reads, 1, "require_watched");
+        let (missing, reads) = crate::config::loads_during(|| core.code_connection_for("acme/nowhere"));
+        assert!(missing.is_err());
+        assert_eq!(reads, 1, "code_connection_for with no match");
+
+        core.set_instance_enabled(&instance, false).await.unwrap();
+        let (refused, reads) = crate::config::loads_during(|| core.require_watched("github:ann", "acme/webshop"));
+        assert!(matches!(refused, Err(Error::CodeHost { status: 403, .. })));
+        assert_eq!(reads, 1, "require_watched while off");
+        let (off, reads) = crate::config::loads_during(|| core.code_connection_for("acme/webshop"));
+        assert!(matches!(off, Err(Error::CodeHost { status: 403, .. })));
+        assert_eq!(reads, 1, "code_connection_for while off");
     }
 
     #[tokio::test]

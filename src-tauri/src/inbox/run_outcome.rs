@@ -1,6 +1,7 @@
 use chrono::Utc;
 use serde::Serialize;
 
+use super::instances::OffNames;
 use super::Core;
 use crate::domain::{CodeChange, CodeChangeKind, Run, RunState};
 use crate::error::{Error, Result};
@@ -62,9 +63,8 @@ impl Core {
         Ok(resolve(run, stored.as_ref()))
     }
 
-    fn change_of(&self, run: &Run) -> Result<Option<CodeChange>> {
-        let off = self.off_names();
-        self.change_in(run, |id| self.watched_repos_in(&off, id))
+    fn change_of(&self, run: &Run, off: &OffNames) -> Result<Option<CodeChange>> {
+        self.change_in(run, |id| self.watched_repos_in(off, id))
     }
 
     fn change_in(&self, run: &Run, repos: impl Fn(&str) -> Result<Vec<String>>) -> Result<Option<CodeChange>> {
@@ -84,8 +84,8 @@ impl Core {
     }
 
     /// The pull request a build opened in its own repository and the commit at its head, as far as a sync has cached them.
-    pub fn pull_head_of(&self, run: &Run) -> Result<Option<(u64, Option<String>)>> {
-        Ok(self.change_of(run)?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number.map(|n| (n, c.sha))))
+    pub fn pull_head_of(&self, run: &Run, off: &OffNames) -> Result<Option<(u64, Option<String>)>> {
+        Ok(self.change_of(run, off)?.filter(|c| c.kind == CodeChangeKind::PullRequest && c.repo.eq_ignore_ascii_case(&run.spec.repo)).and_then(|c| c.number.map(|n| (n, c.sha))))
     }
 
     pub async fn run_outcome(&self, id: &str) -> Result<RunOutcome> {
@@ -94,7 +94,7 @@ impl Core {
         let resolved = resolve(&run, stored.as_ref());
         Ok(RunOutcome {
             note: resolved.note.clone(),
-            change: self.change_of(&run)?,
+            change: self.change_of(&run, &self.off_names())?,
             summary_only: run.state == RunState::Done && resolved.source == Some(ResultSource::SummaryOnly),
             source: resolved.source,
             report: report_view(&run, stored.as_ref(), &resolved),

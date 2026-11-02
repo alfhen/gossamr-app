@@ -163,13 +163,14 @@ impl AgentSide {
             return Ok("There are no other runs in this workstream.".into());
         }
         let (mut left, mut shown, mut skipped) = (RUNS_CHARS, Vec::new(), 0);
+        let off = self.core.off_names();
         for (label, other) in others.iter().rev() {
             if left == 0 {
                 skipped += 1;
                 continue;
             }
             let stored = self.core.report_stored(&other.id).await?;
-            let pull = self.core.pull_head_of(other).ok().flatten();
+            let pull = self.core.pull_head_of(other, &off).ok().flatten();
             let block = describe(label, other, stored.as_ref().and_then(|s| s.current()), pull, RUN_CHARS.min(left));
             left = left.saturating_sub(block.chars().count());
             shown.push(block);
