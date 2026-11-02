@@ -1892,9 +1892,14 @@ pub(crate) mod testing {
     /// The fixture signed in to two Jira accounts on two sites, both registered, with the first as the primary. The
     /// returned scope is the second account's; it has no cached items.
     pub async fn fixture_with_two_jira() -> (Fixture, Scope) {
+        fixture_with_two_jira_and(None).await
+    }
+
+    /// `fixture_with_two_jira` with a code host service.
+    pub async fn fixture_with_two_jira_and(code: Option<CodeService>) -> (Fixture, Scope) {
         let second = credentials("beta", "Beta", "bo", "Bo");
         let scope = second.scope();
-        let fx = fixture_signed_in_to(None, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second]).await;
+        let fx = fixture_signed_in_to(code, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second]).await;
         (fx, scope)
     }
 

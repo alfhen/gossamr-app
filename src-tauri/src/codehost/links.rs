@@ -1,22 +1,34 @@
 //! Link discovery: which work items a code change carries out, read from where it names them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::keys::KeyMatcher;
 use crate::domain::{CodeChange, DevLink, ItemRef, LinkSource};
 
-/// The work item keys a workspace knows, and the connection each project's items live on.
+/// The work item keys a workspace knows, and the connections whose projects have each key.
 #[derive(Clone, Debug, Default)]
 pub struct KnownKeys {
     matcher: KeyMatcher,
-    connections: HashMap<String, String>,
+    connections: HashMap<String, Vec<String>>,
+    cached: HashSet<(String, String)>,
 }
 
 impl KnownKeys {
-    /// `projects` are `(project key, connection id)` pairs.
+    /// `projects` are `(project key, connection id)` pairs. Two sites can both have a project `TAF`.
     pub fn new<'a>(projects: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
-        let connections: HashMap<String, String> = projects.into_iter().map(|(k, c)| (k.trim().to_ascii_uppercase(), c.to_string())).collect();
-        Self { matcher: KeyMatcher::new(connections.keys()), connections }
+        let mut known = Self::default();
+        for (prefix, connection) in projects {
+            known.add_project(prefix, connection);
+        }
+        known
+    }
+
+    fn add_project(&mut self, prefix: &str, connection: &str) {
+        let connections = self.connections.entry(prefix.trim().to_ascii_uppercase()).or_default();
+        if !connections.iter().any(|c| c == connection) {
+            connections.push(connection.to_string());
+        }
+        self.matcher = KeyMatcher::new(self.connections.keys());
     }
 
     #[cfg(test)]
@@ -24,9 +36,33 @@ impl KnownKeys {
         self.matcher.is_empty()
     }
 
-    pub fn item(&self, key: &str) -> Option<ItemRef> {
-        let connection = self.connections.get(KeyMatcher::prefix_of(key)?)?;
-        Some(ItemRef { connection_id: connection.clone(), external_id: key.into(), key: key.into() })
+    /// The project keys that more than one connection has.
+    pub fn shared_prefixes(&self) -> Vec<(&str, &[String])> {
+        self.connections.iter().filter(|(_, c)| c.len() > 1).map(|(p, c)| (p.as_str(), c.as_slice())).collect()
+    }
+
+    /// Records the keys a connection has cached in watched projects. A key shared by several connections links only
+    /// to those that have it.
+    pub fn with_cached(mut self, connection: &str, keys: impl IntoIterator<Item = String>) -> Self {
+        self.cached.extend(keys.into_iter().map(|k| (connection.to_string(), k.to_ascii_uppercase())));
+        self
+    }
+
+    /// Makes sure `item`'s own connection is among those a link to its key may name.
+    pub fn with_item(mut self, item: &ItemRef) -> Self {
+        if let Some(prefix) = KeyMatcher::prefix_of(&item.key) {
+            self.add_project(prefix, &item.connection_id);
+        }
+        self.with_cached(&item.connection_id, [item.key.clone()])
+    }
+
+    /// The work items `key` may name: the connections whose cache has it, or all that have its project when none does.
+    pub fn items(&self, key: &str) -> Vec<ItemRef> {
+        let Some(connections) = KeyMatcher::prefix_of(key).and_then(|p| self.connections.get(&p.to_ascii_uppercase())) else { return Vec::new() };
+        let upper = key.to_ascii_uppercase();
+        let having: Vec<&String> = connections.iter().filter(|c| self.cached.contains(&((*c).clone(), upper.clone()))).collect();
+        let named = if having.is_empty() { connections.iter().collect() } else { having };
+        named.into_iter().map(|c| ItemRef { connection_id: c.clone(), external_id: key.into(), key: key.into() }).collect()
     }
 
     pub fn find(&self, text: &str) -> Vec<String> {
@@ -35,7 +71,8 @@ impl KnownKeys {
 }
 
 /// Fills in each change's `linked_keys` and returns the links found: one per work item and change, from the
-/// place that names it most deliberately (branch, then title, then commit message, then description).
+/// place that names it most deliberately (branch, then title, then commit message, then description). A key that
+/// two sites could own links to each and marks every link `ambiguous`.
 pub fn discover(changes: &mut [CodeChange], known: &KnownKeys) -> Vec<DevLink> {
     let mut links = Vec::new();
     for change in changes.iter_mut() {
@@ -51,8 +88,10 @@ pub fn discover(changes: &mut [CodeChange], known: &KnownKeys) -> Vec<DevLink> {
         }
         change.linked_keys = best.iter().map(|(k, _)| k.clone()).collect();
         for (key, provenance) in best {
-            if let Some(item) = known.item(&key) {
-                links.push(DevLink { item, change: change.clone(), provenance, confidence: provenance.confidence() });
+            let items = known.items(&key);
+            let ambiguous = items.len() > 1;
+            for item in items {
+                links.push(DevLink { item, change: change.clone(), provenance, confidence: provenance.confidence(), ambiguous });
             }
         }
     }
@@ -141,11 +180,57 @@ pub(crate) mod tests {
         assert_eq!(summary, [("CA-300", LinkSource::Commit), ("WEB-1", LinkSource::Commit), ("CA-301", LinkSource::Branch)]);
     }
 
+    fn only_connection(known: &KnownKeys, key: &str) -> String {
+        let items = known.items(key);
+        assert_eq!(items.len(), 1, "{items:?}");
+        items[0].connection_id.clone()
+    }
+
     #[test]
     fn each_project_keeps_its_own_connection() {
         let known = KnownKeys::new([("CA", "jira:a:me"), ("OPS", "jira:b:me")]);
-        assert_eq!(known.item("OPS-4").unwrap().connection_id, "jira:b:me");
-        assert_eq!(known.item("CA-4").unwrap().connection_id, "jira:a:me");
-        assert!(known.item("ZZ-1").is_none());
+        assert_eq!(only_connection(&known, "OPS-4"), "jira:b:me");
+        assert_eq!(only_connection(&known, "CA-4"), "jira:a:me");
+        assert!(known.items("ZZ-1").is_empty());
+    }
+
+    fn shared() -> KnownKeys {
+        KnownKeys::new([("TAF", "jira:acme:me"), ("TAF", "jira:beta:me"), ("CA", "jira:acme:me")])
+    }
+
+    fn link_connections(known: &KnownKeys, branch: &str) -> Vec<(String, bool)> {
+        let mut changes = vec![pr(1, branch, "", "")];
+        discover(&mut changes, known).iter().map(|l| (l.item.connection_id.clone(), l.ambiguous)).collect()
+    }
+
+    #[test]
+    fn a_key_that_two_sites_could_own_links_to_both_and_marks_each_link_ambiguous_when_neither_has_it_cached() {
+        assert_eq!(link_connections(&shared(), "taf-12-fix"), [("jira:acme:me".to_string(), true), ("jira:beta:me".to_string(), true)]);
+    }
+
+    #[test]
+    fn a_key_links_only_to_the_sites_that_have_the_item_cached() {
+        let known = shared().with_cached("jira:beta:me", ["TAF-12".to_string()]).with_cached("jira:acme:me", ["TAF-3".to_string()]);
+        assert_eq!(link_connections(&known, "taf-12-fix"), [("jira:beta:me".to_string(), false)]);
+        assert_eq!(link_connections(&known, "taf-3-fix"), [("jira:acme:me".to_string(), false)]);
+        assert_eq!(link_connections(&known, "taf-99-fix").len(), 2, "cached nowhere, so both stay candidates");
+    }
+
+    #[test]
+    fn a_key_cached_on_both_sites_links_to_both_and_is_ambiguous() {
+        let known = shared().with_cached("jira:beta:me", ["TAF-12".to_string()]).with_cached("jira:acme:me", ["TAF-12".to_string()]);
+        assert_eq!(link_connections(&known, "taf-12-fix"), [("jira:acme:me".to_string(), true), ("jira:beta:me".to_string(), true)]);
+    }
+
+    #[test]
+    fn a_project_only_one_site_has_never_links_ambiguously() {
+        assert_eq!(link_connections(&shared(), "ca-5-fix"), [("jira:acme:me".to_string(), false)]);
+    }
+
+    #[test]
+    fn the_item_being_looked_at_joins_the_sites_a_key_may_name() {
+        let item = ItemRef { connection_id: "jira:gamma:me".into(), external_id: "TAF-12".into(), key: "TAF-12".into() };
+        let known = shared().with_cached("jira:beta:me", ["TAF-12".to_string()]).with_item(&item);
+        assert_eq!(link_connections(&known, "taf-12-fix"), [("jira:beta:me".to_string(), true), ("jira:gamma:me".to_string(), true)]);
     }
 }

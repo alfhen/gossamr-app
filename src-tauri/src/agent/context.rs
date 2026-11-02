@@ -569,6 +569,7 @@ mod tests {
             change,
             provenance: crate::domain::LinkSource::Branch,
             confidence: 0.95,
+            ambiguous: false,
         }
     }
 
