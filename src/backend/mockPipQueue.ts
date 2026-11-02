@@ -3,6 +3,7 @@ import type { ScreenContext } from "../types";
 import { metaOf, mockAsk, mockCancel, mockPipEvents, type PipDrafter } from "./mockPip";
 import { REMOVED, mockPipTurns } from "./mockPipTurns";
 import { eventLine, type WakeFact } from "./mockSupervisor";
+import { defaultModelDefaults, validModelId } from "../lib/models";
 import { GENERAL_CONVERSATION, conversationId, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 
 /** How many of Pip's turns may run at once across every conversation (PIP_PROCESSES in src-tauri/src/agent/queue.rs). */
@@ -159,6 +160,7 @@ const sameFact = (a: WakeFact, b: WakeFact) => a.run === b.run && a.state === b.
 const conversationOf = (req: AskRequest) => conversationId(req.conversation ?? GENERAL_CONVERSATION);
 
 function start({ req, drafter, pace, wake }: Waiting) {
+  recordChoice(conversationOf(req), req.requestId, req.model);
   mockPipTurns.setStatus(req.requestId, "running");
   mockPipEvents.emit(req.requestId, { type: "running" }, metaOf(req));
   if (wake) wakesRunning.set(req.requestId, wake);
@@ -216,6 +218,12 @@ export function mockQueueAsk(req: AskRequest, drafter: Partial<PipDrafter> | nul
     if (again) mockQueueWake(again.workstream, again.facts, drafter, pace);
   }
   return outcome;
+}
+
+/** Keeps the choice a turn takes when it starts, so one cancelled while waiting never becomes its conversation's last: the one asked for, else its conversation's last, else the Settings default. As `Core::pip_turn_model` keeps it, a made-up model id is not kept. */
+function recordChoice(conversation: string, requestId: string, asked: AskRequest["model"]) {
+  const choice = asked ?? mockPipTurns.lastModel(conversation) ?? defaultModelDefaults().pip;
+  if (choice && validModelId(choice.model)) mockPipTurns.setModel(requestId, choice);
 }
 
 /**

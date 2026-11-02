@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,7 @@ mod probes;
 mod provider_probes;
 mod providers;
 mod run_outcome;
+mod pip_model;
 mod pip_runs;
 mod pip_turns;
 mod report;
@@ -484,7 +486,7 @@ impl Core {
 
     /// Runs `f` against the app database, for work that touches only app tables and needs no one signed in. Drafts and
     /// runs of every connection are visible; `with_app_db_for` limits them to one.
-    async fn with_app_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+    pub(crate) async fn with_app_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let mut open = self.db.lock().expect("db lock poisoned");
         f(self.open_app(&mut open)?)
     }
@@ -907,31 +909,59 @@ impl Core {
         self.with_db_for(scope, |db| db.set_meta(ANNOUNCED_NEEDS, &serde_json::to_string(keys)?)).await
     }
 
-    /// Records a session started in Pip's sandbox folder, and as the one to continue for `key` when there is one.
-    /// Sessions recorded by earlier versions, which ran in a user-chosen folder, never enter this list.
-    pub async fn remember_claude_session(&self, scope: &Scope, key: Option<&str>, session_id: &str) -> Result<()> {
+    /// Records a session started in Pip's sandbox folder on `instance_id`, and as the one to continue for `key` when there
+    /// is one. Sessions recorded by earlier versions, which ran in a user-chosen folder, never enter this list.
+    pub async fn remember_claude_session(&self, scope: &Scope, key: Option<&str>, session_id: &str, instance_id: &str) -> Result<()> {
         self.with_app_db_for(scope, |db| {
             if let Some(key) = key {
-                db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id }).to_string())?;
+                db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id, "instance": instance_id }).to_string())?;
             }
-            let mut own: Vec<String> =
-                db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-            own.retain(|s| s != session_id);
-            own.insert(0, session_id.to_string());
+            let mut own = OwnSession::list(db.app_meta(PIP_SESSIONS)?);
+            own.retain(|s| s.id() != session_id);
+            own.insert(0, OwnSession::On { id: session_id.to_string(), instance: instance_id.to_string() });
             own.truncate(OWN_SESSIONS_KEPT);
             db.set_app_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
         })
         .await
     }
 
-    /// Whether Pip started `session_id` in its sandbox folder, which is the only place it can be resumed from: one of the
-    /// last sessions it started, or the session of an open workstream, which stays resumable however long it runs.
-    pub async fn is_pip_session(&self, session_id: &str) -> Result<bool> {
+    /// Whether Pip started `session_id` on `instance_id` in its sandbox folder, which is the only place it can be resumed
+    /// from: one of the last sessions it started, or the session of an open workstream, which stays resumable however long
+    /// it runs. A Claude session lives in the login folder that wrote it, so another instance never resumes it.
+    pub async fn is_pip_session(&self, session_id: &str, instance_id: &str) -> Result<bool> {
         self.with_app_db(|db| {
-            let own: Vec<String> = db.app_meta(PIP_SESSIONS)?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-            Ok(own.iter().any(|s| s == session_id) || db.is_open_workstream_session(session_id)?)
+            let own = OwnSession::list(db.app_meta(PIP_SESSIONS)?);
+            Ok(own.iter().any(|s| s.id() == session_id && s.instance() == Some(instance_id)) || db.is_open_workstream_session(session_id, instance_id)?)
         })
         .await
+    }
+}
+
+/// A session Pip started. A list entry from before instances is a bare id and resumes on no instance: the default's login
+/// folder may not be the one that wrote it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum OwnSession {
+    Legacy(String),
+    On { id: String, instance: String },
+}
+
+impl OwnSession {
+    pub(crate) fn list(stored: Option<String>) -> Vec<Self> {
+        stored.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Legacy(id) | Self::On { id, .. } => id,
+        }
+    }
+
+    fn instance(&self) -> Option<&str> {
+        match self {
+            Self::Legacy(_) => None,
+            Self::On { instance, .. } => Some(instance),
+        }
     }
 }
 
@@ -962,30 +992,43 @@ mod tests {
             .with_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
             .await
             .unwrap();
-        assert!(!fx.core.is_pip_session("old-1").await.unwrap());
+        assert!(!fx.core.is_pip_session("old-1", "claude").await.unwrap());
 
-        fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "new-1").await.unwrap();
-        fx.core.remember_claude_session(&fx.scope, None, "ws-1").await.unwrap();
-        assert!(fx.core.is_pip_session("new-1").await.unwrap() && fx.core.is_pip_session("ws-1").await.unwrap());
-        assert!(!fx.core.is_pip_session("old-1").await.unwrap());
+        fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "new-1", "claude").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "ws-1", "claude").await.unwrap();
+        assert!(fx.core.is_pip_session("new-1", "claude").await.unwrap() && fx.core.is_pip_session("ws-1", "claude").await.unwrap());
+        assert!(!fx.core.is_pip_session("old-1", "claude").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_session_resumes_only_on_the_instance_that_started_it_and_an_old_entry_resumes_on_none() {
+        let fx = super::testing::fixture().await;
+        fx.core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["legacy-1"]"#)).await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "work-1", "claude_2").await.unwrap();
+        assert!(!fx.core.is_pip_session("legacy-1", "claude").await.unwrap());
+        assert!(!fx.core.is_pip_session("legacy-1", "claude_2").await.unwrap());
+        assert!(fx.core.is_pip_session("work-1", "claude_2").await.unwrap());
+        assert!(!fx.core.is_pip_session("work-1", "claude").await.unwrap());
+        let kept = fx.core.with_app_db(|db| db.app_meta("claude:CA-1")).await.unwrap().unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&kept).unwrap(), serde_json::json!({ "id": "work-1", "instance": "claude_2" }));
     }
 
     #[tokio::test]
     async fn a_workstream_s_session_stays_resumable_however_many_others_are_remembered() {
         let fx = super::testing::fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.remember_claude_session(&fx.scope, None, "ws-session").await.unwrap();
-        fx.core.remember_claude_session(&fx.scope, None, "loose-session").await.unwrap();
-        fx.core.set_workstream_session(&fx.scope, &ws.id, "ws-session").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "ws-session", "claude").await.unwrap();
+        fx.core.remember_claude_session(&fx.scope, None, "loose-session", "claude").await.unwrap();
+        fx.core.set_workstream_session(&fx.scope, &ws.id, "ws-session", "claude").await.unwrap();
         for n in 0..60 {
-            fx.core.remember_claude_session(&fx.scope, None, &format!("other-{n}")).await.unwrap();
+            fx.core.remember_claude_session(&fx.scope, None, &format!("other-{n}"), "claude").await.unwrap();
         }
-        assert!(fx.core.is_pip_session("ws-session").await.unwrap(), "pinned by its workstream");
-        assert!(!fx.core.is_pip_session("loose-session").await.unwrap(), "the list itself still keeps only the last 50");
-        assert!(fx.core.is_pip_session("other-59").await.unwrap() && !fx.core.is_pip_session("other-0").await.unwrap());
+        assert!(fx.core.is_pip_session("ws-session", "claude").await.unwrap(), "pinned by its workstream");
+        assert!(!fx.core.is_pip_session("loose-session", "claude").await.unwrap(), "the list itself still keeps only the last 50");
+        assert!(fx.core.is_pip_session("other-59", "claude").await.unwrap() && !fx.core.is_pip_session("other-0", "claude").await.unwrap());
 
         fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert!(!fx.core.is_pip_session("ws-session").await.unwrap(), "closing the workstream lets it go");
+        assert!(!fx.core.is_pip_session("ws-session", "claude").await.unwrap(), "closing the workstream lets it go");
     }
 
     #[tokio::test]
@@ -995,8 +1038,8 @@ mod tests {
         let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), dir.clone());
 
         core.with_app_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"s-1"}"#)).await.unwrap();
-        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["s-1"]"#)).await.unwrap();
-        assert!(core.is_pip_session("s-1").await.unwrap());
+        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"[{"id":"s-1","instance":"claude"}]"#)).await.unwrap();
+        assert!(core.is_pip_session("s-1", "claude").await.unwrap());
         assert!(core.pip_turns("general").await.unwrap().is_empty());
         assert!(core.with_db(|_| Ok(())).await.is_err(), "a cache still needs the sign-in");
 
@@ -1975,9 +2018,7 @@ pub(crate) mod testing {
         let connections: Vec<Connection> = sessions.iter().map(Credentials::connection).collect();
         let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::new(http)));
         let mut core = Core::new(Arc::new(Auth::with_sessions(authenticator, sessions)), registry, data_dir).with_home(home.clone());
-        if let Some(shell) = shell {
-            core = core.with_shell(shell);
-        }
+        core = core.with_shell(shell.unwrap_or_else(|| ShellCapture::with_env(crate::runs::env::RunEnv::from_pairs([("PATH", "/usr/bin:/bin")]))));
         if let Some(code) = code {
             core = core.with_code(code);
         }

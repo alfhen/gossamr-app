@@ -39,7 +39,7 @@ impl Seen {
         seen.insert(id.into(), Asked { at: Instant::now(), worked: models.is_some(), last_read });
     }
 
-    fn found(&self) -> Found {
+    pub(super) fn found(&self) -> Found {
         Found::new(self.0.lock().unwrap().iter().filter_map(|(id, a)| Some((id.clone(), a.last_read.clone()?))).collect())
     }
 }

@@ -1,6 +1,6 @@
 import { conversationId } from "../lib/conversations";
 import { readStored, writeStored } from "../workspace/storage";
-import type { ScreenContext } from "../types";
+import type { ModelChoice, ScreenContext } from "../types";
 import type { StoredTurn, TurnMeta, TurnUsage } from "./claude";
 
 const KEY = "gossamr-mock-pip-turns";
@@ -161,6 +161,18 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
       ];
       live.set(requestId, { text: "", steps: [] });
       save();
+    },
+
+    /** Keeps the instance and model a turn ran with. */
+    setModel(requestId: string, model: ModelChoice) {
+      update(requestId, (t) => ({ ...t, model }));
+    },
+
+    /** The choice the latest turn of `conversation` that kept one ran with. */
+    lastModel(conversation: string): ModelChoice | null {
+      const wanted = conversationId(conversation);
+      const kept = all.filter((t) => t.conversation === wanted && t.model).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      return kept[kept.length - 1]?.model ?? null;
     },
 
     /** A waiting wake's event lines once more wakes were merged into it. */

@@ -289,6 +289,7 @@ impl Core {
                 repo: None,
                 title: title.chars().take(TITLE_LIMIT).collect(),
                 pip_session: None,
+                pip_instance: None,
                 paused_reason: None,
                 notes: None,
                 created_at: at,
@@ -502,12 +503,14 @@ impl Core {
 
     /// Keeps `session` as the Pip session the conversation of `scope`'s open workstream `id` resumes. Nothing is audited:
     /// it changes nothing the person or Pip decided.
-    pub async fn set_workstream_session(&self, scope: &Scope, id: &str, session: &str) -> Result<()> {
+    pub async fn set_workstream_session(&self, scope: &Scope, id: &str, session: &str, instance_id: &str) -> Result<()> {
         let connection_id = scope.connection_id.clone();
         self.with_app_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
-            if ws.closed_at.is_none() && ws.pip_session.as_deref() != Some(session) {
+            let same = ws.pip_session.as_deref() == Some(session) && ws.pip_instance.as_deref() == Some(instance_id);
+            if ws.closed_at.is_none() && !same {
                 ws.pip_session = Some(session.to_string());
+                ws.pip_instance = Some(instance_id.to_string());
                 db.save_workstream(&ws)?;
             }
             Ok(())
@@ -1190,17 +1193,17 @@ mod tests {
     async fn the_pip_session_is_kept_on_an_open_workstream_only() {
         let fx = fixture().await;
         let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap();
-        fx.core.set_workstream_session(&fx.scope, &ws.id, "s-1").await.unwrap();
+        fx.core.set_workstream_session(&fx.scope, &ws.id, "s-1", "claude").await.unwrap();
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!(view.workstream.pip_session.as_deref(), Some("s-1"));
-        assert!(fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1")).await.unwrap());
+        assert!(fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1", "claude")).await.unwrap());
         assert_eq!(actions(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), [(Actor::Person, "opened")], "nothing is audited");
 
         fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
-        fx.core.set_workstream_session(&fx.scope, &ws.id, "s-2").await.unwrap();
+        fx.core.set_workstream_session(&fx.scope, &ws.id, "s-2", "claude").await.unwrap();
         assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.pip_session.as_deref(), Some("s-1"));
-        assert!(!fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1")).await.unwrap(), "a closed one pins nothing");
-        assert!(fx.core.set_workstream_session(&fx.scope, "nope", "s-3").await.is_err());
+        assert!(!fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1", "claude")).await.unwrap(), "a closed one pins nothing");
+        assert!(fx.core.set_workstream_session(&fx.scope, "nope", "s-3", "claude").await.is_err());
     }
 
     #[tokio::test]

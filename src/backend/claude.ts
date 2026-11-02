@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ImageData } from "../lib/pipImages";
-import type { ScreenContext, WorkFilter } from "../types";
+import type { ModelChoice, ScreenContext, WorkFilter } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { mockPipEvents, type PipDrafter } from "./mockPip";
 import { mockQueueAsk, mockQueueCancel, mockResume } from "./mockPipQueue";
@@ -75,6 +75,8 @@ export interface StoredTurn {
   createdAt: string;
   /** `wake` for a turn the supervisor started, with its event lines as `prompt`; a person's question otherwise. */
   kind?: "user" | "wake";
+  /** The instance and model the turn ran on, once it started. The latest in a conversation is the choice it carries on with. */
+  model?: ModelChoice;
 }
 
 export interface AskRequest {
@@ -87,6 +89,8 @@ export interface AskRequest {
   /** Where the turn is kept: the Pip pane's `general` or a workstream's `ws:<id>`. */
   conversation?: string;
   meta?: TurnMeta;
+  /** The instance and model to run on. Without one, the conversation's last choice, else the Settings default for Pip. */
+  model?: ModelChoice;
   /** `wake` for a turn the supervisor started; the sample backend's own wake turns are asked this way. */
   kind?: "user" | "wake";
 }

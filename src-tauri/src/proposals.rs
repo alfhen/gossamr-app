@@ -1217,6 +1217,7 @@ mod tests {
             repo: None,
             title: id.into(),
             pip_session: None,
+            pip_instance: None,
             paused_reason: None,
             notes: None,
             created_at: now(),
