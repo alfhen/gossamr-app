@@ -16,6 +16,7 @@ mod model_choice;
 mod net;
 mod notify;
 mod probe;
+mod provider_probe;
 mod proposals;
 mod runs;
 mod secrets;
@@ -303,8 +304,16 @@ async fn connections_list(app: AppHandle, core: State<'_, CoreState>, refresh: b
     core.settings_rows().await
 }
 
-/// Asks each instance how it stands, and tells the page about the ones that answered differently.
-async fn probe_connections(app: &AppHandle, core: &Core, why: Probe) {
+/// Asks each instance how it stands, and tells the page about the ones that answered differently. The providers are
+/// asked on their own, and the page hears of each when it answers, so a slow `claude` holds nothing else up.
+async fn probe_connections(app: &AppHandle, core: &CoreState, why: Probe) {
+    let providers = {
+        let (app, core) = (app.clone(), core.clone());
+        tauri::async_runtime::spawn(async move {
+            core.probe_providers_each(why, |instance_id| wire::changed(&app, wire::Topic::Connections, instance_id)).await;
+        })
+    };
+    drop(providers);
     for connection_id in core.probe_connections(why).await {
         wire::changed(app, wire::Topic::Connections, &connection_id);
     }
@@ -337,11 +346,17 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
 }
 
 /// Turns an instance on or off, then asks it how it stands: Off for one just turned off, a real answer for one turned on.
+/// A provider is asked in the background, because its CLI can be slow.
 #[tauri::command]
 async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, instance_id: String, enabled: bool) -> Result<()> {
     let connection_id = core.set_instance_enabled(&instance_id, enabled).await?;
     if core.is_provider(&instance_id) {
         wire::changed(&app, wire::Topic::Connections, &connection_id);
+        let (app, core) = (app.clone(), core.inner().clone());
+        tauri::async_runtime::spawn(async move {
+            core.probe_provider_now(&instance_id).await;
+            wire::changed(&app, wire::Topic::Connections, &connection_id);
+        });
         return Ok(());
     }
     if enabled {

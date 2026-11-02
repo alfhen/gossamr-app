@@ -458,7 +458,11 @@ impl Core {
     }
 
     pub fn provider_set_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
-        self.change_provider(instance_id, |provider| provider.enabled = enabled)
+        let id = self.change_provider(instance_id, |provider| provider.enabled = enabled)?;
+        if enabled {
+            self.provider_answer_forget(instance_id);
+        }
+        Ok(id)
     }
 
     /// Removes a provider instance and retires its id. Its config folder and the login in it stay on disk.
@@ -469,7 +473,7 @@ impl Core {
             removed
         })?;
         removed.then_some(()).ok_or_else(not_a_provider)?;
-        self.probes_forget(instance_id);
+        self.provider_probes_forget(instance_id);
         Ok(())
     }
 
@@ -499,24 +503,27 @@ impl Core {
         config
             .providers
             .into_iter()
-            .map(|p| ConnectionInfo {
-                instance_id: p.id.clone(),
-                id: p.id,
-                display_name: p.display_name,
-                enabled: p.enabled,
-                kind: RowKind::Provider,
-                driver: Some(p.driver),
-                config_dir: p.config.config_dir,
-                workspace: String::new(),
-                url: String::new(),
-                account: String::new(),
-                last_sync_at: None,
-                syncing: false,
-                error: None,
-                transient: false,
-                reauth: false,
-                status: None,
-                rechecking: false,
+            .map(|p| {
+                let status = self.provider_snapshot(&p.id);
+                ConnectionInfo {
+                    instance_id: p.id.clone(),
+                    id: p.id,
+                    display_name: p.display_name,
+                    enabled: p.enabled,
+                    kind: RowKind::Provider,
+                    driver: Some(p.driver),
+                    config_dir: p.config.config_dir,
+                    workspace: String::new(),
+                    url: String::new(),
+                    account: String::new(),
+                    last_sync_at: None,
+                    syncing: false,
+                    error: None,
+                    transient: false,
+                    reauth: false,
+                    status,
+                    rechecking: false,
+                }
             })
             .collect()
     }

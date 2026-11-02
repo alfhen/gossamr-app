@@ -54,11 +54,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    fn new(state: State, message: impl Into<String>) -> Self {
+    pub(crate) fn new(state: State, message: impl Into<String>) -> Self {
         Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, checked_at: crate::inbox::now_iso() }
     }
 
-    fn fix(mut self, command: impl Into<String>) -> Self {
+    pub(crate) fn fix(mut self, command: impl Into<String>) -> Self {
         self.fix = Some(command.into());
         self
     }
