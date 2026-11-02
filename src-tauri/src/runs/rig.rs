@@ -17,7 +17,9 @@ use super::toolchain::{FixedToolchain, Toolchain};
 use super::tracker::{Attention, RunNotifier};
 use crate::domain::fixtures::run_spec;
 use crate::domain::{Run, RunSpec, RunState};
-use crate::inbox::testing::{fixture_watching, Fixture};
+use crate::auth::Scope;
+use crate::domain::ItemRef;
+use crate::inbox::testing::{fixture_watching, fixture_watching_two_jira, Fixture};
 
 #[derive(Default)]
 pub struct Notices(pub Mutex<Vec<(String, Attention, RunState)>>);
@@ -60,13 +62,13 @@ pub async fn ready_with(tune: impl FnOnce(RunService) -> RunService) -> Rig {
 
 /// `ready_with` on a fixture of the caller's, such as one with GitHub routes scripted.
 pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) -> Rig {
-    let clone = fx.home.join("webshop");
+    let clone = fx.home.join("Gossamr/agents/acme/webshop");
     clone_with_origin(&clone, "https://github.com/acme/webshop.git");
     let clone = clone.canonicalize().unwrap();
     let cli = Arc::new(FakeCli::new());
     cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
     let bin = install_fake_git(&fx.dir);
-    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display()))]));
+    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]));
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
@@ -74,13 +76,43 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
         fx.core.clone(),
         Arc::new(tools),
         RunIndex::load(&fx.dir.join("index")),
-        vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
     .with_notifier(notices.clone())
     .with_terminal(opened.clone())
     .with_home(fx.home.canonicalize().unwrap());
     Rig { fx, svc: Arc::new(tune(svc)), cli, clone, notices, opened, changes }
+}
+
+/// Two Jira accounts, the first the primary, and a run on the second one's ticket that is launched and working.
+pub async fn working_on_the_second_account() -> (Rig, Run, Scope) {
+    let (fx, second) = fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    fx.core.set_instance_enabled("jira", false).await.unwrap();
+    let rig = ready_on(fx, |svc| svc).await;
+    let on_second = ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+    let queued = rig.fx.core.queue_test_run(rig.spec(1), Some(on_second)).await.unwrap();
+    rig.fx.core.set_instance_enabled("jira", true).await.unwrap();
+    assert_eq!(rig.fx.core.primary().await.unwrap().scope, rig.fx.scope);
+    let launched = rig.svc.start_now(&queued.id).await.unwrap();
+    rig.poll().await;
+    let run = rig.get(&launched).await;
+    assert_eq!((run.connection_id.as_str(), run.state), (second.connection_id.as_str(), RunState::Working));
+    (rig, run, second)
+}
+
+/// Two Jira accounts, the first the primary, and a queued run in a workstream (with no ticket) of the second.
+pub async fn queued_in_a_workstream_of_the_second_account() -> (Rig, Run, String, Scope) {
+    let (fx, second) = fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    fx.core.set_instance_enabled("jira", false).await.unwrap();
+    let rig = ready_on(fx, |svc| svc).await;
+    let ws = rig.fx.core.open_workstream(&second, None, Some("Beta work".into())).await.unwrap().id;
+    let queued = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(1) }, None).await.unwrap();
+    rig.fx.core.set_instance_enabled("jira", true).await.unwrap();
+    assert_eq!(rig.fx.core.primary().await.unwrap().scope, rig.fx.scope);
+    assert_eq!(queued.connection_id, second.connection_id);
+    (rig, queued, ws, second)
 }
 
 pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {
@@ -163,6 +195,37 @@ impl Rig {
 
     pub async fn poll(&self) {
         self.svc.poll_at(Utc::now()).await;
+    }
+}
+
+/// A run set up before agents moved to the work folder: its clone is the person's own, in `~/Code`.
+pub fn legacy_clone(fx: &Fixture) -> PathBuf {
+    let clone = fx.home.join("Code/webshop");
+    clone_with_origin(&clone, "https://github.com/acme/webshop.git");
+    clone.canonicalize().unwrap()
+}
+
+impl Rig {
+    /// Queued with the clone of a run an earlier release set up.
+    pub async fn queued_legacy(&self, n: u32) -> Run {
+        let legacy = legacy_clone(&self.fx);
+        let run = self.queued(n).await;
+        self.set(&run, |r| {
+            r.spec.clone_path = legacy.clone();
+            r.expected_worktree = r.spec.worktree();
+        })
+        .await
+    }
+
+    /// `launched`, then moved to a clone in `~/Code` as if an earlier release had set it up.
+    pub async fn launched_legacy(&self, n: u32) -> Run {
+        let legacy = legacy_clone(&self.fx);
+        let run = self.launched(n).await;
+        self.set(&run, |r| {
+            r.spec.clone_path = legacy.clone();
+            r.expected_worktree = r.spec.worktree();
+        })
+        .await
     }
 }
 

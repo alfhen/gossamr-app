@@ -5,8 +5,6 @@ import type {
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
-  CloneChoice,
-  LocalClone,
   Intent,
   ItemRef,
   Person,
@@ -20,8 +18,9 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  ModelDefaults,
+  ModelOption,
   CleanupResult,
-  Snapshot,
   PullDiff,
   CodeRef,
   ConnectionInfo,
@@ -58,13 +57,13 @@ export interface ReadScope {
 
 export interface Backend {
   readonly kind: "mock" | "jira";
-  load(): Promise<Snapshot>;
-  /** Called with a fresh snapshot whenever local or remote state changes. Returns an unsubscribe function. */
-  subscribe(listener: (snap: Snapshot) => void): () => void;
-  /** People who can see the ticket and match the query, for @mention suggestions. */
-  mentionable(ticketKey: string, query: string): Promise<Person[]>;
-  setUnread(eventId: string, unread: boolean): Promise<void>;
-  /** Items in the local cache that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
+  /** Called whenever local or remote state changes, with nothing to read from it: views re-read through the cache calls. Returns an unsubscribe function. */
+  subscribe(listener: () => void): () => void;
+  /** People who can see the item and match the query, for @mention suggestions. An empty `externalId` asks about the connection alone, as a new ticket does. */
+  mentionable(item: ItemRef, query: string): Promise<Person[]>;
+  /** Marks one event of connection `connectionId` read or unread. Event ids are per site. */
+  setUnread(connectionId: string, eventId: string, unread: boolean): Promise<void>;
+  /** Items in the local cache of every Jira connection that is on that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
   cacheSearch(filter: WorkFilter, opts?: ReadScope): Promise<WorkItem[]>;
   /** A watched item from the cache. Any other is read live and flagged `unwatched`, without being stored; null when it can't be read. */
   cacheItem(ref: ItemRef): Promise<WorkItem | null>;
@@ -164,11 +163,6 @@ export interface Backend {
   runsAcceptMode(id: string, mode: "auto" | "bypass"): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can sign in. Rejects unless the run failed because Claude isn't signed in. */
   runsSignIn(id: string): Promise<void>;
-  /** Local clones of a watched repository, the one the person chose first. */
-  runsClones(repo: string): Promise<CloneChoice>;
-  runsPickClone(repo: string, path: string): Promise<void>;
-  /** Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>` (or fetches into the copy already there). Only after the person chose it, having seen `CloneChoice.fresh`. */
-  runsCloneFresh(repo: string): Promise<LocalClone>;
   runsEvents(id: string): Promise<RunEvent[]>;
   /** The part of the result meant for Jira, the tickets it names, and the pull request or branch the run produced. */
   runsOutcome(id: string): Promise<RunOutcome>;
@@ -178,6 +172,14 @@ export interface Backend {
   runsKeepRunning(): Promise<number>;
   revealPath(path: string): Promise<void>;
   runsSettings(): Promise<AgentSettings>;
+  /** The models provider instance `instanceId` offers: the driver's own, then the ones added to it. */
+  providerModels(instanceId: string): Promise<ModelOption[]>;
+  /** Adds a model id to the instance's list and returns the list. An id that breaks the id rule is refused. */
+  providerAddModel(instanceId: string, model: string): Promise<ModelOption[]>;
+  /** What Pip and new agents use when nothing narrower says. */
+  modelDefaults(): Promise<ModelDefaults>;
+  /** Saves the defaults, each checked as a run's choice would be, and returns what was saved. A `null` clears one. */
+  modelSetDefaults(defaults: ModelDefaults): Promise<ModelDefaults>;
   /** Sets the Dock badge from the same Needs you list the page shows. */
   setNeedsBadge(count: number): Promise<void>;
   /** Whether macOS Reduce transparency is on, which WebKit doesn't report to the page. */
@@ -256,7 +258,11 @@ export interface Backend {
   jiraStatus(): Promise<AuthStatus>;
   /** The cloud id a Jira site reports about itself, or null when the person has to give it. Rejects when the site can't be reached. */
   jiraCloudId(site: string): Promise<string | null>;
-  /** Checks the token against Jira and, only if it works, keeps it in place of the earlier one. */
+  /**
+   * Checks the token against Jira and, only if it works, keeps it. Without `instanceId` the account is added beside
+   * the others; with one it replaces that instance's account, and a different account than it had is signed out
+   * completely. An account another instance has is refused.
+   */
   jiraConnect(input: TokenSignIn, instanceId?: string): Promise<AuthStatus>;
   openUrl(url: string): Promise<void>;
 }

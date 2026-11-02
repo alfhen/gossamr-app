@@ -22,7 +22,7 @@ export interface MockOptions {
   pipPace?: number;
   /** "none" is a GitHub token that can't write to pull requests anywhere, so no review draft can be posted. */
   reviewAccess?: "none";
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
 }
 
 interface Stored {
@@ -292,7 +292,7 @@ export function mockOptionsFromUrl(): MockOptions {
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.
     epoch: Date.now(),
-    seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" || seed === "stuck" || seed === "reports" ? seed : "kinds",
+    seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" || seed === "stuck" || seed === "reports" || seed === "clones" ? seed : "kinds",
     cap: count("runsCap"),
     planDescription: true,
     untrusted: params.get("runsUntrusted") === "1",

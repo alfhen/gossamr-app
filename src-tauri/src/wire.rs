@@ -12,7 +12,7 @@ pub enum Event {
     Changed,
     /// One event of Pip's streamed turn, or its request to narrow the view.
     Pip,
-    /// The inbox snapshot, sent whenever it changes.
+    /// A tick, sent whenever the inbox changes, with no payload.
     Snapshot,
     /// A notification was clicked: focus the run it was about.
     OpenRun,
@@ -78,8 +78,8 @@ pub fn pip<S: Serialize + Clone>(app: &AppHandle, payload: S) {
     send(app, Event::Pip, payload);
 }
 
-pub fn snapshot(app: &AppHandle, snapshot: crate::model::Snapshot) {
-    send(app, Event::Snapshot, snapshot);
+pub fn snapshot(app: &AppHandle) {
+    send(app, Event::Snapshot, ());
 }
 
 pub fn open_run(app: &AppHandle, run_id: &str) {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use super::*;
 use crate::domain::{RefusedMode, RunFailure, RunSpec};
 use crate::runs::index::Entry;
-use crate::runs::rig::{ready, Rig};
+use crate::runs::rig::{ready, working_on_the_second_account, Rig};
 use crate::runs::testing::FakeCli;
 
 fn tmp(tag: &str) -> PathBuf {
@@ -584,33 +584,9 @@ async fn the_folder_comes_from_the_stored_spec_and_a_hostile_one_is_refused() {
 }
 
 #[tokio::test]
-async fn a_folder_can_be_trusted_before_any_run_when_it_is_where_clones_live() {
-    let rig = ready().await;
-    rig.svc.trust_folder(&rig.clone).await.unwrap();
-    let opened = rig.opened.0.lock().unwrap().clone();
-    assert_eq!(opened.len(), 1);
-    assert_eq!(std::fs::read_to_string(&opened[0]).unwrap(), format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude'\n", rig.clone.display()));
-    assert!(opened[0].file_name().unwrap().to_string_lossy().starts_with("trust-"));
-}
-
-#[tokio::test]
-async fn trusting_a_folder_by_path_refuses_what_is_not_a_clone_in_a_known_place() {
-    let rig = ready().await;
-    let home = rig.fx.home.canonicalize().unwrap();
-    let outside = tmp("trust-path-outside");
-    std::fs::create_dir_all(outside.join(".git")).unwrap();
-    std::fs::create_dir_all(home.join("not-a-clone")).unwrap();
-    for folder in [outside.canonicalize().unwrap(), home.join("not-a-clone"), home.join("gone"), PathBuf::from("relative")] {
-        assert!(rig.svc.trust_folder(&folder).await.is_err(), "{}", folder.display());
-    }
-    nothing_opened(&rig);
-    let _ = std::fs::remove_dir_all(outside);
-}
-
-#[tokio::test]
 async fn nothing_opens_when_agents_are_off() {
     let (rig, run) = untrusted().await;
-    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off-trust")), vec![], Arc::new(|_| {}));
+    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off-trust")), Arc::new(|_| {}));
     assert!(off.open_claude(&run.id, Purpose::Trust).await.is_err());
 }
 
@@ -627,4 +603,17 @@ async fn attach_opens_the_terminal_the_person_chose() {
     rig.svc.set_settings(crate::config::AgentSettings { terminal: TerminalChoice::ITerm, ..Default::default() }).unwrap();
     rig.svc.attach(&run.id).await.unwrap();
     assert_eq!(*rig.opened.1.lock().unwrap(), [TerminalChoice::Terminal, TerminalChoice::ITerm]);
+}
+
+#[tokio::test]
+async fn a_run_of_a_connection_that_was_turned_off_can_still_be_seen_and_stopped() {
+    let (rig, run, second) = working_on_the_second_account().await;
+    rig.fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+    let listed = rig.fx.core.runs_list(&RunQuery::default()).await.unwrap();
+    assert_eq!(listed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [run.id.as_str()]);
+
+    let stopped = rig.svc.stop(&run.id).await.unwrap();
+    assert_eq!((stopped.state, stopped.connection_id), (RunState::Stopped, second.connection_id));
+    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1);
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
 }

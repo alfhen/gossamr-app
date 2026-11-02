@@ -14,16 +14,15 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
-  CloneChoice,
-  LocalClone,
   Run,
   RunEvent,
   RunQuery,
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  ModelDefaults,
+  ModelOption,
   CleanupResult,
-  Snapshot,
   CodeRef,
   ConnectionInfo,
   DevLink,
@@ -57,26 +56,22 @@ import { EVENTS, onChanged } from "./events";
 import type { Backend, ReadScope } from "./types";
 
 /**
- * Talks to the Rust core, which syncs Jira into a local SQLite cache and emits a `snapshot` event on every change.
+ * Talks to the Rust core, which syncs Jira into a local SQLite cache and ticks a `snapshot` event on every change.
  */
 export class JiraBackend implements Backend {
   readonly kind = "jira" as const;
 
-  load() {
-    return invoke<Snapshot>("snapshot");
-  }
-
-  subscribe(listener: (s: Snapshot) => void) {
-    const pending = listen<Snapshot>(EVENTS.snapshot, (e) => listener(e.payload));
+  subscribe(listener: () => void) {
+    const pending = listen<null>(EVENTS.snapshot, () => listener());
     return () => void pending.then((unlisten) => unlisten());
   }
 
-  mentionable(key: string, query: string) {
-    return invoke<Person[]>("mentionable", { key, query });
+  mentionable(item: ItemRef, query: string) {
+    return invoke<Person[]>("mentionable", { item, query });
   }
 
-  setUnread(id: string, unread: boolean) {
-    return invoke<void>("set_unread", { id, unread });
+  setUnread(connectionId: string, id: string, unread: boolean) {
+    return invoke<void>("set_unread", { connectionId, id, unread });
   }
 
   cacheSearch(filter: WorkFilter, opts: ReadScope = {}) {
@@ -251,18 +246,6 @@ export class JiraBackend implements Backend {
     return invoke<void>("runs_open_terminal", { id, purpose: { type: "signIn" } });
   }
 
-  runsClones(repo: string) {
-    return invoke<CloneChoice>("runs_clones", { repo });
-  }
-
-  runsCloneFresh(repo: string) {
-    return invoke<LocalClone>("runs_clone_fresh", { repo });
-  }
-
-  runsPickClone(repo: string, path: string) {
-    return invoke<void>("runs_pick_clone", { repo, path });
-  }
-
   runsOutcome(id: string) {
     return invoke<RunOutcome>("runs_outcome", { id });
   }
@@ -289,6 +272,22 @@ export class JiraBackend implements Backend {
 
   runsSettings() {
     return invoke<AgentSettings>("agent_settings", { settings: null });
+  }
+
+  providerModels(instanceId: string) {
+    return invoke<ModelOption[]>("provider_models", { instanceId });
+  }
+
+  providerAddModel(instanceId: string, model: string) {
+    return invoke<ModelOption[]>("provider_add_model", { instanceId, model });
+  }
+
+  modelDefaults() {
+    return invoke<ModelDefaults>("model_defaults", { set: null });
+  }
+
+  modelSetDefaults(defaults: ModelDefaults) {
+    return invoke<ModelDefaults>("model_defaults", { set: defaults });
   }
 
   reduceTransparency() {

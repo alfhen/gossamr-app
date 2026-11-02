@@ -1,8 +1,11 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { onSignedOut } from "../accountEvents";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { useToasts } from "./toasts";
+
+vi.mock("@tauri-apps/api/core", async (orig) => ({ ...(await orig<object>()), isTauri: vi.fn(() => true) }));
 
 const original = useWorkspace.getState();
 const github = { instanceId: "github", kind: "github" as const, displayName: "GitHub" };
@@ -38,6 +41,27 @@ describe("removing a connection", () => {
     off();
     expect(heard).toHaveBeenCalledOnce();
     expect(useToasts.getState().toasts).toEqual([]);
+  });
+
+  it("keeps the mock workspace in a browser when Jira was removed, and re-reads the connections", async () => {
+    vi.mocked(isTauri).mockReturnValue(false);
+    const refreshConnections = vi.fn().mockResolvedValue(undefined);
+    useWorkspace.setState({
+      backend: { connectionRemove: vi.fn().mockResolvedValue(undefined) } as never,
+      refreshConnections,
+      refreshWatch: vi.fn().mockResolvedValue(undefined),
+      refresh: vi.fn().mockResolvedValue(undefined),
+    });
+    const heard = vi.fn();
+    const off = onSignedOut(heard);
+    try {
+      await expect(removeConnection(jira)).resolves.toBe(true);
+    } finally {
+      off();
+      vi.mocked(isTauri).mockReturnValue(true);
+    }
+    expect(heard).not.toHaveBeenCalled();
+    expect(refreshConnections).toHaveBeenCalled();
   });
 
   it("reports false with the reason, and changes nothing, when the backend refuses", async () => {

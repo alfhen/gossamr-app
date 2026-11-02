@@ -103,7 +103,7 @@ pub trait Authenticator: Send + Sync {
     async fn whoami(&self, token: &AccessToken) -> Result<Account>;
 }
 
-#[derive(Serialize)]
+#[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthStatus {
     pub site: Option<Site>,
@@ -119,6 +119,22 @@ pub struct AuthStatus {
 pub struct Scope {
     pub connection_id: String,
     pub account_id: String,
+}
+
+/// A signed-in Jira account as Core reads it, without its token.
+#[derive(Clone)]
+pub struct SignedIn {
+    pub scope: Scope,
+    pub connection: Connection,
+    pub site: Site,
+    pub me: Account,
+    pub email: String,
+}
+
+impl SignedIn {
+    pub fn identity(self) -> (Scope, Site, Account) {
+        (self.scope, self.site, self.me)
+    }
 }
 
 /// What the Jira client needs for one request.
@@ -249,10 +265,13 @@ impl Auth {
         Self::with_authenticator(Arc::new(Atlassian::new(http)), credentials)
     }
 
-    /// The primary session's site and account.
-    pub async fn status(&self) -> Result<AuthStatus> {
+    /// The site and account of the session for `connection_id`, or of the first one when none is named.
+    pub async fn status(&self, connection_id: Option<&str>) -> Result<AuthStatus> {
         let sessions = self.sessions.lock().await;
-        let primary = sessions.first();
+        let primary = match connection_id {
+            Some(id) => sessions.iter().find(|s| s.connection_id() == id),
+            None => sessions.first(),
+        };
         Ok(AuthStatus {
             site: primary.map(|s| s.site.clone()),
             me: primary.map(|s| s.me.clone()),
@@ -265,32 +284,27 @@ impl Auth {
         self.authenticator.find_cloud_id(site).await
     }
 
-    /// Checks `input` against Jira and, only if it works, keeps it in place of every earlier sign-in.
-    pub async fn connect(&self, input: &TokenSignIn) -> Result<Connection> {
-        let credentials = self.authenticator.connect(input).await?;
-        let connection = credentials.connection();
-        let mut replaced: Vec<String> = self.sessions.lock().await.iter().map(|s| token_key(&s.connection_id())).collect();
-        match secrets::keys_with_prefix(TOKEN_PREFIX) {
-            Ok(keys) => replaced.extend(keys),
-            Err(e) => eprintln!("couldn't list the saved Jira tokens to replace: {e}"),
-        }
-        replaced.retain(|key| *key != token_key(&connection.id));
-        replaced.sort();
-        replaced.dedup();
-        let mut ops = vec![saved_op(1, &credentials)?];
-        ops.extend(replaced.iter().map(|key| secrets::Op::delete(key)));
-        ops.push(secrets::Op::delete(TOKEN_KEY));
-        secrets::apply(&ops)?;
-        *self.sessions.lock().await = vec![credentials];
-        Ok(connection)
+    /// Checks `input` against Jira. Nothing is kept: `add` and `replace` keep what this returns.
+    pub async fn verify(&self, input: &TokenSignIn) -> Result<Credentials> {
+        self.authenticator.connect(input).await
     }
 
-    /// Checks `input` against Jira and, only if it works, keeps it beside the earlier sign-ins. An account that is
-    /// already signed in gets the new token in its place.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub async fn add(&self, input: &TokenSignIn) -> Result<Connection> {
-        let credentials = self.authenticator.connect(input).await?;
+    /// Keeps verified `credentials` beside the earlier sign-ins. An account that is already signed in gets the new
+    /// token in its place.
+    pub async fn add(&self, credentials: Credentials) -> Result<Connection> {
+        self.keep(credentials, None).await
+    }
+
+    /// Keeps verified `credentials` in the place of the account `replaced`, in one vault write that also deletes the
+    /// old token. A different account therefore takes over the old one's position, and a failed write leaves both
+    /// the vault and the sessions as they were.
+    pub async fn replace(&self, replaced: &str, credentials: Credentials) -> Result<Connection> {
+        self.keep(credentials, Some(replaced)).await
+    }
+
+    async fn keep(&self, credentials: Credentials, replacing: Option<&str>) -> Result<Connection> {
         let connection = credentials.connection();
+        let replaced = replacing.filter(|id| *id != connection.id);
         let key = token_key(&connection.id);
         let keys = secrets::keys_with_prefix(TOKEN_PREFIX)?;
         let next = keys.iter().filter_map(|k| added_of(k).ok().flatten()).max().unwrap_or(0) + 1;
@@ -305,10 +319,11 @@ impl Auth {
         let mut ops = Vec::new();
         let mut added = match added_of(&key) {
             Ok(Some(added)) => added,
-            _ => next,
+            _ => replaced.and_then(|id| added_of(&token_key(id)).ok().flatten()).unwrap_or(next),
         };
         if let Some(old) = unmoved {
-            if old.connection_id() != connection.id && !keys.contains(&token_key(&old.connection_id())) {
+            let old_id = old.connection_id();
+            if old_id != connection.id && replaced != Some(old_id.as_str()) && !keys.contains(&token_key(&old_id)) {
                 ops.push(saved_op(next, &old)?);
                 if added == next {
                     added = next + 1;
@@ -317,11 +332,21 @@ impl Auth {
             ops.push(secrets::Op::delete(TOKEN_KEY));
         }
         ops.push(saved_op(added, &credentials)?);
+        if let Some(id) = replaced {
+            ops.push(secrets::Op::delete(&token_key(id)));
+        }
         secrets::apply(&ops)?;
         let mut sessions = self.sessions.lock().await;
-        match sessions.iter_mut().find(|s| s.connection_id() == connection.id) {
-            Some(existing) => *existing = credentials,
-            None => sessions.push(credentials),
+        let old_at = replaced.and_then(|id| sessions.iter().position(|s| s.connection_id() == id));
+        match sessions.iter().position(|s| s.connection_id() == connection.id) {
+            Some(at) => {
+                sessions[at] = credentials;
+                sessions.retain(|s| replaced != Some(s.connection_id().as_str()));
+            }
+            None => match old_at {
+                Some(at) => sessions[at] = credentials,
+                None => sessions.push(credentials),
+            },
         }
         Ok(connection)
     }
@@ -339,17 +364,28 @@ impl Auth {
         Ok(())
     }
 
-    /// The primary session's site and account, if any.
+    /// Every signed-in account, in the order they were added.
+    pub async fn accounts(&self) -> Vec<SignedIn> {
+        let sessions = self.sessions.lock().await;
+        sessions
+            .iter()
+            .map(|s| SignedIn { scope: s.scope(), connection: s.connection(), site: s.site.clone(), me: s.me.clone(), email: s.email.clone() })
+            .collect()
+    }
+
+    /// The first session's site and account, if any. `Core::primary` is the connection work runs as.
+    #[cfg(test)]
     pub async fn identity(&self) -> Option<(Scope, Site, Account)> {
         self.sessions.lock().await.first().map(|s| (s.scope(), s.site.clone(), s.me.clone()))
     }
 
-    /// The primary connection, if any.
+    /// The first session's connection, if any. `Core::primary` is the connection work runs as.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn connection(&self) -> Option<Connection> {
         self.sessions.lock().await.first().map(Credentials::connection)
     }
 
-    /// Every signed-in connection, the primary first.
+    /// Every signed-in connection, in the order they were added.
     pub async fn connections(&self) -> Vec<Connection> {
         self.sessions.lock().await.iter().map(Credentials::connection).collect()
     }
@@ -506,13 +542,21 @@ mod tests {
         assert_eq!(fake.writes(), 0);
     }
 
+    async fn add_as(auth: &Auth, input: &TokenSignIn) -> Result<Connection> {
+        auth.add(auth.verify(input).await?).await
+    }
+
+    async fn replace_with(auth: &Auth, replaced: &str, input: &TokenSignIn) -> Result<Connection> {
+        auth.replace(replaced, auth.verify(input).await?).await
+    }
+
     #[tokio::test]
-    async fn connecting_keeps_the_token_in_the_keychain_and_replaces_the_earlier_session() {
+    async fn replacing_an_account_with_itself_keeps_the_new_token_in_the_keychain() {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
         let auth = Auth::with_authenticator(Arc::new(Slow { answer_after: Duration::ZERO }), Credentials { token: "old".into(), ..credentials() });
         let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "secret-token".into(), expires_on: "2027-10-30".into() };
-        assert_eq!(auth.connect(&input).await.unwrap().id, "jira:c1:u1");
+        assert_eq!(replace_with(&auth, "jira:c1:u1", &input).await.unwrap().id, "jira:c1:u1");
         assert_eq!(secrets::load::<Credentials>(&token_key("jira:c1:u1")).unwrap().unwrap().token, "secret-token");
         assert_eq!(auth.credentials_for(&credentials().site_scope()).await.unwrap().token, "secret-token");
     }
@@ -539,8 +583,8 @@ mod tests {
         secrets::save(&token_key("jira:c1:u1"), &credentials()).unwrap();
         let auth = Auth::with_authenticator(Arc::new(Refusing), credentials());
         let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "x".into(), token: "bad".into(), expires_on: "2027-10-30".into() };
-        assert!(auth.connect(&input).await.is_err());
-        assert!(auth.add(&input).await.is_err());
+        assert!(replace_with(&auth, "jira:c1:u1", &input).await.is_err());
+        assert!(add_as(&auth, &input).await.is_err());
         assert_eq!(auth.credentials_for(&credentials().site_scope()).await.unwrap().token, "secret-token");
         assert_eq!(secrets::load::<Credentials>(&token_key("jira:c1:u1")).unwrap().unwrap().token, "secret-token");
     }
@@ -621,11 +665,11 @@ mod tests {
         let [ann, bob, globex] = two_on_acme_one_on_globex();
         let auth = Auth::with_sessions(Arc::new(Roster(vec![ann.clone(), bob.clone(), globex.clone()])), vec![]);
         for c in [&ann, &bob, &globex] {
-            assert_eq!(auth.add(&sign_in_as(c)).await.unwrap().id, c.connection_id());
+            assert_eq!(add_as(&auth, &sign_in_as(c)).await.unwrap().id, c.connection_id());
         }
 
         assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:ann", "jira-token:jira:acme:bob", "jira-token:jira:globex:ann2"]);
-        assert_eq!(auth.status().await.unwrap().me.unwrap().account_id, "ann");
+        assert_eq!(auth.status(None).await.unwrap().me.unwrap().account_id, "ann");
         assert_eq!(auth.connection().await.unwrap().id, "jira:acme:ann");
         assert_eq!(auth.identity().await.unwrap().0.account_id, "ann");
     }
@@ -637,7 +681,7 @@ mod tests {
         let [ann, bob, _] = two_on_acme_one_on_globex();
         let renewed = Credentials { token: "t-ann-new".into(), ..ann.clone() };
         let auth = Auth::with_sessions(Arc::new(Roster(vec![renewed.clone()])), vec![ann, bob]);
-        auth.add(&sign_in_as(&renewed)).await.unwrap();
+        add_as(&auth, &sign_in_as(&renewed)).await.unwrap();
 
         assert_eq!(auth.sessions.lock().await.len(), 2);
         assert_eq!(auth.credentials_for(&renewed.site_scope()).await.unwrap().token, "t-ann-new");
@@ -677,20 +721,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_replaces_every_earlier_session_and_removes_their_tokens_in_one_write() {
+    async fn replacing_an_account_with_another_takes_its_place_and_deletes_its_token() {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
         let [ann, bob, globex] = two_on_acme_one_on_globex();
+        let auth = Auth::with_sessions(Arc::new(Roster(vec![ann.clone(), bob.clone(), globex.clone()])), vec![]);
         for c in [&ann, &bob] {
-            secrets::save(&token_key(&c.connection_id()), c).unwrap();
+            add_as(&auth, &sign_in_as(c)).await.unwrap();
         }
-        let auth = Auth::with_sessions(Arc::new(Roster(vec![globex.clone()])), vec![ann.clone(), bob.clone()]);
-        fake.reset_counts();
-        assert_eq!(auth.connect(&sign_in_as(&globex)).await.unwrap().id, "jira:globex:ann2");
+        assert_eq!(replace_with(&auth, &ann.connection_id(), &sign_in_as(&globex)).await.unwrap().id, "jira:globex:ann2");
 
-        assert_eq!(fake.writes(), 1);
-        assert_eq!(auth.sessions.lock().await.len(), 1);
-        assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:globex:ann2"]);
+        let order: Vec<String> = auth.sessions.lock().await.iter().map(Credentials::connection_id).collect();
+        assert_eq!(order, ["jira:globex:ann2", "jira:acme:bob"], "the new account is the primary the old one was");
+        assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:bob", "jira-token:jira:globex:ann2"]);
+        let relaunched = secrets::fake::install(&fake);
+        let (restored, failed) = restore_sessions();
+        drop(relaunched);
+        assert_eq!((restored.iter().map(Credentials::connection_id).collect::<Vec<_>>(), failed), (["jira:globex:ann2", "jira:acme:bob"].map(String::from).to_vec(), false));
+    }
+
+    #[tokio::test]
+    async fn replacing_an_account_that_is_not_signed_in_adds_the_new_one() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let [ann, bob, _] = two_on_acme_one_on_globex();
+        let auth = Auth::with_sessions(Arc::new(Roster(vec![ann.clone(), bob.clone()])), vec![]);
+        add_as(&auth, &sign_in_as(&ann)).await.unwrap();
+        replace_with(&auth, "jira:acme:gone", &sign_in_as(&bob)).await.unwrap();
+
+        assert_eq!(auth.connections().await.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["jira:acme:ann", "jira:acme:bob"]);
+    }
+
+    #[tokio::test]
+    async fn replacing_with_an_account_that_is_signed_in_already_leaves_one_session_for_it() {
+        let fake = secrets::fake::Fake::default();
+        let _vault = secrets::fake::install(&fake);
+        let [ann, bob, _] = two_on_acme_one_on_globex();
+        let auth = Auth::with_sessions(Arc::new(Roster(vec![ann.clone(), bob.clone()])), vec![]);
+        for c in [&ann, &bob] {
+            add_as(&auth, &sign_in_as(c)).await.unwrap();
+        }
+        replace_with(&auth, &ann.connection_id(), &sign_in_as(&bob)).await.unwrap();
+
+        assert_eq!(auth.connections().await.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["jira:acme:bob"]);
+        assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:bob"]);
     }
 
     #[test]
@@ -836,12 +910,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connecting_another_account_after_a_failed_move_leaves_one_session_on_the_next_launch() {
+    async fn replacing_the_account_after_a_failed_move_leaves_one_session_on_the_next_launch() {
         let fake = secrets::fake::Fake::default();
         let _vault = launch_with_old_token_only(&fake);
         let (_launch, auth) = relaunch_after_a_failed_move(&fake);
         let globex = account("globex", "ann2", "t-ann2");
-        auth.connect(&sign_in_as(&globex)).await.unwrap();
+        replace_with(&auth, "jira:c1:u1", &sign_in_as(&globex)).await.unwrap();
 
         assert!(!vault_holds(TOKEN_KEY));
         let _next_launch = secrets::fake::install(&fake);
@@ -864,7 +938,7 @@ mod tests {
         let fake = secrets::fake::Fake::default();
         let _vault = launch_with_old_token_only(&fake);
         let (_launch, auth) = relaunch_after_a_failed_move(&fake);
-        auth.add(&sign_in_as(&account("globex", "ann2", "t-ann2"))).await.unwrap();
+        add_as(&auth, &sign_in_as(&account("globex", "ann2", "t-ann2"))).await.unwrap();
 
         assert!(!vault_holds(TOKEN_KEY));
         let _next_launch = secrets::fake::install(&fake);
@@ -879,7 +953,7 @@ mod tests {
         let globex = account("globex", "ann2", "t-ann2");
         secrets::save(&token_key(&globex.connection_id()), &"not credentials").unwrap();
         let auth = Auth::with_sessions(Arc::new(Roster(vec![globex.clone()])), vec![]);
-        auth.add(&sign_in_as(&globex)).await.unwrap();
+        add_as(&auth, &sign_in_as(&globex)).await.unwrap();
 
         assert_eq!(restore_sessions().0.len(), 1);
     }
@@ -898,27 +972,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_removes_tokens_the_vault_holds_that_this_run_never_loaded() {
-        let fake = secrets::fake::Fake::default();
-        let _vault = secrets::fake::install(&fake);
-        let [ann, bob, globex] = two_on_acme_one_on_globex();
-        secrets::save(&token_key(&ann.connection_id()), &ann).unwrap();
-        let auth = Auth::with_sessions(Arc::new(Roster(vec![bob.clone(), globex])), vec![]);
-        auth.connect(&sign_in_as(&bob)).await.unwrap();
-
-        assert_eq!(secrets::keys_with_prefix(TOKEN_PREFIX).unwrap(), ["jira-token:jira:acme:bob"]);
-    }
-
-    #[tokio::test]
     async fn the_primary_is_the_account_added_first_after_a_relaunch() {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
         let [ann, bob, globex] = two_on_acme_one_on_globex();
         let auth = Auth::with_sessions(Arc::new(Roster(vec![ann.clone(), bob.clone(), globex.clone()])), vec![]);
         for c in [&globex, &bob, &ann] {
-            auth.add(&sign_in_as(c)).await.unwrap();
+            add_as(&auth, &sign_in_as(c)).await.unwrap();
         }
-        auth.add(&sign_in_as(&bob)).await.unwrap();
+        add_as(&auth, &sign_in_as(&bob)).await.unwrap();
         assert_eq!(auth.connection().await.unwrap().id, "jira:globex:ann2");
 
         let _relaunched = secrets::fake::install(&fake);

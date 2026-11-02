@@ -1,4 +1,4 @@
-import { type AgentSettings, type ChangedFile, type WorkDoc, type CleanupResult, type CloneChoice, type ContainerRef, type FreshCopy, type CodeChange, type ItemRef, type LocalClone, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { type AgentSettings, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -68,13 +68,21 @@ function sampleTitle(key: string, name: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : "sample ticket";
 }
 
+const WORK_FOLDER = "/Users/sample/Gossamr/agents";
+/** The clone Gossamr keeps of a repository, which is where every new agent works. */
+const workPathOf = (repo: string) => `${WORK_FOLDER}/${repo.toLowerCase()}`;
+const inWork = (path: string) => path.startsWith(`${WORK_FOLDER}/`);
+/** A clone from before agents moved to the work folder, for the one sample run that still has the person's own. */
+const LEGACY_CLONE = "/Users/sample/Code/storefront";
+const legacySpec = (key: string, name: string): RunSpec => ({ ...specFor(key, name), clonePath: LEGACY_CLONE });
+
 const DEFAULT_BRIEF = "Look into this work and report what you found.";
 
 function specFor(key: string, name: string, repo = "acme/storefront", role = "investigator", over: Partial<RunSpec> = {}): RunSpec {
   return {
     role,
     repo,
-    clonePath: `/Users/sample/Code/${repo.split("/")[1]}`,
+    clonePath: workPathOf(repo),
     base: "main",
     name,
     brief: DEFAULT_BRIEF,
@@ -102,10 +110,10 @@ const SEEDS: Seed[] = [
   { key: "CA-409", name: "ca-409-checkout-totals-c3d4", state: "needsAnswer", minutesAgo: 22, over: { needs: "Should the refund path keep the old rounding?", asking: true, suggestedReply: "Yes, keep the old rounding.", lastDetail: "Waiting for an answer", tokens: 148_000 } },
   { key: "WEB-108", name: "web-108-size-guide-e5f6", state: "working", minutesAgo: 6, over: { lastDetail: "Reading the size guide component", tokens: 578_000 } },
   { key: "SUP-12", name: "sup-12-refund-lookup-0718", state: "working", minutesAgo: 3, over: { lastDetail: "Searching the logs for the refund id", tokens: 96_000, spec: specFor("SUP-12", "sup-12-refund-lookup-0718", "acme/payments") } },
-  { key: "DEVOPS-455", name: "devops-455-queue-lag-92a3", state: "done", minutesAgo: 95, over: { result: "The lag comes from one consumer that retries without backoff.\n\nFor Jira: add a backoff to the consumer and close the alert.", tokens: 340_000, branch: "worktree-devops-455-queue-lag-92a3" } },
+  { key: "DEVOPS-455", name: "devops-455-queue-lag-92a3", state: "done", minutesAgo: 95, over: { spec: legacySpec("DEVOPS-455", "devops-455-queue-lag-92a3"), expectedWorktree: worktreeOf(legacySpec("DEVOPS-455", "devops-455-queue-lag-92a3")), result: "The lag comes from one consumer that retries without backoff.\n\nFor Jira: add a backoff to the consumer and close the alert.", tokens: 340_000, branch: "worktree-devops-455-queue-lag-92a3" } },
   { key: "WEB-97", name: "web-97-image-crop-b4c5", state: "done", minutesAgo: 180, over: { result: "Cropping happens twice, once in the CDN rule and once in the component.", tokens: 121_000, branch: "worktree-web-97-image-crop-b4c5" } },
   { key: "CA-377", name: "ca-377-stock-sync-d6e7", state: "working", minutesAgo: 70, quietMinutes: 40, over: { lastDetail: "Running the integration tests", tokens: 802_000 } },
-  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted("/Users/sample/Code/storefront") },
+  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted(workPathOf("acme/storefront")) },
 ];
 
 /** A sample plan run's answer: the plan a person reads, edits and approves, then the note for the ticket. */
@@ -273,7 +281,9 @@ const REPO_PROJECTS: Record<string, string> = { "acme/storefront": "CA", "acme/p
 const FAILED_TEXT = {
   notSignedIn: "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry.",
   claudeMissing: "Claude Code isn't installed, or Gossamr can't find it.",
-  noClone: "/Users/sample/Code/storefront isn't a git clone any more",
+  noClone: "Cloning failed: fatal: unable to access 'https://github.com/acme/storefront.git/': Could not resolve host: github.com",
+  outsideWorkFolder: `This agent was set up in ~/Code/storefront, before Gossamr kept its own clones. Ask Pip to start it again, and it will use Gossamr's clone.`,
+  cloneOccupied: "~/Gossamr/agents/acme/payments already exists and isn't a clone of acme/payments. Move it away, then retry.",
   modeRefused: "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once in Terminal and accept the prompt, then retry.",
   capReached: "3 agents are already running. Stop one or wait for one to finish, then retry.",
   other: "Claude couldn't start the agent: the session service didn't answer",
@@ -285,7 +295,7 @@ function untrusted(path: string): Partial<Run> {
 
 /** One failed launch of each kind the person can act on, for trying the guided steps. */
 const FAILURE_SEEDS: Seed[] = [
-  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted("/Users/sample/Code/storefront") },
+  { key: "SUP-9", name: "sup-9-export-timeout-f8a9", state: "failed", minutesAgo: 30, over: untrusted(workPathOf("acme/storefront")) },
   { key: "WEB-120", name: "web-120-login-redirect-1a2b", state: "failed", minutesAgo: 41, over: { error: FAILED_TEXT.notSignedIn, failure: { type: "notSignedIn" } } },
   { key: "CA-415", name: "ca-415-vat-rounding-3c4d", state: "failed", minutesAgo: 52, over: { error: FAILED_TEXT.claudeMissing, failure: { type: "claudeMissing" } } },
   { key: "DEVOPS-480", name: "devops-480-cert-expiry-5e6f", state: "failed", minutesAgo: 63, over: { error: FAILED_TEXT.noClone, failure: { type: "noClone" } } },
@@ -405,12 +415,18 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
     endedAt: ended ? new Date(last).toISOString() : null,
     ...seed.over,
   };
-  return run;
+  return { ...run, inWorkFolder: inWork(run.spec.clonePath) };
 }
+
+/** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
+const CLONE_SEEDS: Seed[] = [
+  { key: "CA-417", name: "ca-417-tax-table-4d5e", state: "failed", minutesAgo: 96, over: { error: FAILED_TEXT.outsideWorkFolder, failure: { type: "outsideWorkFolder", path: LEGACY_CLONE }, spec: legacySpec("CA-417", "ca-417-tax-table-4d5e") } },
+  { key: "SUP-14", name: "sup-14-ledger-fix-6f7a", state: "failed", minutesAgo: 107, over: { error: FAILED_TEXT.cloneOccupied, failure: { type: "cloneOccupied", path: workPathOf("acme/payments") } } },
+];
 
 export interface MockRunsOptions {
   /** `busy` is the eight scripted runs and `kinds` adds one of each other role; `many` is twenty-four; `failures` is one failed launch of each kind; `stuck` adds two stopped runs that may have carried on elsewhere. */
-  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports";
+  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones";
   /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
   epoch?: number;
   /** How many runs may be live at once; another waits for a slot. */
@@ -426,22 +442,8 @@ export interface MockRunsOptions {
 /** How long the sample code host takes to show the draft pull request a pushing build opened, as a sync would find it. */
 export const PR_SURFACE_MS = 1_500;
 
-/** Where the sample clones are, by repository; `acme/ops` has none, to show the blocked state. */
-const CLONES: Record<string, LocalClone[]> = {
-  "acme/storefront": [{ path: "/Users/sample/Code/storefront", branch: "main", dirty: false, defaultBranch: "main" }],
-  "acme/payments": [
-    { path: "/Users/sample/Code/payments", branch: "feature/ledger", dirty: true, defaultBranch: "main" },
-    { path: "/Users/sample/Developer/payments", branch: "main", dirty: false, defaultBranch: "main" },
-  ],
-  "acme/ops": [],
-  "acme/webshop": [{ path: "/Users/sample/Code/webshop", branch: "main", dirty: false, defaultBranch: "main" }],
-  "acme/gateway": [{ path: "/Users/sample/Code/gateway", branch: "main", dirty: false, defaultBranch: "main" }],
-};
-
-const freshCopy = (repo: string): FreshCopy => {
-  const path = `/Users/sample/Gossamr/agents/${repo}`;
-  return { path, command: `git clone https://github.com/${repo}.git ${path}`, ghFallback: true, occupied: false };
-};
+/** The repositories the sample watches; Gossamr clones each into the work folder the first time an agent needs it. */
+const WATCHED = ["acme/storefront", "acme/payments", "acme/ops", "acme/webshop", "acme/gateway"];
 
 const REFUSAL_DELAY_MS = 600;
 
@@ -492,7 +494,6 @@ export class MockRuns {
 
   private readonly epoch: number;
   private readonly untrustedClones: boolean;
-  private picked = new Map<string, string>();
   private followUps = new Map<string, { text: string; detail: string }[]>();
   /** What Pip queued for each working run, until its next question. */
   private queued = new Map<string, string>();
@@ -500,8 +501,6 @@ export class MockRuns {
   private startKeys = new Map<string, string>();
   /** When the person answered each run, oldest first: each is a "You answered" entry in its timeline. */
   private answeredAt = new Map<string, string[]>();
-  /** Copies made in `~/Gossamr/agents` through `cloneFresh`. */
-  private fresh = new Map<string, LocalClone>();
   /** Pull requests and branches by run id, standing in for what a sync would have cached. */
   private changes = new Map<string, CodeChange>();
   /** Draft pull requests pushing builds opened that the code host doesn't show yet, by run id. */
@@ -548,7 +547,7 @@ export class MockRuns {
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.untrustedClones = !!o.untrusted;
     this.prSurfaceMs = o.prSurfaceMs === undefined ? PR_SURFACE_MS : o.prSurfaceMs;
-    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : SEEDS;
+    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
     seeds.forEach((seed, i) => seed.report && this.reports.set(this.runs[i].id, seed.report));
     this.proposals.onApplied = (p) => p.origin.type === "run" && p.intent.type === "create" && this.changed();
@@ -662,6 +661,7 @@ export class MockRuns {
       spec,
       digest: mockDigest(spec),
       expectedWorktree,
+      inWorkFolder: inWork(spec.clonePath),
       state: "queued",
       shortId: null,
       sessionId: null,
@@ -1104,8 +1104,8 @@ export class MockRuns {
         return !this.signedIn;
       case "modeRefused":
         return !this.accepted.has(run.failure.mode);
-      case "noClone":
-        return !this.known(run.spec.repo).some((c) => c.path === run.spec.clonePath);
+      case "outsideWorkFolder":
+        return true;
       default:
         return false;
     }
@@ -1128,7 +1128,8 @@ export class MockRuns {
   prepare(spec: RunSpec, item: ItemRef | null): RunSpec {
     const unlinkable = this.linkProblem(spec, item);
     if (unlinkable) throw new Error(unlinkable);
-    if (!this.known(spec.repo).some((c) => c.path === spec.clonePath)) throw new Error(`${spec.clonePath} isn't a git clone`);
+    if (!inWork(spec.clonePath)) throw new Error(`${spec.clonePath} isn't inside ~/Gossamr/agents, where agents work`);
+    if (spec.clonePath !== workPathOf(spec.repo)) throw new Error(`${spec.clonePath} isn't a folder that exists`);
     const made: RunSpec = { ...spec, report: true, ticket: item?.key ?? null, ticketBlock: item ? this.ticketText(item) : null };
     if (made.pr != null) return this.pinned(made);
     return made;
@@ -1146,32 +1147,6 @@ export class MockRuns {
   private linkProblem(spec: Pick<RunSpec, "workstream">, item: ItemRef | null): string | null {
     if (spec.workstream === undefined || spec.workstream === null) return null;
     return this.workstreams ? this.workstreams.linkProblem(spec.workstream, item) : `there is no workstream ${spec.workstream}`;
-  }
-
-  private known(repo: string): LocalClone[] {
-    const copy = this.fresh.get(repo);
-    return [...(CLONES[repo] ?? []), ...(copy ? [copy] : [])];
-  }
-
-  clones(repo: string): CloneChoice {
-    const found = this.known(repo);
-    const picked = this.picked.get(repo) ?? null;
-    const clones = [...found].sort((a, b) => Number(b.path === picked) - Number(a.path === picked));
-    return { clones, picked, fresh: found.length ? null : freshCopy(repo) };
-  }
-
-  /** Stands in for the clone into `~/Gossamr/agents`: the copy is a clone from here on. */
-  cloneFresh(repo: string): LocalClone {
-    const offer = this.clones(repo).fresh;
-    if (!offer) return this.known(repo)[0];
-    const copy: LocalClone = { path: offer.path, branch: "main", dirty: false, defaultBranch: "main" };
-    this.fresh.set(repo, copy);
-    return copy;
-  }
-
-  pickClone(repo: string, path: string) {
-    if (!this.known(repo).some((c) => c.path === path)) throw new Error(`${path} isn't a clone of ${repo} that Gossamr found`);
-    this.picked.set(repo, path);
   }
 
   suggestName(key: string, title: string): string {
@@ -1202,23 +1177,22 @@ export class MockRuns {
 
   /** The spec of an agent Pip starts: its role, brief and pull request are Pip's; the clone, name and ticket text are found here. */
   private pipSpec(item: ItemRef | null, role: string, brief: string, repo: string | null, pr: number | null, workstream: string | null): RunSpec {
-    const watched = Object.keys(CLONES);
+    const watched = WATCHED;
     let chosen: string | undefined;
     if (repo) {
       chosen = watched.find((r) => r.toLowerCase() === repo.trim().toLowerCase());
       if (!chosen) throw new Error(`${repo.trim()} isn't a repository the user watches. The watched ones are: ${watched.join(", ")}.`);
     } else if (item) {
-      chosen = [...this.runs.map((r) => r.spec.repo), "acme/storefront"].find((r) => (CLONES[r] ?? []).length > 0);
+      chosen = [...this.runs.map((r) => r.spec.repo), "acme/storefront"].find((r) => WATCHED.includes(r));
     } else {
       throw new Error("repo is required with no ticket");
     }
-    const clone = (CLONES[chosen ?? ""] ?? [])[0];
-    if (!chosen || !clone) throw new Error(`There is no local clone of ${chosen ?? "the repository"}`);
+    if (!chosen) throw new Error("repo is required with no ticket");
     const spec: RunSpec = {
       role,
       repo: chosen,
-      clonePath: clone.path,
-      base: clone.defaultBranch ?? clone.branch,
+      clonePath: workPathOf(chosen),
+      base: "main",
       name: this.suggestName(item?.key ?? "agent", item ? "" : brief),
       brief,
       ticket: item?.key ?? null,
