@@ -81,6 +81,13 @@ describe("opening a pull request whose ticket key two sites have", () => {
     expect(useTabs.getState().selected).toBe("mock2:CA-402");
   });
 
+  it("opens the ticket without asking when only one site has it cached", async () => {
+    useWorkspace.setState((s) => ({ items: Object.fromEntries(Object.entries(s.items).filter(([k]) => k !== "mock2:CA-402")) }));
+    await openPull(pull);
+    expect(useKeyChooser.getState().asking).toBeNull();
+    expect(useTabs.getState().selected).toBe("mock:CA-402");
+  });
+
   it("goes nowhere when the chooser is cancelled", async () => {
     const opened = openPull(pull);
     await settle();

@@ -4,7 +4,7 @@ import { useWorkspace } from "../workspaceStore";
 import { useDev } from "./devStore";
 import { openOnGithub } from "./githubUi";
 import { openOneOf, showMe } from "./jump";
-import { refsForKey } from "./keyLookup";
+import { cachedWithKey, refsForKey } from "./keyLookup";
 
 const pageOf = (ref: PullRef) => `https://github.com/${ref.repo}/pull/${ref.number}`;
 
@@ -24,7 +24,12 @@ export async function openPull(ref: PullRef): Promise<void> {
       const linked = Object.values(useWorkspace.getState().items).filter((i) => keys.has(i.item.key.toUpperCase()));
       if (linked.length) {
         const key = linked[0].item.key;
-        await openOneOf(key, refsForKey(useWorkspace.getState(), key));
+        const state = useWorkspace.getState();
+        const cached = cachedWithKey(state.items, key);
+        await openOneOf(
+          key,
+          refsForKey(state, key).filter((r) => cached.some((i) => i.item.connectionId === r.connectionId)),
+        );
         return;
       }
     } catch {
