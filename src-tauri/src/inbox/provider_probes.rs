@@ -430,4 +430,74 @@ mod tests {
         let seen = fx.core.provider_snapshot("claude").unwrap();
         assert_eq!((seen.state, seen.account.as_deref()), (State::Error, Some("alf@acme.com")));
     }
+
+    async fn signed_out(fx: &Fixture) {
+        install_claude(fx, OUT);
+        fx.core.probe_providers(Probe::Launch).await;
+    }
+
+    #[tokio::test]
+    async fn the_sign_in_of_a_signed_out_default_instance_is_its_binary_with_no_login_changes() {
+        let fx = fixture().await;
+        signed_out(&fx).await;
+        let target = fx.core.provider_signin("claude").await.unwrap();
+        assert_eq!((target.driver, target.binary), (Driver::Claude, fx.home.join(".local/bin/claude")));
+        assert!(target.login.terminal_login().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_sign_in_of_an_instance_with_a_folder_names_that_folder() {
+        let fx = fixture().await;
+        install_claude(&fx, OUT);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        let target = fx.core.provider_signin("claude_2").await.unwrap();
+        let login = target.login.terminal_login().unwrap();
+        assert_eq!((login.export.0, login.export.1), ("CLAUDE_CONFIG_DIR", fx.home.join(".claude-work").as_os_str()));
+        assert!(login.unset.contains(&"ANTHROPIC_API_KEY"));
+    }
+
+    #[tokio::test]
+    async fn there_is_no_sign_in_before_the_first_check_or_for_a_login_that_is_ready() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        assert!(fx.core.provider_signin("claude").await.unwrap_err().to_string().contains("Check it again"), "not checked yet");
+        fx.core.probe_providers(Probe::Launch).await;
+        assert!(fx.core.provider_signin("claude").await.unwrap_err().to_string().contains("only when the last check found you signed out"));
+    }
+
+    #[tokio::test]
+    async fn there_is_no_sign_in_for_an_instance_that_is_off_unknown_or_not_a_provider() {
+        let fx = fixture().await;
+        signed_out(&fx).await;
+        add(&fx, "claude_2", Some("~/.claude-work"), false);
+        assert!(fx.core.provider_signin("claude_2").await.unwrap_err().to_string().contains("turned off"));
+        for id in ["claude_9", "jira", "github"] {
+            assert!(fx.core.provider_signin(id).await.unwrap_err().to_string().contains("isn't a provider"), "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_folder_edited_by_hand_to_hold_a_quote_gets_no_sign_in() {
+        let fx = fixture().await;
+        install_claude(&fx, OUT);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        assert!(fx.core.provider_signin("claude_2").await.is_ok());
+        AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].config.config_dir = Some("~/it's; touch pwned".into())).unwrap();
+        fx.core.probe_providers(Probe::Refresh).await;
+        let refused = fx.core.provider_signin("claude_2").await.unwrap_err().to_string();
+        assert!(refused.starts_with("This folder can't be used: "), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn the_sign_in_waits_for_the_shell_capture() {
+        let fx = fixture_with_shell(ShellCapture::with_shell("/nonexistent/shell")).await;
+        AppConfig::update(&fx.core.data_dir(), |config| config.providers = vec![connections::default_claude()]).unwrap();
+        install_claude(&fx, OUT);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        assert_eq!(state_of(&fx, "claude_2"), Some(State::NotSignedIn));
+        assert_eq!(fx.core.provider_signin("claude_2").await.unwrap_err().to_string(), "Couldn't read your shell setup. Try again in a moment.");
+    }
 }

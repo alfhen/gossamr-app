@@ -109,8 +109,7 @@ pub fn states(providers: &[ProviderInstance], places: &Places, shell: Option<&Ru
         .map(|p| {
             let state = match problems.get(&p.id) {
                 _ if !p.enabled => ProviderState::Off,
-                Some(problem) if p.config.config_dir.is_some() => ProviderState::Error(format!("This folder can't be used: {problem}")),
-                Some(problem) => ProviderState::Error(problem.clone()),
+                Some(problem) => ProviderState::Error(provider_folder::describe(problem, p.config.config_dir.is_some())),
                 None => ProviderEnv::resolve(p, shell, home).map_or_else(ProviderState::Unavailable, ProviderState::Ready),
             };
             (p.id.clone(), state)

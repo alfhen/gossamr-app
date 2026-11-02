@@ -192,7 +192,10 @@ fn kind_name(kind: ConnectionKind) -> &'static str {
 
 /// `jira`, `github`, then `github_2`, `github_3`. A removed instance's id is retired, so an id never names two rows.
 fn next_id(config: &AppConfig, kind: ConnectionKind) -> String {
-    let name = kind_name(kind);
+    next_id_named(config, kind_name(kind))
+}
+
+fn next_id_named(config: &AppConfig, name: &str) -> String {
     let taken = config.connections.iter().map(|i| i.id.as_str()).chain(config.providers.iter().map(|p| p.id.as_str())).chain(config.retired_ids.iter().map(String::as_str));
     let used: std::collections::BTreeSet<u64> = taken
         .filter_map(|id| match id.strip_prefix(name)? {
@@ -296,6 +299,13 @@ pub fn providers_live(config: &AppConfig) -> bool {
 
 pub fn provider_mut<'a>(config: &'a mut AppConfig, id: &str) -> Option<&'a mut ProviderInstance> {
     providers_live(config).then(|| config.providers.iter_mut().find(|p| p.id == id)).flatten()
+}
+
+/// Adds a provider instance of `driver` and returns its id: `claude`, then `claude_2`. The folder rules are the caller's to check.
+pub fn add_provider(config: &mut AppConfig, driver: Driver, display_name: String, config_dir: Option<String>) -> String {
+    let id = next_id_named(config, driver.binary());
+    config.providers.push(ProviderInstance { id: id.clone(), driver, display_name, enabled: true, config: ProviderConfig { config_dir, ..Default::default() }, extra: Default::default() });
+    id
 }
 
 /// Removes the provider instance `id` and retires its id, and clears the Settings defaults that named it. Nothing on disk is touched, including its config folder.
@@ -502,6 +512,16 @@ mod tests {
         assert!(remove_provider(&mut config, "claude"));
         assert!(!remove_provider(&mut config, "claude"));
         assert_eq!((config.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), config.retired_ids.clone()), (vec!["claude_2"], vec!["claude".to_string()]));
+    }
+
+    #[test]
+    fn added_providers_are_named_after_their_driver_and_a_removed_id_is_not_given_out_again() {
+        let mut config = AppConfig::default();
+        let ids: Vec<_> = [Driver::Claude, Driver::Claude, Driver::Codex].into_iter().map(|d| add_provider(&mut config, d, "x".into(), None)).collect();
+        assert_eq!(ids, ["claude", "claude_2", "codex"]);
+        remove_provider(&mut config, "claude_2");
+        assert_eq!(add_provider(&mut config, Driver::Claude, "y".into(), Some("~/.claude-work".into())), "claude_3");
+        assert_eq!(config.providers.last().map(|p| (p.enabled, p.config.config_dir.as_deref())), Some((true, Some("~/.claude-work"))));
     }
 
     #[test]

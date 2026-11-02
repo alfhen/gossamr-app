@@ -1,13 +1,29 @@
 //! Core's side of the provider instances: what each one may run as.
 
+use std::os::unix::fs::DirBuilderExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::instances::{clean_name, not_a_provider};
 use super::Core;
 use crate::config::AppConfig;
-use crate::connections::ProviderInstance;
+use crate::connections::{self, Driver, ProviderInstance};
+use crate::error::{Error, Result};
+use crate::probe::State;
+use crate::runs::binary::find_binary_from;
 use crate::runs::env::RunEnv;
-use crate::runs::provider_env::{states, ProviderState};
-use crate::runs::provider_folder::Places;
+use crate::runs::provider_env::{states, ProviderEnv, ProviderState};
+use crate::runs::provider_folder::{self, Places};
+
+const NO_SHELL_SETUP: &str = "Couldn't read your shell setup. Try again in a moment.";
+
+/// What the sign-in Terminal for a provider instance runs: its CLI, as the login its folder picks.
+#[derive(Debug)]
+pub struct SignIn {
+    pub driver: Driver,
+    pub binary: PathBuf,
+    pub login: ProviderEnv,
+}
 
 pub enum Lookup {
     Found { instance: ProviderInstance, state: ProviderState, shell: std::result::Result<Arc<RunEnv>, String> },
@@ -86,6 +102,53 @@ impl Core {
         Listing::Rows { rows: config.providers.into_iter().zip(states).map(|(p, (_, state))| (p, state)).collect(), shell }
     }
 
+    /// Adds a provider instance after the folder rules of 6.2 pass, makes its folder (mode 0700) when it is missing and
+    /// returns the new id. The check and the save happen under one lock on `config.json`, so two adds can't take one folder.
+    /// Without the captured shell the usual folders are unknown, so a folder waits for it.
+    pub async fn provider_add(&self, driver: Driver, display_name: &str, config_dir: Option<&str>) -> Result<String> {
+        let name = clean_name(display_name)?;
+        let typed = config_dir.map(|t| t.trim().to_string());
+        let shell = self.shell.get().await.inspect_err(|why| eprintln!("{why}")).ok();
+        if typed.is_some() && shell.is_none() {
+            return Err(Error::Input(NO_SHELL_SETUP.into()));
+        }
+        let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
+        let mut added = Err(not_a_provider());
+        AppConfig::update_if(&self.data_dir, |config| {
+            added = add_checked(config, driver, name, typed, &places, shell.as_deref());
+            added.is_ok()
+        })?;
+        added
+    }
+
+    /// The row Settings shows for one provider instance.
+    pub fn provider_row(&self, instance_id: &str) -> Result<super::ConnectionInfo> {
+        self.provider_rows().into_iter().find(|row| row.instance_id == instance_id).ok_or_else(not_a_provider)
+    }
+
+    /// What to run to sign `instance_id` in, built from the instance as it is in `config.json` now. Only an instance that
+    /// can run and whose last check found it signed out has one, and never without the captured shell: the folder rules
+    /// and the login both depend on it.
+    pub async fn provider_signin(&self, instance_id: &str) -> Result<SignIn> {
+        let (instance, state, shell) = match self.lookup_provider(instance_id).await {
+            Lookup::Found { instance, state, shell } => (instance, state, shell),
+            Lookup::Missing => return Err(not_a_provider()),
+            Lookup::Unreadable(why) => return Err(Error::Input(why)),
+        };
+        let Ok(shell) = shell else { return Err(Error::Input(NO_SHELL_SETUP.into())) };
+        let login = match state {
+            ProviderState::Ready(login) => login,
+            ProviderState::Off => return Err(Error::Input(format!("{} is turned off. Turn it on first.", instance.display_name))),
+            ProviderState::Error(problem) => return Err(Error::Input(problem)),
+            ProviderState::Unavailable(why) => return Err(Error::Input(why.message().into())),
+        };
+        if self.provider_snapshot(instance_id).is_none_or(|s| s.state != State::NotSignedIn) {
+            return Err(Error::Input("Gossamr opens Terminal to sign in only when the last check found you signed out. Check it again.".into()));
+        }
+        let binary = find_binary_from(self.home.as_deref(), instance.driver, &login.over(&shell)).ok_or_else(|| Error::Input(format!("`{}` isn't installed.", instance.driver.binary())))?;
+        Ok(SignIn { driver: instance.driver, binary, login })
+    }
+
     /// Runs the folder rules on `config.json` as it is now and logs each instance that fails them.
     pub async fn check_providers(&self) {
         for (id, state) in self.provider_states().await {
@@ -94,6 +157,27 @@ impl Core {
             }
         }
     }
+}
+
+fn add_checked(config: &mut AppConfig, driver: Driver, name: String, typed: Option<String>, places: &Places, shell: Option<&RunEnv>) -> Result<String> {
+    if !connections::providers_live(config) {
+        return Err(Error::Input("Gossamr can't read the providers in config.json, so it can't add one. Fix the file first.".into()));
+    }
+    let has_folder = typed.is_some();
+    let id = connections::add_provider(config, driver, name, typed.clone());
+    let checked = match provider_folder::problems(&config.providers, places, shell).remove(&id) {
+        Some(problem) => Err(Error::Input(provider_folder::describe(&problem, has_folder))),
+        None => typed.map_or(Ok(()), |t| make_folder(&provider_folder::expand(&t, places.home.unwrap_or(Path::new(""))))),
+    };
+    if checked.is_err() {
+        config.providers.pop();
+    }
+    checked.map(|()| id)
+}
+
+/// `codex` refuses a `CODEX_HOME` that doesn't exist. A folder that is already there is left as it is.
+fn make_folder(path: &Path) -> Result<()> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(path).map_err(|e| Error::Input(format!("Couldn't create the folder: {e}")))
 }
 
 #[cfg(test)]
@@ -173,5 +257,129 @@ mod tests {
         let states = fx.core.provider_states().await;
         assert!(matches!(&states[1].1, ProviderState::Error(e) if e.starts_with("This folder can't be used: ")), "{:?}", states[1]);
         assert!(matches!(states[2].1, ProviderState::Ready(_)));
+    }
+
+    /// A fixture whose captured shell holds `vars` (NUL-separated `NAME=value` pairs, written once the home folder is known).
+    async fn adding_fixture(vars: impl FnOnce(&std::path::Path) -> String) -> (crate::inbox::testing::Fixture, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("gossamr-provider-add-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let fx = fixture_with_shell(ShellCapture::with_shell(&dir.join("fakeshell").display().to_string())).await;
+        fake_shell(&dir, &vars(&fx.home));
+        only_default(&fx.core);
+        (fx, dir)
+    }
+
+    fn providers(core: &Core) -> Vec<(String, Option<String>)> {
+        AppConfig::load(&core.data_dir).providers.into_iter().map(|p| (p.id, p.config.config_dir)).collect()
+    }
+
+    #[tokio::test]
+    async fn an_added_instance_gets_the_next_id_and_its_missing_folder_is_made_private() {
+        let (fx, dir) = adding_fixture(|_| "PATH=/p\\0".into()).await;
+        let id = fx.core.provider_add(Driver::Claude, "  Claude personal ", Some(" ~/.claude-personal/deeper ")).await.unwrap();
+        assert_eq!(id, "claude_2");
+        let added = AppConfig::load(&fx.core.data_dir).providers.pop().unwrap();
+        assert_eq!((added.display_name.as_str(), added.enabled, added.config.config_dir.as_deref()), ("Claude personal", true, Some("~/.claude-personal/deeper")), "the folder is stored as typed");
+        assert_eq!(std::fs::metadata(fx.home.join(".claude-personal/deeper")).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(fx.core.provider_row(&id).unwrap().config_dir.as_deref(), Some("~/.claude-personal/deeper"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_folder_that_already_exists_keeps_its_mode_and_contents() {
+        let (fx, dir) = adding_fixture(|_| "PATH=/p\\0".into()).await;
+        let folder = fx.home.join(".claude-old");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(folder.join("settings.json"), "{}").unwrap();
+        fx.core.provider_add(Driver::Claude, "Old", Some("~/.claude-old")).await.unwrap();
+        assert_eq!(std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(std::fs::read_to_string(folder.join("settings.json")).unwrap(), "{}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_second_instance_without_a_folder_is_refused_for_its_driver_only() {
+        let (fx, dir) = adding_fixture(|_| "PATH=/p\\0".into()).await;
+        let refused = fx.core.provider_add(Driver::Claude, "Again", None).await.unwrap_err();
+        assert_eq!(refused.to_string(), "Your usual setup is already added as Claude.");
+        assert_eq!(fx.core.provider_add(Driver::Codex, "Codex", None).await.unwrap(), "codex");
+        assert_eq!(providers(&fx.core), [("claude".into(), None), ("codex".into(), None)]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn every_folder_rule_refuses_an_add_and_leaves_config_json_and_the_disk_alone() {
+        let (fx, dir) = adding_fixture(|home| format!("PATH=/p\\0CLAUDE_CONFIG_DIR={}\\0", home.join(".claude-shell").display())).await;
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, fx.home.join("hop")).unwrap();
+        std::fs::create_dir_all(fx.home.join("real")).unwrap();
+        std::os::unix::fs::symlink(fx.home.join("real"), fx.home.join("alias")).unwrap();
+        fx.core.provider_add(Driver::Claude, "Work", Some("~/.claude-work")).await.unwrap();
+        let before = providers(&fx.core);
+
+        let data_dir = fx.core.data_dir.display().to_string();
+        let cases = [
+            ("~/.claude", "usual setup"),
+            ("~/.CLAUDE", "usual setup"),
+            ("~/.claude/", "usual setup"),
+            ("~/.claude-shell", "usual setup"),
+            ("~/hop/inner", "inside your home folder"),
+            ("~/alias", "link"),
+            ("~/it's", "quote"),
+            ("~/two\nlines", "unusual character"),
+            ("~/.CLAUDE-WORK", "Another Claude already uses this folder."),
+            ("~/real/../.claude-work", "Another Claude already uses this folder."),
+            ("~/.codex", "usual folder of Codex"),
+            ("/tmp/outside-home", "inside your home folder"),
+            ("~", "inside your home folder"),
+            (data_dir.as_str(), "data folder"),
+            ("  ", "empty"),
+        ];
+        for (typed, wanted) in cases {
+            let refused = fx.core.provider_add(Driver::Claude, "Nope", Some(typed)).await.unwrap_err().to_string();
+            assert!(refused.starts_with("This folder can't be used: ") && refused.contains(wanted), "{typed:?}: {refused}");
+        }
+        assert_eq!(providers(&fx.core), before);
+        assert!(!outside.join("inner").exists() && !fx.home.join("it's").exists(), "nothing was made for a refused folder");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn codex_may_not_take_claudes_usual_folder_and_its_own_folder_is_made() {
+        let (fx, dir) = adding_fixture(|_| "PATH=/p\\0".into()).await;
+        let refused = fx.core.provider_add(Driver::Codex, "Codex", Some("~/.claude")).await.unwrap_err().to_string();
+        assert!(refused.contains("usual folder of Claude"), "{refused}");
+        assert_eq!(fx.core.provider_add(Driver::Codex, "Codex work", Some("~/.codex-work")).await.unwrap(), "codex");
+        assert!(fx.home.join(".codex-work").is_dir());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_folder_waits_for_the_shell_capture_and_nothing_is_made_without_it() {
+        let fx = fixture_with_shell(ShellCapture::with_shell("/nonexistent/shell")).await;
+        only_default(&fx.core);
+        let refused = fx.core.provider_add(Driver::Claude, "Work", Some("~/.claude-work")).await.unwrap_err();
+        assert_eq!(refused.to_string(), "Couldn't read your shell setup. Try again in a moment.");
+        assert!(!fx.home.join(".claude-work").exists());
+        assert_eq!(providers(&fx.core).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn nothing_is_added_while_the_providers_list_cannot_be_read() {
+        let (fx, dir) = adding_fixture(|_| "PATH=/p\\0".into()).await;
+        std::fs::write(fx.core.data_dir.join("config.json"), r#"{"version":1,"connections":[],"providers":"broken"}"#).unwrap();
+        assert!(fx.core.provider_add(Driver::Claude, "Work", Some("~/.claude-work")).await.is_err());
+        assert!(!fx.home.join(".claude-work").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn two_adds_at_once_cannot_take_the_same_folder() {
+        let (fx, dir) = adding_fixture(|_| "PATH=/p\\0".into()).await;
+        let (a, b) = tokio::join!(fx.core.provider_add(Driver::Claude, "A", Some("~/.claude-x")), fx.core.provider_add(Driver::Claude, "B", Some("~/.CLAUDE-X")));
+        assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1);
+        assert_eq!(providers(&fx.core).len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -19,6 +19,7 @@ use super::service::RunService;
 use super::toolchain::Toolchain;
 use crate::auth::Scope;
 use crate::config::TerminalChoice;
+use crate::connections::Driver;
 use crate::domain::workstream::PauseReason;
 use crate::domain::{Actor, RefusedMode, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
@@ -198,6 +199,19 @@ pub fn write_claude_file(dir: &Path, login: Option<&ProviderEnv>, purpose: Purpo
     let (claude, clone_text) = (quotable(claude)?, quotable(&clone)?);
     let login_text = login_lines(login)?;
     write_script(dir, purpose.prefix(), &format!("#!/bin/zsh\n{login_text}cd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
+}
+
+/// Writes `<dir>/provider-signin-<digest>.command`: the instance's login lines, then its CLI's sign-in command. The
+/// subcommand comes from a fixed table per driver, and `login` can only come from `provider_env::states`, which has
+/// already applied the folder rules, so nothing from the page or from a probe reaches the script. Without a folder the
+/// script is the `exec` line alone and Terminal's own environment picks the login.
+pub fn write_provider_signin(dir: &Path, driver: Driver, binary: &Path, login: Option<&ProviderEnv>) -> Result<PathBuf> {
+    let subcommand = match driver {
+        Driver::Claude => "auth login",
+        Driver::Codex => "login",
+    };
+    let (binary, login) = (quotable(binary)?, login_lines(login)?);
+    write_script(dir, "provider-signin", &format!("#!/bin/zsh\n{login}exec '{binary}' {subcommand}\n"))
 }
 
 /// Writes `<dir>/fix-<digest>.command` running `command`. The command comes from a probe's fixed
@@ -397,6 +411,13 @@ impl RunService {
     /// Rust's own state, never from the page.
     pub fn open_fix(&self, command: &str) -> Result<()> {
         let file = write_fix_file(&self.core.data_dir().join(ATTACH_DIR), command)?;
+        self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+    }
+
+    /// Opens Terminal on the sign-in command of provider instance `instance_id`, built from the instance as it is now.
+    pub async fn open_provider_signin(&self, instance_id: &str) -> Result<()> {
+        let target = self.core.provider_signin(instance_id).await?;
+        let file = write_provider_signin(&self.core.data_dir().join(ATTACH_DIR), target.driver, &target.binary, Some(&target.login))?;
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 
