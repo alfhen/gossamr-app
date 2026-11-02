@@ -81,6 +81,26 @@ impl ProviderEnv {
         Some(TerminalLogin { unset, export: (name, folder) })
     }
 
+    #[cfg(test)]
+    pub fn none() -> Self {
+        Self { vars: Vec::new(), from_folder: false }
+    }
+
+    #[cfg(test)]
+    pub fn for_test(vars: &[(&'static str, Option<&str>)]) -> Self {
+        Self { vars: vars.iter().map(|(name, value)| (*name, value.map(OsString::from))).collect(), from_folder: false }
+    }
+
+    /// Sets or removes the login variables on a command that otherwise keeps the app's environment.
+    pub fn apply(&self, cmd: &mut tokio::process::Command) {
+        for (name, value) in &self.vars {
+            match value {
+                Some(value) => cmd.env(name, value),
+                None => cmd.env_remove(name),
+            };
+        }
+    }
+
     /// `base` with the login variables replaced by this instance's.
     pub fn over(&self, base: &RunEnv) -> RunEnv {
         let mut env = base.clone();

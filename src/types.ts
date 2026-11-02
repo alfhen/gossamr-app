@@ -734,6 +734,8 @@ export interface Workstream {
   title: string;
   /** The Pip session its conversation resumes. */
   pipSession: string | null;
+  /** The provider instance that session lives in; absent for one from before instances, which is the default's. */
+  pipInstance?: string | null;
   /** Why it is paused, while it is. */
   pausedReason: PauseReason | null;
   /** Pip's own notes, at most 2 KB. */

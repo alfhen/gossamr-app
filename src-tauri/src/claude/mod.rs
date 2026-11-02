@@ -17,18 +17,24 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::images::ImageInput;
 use crate::agent::{AgentEvent, AgentRequest, EventStream};
-use crate::error::{Error, Result};
-use crate::runs::binary::find_claude;
+use crate::error::Result;
+use crate::runs::provider_env::ProviderEnv;
 use stream::parse_line;
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
-/// Pinned rather than inherited from the user's Claude Code default, which may be a slower, costlier model.
-const MODEL: &str = "sonnet";
-const EFFORT: &str = "medium";
-
 /// Claude may use the gossamr MCP server and no built-in tool. Ticket text is untrusted, so anything that reaches
 /// files, a shell or the network would let it exfiltrate; loosening a flag here re-opens that.
 const ALLOWED: &str = "mcp__gossamr";
+
+/// Where and as whom a turn runs. Pip always passes a model: without `--model` the CLI would use its own default, which
+/// may be a slower, costlier one.
+#[derive(Debug)]
+pub struct Launch {
+    pub binary: PathBuf,
+    pub env: ProviderEnv,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
 
 #[derive(Default)]
 pub struct ClaudeCodeProvider {
@@ -66,7 +72,8 @@ fn args(req: &AgentRequest) -> Vec<String> {
     let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
         .into_iter()
         .chain(input.iter().copied())
-        .chain(["--model", MODEL, "--effort", EFFORT])
+        .chain(req.launch.model.iter().flat_map(|m| ["--model", m.as_str()]))
+        .chain(req.launch.effort.iter().flat_map(|e| ["--effort", e.as_str()]))
         // `--tools ""` removes every built-in tool, so `dontAsk` refuses whatever isn't in the allowlist.
         .chain(["--permission-mode", "dontAsk", "--tools", "", "--allowedTools", ALLOWED])
         // No user or project settings (hooks, plugins, CLAUDE.md rules, MCP servers) and no skills or slash commands.
@@ -89,8 +96,9 @@ fn user_message(prompt: &str, images: &[ImageInput]) -> String {
     format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": blocks } }))
 }
 
-fn command(binary: PathBuf, req: &AgentRequest) -> Command {
-    let mut cmd = Command::new(binary);
+fn command(req: &AgentRequest) -> Command {
+    let mut cmd = Command::new(&req.launch.binary);
+    req.launch.env.apply(&mut cmd);
     cmd.args(args(req))
         .current_dir(req.sandbox.path())
         // Launched from inside a Claude Code session, the child would otherwise think it's nested.
@@ -111,6 +119,15 @@ impl ClaudeCodeProvider {
         Self { stand_in: Some(stand_in), ..Self::default() }
     }
 
+    /// `claude` as the environment `shell` finds it. A stand-in is always found.
+    pub fn find(&self, shell: &crate::runs::env::RunEnv) -> Option<PathBuf> {
+        #[cfg(test)]
+        if self.stand_in.is_some() {
+            return Some(PathBuf::from("claude"));
+        }
+        crate::runs::binary::find_binary(crate::connections::Driver::Claude, shell)
+    }
+
     /// Starts a run. The stream ends with exactly one `Done`, including after a cancel or a crash, and once it has
     /// ended nothing of the run is still executing.
     pub async fn run(&self, req: AgentRequest) -> Result<EventStream> {
@@ -118,10 +135,7 @@ impl ClaudeCodeProvider {
         if let Some(stand_in) = &self.stand_in {
             return stand_in.run(req).await;
         }
-        let binary = find_claude().ok_or_else(|| {
-            Error::Claude("Claude Code isn't installed, or isn't on your PATH. Install it from code.claude.com.".into())
-        })?;
-        let mut child = command(binary, &req)
+        let mut child = command(&req)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -215,6 +229,7 @@ mod tests {
             sandbox: Sandbox::prepare(&std::env::temp_dir().join(format!("gossamr-claude-args-{}", std::process::id()))).unwrap(),
             session: session.map(String::from),
             images: Vec::new(),
+            launch: Launch { binary: PathBuf::from("claude"), env: ProviderEnv::none(), model: Some("sonnet".into()), effort: Some("medium".into()) },
         }
     }
 
@@ -223,9 +238,26 @@ mod tests {
         "TodoWrite", "Skill", "SlashCommand", "KillShell", "BashOutput", "ExitPlanMode",
     ];
 
+    /// An instance with its own folder: its folder variable set, and the key the shell holds removed.
+    fn in_a_folder(mut req: AgentRequest) -> AgentRequest {
+        req.launch.env = ProviderEnv::for_test(&[("CLAUDE_CONFIG_DIR", Some("/Users/x/.claude-work")), ("ANTHROPIC_API_KEY", None)]);
+        req
+    }
+
     #[test]
     fn claude_is_started_read_only_with_only_the_gossamr_mcp_server() {
-        let a = args(&request(None));
+        assert_locked_down(&args(&request(None)));
+    }
+
+    #[test]
+    fn claude_is_started_read_only_for_an_instance_with_a_folder_and_a_model_of_its_own() {
+        let mut req = in_a_folder(request(None));
+        req.launch.model = Some("claude-opus-5-5[1m]".into());
+        req.launch.effort = Some("max".into());
+        assert_locked_down(&args(&req));
+    }
+
+    fn assert_locked_down(a: &[String]) {
         let after = |flag: &str| a[a.iter().position(|x| x == flag).unwrap() + 1].clone();
         assert_eq!(after("--permission-mode"), "dontAsk");
         assert_eq!(after("--tools"), "", "every built-in tool is off");
@@ -244,11 +276,37 @@ mod tests {
     }
 
     #[test]
+    fn the_model_and_effort_come_from_the_launch_and_default_passes_neither() {
+        let mut req = request(None);
+        req.launch.model = Some("opus".into());
+        req.launch.effort = Some("high".into());
+        let a = args(&req);
+        assert_eq!(a[a.iter().position(|x| x == "--model").unwrap() + 1], "opus");
+        assert_eq!(a[a.iter().position(|x| x == "--effort").unwrap() + 1], "high");
+        req.launch.model = None;
+        req.launch.effort = None;
+        let a = args(&req);
+        assert!(!a.contains(&"--model".to_string()) && !a.contains(&"--effort".to_string()));
+    }
+
+    #[test]
+    fn the_instances_login_variables_are_set_or_removed_and_the_rest_of_the_environment_is_the_apps() {
+        let cmd = command(&in_a_folder(request(None)));
+        let envs: Vec<_> = cmd.as_std().get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+        assert!(envs.contains(&("CLAUDE_CONFIG_DIR".into(), Some("/Users/x/.claude-work".into()))));
+        assert!(envs.contains(&("ANTHROPIC_API_KEY".into(), None)), "removed, so the app's own key can't override the folder");
+        assert!(envs.iter().any(|(k, v)| k == TOKEN_ENV && v.is_some()));
+        assert!(envs.iter().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_AUTO_MEMORY" && v.is_some()));
+        assert!(!envs.iter().any(|(k, _)| k == "PATH"), "nothing else of the environment is copied or cleared");
+        assert_eq!(cmd.as_std().get_program(), "claude");
+    }
+
+    #[test]
     fn the_token_is_in_the_childs_environment_and_nowhere_in_its_arguments() {
         let mut req = request(Some("s-1"));
         req.mcp.token = "tok-7f3a91c2".into();
         req.images = vec![crate::agent::images::tests::png()];
-        let cmd = command(PathBuf::from("claude"), &req);
+        let cmd = command(&req);
         let cmd = cmd.as_std();
         let argv: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert!(!argv.iter().any(|a| a.contains("tok-7f3a91c2")), "the token must not reach ps");
@@ -292,7 +350,7 @@ mod tests {
     #[test]
     fn it_runs_in_the_sandbox_with_auto_memory_off() {
         let req = request(None);
-        let cmd = command(PathBuf::from("claude"), &req);
+        let cmd = command(&req);
         let cmd = cmd.as_std();
         assert_eq!(cmd.get_current_dir(), Some(req.sandbox.path()));
         assert!(cmd.get_envs().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_AUTO_MEMORY" && v == Some("1".as_ref())));
@@ -338,7 +396,8 @@ mod tests {
         req.mcp = McpEndpoint { url: format!("http://127.0.0.1:{port}/mcp/r"), token: "tok-probe-5d1e".into() };
         let config = std::env::temp_dir().join(format!("gossamr-claude-token-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&config).unwrap();
-        let mut cmd = command(find_claude().expect("claude installed"), &req);
+        req.launch.binary = crate::runs::binary::find_claude().expect("claude installed");
+        let mut cmd = command(&req);
         let mut child = cmd.env("CLAUDE_CONFIG_DIR", &config).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn().unwrap();
         child.stdin.take().unwrap().write_all(b"hi").await.unwrap();
         let _ = tokio::time::timeout(Duration::from_secs(60), child.wait()).await;
@@ -354,6 +413,7 @@ mod tests {
     async fn claude_code_sees_an_attached_image() {
         let mut req = request(None);
         req.prompt = "What single colour fills this image? Reply with just the colour name.".into();
+        req.launch.binary = crate::runs::binary::find_claude().expect("claude installed");
         req.images = vec![ImageInput { media_type: "image/png".into(), data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGO4IyJCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAJ3LED3QqzauAAAAAElFTkSuQmCC".into() }];
         let events = ClaudeCodeProvider::new().run(req).await.unwrap();
         let mut text = String::new();
