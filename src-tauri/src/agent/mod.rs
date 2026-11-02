@@ -403,6 +403,14 @@ impl AgentService {
         meta.shown = shown_line(meta.shown.take());
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
+        // A choice the page sent is refused now, not when the turns ahead of it end. `start` checks again for a state that
+        // changes while the turn waits.
+        if let Some(asked) = req.model.clone() {
+            if let Err(e) = self.core.pip_launch(Some(&asked), |shell| self.provider.find(shell)).await {
+                recorded(self.core.pip_turn_finish(&scope, &req.request_id, "", false, Some(&e.to_string()), None, None).await);
+                return Err(e);
+            }
+        }
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
         if let Some(id) = workstream.as_ref().filter(|_| meta.shown.is_none()) {
             // What the person types answers a question Pip asked in this workstream, if one is open; a line the page
@@ -606,10 +614,11 @@ impl AgentService {
     async fn start(self: &Arc<Self>, scope: Scope, req: AskRequest, sink: UpdateSink) -> Result<()> {
         images::validate(&req.images)?;
         let choice = self.core.pip_choice(&req.conversation, req.model.clone()).await?;
+        let (instance, launch) = self.core.pip_launch(choice.as_ref(), |shell| self.provider.find(shell)).await?;
+        // Kept only once the turn can run, so a refused choice never becomes the conversation's last one.
         if let Some(choice) = &choice {
             recorded(self.core.pip_turn_model(&scope, &req.request_id, choice).await);
         }
-        let (instance, launch) = self.core.pip_launch(choice.as_ref(), |shell| self.provider.find(shell)).await?;
         // A turn in a workstream's conversation works in that workstream, which must be an open one of this account.
         let mut workstream = match workstream_of_conversation(&req.conversation) {
             Some(id) => Some(workstream::for_turn(&self.core, &scope, id).await?),
@@ -1403,6 +1412,8 @@ mod tests {
         struct Recorder {
             launched: Mutex<Vec<Launched>>,
             sessions: AtomicUsize,
+            hold: std::sync::atomic::AtomicBool,
+            held: Mutex<Vec<(mpsc::UnboundedSender<AgentEvent>, String)>>,
         }
 
         #[async_trait]
@@ -1415,6 +1426,10 @@ mod tests {
                 let session = format!("sess-{}", self.sessions.fetch_add(1, Ordering::SeqCst) + 1);
                 let (tx, rx) = mpsc::unbounded_channel();
                 let _ = tx.send(AgentEvent::Started { session_id: session.clone() });
+                if self.hold.load(Ordering::SeqCst) {
+                    self.held.lock().unwrap().push((tx, session));
+                    return Ok(rx);
+                }
                 let _ = tx.send(AgentEvent::Done { session_id: Some(session), ok: true, message: None, usage: None });
                 Ok(rx)
             }
@@ -1425,6 +1440,13 @@ mod tests {
         impl Recorder {
             fn count(&self) -> usize {
                 self.launched.lock().unwrap().len()
+            }
+
+            fn finish_held(&self) {
+                self.hold.store(false, Ordering::SeqCst);
+                for (tx, session) in self.held.lock().unwrap().drain(..) {
+                    let _ = tx.send(AgentEvent::Done { session_id: Some(session), ok: true, message: None, usage: None });
+                }
             }
         }
 
@@ -1520,6 +1542,41 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn a_choice_without_an_effort_runs_at_medium_and_keeps_its_own_when_it_has_one() {
+            let (fx, svc, recorder) = rig().await;
+            say(&svc, ask("q1", "general", Some(pick("claude_2", "opus", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            say(&svc, ask("q2", "general", Some(pick("claude_2", "opus", Some("high"))))).await.unwrap();
+            done(&fx, "general", "q2").await;
+            let efforts: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.effort.clone()).collect();
+            assert_eq!(efforts, [Some("medium".into()), Some("high".into())]);
+        }
+
+        #[tokio::test]
+        async fn a_session_from_before_instances_is_not_resumed_on_any_instance() {
+            let (fx, svc, recorder) = rig().await;
+            fx.core.with_app_db(|db| db.set_app_meta("pip_sessions", r#"["legacy-1"]"#)).await.unwrap();
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap().id;
+            fx.core
+                .with_app_db(|db| {
+                    let mut w = db.workstream(&ws)?.unwrap();
+                    w.pip_session = Some("legacy-2".into());
+                    db.save_workstream(&w).map(drop)
+                })
+                .await
+                .unwrap();
+            let mut question = ask("q1", "general", Some(pick("claude", "sonnet", None)));
+            question.session_id = Some("legacy-1".into());
+            say(&svc, question).await.unwrap();
+            done(&fx, "general", "q1").await;
+            let conversation = format!("ws:{ws}");
+            say(&svc, ask("q2", &conversation, Some(pick("claude", "sonnet", None)))).await.unwrap();
+            done(&fx, &conversation, "q2").await;
+            let sessions: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.session.clone()).collect();
+            assert_eq!(sessions, [None, None], "the first turn after the upgrade starts fresh");
+        }
+
+        #[tokio::test]
         async fn the_instance_without_a_folder_takes_its_login_variables_from_the_shell() {
             let (fx, svc, recorder) = rig().await;
             say(&svc, ask("q1", "general", Some(pick("claude", "sonnet", None)))).await.unwrap();
@@ -1577,6 +1634,36 @@ mod tests {
             AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].enabled = false).unwrap();
             assert_eq!(refused(&svc, &fx, Some(pick("claude_2", "sonnet", None))).await, "Pip runs on Claude work, which is off. Turn it on in Settings or pick another.");
             assert_eq!(recorder.count(), 0, "it never falls back to the other instance");
+        }
+
+        #[tokio::test]
+        async fn a_choice_that_cannot_run_is_refused_at_once_even_behind_a_running_turn() {
+            let (fx, svc, recorder) = rig().await;
+            AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].enabled = false).unwrap();
+            recorder.hold.store(true, Ordering::SeqCst);
+            assert!(!say(&svc, ask("q1", "general", Some(pick("claude", "sonnet", None)))).await.unwrap().queued);
+
+            let words = refused(&svc, &fx, Some(pick("claude_2", "sonnet", None))).await;
+            assert_eq!(words, "Pip runs on Claude work, which is off. Turn it on in Settings or pick another.");
+            assert_eq!(refused(&svc, &fx, Some(pick("claude", "claude-opus-9", None))).await, "Pick a model for Pip.");
+            assert_eq!(recorder.count(), 1, "nothing was queued behind the running turn");
+            recorder.finish_held();
+            done(&fx, "general", "q1").await;
+            assert_eq!(recorder.count(), 1);
+        }
+
+        #[tokio::test]
+        async fn a_refused_choice_is_not_the_conversations_last_one_and_the_next_turn_runs_on_the_one_that_ran() {
+            let (fx, svc, recorder) = rig().await;
+            say(&svc, ask("q1", "general", Some(pick("claude", "haiku", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].enabled = false).unwrap();
+            refused(&svc, &fx, Some(pick("claude_2", "sonnet", None))).await;
+            assert_eq!(fx.core.pip_choice("general", None).await.unwrap(), Some(pick("claude", "haiku", None)));
+            say(&svc, ask("q2", "general", None)).await.unwrap();
+            done(&fx, "general", "q2").await;
+            let models: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.model.clone()).collect();
+            assert_eq!(models, [Some("haiku".into()), Some("haiku".into())]);
         }
 
         #[tokio::test]

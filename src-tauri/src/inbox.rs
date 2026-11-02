@@ -479,7 +479,7 @@ impl Core {
 
     /// Runs `f` against the app database, for work that touches only app tables and needs no one signed in. Drafts and
     /// runs of every connection are visible; `with_app_db_for` limits them to one.
-    async fn with_app_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
+    pub(crate) async fn with_app_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let mut open = self.db.lock().expect("db lock poisoned");
         f(self.open_app(&mut open)?)
     }
@@ -924,13 +924,14 @@ impl Core {
     pub async fn is_pip_session(&self, session_id: &str, instance_id: &str) -> Result<bool> {
         self.with_app_db(|db| {
             let own = OwnSession::list(db.app_meta(PIP_SESSIONS)?);
-            Ok(own.iter().any(|s| s.id() == session_id && s.instance() == instance_id) || db.is_open_workstream_session(session_id, instance_id)?)
+            Ok(own.iter().any(|s| s.id() == session_id && s.instance() == Some(instance_id)) || db.is_open_workstream_session(session_id, instance_id)?)
         })
         .await
     }
 }
 
-/// A session Pip started. A list entry from before instances is a bare id and belongs to the default instance.
+/// A session Pip started. A list entry from before instances is a bare id and resumes on no instance: the default's login
+/// folder may not be the one that wrote it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum OwnSession {
@@ -949,10 +950,10 @@ impl OwnSession {
         }
     }
 
-    fn instance(&self) -> &str {
+    fn instance(&self) -> Option<&str> {
         match self {
-            Self::Legacy(_) => crate::connections::DEFAULT_CLAUDE,
-            Self::On { instance, .. } => instance,
+            Self::Legacy(_) => None,
+            Self::On { instance, .. } => Some(instance),
         }
     }
 }
@@ -993,11 +994,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_session_resumes_only_on_the_instance_that_started_it_and_an_old_entry_belongs_to_the_default() {
+    async fn a_session_resumes_only_on_the_instance_that_started_it_and_an_old_entry_resumes_on_none() {
         let fx = super::testing::fixture().await;
         fx.core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["legacy-1"]"#)).await.unwrap();
         fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "work-1", "claude_2").await.unwrap();
-        assert!(fx.core.is_pip_session("legacy-1", "claude").await.unwrap());
+        assert!(!fx.core.is_pip_session("legacy-1", "claude").await.unwrap());
         assert!(!fx.core.is_pip_session("legacy-1", "claude_2").await.unwrap());
         assert!(fx.core.is_pip_session("work-1", "claude_2").await.unwrap());
         assert!(!fx.core.is_pip_session("work-1", "claude").await.unwrap());
@@ -1030,7 +1031,7 @@ mod tests {
         let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), dir.clone());
 
         core.with_app_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"s-1"}"#)).await.unwrap();
-        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["s-1"]"#)).await.unwrap();
+        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"[{"id":"s-1","instance":"claude"}]"#)).await.unwrap();
         assert!(core.is_pip_session("s-1", "claude").await.unwrap());
         assert!(core.pip_turns("general").await.unwrap().is_empty());
         assert!(core.with_db(|_| Ok(())).await.is_err(), "a cache still needs the sign-in");

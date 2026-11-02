@@ -13,6 +13,9 @@ use crate::runs::env::RunEnv;
 use crate::runs::provider_env::{states, ProviderState, Unavailable};
 use crate::runs::provider_folder::Places;
 
+/// What a Pip turn runs at when its choice names no effort, so the CLI's own, costlier default is never used.
+const DEFAULT_EFFORT: &str = "medium";
+
 impl Core {
     /// The choice a turn of `conversation` takes: the one the page sent, else the one the conversation's last turn ran
     /// with, else the Settings default.
@@ -63,6 +66,7 @@ impl Core {
             }
             Resolution::Ready { instance_id, model, effort } => match state_of(&instance_id) {
                 Some(ProviderState::Ready(env)) => {
+                    let effort = effort.or_else(|| Some(DEFAULT_EFFORT.to_string()));
                     let launch = Launch { binary: binary.expect("standing found it"), env: env.clone(), model, effort };
                     Ok((instance_id, launch))
                 }

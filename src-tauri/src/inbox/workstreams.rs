@@ -289,7 +289,7 @@ impl Core {
                 repo: None,
                 title: title.chars().take(TITLE_LIMIT).collect(),
                 pip_session: None,
-            pip_instance: None,
+                pip_instance: None,
                 paused_reason: None,
                 notes: None,
                 created_at: at,
@@ -507,7 +507,7 @@ impl Core {
         let connection_id = scope.connection_id.clone();
         self.with_app_db_atomically_for(scope, |db| {
             let mut ws = owned(db, &connection_id, id)?;
-            let same = ws.pip_session.as_deref() == Some(session) && ws.pip_instance.as_deref().unwrap_or(crate::connections::DEFAULT_CLAUDE) == instance_id;
+            let same = ws.pip_session.as_deref() == Some(session) && ws.pip_instance.as_deref() == Some(instance_id);
             if ws.closed_at.is_none() && !same {
                 ws.pip_session = Some(session.to_string());
                 ws.pip_instance = Some(instance_id.to_string());
