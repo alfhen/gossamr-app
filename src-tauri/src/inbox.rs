@@ -307,6 +307,7 @@ impl Core {
                 let name = self.instance_name(id);
                 if changing {
                     self.refuse_while_posting(&old, &name).await?;
+                    self.refuse_while_running(&old).await?;
                 }
                 self.auth.replace(&old, credentials).await?;
                 if let Err(e) = self.rebind_instance(id, binding) {
@@ -1706,6 +1707,8 @@ pub(crate) mod testing {
         pub core: Arc<Core>,
         pub scope: Scope,
         pub tracker: Arc<Recorder>,
+        /// The tracker of the second account in `fixture_with_two_jira`; nothing reaches it in the other fixtures.
+        pub second_tracker: Arc<Recorder>,
         pub dir: PathBuf,
         /// Where clones for runs may live.
         pub home: PathBuf,
@@ -1779,6 +1782,11 @@ pub(crate) mod testing {
             self.core.with_db_for(&self.scope, |db| db.insert_run(run)).await.unwrap();
         }
 
+        /// Takes `connection_id` out of the registry while its token stays in the vault, as a launch that registered only the bound sessions leaves it.
+        pub fn unregister(&self, connection_id: &str) {
+            self.core.registry.remove(connection_id);
+        }
+
         /// Stores `ws` as it is, whatever its connection.
         pub async fn insert_workstream(&self, ws: &crate::domain::Workstream) {
             self.core.with_db_for(&self.scope, |db| db.insert_workstream(ws)).await.unwrap();
@@ -1802,6 +1810,23 @@ pub(crate) mod testing {
 
     /// `fixture_watching` with more GitHub routes scripted: replies come in order and the last repeats.
     pub async fn fixture_watching_with(repos: &[&str], extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>) -> Fixture {
+        watching_signed_in_to(repos, extra, None, vec![credentials("site", "Acme", "me", "Me")]).await
+    }
+
+    /// `fixture_with_two_jira` that also has a GitHub connection watching `repos`.
+    pub async fn fixture_watching_two_jira(repos: &[&str], extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>) -> (Fixture, Scope) {
+        let second = credentials("beta", "Beta", "bo", "Bo");
+        let scope = second.scope();
+        let fx = watching_signed_in_to(repos, extra, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second]).await;
+        (fx, scope)
+    }
+
+    async fn watching_signed_in_to(
+        repos: &[&str],
+        extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>,
+        authenticator: Option<Arc<dyn crate::auth::Authenticator>>,
+        sessions: Vec<Credentials>,
+    ) -> Fixture {
         use crate::auth::GithubAuth;
         use crate::codehost::github::testserver::{serve, Reply};
         use crate::codehost::github::GithubHost;
@@ -1826,7 +1851,7 @@ pub(crate) mod testing {
             auth,
             Box::new(move |s, credentials, db| Arc::new(GithubHost::new(factory_http.clone(), &base, credentials, &Connection::github_id(&s.login), &s.login, db))),
         );
-        let mut fx = fixture_with(Some(code)).await;
+        let mut fx = fixture_signed_in_to(Some(code), authenticator, sessions).await;
         fx.github = Some(server.seen.clone());
         fx.github_routes = Some(server.routes.clone());
         fx.core.github_connect(None).await.unwrap();
@@ -1852,7 +1877,7 @@ pub(crate) mod testing {
         (fx, scope)
     }
 
-    /// Answers `whoami` as the account the token belongs to, and scripts nothing else.
+    /// Answers `whoami` as the account the token belongs to, and signs in as the site and email it is given.
     struct Echo;
 
     #[async_trait::async_trait]
@@ -1860,8 +1885,10 @@ pub(crate) mod testing {
         async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
             Ok(None)
         }
-        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
-            Err(Error::Auth("this fixture signs in nowhere".into()))
+        async fn connect(&self, input: &TokenSignIn) -> Result<Credentials> {
+            let site = Site { cloud_id: input.site.clone(), name: input.site.clone(), url: format!("https://{}.example", input.site) };
+            let me = Account { account_id: input.email.clone(), name: input.email.clone(), avatar_url: None };
+            Ok(Credentials { email: input.email.clone(), token: input.token.clone(), expires_on: "2999-01-01".into(), site, me })
         }
         async fn whoami(&self, token: &crate::auth::AccessToken) -> Result<Account> {
             Ok(Account { account_id: token.scope.account_id.clone(), name: token.scope.account_id.clone(), avatar_url: None })
@@ -1881,7 +1908,9 @@ pub(crate) mod testing {
         let http = reqwest::Client::new();
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
-        let registry = Registry::new(move |_| shared.clone());
+        let second_tracker = Arc::new(Recorder::default());
+        let (second_id, second_shared) = (sessions.get(1).map(|c| c.connection().id), second_tracker.clone());
+        let registry = Registry::new(move |c| if Some(&c.id) == second_id.as_ref() { second_shared.clone() } else { shared.clone() });
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
@@ -1896,7 +1925,7 @@ pub(crate) mod testing {
             core.registry.register(connection);
         }
 
-        let fx = Fixture { core, scope, tracker, dir, home, github: None, github_routes: None };
+        let fx = Fixture { core, scope, tracker, second_tracker, dir, home, github: None, github_routes: None };
         fx.add_item(1).await;
         let connection = fx.core.connection(&fx.scope).unwrap();
         let item = fx.core.cache_item(&connection.item("CA-1")).await.unwrap().unwrap();

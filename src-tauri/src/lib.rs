@@ -432,14 +432,14 @@ async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>
 #[tauri::command]
 async fn proposals_create(app: AppHandle, core: State<'_, CoreState>, intent: Intent, label: Option<String>) -> Result<Proposal> {
     let made = core.draft_as_user(intent, label).await?;
-    proposals_changed(&app, &core.scope().await?.connection_id);
+    proposals_changed(&app, &db::connection_of(&made));
     Ok(made)
 }
 
 #[tauri::command]
 async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, edit: Edit) -> Result<Proposal> {
     let edited = core.edit_proposal(&id, &edit).await?;
-    proposals_changed(&app, &core.scope().await?.connection_id);
+    proposals_changed(&app, &db::connection_of(&edited));
     Ok(edited)
 }
 
@@ -448,7 +448,7 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
 #[tauri::command]
 async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, undo: bool) -> Result<Proposal> {
     let done = if undo { core.unskip_proposal(&id).await? } else { core.skip_proposal(&id).await? };
-    let connection = core.scope().await?.connection_id;
+    let connection = db::connection_of(&done);
     proposals_changed(&app, &connection);
     // A draft in a workstream is a line in its audit, which its timeline's counts read.
     if done.workstream().is_some() {
@@ -460,8 +460,9 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, 
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
 #[tauri::command]
 async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let connection = core.draft_connection(&id).await;
     let result = core.approve_proposal(&id).await;
-    if let Ok(connection) = core.scope().await.map(|s| s.connection_id) {
+    if let Some(connection) = connection {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
         // Approving a draft in a workstream is a line in its audit, which its timeline's counts read.
@@ -482,8 +483,9 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
 /// choice to send a review that may be on GitHub already, which Gossamr looked for and didn't find.
 #[tauri::command]
 async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize, post_anyway: Option<bool>) -> Result<Proposal> {
+    let connection = core.draft_connection(&id).await;
     let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
-    if let Ok(connection) = core.scope().await.map(|s| s.connection_id) {
+    if let Some(connection) = connection {
         proposals_changed(&app, &connection);
     }
     publish(&app);
@@ -863,6 +865,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                             wire::changed(&app, Topic::Connections, &connection_id);
                         }
                         if synced.reviews_changed {
+                            proposals_changed(&app, &connection_id);
                             if let Ok(scope) = core.scope().await {
                                 proposals_changed(&app, &scope.connection_id);
                             }

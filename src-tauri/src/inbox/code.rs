@@ -1017,10 +1017,9 @@ impl Core {
     /// posted when found; when not found, or when GitHub can't be asked, the draft stays pending and says so
     /// (`REVIEW_NOT_FOUND_NOTE`). Only `post_anyway`, the person's explicit choice, then sends it again.
     pub async fn post_review_draft(&self, id: &str, seen: usize, post_anyway: bool) -> Result<Proposal> {
-        let scope = self.scope().await?;
         let gate = self.draft_gate.lock().await;
         let (claimed, look_for) = self
-            .with_app_db_for(&scope, |db| {
+            .with_proposals(|db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if let Intent::GithubReview { connection_id, .. } = &current.intent {
                     self.refuse_while_held(connection_id)?;
@@ -1059,7 +1058,7 @@ impl Core {
             (Err(e), None) => Err(e),
         };
         let label = format!("{repo}#{number}");
-        self.with_app_db_for(&scope, |db| {
+        self.with_proposals(|db| {
             let at = Utc::now();
             let mut p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             p.updated_at = at;
@@ -2233,6 +2232,41 @@ mod review_tests {
         assert_eq!(body["comments"].as_array().unwrap().iter().map(|c| (c["path"].as_str().unwrap(), c["line"].as_u64().unwrap())).collect::<Vec<_>>(), [("src/consumer/retry.ts", 42), ("src/consumer/retry.ts", 17)]);
         assert!(fx.tracker.intents().is_empty(), "posting a review writes nothing to Jira");
         assert_eq!(fx.core.proposal(&p.id).await.unwrap(), Some(done));
+    }
+
+    async fn stored_review(fx: &Fixture, item: Option<ItemRef>) -> Proposal {
+        let intent = Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item,
+            run_id: "run-1".into(),
+            repo: "acme/webshop".into(),
+            number: 12,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Review summary.".into(),
+            comments: comments(),
+        };
+        let draft = Draft { origin: Origin::chat("review-turn"), created_by: CreatedBy::Pip, intent, label: None, basis: None };
+        fx.core.with_app_db(|db| proposals::create(db, draft, Utc::now())).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_review_posts_with_no_jira_connection_registered() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![(POST_ROUTE, vec![posted_reply()])]).await;
+        let p = stored_review(&fx, None).await;
+        fx.core.registry.remove(&fx.scope.connection_id);
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
+        assert_eq!(posts(&fx), ["POST /repos/acme/webshop/pulls/12/reviews"]);
+    }
+
+    #[tokio::test]
+    async fn a_review_of_a_ticket_on_the_second_jira_site_posts_while_the_first_is_the_primary() {
+        let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], vec![(POST_ROUTE, vec![posted_reply()])]).await;
+        let on_beta = ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+        let p = stored_review(&fx, Some(on_beta)).await;
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
+        assert_eq!(posts(&fx), ["POST /repos/acme/webshop/pulls/12/reviews"]);
     }
 
     #[tokio::test]

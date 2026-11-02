@@ -226,6 +226,10 @@ impl Registry {
         self.connections.lock().expect("registry lock poisoned").get(id).cloned()
     }
 
+    pub fn ids(&self) -> Vec<String> {
+        self.connections.lock().expect("registry lock poisoned").keys().cloned().collect()
+    }
+
     pub fn remove(&self, id: &str) {
         self.trackers.lock().expect("registry lock poisoned").remove(id);
         self.connections.lock().expect("registry lock poisoned").remove(id);

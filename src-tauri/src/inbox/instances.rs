@@ -4,8 +4,8 @@
 use super::{ConnectionInfo, Core};
 use crate::config::AppConfig;
 use crate::connections::{self, Binding, RowKind};
-use crate::db::is_for;
-use crate::domain::{Actor, ProposalQuery, ProposalState, StateKind};
+use crate::db::{connection_of, is_for};
+use crate::domain::{Actor, ProposalQuery, ProposalState, Run, RunQuery, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::secrets;
@@ -221,6 +221,10 @@ impl Core {
         let _gate = self.draft_gate.lock().await;
         let target = self.removal_target(instance_id).await?;
         self.refuse_while_posting(&target.connection_id, &target.name).await?;
+        if target.kind == ConnectionKind::Jira {
+            self.refuse_while_review_listed_under_is_posting(&target.connection_id, &target.name).await?;
+            self.refuse_while_running(&target.connection_id).await?;
+        }
         match target.kind {
             ConnectionKind::Github => self.forget_github(&target).await?,
             ConnectionKind::Jira => self.forget_jira(&target.connection_id).await?,
@@ -319,12 +323,44 @@ impl Core {
         finished
     }
 
+    /// A review is stored under its ticket's Jira connection, so it vanishes from the registry-limited views once that
+    /// connection is removed; posting must finish first.
+    async fn refuse_while_review_listed_under_is_posting(&self, connection_id: &str, name: &str) -> Result<()> {
+        let posting = self
+            .with_app_db(|db| {
+                let applying = ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() };
+                Ok(db.proposals(&applying)?.iter().any(|p| connection_of(p) == connection_id))
+            })
+            .await?;
+        if posting {
+            return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
+        }
+        Ok(())
+    }
+
     pub(super) async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
         let posting = self.with_app_db(|db| open_drafts_for(db, connection_id).map(|mine| mine.iter().any(|p| p.state == ProposalState::Applying))).await?;
         if posting {
             return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
         }
         Ok(())
+    }
+
+    /// Agents that are running or waiting to start keep their tickets' site, so it stays until they are stopped. Runs
+    /// of a connection that has left the registry are invisible to the run service, so nothing could stop them.
+    pub(super) async fn refuse_while_running(&self, connection_id: &str) -> Result<()> {
+        let runs = self.live_runs(connection_id).await?;
+        match runs.len() {
+            0 => Ok(()),
+            _ if runs.iter().all(|r| r.state == RunState::Unknown) => Err(Error::Input("Gossamr can't find its agent's session right now. Try again once it settles.".into())),
+            1 => Err(Error::Input("Stop its running agent first.".into())),
+            n => Err(Error::Input(format!("Stop its {n} running agents first."))),
+        }
+    }
+
+    pub(super) async fn live_runs(&self, connection_id: &str) -> Result<Vec<Run>> {
+        let query = RunQuery { states: Some(RunState::UNFINISHED.to_vec()), connection_id: Some(connection_id.into()), ..Default::default() };
+        self.with_app_db(|db| db.runs(&query)).await
     }
 
     /// Closes the pending drafts for the removed connection. Says whether a closed draft was in a workstream.
@@ -632,6 +668,18 @@ mod tests {
         assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft")), "{refused}");
         assert_eq!(state_of(&fx, &waiting.id).await, ProposalState::Pending);
         assert_eq!(state_of(&fx, &posting.id).await, ProposalState::Applying);
+        assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    #[tokio::test]
+    async fn a_review_being_posted_stops_the_removal_of_the_jira_site_it_is_listed_under() {
+        let fx = adopted().await;
+        let posting = draft_for(&fx, review_on_github(&fx)).await;
+        fx.core.with_app_db(|db| db.begin_posting_review(&posting.id, chrono::Utc::now(), None)).await.unwrap();
+
+        let refused = fx.core.remove_instance("jira").await.unwrap_err();
+
+        assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft")), "{refused}");
         assert_eq!(ids(&fx), ["jira", "github"]);
     }
 
@@ -1051,5 +1099,83 @@ mod tests {
         assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
         assert!(matches!(fx.core.provider_set_enabled("claude", false), Err(Error::Input(_))));
         assert!(matches!(fx.core.rename_instance("claude", "Other"), Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn a_jira_connection_with_a_live_run_is_not_removed_until_the_run_is_stopped() {
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+        let refused = core.remove_instance("jira_2").await.unwrap_err();
+        assert_eq!(refused.to_string(), "Stop its running agent first.");
+        assert!(core.auth.accounts().await.iter().any(|s| s.connection.id == second.connection_id), "the account is still signed in");
+
+        rig.svc.stop(&run.id).await.unwrap();
+        let removed = core.remove_instance("jira_2").await.unwrap();
+        assert_eq!(removed.connection_id, second.connection_id);
+    }
+
+    #[tokio::test]
+    async fn a_jira_connection_whose_run_has_lost_its_session_is_not_removed() {
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+        rig.set(&run, |r| r.state = RunState::Unknown).await;
+
+        let refused = core.remove_instance("jira_2").await.unwrap_err();
+
+        assert_eq!(refused.to_string(), "Gossamr can't find its agent's session right now. Try again once it settles.");
+        assert!(core.runs_list(&RunQuery::default()).await.unwrap().iter().any(|r| r.id == run.id), "the run is still in reach");
+        assert!(core.auth.accounts().await.iter().any(|s| s.connection.id == second.connection_id));
+    }
+
+    fn sign_in_as(site: &str, email: &str) -> crate::auth::TokenSignIn {
+        crate::auth::TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: "t".into(), expires_on: "2999-01-01".into() }
+    }
+
+    #[tokio::test]
+    async fn taking_over_an_instance_with_another_account_is_refused_while_an_agent_works_on_the_account_it_had() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+
+        let refused = core.connect_jira(&sign_in_as("gamma", "gus"), Some("jira_2")).await.err().expect("refused");
+
+        assert!(refused.to_string().contains("running agent"), "{refused}");
+        let signed_in: Vec<String> = core.auth.accounts().await.into_iter().map(|s| s.connection.id).collect();
+        assert!(signed_in.contains(&second.connection_id) && signed_in.len() == 2, "{signed_in:?}");
+        assert!(core.run(&run.id).await.unwrap().is_some(), "the run is still in reach");
+        rig.svc.stop(&run.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn taking_over_an_instance_again_as_the_account_with_the_agent_is_allowed() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let (rig, run, _second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+
+        core.connect_jira(&sign_in_as("beta", "bo"), Some("jira_2")).await.unwrap();
+
+        assert!(core.run(&run.id).await.unwrap().is_some(), "the run is still in reach");
+        rig.svc.stop(&run.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_run_cannot_be_queued_while_its_connection_is_being_removed() {
+        let (rig, run, _second) = crate::runs::rig::working_on_the_second_account().await;
+        rig.svc.stop(&run.id).await.unwrap();
+        let removing = rig.fx.core.draft_gate.lock().await;
+        let (core, spec, item) = (rig.fx.core.clone(), rig.spec(2), rig.fx.item("CA-1"));
+        let queuing = tokio::spawn(async move { core.queue_test_run(spec, Some(item)).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert!(!queuing.is_finished(), "the run was queued while a removal held the gate");
+        drop(removing);
+        queuing.await.unwrap().unwrap();
     }
 }

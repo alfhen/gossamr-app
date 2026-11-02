@@ -139,13 +139,15 @@ impl Core {
 
     /// Stores the queued run for `spec` as started by Pip, and returns it with whether it is new. A run already started
     /// under `start.key` (an MCP retry of the same call) comes back instead, unchanged, and nothing is recorded again.
-    /// The workstream's audit says Pip started it, in which turn kind, and as what.
+    /// The workstream's audit says Pip started it, in which turn kind, and as what. Waits for a removal in progress, which
+    /// checks for live runs under the same lock, so a run is never queued for a connection that is leaving.
     pub(crate) async fn commit_pip_run(&self, scope: &Scope, start: &PipStart<'_>, item: Option<ItemRef>, spec: RunSpec) -> Result<(Run, bool)> {
         let connection_id = scope.connection_id.clone();
         let workstream = spec.workstream.clone();
         let role = spec.role.clone();
         let id = proposals::new_id()?;
         let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, start.request_id, Utc::now());
+        let _removal = self.draft_gate.lock().await;
         self.with_app_db_atomically_for(scope, |db| {
             if let Some(ws) = workstream.as_deref() {
                 super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;
