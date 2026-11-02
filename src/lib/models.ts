@@ -19,9 +19,20 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { id: "haiku", label: "Haiku" },
 ];
 
-/** The built-in list, then the ids added to the instance, leaving out any that is already listed in some case. */
-export function modelList(custom: string[]): ModelOption[] {
-  const list = [...CLAUDE_MODELS];
+/** What the desktop app lists for Codex when `codex debug models` can't be read. */
+export const CODEX_MODELS: ModelOption[] = [
+  { id: DEFAULT_MODEL, label: "Default" },
+  { id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+  { id: "gpt-6-sol", label: "GPT-6-Sol" },
+  { id: "gpt-6-luna", label: "GPT-6-Luna" },
+  { id: "gpt-5.5", label: "GPT-5.5" },
+];
+
+export type Driver = "claude" | "codex";
+
+/** The driver's built-in list, then the ids added to the instance, leaving out any that is already listed in some case. */
+export function modelList(custom: string[], driver: Driver = "claude"): ModelOption[] {
+  const list = [...(driver === "codex" ? CODEX_MODELS : CLAUDE_MODELS)];
   for (const id of custom) {
     if (validModelId(id) && !list.some((m) => m.id.toLowerCase() === id.toLowerCase())) list.push({ id, label: id });
   }
