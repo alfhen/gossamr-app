@@ -273,10 +273,11 @@ async fn git_keeps_a_branch_with_unpushed_commits_and_the_run_can_be_cleaned_up_
     std::fs::write(rig.clone.join(".fake-branch-unmerged"), "").unwrap();
     let Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("expected a refusal") };
     assert!(message.contains("not fully merged"), "{message}");
+    assert!(run.expected_worktree.exists(), "the worktree stays when its branch is refused");
     assert_eq!(rig.get(&run).await.worktree_removed_at, None);
     std::fs::remove_file(rig.clone.join(".fake-branch-unmerged")).unwrap();
     assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
-    assert!(git_calls(&rig).iter().any(|c| c.contains("worktree prune")), "a worktree folder that is gone is only forgotten");
+    assert!(!run.expected_worktree.exists());
 }
 
 #[tokio::test]

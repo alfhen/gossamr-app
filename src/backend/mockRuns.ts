@@ -7,6 +7,7 @@ import { answerProblem } from "../lib/answer";
 import { stepOf, type Step } from "../lib/roles";
 import { docText } from "../lib/docs";
 import { type MockProposals } from "./mockProposals";
+import { type MockProviders } from "./mockProviders";
 import { type MockWorkstreams } from "./mockWorkstreams";
 import { thinDescription, unclearTriageResult, unclearTriageSummary } from "./mockSupervisor";
 import { withWorkstream } from "../lib/workstreamAdopt";
@@ -700,11 +701,8 @@ export class MockRuns {
     return run;
   }
 
-  /** The name of the instance a run is on while it is signed out; set by the mock backend. */
-  signedOutName: (instanceId: string) => string | null = () => null;
-
-  /** Whether a provider instance still exists. Set by the mock backend. */
-  instanceExists: (instanceId: string) => boolean = () => true;
+  /** The logins runs launch on; set by the mock backend. */
+  providers: Pick<MockProviders, "signedOutName" | "has"> = { signedOutName: () => null, has: () => true };
 
   /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
   choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
@@ -844,7 +842,7 @@ export class MockRuns {
     const to = NEXT[run.state];
     if (!to) return run;
     if (run.state === "queued") {
-      const signedOut = this.signedOutName(run.runsOn?.instanceId ?? "claude");
+      const signedOut = this.providers.signedOutName(run.runsOn?.instanceId ?? "claude");
       const words = signedOut ? `Waits until ${signedOut} is signed in.` : null;
       if (words) return run.waitReason === words ? run : this.update(run.id, { waitReason: words });
       if (run.waitReason) run = this.update(run.id, { waitReason: null });
@@ -1357,7 +1355,7 @@ export class MockRuns {
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
     const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
-    const left = !this.instanceExists(run.runsOn?.instanceId ?? "claude");
+    const left = !this.providers.has(run.runsOn?.instanceId ?? "claude");
     this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}), ...(left ? { sessionsLeft: true } : {}) });
     this.changed();
     return { type: "removed" };

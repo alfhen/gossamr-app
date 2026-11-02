@@ -121,11 +121,30 @@ impl Git {
         self.out_or_why(clone, &["worktree", "remove", "--", &path]).await.map(drop)
     }
 
+    async fn branch_exists(&self, clone: &Path, branch: &str) -> Result<bool, String> {
+        let found = self.out_or_why(clone, &["branch", "--list", "--format=%(refname:short)", "--", branch]).await?;
+        Ok(!found.trim().is_empty())
+    }
+
+    /// Whether `git branch -d` would take the branch, asked before the worktree goes so a refusal leaves both in place.
+    /// Like `-d`, a branch counts as merged when it is in its upstream, or in HEAD when it has none.
+    pub async fn check_branch_deletable(&self, clone: &Path, branch: &str) -> Result<(), String> {
+        if !self.branch_exists(clone, branch).await? {
+            return Ok(());
+        }
+        let local = format!("refs/heads/{branch}");
+        let upstream = format!("{local}@{{upstream}}");
+        let into = if self.out(clone, &["rev-parse", "--verify", "--quiet", &upstream]).await.is_some() { upstream } else { "HEAD".to_owned() };
+        match self.out_or_why(clone, &["merge-base", "--is-ancestor", &local, &into]).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err(format!("git: the branch '{branch}' is not fully merged")),
+        }
+    }
+
     /// `git branch -d`, never `-D`: git keeps a branch with commits that are neither merged nor on its upstream.
     /// A branch that isn't there counts as removed.
     pub async fn delete_branch(&self, clone: &Path, branch: &str) -> Result<(), String> {
-        let exists = self.out_or_why(clone, &["branch", "--list", "--format=%(refname:short)", "--", branch]).await?;
-        if exists.trim().is_empty() {
+        if !self.branch_exists(clone, branch).await? {
             return Ok(());
         }
         self.out_or_why(clone, &["branch", "-d", "--", branch]).await.map(drop)
@@ -318,6 +337,8 @@ case "$*" in
   "worktree prune") ;;
   "worktree remove -- "*) [ ! -f "$dir/.fake-worktree-dirty" ] || { echo "fatal: '$4' contains modified or untracked files, use --force to delete it" >&2; exit 128; }; rm -rf "$4" ;;
   "branch --list --format=%(refname:short) -- "*) cat "$dir/.fake-branches" 2>/dev/null | grep -Fx -- "$5"; true ;;
+  "rev-parse --verify --quiet "*) exit 1 ;;
+  "merge-base --is-ancestor "*) [ ! -f "$dir/.fake-branch-unmerged" ] || exit 1 ;;
   "branch -d -- "*) [ ! -f "$dir/.fake-branch-unmerged" ] || { echo "error: the branch '$4' is not fully merged." >&2; exit 1; } ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;
 esac

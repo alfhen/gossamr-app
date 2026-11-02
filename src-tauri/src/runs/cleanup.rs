@@ -114,10 +114,13 @@ impl RunService {
             run.expected_worktree.clone()
         };
         let git: Git = self.git().await?;
+        let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
+        if let Err(message) = git.check_branch_deletable(clone, &branch).await {
+            return Ok(Some(message));
+        }
         if let Err(message) = git.remove_worktree(clone, &worktree).await {
             return Ok(Some(message));
         }
-        let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
         Ok(git.delete_branch(clone, &branch).await.err())
     }
 
