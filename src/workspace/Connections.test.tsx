@@ -221,6 +221,13 @@ describe("a provider in the list", () => {
     expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
   });
 
+  it("shows the sign-in command to copy but no Open Terminal, which only runs a connection's fix", () => {
+    const out = view({ connections: [jira, gh, { ...claude, status: { ...githubSnapshot("notSignedIn", "ada", CHECKED), fix: "claude auth login" } }], selectedId: "claude" });
+    expect(out).toContain("claude auth login");
+    expect(out).toContain("Copy");
+    expect(out).not.toContain("Open Terminal");
+  });
+
   it("says in the detail pane that no check runs", () => {
     const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
     expect(out).toContain("No check runs for this provider.");

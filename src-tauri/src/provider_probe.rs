@@ -109,7 +109,10 @@ fn sign_in_command(driver: Driver, folder: Option<Folder<'_>>) -> String {
     match folder {
         None => login.to_string(),
         Some(f) if f.typed.chars().all(|c| c.is_ascii_alphanumeric() || "._~/-".contains(c)) => format!("{}={} {login}", driver.folder_variable(), f.typed),
-        Some(f) => format!("{}='{}' {login}", driver.folder_variable(), f.typed),
+        Some(f) => match f.typed.strip_prefix("~/") {
+            Some(rest) => format!("{}=~/'{rest}' {login}", driver.folder_variable()),
+            None => format!("{}='{}' {login}", driver.folder_variable(), f.typed),
+        },
     }
 }
 
@@ -242,6 +245,7 @@ mod tests {
         let binary = claude_saying(&dir, out, 1);
         assert_eq!(claude(&binary, Some("~/.claude-work")).await.fix.as_deref(), Some("CLAUDE_CONFIG_DIR=~/.claude-work claude auth login"));
         assert_eq!(claude(&binary, Some("/Users/x/My Claude")).await.fix.as_deref(), Some("CLAUDE_CONFIG_DIR='/Users/x/My Claude' claude auth login"));
+        assert_eq!(claude(&binary, Some("~/My Claude")).await.fix.as_deref(), Some("CLAUDE_CONFIG_DIR=~/'My Claude' claude auth login"));
     }
 
     #[tokio::test]

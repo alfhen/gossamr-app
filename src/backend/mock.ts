@@ -1115,7 +1115,8 @@ export class MockBackend implements Backend {
   }
 
   async connectionOpenTerminal(instanceId: string) {
-    const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
+    const row = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
+    const fix = row?.kind === "provider" ? undefined : row?.status?.fix;
     if (!fix) throw new Error("There's nothing to run for this connection. Check it again.");
     this.terminals.push(fix);
   }

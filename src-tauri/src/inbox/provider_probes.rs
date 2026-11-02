@@ -60,8 +60,13 @@ impl Core {
         self.provider_probes.answers.lock().expect("provider probe lock poisoned").get(instance_id).map(|a| a.snapshot.clone())
     }
 
-    pub(super) fn provider_probes_forget(&self, instance_id: &str) {
+    /// A row just turned on must not keep reading Off while it is asked.
+    pub(super) fn provider_answer_forget(&self, instance_id: &str) {
         self.provider_probes.answers.lock().expect("provider probe lock poisoned").remove(instance_id);
+    }
+
+    pub(super) fn provider_probes_forget(&self, instance_id: &str) {
+        self.provider_answer_forget(instance_id);
         self.provider_probes.locks.lock().expect("provider probe lock poisoned").remove(instance_id);
     }
 
@@ -71,8 +76,13 @@ impl Core {
 
     /// Returns the instance's id when the page should read it again.
     async fn probe_provider(&self, instance: ProviderInstance, state: ProviderState, shell: Option<Arc<RunEnv>>, why: Probe) -> Option<String> {
+        // Only a probe that runs a CLI waits its turn. Off and error answers spawn nothing, so turning an instance off
+        // never waits behind a CLI that is hung.
         let lock = self.provider_lock(&instance.id);
-        let _one_at_a_time = lock.lock().await;
+        let _one_at_a_time = match state {
+            ProviderState::Ready(_) => Some(lock.lock().await),
+            _ => None,
+        };
         let previous = {
             let answers = self.provider_probes.answers.lock().expect("provider probe lock poisoned");
             answers.get(&instance.id).map(|a| (a.snapshot.clone(), a.at.elapsed()))
@@ -308,6 +318,32 @@ mod tests {
         fx.core.probe_instance_now("jira").await;
         assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
         slow.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_off_does_not_wait_for_a_probe_of_it_that_is_still_running() {
+        let fx = fixture().await;
+        script(&fx.home.join(".local/bin/claude"), "[ \"$1\" = \"--version\" ] && exit 0\nsleep 2\necho '{\"loggedIn\":false}'");
+        let core = fx.core.clone();
+        let slow = tokio::spawn(async move { core.probe_providers(Probe::Launch).await });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let started = Instant::now();
+        fx.core.set_instance_enabled("claude", false).await.unwrap();
+        fx.core.probe_provider_now("claude").await;
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        assert_eq!(state_of(&fx, "claude"), Some(State::Off));
+        slow.await.unwrap();
+        assert_eq!(state_of(&fx, "claude"), Some(State::Off), "the late answer is about an instance that is now off");
+    }
+
+    #[tokio::test]
+    async fn turning_an_instance_on_drops_its_off_answer_until_it_is_asked() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        fx.core.set_instance_enabled("claude", false).await.unwrap();
+        fx.core.probe_provider_now("claude").await;
+        fx.core.set_instance_enabled("claude", true).await.unwrap();
+        assert_eq!(state_of(&fx, "claude"), None);
     }
 
     #[tokio::test]

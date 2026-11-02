@@ -433,7 +433,11 @@ impl Core {
     }
 
     pub fn provider_set_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
-        self.change_provider(instance_id, |provider| provider.enabled = enabled)
+        let id = self.change_provider(instance_id, |provider| provider.enabled = enabled)?;
+        if enabled {
+            self.provider_answer_forget(instance_id);
+        }
+        Ok(id)
     }
 
     /// Removes a provider instance and retires its id. Its config folder and the login in it stay on disk.

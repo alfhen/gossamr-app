@@ -141,9 +141,11 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           <Button size="sm" onClick={() => p.onCopy(s.fix as string)}>
             {p.copied ? "Copied" : "Copy"}
           </Button>
-          <Button size="sm" onClick={p.onOpenTerminal}>
-            Open Terminal
-          </Button>
+          {c.kind !== "provider" && (
+            <Button size="sm" onClick={p.onOpenTerminal}>
+              Open Terminal
+            </Button>
+          )}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">

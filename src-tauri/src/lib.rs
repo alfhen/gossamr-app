@@ -348,12 +348,17 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
 }
 
 /// Turns an instance on or off, then asks it how it stands: Off for one just turned off, a real answer for one turned on.
+/// A provider is asked in the background, because its CLI can be slow.
 #[tauri::command]
 async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, instance_id: String, enabled: bool) -> Result<()> {
     let connection_id = core.set_instance_enabled(&instance_id, enabled).await?;
     if core.is_provider(&instance_id) {
-        core.probe_provider_now(&instance_id).await;
         wire::changed(&app, wire::Topic::Connections, &connection_id);
+        let (app, core) = (app.clone(), core.inner().clone());
+        tauri::async_runtime::spawn(async move {
+            core.probe_provider_now(&instance_id).await;
+            wire::changed(&app, wire::Topic::Connections, &connection_id);
+        });
         return Ok(());
     }
     if enabled {
