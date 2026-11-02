@@ -65,13 +65,12 @@ async fn a_run_queued_with_no_workstream_choice_gets_the_settings_default_for_ag
 #[tokio::test]
 async fn a_run_queued_in_a_workstream_gets_that_workstreams_choice_and_one_queued_before_the_change_keeps_its_own() {
     let rig = ready().await;
-    add_second_claude(&rig);
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
     let before = rig.fx.core.queue_test_run(crate::domain::RunSpec { workstream: Some(ws.id.clone()), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let set = rig.fx.core.set_workstream_model(&rig.fx.scope, &ws.id, Some(pick("claude_2", "opus"))).await.unwrap();
-    assert_eq!(set.agents_model, Some(pick("claude_2", "opus")));
+    let set = rig.fx.core.set_workstream_model(&rig.fx.scope, &ws.id, Some(pick("claude", "opus"))).await.unwrap();
+    assert_eq!(set.agents_model, Some(pick("claude", "opus")));
     let after = rig.fx.core.queue_test_run(crate::domain::RunSpec { workstream: Some(ws.id.clone()), ..rig.spec(2) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    assert_eq!((before.runs_on, after.runs_on), (Some(pick("claude", "default")), Some(pick("claude_2", "opus"))));
+    assert_eq!((before.runs_on, after.runs_on), (Some(pick("claude", "default")), Some(pick("claude", "opus"))));
 
     rig.fx.core.set_workstream_model(&rig.fx.scope, &ws.id, None).await.unwrap();
     let third = rig.fx.core.queue_test_run(crate::domain::RunSpec { workstream: Some(ws.id), ..rig.spec(3) }, Some(rig.fx.item("CA-1"))).await.unwrap();
@@ -108,32 +107,80 @@ async fn a_run_stored_with_no_choice_takes_the_settings_default_when_it_launches
     assert_eq!(rig.get(&run).await.runs_on, Some(pick("claude", "default")));
 }
 
+async fn on_second_claude(rig: &Rig, n: u32) -> Run {
+    let run = rig.queued(n).await;
+    rig.set(&run, |r| r.runs_on = Some(pick("claude_2", "opus"))).await
+}
+
 #[tokio::test]
-async fn a_run_whose_instance_cannot_run_agents_yet_waits_with_its_reason_and_starts_once_it_has_another_choice() {
+async fn a_second_instance_is_refused_for_agents_wherever_a_choice_is_made_until_runs_are_tracked_per_instance() {
     let rig = ready().await;
     add_second_claude(&rig);
+    let words = "Agents can't run on Claude personal yet.";
     let run = rig.queued(1).await;
-    rig.svc.set_model(&run.id, pick("claude_2", "opus")).await.unwrap();
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
+    let defaults = crate::model_choice::ModelDefaults { pip: None, agents: Some(pick("claude_2", "opus")) };
+    assert!(matches!(rig.fx.core.model_defaults(Some(defaults)), Err(Error::Input(w)) if w == words));
+    assert!(matches!(rig.fx.core.set_workstream_model(&rig.fx.scope, &ws.id, Some(pick("claude_2", "opus"))).await, Err(Error::Input(w)) if w == words));
+    assert!(matches!(rig.svc.set_model(&run.id, pick("claude_2", "opus")).await, Err(Error::Input(w)) if w == words));
+    assert_eq!(rig.get(&run).await.runs_on, Some(pick("claude", "default")));
+}
+
+#[tokio::test]
+async fn a_run_stored_on_a_second_instance_waits_with_its_reason_and_starts_once_it_has_another_choice() {
+    let rig = ready().await;
+    add_second_claude(&rig);
+    let run = on_second_claude(&rig, 1).await;
 
     let waiting = rig.svc.start_now(&run.id).await.unwrap();
     assert_eq!(waiting.state, RunState::Queued);
-    assert_eq!(waiting.wait_reason.as_deref(), Some("Agents can't run on Claude yet."));
-    assert!(waiting.slot_wait_since.is_some());
+    assert_eq!(waiting.wait_reason.as_deref(), Some("Agents can't run on Claude personal yet."));
+    assert_eq!(waiting.slot_wait_since, None, "it waits for its choice, not for a slot");
     assert_eq!(rig.cli.launches(), 0);
 
-    rig.svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
-    assert_eq!(rig.get(&run).await.wait_reason, None, "a new choice clears what the old one waited for");
+    let started = rig.svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
+    assert_eq!((started.state, started.wait_reason, started.slot_wait_since), (RunState::Launching, None, None), "a new choice is tried at once");
+    assert_eq!(rig.cli.launches(), 1);
+}
+
+#[tokio::test]
+async fn a_run_in_no_workstream_that_waits_for_its_choice_starts_by_itself_when_the_reason_clears_even_after_a_restart() {
+    let rig = ready().await;
+    let off = ToolchainError::Unusable { reason: Reason::Off, name: "Claude".into() };
+    let run = rig.queued(1).await;
+    let blocked = Instances { default: Toolchain::new(rig.cli.clone(), rig_env(&rig)), by_id: HashMap::from([("claude".to_owned(), Err(off))]), gets: AtomicUsize::new(0) };
+    let before = RunService::new(rig.fx.core.clone(), Arc::new(blocked), RunIndex::load(&rig.fx.dir.join("index2")), Arc::new(|_| {})).with_home(rig.fx.home.canonicalize().unwrap());
+    let waiting = before.start_now(&run.id).await.unwrap();
+    assert_eq!(waiting.wait_reason.as_deref(), Some("Waits for Claude, which is off."));
+
+    // The app restarts and the person turns Claude back on.
+    rig.svc.recover().await;
+    let kept = rig.get(&run).await;
+    assert_eq!((kept.state, kept.wait_reason), (RunState::Queued, waiting.wait_reason));
     assert_eq!(rig.svc.launch_waiting().await.unwrap(), vec![run.id.clone()]);
-    let started = rig.get(&run).await;
-    assert_eq!((started.state, started.wait_reason, started.slot_wait_since), (RunState::Launching, None, None));
+    assert_eq!(rig.get(&run).await.state, RunState::Launching);
+}
+
+#[tokio::test]
+async fn a_run_waiting_for_its_choice_is_not_in_the_slot_line_and_holds_no_one_behind_it() {
+    let rig = ready().await;
+    add_second_claude(&rig);
+    let blocked = on_second_claude(&rig, 1).await;
+    rig.svc.start_now(&blocked.id).await.unwrap();
+
+    let next = rig.queued(2).await;
+    let noted = rig.svc.note_slot_wait(&next.id).await.unwrap();
+    assert_eq!(noted.slot_wait_since, None, "free slots, so nothing for it to wait behind");
+    let started = rig.svc.start_now(&next.id).await.unwrap();
+    assert_eq!(started.state, RunState::Launching);
+    assert_eq!(rig.get(&blocked).await.slot_wait_since, None);
 }
 
 #[tokio::test]
 async fn a_run_whose_instance_was_removed_waits_and_says_to_pick_another() {
     let rig = ready().await;
     add_second_claude(&rig);
-    let run = rig.queued(1).await;
-    rig.svc.set_model(&run.id, pick("claude_2", "opus")).await.unwrap();
+    let run = on_second_claude(&rig, 1).await;
     AppConfig::update(&rig.fx.core.data_dir(), |config| {
         connections::remove_provider(config, "claude_2");
     })
@@ -237,4 +284,20 @@ async fn a_change_while_the_launcher_holds_the_lock_waits_and_then_loses_to_the_
         Ok(_) => assert_eq!(stored.runs_on, Some(pick("claude", "opus"))),
         Err(_) => assert_eq!(stored.runs_on, Some(pick("claude", "default"))),
     }
+}
+
+#[tokio::test]
+async fn retrying_a_failed_run_whose_instance_is_off_queues_it_to_wait_and_counts_as_a_retry() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let failed = rig.set(&run, |r| {
+        r.state = RunState::Failed;
+        r.failure = Some(crate::domain::RunFailure::NotSignedIn);
+    })
+    .await;
+    let off = ToolchainError::Unusable { reason: Reason::Off, name: "Claude".into() };
+    let tools = Instances { default: Toolchain::new(rig.cli.clone(), rig_env(&rig)), by_id: HashMap::from([("claude".to_owned(), Err(off))]), gets: AtomicUsize::new(0) };
+    let svc = RunService::new(rig.fx.core.clone(), Arc::new(tools), RunIndex::load(&rig.fx.dir.join("index2")), Arc::new(|_| {})).with_home(rig.fx.home.canonicalize().unwrap());
+    let retried = svc.retry_launch(&failed.id).await.unwrap();
+    assert_eq!((retried.state, retried.wait_reason.as_deref()), (RunState::Queued, Some("Waits for Claude, which is off.")));
 }

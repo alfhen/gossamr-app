@@ -275,7 +275,7 @@ mod tests {
         let fx = crate::inbox::testing::fixture().await;
         second_claude(&fx);
         assert_eq!(fx.core.model_defaults(None).unwrap(), ModelDefaults::default());
-        let chosen = ModelDefaults { pip: Some(ModelChoice { effort: Some("high".into()), ..pick("claude_2", "opus") }), agents: Some(pick("claude_2", "default")) };
+        let chosen = ModelDefaults { pip: Some(ModelChoice { effort: Some("high".into()), ..pick("claude_2", "opus") }), agents: Some(pick("claude", "sonnet")) };
         assert_eq!(fx.core.model_defaults(Some(chosen.clone())).unwrap(), chosen);
         assert_eq!(fx.core.model_defaults(None).unwrap(), chosen);
     }

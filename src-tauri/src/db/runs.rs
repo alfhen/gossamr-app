@@ -167,14 +167,14 @@ impl Db {
         Ok(n > 0)
     }
 
-    /// Changes a run's choice only while it is still queued, and clears what it waited for, since the new choice may not
-    /// wait. False when the run has started, or is not this handle's.
+    /// Changes a run's choice only while it is still queued. A wait reason stays until the launcher settles the new
+    /// choice, so the run stays one that waits. False when the run has started, or is not this handle's.
     pub fn set_queued_run_choice(&self, id: &str, choice: &ModelChoice) -> Result<bool> {
         if !self.sees_run(id)? {
             return Ok(false);
         }
         let n = self.conn.execute(
-            "UPDATE runs SET runs_on = ?2, data = json_remove(json_set(data, '$.runsOn', json(?3)), '$.waitReason') WHERE id = ?1 AND state = 'queued'",
+            "UPDATE runs SET runs_on = ?2, data = json_set(data, '$.runsOn', json(?3)) WHERE id = ?1 AND state = 'queued'",
             params![id, choice.instance_id, serde_json::to_string(choice)?],
         )?;
         Ok(n > 0)
@@ -650,7 +650,7 @@ mod tests {
 
         assert!(db.set_queued_run_choice("a", &choice("claude_2", "opus")).unwrap());
         let after = db.run("a").unwrap().unwrap();
-        assert_eq!((after.runs_on, after.wait_reason), (Some(choice("claude_2", "opus")), None));
+        assert_eq!((after.runs_on, after.wait_reason.as_deref()), (Some(choice("claude_2", "opus")), Some("Waits for Claude, which is off.")));
         assert_eq!(db.runs(&RunQuery { runs_on: Some("claude_2".into()), ..Default::default() }).unwrap().len(), 1);
 
         assert!(!db.set_queued_run_choice("b", &choice("claude_2", "opus")).unwrap());

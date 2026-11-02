@@ -600,7 +600,8 @@ export class MockRuns {
           (!query.states || query.states.includes(r.state)) &&
           (!query.item || r.item?.externalId === query.item.externalId) &&
           (!query.connectionId || r.connectionId === query.connectionId) &&
-          (!query.workstream || r.spec.workstream === query.workstream),
+          (!query.workstream || r.spec.workstream === query.workstream) &&
+          (!query.runsOn || (r.runsOn?.instanceId ?? "claude") === query.runsOn),
       )
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   }

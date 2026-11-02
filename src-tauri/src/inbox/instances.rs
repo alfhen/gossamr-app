@@ -478,6 +478,7 @@ impl Core {
 
     /// Removes a provider instance and retires its id. Its config folder and the login in it stay on disk.
     pub async fn provider_remove(&self, instance_id: &str) -> Result<()> {
+        let _no_launch = self.launching.lock().await;
         self.refuse_while_instance_runs(instance_id).await?;
         let mut removed = false;
         AppConfig::update_if(&self.data_dir, |config| {
@@ -1101,6 +1102,29 @@ mod tests {
         }
         fx.core.provider_remove("claude_2").await.unwrap();
         assert_eq!(provider_ids(&fx), ["claude"]);
+    }
+
+    #[tokio::test]
+    async fn removing_a_provider_waits_for_a_launch_under_way_and_is_then_refused() {
+        let fx = adopted().await;
+        add_provider(&fx, "claude_2", None);
+        let mut run = Run::queued("racing".into(), "p-racing".into(), fx.scope.connection_id.clone(), None, crate::domain::fixtures::run_spec(), chrono::Utc::now());
+        run.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "opus".into(), effort: None });
+        run.expected_worktree = "/tmp/racing".into();
+        fx.insert_run(&run).await;
+
+        let launch = fx.core.launching.lock().await;
+        let core = fx.core.clone();
+        let removal = tokio::spawn(async move { core.provider_remove("claude_2").await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!removal.is_finished(), "removal waits for the launch lock");
+
+        run.state = RunState::Launching;
+        fx.core.save_run(&run).await.unwrap();
+        drop(launch);
+        let outcome = removal.await.unwrap();
+        assert!(matches!(outcome, Err(Error::Input(words)) if words == "Stop its running agent first."));
+        assert_eq!(provider_ids(&fx), ["claude", "claude_2"]);
     }
 
     #[tokio::test]

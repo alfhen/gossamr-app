@@ -693,6 +693,8 @@ export interface RunQuery {
   connectionId?: string;
   /** Runs linked to this workstream. */
   workstream?: string;
+  /** Runs on this provider instance; a run with no choice is on the default instance. */
+  runsOn?: string;
 }
 
 /**

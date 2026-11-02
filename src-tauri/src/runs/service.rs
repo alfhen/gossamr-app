@@ -59,8 +59,9 @@ pub struct RunService {
     pub(super) tools: Arc<dyn ToolchainSource>,
     pub(super) index: RunIndex,
     /// Held from the cap check to the end of the launch, so two approvals can't both pass the cap. The tracker takes
-    /// it while it writes runs, so a poll never overwrites a launch half-recorded.
-    pub(super) launching: tokio::sync::Mutex<()>,
+    /// it while it writes runs, so a poll never overwrites a launch half-recorded. It is `Core`'s lock, which removing a
+    /// provider instance also takes.
+    pub(super) launching: Arc<tokio::sync::Mutex<()>>,
     /// Recovery runs at startup and again after sign-in; two passes must not act on the same run. The tracker skips a
     /// poll while one is running.
     pub(super) recovery: tokio::sync::Mutex<()>,
@@ -137,10 +138,10 @@ fn claude_error(why: Failure) -> Error {
 impl RunService {
     pub fn new(core: Arc<Core>, tools: Arc<dyn ToolchainSource>, index: RunIndex, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
         Self {
+            launching: core.launching.clone(),
             core,
             tools,
             index,
-            launching: tokio::sync::Mutex::new(()),
             recovery: tokio::sync::Mutex::new(()),
             in_flight: Mutex::new(HashSet::new()),
             cleaning: Mutex::new(HashSet::new()),
@@ -525,7 +526,7 @@ impl RunService {
     }
 
     /// Starts the runs that wait, in approval order (`queued_at`, then id), while fewer than the cap are live: queued
-    /// runs in a workstream that is open and not paused, and runs in no workstream a person approved over the cap. The
+    /// runs in a workstream that is open and not paused, and runs in no workstream a person approved over the cap or whose choice can't run yet. The
     /// rest stay queued, never failed for the cap: one the cap keeps out is marked as waiting for a slot, and a paused
     /// workstream's is skipped.
     ///
@@ -536,7 +537,7 @@ impl RunService {
     /// waiting run can't take that run's slot while it settles. Returns the ids it started.
     pub async fn launch_waiting(&self) -> Result<Vec<String>> {
         let mut queued = self.core.runs_list(&RunQuery { states: Some(vec![RunState::Queued]), ..RunQuery::default() }).await?;
-        queued.retain(|r| r.spec.workstream.is_some() || r.slot_wait_since.is_some());
+        queued.retain(|r| r.spec.workstream.is_some() || r.slot_wait_since.is_some() || r.wait_reason.is_some());
         queued.sort_by(|a, b| (a.queued_at, &a.id).cmp(&(b.queued_at, &b.id)));
         let mut started = Vec::new();
         for run in queued {
@@ -598,22 +599,22 @@ impl RunService {
         self.prepare(run).await.map(|who| (true, who))
     }
 
-    /// Whether a queued run is one `launch_waiting` may start: in an open workstream, or waiting for a slot.
+    /// Whether a queued run is one `launch_waiting` may start: in an open workstream, or waiting for a slot or for its choice.
     async fn may_start(&self, run: &Run) -> bool {
         match run.spec.workstream {
             Some(_) => self.workstream_runs(run).await,
-            None => run.slot_wait_since.is_some(),
+            None => run.slot_wait_since.is_some() || run.wait_reason.is_some(),
         }
     }
 
     /// Looks for the session of a failed launch and adopts it; only when there is none does it launch again.
     pub async fn retry_launch(&self, run_id: &str) -> Result<Run> {
         match self.start(run_id, true).await? {
-            (run, true) => {
+            (run, launched) if launched || (run.state == RunState::Queued && run.wait_reason.is_some()) => {
                 self.note_person(&run, "run_retried", None).await;
                 Ok(run)
             }
-            (run, false) => Err(Error::Proposal(format!("This run is {} and has nothing to retry.", run.state.as_str()))),
+            (run, _) => Err(Error::Proposal(format!("This run is {} and has nothing to retry.", run.state.as_str()))),
         }
     }
 
@@ -639,7 +640,7 @@ impl RunService {
 
     /// After a restart: runs that were launching are matched to their sessions for up to the recovery window, adopted
     /// if found and failed if not. Queued runs stay queued; one in no workstream that was waiting for a slot before the
-    /// restart stops waiting, so it is the person's to start again (a workstream's keeps waiting). The
+    /// restart stops waiting, so it is the person's to start again (a workstream's keeps waiting, and so does a run waiting for its choice). The
     /// same pass runs again on sign-in; a wait from this session is kept then, so an
     /// queued run still starts when a slot frees. Live runs missing from the index are put back.
     pub async fn recover(&self) {
