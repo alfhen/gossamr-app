@@ -801,15 +801,15 @@ export interface AgentSettings {
   terminal: "terminal" | "iTerm";
   /** Which system notifications about runs to show; a backend that sent none has "workstream". */
   notifications?: NoticeMode;
-  /** What git does in Gossamr's work folder. Read-only: the backend sends it and ignores it when settings are saved. */
-  workFolder?: WorkFolderGit;
 }
 
 /** Who git commits as in `~/Gossamr/agents`, and whether the person's git settings choose that by folder. */
 export interface WorkFolderGit {
-  /** The address git commits with there; null when git has no `user.email`. */
-  commitEmail: string | null;
-  /** Their `~/.gitconfig` has `includeIf "gitdir:…"` rules. */
+  /** The address in their global git settings; null when there is none. */
+  globalEmail: string | null;
+  /** The address git commits with inside the newest clone of each owner; empty until Gossamr has made a clone. */
+  owners: { owner: string; commitEmail: string | null }[];
+  /** Their git settings choose an address by folder, and no clone in the work folder gets any but the global one. */
   includeIf: boolean;
 }
 

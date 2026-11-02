@@ -13,6 +13,8 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use super::env::RunEnv;
+use super::fresh::{agents_root, newest_clone_per_owner};
+use super::limits::{OwnerAddress, WorkFolderGit};
 
 /// How long one git command may take. The app runs them one repository at a time, where 5 seconds is generous; the test
 /// suite runs hundreds of tests at once on a loaded CI runner, where a plain `git remote get-url` has taken longer, so tests wait
@@ -20,6 +22,8 @@ use super::env::RunEnv;
 const GIT_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(30) } else { Duration::from_secs(5) };
 const WORD_LIMIT: usize = 16;
 const CONFIG_VALUE_LIMIT: usize = 200;
+/// How many owners' folders Settings reads an address in.
+const OWNERS_SHOWN: usize = 6;
 
 /// Who git commits as in a folder. Either part is `None` when git has no setting for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -113,10 +117,41 @@ impl Git {
         Some(name.strip_prefix("origin/").unwrap_or(&name).to_owned()).filter(|b| !b.is_empty())
     }
 
+    /// Who git commits as in the work folder under `home`, and whether the person's git settings pick that by folder.
+    /// `includeIf` rules apply only inside a repository, so the address is read inside the newest clone of each owner,
+    /// never at the folder itself or in `~`. None when git can't be run.
+    pub async fn work_folder_git(&self, home: &Path) -> Option<WorkFolderGit> {
+        if !self.runs(home).await {
+            return None;
+        }
+        let global_email = self.global_email(home).await;
+        let mut owners = Vec::new();
+        for (owner, clone) in newest_clone_per_owner(&agents_root(home)).into_iter().take(OWNERS_SHOWN) {
+            owners.push(OwnerAddress { owner, commit_email: self.commit_email(&clone).await });
+        }
+        let include_if = self.picks_settings_by_folder(home).await && owners.iter().all(|o| o.commit_email == global_email);
+        Some(WorkFolderGit { global_email, owners, include_if })
+    }
+
     /// The address and signing key git would commit with in `dir`: the local settings first, then the global ones the
     /// folder's `includeIf` rules choose. Reading them runs no program.
     pub async fn commit_identity(&self, dir: &Path) -> CommitIdentity {
-        CommitIdentity { email: self.config_value(dir, "user.email").await, signing_key: self.config_value(dir, "user.signingkey").await }
+        CommitIdentity { email: self.config_value(dir, &["user.email"]).await, signing_key: self.config_value(dir, &["user.signingkey"]).await }
+    }
+
+    /// The address git would commit with in the repository at `dir`.
+    pub async fn commit_email(&self, dir: &Path) -> Option<String> {
+        self.config_value(dir, &["user.email"]).await
+    }
+
+    /// The address in the person's global git settings, which `includeIf` rules can override inside a repository.
+    pub async fn global_email(&self, dir: &Path) -> Option<String> {
+        self.config_value(dir, &["--global", "user.email"]).await
+    }
+
+    /// Whether git runs at all, so a missing address can be told from a git that couldn't be asked.
+    pub async fn runs(&self, dir: &Path) -> bool {
+        self.out(dir, &["version"]).await.is_some()
     }
 
     /// Whether `~/.gitconfig` has `includeIf "gitdir:…"` rules, which pick settings by the folder a repository is in.
@@ -125,8 +160,8 @@ impl Git {
         self.out(dir, &["config", "--global", "--get-regexp", "^includeif\\.gitdir"]).await.is_some_and(|rules| !rules.is_empty())
     }
 
-    async fn config_value(&self, dir: &Path, key: &str) -> Option<String> {
-        let value = self.out(dir, &["config", "--get", key]).await?;
+    async fn config_value(&self, dir: &Path, args: &[&str]) -> Option<String> {
+        let value = self.out(dir, &[&["config", "--get"], args].concat()).await?;
         let value: String = value.chars().filter(|c| !c.is_control()).take(CONFIG_VALUE_LIMIT).collect();
         Some(value).filter(|v| !v.is_empty())
     }
@@ -252,6 +287,8 @@ case "$*" in
   "ls-remote --symref -- "*) printf 'ref: refs/heads/main\tHEAD\nabc\tHEAD\n' ;;
   "config --get user.email") cat "$dir/.fake-email" 2>/dev/null || exit 1 ;;
   "config --get user.signingkey") cat "$dir/.fake-signingkey" 2>/dev/null || exit 1 ;;
+  "config --get --global user.email") cat "$dir/.fake-global-email" 2>/dev/null || exit 1 ;;
+  "version") echo "git version 2.0" ;;
   "config --global --get-regexp ^includeif\\.gitdir") cat "$dir/.fake-includeif" 2>/dev/null || exit 1 ;;
   "config --local --list --name-only -z") sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
   "config --local --get-all "*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null; true ;;
@@ -413,6 +450,63 @@ mod tests {
         std::fs::write(home.join(".gitconfig"), format!("[user]\n\temail = {}\n", "a".repeat(500))).unwrap();
         assert_eq!(git_in(&home).commit_identity(&clone).await.email.unwrap().len(), CONFIG_VALUE_LIMIT);
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    fn rule_for(home: &Path, folder: &str, email: &str) -> String {
+        std::fs::write(home.join("acme.gitconfig"), format!("[user]\n\temail = {email}\n")).unwrap();
+        format!("[includeIf \"gitdir:{}/{folder}\"]\n\tpath = {}/acme.gitconfig\n", home.display(), home.display())
+    }
+
+    #[tokio::test]
+    async fn settings_show_the_address_a_rule_for_the_work_folder_gives_inside_its_clones() {
+        let home = scratch("work-folder-git");
+        let global = "[user]\n\temail = alf@global.example\n";
+        std::fs::write(home.join(".gitconfig"), format!("{global}{}", rule_for(&home, "Code/acme/", "alf@code.example"))).unwrap();
+        init(&home.join("Gossamr/agents/acme/webshop"));
+        let git = git_in(&home);
+        let before = git.work_folder_git(&home).await.unwrap();
+        assert_eq!(before.global_email.as_deref(), Some("alf@global.example"));
+        assert_eq!(before.owners, vec![OwnerAddress { owner: "acme".into(), commit_email: Some("alf@global.example".into()) }]);
+        assert!(before.include_if, "rules exist and none reaches the work folder");
+
+        std::fs::write(home.join(".gitconfig"), format!("{global}{}", rule_for(&home, "Gossamr/agents/acme/", "alf@acme.example"))).unwrap();
+        let after = git.work_folder_git(&home).await.unwrap();
+        assert_eq!(after.owners[0].commit_email.as_deref(), Some("alf@acme.example"), "read inside the clone, where the rule applies");
+        assert!(!after.include_if, "the rule the warning asks for clears it");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn settings_do_not_read_the_address_from_the_folder_itself_or_from_a_repository_in_home() {
+        let home = scratch("work-folder-home-repo");
+        std::fs::write(home.join(".gitconfig"), "[user]\n\temail = alf@global.example\n").unwrap();
+        init(&home);
+        std::fs::write(home.join(".git/config"), format!("{}[user]\n\temail = alf@dotfiles.example\n", std::fs::read_to_string(home.join(".git/config")).unwrap())).unwrap();
+        std::fs::create_dir_all(agents_root(&home)).unwrap();
+        let found = git_in(&home).work_folder_git(&home).await.unwrap();
+        assert_eq!((found.global_email.as_deref(), found.owners.is_empty(), found.include_if), (Some("alf@global.example"), true, false));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn settings_read_nothing_when_git_cannot_run() {
+        let gone = Git { program: PathBuf::from("/nonexistent/git"), env: Arc::new(RunEnv::from_pairs([("PATH", "/nonexistent")])) };
+        assert_eq!(gone.work_folder_git(Path::new("/")).await, None);
+    }
+
+    #[test]
+    fn the_newest_clone_of_each_owner_is_found_and_links_and_plain_folders_are_not() {
+        let root = scratch("newest-clones");
+        for clone in ["acme/old", "acme/new", "zeta/only"] {
+            std::fs::create_dir_all(root.join(clone).join(".git")).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::create_dir_all(root.join("acme/plain")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::os::unix::fs::symlink("/tmp", root.join("linked")).unwrap();
+        assert_eq!(newest_clone_per_owner(&root), vec![("acme".to_owned(), root.join("acme/new")), ("zeta".to_owned(), root.join("zeta/only"))]);
+        assert!(newest_clone_per_owner(&root.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

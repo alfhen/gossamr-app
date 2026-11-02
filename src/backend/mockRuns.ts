@@ -1,4 +1,4 @@
-import { type AgentSettings, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -415,7 +415,7 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
     endedAt: ended ? new Date(last).toISOString() : null,
     ...seed.over,
   };
-  return { ...run, inWorkFolder: inWork(run.spec.clonePath), ...(inWork(run.spec.clonePath) && { commitEmail: COMMIT_EMAIL }) };
+  return { ...run, inWorkFolder: inWork(run.spec.clonePath), ...(inWork(run.spec.clonePath) && run.state !== "queued" && { commitEmail: COMMIT_EMAIL }) };
 }
 
 /** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
@@ -671,7 +671,6 @@ export class MockRuns {
       digest: mockDigest(spec),
       expectedWorktree,
       inWorkFolder: inWork(spec.clonePath),
-      commitEmail: COMMIT_EMAIL,
       state: "queued",
       shortId: null,
       sessionId: null,
@@ -798,7 +797,8 @@ export class MockRuns {
   private markLaunching(run: Run, patch: Partial<Run> = {}, at: string = this.now()): Run {
     this.launchLog.push({ runId: run.id, role: run.spec.role, guard: [GUARD, AGENT_GUARD].join(" "), at });
     if (!this.reports.has(run.id)) this.reports.set(run.id, { offered: true, report: null, revision: 0, calls: 0, rejections: 0, stale: false });
-    return this.update(run.id, { ...patch, state: "launching", launchedAt: at, ...(run.slotWaitSince !== undefined ? { slotWaitSince: null } : {}) });
+    const identity = inWork(run.spec.clonePath) ? { commitEmail: COMMIT_EMAIL } : {};
+    return this.update(run.id, { ...patch, ...identity, state: "launching", launchedAt: at, ...(run.slotWaitSince !== undefined ? { slotWaitSince: null } : {}) });
   }
 
   /** Every launch so far, oldest first. */
@@ -1287,7 +1287,11 @@ export class MockRuns {
   readonly unpushed = new Set<string>();
 
   settings(): AgentSettings {
-    return { ...this.limits, workFolder: { commitEmail: COMMIT_EMAIL, includeIf: this.gitRules } };
+    return this.limits;
+  }
+
+  workFolderGit(): WorkFolderGit {
+    return { globalEmail: COMMIT_EMAIL, owners: [{ owner: "acme", commitEmail: COMMIT_EMAIL }], includeIf: this.gitRules };
   }
 
   setSettings(settings: AgentSettings): AgentSettings {
@@ -1298,7 +1302,7 @@ export class MockRuns {
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
     };
-    return this.settings();
+    return this.limits;
   }
 
   cleanup(id: string): CleanupResult {

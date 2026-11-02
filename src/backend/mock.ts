@@ -620,6 +620,10 @@ export class MockBackend implements Backend {
     return this.runs.settings();
   }
 
+  async runsWorkFolderGit() {
+    return this.runs.workFolderGit();
+  }
+
   async setNeedsBadge(_count: number) {}
 
   async reduceTransparency() {

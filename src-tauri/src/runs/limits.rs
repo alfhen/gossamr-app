@@ -9,19 +9,20 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkFolderGit {
-    /// The address git commits with there; none when git has no `user.email`.
-    pub commit_email: Option<String>,
-    /// The person's git settings choose settings by folder, which don't reach the work folder until they add a rule.
+    /// The address in the person's global git settings; none when there is none.
+    pub global_email: Option<String>,
+    /// The address git commits with inside the newest clone of each owner. Empty until Gossamr has made a clone.
+    pub owners: Vec<OwnerAddress>,
+    /// Their git settings choose an address by folder, and no clone in the work folder gets anything but the global one.
     pub include_if: bool,
 }
 
-/// The saved agent settings and the work folder's git settings beside them.
+/// Who git commits as inside one owner's clones.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentSettingsView {
-    #[serde(flatten)]
-    pub settings: AgentSettings,
-    pub work_folder: WorkFolderGit,
+pub struct OwnerAddress {
+    pub owner: String,
+    pub commit_email: Option<String>,
 }
 
 impl RunService {

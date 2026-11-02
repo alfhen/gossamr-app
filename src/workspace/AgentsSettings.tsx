@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { type AgentSettings, type Run, type WorkFolderGit } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
+import { Icon } from "./AgentIcons";
 import { roleLabel } from "../lib/roles";
 import { slotWaiters, stopAllLabel, stopAllText, stoppable } from "./agentsLogic";
 
@@ -19,6 +20,8 @@ export interface SettingsViewProps {
   keepRunning: number | null;
   /** Null until the backend has answered. */
   settings: AgentSettings | null;
+  /** Who git commits as in the work folder: undefined until it is read, null when git couldn't be asked. */
+  workFolder?: WorkFolderGit | null;
   /** A save is under way; the fields wait so a second one can't send values from before the first. */
   settingsSaving?: boolean;
   cleanup: CleanupOffer | null;
@@ -30,7 +33,7 @@ export interface SettingsViewProps {
 }
 
 /** Agent settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onRevealWorkFolder, onCleanup, onStopAll, onClose }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, workFolder, settingsSaving = false, cleanup, onSettings, onRevealWorkFolder, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
@@ -105,7 +108,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
       </Sec>
 
       <Sec title="Where agents work">
-        <WorkFolder git={settings?.workFolder} onReveal={onRevealWorkFolder} />
+        <WorkFolder git={workFolder} onReveal={onRevealWorkFolder} />
       </Sec>
 
       <Sec title="Clean up">
@@ -144,20 +147,31 @@ export const INCLUDE_IF_WARNING = "Your git settings choose an address by folder
 
 const LINE = "m-0 border-b border-ws-sep py-2.5 first:pt-0";
 
+const NO_EMAIL = "Git has no email address set for commits there.";
+
+/** One line for each owner's clones, or the global address while there is no clone to read it in. */
+function commitLines(git: WorkFolderGit): string[] {
+  if (git.owners.length > 0) return git.owners.map((o) => (o.commitEmail ? `In ~/Gossamr/agents/${o.owner}/ git commits as ${o.commitEmail}.` : `In ~/Gossamr/agents/${o.owner}/ git has no email address set for commits.`));
+  return [git.globalEmail ? `Git commits there as ${git.globalEmail}, your global address. Gossamr checks again inside a clone once it has made one.` : NO_EMAIL];
+}
+
 /** Where agents work, who git commits as there, and the way to see the folder. */
-function WorkFolder({ git, onReveal }: { git: WorkFolderGit | undefined; onReveal(): void }) {
+function WorkFolder({ git, onReveal }: { git: WorkFolderGit | null | undefined; onReveal(): void }) {
   return (
     <div className="grid">
       <p className={`${LINE} text-ws-ink2`}>
         Agents work in Gossamr&apos;s own clones in ~/Gossamr/agents, one per repository, each agent in its own worktree and branch. Gossamr clones a repository the first time an agent works on it, and fetches before each agent starts. Your clones in ~/Code and other folders aren&apos;t used or changed, so Claude Code, T3 Code and your own work there stay apart.
       </p>
-      {git && (
-        <p data-commit-address className={`${LINE} selectable text-ws-ink2 [overflow-wrap:anywhere]`}>
-          {git.commitEmail ? <>Git commits there as {git.commitEmail}.</> : <>Git has no email address set for commits there.</>}
-        </p>
-      )}
+      {git === null && <p className={`${LINE} text-ws-ink2`}>Gossamr couldn&apos;t ask git who commits there.</p>}
+      {git &&
+        commitLines(git).map((line) => (
+          <p key={line} data-commit-address className={`${LINE} selectable text-ws-ink2 [overflow-wrap:anywhere]`}>
+            {line}
+          </p>
+        ))}
       {git?.includeIf && (
-        <p role="note" data-include-if className={`${LINE} text-ws-warn`}>
+        <p role="note" data-include-if className={`${LINE} flex items-start gap-1.5 text-ws-ink`}>
+          <Icon name="alert" className="mt-0.5 size-[15px] shrink-0 text-ws-warn" />
           {INCLUDE_IF_WARNING}
         </p>
       )}

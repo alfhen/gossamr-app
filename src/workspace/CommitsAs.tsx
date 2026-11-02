@@ -1,14 +1,14 @@
 import type { Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 
-/** "Commits as alf@acme.com · pushes as alfhen"; nothing until git's address in the run's clone has been read. */
+/** "Commits as alf@acme.com · gh is signed in as alfhen"; nothing until git's address in the run's clone has been read. */
 export function commitsAsText(run: Pick<Run, "commitEmail">, pushLogin: string | null): string | null {
   const email = run.commitEmail?.trim();
   if (!email) return null;
-  return pushLogin ? `Commits as ${email} · pushes as ${pushLogin}` : `Commits as ${email}`;
+  return pushLogin ? `Commits as ${email} · gh is signed in as ${pushLogin}` : `Commits as ${email}`;
 }
 
-/** The account `gh` is signed in to, which agents push with unless git has another credential. */
+/** The account `gh` is signed in to. Agents push with git's own credential first, so it is named as gh's, not as the pusher. */
 function usePushLogin(): string | null {
   return useWorkspace((s) => s.connections.find((c) => c.kind === "github" && c.status?.activeLogin)?.status?.activeLogin ?? null);
 }

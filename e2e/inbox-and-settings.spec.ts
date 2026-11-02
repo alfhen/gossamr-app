@@ -57,7 +57,7 @@ test.describe("Where agents work", () => {
     const settings = await openAgentSettings(page);
     const section = settings.locator("section", { has: page.getByRole("heading", { name: "Where agents work" }) });
     await expect(section).toContainText("Agents work in Gossamr's own clones in ~/Gossamr/agents");
-    await expect(section.locator("[data-commit-address]")).toHaveText("Git commits there as alf@acme.example.");
+    await expect(section.locator("[data-commit-address]")).toHaveText("In ~/Gossamr/agents/acme/ git commits as alf@acme.example.");
     await expect(section.locator("[data-include-if]")).toHaveCount(0);
     expect(await page.evaluate(() => globalThis.__gossamrMock?.workFolderReveals())).toBe(0);
     await section.getByRole("button", { name: "Reveal in Finder" }).click();

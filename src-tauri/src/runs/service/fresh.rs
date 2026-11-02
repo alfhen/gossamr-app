@@ -85,17 +85,15 @@ impl RunService {
     pub fn make_work_folder(&self) -> Result<PathBuf> {
         let home = self.fresh_home().ok_or_else(|| Error::Claude("Gossamr can't find your home folder.".into()))?;
         let root = agents_root(&home);
-        std::fs::create_dir_all(&root)?;
+        std::fs::create_dir_all(&root).map_err(|e| Error::Claude(format!("Couldn't make {}: {e}", root.display())))?;
         Ok(root)
     }
 
-    /// Who git commits as in the work folder, and whether the person's git settings pick that by folder.
-    pub async fn work_folder_git(&self) -> WorkFolderGit {
-        let (Some(home), Ok(tools)) = (self.fresh_home(), self.tools.get().await) else { return WorkFolderGit::default() };
-        let git = Git::new(tools.env);
-        let root = agents_root(&home);
-        let dir = if root.is_dir() { root } else { home.clone() };
-        WorkFolderGit { commit_email: git.commit_identity(&dir).await.email, include_if: git.picks_settings_by_folder(&home).await }
+    /// Who git commits as in the work folder, and whether the person's git settings pick that by folder. None when
+    /// git can't be asked.
+    pub async fn work_folder_git(&self) -> Option<WorkFolderGit> {
+        let (home, tools) = (self.fresh_home()?, self.tools.get().await.ok()?);
+        Git::new(tools.env).work_folder_git(&home).await
     }
 
     /// Makes Gossamr's clone of the run's repository, or fetches into it, before a launch. It takes the repository's

@@ -502,22 +502,27 @@ async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo:
     core.code_pull_diff(&connection_id, &repo, number).await
 }
 
-/// How many agents run at once, the terminal to open and the notices, with who git commits as in the work folder.
-/// With `settings`, saves them first, clamped.
+/// How many agents run at once, the terminal to open and the notices. With `settings`, saves them first, clamped.
 #[tauri::command]
-async fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSettings>) -> Result<runs::limits::AgentSettingsView> {
-    let settings = match settings {
-        Some(settings) => runs.set_settings(settings)?,
-        None => runs.settings(),
-    };
-    Ok(runs::limits::AgentSettingsView { settings, work_folder: runs.work_folder_git().await })
+fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSettings>) -> Result<config::AgentSettings> {
+    match settings {
+        Some(settings) => runs.set_settings(settings),
+        None => Ok(runs.settings()),
+    }
+}
+
+/// Who git commits as in Gossamr's clones, and whether the person's git settings choose that by folder. None when git
+/// can't be asked. It runs git, so Settings asks for it apart from the settings themselves.
+#[tauri::command]
+async fn agent_work_folder_git(runs: State<'_, RunsState>) -> Result<Option<runs::limits::WorkFolderGit>> {
+    Ok(runs.work_folder_git().await)
 }
 
 /// Shows `~/Gossamr/agents` in Finder, making it first. The page names no folder.
 #[tauri::command]
 fn runs_reveal_work_folder(runs: State<'_, RunsState>) -> Result<()> {
     let folder = runs.make_work_folder()?;
-    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| error::Error::Claude(format!("Couldn't show the folder in Finder: {e}")))
+    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| error::Error::Claude(format!("Finder didn't open it: {e}")))
 }
 
 /// The models a provider instance offers: the driver's own, then the ones added to it.
@@ -1063,6 +1068,7 @@ pub fn run() {
             runs_open_terminal,
             runs_disk,
             runs_reveal_work_folder,
+            agent_work_folder_git,
             runs_events,
             runs_keep_running,
             runs_list,

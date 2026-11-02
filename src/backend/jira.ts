@@ -20,6 +20,7 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  WorkFolderGit,
   ModelDefaults,
   ModelOption,
   CleanupResult,
@@ -276,6 +277,10 @@ export class JiraBackend implements Backend {
 
   runsSettings() {
     return invoke<AgentSettings>("agent_settings", { settings: null });
+  }
+
+  runsWorkFolderGit() {
+    return invoke<WorkFolderGit | null>("agent_work_folder_git");
   }
 
   providerModels(instanceId: string) {
