@@ -36,9 +36,11 @@ test.describe("the Connections list", () => {
     expect(text.indexOf("Code")).toBeLessThan(text.indexOf("GitHub"));
     expect(text.indexOf("GitHub")).toBeLessThan(text.indexOf("Tickets"));
     expect(text.indexOf("Tickets")).toBeLessThan(text.indexOf("Sample data"));
-    await list.locator('[data-connection="mock"]').focus();
+    await list.locator('[data-connection="mock"]').click();
+    await expect(page.getByRole("region", { name: "Sample data details" })).toBeVisible();
     await page.keyboard.press("ArrowUp");
     await expect(page.getByRole("region", { name: "GitHub details" })).toBeVisible();
+    await expect(rowOf(page, "GitHub").locator("[data-connection]")).toBeFocused();
   });
 
   test("shows the Models group with the provider rows on providers=1", async ({ page }) => {

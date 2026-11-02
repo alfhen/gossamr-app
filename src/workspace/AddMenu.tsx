@@ -33,7 +33,7 @@ export function AddMenu({ entries, primary, onAdd }: AddMenuProps) {
         + Add
       </Button>
       {open && (
-        <div role="menu" aria-label="Add a connection" onKeyDown={onKeyDown} className="absolute top-full right-0 z-40 mt-1 w-[280px] rounded-xl border border-ws-sep2 bg-ws-win py-1 text-sm text-ws-ink shadow-ws-pop">
+        <div role="menu" aria-label="Add a connection" onKeyDown={onKeyDown} className="absolute top-full right-0 z-40 mt-1 w-[280px] ws-glass ws-glass-regular ws-pop rounded-xl py-1 text-sm text-ws-ink">
           {ADD_GROUPS.map((group) => {
             const rows = entries.filter((e) => e.group === group);
             if (rows.length === 0) return null;

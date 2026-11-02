@@ -39,9 +39,9 @@ export function StatusLine({ line }: { line: { text: string; tone: LineTone } })
   );
 }
 
-function badgeText(c: ConnectionInfo) {
+export function badgeText(c: ConnectionInfo) {
   if (c.kind === "provider") return c.driver === "codex" ? "CX" : "CL";
-  return c.kind === "mock" ? "SD" : c.kind === "jira" ? "JI" : keyInitials(c.workspace);
+  return c.kind === "mock" ? "SD" : keyInitials(c.workspace.replace(/^https?:\/\//, ""));
 }
 
 export interface ConnectionsViewProps {
@@ -351,6 +351,7 @@ export function ConnectionsView(p: ConnectionsViewProps) {
 
 export function ConnectionsSection({ now }: { now: Date }) {
   const connections = useWorkspace((s) => s.connections);
+  const loaded = useWorkspace((s) => s.connectionsLoaded);
   const watch = useWorkspace((s) => s.watch);
   const selectedId = useConnectionsUi((s) => s.selected);
   const [checking, setChecking] = useState(false);
@@ -443,7 +444,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
       // Claude and Codex have no sheet to open yet.
-      addable={addEntries(connections).filter((e) => e.group !== "Models")}
+      addable={addEntries(connections, undefined, loaded).filter((e) => e.group !== "Models")}
       onAdd={(id) => {
         if (id === "github") useGithubUi.getState().openConnect();
         else if (id === "jira") useJiraUi.getState().openConnect();

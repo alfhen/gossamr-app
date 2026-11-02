@@ -310,7 +310,7 @@ export function Palette() {
   const watch = useWorkspace((s) => s.watch);
   const proposals = useWorkspace((s) => s.proposals);
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
-  const jira = useWorkspace((s) => s.connections.some((c) => c.kind === "jira"));
+  const jira = useWorkspace((s) => !s.connectionsLoaded || s.connections.some((c) => c.kind === "jira"));
   const unread = useActivity((s) => s.unread);
   const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);

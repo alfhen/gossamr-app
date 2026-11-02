@@ -174,6 +174,10 @@ describe("the + Add entries", () => {
     expect(ids([], true)).toEqual(["github", "jira", "claude"]);
   });
 
+  it("holds Jira back until the connections have loaded, so an unread list never offers it over a sign-in", () => {
+    expect(addEntries([], false, false).map((e) => e.id)).toEqual(["github"]);
+  });
+
   it("puts each entry under its group", () => {
     expect(addEntries([], true).map((e) => [e.id, e.group])).toEqual([["github", "Code"], ["jira", "Tickets"], ["claude", "Models"]]);
   });

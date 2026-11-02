@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { ConnectionsView, type ConnectionsViewProps } from "./Connections";
+import { badgeText, ConnectionsView, type ConnectionsViewProps } from "./Connections";
 import { addEntries } from "./connectionsLogic";
 import { SignInBannerView } from "./SignInBanner";
 
@@ -186,6 +186,20 @@ describe("the connections list", () => {
   it("keeps only the selected row in the tab order, so the arrow keys move between rows", () => {
     const tabIndexes = [...view().matchAll(/data-connection="[^"]+"[^>]*tabindex="(-?\d)"/g)].map((m) => m[1]);
     expect(tabIndexes.sort()).toEqual(["-1", "0"]);
+  });
+});
+
+describe("a row's badge", () => {
+  it("takes a Jira row's from the first two letters of its site, so two sites differ", () => {
+    expect(badgeText(jira)).toBe("AC");
+    expect(badgeText({ ...jira, workspace: "https://beta.atlassian.net" })).toBe("BE");
+    expect(view()).toContain(">AC<");
+  });
+
+  it("keeps SD for the sample data and CL and CX for the providers", () => {
+    expect(badgeText({ ...gh, kind: "mock", workspace: "Sample data" })).toBe("SD");
+    expect(badgeText({ ...gh, kind: "provider", driver: "claude" })).toBe("CL");
+    expect(badgeText({ ...gh, kind: "provider", driver: "codex" })).toBe("CX");
   });
 });
 

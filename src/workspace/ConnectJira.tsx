@@ -329,7 +329,7 @@ export function ConnectJiraDialog() {
     busy.current = false;
     close();
     useToasts.getState().push(`Connected to Jira as ${next.me?.name ?? "you"}.`, "info");
-    if (sameAccount(current, next)) {
+    if (keepsWorkspace(current, next)) {
       const ws = useWorkspace.getState();
       void Promise.all([ws.refreshConnections(true), ws.refresh()]);
     } else {
@@ -341,6 +341,7 @@ export function ConnectJiraDialog() {
     <ConnectFrame label="Connect Jira" onClose={dismiss}>
       <div className="grid gap-4">
         <h2 className="font-display m-0 text-lg font-semibold">Connect Jira</h2>
+        {!instanceId && current?.site && <p className="m-0 text-sm text-ws-ink2">You're signed in to {current.site.name}. Signing in to another site or account replaces it.</p>}
         <ConnectJiraForm
           key={current?.site?.name ?? "new"}
           api={backend}
@@ -354,6 +355,9 @@ export function ConnectJiraDialog() {
     </ConnectFrame>
   );
 }
+
+/** The browser build has no sign-in to start over from, so there the mock workspace stays and only re-reads its connections. */
+export const keepsWorkspace = (before: AuthStatus | null, after: AuthStatus) => !isTauri() || sameAccount(before, after);
 
 /** A new token for the account already signed in keeps the workspace as it is; another site or account starts it over. */
 export function sameAccount(before: AuthStatus | null, after: AuthStatus): boolean {
