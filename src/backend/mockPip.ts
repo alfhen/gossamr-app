@@ -10,7 +10,7 @@ import { mockPipTurns, mockUsage } from "./mockPipTurns";
 import { GENERAL_CONVERSATION, workstreamOfConversation } from "../lib/conversations";
 import { labelsByRun } from "../lib/workstreamStage";
 import { draftPhrase, runPhrase } from "../lib/runNames";
-import { statusId } from "./mockConnector";
+import { MOCK_CONNECTION, statusId } from "./mockConnector";
 import type { LastDrift } from "./mockWorkstreams";
 
 /** What the scripted Pip does for one question. */
@@ -275,6 +275,10 @@ function directAgent(prompt: string, runs: readonly Run[], workstream: PipWorkst
   return say(`I sent ${name} your message.`, ["Messaged an agent"], { message: { runId: run.id, text: message![2] } });
 }
 
+/** The Jira connection a turn works in: the workstream's, else the open ticket's, else the first selected, else the first connection. A key the person types belongs to it. */
+const turnConnection = (context: ScreenContext, workstream: PipWorkstream | null) =>
+  workstream?.item?.connectionId ?? context.item?.connectionId ?? context.selection[0]?.connectionId ?? MOCK_CONNECTION;
+
 const asksToMove = /^\s*(?:please\s+)?move\s+(?:it|this|([A-Z][A-Z0-9]*-\d+))\s+to\s+(.+?)\s*[.!]?\s*$/i;
 
 /** "Move it to QA": a move of the named ticket, else the workstream's or the open one, drafted the way propose_transition does. */
@@ -282,7 +286,7 @@ function moveScript(prompt: string, context: ScreenContext, workstream: PipWorks
   const m = asksToMove.exec(prompt);
   if (!m) return null;
   const key = m[1]?.toUpperCase();
-  const item: ItemRef | null = key ? { connectionId: workstream?.item?.connectionId ?? context.item?.connectionId ?? "mock", externalId: key, key } : (workstream?.item ?? context.item);
+  const item: ItemRef | null = key ? { connectionId: turnConnection(context, workstream), externalId: key, key } : (workstream?.item ?? context.item);
   if (!item) return { steps: [], text: "Which ticket should I move? Name it, or open it first.", filter: null, draft: null };
   const status = m[2].trim();
   return {
@@ -456,7 +460,7 @@ function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
   const key = (attached ?? (context.item ? null : new RegExp(`\\b${ANY_KEY}\\b`).exec(prompt)?.[1]))?.toUpperCase();
   if (!key) return context.item;
   if (context.item?.key.toUpperCase() === key) return context.item;
-  return { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key };
+  return { connectionId: turnConnection(context, null), externalId: key, key };
 }
 
 /** The ways Pip words a check-in comment, one for each that already waits on the ticket. */
@@ -647,7 +651,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     const named: ItemRef | null = key
       ? context.item?.key === key
         ? context.item
-        : { connectionId: context.item?.connectionId ?? context.selection[0]?.connectionId ?? "mock", externalId: key, key }
+        : { connectionId: turnConnection(context, workstream), externalId: key, key }
       : null;
     const item = named ?? workstream?.item ?? (workstream ? null : context.item);
     if (item) {
