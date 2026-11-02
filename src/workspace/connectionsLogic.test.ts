@@ -153,7 +153,7 @@ describe("when code shows", () => {
 describe("removalWarning", () => {
   it("says a provider's folder and login stay on disk and mentions no tickets or token", () => {
     const text = removalWarning({ kind: "provider", displayName: "Claude", workspace: "" });
-    expect(text).toContain("stay on disk");
+    expect(text).toContain("your login and folder stay as they are");
     expect(text).not.toMatch(/token|ticket/);
   });
 });
@@ -181,6 +181,10 @@ describe("the + Add entries", () => {
   it("offers Claude only when provider rows are shown, and never Codex while it cannot run agents", () => {
     expect(ids([], false)).not.toContain("claude");
     expect(ids([], true)).toEqual(["github", "jira", "claude"]);
+  });
+
+  it("offers Codex too when the sample page asks for it", () => {
+    expect(addEntries([], true, true, true).map((e) => e.id)).toEqual(["github", "jira", "claude", "codex"]);
   });
 
   it("holds Jira back until the connections have loaded, so an unread list never offers it over a sign-in", () => {

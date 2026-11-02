@@ -1182,6 +1182,7 @@ export class MockBackend implements Backend {
 
   /** The commands Terminal was opened on, oldest first. */
   readonly terminals: string[] = [];
+  readonly revealedFolders: string[] = [];
   private readonly names = new Map<string, string>();
   /** The provider instances: the default Claude, until it is removed, and the ones added. */
   private readonly providers = new MockProviders();
@@ -1210,6 +1211,10 @@ export class MockBackend implements Backend {
     const added = this.providers.add(driver, displayName, configDir);
     this.connectionsListeners.forEach((l) => l());
     return this.providers.rows().find((r) => r.instanceId === added.id)!;
+  }
+
+  async providerRevealFolder(instanceId: string) {
+    this.revealedFolders.push(this.providers.folderToShow(instanceId));
   }
 
   async connectionOpenTerminal(instanceId: string) {

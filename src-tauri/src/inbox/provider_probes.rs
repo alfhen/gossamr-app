@@ -147,7 +147,8 @@ impl Core {
         let typed = instance.config.config_dir.as_deref();
         let path = typed.map(|t| provider_folder::expand(t, self.home.as_deref().unwrap_or(Path::new(""))));
         let folder = typed.zip(path.as_deref()).map(|(typed, path)| Folder { typed, path });
-        provider_probe::probe(instance.driver, binary.as_deref(), folder, &env, Timeouts::default()).await
+        let ignored = shell.map(|shell| login.ignored(shell)).unwrap_or_default();
+        Snapshot { ignored, ..provider_probe::probe(instance.driver, binary.as_deref(), folder, &env, Timeouts::default()).await }
     }
 
     #[cfg(test)]
@@ -233,6 +234,16 @@ mod tests {
         let mut seen = runs(&calls);
         seen.sort();
         assert_eq!(seen, [format!("{} nokey", fx.home.join(".claude-work").display()), "default sk-shell".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn an_instance_with_a_folder_names_the_shells_login_variables_it_ignores_and_the_default_names_none() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        assert_eq!(fx.core.provider_snapshot("claude_2").unwrap().ignored, ["ANTHROPIC_API_KEY"]);
+        assert!(fx.core.provider_snapshot("claude").unwrap().ignored.is_empty());
     }
 
     #[tokio::test]

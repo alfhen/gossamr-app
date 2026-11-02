@@ -7,11 +7,13 @@ import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
 import { AddMenu } from "./AddMenu";
-import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isUnreadableProviders, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type AddEntry, type AddEntryId, type LineTone } from "./connectionsLogic";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isUnreadableProviders, OFF_DETAIL, oldestCheck, PROVIDER_OFF_DETAIL, removalWarning, rowAfter, statusLine, syncLine, type AddEntry, type AddEntryId, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { isJira } from "./domains";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
+import { accountOf, ignoredLine, usedForLine } from "./providerLogic";
+import { useProviderUi } from "./providerUi";
 import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -65,6 +67,8 @@ export interface ConnectionsViewProps {
   /** Resolves true when the name was saved. */
   onRename(name: string): Promise<boolean>;
   onManage(): void;
+  /** Shows a provider's config folder in Finder. */
+  onRevealFolder(): void;
   onNewToken(): void;
   onAskRemove(): void;
   onCancel(): void;
@@ -129,7 +133,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const jira = isJira(c.kind);
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
   if (isUnreadableProviders(c)) return <p role="status" className="m-0 text-ws-blocked">{c.error}</p>;
-  if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
+  if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{c.kind === "provider" ? PROVIDER_OFF_DETAIL : OFF_DETAIL}</p>;
   if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : "Not checked yet."}</p>;
   return (
     <>
@@ -142,11 +146,9 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           <Button size="sm" onClick={() => p.onCopy(s.fix as string)}>
             {p.copied ? "Copied" : "Copy"}
           </Button>
-          {c.kind !== "provider" && (
-            <Button size="sm" onClick={p.onOpenTerminal}>
-              Open Terminal
-            </Button>
-          )}
+          <Button size="sm" onClick={p.onOpenTerminal}>
+            Open Terminal
+          </Button>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -238,6 +240,26 @@ function NameField({ name, onRename }: { name: string; onRename(name: string): P
   );
 }
 
+function ProviderFields({ c, onReveal }: { c: ConnectionInfo; onReveal(): void }) {
+  const ignored = ignoredLine(c);
+  return (
+    <>
+      <Field label="Config folder">
+        <p className="selectable m-0 font-mono text-sm">{c.configDir ?? "Your usual setup"}</p>
+        {ignored && <p className="m-0 text-sm text-ws-ink2">{ignored}</p>}
+        {c.configDir && (
+          <div>
+            <Button variant="quiet" size="sm" onClick={onReveal}>
+              Reveal in Finder
+            </Button>
+          </div>
+        )}
+      </Field>
+      <p className="m-0 border-b border-ws-sep py-2.5 text-sm text-ws-ink2 last:border-b-0">{usedForLine(c)}</p>
+    </>
+  );
+}
+
 function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const sync = syncLine(c, p.now);
   const watch = p.watch.find((w) => w.connectionId === c.id);
@@ -255,7 +277,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
       )}
       {!sample && (
         <Field label="Account">
-          {c.kind !== "provider" && <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>}
+          {c.kind === "provider" ? <p className="m-0">{accountOf(c) ?? "Not signed in"}</p> : <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>}
           <div className="flex flex-wrap gap-2">
             {isJira(c.kind) && (
               <Button variant="quiet" size="sm" onClick={p.onNewToken}>
@@ -281,6 +303,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           )}
         </Field>
       )}
+      {c.kind === "provider" && !sample && <ProviderFields c={c} onReveal={p.onRevealFolder} />}
       {c.kind !== "provider" && (
         <>
         <Field label="Sync">
@@ -385,6 +408,15 @@ export function ConnectionsSection({ now }: { now: Date }) {
       useWorkspace.getState().report("Couldn't open Terminal", e);
     }
   };
+  const revealFolder = async (c: ConnectionInfo | undefined) => {
+    const backend = useWorkspace.getState().backend;
+    if (!c || !backend) return;
+    try {
+      await backend.providerRevealFolder(c.instanceId);
+    } catch (e) {
+      useWorkspace.getState().report("Couldn't show the folder", e);
+    }
+  };
   const toggle = async (c: ConnectionInfo, on: boolean) => {
     setToggling((now) => [...now, c.instanceId]);
     try {
@@ -430,6 +462,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       }
       onOpenTerminal={() => void openTerminal(current)}
       onRename={(name) => rename(current, name)}
+      onRevealFolder={() => void revealFolder(current)}
       onManage={() => useTabs.getState().openSettings("watching")}
       onNewToken={() => useJiraUi.getState().openConnect(current?.instanceId)}
       onAskRemove={() => setConfirming(current?.id ?? null)}
@@ -446,11 +479,11 @@ export function ConnectionsSection({ now }: { now: Date }) {
       }}
       onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
-      // Claude and Codex have no sheet to open yet.
-      addable={addEntries(connections, undefined, loaded).filter((e) => e.group !== "Models")}
+      addable={addEntries(connections, undefined, loaded)}
       onAdd={(id) => {
         if (id === "github") useGithubUi.getState().openConnect();
         else if (id === "jira") useJiraUi.getState().openConnect();
+        else useProviderUi.getState().openAdd(id);
       }}
     />
   );

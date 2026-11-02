@@ -115,6 +115,10 @@ export class JiraBackend implements Backend {
     return invoke<void>("connection_open_terminal", { instanceId });
   }
 
+  providerRevealFolder(instanceId: string) {
+    return invoke<void>("provider_reveal_folder", { instanceId });
+  }
+
   providerAdd(driver: "claude" | "codex", displayName: string, configDir?: string) {
     return invoke<ConnectionInfo>("provider_add", { driver, displayName, configDir });
   }

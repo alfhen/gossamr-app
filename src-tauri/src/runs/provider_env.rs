@@ -70,6 +70,15 @@ impl ProviderEnv {
         self.from_folder
     }
 
+    /// The login variables `shell` sets that this instance's folder replaces or removes. Empty without a folder.
+    pub fn ignored(&self, shell: &RunEnv) -> Vec<String> {
+        if !self.from_folder {
+            return Vec::new();
+        }
+        let differs = |name: &str, value: &Option<OsString>| shell.get(name).is_some_and(|set| value.as_deref() != Some(set));
+        self.vars.iter().filter(|(name, value)| differs(name, value)).map(|(name, _)| (*name).to_string()).collect()
+    }
+
     /// What a Terminal script does to run as this instance: the variables to remove and the folder variable to set.
     /// None without a folder, where Terminal's own environment picks the login.
     pub fn terminal_login(&self) -> Option<TerminalLogin<'_>> {
@@ -169,6 +178,17 @@ mod tests {
         assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), None, "a login variable the shell lacks is not taken from the base");
         assert_eq!(env.get("PATH").unwrap(), "/bin");
         assert_eq!(env.get("OPENAI_API_KEY"), None, "another driver's variables are not Claude's business");
+    }
+
+    #[test]
+    fn a_folder_names_the_shells_login_variables_it_ignores_and_no_folder_ignores_none() {
+        let home = Path::new("/Users/x");
+        let with_folder = ProviderEnv::resolve(&instance("claude_2", Driver::Claude, Some("~/.claude-work")), Some(&shell()), home).unwrap();
+        assert_eq!(with_folder.ignored(&shell()), ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY"]);
+        let same_folder = RunEnv::from_pairs([("CLAUDE_CONFIG_DIR", "/Users/x/.claude-work")]);
+        assert!(with_folder.ignored(&same_folder).is_empty(), "a folder the shell already names is not ignored");
+        let usual = ProviderEnv::resolve(&instance("claude", Driver::Claude, None), Some(&shell()), home).unwrap();
+        assert!(usual.ignored(&shell()).is_empty());
     }
 
     #[test]

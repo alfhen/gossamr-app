@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
+import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
 import { badgeText, ConnectionsView, type ConnectionsViewProps } from "./Connections";
 import { addEntries } from "./connectionsLogic";
@@ -31,6 +31,7 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onOpenTerminal={vi.fn()}
       onRename={vi.fn()}
       onManage={vi.fn()}
+      onRevealFolder={vi.fn()}
       onNewToken={vi.fn()}
       onAskRemove={vi.fn()}
       onCancel={vi.fn()}
@@ -221,11 +222,46 @@ describe("a provider in the list", () => {
     expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
   });
 
-  it("shows the sign-in command to copy but no Open Terminal, which only runs a connection's fix", () => {
-    const out = view({ connections: [jira, gh, { ...claude, status: { ...githubSnapshot("notSignedIn", "ada", CHECKED), fix: "claude auth login" } }], selectedId: "claude" });
+  it("shows the sign-in command with Copy, Open Terminal and a check that says the command was run", () => {
+    const out = view({ connections: [jira, gh, { ...claude, status: { ...claudeSnapshot("notSignedIn", CHECKED), fix: "claude auth login" } }], selectedId: "claude" });
     expect(out).toContain("claude auth login");
     expect(out).toContain("Copy");
-    expect(out).not.toContain("Open Terminal");
+    expect(out).toContain("Open Terminal");
+    expect(out).toContain("I&#x27;ve run it, check again");
+  });
+
+  it("shows the account, the folder with Reveal in Finder, and what the provider is for, in that order", () => {
+    const row = { ...claude, displayName: "Claude personal", configDir: "~/.claude-personal", status: claudeSnapshot("ready", CHECKED) };
+    const all = view({ connections: [jira, gh, row], selectedId: "claude" });
+    const out = all.slice(all.indexOf('aria-label="Claude personal details"'));
+    const at = [">Status<", ">Name<", ">Account<", ">Remove<", ">Config folder<", "~/.claude-personal", "Reveal in Finder", "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."].map((t) => out.indexOf(t));
+    expect(at).not.toContain(-1);
+    expect(at).toEqual([...at].sort((a, b) => a - b));
+    expect(out).not.toContain("Models</h4>");
+  });
+
+  it("says Codex is for new agents, and shows no Reveal in Finder for a usual setup", () => {
+    const out = view({ connections: [jira, gh, { ...claude, id: "codex", instanceId: "codex", displayName: "Codex", driver: "codex", status: claudeSnapshot("ready", CHECKED) }], selectedId: "codex" });
+    expect(out).toContain("New agents run on Codex when you pick it.");
+    expect(out).toContain("Your usual setup");
+    expect(out).not.toContain("Reveal in Finder");
+  });
+
+  it("names the shell variables a folder ignores", () => {
+    const row = { ...claude, displayName: "Claude personal", configDir: "~/.claude-personal", status: { ...claudeSnapshot("ready", CHECKED), ignored: ["ANTHROPIC_API_KEY"] } };
+    expect(view({ connections: [jira, gh, row], selectedId: "claude" })).toContain("Your shell sets ANTHROPIC_API_KEY. Claude personal doesn&#x27;t use it.");
+  });
+
+  it("says off in a provider's words, not a tracker's", () => {
+    const out = view({ connections: [jira, gh, { ...claude, enabled: false, status: claudeSnapshot("off", CHECKED) }], selectedId: "claude" });
+    expect(out).toContain("Off. Pip and new agents can&#x27;t use it.");
+    expect(out).not.toContain("drafts for it wait");
+  });
+
+  it("asks before removing a provider and says its login and folder stay", () => {
+    const out = view({ connections: [jira, gh, { ...claude, displayName: "Claude personal" }], selectedId: "claude", confirming: "claude" });
+    expect(out).toContain("Remove Claude personal? Gossamr stops offering it.");
+    expect(out).toContain("your login and folder stay as they are");
   });
 
   it("says in the detail pane that a provider with no answer yet is not checked yet", () => {

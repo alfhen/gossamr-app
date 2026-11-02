@@ -50,12 +50,15 @@ pub struct Snapshot {
     pub detail: Option<String>,
     /// The command that fixes it, when there is one.
     pub fix: Option<String>,
+    /// Names of login variables the shell sets that this instance's folder overrides. Never their values.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<String>,
     pub checked_at: String,
 }
 
 impl Snapshot {
     pub(crate) fn new(state: State, message: impl Into<String>) -> Self {
-        Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, checked_at: crate::inbox::now_iso() }
+        Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, ignored: Vec::new(), checked_at: crate::inbox::now_iso() }
     }
 
     pub(crate) fn fix(mut self, command: impl Into<String>) -> Self {

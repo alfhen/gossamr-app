@@ -9,6 +9,8 @@ const LABEL: Record<Driver, string> = { claude: "Claude", codex: "Codex" };
 const USUAL_FOLDER: Record<Driver, string> = { claude: `${HOME}/.claude`, codex: `${HOME}/.codex` };
 const FOLDER_VARIABLE: Record<Driver, string> = { claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME" };
 const SIGN_IN: Record<Driver, string> = { claude: "claude auth login", codex: "codex login" };
+/** The login variable the sample shell exports, which a Claude with its own folder ignores. */
+const SHELL_KEY = "ANTHROPIC_API_KEY";
 const NOT_A_PROVIDER = "This isn't a provider. Reopen Settings.";
 
 export interface MockProvider {
@@ -20,6 +22,8 @@ export interface MockProvider {
   /** `null` until the first check answers, as the desktop backend's row is when it is added. */
   probe: GithubProbeState | null;
   checkedAt: string;
+  /** Terminal was opened on its sign-in, so the next check finds the login. */
+  signInOpened?: boolean;
 }
 
 /** `~` and `~/…` start at the home folder; `.` and `..` are folded away. */
@@ -63,7 +67,10 @@ function snapshot(p: MockProvider) {
   if (p.enabled && p.probe === null) return null;
   const state = p.enabled ? p.probe! : "off";
   const found = claudeSnapshot(state, p.checkedAt);
-  if (p.driver === "claude") return state === "notSignedIn" ? { ...found, fix: signInCommand("claude", p.configDir) } : found;
+  if (p.driver === "claude") {
+    const own = p.configDir && state !== "off" ? { ...found, ignored: [SHELL_KEY] } : found;
+    return state === "notSignedIn" ? { ...own, fix: signInCommand("claude", p.configDir) } : own;
+  }
   switch (state) {
     case "ready":
       return { ...found, account: null, message: "Authenticated · ChatGPT" };
@@ -91,9 +98,13 @@ export class MockProviders {
     return this.items.find((p) => p.id === id)?.driver ?? null;
   }
 
+  /** A check of everything: an instance whose sign-in was opened in Terminal now finds its login. */
   touch() {
     const now = new Date().toISOString();
-    for (const p of this.items) p.checkedAt = now;
+    for (const p of this.items) {
+      p.checkedAt = now;
+      if (p.signInOpened && p.probe === "notSignedIn") p.probe = "ready";
+    }
   }
 
   /** The first check of each added instance answers: signed out, the state a fresh folder is in. */
@@ -139,7 +150,16 @@ export class MockProviders {
     if (!target) throw new Error(NOT_A_PROVIDER);
     if (!target.enabled) throw new Error(`${target.displayName} is turned off. Turn it on first.`);
     if (target.probe !== "notSignedIn") throw new Error("Gossamr opens Terminal to sign in only when the last check found you signed out. Check it again.");
+    target.signInOpened = true;
     return signInCommand(target.driver, target.configDir);
+  }
+
+  /** The folder Finder shows for `id`. */
+  folderToShow(id: string): string {
+    const target = this.items.find((p) => p.id === id);
+    if (!target) throw new Error(NOT_A_PROVIDER);
+    if (!target.configDir) throw new Error("This one uses your usual setup, which has no folder of its own to show.");
+    return target.configDir;
   }
 
   rows(): ConnectionInfo[] {
