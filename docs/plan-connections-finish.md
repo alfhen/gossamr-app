@@ -1,6 +1,6 @@
 # Plan: finish the connections refactor
 
-This plan finishes the work in [the connections proposal](connections-proposal.md): several AI providers and several Jira accounts, each picked per Pip turn and per agent run. Steps p1 to p6, r7, r8, r9 (#290), r11, the first slice of r12, j15 to j21, j23 to j25, c0, c1, t1 and t2 are merged. What is left: one open PR (#291, which carries j22), the rest of r12, and r13, r14, j26, j27 and d28. The Codex runner (c3 to c6) moves to a plan of its own. Each entry is one small PR. A PR is done when its acceptance test passes in CI, an adversarial review reports no blockers or majors, and it is squash-merged.
+This plan finishes the work in [the connections proposal](connections-proposal.md): several AI providers and several Jira accounts, each picked per Pip turn and per agent run. Steps p1 to p6, r7, r8, r9 (#290), r11, the first slice of r12, o10 (#266), j15 to j21, j23 to j25, c0, c1, t1 and t2 are merged, and the Codex decisions are recorded in the proposal (#298). What is left: one open PR (#291, which carries j22), the rest of r12, and r13, r14, j26, j27 and d28. The Codex runner (c3 to c6) moves to a plan of its own. Each entry is one small PR. A PR is done when its acceptance test passes in CI, an adversarial review reports no blockers or majors, and it is squash-merged.
 
 ## Goals this release serves
 
@@ -11,7 +11,7 @@ This plan finishes the work in [the connections proposal](connections-proposal.m
 
 ## Findings
 
-Checked against `main` at 2d3dd4e on 2 Nov 2026. #290 (r9) merged afterwards, at 10f3117d.
+Checked against `main` at a1c7a89 (after #290 and #298) on 3 Nov 2026.
 
 | Finding | Where | What is wrong |
 | --- | --- | --- |
@@ -20,7 +20,7 @@ Checked against `main` at 2d3dd4e on 2 Nov 2026. #290 (r9) merged afterwards, at
 | Runs only track the default login | `runs/index.rs:23` (`short_id`), `runs/service.rs:101` (`belongs_to`), and 11 non-test `tools.get()` calls. Six act on a run or an instance and need its login: `cleanup.rs:112`, `control.rs:264`, `final_answer.rs:88`, `service.rs:326,657`, `tracker.rs:229`. Five stay on the default on purpose: `service.rs:216` (warm), `service.rs:707` and `service/fresh.rs:95,109` (git keeps the captured environment), `service/choice.rs:24` (a run with no `runs_on`). | The gate at `model_choice.rs:254` keeps agents on the default instance until this is fixed. |
 | Provider rows and pickers are hidden | `src/workspace/connectionsLogic.ts:11` (`providersShown = false`) | The backend honours a choice; nothing shows it yet. |
 | One Jira in the front end | `src/Root.tsx:24,37,47`, `ConnectJira.tsx:344`, `Workspace.tsx:59`, `Rail.tsx:312` | Adding a second Jira account replaces the first. |
-| The proposal does not record the Codex decisions | `docs/connections-proposal.md:135,364,532,590`, `docs/agents-cli-findings.md` | c2 still reads "only if c0 says yes"; the sandbox row says "owner to confirm"; no doc says Codex is beta. |
+| The proposal keeps Codex out of + Add until the runner | `docs/connections-proposal.md` decision 2, 6.1, the 10.1 table row, and the c3 to c6 notes (#298) | The owner decided Codex shows with a Beta label and is not hidden. With no Codex instance by default (5.2), a Codex row can only exist if + Add offers it. A04 changes this text. |
 | Two low QA findings still hold | `src/backend/mockGithub.ts:114`, `ConnectGithub.tsx:88`, `ConnectJira.tsx:71` | The mock says "Checked 3m ago" right after Connect; + Add says "GitHub account" but the sheet says "Connect GitHub". |
 
 ## Scope
@@ -30,7 +30,6 @@ In:
 | Group | Entries | Size |
 | --- | --- | --- |
 | Open PR | L02 (#291) | S |
-| Decisions in the docs | D01 | S |
 | Runs per login | A01 (r12b), A02 (r13a), A03 (r13b), A04 (r14a), A05 (r14b) | M each |
 | Several Jira accounts | B01 (j26), B02 (j27) | M each |
 | Docs and tidy-up | E01 (d28) | S |
@@ -49,14 +48,14 @@ Not in:
 
 ```mermaid
 flowchart LR
-  W1[Wave 1: D01, L02] --> W2[Wave 2: A01]
+  W1[Wave 1: L02] --> W2[Wave 2: A01]
   W2 --> W3[Wave 3: A02, B01]
   W3 --> W4[Wave 4: A03, B02]
   W4 --> W5[Wave 5: A04]
   W5 --> W6[Wave 6: A05, E01]
 ```
 
-Two tracks run side by side: runs per login (A) in `src-tauri/src/runs/` and the run views, and Jira (L02, B) in the front end. A01 and A03 both edit `runs/cleanup.rs`, and A02 and A03 both edit `runs/service.rs`, so the A entries form a chain. L02, A01, B01, A04 and A05 all edit `src/backend/mock.ts`, so each sits in its own wave. A04 and B01 both edit `Connections.tsx` and `connectionsLogic.ts`. A04 waits for A03 (wave 5): the proposal keeps provider rows hidden until runs honour their instance (`docs/connections-proposal.md:70`, r14 after r13 at `:573`), and until the gate at `model_choice.rs:254` is lifted, a person could pick `claude_2` for new agents and the backend would refuse it. A03 is Rust only and B02 touches neither `mock.ts` nor the Settings files, so they share wave 4. A05 and E01 follow A04 in wave 6; E01 describes the state after A01 to A05. L02 lands before B01, which builds on j22. D01 changes docs only and goes in wave 1 so later entries read the decisions.
+Two tracks run side by side: runs per login (A) in `src-tauri/src/runs/` and the run views, and Jira (L02, B) in the front end. A01 and A03 both edit `runs/cleanup.rs`, and A02 and A03 both edit `runs/service.rs`, so the A entries form a chain. L02, A01, B01, A04 and A05 all edit `src/backend/mock.ts`, so each sits in its own wave. A04 and B01 both edit `Connections.tsx` and `connectionsLogic.ts`. A04 waits for A03 (wave 5): the proposal keeps provider rows hidden until runs honour their instance (`docs/connections-proposal.md:70`, r14 after r13 at `:573`), and until the gate at `model_choice.rs:254` is lifted, a person could pick `claude_2` for new agents and the backend would refuse it. A03 is Rust only and B02 touches neither `mock.ts` nor the Settings files, so they share wave 4. A05 and E01 follow A04 in wave 6; E01 describes the state after A01 to A05. L02 lands before B01, which builds on j22. The Codex decisions are already on main (#298, formerly entry D01).
 
 ## Rules for every PR
 
@@ -71,14 +70,6 @@ Two tracks run side by side: runs per login (A) in `src-tauri/src/runs/` and the
 ## PRs
 
 ### Wave 1
-
-**D01 Record the Codex decisions in the docs.** Touches: `docs/connections-proposal.md`, `docs/agents-cli-findings.md`.
-- c2 is skipped by owner decision on 2 Nov 2026 (Pip stays on Claude): update section 1 (line 19), decision 2 (line 63, "For the owner to confirm"), the 6.1 table (line 135), the c0 row (line 362), lines 364, 532, 590 and 598, and the risk at line 666.
-- Codex agents get no `--sandbox` flag, so the person's own Codex config decides (owner decision, 2 Nov 2026); mark the findings row confirmed and say what `workspace-write` breaks (C6).
-- Codex is a beta provider: a **Beta** label on its row, its sheet and its picker entries, and nothing hidden behind a switch. Add this to 8.x, 10.x and the c6 step. Record that Codex shows in Settings, in + Add and in the palette from A04 (r14a), marked as unable to run anything yet; this is the "other choice" in decision 2. Amend 6.1 ("+ Add lists only drivers that can run something"), the 10.1 table row ("Shown from c6" becomes r14a) and decision 2 to match. Agents run on Codex only after the Codex runner (c3 to c6), which moves to a follow-up plan.
-- Steps p1 to p6, r7, r8, r9 (#290), r11, j15 to j21, j23 to j25, c0, c1, t1 and t2 are marked merged with their PR numbers. j22 stays open until L02 lands.
-Regression test: none (docs only).
-Acceptance: `grep -n "if c0 says yes" docs/connections-proposal.md` finds nothing, decision 2 no longer says "For the owner to confirm", and the Beta rule and both decisions appear with their date.
 
 **L02 Fix the lost cross-site Pip turns and land #291 (j22).** Touches: `src/claudeStore.ts`, `src/claudeStore.test.ts`, and #291's files: `src-tauri/src/agent/{context.rs,mcp.rs,mod.rs,real_tests.rs,runs.rs,runs/drive_tests.rs,supervisor/tests.rs}`, `src-tauri/src/db/{pip_turns.rs,workstreams.rs}`, `src-tauri/src/inbox.rs`, `src-tauri/src/inbox/{instances.rs,pip_model.rs,pip_scope.rs,pip_turns.rs,workstreams.rs}`, `src/backend/{claude.ts,mock.ts,mockPip.ts,mockPipQueue.ts,mockPipTurns.ts,mockPipTurns.test.ts,mockSeveralJira.test.ts}`, `src/lib/conversations.ts`.
 - The page names each conversation with `conversationIn(ticketKey, connectionId)` in `ask`, `load`, `readWakePrompt` and `cancel`, so the turn is stored and read back under the same `<connection>:<name>` key. A bare page name still means the primary connection, so existing conversations keep working. Rust already stores under the qualified key and `pip_conversation` reads one, so the fix is in the page.
@@ -104,16 +95,16 @@ Acceptance: `cargo test cleanup` and `cargo test choice` pass; `pnpm test cleanu
 - `find_session` (`service.rs:326`) and `recover` (`service.rs:657`) ask the daemon with `toolchain_of(run)`: `recover` lists `claude agents` once per instance that has Launching runs.
 - The tracker runs `claude agents --json --all` once per instance that has live runs, with that instance's toolchain (`toolchain_of`).
 - The gate at `model_choice.rs:254` stays on until A03.
-Regression test: two fake CLIs that both report short id `abc12345`; each run follows only its own instance's listing. A restart while a run on `claude_2` is Launching recovers it on `claude_2`. Fails on main, where `belongs_to` matches the short id alone.
+Regression test: one stored run on `claude_2` with short id `abc12345`, and a default-instance listing that also reports `abc12345` (another folder's session); the run follows only `claude_2`'s listing and ignores the default one. The runs table keeps its unique index on `short_id` (`db/schema.rs:449`), so two stored runs never share one; the risk is a foreign listing, not two stored runs. A restart while a run on `claude_2` is Launching recovers it on `claude_2`. Both fail on main, where `belongs_to` matches the short id alone and `recover` asks only the default instance.
 Acceptance: `cargo test tracker` and `cargo test recover` pass.
 
-**B01 Add Jira accounts (j26).** Touches: `src/Root.tsx`, `src/accountState.ts`, `src/workspace/{ConnectJira.tsx,Connections.tsx,connectionsLogic.ts,Workspace.tsx,Rail.tsx,commands.ts,commands.test.ts,Palette.tsx}`, `src/backend/{jira.ts,mock.ts,auth.ts,types.ts}`, `src-tauri/src/auth/mod.rs` and `src-tauri/src/lib.rs` (a `name` on `TokenSignIn`, mirrored in `auth.ts` and `types.ts`), `e2e/{jira-token,connections,first-run}.spec.ts`.
+**B01 Add Jira accounts (j26).** Touches: `src/Root.tsx`, `src/accountState.ts`, `src/workspace/{ConnectJira.tsx,Connections.tsx,connectionsLogic.ts,Workspace.tsx,Rail.tsx,commands.ts,commands.test.ts,Palette.tsx}`, `src/backend/{jira.ts,mock.ts,auth.ts,types.ts}`, `src/accountState.test.ts`, `src-tauri/src/auth/{mod.rs,atlassian.rs}`, `src-tauri/src/lib.rs`, `src-tauri/src/inbox.rs`, `src-tauri/src/inbox/{instances.rs,probes.rs}` (a `name` on `TokenSignIn`, mirrored in `auth.ts` and `types.ts`; the `TokenSignIn { .. }` literals at `auth/atlassian.rs:199`, `inbox.rs:1117`, `inbox/instances.rs:1252` and `inbox/probes.rs:268` gain it, and `jira_connect` stores it as the connection's display name), `e2e/{jira-token,connections,first-run}.spec.ts`.
 - The desktop backend is chosen whenever any Jira connection that is on exists; the account key no longer depends on one site.
 - + Add always offers "Jira account". The sheet is titled "Add Jira account", has a Name field, adds without signing out the first account, and refuses an account that is already connected. Removing the last Jira goes back to Setup; removing another one does not.
 - The palette takes its "Add Jira account" entry from `addEntries`, as it does for providers, replacing the `ctx.jira ? [] : add-jira` rule at `commands.ts:142`, so the rule lives in one place.
 - After adding, Watching opens for the new account.
-Regression test: a vitest test for the backend choice with two Jira connections; e2e adds a second account in the mock (`?jira=2` style) and checks both rows stay; a `commands.test.ts` case checks the palette still offers "Add Jira account" once a Jira exists. Fails on main, where the second sign-in replaces the first (`ConnectJira.tsx:344`).
-Acceptance: `pnpm test Root connectionsLogic` and `pnpm e2e e2e/connections.spec.ts e2e/jira-token.spec.ts` pass.
+Regression test: a cargo test that a second `jira_connect` with a different account and name adds a connection, keeps the first, and stores the name; a vitest test in `accountState.test.ts` for the backend choice with two Jira connections; e2e adds a second account in the mock (`?jira=2` style) and checks both rows stay; a `commands.test.ts` case checks the palette still offers "Add Jira account" once a Jira exists. Fails on main, where the second sign-in replaces the first (`ConnectJira.tsx:344`).
+Acceptance: `cargo test jira_connect`, `pnpm test accountState connectionsLogic commands` and `pnpm e2e e2e/connections.spec.ts e2e/jira-token.spec.ts` pass.
 QA: add a second Jira account with a different name, check both rows, the Inbox shows tickets from both, remove one, then remove the last and check Setup appears.
 
 ### Wave 4
@@ -123,7 +114,7 @@ QA: add a second Jira account with a different name, check both rows, the Inbox 
 - These stay on the default on purpose: `service.rs:216` (warm), `service.rs:707` and `service/fresh.rs:95,109` (git keeps the captured environment, so it works for a run whose instance is off), and `service/choice.rs:24` (a run with no `runs_on`).
 - A message to a run on an instance that is off waits until it is back on (proposal 7.3, 7.4).
 - Lift the gate at `model_choice.rs:254`: any Claude instance that is on and signed in can run agents.
-Regression test: with two fake CLIs, stopping, answering and messaging a run on `claude_2` call only `claude_2`'s binary and folder; a trust write on `claude_2` changes only its `.claude.json`. A `model_choice` test accepts `claude_2` for agents. All fail on main.
+Regression test: with two fake CLIs, stopping, answering and messaging a run on `claude_2` call only `claude_2`'s binary and folder; a `model_choice` test accepts `claude_2` for agents. Both fail on main. A trust write on `claude_2` changes only its `.claude.json`; that case already passes on main (`service/trust.rs` uses `toolchain_of`) and guards it against this change.
 Acceptance: `cargo test runs::` passes; the gate test fails if the gate is put back.
 
 **B02 Show which Jira account each item comes from (j27).** Touches: `src/workspace/{ItemCard.tsx,ListView.tsx,BoardView.tsx,PeekSheet.tsx,PeekParts.tsx,DraftCard.tsx,FilterBar.tsx,Rail.tsx,PipPane.tsx}`, `src/lib/filter.ts`, `src/claudeStore.ts`, new `e2e/multi-jira.spec.ts`.
@@ -136,10 +127,10 @@ QA: with `?jira=2`, filter by each account, open a ticket from each, and check t
 
 ### Wave 5
 
-**A04 Settings and provider pickers, provider rows shown (r14a).** Touches: `src/workspace/{Settings.tsx,Connections.tsx,connectionsLogic.ts,connectionsLogic.test.ts}`, `src/components/ModelPicker.tsx` (reuse only), `src/backend/mock.ts`, `e2e/providers.spec.ts`. Starts after A03 is merged; rerun its e2e after merging `main`.
+**A04 Settings and provider pickers, provider rows shown (r14a).** Touches: `src/workspace/{Settings.tsx,Connections.tsx,connectionsLogic.ts,connectionsLogic.test.ts}`, `src/components/ModelPicker.tsx` (reuse only), `src/backend/mock.ts`, `e2e/providers.spec.ts`, `docs/connections-proposal.md`. Starts after A03 is merged; rerun its e2e after merging `main`.
 - `providersShown` becomes true: Claude and Codex rows show under Models.
 - Settings gets a Models section: "Pip uses" and "New agents use", each a `ModelPicker`. The provider detail gets its own models with "Add model…". Safety's second promise names the instance.
-- A Codex row, sheet and picker entry carry a **Beta** label (D01). `addEntries` offers Codex whenever providers show, and the `?codex=1` switch and `DRIVER_CAPABILITIES.codex.runsAgents` check in `connectionsLogic.ts:17-18,55` go. The palette takes its entries from `addEntries`, so Codex appears there too.
+- A Codex row, sheet and picker entry carry a **Beta** label (owner decision, #298). `addEntries` offers Codex whenever providers show, and the `?codex=1` switch and `DRIVER_CAPABILITIES.codex.runsAgents` check in `connectionsLogic.ts:20,40,57` go. The proposal's decision 2, 6.1 ("+ Add lists only drivers that can run something"), the 10.1 table row ("Shown from c6") and the c3 to c6 notes change to say + Add offers Codex from r14a with Beta, marked as unable to run anything yet. The palette takes its entries from `addEntries`, so Codex appears there too.
 - A Codex instance is greyed in both pickers with the 7.1 reason ("Agents can't run on Codex yet", "Pip can't run on Codex yet").
 Regression test: vitest for the defaults written by each picker; e2e changes "New agents use" and checks a new run starts on it in the mock. A vitest case checks that `addEntries` lists Codex with Beta without `?codex=1`, and an e2e case checks Codex is greyed in "New agents use". Fails on main, where the rows are hidden and + Add omits Codex.
 Acceptance: `pnpm test Settings connectionsLogic` and `pnpm e2e e2e/providers.spec.ts` pass.
