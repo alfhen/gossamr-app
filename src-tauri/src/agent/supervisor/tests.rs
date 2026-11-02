@@ -217,6 +217,7 @@ fn ask(id: &str, conversation: &str) -> AskRequest {
         conversation: conversation.into(),
         meta: None,
         model: None,
+        connection_id: None,
         event: None,
     }
 }

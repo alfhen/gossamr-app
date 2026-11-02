@@ -189,6 +189,10 @@ pub struct AskRequest {
     /// its conversation's last choice, else the Settings default.
     #[serde(default)]
     pub model: Option<ModelChoice>,
+    /// The connection the person picked in the drawer, for a conversation with no ticket. Checked in Rust: it must be
+    /// registered and on. A workstream's connection or the open ticket's takes precedence.
+    #[serde(default)]
+    pub connection_id: Option<String>,
     /// For a wake turn only: the `[Event]` lines Rust wrote. Never taken from the page.
     #[serde(skip)]
     pub event: Option<String>,
@@ -398,7 +402,7 @@ impl AgentService {
             }
             Sending { set: &self.sending, id: req.request_id.clone() }
         };
-        let scope = self.core.scope().await?;
+        let scope = self.core.pip_scope(workstream_of_conversation(&req.conversation), req.context.item.as_ref(), req.connection_id.as_deref()).await?;
         let mut meta = req.meta.clone().unwrap_or_else(|| TurnMeta { image_count: req.images.len() as u32, ..Default::default() });
         meta.shown = shown_line(meta.shown.take());
         // Kept as waiting until its provider has started, so a reload shows it either way.
@@ -529,6 +533,7 @@ impl AgentService {
             conversation: conversation.clone(),
             meta: None,
             model: None,
+            connection_id: None,
             event: Some(event_line(&facts)),
         };
         self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: wake_sink });
@@ -624,26 +629,27 @@ impl AgentService {
             ws.event = req.event.clone();
         }
 
-        let mut context = req.context.in_connection(&scope.connection_id);
+        let mut context = req.context.in_connection(&scope.connection_id).only_in(&scope.connection_id);
         if let Some(name) = self.core.off_name(&scope.connection_id) {
             context.item = None;
             context.selection.clear();
             context.tracker_off = Some(name);
         }
-        let mut handed: std::collections::HashSet<String> = context::keys_in(&req.prompt).into_iter().collect();
+        let mut handed = mcp::Keyed::default();
+        context::keys_in(&req.prompt).iter().for_each(|key| handed.hand(&scope, key));
         if let Some(key) = workstream.as_ref().and_then(|w| w.workstream.item_key.as_ref()) {
-            handed.insert(key.to_uppercase());
+            handed.hand(&scope, key);
         }
         if let Some(r) = &context.item {
-            handed.insert(r.key.to_uppercase());
+            handed.hand(&scope, &r.key);
             context.unwatched_item = !self.core.is_item_watched(&scope, &r.key).await?;
         }
-        let mut read = std::collections::HashMap::new();
+        let mut read = mcp::Keyed::default();
         let item = match &context.item {
             Some(r) => {
                 let (ticket, seen) = self.core.ticket_for_pip(&scope, &r.key).await?;
                 let text = mcp::describe_with(&ticket, &seen.description);
-                read.insert(r.key.to_uppercase(), seen);
+                read.insert(&scope, &r.key, seen);
                 Some(text)
             }
             None => None,
@@ -659,14 +665,14 @@ impl AgentService {
         // A workstream's conversation continues its own session when the page has none to give.
         let asked = req.session_id.or_else(|| workstream.as_ref().and_then(|w| w.workstream.pip_session.clone()));
         let session = match asked {
-            Some(id) if self.core.is_pip_session(&id, &instance).await? => Some(id),
+            Some(id) if self.core.is_pip_session(&id, &instance, &scope.connection_id).await? => Some(id),
             _ => None,
         };
 
         let run_id = req.request_id.clone();
         let agent_req = AgentRequest {
             run_id: run_id.clone(),
-            system: context::system_prompt(self.core.can_edit_text(&scope)?),
+            system: self.system_prompt(&scope).await?,
             prompt: context::compose(&context, item.as_deref(), &links, &drafts, &runs, workstream.as_ref(), &req.prompt),
             mcp: self.mcp.endpoint(&run_id)?,
             sandbox,
@@ -742,6 +748,14 @@ impl AgentService {
             this.release(&run_id, session);
         });
         Ok(())
+    }
+
+    async fn system_prompt(&self, scope: &Scope) -> Result<String> {
+        let prompt = context::system_prompt(self.core.can_edit_text(scope)?);
+        Ok(match self.core.pip_site(scope).await {
+            Some(site) => format!("{prompt} {}", context::site_note(&site)),
+            None => prompt,
+        })
     }
 
     fn live_turn(&self, run_id: &str, f: impl FnOnce(&mut LiveTurn)) {
@@ -855,6 +869,7 @@ mod tests {
                 conversation: GENERAL_CONVERSATION.into(),
                 meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0, ..Default::default() }),
                 model: None,
+                connection_id: None,
                 event: None,
             }
         }
@@ -997,7 +1012,7 @@ mod tests {
         use super::*;
         use crate::agent::runs::testing::FakePlanner;
         use crate::claude::StandIn;
-        use crate::inbox::testing::{fixture, Fixture};
+        use crate::inbox::testing::{fixture, fixture_with_two_jira, Fixture};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::Duration;
         use tokio::sync::Notify;
@@ -1106,6 +1121,7 @@ mod tests {
                 conversation: conversation.into(),
                 meta: None,
                 model: None,
+                connection_id: None,
                 event: None,
             }
         }
@@ -1296,7 +1312,7 @@ mod tests {
             svc.ask(ask("q1", &conversation), sink.clone()).await.unwrap();
             fake.until_started(1).await;
             assert_eq!(svc.mcp.runs.lock().unwrap().get("q1").and_then(|p| p.workstream.clone()), Some(ws.id.clone()), "Pip's tools know the workstream");
-            assert!(svc.mcp.runs.lock().unwrap().get("q1").is_some_and(|p| p.handed.contains("CA-1")), "its ticket is handed to Pip");
+            assert!(svc.mcp.runs.lock().unwrap().get("q1").is_some_and(|p| p.handed.contains(&p.scope, "CA-1")), "its ticket is handed to Pip");
             let prompt = fake.0.prompts.lock().unwrap().get("q1").cloned().unwrap();
             assert!(prompt.contains(&format!("Id: {} · ticket CA-1 · stage Intake", ws.id)) && prompt.contains("[Open drafts in this workstream]"), "{prompt}");
             let system = fake.0.systems.lock().unwrap().get("q1").cloned().unwrap();
@@ -1365,9 +1381,9 @@ mod tests {
             let err = svc.ask(ask("q1", &format!("ws:{}", closed.id)), sink.clone()).await.unwrap_err().to_string();
             assert!(err.contains("is closed"), "{err}");
             let err = svc.ask(ask("q2", "ws:theirs"), sink.clone()).await.unwrap_err().to_string();
-            assert!(err.contains("no workstream theirs"), "{err}");
+            assert!(err.contains("different Jira site or account"), "a workstream of a connection that isn't registered is refused before it is recorded: {err}");
             assert_eq!(status(&fx, &format!("ws:{}", closed.id), "q1").await, "failed");
-            assert_eq!(status(&fx, "ws:theirs", "q2").await, "failed");
+            assert_eq!(status(&fx, "ws:theirs", "q2").await, "");
             tokio::time::sleep(Duration::from_millis(30)).await;
             assert!(fake.started().is_empty(), "nothing ran");
             assert!(svc.mcp.runs.lock().unwrap().is_empty());
@@ -1377,6 +1393,121 @@ mod tests {
             fake.open("q3").await;
             until_status(&fx, GENERAL_CONVERSATION, "q3", "done").await;
             assert_eq!(fx.core.pip_turns("workspace").await.unwrap()[0].conversation, GENERAL_CONVERSATION, "a legacy name is kept as general");
+        }
+
+        fn turn_scope(svc: &AgentService, id: &str) -> Scope {
+            svc.mcp.runs.lock().unwrap().get(id).unwrap().scope.clone()
+        }
+
+        fn on(connection_id: &str, key: &str) -> crate::domain::ItemRef {
+            crate::domain::ItemRef { connection_id: connection_id.into(), external_id: key.into(), key: key.into() }
+        }
+
+        #[tokio::test]
+        async fn a_turn_with_no_ticket_works_in_the_connection_picked_in_the_drawer_and_a_tickets_beats_the_drawer() {
+            let (fx, second) = fixture_with_two_jira().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let mut drawer = ask("q1", "A");
+            drawer.connection_id = Some(second.connection_id.clone());
+            let mut ticket = ask("q2", "B");
+            ticket.connection_id = Some(second.connection_id.clone());
+            ticket.context = ScreenContext { item: Some(on(&fx.scope.connection_id, "CA-1")), ..Default::default() };
+            svc.ask(drawer, sink.clone()).await.unwrap();
+            svc.ask(ticket, sink.clone()).await.unwrap();
+            fake.until_started(2).await;
+            assert_eq!(turn_scope(&svc, "q1"), second);
+            assert_eq!(turn_scope(&svc, "q2"), fx.scope, "the open ticket's connection wins");
+
+            fake.open("q1").await;
+            svc.ask(ask("q3", "C"), sink).await.unwrap();
+            fake.until_started(3).await;
+            assert_eq!(turn_scope(&svc, "q3"), fx.scope, "else the primary");
+        }
+
+        #[tokio::test]
+        async fn a_workstreams_connection_wins_and_leaves_out_what_the_page_shows_from_another() {
+            let (fx, second) = fixture_with_two_jira().await;
+            let ws = fx.core.open_workstream(&second, None, Some("On Beta".into())).await.unwrap();
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let mut req = ask("q1", &format!("ws:{}", ws.id));
+            req.connection_id = Some(fx.scope.connection_id.clone());
+            req.context = ScreenContext { item: Some(on(&fx.scope.connection_id, "CA-1")), selection: vec![on(&fx.scope.connection_id, "CA-2")], ..Default::default() };
+            svc.ask(req, sink).await.unwrap();
+            fake.until_started(1).await;
+
+            assert_eq!(turn_scope(&svc, "q1"), second);
+            let prompt = fake.0.prompts.lock().unwrap().get("q1").cloned().unwrap();
+            assert!(!prompt.contains("CA-1") && !prompt.contains("CA-2"), "{prompt}");
+            let handed = svc.mcp.runs.lock().unwrap().get("q1").unwrap().handed.clone();
+            assert!(!handed.contains(&fx.scope, "CA-1") && !handed.contains(&second, "CA-1"));
+        }
+
+        #[tokio::test]
+        async fn a_connection_that_is_off_or_unknown_is_refused_before_the_turn_is_recorded_or_started() {
+            let (fx, second) = fixture_with_two_jira().await;
+            fx.core.adopt_instances().await;
+            fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+
+            for (n, connection) in [second.connection_id.as_str(), "jira:gone:nobody"].into_iter().enumerate() {
+                let mut req = ask(&format!("q{n}"), "A");
+                req.connection_id = Some(connection.into());
+                assert!(svc.ask(req, sink.clone()).await.is_err(), "{connection}");
+            }
+            let mut stale_ticket = ask("q9", "A");
+            stale_ticket.context = ScreenContext { item: Some(on(&second.connection_id, "CA-1")), ..Default::default() };
+            let refused = svc.ask(stale_ticket, sink).await.unwrap_err();
+            assert!(refused.to_string().contains("Beta is off"), "{refused}");
+
+            assert!(fx.core.pip_turns("A").await.unwrap().is_empty());
+            assert!(fake.started().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_session_started_on_one_connection_is_not_resumed_on_another() {
+            let (fx, second) = fixture_with_two_jira().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let on_second = |id: &str| {
+                let mut req = ask(id, "A");
+                req.connection_id = Some(second.connection_id.clone());
+                req
+            };
+            svc.ask(ask("q1", "A"), sink.clone()).await.unwrap();
+            fake.until_started(1).await;
+            fake.open("q1").await;
+            svc.ask(on_second("q2"), sink.clone()).await.unwrap();
+            fake.until_started(2).await;
+            fake.open("q2").await;
+            svc.ask(on_second("q3"), sink).await.unwrap();
+            fake.until_started(3).await;
+
+            assert_eq!(fake.session_of("q2"), None, "q1's session read tickets of the other site");
+            assert_eq!(fake.session_of("q3").as_deref(), Some("sess-q2"));
+            fake.open("q3").await;
+            until_status(&fx, "A", "q3", "done").await;
+        }
+
+        #[tokio::test]
+        async fn the_system_prompt_names_the_site_only_when_more_than_one_jira_connection_is_on() {
+            let fx = fixture().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            svc.ask(ask("q1", "A"), sink).await.unwrap();
+            fake.until_started(1).await;
+            assert!(!fake.0.systems.lock().unwrap().get("q1").unwrap().contains("This turn works in"));
+
+            let (fx, second) = fixture_with_two_jira().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let mut req = ask("q2", "A");
+            req.connection_id = Some(second.connection_id.clone());
+            svc.ask(req, sink).await.unwrap();
+            fake.until_started(1).await;
+            assert!(fake.0.systems.lock().unwrap().get("q2").unwrap().contains("This turn works in Beta only"));
         }
 
         #[tokio::test]
@@ -1485,6 +1616,7 @@ mod tests {
                 conversation: conversation.into(),
                 meta: None,
                 model,
+                connection_id: None,
                 event: None,
             }
         }
@@ -1598,7 +1730,7 @@ mod tests {
             }
             let sessions: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.session.clone()).collect();
             assert_eq!(sessions, [None, None, Some("sess-2".into()), None], "switching starts fresh, staying continues, and each folder keeps its own");
-            assert!(fx.core.is_pip_session("sess-1", "claude").await.unwrap() && !fx.core.is_pip_session("sess-1", "claude_2").await.unwrap());
+            assert!(fx.core.is_pip_session("sess-1", "claude", &fx.scope.connection_id).await.unwrap() && !fx.core.is_pip_session("sess-1", "claude_2", &fx.scope.connection_id).await.unwrap());
         }
 
         #[tokio::test]

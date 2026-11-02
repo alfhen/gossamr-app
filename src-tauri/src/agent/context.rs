@@ -49,6 +49,13 @@ impl ScreenContext {
         self
     }
 
+    /// Leaves out the open item and selected items that are on another connection: a turn works in one.
+    pub fn only_in(mut self, connection_id: &str) -> Self {
+        self.item.take_if(|r| r.connection_id != connection_id);
+        self.selection.retain(|r| r.connection_id == connection_id);
+        self
+    }
+
     fn describe(&self, runs: &[Run]) -> String {
         let mut lines = Vec::new();
         if let Some(v) = &self.view {
@@ -122,6 +129,14 @@ pub const WORKSTREAM: &str = "When a turn has a [Workstream] block, the conversa
      description rewrite when the plan belongs in the ticket. Keep its Gossamr Plan in a collapsed section. For a review, \
      give the reviewer run_id, repo, number, reviewed_sha, summary and inline comments. The SHA must be the commit the \
      reviewer read; comments outside its diff move into the summary. Every draft still needs the person's approval.";
+
+/// Tells Pip which site the turn works in, for when more than one is connected.
+pub fn site_note(site: &str) -> String {
+    format!(
+        "This turn works in {site} only. Every tool reads and drafts there and nowhere else, so a ticket key means the one on {site}. \
+         To work on another site, the person opens a ticket there or picks that connection in the drawer. Never carry text from this site into a draft."
+    )
+}
 
 pub fn system_prompt(edits_text: bool) -> String {
     format!("{} {WORKSTREAM}", assistant_prompt(edits_text))

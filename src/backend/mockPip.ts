@@ -275,18 +275,18 @@ function directAgent(prompt: string, runs: readonly Run[], workstream: PipWorkst
   return say(`I sent ${name} your message.`, ["Messaged an agent"], { message: { runId: run.id, text: message![2] } });
 }
 
-/** The Jira connection a turn works in: the workstream's, else the open ticket's, else the first selected, else the first connection. A key the person types belongs to it. */
-const turnConnection = (context: ScreenContext, workstream: PipWorkstream | null) =>
-  workstream?.item?.connectionId ?? context.item?.connectionId ?? context.selection[0]?.connectionId ?? MOCK_CONNECTION;
+/** The Jira connection a turn works in: the workstream's, else the open ticket's, else the drawer's, else the first selected, else the first connection. A key the person types belongs to it. */
+const turnConnection = (context: ScreenContext, workstream: PipWorkstream | null, drawer: string | null = null) =>
+  workstream?.item?.connectionId ?? context.item?.connectionId ?? drawer ?? context.selection[0]?.connectionId ?? MOCK_CONNECTION;
 
 const asksToMove = /^\s*(?:please\s+)?move\s+(?:it|this|([A-Z][A-Z0-9]*-\d+))\s+to\s+(.+?)\s*[.!]?\s*$/i;
 
 /** "Move it to QA": a move of the named ticket, else the workstream's or the open one, drafted the way propose_transition does. */
-function moveScript(prompt: string, context: ScreenContext, workstream: PipWorkstream | null): PipScript | null {
+function moveScript(prompt: string, context: ScreenContext, workstream: PipWorkstream | null, drawer: string | null): PipScript | null {
   const m = asksToMove.exec(prompt);
   if (!m) return null;
   const key = m[1]?.toUpperCase();
-  const item: ItemRef | null = key ? { connectionId: turnConnection(context, workstream), externalId: key, key } : (workstream?.item ?? context.item);
+  const item: ItemRef | null = key ? { connectionId: turnConnection(context, workstream, drawer), externalId: key, key } : (workstream?.item ?? context.item);
   if (!item) return { steps: [], text: "Which ticket should I move? Name it, or open it first.", filter: null, draft: null };
   const status = m[2].trim();
   return {
@@ -453,14 +453,14 @@ function findings(runs: readonly Run[]): string {
  * The ticket a text edit is for: the one the request attaches to the description or title ("description of CA-401", "CA-401's title"),
  * else the open one, else the first key written anywhere. A key mentioned in passing ("since CA-271 found") doesn't take the edit from the open ticket.
  */
-function rewriteTarget(prompt: string, context: ScreenContext): ItemRef | null {
+function rewriteTarget(prompt: string, context: ScreenContext, drawer: string | null): ItemRef | null {
   const attached =
     new RegExp(`\\b${ANY_KEY}(?:'s|\u2019s)?\\s+(?:description|title)\\b`, "i").exec(prompt)?.[1] ??
     new RegExp(`\\b(?:description|title)s?(?:\\s+(?:update|edit|rewrite|revision|change))?\\s+(?:of|for|on|in|at)\\s+(?:the\\s+)?${TICKET_WORDS}${ANY_KEY}\\b`, "i").exec(prompt)?.[1];
   const key = (attached ?? (context.item ? null : new RegExp(`\\b${ANY_KEY}\\b`).exec(prompt)?.[1]))?.toUpperCase();
   if (!key) return context.item;
   if (context.item?.key.toUpperCase() === key) return context.item;
-  return { connectionId: turnConnection(context, null), externalId: key, key };
+  return { connectionId: turnConnection(context, null, drawer), externalId: key, key };
 }
 
 /** The ways Pip words a check-in comment, one for each that already waits on the ticket. */
@@ -473,10 +473,10 @@ function nudgeText(drafts: readonly Proposal[], item: ItemRef): string {
 }
 
 /** The scripted assistant the browser build talks to; it decides from keywords and the screen context alone. */
-export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null): PipScript {
+export function scriptPip(prompt: string, context: ScreenContext, images: ImageData[] = [], runs: readonly Run[] = [], now = Date.now(), drafts: readonly Proposal[] = [], discussed: string | null = null, workstream: PipWorkstream | null = null, drawer: string | null = null): PipScript {
   if (prompt.startsWith(EVENT)) return wakeScript(prompt, runs, workstream);
   const q = prompt.toLowerCase();
-  const move = moveScript(prompt, context, workstream);
+  const move = moveScript(prompt, context, workstream, drawer);
   if (move) return move;
   const answer = workstream ? workstreamAnswer(prompt, runs, workstream, now) : null;
   if (answer) return answer;
@@ -590,7 +590,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     };
   }
   if (asksForTextEdit.test(q) && !actsOnComment.test(q)) {
-    const target = rewriteTarget(prompt, context);
+    const target = rewriteTarget(prompt, context, drawer);
     if (!target) {
       return { steps: [], text: "Which ticket? Open it and ask again, and I'll draft the new text for you to review.", filter: null, draft: null };
     }
@@ -651,7 +651,7 @@ export function scriptPip(prompt: string, context: ScreenContext, images: ImageD
     const named: ItemRef | null = key
       ? context.item?.key === key
         ? context.item
-        : { connectionId: turnConnection(context, workstream), externalId: key, key }
+        : { connectionId: turnConnection(context, workstream, drawer), externalId: key, key }
       : null;
     const item = named ?? workstream?.item ?? (workstream ? null : context.item);
     if (item) {
@@ -778,6 +778,8 @@ export interface PipDrafter {
   pipRevise(id: string, change: string | { body?: string; title?: string; description?: string; summaries?: string[]; comments?: ReviewComment[] }, requestId?: string): Promise<unknown>;
   /** Drafts a title or description edit the way propose_description_edit does. */
   pipRewrite(item: ItemRef, part: "title" | "description", requestId: string): Promise<unknown>;
+  /** Whether Jira connection `id` is on, so a turn can work in it. */
+  pipConnectionOn?(id: string): boolean;
   /** The ticket of workstream `id`, for a turn asked in its conversation. */
   pipWorkstreamItem(id: string): ItemRef | null;
   /** The last time workstream `id`'s ticket changed in Jira, while no wake told Pip of it since; a wake's script reads it. */
@@ -854,7 +856,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const item = wsId ? (drafter?.pipWorkstreamItem?.(wsId) ?? null) : null;
   const workstream = wsId ? { id: wsId, item, lastDrift: drafter?.pipWorkstreamDrift?.(wsId) ?? null } : null;
   if (wsId && req.kind !== "wake" && !req.meta?.shown) await drafter?.pipAskAnswered?.(wsId);
-  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
+  const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream, req.connectionId ?? null);
   if (script.discussed) discussing.set(session, script.discussed);
   emit(req.requestId, { type: "started", sessionId: session });
   let said = "";

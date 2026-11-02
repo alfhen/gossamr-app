@@ -4,6 +4,8 @@ import type { ItemRef, ScreenContext } from "../types";
 import type { Intent } from "../types";
 import { MockBackend } from "./mock";
 import { scriptPip } from "./mockPip";
+import { mockPipTurns } from "./mockPipTurns";
+import { mockQueueAsk, mockQueueCancel } from "./mockPipQueue";
 
 const ref = (connectionId: string, key: string): ItemRef => ({ connectionId, externalId: key, key });
 const acme = (key: string) => ref("mock", key);
@@ -233,6 +235,26 @@ describe("the scripted Pip and a key that two sites have", () => {
   it("falls back to the first site when nothing says which", () => {
     const s = scriptPip("move CA-402 to Copy", context(null));
     expect(s.draft?.intent).toMatchObject({ item: acme("CA-402") });
+  });
+
+  it("takes a typed key from the site picked in the drawer when no ticket is open, and the open ticket's site before it", () => {
+    const picked = scriptPip("move CA-402 to Working", context(null), [], [], 0, [], null, null, "mock2");
+    expect(picked.draft?.intent).toMatchObject({ item: beta("CA-402") });
+    const open = scriptPip("move CA-402 to Copy", context(acme("CA-401")), [], [], 0, [], null, null, "mock2");
+    expect(open.draft?.intent).toMatchObject({ item: acme("CA-402") });
+  });
+
+  it("refuses a question that names a connection which is off or gone, and records nothing", async () => {
+    const b = new MockBackend({ jira: 2, githubRepos: 6 });
+    await b.connectionSetEnabled("jira_2", false);
+    const asked = (id: string, connectionId: string, item: ItemRef | null = null) =>
+      mockQueueAsk({ requestId: id, prompt: "Hi", sessionId: null, context: context(item), conversation: "general", connectionId }, b, 1);
+    expect(() => asked("q1", "mock2")).toThrow("off or gone");
+    expect(() => asked("q2", "mock9")).toThrow("off or gone");
+    expect(() => asked("q3", "mock", beta("OPS-1"))).toThrow("off or gone");
+    expect(mockPipTurns.turns("general")).toEqual([]);
+    expect(asked("q4", "mock")).toEqual({ queued: false, ahead: 0 });
+    mockQueueCancel("q4");
   });
 });
 

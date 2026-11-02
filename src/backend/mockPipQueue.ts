@@ -202,6 +202,8 @@ export function mockQueueAsk(req: AskRequest, drafter: Partial<PipDrafter> | nul
   if (queue.position(req.requestId) !== null) throw new Error("That question was already sent.");
   const conversation = conversationOf(req);
   const workstream = req.kind === "wake" ? null : workstreamOfConversation(conversation);
+  const named = req.context.item?.connectionId || req.connectionId;
+  if (!workstream && named && drafter?.pipConnectionOn && !drafter.pipConnectionOn(named)) throw new Error("That Jira connection is off or gone, so Pip can't work in it.");
   let again: { workstream: string; facts: WakeFact[] } | undefined;
   if (workstream) {
     for (const [id, w] of queue.waitingIn(conversation)) if (w.wake) mockQueueCancel(id);

@@ -334,7 +334,7 @@ async fn a_ticket_out_of_reach_is_refused_until_the_person_hands_it_over() {
     let args = json!({ "workstream": out, "role": "investigator", "brief": "Look." });
     d.join_general("general");
     assert!(d.err("general", "start_agent", args.clone()).await.contains("out of reach"));
-    d.st.runs.lock().unwrap().get_mut("general").unwrap().handed = ["OTH-1".to_string()].into();
+    d.st.runs.lock().unwrap().get_mut("general").unwrap().handed.hand(&d.rig.fx.scope, "OTH-1");
     assert!(d.ok("general", "start_agent", args).await.contains("OTH-1"));
 }
 
