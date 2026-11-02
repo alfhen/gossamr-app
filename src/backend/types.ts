@@ -20,6 +20,8 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  ModelDefaults,
+  ModelOption,
   CleanupResult,
   Snapshot,
   PullDiff,
@@ -178,6 +180,14 @@ export interface Backend {
   runsKeepRunning(): Promise<number>;
   revealPath(path: string): Promise<void>;
   runsSettings(): Promise<AgentSettings>;
+  /** The models provider instance `instanceId` offers: the driver's own, then the ones added to it. */
+  providerModels(instanceId: string): Promise<ModelOption[]>;
+  /** Adds a model id to the instance's list and returns the list. An id that breaks the id rule is refused. */
+  providerAddModel(instanceId: string, model: string): Promise<ModelOption[]>;
+  /** What Pip and new agents use when nothing narrower says. */
+  modelDefaults(): Promise<ModelDefaults>;
+  /** Saves the defaults, each checked as a run's choice would be, and returns what was saved. A `null` clears one. */
+  modelSetDefaults(defaults: ModelDefaults): Promise<ModelDefaults>;
   /** Sets the Dock badge from the same Needs you list the page shows. */
   setNeedsBadge(count: number): Promise<void>;
   /** Whether macOS Reduce transparency is on, which WebKit doesn't report to the page. */
