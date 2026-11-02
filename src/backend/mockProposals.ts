@@ -18,6 +18,8 @@ const SUMMARY_LIMIT = 255;
 const DESCRIPTION_LIMIT = 30_000;
 const RESERVED = ["<<<TICKET", "TICKET>>>", "<<<FOCUS", "FOCUS>>>", "<<<PLAN", "PLAN>>>", "<<<BUILD", "BUILD>>>", "<<<FINDINGS", "FINDINGS>>>"];
 
+const draftConnection = (p: Proposal): string | null => (p.intent.type === "create" ? p.intent.container.connectionId : p.intent.type === "githubReview" ? p.intent.connectionId : targetOf(p.intent)?.connectionId ?? null);
+
 /** The backend's checks on a rewrite, in the same words. */
 function rewriteProblem(i: Extract<Intent, { type: "rewrite" }>): string | null {
   if (!i.title && !i.body) return "a rewrite has to change the title or the description";
@@ -65,6 +67,9 @@ export class MockProposals {
   /** Every write the sample tracker made, oldest first, each with the draft the person approved for it: the only way anything reaches it. */
   readonly writes: { proposalId: string; intent: Intent }[] = [];
 
+  /** Whether a new item can be drafted for this connection; the sample backend knows its Jira accounts. */
+  hasConnection: (connectionId: string) => boolean = (id) => id === CONNECTION;
+
   /** Called with each draft that was applied, for a backend that has to tell its own listeners. */
   onApplied: (p: Proposal) => void = () => {};
   /** Told of a draft the moment its write went through, before it reads as applied, as the backend takes a workstream's basis again then. */
@@ -89,7 +94,7 @@ export class MockProposals {
   create(intent: Intent, label: string | null = null): Promise<Proposal> {
     if (intent.type === "create") {
       if (!intent.fields.title.trim()) return Promise.reject(new Error("a new item needs a title"));
-      if (intent.container.connectionId !== CONNECTION) return Promise.reject(new Error("that item belongs to another connection"));
+      if (!this.hasConnection(intent.container.connectionId)) return Promise.reject(new Error("that item belongs to another connection"));
     } else if (intent.type === "startRun" || intent.type === "followUp" || intent.type === "runAnswer") return Promise.reject(new Error(AGENTS_DIRECT));
     else if (intent.type === "githubReview") return Promise.reject(new Error("ask Pip to draft a GitHub review with the reviewed commit"));
     else if (!targetOf(intent)) return Promise.reject(new Error("a draft made by hand has to be about an existing item"));
@@ -148,7 +153,7 @@ export class MockProposals {
   private retireMovedSiblings(approved: Proposal) {
     if (approved.intent.type !== "transition") return;
     const on = approved.intent.item;
-    const siblings = this.drafts.filter((d) => d.state.type === "pending" && d.intent.type === "transition" && d.intent.item.externalId === on.externalId && d.createdAt <= approved.updatedAt);
+    const siblings = this.drafts.filter((d) => d.state.type === "pending" && d.intent.type === "transition" && d.intent.item.connectionId === on.connectionId && d.intent.item.externalId === on.externalId && d.createdAt <= approved.updatedAt);
     for (const d of siblings) {
       const retired = this.set(d.id, { state: { type: "retired", reason: `Another move of ${on.key} was approved` } });
       this.audit(retired, "supervisor", "draft_retired");
@@ -159,8 +164,8 @@ export class MockProposals {
     return this.drafts.filter(
       (p) =>
         (!query.states || query.states.includes(p.state.type)) &&
-        (!query.item || targetOf(p.intent)?.externalId === query.item.externalId) &&
-        (!query.connectionId || query.connectionId === CONNECTION) &&
+        (!query.item || (targetOf(p.intent)?.externalId === query.item.externalId && targetOf(p.intent)?.connectionId === query.item.connectionId)) &&
+        (!query.connectionId || draftConnection(p) === query.connectionId) &&
         (!query.workstream || workstreamOf(p) === query.workstream),
     );
   }
@@ -248,7 +253,7 @@ export class MockProposals {
     }
     if (edit.type === "create" && intent.type === "create") {
       if (edit.title !== undefined && !edit.title.trim()) throw new Error("a new item needs a title");
-      if (edit.container && edit.container.connectionId !== CONNECTION) throw new Error("a new item can't move to another connection");
+      if (edit.container && edit.container.connectionId !== intent.container.connectionId) throw new Error("a new item can't move to another connection");
       const fields = {
         ...intent.fields,
         ...(edit.title !== undefined ? { title: edit.title.trim() } : {}),

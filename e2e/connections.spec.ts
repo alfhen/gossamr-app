@@ -452,3 +452,34 @@ test.describe("the banner for a signed-out connection", () => {
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 });
+
+test.describe("two Jira accounts on the sample backend", () => {
+  const failJira = (page: Page, instanceId: string, problem: string | null) =>
+    page.evaluate(([id, p]) => (globalThis as unknown as { __gossamrMock: { failJira(id: string, problem: string | null): void } }).__gossamrMock.failJira(id, p), [instanceId, problem] as const);
+
+  test("lists both sites under Tickets", async ({ page }) => {
+    await openApp(page, "runs=empty&jira=2");
+    await openSettings(page);
+    await expect(rowOf(page, "acme.atlassian.net")).toBeVisible();
+    await expect(rowOf(page, "beta.atlassian.net")).toBeVisible();
+    await expect(page.getByRole("list", { name: "Connections" })).not.toContainText("Sample data");
+  });
+
+  test("shows the tickets of both sites, including two with the same key", async ({ page }) => {
+    await openApp(page, "runs=empty&jira=2");
+    const items = page.getByRole("listbox", { name: "Items" });
+    await expect(items.getByText("CA-402", { exact: true })).toHaveCount(2);
+    await expect(items).toContainText("Subject line variants");
+    await expect(items).toContainText("Quote template for the pilot");
+  });
+
+  test("marks only the account whose token Jira turned down", async ({ page }) => {
+    await openApp(page, "runs=empty&jira=2");
+    await openSettings(page);
+    await failJira(page, "jira_2", "refused");
+    await expect(rowOf(page, "beta.atlassian.net")).toContainText("Not signed in");
+    await expect(rowOf(page, "acme.atlassian.net")).not.toContainText("Not signed in");
+    await failJira(page, "jira_2", null);
+    await expect(rowOf(page, "beta.atlassian.net")).not.toContainText("Not signed in");
+  });
+});

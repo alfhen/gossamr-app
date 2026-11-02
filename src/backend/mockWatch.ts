@@ -24,6 +24,8 @@ export interface MockOptions {
   pipPace?: number;
   /** "none" is a GitHub token that can't write to pull requests anywhere, so no review draft can be posted. */
   reviewAccess?: "none";
+  /** 2 adds a second Jira account with its own site, which shares the project key CA and the ticket key CA-402 with the first (`?jira=2`). */
+  jira?: 2;
   runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; gitRules?: boolean; prSurfaceMs?: number | null };
 }
 
@@ -140,7 +142,9 @@ export interface MockHandle {
   /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
   pipIdle(): boolean;
   /** Changes sample ticket `key` as someone editing it in Jira would (`MockBackend.editTicket`): its summary, description or status (an id or a name). */
-  editTicket(key: string, change: TicketEdit): void;
+  editTicket(item: string | ItemRef, change: TicketEdit): void;
+  /** Has the sync of a Jira account after the first fail (`refused` is a token Jira turned down, `offline` a network failure), or recover with null. */
+  failJira(instanceId: string, problem: "refused" | "offline" | null): void;
   /** Marks pending draft `id` as edited by the person, so a newer draft of the same kind stays beside it. */
   noteEdited(id: string): void;
   /** Every review the sample GitHub was sent, oldest first: the only writes it takes, each from a draft the person approved. */
@@ -182,7 +186,8 @@ export interface MockClockParts {
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
   pip?: { hold(on: boolean): void; idle(): boolean };
-  tickets?: { edit(key: string, change: TicketEdit): void };
+  tickets?: { edit(item: string | ItemRef, change: TicketEdit): void };
+  jira?: { fail(instanceId: string, problem: "refused" | "offline" | null): void };
   terminals?: readonly string[];
   github?: { probe(state: GithubProbeState): void; refuseToken(): void; finishRecheck(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
@@ -201,7 +206,7 @@ declare global {
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`, and `refuseGithubToken()` has GitHub turn down the stored token. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, github, terminals, draftReview }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, github, terminals, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -241,7 +246,8 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     },
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
-    editTicket: (key, change) => tickets?.edit(key, change),
+    editTicket: (item, change) => tickets?.edit(item, change),
+    failJira: (instanceId, problem) => jira?.fail(instanceId, problem),
     noteEdited: (id) => {
       if (!proposals) throw new Error("the sample clock has no drafts");
       proposals.noteEdited(id);
@@ -272,7 +278,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?runsGitRules=1` gives the sample git folder rules, so Settings warns they don't reach the work folder. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start, and `?mockClaudeProbe=` does the same for the Claude provider. The mock always lists the default Claude provider; `?providers=1` shows provider rows in Settings, which hides them otherwise. `?mockGithubRecheck=hold` keeps the sample GitHub checking its drafts after it is turned back on until `__gossamrMock.finishGithubRecheck()`. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?runsGitRules=1` gives the sample git folder rules, so Settings warns they don't reach the work folder. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start, and `?mockClaudeProbe=` does the same for the Claude provider. The mock always lists the default Claude provider; `?providers=1` shows provider rows in Settings, which hides them otherwise. `?mockGithubRecheck=hold` keeps the sample GitHub checking its drafts after it is turned back on until `__gossamrMock.finishGithubRecheck()`. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?jira=2` adds a second Jira account (see `MockOptions.jira`), and `__gossamrMock.failJira("jira_2", "refused" | "offline" | null)` makes its sync fail or recover. `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -292,6 +298,7 @@ export function mockOptionsFromUrl(): MockOptions {
   if (params.get("mockGithubRecheck") === "hold") options.githubRecheck = "hold";
   const jiraToken = params.get("mockJiraToken");
   if (jiraToken === "expiring" || jiraToken === "refused") options.jiraToken = jiraToken;
+  if (params.get("jira") === "2") options.jira = 2;
   const pace = count("pipPace");
   if (pace) options.pipPace = pace;
   if (params.get("mockReviewAccess") === "none") options.reviewAccess = "none";
