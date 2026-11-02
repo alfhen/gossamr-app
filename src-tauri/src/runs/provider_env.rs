@@ -34,6 +34,8 @@ pub enum ProviderState {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ProviderEnv {
     vars: Vec<(&'static str, Option<OsString>)>,
+    /// Whether the login comes from the instance's own folder, not from the shell.
+    from_folder: bool,
 }
 
 // Values can hold API keys, so nothing prints them.
@@ -49,6 +51,7 @@ impl ProviderEnv {
     /// known. Private, so the folder rules in `states` can't be skipped.
     fn resolve(instance: &ProviderInstance, shell: Option<&RunEnv>, home: &Path) -> std::result::Result<Self, Unavailable> {
         let driver = instance.driver;
+        let from_folder = instance.config.config_dir.is_some();
         let vars = match instance.config.config_dir.as_deref() {
             Some(typed) => {
                 let folder = provider_folder::expand(typed, home).into_os_string();
@@ -59,7 +62,23 @@ impl ProviderEnv {
                 driver.login_variables().iter().map(|&name| (name, shell.get(name).map(OsStr::to_os_string))).collect()
             }
         };
-        Ok(Self { vars })
+        Ok(Self { vars, from_folder })
+    }
+
+    /// Whether the login comes from the instance's own folder, not from the shell.
+    pub fn uses_own_folder(&self) -> bool {
+        self.from_folder
+    }
+
+    /// What a Terminal script does to run as this instance: the variables to remove and the folder variable to set.
+    /// None without a folder, where Terminal's own environment picks the login.
+    pub fn terminal_login(&self) -> Option<TerminalLogin<'_>> {
+        if !self.from_folder {
+            return None;
+        }
+        let unset = self.vars.iter().filter(|(_, value)| value.is_none()).map(|(name, _)| *name).collect();
+        let (name, folder) = self.vars.iter().find_map(|(name, value)| Some((*name, value.as_deref()?)))?;
+        Some(TerminalLogin { unset, export: (name, folder) })
     }
 
     #[cfg(test)]
@@ -93,6 +112,11 @@ impl ProviderEnv {
         }
         env
     }
+}
+
+pub struct TerminalLogin<'a> {
+    pub unset: Vec<&'static str>,
+    pub export: (&'static str, &'a OsStr),
 }
 
 /// The state of every provider instance, in order. A folder that fails the rules in `provider_folder` is an error

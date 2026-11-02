@@ -1,7 +1,8 @@
 //! The person's interactive shell environment, captured once.
 //!
-//! The Claude daemon is shared and inherits the environment of whichever `claude` starts it, so every `claude` we
-//! run gets exactly this environment and nothing per launch.
+//! Claude keeps one background daemon per config folder, and it inherits the environment of whichever `claude` starts
+//! it, so every `claude` of one provider instance gets exactly the same environment (this capture with the instance's
+//! login variables, `provider_env.rs`) and nothing per launch.
 
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::OsStringExt;

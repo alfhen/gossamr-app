@@ -69,7 +69,7 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
     cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
     let bin = install_fake_git(&fx.dir);
     let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]));
-    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
+    let tools = FixedToolchain(Ok(Toolchain::new(cli.clone(), env)));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
     let svc = RunService::new(
