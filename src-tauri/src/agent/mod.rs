@@ -453,7 +453,7 @@ impl AgentService {
     /// While another wake waits there, the facts are merged into that one instead. The turn is kept with its event lines
     /// as its prompt and kind `wake`, and asked like any other.
     pub async fn wake(self: &Arc<Self>, ws_id: &str, facts: WakeFacts, sink: WakeSink) -> Result<()> {
-        let scope = self.core.scope().await?;
+        let scope = self.core.workstream_scope(ws_id).await?;
         self.queue_wake(scope, format!("{WORKSTREAM_PREFIX}{ws_id}"), facts, sink).await
     }
 
