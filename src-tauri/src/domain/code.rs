@@ -180,6 +180,9 @@ pub struct DevLink {
     pub change: CodeChange,
     pub provenance: LinkSource,
     pub confidence: f32,
+    /// The key could be this item's or another site's with the same key; each candidate gets a link marked so.
+    #[serde(default)]
+    pub ambiguous: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

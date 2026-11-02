@@ -21,6 +21,7 @@ describe("the mock's development links", () => {
     const draft = ca208[0].change;
     expect([draft.state, draft.checks, draft.review, draft.headRef]).toEqual(["draft", "failing", "changesRequested", "ca-208-gateway"]);
     expect(ca208[0].confidence).toBeGreaterThan(ca208[1].confidence);
+    expect(ca208.map((l) => l.ambiguous)).toEqual([false, false]);
 
     const devops = await b.devLinks(ticket("DEVOPS-471"));
     expect(devops.map((l) => [l.change.number, l.change.state, l.provenance])).toEqual([
