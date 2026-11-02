@@ -23,6 +23,7 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 pub(crate) mod code;
 mod drafts;
 mod instances;
+mod models;
 mod probes;
 mod run_outcome;
 mod pip_runs;

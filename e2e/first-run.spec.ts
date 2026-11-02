@@ -61,6 +61,9 @@ test.describe("the first-run screen", () => {
     await expect(page).toHaveTitle("Work — Gossamr");
     await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
     await expect(page.getByRole("listitem", { name: "acme.atlassian.net connection" })).toContainText("Authenticated · Alf Henderson");
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await expect(page.getByRole("menuitem", { name: /^GitHub account/ })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /^Jira account/ })).toHaveCount(0);
   });
 
   test("Cancel closes the form, and sample data leaves for the workspace", async ({ page }) => {
