@@ -46,6 +46,13 @@ impl Connection {
         Self { id: Self::github_id(login), kind: ConnectionKind::Github, workspace: login.into(), account: login.into(), display_name: display_name.into() }
     }
 
+    /// The Jira connection that `SiteScope::connection_id` made `id` from, which is all its cache file name needs.
+    pub fn from_jira_id(id: &str) -> Option<Self> {
+        let (workspace, account) = id.strip_prefix("jira:")?.split_once(':')?;
+        (!workspace.is_empty() && !account.is_empty())
+            .then(|| Self { id: id.into(), kind: ConnectionKind::Jira, workspace: workspace.into(), account: account.into(), display_name: String::new() })
+    }
+
     pub fn github_id(login: &str) -> String {
         format!("github:{}", login.to_ascii_lowercase())
     }
@@ -219,6 +226,10 @@ impl Registry {
         self.connections.lock().expect("registry lock poisoned").get(id).cloned()
     }
 
+    pub fn ids(&self) -> Vec<String> {
+        self.connections.lock().expect("registry lock poisoned").keys().cloned().collect()
+    }
+
     pub fn remove(&self, id: &str) {
         self.trackers.lock().expect("registry lock poisoned").remove(id);
         self.connections.lock().expect("registry lock poisoned").remove(id);
@@ -360,8 +371,9 @@ pub(crate) mod testing {
         async fn transitions(&self, _: &ItemRef) -> Result<Vec<Move>> {
             Ok(self.moves.lock().unwrap().clone())
         }
-        async fn people(&self, _: &ItemRef, _: &str) -> Result<Vec<Person>> {
-            unimplemented!()
+        async fn people(&self, item: &ItemRef, query: &str) -> Result<Vec<Person>> {
+            let person_ref = crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: "mentioned".into() };
+            Ok(vec![Person { person_ref, display_name: format!("{query} on {}", item.connection_id), avatar_url: None }])
         }
         async fn apply_with_files(&self, write: &Write, _: &[Uploaded]) -> Result<Applied> {
             self.applied.lock().unwrap().push(write.clone());

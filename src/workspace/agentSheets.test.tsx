@@ -10,7 +10,7 @@ import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./Ru
 import { sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { useRuns } from "./runsStore";
-import { placesOf } from "./RunWhere";
+import { placesOf, whereText } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -181,15 +181,18 @@ describe("the run sheet, by state", () => {
   describe("a failed launch the person can fix", () => {
     const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
     const failedOf = (type: string) => failures().find((r) => r.failure?.type === type)!;
+    const clones = () => new MockBackend({ runs: { seed: "clones" } }).runs.list();
+    const outsideRun = () => clones().find((r) => r.failure?.type === "outsideWorkFolder")!;
+    const occupiedRun = () => clones().find((r) => r.failure?.type === "cloneOccupied")!;
     const disabled = (html: string, label: string) => new RegExp(`<button[^>]*disabled=""[^>]*>(?:(?!</button>)[\\s\\S])*${label}</button>`).test(html);
 
     it("walks through trusting a folder: explanation, one main button, the command to copy, and Retry that waits", () => {
       const html = sheet(failedOf("untrustedFolder"));
       expect(html).toContain("Claude asks you once per folder before it will work there.");
-      expect(html).toContain("hasn&#x27;t been trusted in /Users/sample/Code/storefront yet");
+      expect(html).toContain("hasn&#x27;t been trusted in /Users/sample/Gossamr/agents/acme/storefront yet");
       expect(html).toContain("Gossamr doesn&#x27;t change Claude&#x27;s settings for you.");
       expect(buttons(html).filter((b) => !b.startsWith("Copy") && !b.startsWith("×") && !/^[⤢⤡]/.test(b))).toEqual(expect.arrayContaining(["Trust this folder in Terminal", "Retry"]));
-      expect(html).toContain("data-copy=\"cd &#x27;/Users/sample/Code/storefront&#x27; &amp;&amp; claude\"");
+      expect(html).toContain("data-copy=\"cd &#x27;/Users/sample/Gossamr/agents/acme/storefront&#x27; &amp;&amp; claude\"");
       expect(disabled(html, "Retry")).toBe(true);
       expect(html).toContain("What Gossamr recorded");
       expect(html).toContain("accept the trust prompt");
@@ -220,11 +223,33 @@ describe("the run sheet, by state", () => {
       expect(disabled(html, "Retry")).toBe(false);
     });
 
-    it("offers Clone it and Choose clone for a missing clone, and Pip starts the agent again", () => {
+    it("offers Retry alone for a clone that failed, and says what Retry does", () => {
       const html = sheet(failedOf("noClone"));
-      expect(buttons(html)).toEqual(expect.arrayContaining(["Clone it", "Choose clone"]));
-      expect(html).toContain("choose a clone of it, and Pip starts the agent again");
+      expect(buttons(html)).toContain("Retry");
+      expect(buttons(html)).not.toContain("Ask Pip to start it again");
+      expect(html).toContain("Retry makes it again");
       expect(html).not.toContain("Or run this");
+    });
+
+    it("offers only Ask Pip to start it again for a run set up in the person's own clone", () => {
+      const html = sheet(outsideRun());
+      expect(buttons(html)).toContain("Ask Pip to start it again");
+      expect(buttons(html)).not.toContain("Retry");
+      expect(html).toContain("before Gossamr kept its own clones");
+      expect(html).not.toContain("Trust this folder in Terminal");
+    });
+
+    it("keeps the trust steps off a run set up in the person's own clone, but not off one in the work folder", () => {
+      const legacy = { ...failedOf("untrustedFolder"), inWorkFolder: false };
+      expect(buttons(sheet(legacy))).toEqual(expect.arrayContaining(["Ask Pip to start it again"]));
+      expect(buttons(sheet(legacy))).not.toContain("Trust this folder in Terminal");
+      expect(buttons(sheet(failedOf("untrustedFolder")))).toContain("Trust this folder in Terminal");
+    });
+
+    it("tells a folder in the way to be moved and then retried", () => {
+      const html = sheet(occupiedRun());
+      expect(html).toContain("Move it away, then retry");
+      expect(buttons(html)).toContain("Retry");
     });
 
     it("explains the limit when the cap was reached and has only Retry", () => {
@@ -232,7 +257,6 @@ describe("the run sheet, by state", () => {
       expect(html).toContain("Too many agents are running at once.");
       expect(html).toContain("3 agents are already running");
       expect(buttons(html).filter((b) => b === "Retry")).toHaveLength(1);
-      expect(buttons(html)).not.toContain("Clone it");
     });
 
     it("wires the buttons to the actions", () => {
@@ -312,10 +336,17 @@ describe("Stop in the run sheet", () => {
 
 describe("where a run lives", () => {
   it("copies the worktree, the clone and the branch exactly", () => {
-    const r = run("working", { branch: null, expectedWorktree: "/Users/sample/Code/storefront/.claude/worktrees/ca-1-fix-ab12", spec: { ...seeded()[0].spec, name: "ca-1-fix-ab12", clonePath: "/Users/sample/Code/storefront" } });
-    expect(placesOf(r).map((p) => p.value)).toEqual(["/Users/sample/Code/storefront/.claude/worktrees/ca-1-fix-ab12", "/Users/sample/Code/storefront", "worktree-ca-1-fix-ab12"]);
+    const r = run("working", { branch: null, expectedWorktree: "/Users/sample/Gossamr/agents/acme/storefront/.claude/worktrees/ca-1-fix-ab12", spec: { ...seeded()[0].spec, name: "ca-1-fix-ab12", clonePath: "/Users/sample/Gossamr/agents/acme/storefront" } });
+    expect(placesOf(r).map((p) => p.value)).toEqual(["/Users/sample/Gossamr/agents/acme/storefront/.claude/worktrees/ca-1-fix-ab12", "/Users/sample/Gossamr/agents/acme/storefront", "worktree-ca-1-fix-ab12"]);
     const html = sheet(r);
     for (const p of placesOf(r)) expect(html).toContain(`data-copy="${p.value}"`);
+  });
+
+  it("says a legacy run keeps working in your clone only when it has a session", () => {
+    const legacy = (state: Parameters<typeof run>[0], shortId: string | null) => whereText(run(state, { shortId, inWorkFolder: false }));
+    expect(legacy("working", "1000a000")).toContain("It keeps working there");
+    expect(legacy("failed", null)).toContain("Ask Pip to start it again in Gossamr's clone");
+    expect(legacy("queued", null)).not.toContain("keeps working");
   });
 
   it("shows the size of the session files once it is known", () => {

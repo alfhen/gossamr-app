@@ -22,7 +22,7 @@ const CA401 = itemRef("CA-401");
 const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
   role: "investigator",
   repo: "acme/storefront",
-  clonePath: "/Users/sample/Code/storefront",
+  clonePath: "/Users/sample/Gossamr/agents/acme/storefront",
   base: "main",
   name: `ca-401-${Math.random().toString(16).slice(2, 8)}`,
   brief: "Look into it.",

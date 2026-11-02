@@ -111,6 +111,21 @@ test("the Needs you list ranks a question from Pip ahead of a pause, opens each 
   await expect(needsYouTray(page)).toContainText("Nothing needs you.");
 });
 
+test("a run set up in the person's own clone says so and offers only Ask Pip to start it again", async ({ page }) => {
+  await openApp(page, "runs=clones&prSurface=manual");
+  await openAgents(page);
+  await expandNeedsYou(page);
+  await needRow(page, /CA-417.*failed/).click();
+  await expect(needsPane(page)).toContainText("This agent was set up before Gossamr kept its own clones.");
+  await expect(needsPane(page).getByRole("button", { name: "Ask Pip to start it again" })).toBeVisible();
+  await expect(needsPane(page).getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
+  await expect(needsPane(page).getByRole("button", { name: /Trust this folder/ })).toHaveCount(0);
+
+  await needRow(page, /SUP-14.*failed/).click();
+  await expect(needsPane(page)).toContainText("Move it away, then retry.");
+  await expect(needsPane(page).getByRole("button", { name: "Retry", exact: true })).toBeEnabled();
+});
+
 test("a failed run waits in the list under General, opens its decision, and stays until it is dealt with, not just seen", async ({ page }) => {
   await openApp(page, "prSurface=manual");
   await openAgents(page);

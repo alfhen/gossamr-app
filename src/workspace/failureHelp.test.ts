@@ -28,10 +28,24 @@ describe("failure help", () => {
   });
 
   it("gives the exact command to run in your own terminal, quoted for the shell", () => {
-    expect(failureHelp(of("untrustedFolder"))?.command?.text).toBe("cd '/Users/sample/Code/storefront' && claude");
+    expect(failureHelp(of("untrustedFolder"))?.command?.text).toBe("cd '/Users/sample/Gossamr/agents/acme/storefront' && claude");
     expect(failureHelp(of("notSignedIn"))?.command).toEqual({ text: "claude", note: "Then type /login." });
     expect(failureHelp(of("modeRefused"))?.command?.text).toBe("claude --permission-mode auto");
     expect(failureHelp(of("claudeMissing"))?.command?.text).toBe("curl -fsSL https://claude.ai/install.sh | bash");
     expect(shellQuote("/Users/me/My Code/it's")).toBe("'/Users/me/My Code/it'\\''s'");
+  });
+
+  it("sends every failed run set up outside the work folder to Pip, whatever it failed on", () => {
+    for (const type of ["noClone", "capReached", "notSignedIn", "untrustedFolder"]) {
+      const help = failureHelp({ ...of(type), inWorkFolder: false });
+      expect([type, help?.kind, help?.retry, help?.primary]).toEqual([type, "outsideWorkFolder", false, null]);
+    }
+  });
+
+  it("says a folder in the way is never removed without repeating that it should be moved", () => {
+    const occupied = { ...of("noClone"), failure: { type: "cloneOccupied", path: "/x" } } as Run;
+    const said = (error: string | null) => failureHelp({ ...occupied, error })?.detail ?? "";
+    expect(said("~/Gossamr/agents/acme/payments already exists and isn't a clone of acme/payments. Move it away, then retry.").match(/move it away/gi)).toHaveLength(1);
+    expect(said(null)).toContain("Gossamr never removes it. Move it away, then retry.");
   });
 });

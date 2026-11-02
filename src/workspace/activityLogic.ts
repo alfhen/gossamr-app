@@ -96,9 +96,13 @@ export function verb(e: Pick<FeedEntry, "kind" | "mention">): string {
 
 export { initials } from "./canvasShared";
 
-/** The entries whose id is in `ids` with `unread` set, the others untouched. */
-export function withRead(entries: readonly FeedEntry[], ids: ReadonlySet<string>, unread: boolean): FeedEntry[] {
-  return entries.map((e) => (ids.has(e.id) ? { ...e, unread } : e));
+/** What names a feed entry: event ids are per site, and two accounts on one site hold the same event. */
+export const feedKey = (e: Pick<FeedEntry, "connectionId" | "id">): string => `${e.connectionId}:${e.id}`;
+
+/** The entries that are one of `marked` with `unread` set, the others untouched. */
+export function withRead(entries: readonly FeedEntry[], marked: readonly FeedEntry[], unread: boolean): FeedEntry[] {
+  const keys = new Set(marked.map(feedKey));
+  return entries.map((e) => (keys.has(feedKey(e)) ? { ...e, unread } : e));
 }
 
 /** The index j and k move to, staying inside the list. -1 means nothing is active yet. */

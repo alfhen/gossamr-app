@@ -343,15 +343,16 @@ impl ClaudeCli for SignedIn {
 async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_stops_and_removes() {
     let mut s = Scratch::new("service").await;
     let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
-    let clone = fx.home.join("webshop");
-    git(&fx.home, &["clone", "-q", "--local", &s.repo.to_string_lossy(), "webshop"]);
+    let clone = fx.home.join("Gossamr/agents/acme/webshop");
+    std::fs::create_dir_all(clone.parent().unwrap()).unwrap();
+    git(&fx.home, &["clone", "-q", "--local", &s.repo.to_string_lossy(), &clone.to_string_lossy()]);
     git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/webshop.git"]);
     let trust = serde_json::json!({ "projects": { s.repo.to_string_lossy(): { "hasTrustDialogAccepted": true }, clone.to_string_lossy(): { "hasTrustDialogAccepted": true } } });
     std::fs::write(s.config.join(".claude.json"), trust.to_string()).unwrap();
 
     let cli = Arc::new(SignedIn(SystemCli::new(s.cli.binary().to_path_buf(), s.env.clone())));
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: s.env.clone() }));
-    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}));
+    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), Arc::new(|_| {})).with_home(fx.home.clone());
 
     let spec = RunSpec { clone_path: clone.canonicalize().unwrap(), name: "ce-4-spike-0a1b".into(), base: "feature".into(), ..crate::domain::fixtures::run_spec() };
     let run = fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap();
@@ -389,8 +390,9 @@ async fn real_approved_run_launches_into_its_worktree_is_adopted_by_retry_then_s
 async fn real_signed_out_session_is_tracked_as_a_system_block_then_stops_and_a_foreign_session_is_left_alone() {
     let mut s = Scratch::new("tracker").await;
     let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
-    let clone = fx.home.join("webshop");
-    git(&fx.home, &["clone", "-q", "--local", &s.repo.to_string_lossy(), "webshop"]);
+    let clone = fx.home.join("Gossamr/agents/acme/webshop");
+    std::fs::create_dir_all(clone.parent().unwrap()).unwrap();
+    git(&fx.home, &["clone", "-q", "--local", &s.repo.to_string_lossy(), &clone.to_string_lossy()]);
     git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/webshop.git"]);
     let trust = serde_json::json!({ "projects": { s.repo.to_string_lossy(): { "hasTrustDialogAccepted": true }, clone.to_string_lossy(): { "hasTrustDialogAccepted": true } } });
     std::fs::write(s.config.join(".claude.json"), trust.to_string()).unwrap();
@@ -399,7 +401,8 @@ async fn real_signed_out_session_is_tracked_as_a_system_block_then_stops_and_a_f
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: s.env.clone() }));
     let opened = Arc::new(super::rig::Opened::default());
     let notices = Arc::new(super::rig::Notices::default());
-    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {}))
+    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), Arc::new(|_| {}))
+        .with_home(fx.home.clone())
         .with_terminal(opened.clone())
         .with_notifier(notices.clone());
 
@@ -650,8 +653,8 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let mut s = Scratch::new("fresh").await;
     let home = s.root.join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World").await.expect("clone");
-    assert_eq!(path, super::fresh::agents_root(&home).join("octocat/Hello-World"));
+    let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World", true).await.expect("clone").path;
+    assert_eq!(path, super::fresh::work_path(&home, "octocat/Hello-World").unwrap());
     assert!(path.join(".git").is_dir());
     let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None };
 

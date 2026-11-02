@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   advanceRuns, agentsHome, allProjects, askPip, detailsOf, editTicket, expandNeedsYou, expectPeekInPlace, finishOnHome,
   githubWrites, homeConversation, homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, MANUAL_PRS, mockRuns,
-  needRow, needsPane, needsYouTray, openAgents, openApp, openNeedRow, paneSettled, peekSheet, peekTicket,
+  needRow, needsPane, needsYouTray, openAgents, openApp, openNeedRow, openRunOf, paneSettled, peekSheet, peekTicket,
   pipConversation, pipPane, runSheet, scriptNextRun, selectWorkstream, showWorkspace, startAgent, startWorkstream,
   ask, stepChip, stepOf, stepRail, surfacePullRequests, wakes, WITH_REPOS, workstreamGroup, workstreamOnHome,
 } from "./support/app";
@@ -548,4 +548,19 @@ test.describe("a plan's step", () => {
     await selectWorkstream(page, "CA-401");
     await expect(stepChip(page, "plan").locator("[data-step-state]")).toHaveText("Approved");
   });
+});
+
+test("a run says whether it ran in Gossamr's own clone or in the person's, which an earlier release set up", async ({ page }) => {
+  await openApp(page);
+  await openAgents(page);
+  await openRunOf(page, "WEB-108");
+  const sheet = runSheet(page);
+  await expect(sheet).toContainText("Gossamr's clone it was made from");
+  await expect(sheet).toContainText("A worktree of Gossamr's own clone of acme/storefront.");
+  await expect(sheet.getByText("/Users/sample/Gossamr/agents/acme/storefront", { exact: true }).first()).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await openRunOf(page, "DEVOPS-455");
+  await expect(sheet).toContainText("Your clone it was made from");
+  await expect(sheet).toContainText("This agent started in your own clone, before Gossamr kept its own. It keeps working there until it's done.");
 });

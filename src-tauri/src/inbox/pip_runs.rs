@@ -101,10 +101,12 @@ impl Core {
     /// a fork is refused.
     pub(crate) async fn build_pip_run(&self, scope: &Scope, workstream: &str, ticket: Option<&str>, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<(RunSpec, Option<ItemRef>)> {
         self.require_watched_repo(&repo)?;
-        let clone_path = self.resolve_clone(&plan.path)?;
+        let clone_path = self.resolve_clone(&plan.path, &repo)?;
         let item = ticket.map(|key| Self::item(scope, key));
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let connection_id = scope.connection_id.clone();
+        let (_, site, _) = self.identity_for(scope).await?;
+        let site = site.name;
         let mut spec = RunSpec {
             role: ask.role,
             repo,
@@ -113,6 +115,7 @@ impl Core {
             name: plan.name,
             brief: ask.brief,
             ticket: item.as_ref().map(|i| i.key.clone()),
+            site: item.as_ref().map(|_| site),
             ticket_block: None,
             pr: ask.pr,
             pr_sha: None,
@@ -139,13 +142,15 @@ impl Core {
 
     /// Stores the queued run for `spec` as started by Pip, and returns it with whether it is new. A run already started
     /// under `start.key` (an MCP retry of the same call) comes back instead, unchanged, and nothing is recorded again.
-    /// The workstream's audit says Pip started it, in which turn kind, and as what.
+    /// The workstream's audit says Pip started it, in which turn kind, and as what. Waits for a removal in progress, which
+    /// checks for live runs under the same lock, so a run is never queued for a connection that is leaving.
     pub(crate) async fn commit_pip_run(&self, scope: &Scope, start: &PipStart<'_>, item: Option<ItemRef>, spec: RunSpec) -> Result<(Run, bool)> {
         let connection_id = scope.connection_id.clone();
         let workstream = spec.workstream.clone();
         let role = spec.role.clone();
         let id = proposals::new_id()?;
         let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, start.request_id, Utc::now());
+        let _removal = self.draft_gate.lock().await;
         self.with_app_db_atomically_for(scope, |db| {
             if let Some(ws) = workstream.as_deref() {
                 super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;
@@ -200,7 +205,7 @@ impl Core {
         let scope = self.scope().await?;
         self.require_watched_repo(&spec.repo)?;
         spec.report = true;
-        spec.clone_path = self.resolve_clone(&spec.clone_path)?;
+        spec.clone_path = self.resolve_clone(&spec.clone_path, &spec.repo)?;
         if spec.brief.trim().is_empty() {
             spec.brief = "Look into this.".into();
         }

@@ -197,7 +197,7 @@ describe("the run sheet", () => {
 
   it("browses in group order, a workstream's runs together, as the list on screen is", async () => {
     const ws = await backend.workstreamsOpen(itemRef("CA-401"));
-    const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-browse-1a2b", brief: "", workstream: ws.id }, itemRef("CA-401"));
+    const run = backend.runs.start({ role: "investigate", repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront", base: "main", name: "ca-401-browse-1a2b", brief: "", workstream: ws.id }, itemRef("CA-401"));
     // Finished, it is still the workstream with the latest activity, so first.
     for (let i = 0; i < 3; i++) backend.runs.advance(run.id);
     useWorkstreams.getState().init(backend);

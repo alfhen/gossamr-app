@@ -68,7 +68,7 @@ describe("mock Pip woken by a finished plan (N6)", () => {
 
 describe("mock Pip starting the next step of a workstream, as start_agent does", () => {
   const CA401 = itemRef("CA-401");
-  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
+  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront" };
   const base: RunSpec = { role: "investigator", ...storefront, base: "main", name: "x", brief: "", ticket: "CA-401", ticketBlock: null };
   let n = 0;
 
@@ -175,7 +175,7 @@ describe("mock Pip woken by an agent that asks a question, as ask_person does", 
   it("asks the person what to tell it, and starts, stops or answers nothing", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });
     const ws = b.workstreams.open(CA401).id;
-    const run = b.runs.start({ role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: "ca-401-asks", brief: "", ticketBlock: null, workstream: ws }, CA401);
+    const run = b.runs.start({ role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront", base: "main", name: "ca-401-asks", brief: "", ticketBlock: null, workstream: ws }, CA401);
     b.runs.advance(run.id);
     b.runs.advance(run.id);
     b.runs.ask(run.id, "Should the refund path keep the old rounding?");
@@ -197,7 +197,7 @@ describe("mock Pip woken by an agent that asks a question, as ask_person does", 
 
 describe("mock Pip discussing and revising a GitHub review draft, as revise_proposal does", () => {
   const GH = "github:ada";
-  const spec: RunSpec = { role: "review", repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop", base: "main", name: "ca-402-review", brief: "", pr: 218, ticketBlock: "CA-402: sample" };
+  const spec: RunSpec = { role: "review", repo: "acme/webshop", clonePath: "/Users/sample/Gossamr/agents/acme/webshop", base: "main", name: "ca-402-review", brief: "", pr: 218, ticketBlock: "CA-402: sample" };
   const context = { screen: "board", item: itemRef("CA-402"), selection: [] } as unknown as ScreenContext;
   let n = 0;
 

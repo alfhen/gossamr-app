@@ -798,7 +798,7 @@ mod tests {
         assert_eq!(json["type"], "startRun");
         assert_eq!(json["connectionId"], "c");
         assert_eq!(json["item"]["externalId"], "1");
-        assert_eq!(json["spec"]["clonePath"], "/Users/me/Code/webshop");
+        assert_eq!(json["spec"]["clonePath"], "/Users/me/Gossamr/agents/acme/webshop");
         let back: Intent = serde_json::from_value(json).unwrap();
         assert_eq!(back.target(), Some(&item_ref("1")));
     }
