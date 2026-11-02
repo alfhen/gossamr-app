@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { MODEL_ID_LIMIT, validModelId } from "../lib/models";
 import { choiceLabel, listedId, type PickerInstance } from "../lib/modelPicker";
 import { usePopover } from "../workspace/Popover";
@@ -35,6 +35,8 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const field = useId();
+  const current = useRef(value);
+  current.current = value;
 
   useEffect(() => {
     if (open) return;
@@ -78,7 +80,8 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
     try {
       const listed = listedId(await onAddModel(value.instanceId, model), model);
       if (!listed) return setProblem(`${model} isn't a model you can pick here.`);
-      pick(value.instanceId, listed);
+      const now = current.current;
+      if (now?.instanceId === value.instanceId && now.model === value.model) pick(value.instanceId, listed);
     } catch (e) {
       setProblem(e instanceof Error ? e.message : String(e));
     } finally {

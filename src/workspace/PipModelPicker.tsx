@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelPickerProps } from "../components/ModelPicker";
 import { useClaude } from "../claudeStore";
 import { movesTo, pickerInstances, pipModels, switchingLine, type PickerInstance } from "../lib/modelPicker";
@@ -17,13 +17,16 @@ interface Options {
 function useOptions() {
   const backend = useWorkspace((s) => s.backend);
   const [options, setOptions] = useState<Options>({ instances: [], models: {}, defaults: null });
+  const latest = useRef(0);
   const read = useCallback(async () => {
     if (!backend) return;
+    const mine = ++latest.current;
     try {
       const [connections, defaults] = await Promise.all([backend.connectionsList(), backend.modelDefaults()]);
       const instances = pickerInstances(connections);
-      const lists = await Promise.all(instances.map((i) => backend.providerModels(i.id).then(pipModels, () => [])));
-      setOptions({ instances, models: Object.fromEntries(instances.map((i, at) => [i.id, lists[at]])), defaults });
+      const lists = await Promise.all(instances.map((i) => backend.providerModels(i.id).then(pipModels, () => null)));
+      if (mine !== latest.current) return;
+      setOptions((prev) => ({ instances, models: Object.fromEntries(instances.map((i, at) => [i.id, lists[at] ?? prev.models[i.id] ?? []])), defaults }));
     } catch {
       // Settings reports what is wrong with a provider; the list stays as it was.
     }

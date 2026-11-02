@@ -55,8 +55,9 @@ export function choiceLabel(choice: ModelChoice | null, instances: readonly Pick
 /** Shown once the person picks a model on another instance than the one Pip last ran on in this conversation. */
 export const switchingLine = (name: string) => `Switching to ${name} starts Pip fresh in this conversation. Your messages and drafts stay.`;
 
-/** The instance the choice moves Pip onto, or none when it stays on the one it last ran on (else the Settings default's) in this conversation. */
+/** The instance the choice moves Pip onto, or none when it stays on the one it last ran on (else the Settings default's) in this conversation, or when there is none to move from. */
 export function movesTo(instances: readonly PickerInstance[], choice: ModelChoice | null, ranOn: string | undefined, fallback: string | undefined): PickerInstance | undefined {
-  if (!choice || (ranOn ?? fallback) === choice.instanceId) return undefined;
+  const from = ranOn ?? fallback;
+  if (!choice || !from || from === choice.instanceId) return undefined;
   return instances.find((i) => i.id === choice.instanceId);
 }

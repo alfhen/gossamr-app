@@ -81,6 +81,10 @@ describe("movesTo", () => {
     expect(movesTo(instances, work, undefined, "claude")?.id).toBe("claude_work");
   });
 
+  it("is none when Pip hasn't run here and no default is set", () => {
+    expect(movesTo(instances, work, undefined, undefined)).toBeUndefined();
+  });
+
   it("is none without a choice", () => {
     expect(movesTo(instances, null, "claude", "claude")).toBeUndefined();
   });

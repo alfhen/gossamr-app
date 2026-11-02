@@ -862,7 +862,7 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream);
   if (script.discussed) discussing.set(session, script.discussed);
   const ranOn = mockPipTurns.turns(req.conversation ?? GENERAL_CONVERSATION).find((t) => t.requestId === req.requestId)?.model;
-  if (ranOn && asksWhichModel.test(req.prompt)) Object.assign(script, { steps: [], filter: null, draft: null, text: `I'm running on ${modelLabel(ranOn.model)} through ${ranOn.instanceId}.` });
+  if (ranOn && asksWhichModel.test(req.prompt)) Object.assign(script, { steps: [], filter: null, draft: null, start: undefined, message: undefined, stop: undefined, ask: undefined, revise: undefined, rewrite: undefined, text: `I'm running on ${modelLabel(ranOn.model)} through ${ranOn.instanceId}.` });
   emit(req.requestId, { type: "started", sessionId: session });
   let said = "";
   try {
