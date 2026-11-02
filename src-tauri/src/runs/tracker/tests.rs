@@ -1108,6 +1108,39 @@ async fn a_need_in_the_second_account_notifies_and_is_kept_in_that_accounts_cach
 }
 
 #[tokio::test]
+async fn a_pending_review_draft_with_no_ticket_is_not_announced_again_after_a_restart() {
+    use crate::domain::{CreatedBy, Intent, Origin};
+    use crate::proposals::Draft;
+    let told = Arc::new(Announced::default());
+    let (fx, _second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    let rig = crate::runs::rig::ready_on(fx, {
+        let told = told.clone();
+        move |svc| svc.with_notifier(told)
+    })
+    .await;
+    rig.poll().await;
+    let intent = Intent::GithubReview {
+        connection_id: "github:ann".into(),
+        item: None,
+        run_id: "run-1".into(),
+        repo: "acme/webshop".into(),
+        number: 12,
+        commit_sha: "a1b2c3d4e5f6".into(),
+        summary: "Review summary.".into(),
+        comments: Vec::new(),
+    };
+    rig.fx.core.propose(&rig.fx.scope, Draft { origin: Origin::chat("review-turn"), created_by: CreatedBy::Pip, intent, label: None, basis: None }).await.unwrap();
+
+    rig.poll().await;
+    assert_eq!(told.0.lock().unwrap().len(), 1, "the draft is announced once");
+
+    let again = restarted(&rig).with_notifier(told.clone());
+    again.poll_at(chrono::Utc::now()).await;
+    assert_eq!(told.0.lock().unwrap().len(), 1, "a restart announces only what is new");
+}
+
+#[tokio::test]
 async fn a_working_run_in_code_is_still_tracked_messaged_answered_and_stopped() {
     let rig = ready().await;
     let run = rig.launched_legacy(1).await;

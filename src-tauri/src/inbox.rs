@@ -659,6 +659,12 @@ impl Core {
         signed_in.map(|s| s.scope).ok_or(Error::SiteChanged)
     }
 
+    /// Like `scope_of`, and refused while the connection is off: for what an agent reads.
+    pub(crate) async fn visible_scope_of(&self, connection_id: &str) -> Result<Scope> {
+        self.refuse_hidden(connection_id)?;
+        self.scope_of(connection_id).await
+    }
+
     /// The scope of every registered, signed-in connection, in the order they were added.
     pub async fn scopes(&self) -> Vec<Scope> {
         self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).map(|s| s.scope).collect()

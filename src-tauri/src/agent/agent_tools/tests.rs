@@ -641,6 +641,27 @@ async fn a_run_on_the_second_account_reads_its_own_ticket_and_workstream() {
 }
 
 #[tokio::test]
+async fn a_run_on_a_second_account_that_is_off_is_refused_by_both_reading_tools() {
+    let (t, second, ws) = live_on_two_accounts("second-account-off").await;
+    let core = &t.rig.fx.core;
+    let item = crate::domain::ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+    core.set_instance_enabled("jira", false).await.unwrap();
+    let queued = core.queue_test_run(RunSpec { workstream: Some(ws), ..t.rig.spec(1) }, Some(item)).await.unwrap();
+    core.set_instance_enabled("jira", true).await.unwrap();
+    let run = t.rig.svc.start_now(&queued.id).await.unwrap();
+    let instance = crate::config::AppConfig::load(&t.rig.fx.dir).connections.into_iter().find(|i| i.bound_to.as_deref() == Some(second.connection_id.as_str())).unwrap().id;
+    core.set_instance_enabled(&instance, false).await.unwrap();
+
+    for (tool, args) in [("read_ticket", json!({ "key": "BETA-1" })), ("read_workstream", json!({}))] {
+        let (text, is_error) = t.call(&run, tool, args).await;
+        assert!(is_error && text.contains("is off, so its items are hidden"), "{tool}: {text}");
+    }
+
+    core.set_instance_enabled(&instance, true).await.unwrap();
+    assert!(!t.call(&run, "read_workstream", json!({})).await.1);
+}
+
+#[tokio::test]
 async fn read_ticket_gives_the_runs_own_ticket_and_linked_ones_as_data_and_refuses_any_other() {
     let t = live("ticket").await;
     let fx = &t.rig.fx;

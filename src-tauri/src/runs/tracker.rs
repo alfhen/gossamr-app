@@ -363,8 +363,11 @@ impl RunService {
             (before, board.seen().clone())
         };
         if before != after {
+            // A key owned by no Jira scope (a review draft with no ticket goes by the code host) is kept with the primary.
+            let home = self.core.primary().await.map_or_else(|_| scopes[0].connection_id.clone(), |p| p.scope.connection_id);
+            let home_of = |key: &String| owners.get(key).filter(|owner| scopes.iter().any(|s| &s.connection_id == *owner)).cloned().unwrap_or_else(|| home.clone());
             for scope in &scopes {
-                let mine: BTreeSet<String> = after.iter().filter(|key| owners.get(*key) == Some(&scope.connection_id)).cloned().collect();
+                let mine: BTreeSet<String> = after.iter().filter(|key| home_of(key) == scope.connection_id).cloned().collect();
                 if let Err(e) = self.core.remember_announced_needs(scope, &mine).await {
                     eprintln!("couldn't keep which items were announced: {e}");
                 }
