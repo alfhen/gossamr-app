@@ -6,6 +6,7 @@ import { Btn, SheetFrame, pickerOpen } from "./AgentSheet";
 import { WorkstreamHeadExtras, rowTitle } from "./AgentsHome";
 import { lightboxOpen } from "./PipImages";
 import { popoverOpen } from "./Popover";
+import { keyChooserOpen } from "./keyChooserStore";
 import { usePrefs } from "./prefs";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
@@ -25,6 +26,10 @@ function openTicket(ref: ItemRef) {
   if (useWorkspace.getState().items[itemKey(ref)]) return useTabs.getState().select(itemKey(ref));
   void openLive(ref);
 }
+
+/** Opens the workstream's own ticket, on the site the workstream belongs to. */
+export const openWorkstreamTicket = (ws: Pick<WorkstreamView["workstream"], "connectionId" | "itemKey">) =>
+  ws.itemKey && openTicket({ connectionId: ws.connectionId, externalId: ws.itemKey, key: ws.itemKey });
 
 /** The element in an open workstream's detail `target` names: a draft's card, a run's card, or the paused banner's Resume (the banner itself without one). */
 function targetElement(root: ParentNode, target: WorkViewFocus): HTMLElement | null {
@@ -75,7 +80,7 @@ function Body({ view }: { view: WorkstreamView }) {
         <WorkstreamHeadExtras view={view} />
         <span className="flex-1" />
         {ws.itemKey && (
-          <Btn tone="ghost" data-workstream-ticket onClick={() => openTicket({ connectionId: ws.connectionId, externalId: ws.itemKey!, key: ws.itemKey! })}>
+          <Btn tone="ghost" data-workstream-ticket onClick={() => openWorkstreamTicket(ws)}>
             Open {ws.itemKey}
           </Btn>
         )}
@@ -97,7 +102,7 @@ function useDetailEsc() {
       const runs = useRuns.getState();
       if (runs.sheet !== null) return;
       const field = ev.target as HTMLElement | null;
-      if (usePrefs.getState().paletteOpen || pickerOpen() || popoverOpen() || lightboxOpen() || useTabs.getState().selected !== null || isTypingTarget(field) || field?.closest?.("[data-esc-local]")) return;
+      if (usePrefs.getState().paletteOpen || keyChooserOpen() || pickerOpen() || popoverOpen() || lightboxOpen() || useTabs.getState().selected !== null || isTypingTarget(field) || field?.closest?.("[data-esc-local]")) return;
       ev.preventDefault();
       useWorkView.getState().closeWorkstream();
     };

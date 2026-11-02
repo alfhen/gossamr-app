@@ -61,7 +61,7 @@ export function KeyChooser() {
   if (!asking) return null;
   const options = asking.options.map((ref) => ({ ref, site: connections.find((c) => c.id === ref.connectionId)?.displayName ?? ref.connectionId, title: items[itemKey(ref)]?.title ?? null }));
   return (
-    <ConnectFrame label={`Which ${asking.key}`} onClose={() => answer(null)}>
+    <ConnectFrame label={`Which ${asking.key}`} onClose={() => answer(null)} takesEscape>
       <KeyChooserView keyName={asking.key} options={options} onPick={answer} />
     </ConnectFrame>
   );

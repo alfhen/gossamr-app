@@ -16,6 +16,7 @@ import { LiveDraftPeek } from "./DraftPeek";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { canvasElement, showMe } from "./jump";
 import { PEEK_DEFAULT } from "./paneSizes";
+import { keyChooserOpen } from "./keyChooserStore";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
@@ -642,7 +643,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
 
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen) return;
+      if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen || keyChooserOpen()) return;
       const field = document.activeElement;
       // A field keeps Esc for itself, except Pip's input: the peek over it closes first, as Esc does from anywhere else,
       // and the next Esc closes Pip.

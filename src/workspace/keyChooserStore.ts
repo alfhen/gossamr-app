@@ -8,6 +8,8 @@ interface KeyChooserState {
   answer(picked: ItemRef | null): void;
 }
 
+export const keyChooserOpen = () => useKeyChooser.getState().asking !== null;
+
 export const useKeyChooser = create<KeyChooserState>((set, get) => ({
   asking: null,
   choose: (key, options) =>

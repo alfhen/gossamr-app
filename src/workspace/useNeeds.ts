@@ -60,7 +60,7 @@ export function useNeedsYou(): Need[] {
 }
 
 /** A ticket's title by its connection and key; one peeked from outside the watched projects has its title in the peek. */
-function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peeked: ReturnType<typeof useWorkspace.getState>["peeked"]) {
+export function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peeked: ReturnType<typeof useWorkspace.getState>["peeked"]) {
   const titles = new Map([...Object.values(peeked).map((p) => [atTicket(p.item.item), p.item.title] as const), ...Object.values(items).map((i) => [atTicket(i.item), i.title] as const)]);
   return (ref: TicketRef) => titles.get(atTicket(ref));
 }

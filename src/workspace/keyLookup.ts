@@ -21,19 +21,35 @@ const readable = (s: Known): string[] => {
   return on.length ? on.map((c) => c.id) : [...new Set(s.watch.map((w) => w.connectionId).filter(isWorkConnection))];
 };
 
+const sitesWithProject = (s: Known, sites: string[], key: string) => {
+  const project = projectOfKey(key).toLowerCase();
+  return sites.filter((id) => Object.values(s.containers).some((c) => c.ref.connectionId === id && c.key.toLowerCase() === project));
+};
+
 /**
- * The tickets a key typed by hand can mean. Where it is cached, those, in the order the sites are listed; otherwise one per site that has the project, or
- * per site that is on when none says it has.
+ * The tickets a key typed by hand can mean, in the order the sites are listed. The sync holds only some of a site's tickets, so a cached one
+ * doesn't rule out the other sites that have the project: they come as live refs. With nothing cached, one per site that has the project,
+ * or per site that is on when none says it has.
  */
 export function refsForKey(s: Known, key: string): ItemRef[] {
-  const cached = cachedWithKey(s.items, key);
+  const cached = cachedWithKey(s.items, key).map((i) => i.item);
   const position = (r: ItemRef) => s.connections.findIndex((c) => c.id === r.connectionId);
-  if (cached.length) return cached.map((i) => i.item).sort((a, b) => position(a) - position(b) || a.connectionId.localeCompare(b.connectionId));
-  const project = projectOfKey(key).toLowerCase();
+  const byPosition = (a: ItemRef, b: ItemRef) => position(a) - position(b) || a.connectionId.localeCompare(b.connectionId);
   const sites = readable(s);
-  const withProject = sites.filter((id) => Object.values(s.containers).some((c) => c.ref.connectionId === id && c.key.toLowerCase() === project));
-  return (withProject.length ? withProject : sites).map((connectionId) => ({ connectionId, externalId: key, key }));
+  const live = (ids: string[]): ItemRef[] => ids.map((connectionId) => ({ connectionId, externalId: key, key }));
+  if (cached.length) {
+    const others = sitesWithProject(s, sites, key).filter((id) => !cached.some((r) => r.connectionId === id));
+    return [...cached, ...live(others)].sort(byPosition);
+  }
+  const withProject = sitesWithProject(s, sites, key);
+  return live(withProject.length ? withProject : sites);
 }
+
+/** Whether a key could also be on a site where it isn't cached, so a cached copy is not the whole answer. */
+export const couldBeElsewhere = (s: Known, key: string): boolean => {
+  const cached = cachedWithKey(s.items, key);
+  return refsForKey(s, key).some((r) => !cached.some((i) => i.item.connectionId === r.connectionId));
+};
 
 /** The site's name for a ticket, only while more than one Jira site is on; otherwise a key says all there is to say. */
 export function siteNamer(connections: readonly Pick<ConnectionInfo, "id" | "kind" | "enabled" | "displayName">[]): (ref: ItemRef) => string | null {

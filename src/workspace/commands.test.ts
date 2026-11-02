@@ -241,6 +241,12 @@ describe("watch commands", () => {
     expect(a.openTicket).toHaveBeenCalledWith("SUP-99");
   });
 
+  it("keeps Open KEY for a synced key that another site could have too", () => {
+    const key = items[0].item.key;
+    const [open] = keyCommand(key.toLowerCase(), items, a.openTicket, () => true);
+    expect(open).toMatchObject({ label: `Open ${key}`, group: "Tickets" });
+  });
+
   it("leaves a synced key to the ticket results, and words alone", () => {
     const key = items[0].item.key;
     expect(keyCommand(key.toLowerCase(), items, a.openTicket)).toEqual([]);

@@ -9,6 +9,7 @@ import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { unwatchWithUndo } from "./unwatch";
 import { useActivity } from "./activityStore";
+import { couldBeElsewhere } from "./keyLookup";
 import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, PIP_ICON, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
@@ -309,6 +310,7 @@ export function Palette() {
   const containers = useWorkspace((s) => s.containers);
   const items = useWorkspace((s) => s.items);
   const watch = useWorkspace((s) => s.watch);
+  const connections = useWorkspace((s) => s.connections);
   const proposals = useWorkspace((s) => s.proposals);
   const siteOf = useSiteOf();
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
@@ -362,7 +364,7 @@ export function Palette() {
     const found = [
       ...order.head,
       ...order.tickets,
-      ...keyCommand(query, all, actions.openTicket),
+      ...keyCommand(query, all, actions.openTicket, (key) => couldBeElsewhere({ items, containers, connections, watch }, key)),
       ...pullCommand(query, actions.openPull),
       ...askToPlanCommands(all, query, actions),
       ...workstreamCommands(workstreams, query, actions),
@@ -370,7 +372,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, jira, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject, siteOf]);
+  }, [containers, items, watch, connections, proposals, github, jira, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject, siteOf]);
 
   // A new ticket's project and title are steps back to the search.
   const prompting = step.type === "project" || step.type === "title";

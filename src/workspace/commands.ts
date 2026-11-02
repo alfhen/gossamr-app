@@ -296,10 +296,10 @@ export function unwatchCommands(containers: readonly WorkContainer[], query: str
   );
 }
 
-/** For a query that is a ticket key not in the synced items: opens it in any project, read live. */
-export function keyCommand(query: string, items: readonly WorkItem[], open: (key: string) => void): Command[] {
+/** For a query that is a ticket key not in the synced items, or that another site could have too: opens it in any project, read live. */
+export function keyCommand(query: string, items: readonly WorkItem[], open: (key: string) => void, elsewhere: (key: string) => boolean = () => false): Command[] {
   const key = ticketKeyOf(query);
-  if (!key || items.some((i) => i.item.key.toUpperCase() === key)) return [];
+  if (!key || (items.some((i) => i.item.key.toUpperCase() === key) && !elsewhere(key))) return [];
   return [{ id: `key:${key}`, group: "Tickets", icon: "↗", label: `Open ${key}`, hint: "look up live", keywords: key, run: () => open(key) }];
 }
 

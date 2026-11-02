@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectionInfo, ItemRef, WorkContainer, WorkItem } from "../types";
-import { cachedWithKey, refsForKey, siteNamer } from "./keyLookup";
+import { cachedWithKey, couldBeElsewhere, refsForKey, siteNamer } from "./keyLookup";
 
 const conn = (id: string, kind: string, enabled = true) => ({ id, kind, enabled, displayName: `${id}.example` }) as ConnectionInfo;
 const item = (connectionId: string, key: string) => ({ item: { connectionId, externalId: key, key }, title: `${connectionId} ${key}` }) as WorkItem;
@@ -32,6 +32,24 @@ describe("refsForKey", () => {
     expect(refsForKey(s, "TAF-99")).toEqual([ref("jira:beta", "TAF-99")]);
     expect(refsForKey(s, "ZZ-1")).toEqual([ref("jira:acme", "ZZ-1"), ref("jira:beta", "ZZ-1")]);
     expect(refsForKey(state({ connections: [...twoSites.slice(0, 2), conn("jira:beta", "jira", false)] }), "ZZ-1")).toEqual([ref("jira:acme", "ZZ-1")]);
+  });
+
+  it("adds the other sites that have the project when the key is cached on one, because the sync holds only some of a site's tickets", () => {
+    const s = state({ connections: twoSites, items: [item("jira:acme", "CA-402")], containers: [container("jira:acme", "CA"), container("jira:beta", "CA")] });
+    expect(refsForKey(s, "CA-402")).toEqual([ref("jira:acme", "CA-402"), ref("jira:beta", "CA-402")]);
+    expect(couldBeElsewhere(s, "CA-402")).toBe(true);
+  });
+
+  it("is only the cached site when no other site has the project", () => {
+    const s = state({ connections: twoSites, items: [item("jira:acme", "CA-402")], containers: [container("jira:acme", "CA"), container("jira:beta", "OPS")] });
+    expect(refsForKey(s, "CA-402")).toEqual([ref("jira:acme", "CA-402")]);
+    expect(couldBeElsewhere(s, "CA-402")).toBe(false);
+  });
+
+  it("leaves out a site that is off", () => {
+    const connections = [...twoSites.slice(0, 2), conn("jira:beta", "jira", false)];
+    const s = state({ connections, items: [item("jira:acme", "CA-402")], containers: [container("jira:beta", "CA")] });
+    expect(refsForKey(s, "CA-402")).toEqual([ref("jira:acme", "CA-402")]);
   });
 
   it("offers both sites for an uncached key when both have the project", () => {

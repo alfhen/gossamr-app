@@ -96,7 +96,7 @@ export async function openTicketByKey(key: string): Promise<ItemRef | null> {
  */
 export function knownTicketTitle(key: string): string | null {
   const cached = cachedWithKey(useWorkspace.getState().items, key);
-  if (cached.length) return cached.length === 1 ? cached[0].title : "";
+  if (cached.length) return cached.length === 1 && refsForKey(useWorkspace.getState(), key).length === 1 ? cached[0].title : "";
   const lower = key.toLowerCase();
   if (useRuns.getState().runs.some((r) => r.item?.key.toLowerCase() === lower)) return "";
   const project = projectOfKey(key).toLowerCase();

@@ -53,6 +53,16 @@ describe("opening a ticket on two Jira sites", () => {
     expect(useTabs.getState().selected).toBe("mock:CA-402");
   });
 
+  it("asks about a key cached on one site when the other site has its project", async () => {
+    useWorkspace.setState((s) => ({ items: Object.fromEntries(Object.entries(s.items).filter(([k]) => k !== "mock2:CA-402")) }));
+    expect(knownTicketTitle("CA-402")).toBe("");
+    const opened = openTicketByKey("CA-402");
+    await settle();
+    expect(useKeyChooser.getState().asking?.options).toEqual([acme, beta]);
+    useKeyChooser.getState().answer(null);
+    await opened;
+  });
+
   it("links a key both sites have without naming a title, and one site's key with its title", () => {
     expect(knownTicketTitle("CA-402")).toBe("");
     expect(knownTicketTitle("OPS-3")).toBe(useWorkspace.getState().items["mock2:OPS-3"].title);

@@ -83,8 +83,6 @@ export function buildScreenContext(s: Screen): ScreenContext {
 
 export interface ContextWords {
   titleOf(ref: ItemRef): string | null;
-  /** The site a ticket is on, said only when more than one Jira site is on, because only then does a key not say it. */
-  siteOf?(ref: ItemRef): string | null;
   describeFilter(filter: NonNullable<ScreenContext["filter"]>): string;
   /** A line about the pull requests linked to an item, when it has any. */
   developmentOf?(ref: ItemRef): string | null;
@@ -99,24 +97,23 @@ const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)
 /** What Pip can see, one line per thing sent: built from the very context that goes with the question, plus the selected text if any. */
 export function contextLines(ctx: ScreenContext, quote: string | null, words: ContextWords): string[] {
   const title = ctx.item ? words.titleOf(ctx.item) : null;
-  const named = (ref: ItemRef) => `${ref.key}${onSite(words.siteOf?.(ref))}`;
   const development = ctx.item ? words.developmentOf?.(ctx.item) : null;
   const run = ctx.run ? words.runOf?.(ctx.run) : null;
   return [
     `Screen: ${ctx.view ?? "unknown"}`,
-    ...(ctx.item ? [`Open ticket: ${named(ctx.item)}${title ? ` · ${title}` : ""}`] : []),
+    ...(ctx.item ? [`Open ticket: ${ctx.item.key}${title ? ` · ${title}` : ""}`] : []),
     ...(development ? [development] : []),
     ...(run ? [`Open agent run: ${run}`] : []),
     ...(ctx.runsSummary ? [`Runs shown: ${ctx.runsSummary}`] : []),
     ...(ctx.runsWaiting ? [`Agents waiting on you: ${ctx.runsWaiting}`] : []),
     ...(ctx.filter ? [`Filter: ${words.describeFilter(ctx.filter)}`] : []),
-    ...(ctx.selection.length ? [`Ticked tickets: ${ctx.selection.map(named).join(", ")}`] : []),
+    ...(ctx.selection.length ? [`Ticked tickets: ${ctx.selection.map((r) => r.key).join(", ")}`] : []),
     ...(quote ? [`Selected text: “${clip(quote.replace(/\s+/g, " "), 90)}”`] : []),
   ];
 }
 
-/** The chip's two parts: what kind of thing Pip is looking at, and its name. */
-export function contextLabel(ctx: ScreenContext, quote: string | null, titleOf: ContextWords["titleOf"], runOf?: ContextWords["runOf"], siteOf?: ContextWords["siteOf"]): { kind: string; label: string } {
+/** The chip's two parts: what kind of thing Pip is looking at, and its name. `siteOf` is for the chip only; Pip's prompt names no site. */
+export function contextLabel(ctx: ScreenContext, quote: string | null, titleOf: ContextWords["titleOf"], runOf?: ContextWords["runOf"], siteOf?: (ref: ItemRef) => string | null): { kind: string; label: string } {
   const plus = quote ? " + selection" : "";
   if (ctx.item) {
     const title = titleOf(ctx.item);
