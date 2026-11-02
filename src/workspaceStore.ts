@@ -53,6 +53,8 @@ interface WorkspaceState {
   moves: Record<string, { statusId: string; to: StatusDef[] }>;
   /** The signed-in connections and how their sync is going. */
   connections: ConnectionInfo[];
+  /** Whether `connections` has been read at least once. Until then an empty list says nothing about what is signed in. */
+  connectionsLoaded: boolean;
   /** Jira turned down the token, so only a new one restores the connection. */
   reauth: boolean;
   /** What each connection follows. Items, containers, counts and Pip's view are already limited to it. */
@@ -122,6 +124,7 @@ const empty = {
   comments: {},
   moves: {},
   connections: [],
+  connectionsLoaded: false,
   reauth: false,
   watch: [],
   strays: [],
@@ -346,7 +349,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       const connections = shownConnections(await backend.connectionsList(refresh));
       if (backend !== get().backend) return;
-      set({ connections });
+      set({ connections, connectionsLoaded: true });
       set({ reauth: connections.some((c) => c.reauth) });
       const error = connections.find((c) => c.error && !c.transient && !c.reauth)?.error ?? null;
       if (error && error !== lastSyncError) useToasts.getState().push(`Couldn't sync: ${error}`);

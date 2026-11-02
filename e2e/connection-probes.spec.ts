@@ -53,7 +53,7 @@ test.describe("GitHub's status in Settings", () => {
   test("the sample connection shows no probe", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
-    await expect(page.getByRole("listitem", { name: "Sample data connection" })).toBeVisible();
+    await page.getByRole("listitem", { name: "Sample data connection" }).getByRole("button").click();
     await expect(page.getByRole("region", { name: "Sample data details" })).toBeVisible();
     await expect(page.locator("[data-probe]")).toHaveCount(0);
   });
