@@ -308,6 +308,11 @@ impl RunService {
         if !auth.logged_in {
             return Err(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
         }
+        if let Ok(file) = super::trust::config_file(&tc.env, &auth) {
+            if super::trust::trusted(&file, clone) == Some(false) && !super::trust::trusted_above(&file, clone) {
+                return Err(Failure::NeedsTrust { folder: clone.clone(), instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
+            }
+        }
         if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone, tc))? {
             return Err(Failure::TooOld);
         }
@@ -719,6 +724,7 @@ impl RunLauncher for RunService {
 
 mod choice;
 mod fresh;
+mod trust;
 
 #[cfg(test)]
 mod tests;

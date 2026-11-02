@@ -662,9 +662,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
     assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");
 
-    let mut config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(s.config.join(".claude.json")).unwrap()).unwrap();
-    config["projects"][path.to_string_lossy().as_ref()] = serde_json::json!({ "hasTrustDialogAccepted": true });
-    std::fs::write(s.config.join(".claude.json"), config.to_string()).unwrap();
+    assert_eq!(super::trust::trust(&s.config.join(".claude.json"), &path).await, Ok(true));
     let id = s.cli.launch(&request("fresh-0c2d")).await.expect("launch after trusting the clone").short_id;
     s.launched.push(id.clone());
 

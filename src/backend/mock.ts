@@ -87,7 +87,7 @@ import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import { isJira } from "../workspace/domains";
-import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
+import { claudeSnapshot, jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus, type GithubProbeState } from "./mockProbes";
 import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
 
@@ -412,6 +412,7 @@ export class MockBackend implements Backend {
     this.jiraAccount = options.jiraToken || several ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (several) this.addAccount(mockJiraStatus("beta.atlassian.net", "alf@beta.example", "2027-10-30"), true);
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
+    if (options.claudeProbe) this.claudeProbe = options.claudeProbe;
     this.github.holdRecheck = options.githubRecheck === "hold";
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
@@ -719,8 +720,8 @@ export class MockBackend implements Backend {
     return this.runs.deleteArchived(id, removeWorktree);
   }
 
-  async runsRetryLaunch(id: string) {
-    return this.runs.retryLaunch(id);
+  async runsRetryLaunch(id: string, options?: { trust?: boolean }) {
+    return this.runs.retryLaunch(id, options);
   }
 
   onRunsChanged(listener: (c: RunsChanged) => void) {
@@ -1194,6 +1195,8 @@ export class MockBackend implements Backend {
   private readonly names = new Map<string, string>();
   /** The default Claude provider instance, until it is removed. */
   private claude: { enabled: boolean } | null = { enabled: true };
+  private claudeProbe: GithubProbeState = "ready";
+  private claudeCheckedAt = new Date().toISOString();
   /** Set to show the placeholder row the real backend returns when the providers list can't be read. */
   providersProblem: string | null = null;
   private readonly models = new MockModels((instanceId) => (instanceId === "claude" && this.claude !== null ? "claude" : null));
@@ -1215,7 +1218,8 @@ export class MockBackend implements Backend {
   }
 
   async connectionOpenTerminal(instanceId: string) {
-    const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
+    const row = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
+    const fix = row?.kind === "provider" ? undefined : row?.status?.fix;
     if (!fix) throw new Error("There's nothing to run for this connection. Check it again.");
     this.terminals.push(fix);
   }
@@ -1234,6 +1238,7 @@ export class MockBackend implements Backend {
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be turned off.");
     if (target.kind === "provider") {
       this.claude = { enabled };
+      this.claudeCheckedAt = new Date().toISOString();
       this.connectionsListeners.forEach((l) => l());
       return;
     }
@@ -1297,7 +1302,10 @@ export class MockBackend implements Backend {
   }
 
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
-    if (refresh) this.github.recheck();
+    if (refresh) {
+      this.github.recheck();
+      this.claudeCheckedAt = new Date().toISOString();
+    }
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
@@ -1310,7 +1318,7 @@ export class MockBackend implements Backend {
       const message = a.problem === "refused" ? "Jira turned down your token. Make a new one to keep syncing" : a.problem === "offline" ? `Can't reach ${host}. Gossamr tries again at the next sync.` : null;
       return { id: a.connector.connectionId, instanceId: a.instanceId, displayName: shared ? `${host} (${a.status.email})` : host, enabled: a.enabled, kind: "jira", workspace: host, url: a.status.site?.url ?? null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: message, transient: a.problem === "offline", reauth: a.problem === "refused", status: jiraSnapshot(a.problem === "refused" ? "notSignedIn" : "ready", new Date().toISOString()), rechecking: false };
     });
-    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: "", account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
+    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: "", account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: claudeSnapshot(this.claude.enabled ? this.claudeProbe : "off", this.claudeCheckedAt), rechecking: false }] : [];
     const unreadable: ConnectionInfo[] = this.providersProblem ? [{ ...sample, id: "providers", instanceId: "providers", displayName: "Models", enabled: false, kind: "provider", workspace: "", url: "", account: "", error: this.providersProblem, reauth: false, status: null }] : [];
     const all = [sample, ...accounts, ...(this.github.connected ? [this.github.info()] : []), ...claude, ...unreadable];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));

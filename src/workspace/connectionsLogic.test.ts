@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
+import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
 import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
@@ -31,6 +31,15 @@ describe("a connection's line in the list", () => {
   it("says Not signed in and Not found as an error for GitHub, because gh decides whether it works", () => {
     expect(statusLine(github("notSignedIn"), false)).toEqual({ text: "Not signed in", tone: "error" });
     expect(statusLine(github("notFound"), false)).toEqual({ text: "Not found · gh", tone: "error" });
+  });
+
+  it("shows a provider's own message as the line when it is signed in, and names its binary when it is missing", () => {
+    expect(statusLine(claude({ status: claudeSnapshot("ready", CHECKED) }), false)).toEqual({ text: "Authenticated · alf@acme.com", tone: "ok" });
+    expect(statusLine(claude({ status: { ...claudeSnapshot("ready", CHECKED), account: null, message: "Authenticated · ChatGPT" } }), false).text).toBe("Authenticated · ChatGPT");
+    expect(statusLine(claude({ status: claudeSnapshot("notFound", CHECKED) }), false)).toEqual({ text: "Not found · claude", tone: "error" });
+    expect(statusLine(claude({ driver: "codex", status: claudeSnapshot("notFound", CHECKED) }), false).text).toBe("Not found · codex");
+    expect(statusLine(claude({ status: claudeSnapshot("notSignedIn", CHECKED) }), false)).toEqual({ text: "Not signed in", tone: "error" });
+    expect(statusLine(claude({ status: claudeSnapshot("error", CHECKED) }), false)).toEqual({ text: "Couldn't check", tone: "unsure" });
   });
 
   it("shows how long a Jira token has left", () => {

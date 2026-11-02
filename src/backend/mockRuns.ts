@@ -435,6 +435,8 @@ export interface MockRunsOptions {
   planDescription?: boolean;
   /** Claude refuses every clone until it is trusted: the pre-flight offers Trust this folder, and a started run fails a moment later. */
   untrusted?: boolean;
+  /** Trust this clone is refused, as when Claude has made no settings file yet; Terminal comes first. */
+  trustRefused?: boolean;
   /** The sample's `~/.gitconfig` has `includeIf "gitdir:…"` rules, so Settings warns that they don't reach the work folder. */
   gitRules?: boolean;
   /** How long after a pushing build finishes its draft pull request turns up on the code host; null waits for `surfacePullRequests`. */
@@ -499,6 +501,7 @@ export class MockRuns {
 
   private readonly epoch: number;
   private readonly untrustedClones: boolean;
+  private readonly trustRefused: boolean;
   private readonly gitRules: boolean;
   /** How many times the work folder was shown in Finder. */
   workFolderReveals = 0;
@@ -554,6 +557,7 @@ export class MockRuns {
     this.epoch = o.epoch ?? EPOCH;
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.untrustedClones = !!o.untrusted;
+    this.trustRefused = !!o.trustRefused;
     this.gitRules = !!o.gitRules;
     this.prSurfaceMs = o.prSurfaceMs === undefined ? PR_SURFACE_MS : o.prSurfaceMs;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : SEEDS;
@@ -1141,10 +1145,19 @@ export class MockRuns {
     }
   }
 
-  retryLaunch(id: string): Run {
+  /** What Trust this clone does: the clone counts as trusted from here, or is refused as the real backend words it. */
+  private trustClone(run: Run) {
+    if (run.failure?.type !== "untrustedFolder") throw new Error("Trusting is only for a run that failed because Claude doesn't trust its clone.");
+    if (!inWork(run.spec.clonePath)) throw new Error("Gossamr trusts only its own clones in ~/Gossamr/agents.");
+    if (this.trustRefused) throw new Error("Claude hasn't made its settings for Claude yet. Trust it in Terminal.");
+    this.trusted.add(run.spec.clonePath);
+  }
+
+  retryLaunch(id: string, options?: { trust?: boolean }): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     if (run.state !== "failed" || run.shortId) throw new Error(`This run is ${run.state} and has nothing to retry.`);
+    if (options?.trust) this.trustClone(run);
     const at = this.now();
     const next = this.stillBlocked(run)
       ? this.update(id, { lastProgressAt: at, endedAt: at })

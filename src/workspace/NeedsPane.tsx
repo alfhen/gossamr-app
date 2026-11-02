@@ -269,7 +269,9 @@ function Dismiss({ run }: { run: Run }) {
 
 function FailureBody({ run }: { run: Run }) {
   const opened = useRuns((s) => s.terminalOpened.has(run.id));
-  const help = failureHelp(run);
+  const trusting = useRuns((s) => s.trusting.has(run.id));
+  const refused = useRuns((s) => s.trustRefused.get(run.id) ?? null);
+  const help = failureHelp(run, refused);
   const store = useRuns.getState();
   return (
     <Box tone="failed" label="Failure">
@@ -280,7 +282,7 @@ function FailureBody({ run }: { run: Run }) {
         <>
           <p className="m-0 font-semibold text-ws-ink">{help.summary}</p>
           <p className="m-0 text-ws-ink2">{help.detail}</p>
-          <FailureNext run={run} failure={{ opened, on: { act: (act) => failureAction(run.id, act), retry: () => void store.retryLaunch(run.id), copied: () => store.noteCopied(run.id) } }} />
+          <FailureNext run={run} failure={{ opened, trust: { trusting, refused }, on: { act: (act) => failureAction(run.id, act), retry: () => void store.retryLaunch(run.id), copied: () => store.noteCopied(run.id) } }} />
         </>
       ) : (
         <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{run.error?.trim() || "No reason was recorded."}</pre>

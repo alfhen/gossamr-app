@@ -240,6 +240,22 @@ describe("mock runs", () => {
     await expect(backend.runsTrustFolder(untrusted.id)).rejects.toThrow(/doesn't trust/);
   });
 
+  it("trusts the clone on a retry with trust, only for a run that failed untrusted in the work folder, and refuses when scripted to", async () => {
+    const backend = new MockBackend({ runs: { seed: "failures" } });
+    const by = async (type: string) => (await backend.runsList()).find((r) => r.failure?.type === type)!;
+    const [untrusted, signedOut] = [await by("untrustedFolder"), await by("notSignedIn")];
+    await expect(backend.runsRetryLaunch(signedOut.id, { trust: true })).rejects.toThrow(/only for a run that failed because Claude doesn't trust/);
+    expect((await backend.runsRetryLaunch(untrusted.id, { trust: true })).state).toBe("queued");
+    expect(backend.runs.terminals).toEqual([]);
+
+    const refusing = new MockBackend({ runs: { seed: "failures", trustRefused: true } });
+    const stuck = (await refusing.runsList()).find((r) => r.failure?.type === "untrustedFolder")!;
+    await expect(refusing.runsRetryLaunch(stuck.id, { trust: true })).rejects.toThrow("Claude hasn't made its settings for Claude yet. Trust it in Terminal.");
+    expect((await refusing.runsList()).find((r) => r.id === stuck.id)?.state).toBe("failed");
+    await refusing.runsTrustFolder(stuck.id);
+    expect((await refusing.runsRetryLaunch(stuck.id)).state).toBe("queued");
+  });
+
   it("opens Terminal to accept a refused permission mode, once, and retry then goes through", async () => {
     const backend = new MockBackend({ runs: { seed: "failures" } });
     const refused = (await backend.runsList()).find((r) => r.failure?.type === "modeRefused")!;

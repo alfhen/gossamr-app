@@ -8,6 +8,7 @@ import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { answerKey, keepAnswer, keptAnswer } from "./keptAnswers";
 import { browseList, useRuns } from "./runsStore";
+import { STILL_UNTRUSTED } from "./failureHelp";
 import { needsAttention } from "./agentsLogic";
 
 const memory = () => {
@@ -280,7 +281,39 @@ describe("the run sheet", () => {
       await s().retryLaunch(run.id);
       await settle();
       expect(find(run.id)).toMatchObject({ state: "failed", failure: { type: "untrustedFolder" } });
-      expect(useToasts.getState().toasts[0].text).toMatch(/^Still blocked: Claude asks you once per folder/);
+      expect(useToasts.getState().toasts[0].text).toMatch(/^Still blocked: Claude hasn't trusted Gossamr's clone of acme\/storefront yet/);
+    });
+
+    it("trusts the clone with one click, then starts the run", async () => {
+      const run = await failing("untrustedFolder");
+      const retry = vi.spyOn(backend, "runsRetryLaunch");
+      const pending = s().fix(run.id, "trust");
+      expect(s().trusting.has(run.id)).toBe(true);
+      await pending;
+      await settle();
+      expect(retry).toHaveBeenCalledWith(run.id, { trust: true });
+      expect(find(run.id)).toMatchObject({ state: "queued", failure: null });
+      expect([s().trusting.has(run.id), s().trustRefused.has(run.id), useToasts.getState().toasts.length]).toEqual([false, false, 0]);
+    });
+
+    it("keeps the reason on the run's card, not in a toast, when Gossamr won't trust the clone", async () => {
+      backend = new MockBackend({ runs: { seed: "failures", trustRefused: true } });
+      s().init(backend);
+      await settle();
+      const run = s().runs.find((r) => r.failure?.type === "untrustedFolder")!;
+      await s().retryLaunch(run.id, { trust: true });
+      expect(s().trustRefused.get(run.id)).toBe("Claude hasn't made its settings for Claude yet. Trust it in Terminal.");
+      expect([s().trusting.has(run.id), find(run.id).state, useToasts.getState().toasts.length]).toEqual([false, "failed", 0]);
+      await s().retryLaunch(run.id);
+      expect(s().trustRefused.get(run.id)).toBeDefined();
+    });
+
+    it("says Claude still doesn't trust it when the launch fails the same way after the trust was saved", async () => {
+      const run = await failing("untrustedFolder");
+      vi.spyOn(backend, "runsRetryLaunch").mockResolvedValueOnce(run);
+      await s().retryLaunch(run.id, { trust: true });
+      expect(s().trustRefused.get(run.id)).toBe(STILL_UNTRUSTED);
+      expect(useToasts.getState().toasts).toHaveLength(0);
     });
 
     it("accepts the refused mode through Terminal, then lets Retry through to Queued", async () => {

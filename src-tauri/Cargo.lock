@@ -1509,6 +1509,7 @@ dependencies = [
  "chrono",
  "dirs",
  "getrandom 0.4.3",
+ "indexmap 2.14.2",
  "keyring",
  "objc2-app-kit",
  "objc2-foundation",

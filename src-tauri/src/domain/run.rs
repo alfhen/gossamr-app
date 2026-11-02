@@ -896,6 +896,11 @@ mod tests {
     }
 
     #[test]
+    fn the_fixture_specs_digest_is_pinned_so_no_dependency_feature_can_reorder_it() {
+        assert_eq!(spec().digest(), "e692d15e652db9911f8be3037145d726c7665be1b7f5c60b77ac7a76f06be0b7");
+    }
+
+    #[test]
     fn digest_is_stable_and_changes_with_everything_the_agent_receives() {
         let base = spec();
         assert_eq!(base.digest(), spec().digest());

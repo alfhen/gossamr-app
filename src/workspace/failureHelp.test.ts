@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run } from "../types";
-import { failureHelp, retryEnabled, shellQuote } from "./failureHelp";
+import { STILL_UNTRUSTED, failureHelp, retryEnabled, shellQuote } from "./failureHelp";
 
 const runs = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
 const of = (type: string) => runs().find((r) => r.failure?.type === type)!;
@@ -47,5 +47,27 @@ describe("failure help", () => {
     const said = (error: string | null) => failureHelp({ ...occupied, error })?.detail ?? "";
     expect(said("~/Gossamr/agents/acme/payments already exists and isn't a clone of acme/payments. Move it away, then retry.").match(/move it away/gi)).toHaveLength(1);
     expect(said(null)).toContain("Gossamr never removes it. Move it away, then retry.");
+  });
+
+  it("offers to trust the clone first and Terminal second, only for a run whose clone is in the work folder", () => {
+    const help = failureHelp(of("untrustedFolder"))!;
+    expect(help.summary).toBe("Claude hasn't trusted Gossamr's clone of acme/storefront yet.");
+    expect([help.primary, help.secondary]).toEqual([
+      { label: "Trust this clone for Claude", act: "trust" },
+      { label: "Trust in Terminal instead", act: "terminal" },
+    ]);
+    expect(help.detail).toContain("hooks, MCP servers and permission rules in its .claude folder and .mcp.json");
+    const unknown = failureHelp({ ...of("untrustedFolder"), inWorkFolder: undefined })!;
+    expect([unknown.primary?.act, unknown.secondary ?? null]).toEqual(["terminal", null]);
+  });
+
+  it("puts Terminal first after a refusal, and drops the one-click button once Claude refused a saved trust", () => {
+    const run = of("untrustedFolder");
+    const why = "Gossamr trusts only its own clones in ~/Gossamr/agents.";
+    const refused = failureHelp(run, why)!;
+    expect([refused.refusal, refused.primary?.act, refused.secondary?.act]).toEqual([why, "terminal", "trust"]);
+    const still = failureHelp(run, STILL_UNTRUSTED)!;
+    expect([still.primary?.act, still.secondary]).toEqual(["terminal", null]);
+    expect(retryEnabled(still, false)).toBe(false);
   });
 });

@@ -12,6 +12,13 @@ describe("the mock connection actions", () => {
     expect(b.terminals).toHaveLength(1);
   });
 
+  it("refuses to open Terminal for a provider, as the real backend does", async () => {
+    const b = new MockBackend({ claudeProbe: "notSignedIn" });
+    expect((await b.connectionsList()).find((c) => c.instanceId === "claude")?.status?.fix).toBe("claude auth login");
+    await expect(b.connectionOpenTerminal("claude")).rejects.toThrow("nothing to run");
+    expect(b.terminals).toEqual([]);
+  });
+
   it("lists the Jira site it was connected to in place of the sample name", async () => {
     const b = new MockBackend();
     expect((await b.connectionsList())[0]).toMatchObject({ displayName: "Sample data", status: null });
@@ -107,8 +114,34 @@ describe("the mock provider instance", () => {
   it("always lists one default Claude row, after the others", async () => {
     const rows = await new MockBackend({ githubRepos: 6 }).connectionsList();
     expect(rows.map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
-    expect(rows[2]).toMatchObject({ kind: "provider", driver: "claude", displayName: "Claude", enabled: true, status: null });
+    expect(rows[2]).toMatchObject({ kind: "provider", driver: "claude", displayName: "Claude", enabled: true });
+    expect(rows[2].status).toMatchObject({ state: "ready", message: "Authenticated · alf@acme.com" });
     expect(rows[2].configDir).toBeUndefined();
+  });
+
+  it("scripts each state the Claude probe can find and shows Off while it is turned off", async () => {
+    for (const state of ["ready", "notSignedIn", "notFound", "error"] as const) {
+      const rows = await new MockBackend({ githubRepos: 6, claudeProbe: state }).connectionsList();
+      expect(rows[2].status?.state, state).toBe(state);
+    }
+    const b = new MockBackend({ githubRepos: 6, claudeProbe: "notSignedIn" });
+    await b.connectionSetEnabled("claude", false);
+    expect((await b.connectionsList())[2].status?.state).toBe("off");
+    await b.connectionSetEnabled("claude", true);
+    expect((await b.connectionsList())[2].status?.state).toBe("notSignedIn");
+  });
+
+  it("stamps a new check time when the list is refreshed", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = new MockBackend({ githubRepos: 6 });
+      const first = (await b.connectionsList())[2].status?.checkedAt;
+      vi.advanceTimersByTime(60_000);
+      expect((await b.connectionsList())[2].status?.checkedAt).toBe(first);
+      expect((await b.connectionsList(true))[2].status?.checkedAt).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a Jira sign-in started from a row that is not the Jira one", async () => {

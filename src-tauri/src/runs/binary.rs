@@ -20,13 +20,17 @@ pub fn find_claude() -> Option<PathBuf> {
 /// `.zshrc` adds (an npm `codex` under nvm), then the copy an app bundles. A copy on PATH wins over a bundled one
 /// because the person put it there.
 pub fn find_binary(driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let apps = [PathBuf::from("/Applications"), home.join("Applications")];
-    find_with(driver, &home, &apps, shell.get("PATH"))
+    find_binary_from(dirs::home_dir().as_deref(), driver, shell)
 }
 
-fn find_with(driver: Driver, home: &Path, apps: &[PathBuf], path: Option<&OsStr>) -> Option<PathBuf> {
-    find_in(&installed(driver, home), driver.binary(), path).or_else(|| bundled(driver, apps))
+/// `find_binary` with the home folder given, so a test or a caller that already knows it need not ask the system.
+pub fn find_binary_from(home: Option<&Path>, driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
+    let apps: Vec<PathBuf> = [Some(PathBuf::from("/Applications")), home.map(|h| h.join("Applications"))].into_iter().flatten().collect();
+    find_with(driver, home, &apps, shell.get("PATH"))
+}
+
+fn find_with(driver: Driver, home: Option<&Path>, apps: &[PathBuf], path: Option<&OsStr>) -> Option<PathBuf> {
+    find_in(&home.map(|h| installed(driver, h)).unwrap_or_default(), driver.binary(), path).or_else(|| bundled(driver, apps))
 }
 
 /// Where apps that ship the Codex CLI keep it. ChatGPT.app is the one the owner's Mac has, and it is not on PATH.
@@ -152,9 +156,9 @@ mod tests {
         let path = std::env::join_paths([dir.join("nvm")]).unwrap();
         let apps = [dir.join("Applications")];
         let nowhere = dir.join("home");
-        assert_eq!(find_with(Driver::Codex, &nowhere, &apps, Some(&path)), Some(on_path));
-        assert_eq!(find_with(Driver::Codex, &nowhere, &apps, None), bundled(Driver::Codex, &apps));
-        assert_eq!(find_with(Driver::Claude, &nowhere, &apps, None), None);
+        assert_eq!(find_with(Driver::Codex, Some(&nowhere), &apps, Some(&path)), Some(on_path));
+        assert_eq!(find_with(Driver::Codex, Some(&nowhere), &apps, None), bundled(Driver::Codex, &apps));
+        assert_eq!(find_with(Driver::Claude, Some(&nowhere), &apps, None), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

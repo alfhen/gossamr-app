@@ -24,6 +24,23 @@ export function githubSnapshot(state: GithubProbeState, login: string, checkedAt
   }
 }
 
+/** What `src-tauri/src/provider_probe.rs` finds for the Claude provider in each state. */
+export function claudeSnapshot(state: GithubProbeState, checkedAt: string): ProbeSnapshot {
+  const found = { installed: true, version: "2.1.316", state, account: null, activeLogin: null, message: "", detail: null, fix: null, checkedAt };
+  switch (state) {
+    case "ready":
+      return { ...found, account: "alf@acme.com", message: "Authenticated · alf@acme.com" };
+    case "notSignedIn":
+      return { ...found, message: "Not signed in to Claude.", fix: "claude auth login" };
+    case "notFound":
+      return { ...found, installed: false, version: null, message: "`claude` isn't installed." };
+    case "error":
+      return { ...found, version: null, message: "Claude didn't answer in time. Check again." };
+    case "off":
+      return { ...found, version: null, message: "Off. Pip and agents don't use it." };
+  }
+}
+
 export const PROBE_STATES: readonly GithubProbeState[] = ["ready", "notSignedIn", "notFound", "error", "off"];
 
 /** What `src-tauri/src/probe.rs` finds for Jira when the token is about to run out or has been turned down. */
