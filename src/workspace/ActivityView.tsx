@@ -131,7 +131,7 @@ export function ActivityView() {
 
   const open = (e: FeedEntry) => {
     useTabs.getState().select(itemKey(e.item));
-    void useActivity.getState().markRead(e.unread ? [e.id] : []);
+    void useActivity.getState().markRead(e.unread ? [e] : []);
   };
 
   const shownRef = useRef(entries);
@@ -154,7 +154,7 @@ export function ActivityView() {
         const entry = shownRef.current.find((e) => e.id === id);
         if (entry?.unread) {
           ev.preventDefault();
-          void useActivity.getState().markRead([entry.id]);
+          void useActivity.getState().markRead([entry]);
         }
       }
     };
@@ -207,7 +207,7 @@ export function ActivityView() {
                         position={++position}
                         total={entries.length}
                         onOpen={() => open(e)}
-                        onMarkRead={() => void useActivity.getState().markRead([e.id])}
+                        onMarkRead={() => void useActivity.getState().markRead([e])}
                         onShow={() => (open(e), showMe(e.item))}
                       />
                     );

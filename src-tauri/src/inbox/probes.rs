@@ -266,14 +266,14 @@ mod tests {
         fx.core.adopt_instances().await;
         let on = chrono::Local::now().date_naive() + chrono::Days::new(5);
         let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "tok".into(), expires_on: on.to_string() };
-        fx.core.connect_jira(&input).await.unwrap();
+        fx.core.connect_jira(&input, Some("jira")).await.unwrap();
 
         fx.core.probe_connections(Probe::Launch).await;
         let seen = snapshot_of(&fx.core, "jira").unwrap();
         assert_eq!((seen.state, seen.message.as_str()), (State::ExpiresSoon, "Token expires in 5 days"));
 
         let later = TokenSignIn { expires_on: (on + chrono::Days::new(300)).to_string(), ..input };
-        fx.core.connect_jira(&later).await.unwrap();
+        fx.core.connect_jira(&later, Some("jira")).await.unwrap();
         fx.core.probe_connections(Probe::Refresh).await;
         assert_eq!(snapshot_of(&fx.core, "jira").map(|s| s.state), Some(State::Ready));
     }
@@ -282,7 +282,7 @@ mod tests {
     async fn signing_in_to_another_jira_account_leaves_the_old_answer_behind_and_the_next_focus_probes_at_once() {
         let fx = jira_fixture(Jira::answering()).await;
         fx.core.probe_connections(Probe::Launch).await;
-        fx.core.rebind_instance(vec!["jira:site:me".into()], Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
+        fx.core.rebind_instance("jira", Binding::jira("jira:other:u2", "Globex", "https://globex.example")).unwrap();
         assert!(snapshot_of(&fx.core, "jira").is_none());
         assert_eq!(fx.core.probe_connections(Probe::Focus).await, ["jira:other:u2"]);
         assert!(snapshot_of(&fx.core, "jira").is_some());
@@ -299,7 +299,7 @@ mod tests {
         let core = fx.core.clone();
         let probing = tokio::spawn(async move { core.probe_connections(Probe::Launch).await });
         asked.notified().await;
-        fx.core.rebind_instance(vec!["jira:site:me".into()], Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
+        fx.core.rebind_instance("jira", Binding::jira("jira:other:u2", "Globex", "https://globex.example")).unwrap();
         gate.notify_one();
         probing.await.unwrap();
         assert!(snapshot_of(&fx.core, "jira").is_none());

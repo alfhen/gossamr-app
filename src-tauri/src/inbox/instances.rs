@@ -113,12 +113,28 @@ impl Core {
         self.try_change_instances_checked(|config| connections::bind(config, binding))
     }
 
-    /// Points the instance of the accounts `replaced` at `binding`'s account.
-    pub(super) fn rebind_instance(&self, replaced: Vec<String>, binding: Binding) {
-        if let Err(e) = self.try_change_instances_checked(|config| connections::rebind(config, &replaced, binding)) {
-            eprintln!("couldn't save the connections to config.json: {e}");
-        }
+    /// Points the Jira instance `instance_id` at `binding`'s account, which the next probe asks about.
+    pub(super) fn rebind_instance(&self, instance_id: &str, binding: Binding) -> Result<()> {
+        self.try_change_instances_checked(|config| connections::replace_account(config, instance_id, binding))?;
         self.probes_rebound();
+        Ok(())
+    }
+
+    /// Refuses an account that an instance other than `replacing` already has.
+    pub(super) fn refuse_taken_account(&self, connection_id: &str, replacing: Option<&str>) -> Result<()> {
+        let config = AppConfig::load(&self.data_dir);
+        if connections::is_live(&config) && connections::account_taken(&config, connection_id, replacing) {
+            return Err(Error::Input(connections::ALREADY_HAVE_ACCOUNT.into()));
+        }
+        Ok(())
+    }
+
+    /// The connection the Jira instance `instance_id` is bound to, or `instance_id` itself when no instance is listed
+    /// under it, as `require_jira` accepts.
+    pub(super) fn bound_account(&self, instance_id: &str) -> String {
+        let config = AppConfig::load(&self.data_dir);
+        let listed = config.connections.iter().find(|i| i.kind == ConnectionKind::Jira && (i.id == instance_id || i.bound_to.as_deref() == Some(instance_id)));
+        listed.and_then(|i| i.bound_to.clone()).unwrap_or_else(|| instance_id.into())
     }
 
     pub(super) fn unbind_instance(&self, connection_id: &str) {
@@ -325,12 +341,7 @@ impl Core {
             self.auth.disconnect(connection_id).await?;
         }
         let Some(connection) = held.or_else(|| Connection::from_jira_id(connection_id)) else { return Ok(()) };
-        self.registry.remove(&connection.id);
-        self.jira_sync.lock().expect("sync lock poisoned").remove(&connection.id);
-        // Turns don't record their connection yet, so with another one signed in they can't be told apart from its own.
-        if !self.auth.accounts().await.iter().any(|s| self.registry.connection(&s.connection.id).is_some()) {
-            self.settle_pip_turns(crate::db::DISCONNECTED).await;
-        }
+        self.unregister_jira(&connection.id).await;
         self.delete_cache(&connection);
         Ok(())
     }

@@ -21,7 +21,6 @@ import type {
   RunsChanged,
   AgentSettings,
   CleanupResult,
-  Snapshot,
   PullDiff,
   CodeRef,
   ConnectionInfo,
@@ -58,13 +57,13 @@ export interface ReadScope {
 
 export interface Backend {
   readonly kind: "mock" | "jira";
-  load(): Promise<Snapshot>;
-  /** Called with a fresh snapshot whenever local or remote state changes. Returns an unsubscribe function. */
-  subscribe(listener: (snap: Snapshot) => void): () => void;
-  /** People who can see the ticket and match the query, for @mention suggestions. */
-  mentionable(ticketKey: string, query: string): Promise<Person[]>;
-  setUnread(eventId: string, unread: boolean): Promise<void>;
-  /** Items in the local cache that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
+  /** Called whenever local or remote state changes, with nothing to read from it: views re-read through the cache calls. Returns an unsubscribe function. */
+  subscribe(listener: () => void): () => void;
+  /** People who can see the item and match the query, for @mention suggestions. An empty `externalId` asks about the connection alone, as a new ticket does. */
+  mentionable(item: ItemRef, query: string): Promise<Person[]>;
+  /** Marks one event of connection `connectionId` read or unread. Event ids are per site. */
+  setUnread(connectionId: string, eventId: string, unread: boolean): Promise<void>;
+  /** Items in the local cache of every Jira connection that is on that match the filter, newest first. Works offline. Only watched containers unless `includeUnwatched`. */
   cacheSearch(filter: WorkFilter, opts?: ReadScope): Promise<WorkItem[]>;
   /** A watched item from the cache. Any other is read live and flagged `unwatched`, without being stored; null when it can't be read. */
   cacheItem(ref: ItemRef): Promise<WorkItem | null>;
@@ -256,7 +255,11 @@ export interface Backend {
   jiraStatus(): Promise<AuthStatus>;
   /** The cloud id a Jira site reports about itself, or null when the person has to give it. Rejects when the site can't be reached. */
   jiraCloudId(site: string): Promise<string | null>;
-  /** Checks the token against Jira and, only if it works, keeps it in place of the earlier one. */
+  /**
+   * Checks the token against Jira and, only if it works, keeps it. Without `instanceId` the account is added beside
+   * the others; with one it replaces that instance's account, and a different account than it had is signed out
+   * completely. An account another instance has is refused.
+   */
   jiraConnect(input: TokenSignIn, instanceId?: string): Promise<AuthStatus>;
   openUrl(url: string): Promise<void>;
 }

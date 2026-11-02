@@ -129,7 +129,7 @@ describe("the activity store on the mock", () => {
   it("marks one entry read at once and keeps it read after the backend answers", async () => {
     const first = useActivity.getState().entries.find((e) => e.unread)!;
     const before = useActivity.getState().unread;
-    const done = useActivity.getState().markRead([first.id]);
+    const done = useActivity.getState().markRead([first]);
     expect(useActivity.getState().entries.find((e) => e.id === first.id)!.unread).toBe(false);
     expect(useActivity.getState().unread).toBe(before - 1);
     await done;

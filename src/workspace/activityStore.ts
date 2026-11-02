@@ -20,7 +20,7 @@ interface ActivityState {
   reload(): Promise<void>;
   loadMore(): Promise<void>;
   /** Marks unread entries read. Resolves false when the backend refused. */
-  markRead(ids: string[]): Promise<boolean>;
+  markRead(entries: FeedEntry[]): Promise<boolean>;
   /** Marks everything unread read, not only the entries loaded so far. */
   markAllRead(): Promise<void>;
 }
@@ -89,12 +89,12 @@ export const useActivity = create<ActivityState>((set, get) => ({
     }
   },
 
-  async markRead(ids) {
+  async markRead(marked) {
     const { backend } = get();
-    if (!backend || !ids.length) return true;
-    set((s) => ({ entries: withRead(s.entries, new Set(ids), false), unread: Math.max(0, s.unread - ids.length) }));
+    if (!backend || !marked.length) return true;
+    set((s) => ({ entries: withRead(s.entries, marked, false), unread: Math.max(0, s.unread - marked.length) }));
     try {
-      await Promise.all(ids.map((id) => backend.setUnread(id, false)));
+      await Promise.all(marked.map((e) => backend.setUnread(e.connectionId, e.id, false)));
       return true;
     } catch (e) {
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
@@ -113,6 +113,6 @@ export const useActivity = create<ActivityState>((set, get) => ({
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
       return;
     }
-    if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead();
+    if (await get().markRead(page.entries) && page.next) await get().markAllRead();
   },
 }));

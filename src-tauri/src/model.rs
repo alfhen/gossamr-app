@@ -66,15 +66,6 @@ pub struct Mentioned {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FieldChange {
-    pub field: String,
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub author: Person,
-    pub at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
     pub id: String,
@@ -159,32 +150,6 @@ pub struct TicketLink {
     pub outward: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Ticket {
-    pub key: String,
-    pub summary: String,
-    #[serde(rename = "type")]
-    pub issue_type: String,
-    pub status: Status,
-    pub priority: Option<String>,
-    pub assignee: Option<Person>,
-    pub reporter: Option<Person>,
-    pub parent: Option<ParentRef>,
-    pub description: String,
-    pub description_doc: Option<Value>,
-    pub comments: Vec<Comment>,
-    pub attachments: Vec<Attachment>,
-    pub changes: Vec<FieldChange>,
-    pub subtasks: Vec<SubtaskRef>,
-    pub children: Vec<String>,
-    pub due_date: Option<String>,
-    pub sprint: Option<String>,
-    pub url: String,
-    pub updated: String,
-    pub resolved: Option<String>,
-}
-
 /// Something the user did on a ticket that the ticket itself doesn't show, for My work. Their comments are read
 /// from the tickets instead.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -242,19 +207,6 @@ pub struct InboxEvent {
     pub unread: bool,
     pub done_at: Option<String>,
     pub snoozed_until: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub me: Person,
-    pub site: String,
-    pub tickets: std::collections::BTreeMap<String, Ticket>,
-    pub events: Vec<InboxEvent>,
-    pub watching: Vec<String>,
-    pub last_sync_at: Option<String>,
-    pub sync_error: Option<String>,
-    pub activity: Vec<MyAction>,
 }
 
 #[derive(Clone, Debug, Serialize)]

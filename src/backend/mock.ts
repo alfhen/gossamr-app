@@ -355,7 +355,7 @@ const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
 export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
-  private listeners = new Set<(s: Snapshot) => void>();
+  private listeners = new Set<() => void>();
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
@@ -915,11 +915,12 @@ export class MockBackend implements Backend {
     return this.proposals.onChanged(listener);
   }
 
+  /** The mock's own tickets, which the cache reads are built from. For tests. */
   async load() {
     return this.snap;
   }
 
-  subscribe(listener: (s: Snapshot) => void) {
+  subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
   }
@@ -928,7 +929,7 @@ export class MockBackend implements Backend {
     const next = structuredClone(this.snap);
     fn(next);
     this.snap = next;
-    this.listeners.forEach((l) => l(next));
+    this.listeners.forEach((l) => l());
     this.cacheListeners.forEach((l) => l({ connectionId: "mock" }));
   }
 
@@ -1236,7 +1237,7 @@ export class MockBackend implements Backend {
     return { created: keys, error: null };
   }
 
-  async mentionable(_key: string, query: string) {
+  async mentionable(_item: ItemRef, query: string) {
     const q = fold(query.trim());
     return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => {
       const name = fold(p.name);
@@ -1244,7 +1245,7 @@ export class MockBackend implements Backend {
     });
   }
 
-  async setUnread(eventId: string, unread: boolean) {
+  async setUnread(_connectionId: string, eventId: string, unread: boolean) {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }

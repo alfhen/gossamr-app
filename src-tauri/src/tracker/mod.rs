@@ -367,8 +367,9 @@ pub(crate) mod testing {
         async fn transitions(&self, _: &ItemRef) -> Result<Vec<Move>> {
             Ok(self.moves.lock().unwrap().clone())
         }
-        async fn people(&self, _: &ItemRef, _: &str) -> Result<Vec<Person>> {
-            unimplemented!()
+        async fn people(&self, item: &ItemRef, query: &str) -> Result<Vec<Person>> {
+            let person_ref = crate::domain::PersonRef { connection_id: item.connection_id.clone(), account_id: "mentioned".into() };
+            Ok(vec![Person { person_ref, display_name: format!("{query} on {}", item.connection_id), avatar_url: None }])
         }
         async fn apply_with_files(&self, write: &Write, _: &[Uploaded]) -> Result<Applied> {
             self.applied.lock().unwrap().push(write.clone());

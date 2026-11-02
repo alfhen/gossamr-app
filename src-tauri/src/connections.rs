@@ -153,12 +153,6 @@ fn jira_bound_to(config: &AppConfig, connection_id: &str) -> Option<usize> {
     config.connections.iter().position(|i| i.kind == ConnectionKind::Jira && i.bound_to.as_deref() == Some(connection_id))
 }
 
-fn lone_jira(config: &AppConfig) -> Option<usize> {
-    let mut jira = config.connections.iter().enumerate().filter(|(_, i)| i.kind == ConnectionKind::Jira);
-    let (at, _) = jira.next()?;
-    jira.next().is_none().then_some(at)
-}
-
 /// Binds an instance to `binding`. Two instances never bind one account: a Jira account that has one is refused, and a
 /// GitHub account that has one keeps it. A second account on a site is named "site (email)".
 pub fn bind(config: &mut AppConfig, binding: Binding) -> Result<(), AlreadyBound> {
@@ -193,30 +187,31 @@ fn push_instance(config: &mut AppConfig, binding: Binding, display_name: String)
     config.connections.push(Instance { id, kind: binding.kind, display_name, enabled: true, config: binding.config, bound_to: Some(binding.connection_id), recheck_since: None });
 }
 
-/// Points the Jira instance of an account that signing in has just replaced at the new one. The instance keeps its id,
-/// switch and name unless the site changed; instances of any other replaced account are removed. A lone Jira instance
-/// bound to an account that has no sign-in (a config.json restored from an older copy, or a write that failed) is carried
-/// too. Without an instance to carry over, the account is bound as `bind` would.
-pub fn rebind(config: &mut AppConfig, replaced: &[String], binding: Binding) -> Result<(), AlreadyBound> {
-    let carried = jira_bound_to(config, &binding.connection_id).or_else(|| replaced.iter().find_map(|id| jira_bound_to(config, id))).or_else(|| lone_jira(config));
-    let Some(at) = carried else { return bind(config, binding) };
+/// The Jira instance a page names by its id, or by the connection it is bound to when the row isn't listed yet.
+fn jira_instance(config: &AppConfig, id: &str) -> Option<usize> {
+    config.connections.iter().position(|i| i.kind == ConnectionKind::Jira && (i.id == id || i.bound_to.as_deref() == Some(id)))
+}
+
+/// Whether `connection_id` is bound to an instance other than `replacing`, which signing in would then have to share.
+pub fn account_taken(config: &AppConfig, connection_id: &str, replacing: Option<&str>) -> bool {
+    let own = replacing.and_then(|id| jira_instance(config, id));
+    jira_bound_to(config, connection_id).is_some_and(|at| Some(at) != own)
+}
+
+/// Points the Jira instance `instance_id` at `binding`'s account. The instance keeps its id, switch and name unless the
+/// site changed. Without such an instance the account is bound as `bind` would.
+pub fn replace_account(config: &mut AppConfig, instance_id: &str, binding: Binding) -> Result<(), AlreadyBound> {
+    let Some(at) = jira_instance(config, instance_id) else { return bind(config, binding) };
+    if account_taken(config, &binding.connection_id, Some(instance_id)) {
+        return Err(AlreadyBound);
+    }
     let instance = &mut config.connections[at];
     let same_site = instance.config.site == binding.config.site;
-    let kept = instance.id.clone();
     instance.bound_to = Some(binding.connection_id);
     instance.config = binding.config;
     if !same_site {
         instance.display_name = binding.name;
     }
-    let mut retired = Vec::new();
-    config.connections.retain(|i| {
-        let stale = i.kind == ConnectionKind::Jira && i.id != kept && i.bound_to.as_ref().is_some_and(|b| replaced.contains(b));
-        if stale {
-            retired.push(i.id.clone());
-        }
-        !stale
-    });
-    config.retired_ids.extend(retired);
     Ok(())
 }
 
@@ -336,26 +331,14 @@ mod tests {
     }
 
     #[test]
-    fn signing_in_to_another_jira_site_rebinds_the_instance_of_the_account_it_replaces() {
+    fn replacing_the_account_with_one_on_another_site_points_the_instance_at_it_and_keeps_its_switch() {
         let mut config = AppConfig::default();
         adopt(&mut config, true, vec![Binding::jira("jira:c1:a1", "Acme", "https://acme.atlassian.net")], Vec::new());
         config.connections[0].enabled = false;
-        rebind(&mut config, &["jira:c1:a1".into()], Binding::jira("jira:c2:a9", "Globex", "https://globex.atlassian.net/")).unwrap();
+        replace_account(&mut config, "jira", Binding::jira("jira:c2:a9", "Globex", "https://globex.atlassian.net/")).unwrap();
         assert_eq!(ids(&config), ["jira"]);
         let jira = &config.connections[0];
         assert_eq!((jira.display_name.as_str(), jira.bound_to.as_deref(), jira.config.site.as_deref(), jira.enabled), ("Globex", Some("jira:c2:a9"), Some("globex.atlassian.net"), false));
-    }
-
-    #[test]
-    fn signing_in_carries_a_lone_instance_bound_to_an_account_that_has_no_sign_in() {
-        let mut config = AppConfig::default();
-        adopt(&mut config, true, vec![acme("jira:c1:a1", "a@acme.com")], Vec::new());
-        config.connections[0].display_name = "Work Jira".into();
-        config.connections[0].enabled = false;
-        rebind(&mut config, &["jira:c1:a2".into()], acme("jira:c1:a2", "b@acme.com")).unwrap();
-        assert_eq!(ids(&config), ["jira"]);
-        let jira = &config.connections[0];
-        assert_eq!((jira.display_name.as_str(), jira.bound_to.as_deref(), jira.enabled), ("Work Jira", Some("jira:c1:a2"), false));
         assert!(config.retired_ids.is_empty());
     }
 
@@ -364,9 +347,32 @@ mod tests {
         let mut config = AppConfig::default();
         adopt(&mut config, true, vec![acme("jira:c1:a1", "a@acme.com")], Vec::new());
         config.connections[0].display_name = "Work Jira".into();
-        rebind(&mut config, &["jira:c1:a1".into()], acme("jira:c1:a2", "b@acme.com")).unwrap();
+        replace_account(&mut config, "jira", acme("jira:c1:a2", "b@acme.com")).unwrap();
         assert_eq!(ids(&config), ["jira"]);
         assert_eq!((config.connections[0].display_name.as_str(), config.connections[0].bound_to.as_deref()), ("Work Jira", Some("jira:c1:a2")));
+    }
+
+    #[test]
+    fn an_instance_is_found_by_the_connection_it_is_bound_to_when_the_id_is_not_listed() {
+        let mut config = AppConfig::default();
+        bind(&mut config, acme("jira:c1:a1", "a@acme.com")).unwrap();
+        bind(&mut config, acme("jira:c1:a2", "b@acme.com")).unwrap();
+        replace_account(&mut config, "jira:c1:a2", acme("jira:c1:a3", "c@acme.com")).unwrap();
+        let bound: Vec<_> = config.connections.iter().map(|i| i.bound_to.as_deref().unwrap()).collect();
+        assert_eq!(bound, ["jira:c1:a1", "jira:c1:a3"]);
+    }
+
+    #[test]
+    fn replacing_with_an_account_another_instance_has_is_refused_and_changes_nothing() {
+        let mut config = AppConfig::default();
+        bind(&mut config, acme("jira:c1:a1", "a@acme.com")).unwrap();
+        bind(&mut config, acme("jira:c1:a2", "b@acme.com")).unwrap();
+        assert!(account_taken(&config, "jira:c1:a2", Some("jira")));
+        assert!(!account_taken(&config, "jira:c1:a2", Some("jira_2")), "the instance's own account is not taken from it");
+        assert!(!account_taken(&config, "jira:c1:a9", None));
+        assert_eq!(replace_account(&mut config, "jira", acme("jira:c1:a2", "b@acme.com")), Err(AlreadyBound));
+        let bound: Vec<_> = config.connections.iter().map(|i| i.bound_to.as_deref().unwrap()).collect();
+        assert_eq!(bound, ["jira:c1:a1", "jira:c1:a2"]);
     }
 
     #[test]
@@ -386,16 +392,6 @@ mod tests {
         bind(&mut config, acme("jira:c1:a1", "a@acme.com")).unwrap();
         assert_eq!(bind(&mut config, acme("jira:c1:a1", "a@acme.com")), Err(AlreadyBound));
         assert_eq!(ids(&config), ["jira"]);
-    }
-
-    #[test]
-    fn signing_in_again_as_the_same_account_keeps_its_instance_and_drops_the_instances_of_other_replaced_accounts() {
-        let mut config = AppConfig::default();
-        bind(&mut config, acme("jira:c1:a1", "a@acme.com")).unwrap();
-        bind(&mut config, acme("jira:c1:a2", "b@acme.com")).unwrap();
-        rebind(&mut config, &["jira:c1:a1".into(), "jira:c1:a2".into()], acme("jira:c1:a2", "b@acme.com")).unwrap();
-        assert_eq!(ids(&config), ["jira_2"]);
-        assert_eq!(config.retired_ids, ["jira"]);
     }
 
     #[test]

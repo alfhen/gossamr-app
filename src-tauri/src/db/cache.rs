@@ -126,6 +126,11 @@ impl Narrowing {
 }
 
 impl Db {
+    /// How many entries a page of `q` holds.
+    pub fn feed_limit(q: &FeedQuery) -> usize {
+        if q.limit == 0 { FEED_PAGE } else { q.limit.min(FEED_MAX) }
+    }
+
     /// Stores items as fetched at `synced_at`. Storing an item again replaces it, so a sync can be repeated.
     pub fn upsert_items(&self, items: &[WorkItem], synced_at: &str) -> Result<Upserted> {
         let tx = self.conn.unchecked_transaction()?;
@@ -189,6 +194,7 @@ impl Db {
     }
 
     /// Items refreshed at or after `since`; older ones have dropped out of every query.
+    #[cfg(test)]
     pub fn items_synced_since(&self, connection_id: &str, since: &str, visible: &Visible) -> Result<Vec<WorkItem>> {
         let mut sql = String::from("SELECT data FROM items WHERE connection_id = ?1 AND synced_at >= ?2");
         let mut args = vec![Sql::Text(connection_id.into()), Sql::Text(since.into())];
@@ -340,7 +346,7 @@ impl Db {
 
     /// Events across the connection's items, newest first, with the read state the inbox keeps under the same id.
     pub fn feed(&self, connection_id: &str, q: &FeedQuery, visible: &Visible) -> Result<FeedPage> {
-        let limit = if q.limit == 0 { FEED_PAGE } else { q.limit.min(FEED_MAX) };
+        let limit = Self::feed_limit(q);
         let mut sql = String::from(FEED_SELECT);
         sql.push_str(" WHERE c.connection_id = ? AND c.item_id IS NOT NULL");
         let mut args = vec![Sql::Text(connection_id.into())];

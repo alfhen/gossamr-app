@@ -96,9 +96,10 @@ export function verb(e: Pick<FeedEntry, "kind" | "mention">): string {
 
 export { initials } from "./canvasShared";
 
-/** The entries whose id is in `ids` with `unread` set, the others untouched. */
-export function withRead(entries: readonly FeedEntry[], ids: ReadonlySet<string>, unread: boolean): FeedEntry[] {
-  return entries.map((e) => (ids.has(e.id) ? { ...e, unread } : e));
+/** The entries that are one of `marked` with `unread` set, the others untouched. Event ids are per site, so the connection counts. */
+export function withRead(entries: readonly FeedEntry[], marked: readonly FeedEntry[], unread: boolean): FeedEntry[] {
+  const same = (a: FeedEntry, b: FeedEntry) => a.id === b.id && a.connectionId === b.connectionId;
+  return entries.map((e) => (marked.some((m) => same(m, e)) ? { ...e, unread } : e));
 }
 
 /** The index j and k move to, staying inside the list. -1 means nothing is active yet. */

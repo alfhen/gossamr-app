@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -10,11 +10,11 @@ use crate::connections::{self, Binding, Driver, RowKind};
 use crate::auth::{Account, Auth, AuthStatus, Scope, Site, SignedIn, TokenSignIn};
 use crate::db::{stamp, Db};
 use crate::error::{Error, Result};
-use crate::events::{changes_since, derive, my_actions, NewEvent};
+use crate::events::{derive, my_actions, NewEvent};
 use crate::domain::{
     Comment, Container, ContainerRef, Event, FeedPage, FeedQuery, Filter, FilterContext, Identity, ItemRef, PersonRef, Visible, WorkItem, Workflow,
 };
-use crate::model::{CachedTicket, Person, Snapshot, Status, Ticket, Transition};
+use crate::model::{CachedTicket, Person, Status, Transition};
 use crate::proposals;
 use crate::runs::ask::Asks;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
@@ -22,6 +22,8 @@ use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
 pub(crate) mod code;
 mod drafts;
+#[cfg(test)]
+mod fan_out;
 mod instances;
 mod probes;
 mod run_outcome;
@@ -45,12 +47,6 @@ pub use run_outcome::{RunOutcome, SUMMARY_ONLY};
 pub use probes::Probe;
 pub use watch::{CatalogPage, WatchState};
 
-/// Events this old drop out of the inbox unless they are still unread.
-const EVENT_WINDOW_DAYS: i64 = 30;
-/// How far back My work can reach.
-const ACTIVITY_DAYS: i64 = 30;
-/// Before a ticket has been opened in the app, "since you last looked" covers this many days.
-const DEFAULT_SEEN_DAYS: i64 = 3;
 
 const LAST_SYNC: &str = "last_sync_at";
 const CACHE_BACKFILLED: &str = "cache_backfilled";
@@ -281,17 +277,36 @@ impl Core {
         self.data_dir.clone()
     }
 
-    /// Signs in with an API token and registers the resulting connection. Replaces every earlier sign-in.
-    pub async fn connect_jira(&self, input: &TokenSignIn) -> Result<AuthStatus> {
+    /// Signs in with an API token. Without `instance_id` the account is added beside the others. With one it takes over
+    /// that instance, and when it is another account than the instance had, the old one is disconnected completely.
+    pub async fn connect_jira(&self, input: &TokenSignIn, instance_id: Option<&str>) -> Result<AuthStatus> {
         let _alone = self.sign_in.lock().await;
-        let previous: Vec<Connection> = self.auth.accounts().await.into_iter().map(|s| s.connection).collect();
-        let connection = self.auth.connect(input).await?;
-        if let Some(now) = self.auth.accounts().await.into_iter().find(|s| s.connection.id == connection.id) {
-            let binding = Binding::jira(&connection.id, &now.site.name, &now.site.url).with_email(input.email.trim());
-            self.rebind_instance(previous.iter().map(|c| c.id.clone()).collect(), binding);
+        let credentials = self.auth.verify(input).await?;
+        let connection = credentials.connection();
+        self.refuse_taken_account(&connection.id, instance_id)?;
+        let binding = Binding::jira(&connection.id, &credentials.site.name, &credentials.site.url).with_email(input.email.trim());
+        match instance_id {
+            None => {
+                self.auth.add(credentials).await?;
+                if let Err(e) = self.try_bind_instance(binding) {
+                    eprintln!("couldn't save the connections to config.json: {e}");
+                }
+                self.probes_rebound();
+            }
+            Some(id) => {
+                let old = self.bound_account(id);
+                self.auth.replace(&old, credentials).await?;
+                if let Err(e) = self.rebind_instance(id, binding) {
+                    eprintln!("couldn't save the connections to config.json: {e}");
+                }
+                if old != connection.id {
+                    self.unregister_jira(&old).await;
+                    self.close_cache(&old);
+                }
+            }
         }
-        self.replace_connections(previous, connection);
-        self.jira_status().await
+        self.registry.register(connection.clone());
+        self.auth.status(Some(&connection.id)).await
     }
 
     /// The site and account of the primary connection, so the page labels the session with the account it shows. A
@@ -303,15 +318,16 @@ impl Core {
         }
     }
 
-    /// Registers `connection`, and drops each of `previous` that is another account: a registered connection is the
-    /// proof `with_app_db_for` relies on that its scope is still signed in.
-    fn replace_connections(&self, previous: Vec<Connection>, connection: Connection) {
-        for gone in previous.into_iter().filter(|p| p.id != connection.id) {
-            self.registry.remove(&gone.id);
-            self.close_cache(&gone.id);
-            self.jira_sync.lock().expect("sync lock poisoned").remove(&gone.id);
+    /// Takes a connection out of the registry, which is the proof `with_app_db_for` relies on that its scope is still
+    /// signed in. The Pip turns still open fail when it was the last registered account: they don't record their
+    /// connection yet, so with another one registered they can't be told apart from its own, and a late write for this
+    /// one is refused and would leave its turn open until the next launch.
+    pub(super) async fn unregister_jira(&self, connection_id: &str) {
+        self.registry.remove(connection_id);
+        self.jira_sync.lock().expect("sync lock poisoned").remove(connection_id);
+        if !self.auth.accounts().await.iter().any(|s| self.registry.connection(&s.connection.id).is_some()) {
+            self.settle_pip_turns(crate::db::DISCONNECTED).await;
         }
-        self.registry.register(connection);
     }
 
     /// Registers the connections restored from the Keychain that an instance is bound to. A token no instance is bound
@@ -366,6 +382,27 @@ impl Core {
         };
         let signed_in = self.auth.accounts().await.into_iter().find(|s| s.connection.id == connection.id && &s.scope == scope);
         signed_in.map(|s| (connection, s.site, s.me)).ok_or(Error::SiteChanged)
+    }
+
+    /// The Jira accounts whose items are shown: registered and on, in the order they were added. Signed out is an
+    /// error; every account off is none.
+    async fn on_accounts(&self) -> Result<Vec<SignedIn>> {
+        let registered: Vec<SignedIn> = self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).collect();
+        if registered.is_empty() {
+            return Err(Error::NotSignedIn);
+        }
+        let off = self.off_names();
+        Ok(registered.into_iter().filter(|s| off.name(&s.connection.id).is_none()).collect())
+    }
+
+    /// The scope of the registered connection `connection_id`, on or off: what a read that names its connection runs as.
+    pub(super) async fn scope_of(&self, connection_id: &str) -> Result<Scope> {
+        let accounts = self.auth.accounts().await;
+        if accounts.is_empty() {
+            return Err(Error::NotSignedIn);
+        }
+        let found = accounts.into_iter().find(|s| s.connection.id == connection_id);
+        found.filter(|_| self.registry.connection(connection_id).is_some()).map(|s| s.scope).ok_or(Error::SiteChanged)
     }
 
     async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
@@ -562,80 +599,10 @@ impl Core {
         .await
     }
 
-    pub async fn snapshot(&self) -> Result<Snapshot> {
-        let (scope, site, me) = self.identity().await?;
-        let sync_error = self.sync_state(&scope.connection_id).error;
-        // The identity above labels the snapshot, so the data must come from that same account's database.
-        self.with_db_for(&scope.clone(), |db| {
-            let last_sync = db.meta(LAST_SYNC)?;
-            // Tickets refreshed within a day of the last sync; older ones have dropped out of every query.
-            let cutoff = last_sync
-                .as_deref()
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|d| (d.with_timezone(&Utc) - Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true))
-                .unwrap_or_default();
-            let connection_id = scope.connection_id.clone();
-            let off = self.off_name(&connection_id).is_some();
-            let visible = db.watch_set(&connection_id)?.visible();
-            let cached = if off { Vec::new() } else { tickets_of(&db.items_synced_since(&connection_id, &cutoff, &visible)?)? };
-            let keys = db.visible_keys(&connection_id, &visible)?;
-            let shown = |key: &str| !off && keys.as_ref().is_none_or(|k| k.contains(key));
-            let seen = db.seen()?;
-            let default_since = ago(Duration::days(DEFAULT_SEEN_DAYS));
-
-            let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
-            for t in &cached {
-                if let Some(p) = &t.parent {
-                    children.entry(p.key.clone()).or_default().push(t.key.clone());
-                }
-            }
-            let watching = cached.iter().filter(|t| t.watching).map(|t| t.key.clone()).collect();
-            let tickets = cached
-                .into_iter()
-                .map(|t| {
-                    let since = seen.get(&t.key).cloned().unwrap_or_else(|| default_since.clone());
-                    let ticket = Ticket {
-                        changes: changes_since(&t, &me.account_id, &since),
-                        children: if t.is_epic { children.remove(&t.key).unwrap_or_default() } else { Vec::new() },
-                        url: format!("{}/browse/{}", site.url.trim_end_matches('/'), t.key),
-                        key: t.key,
-                        summary: t.summary,
-                        issue_type: t.issue_type,
-                        status: t.status,
-                        priority: t.priority,
-                        assignee: t.assignee,
-                        reporter: t.reporter,
-                        parent: t.parent,
-                        description: t.description,
-                        description_doc: t.description_doc,
-                        comments: t.comments,
-                        attachments: t.attachments,
-                        subtasks: t.subtasks,
-                        due_date: t.due_date,
-                        sprint: None,
-                        updated: t.updated,
-                        resolved: t.resolved,
-                    };
-                    (ticket.key.clone(), ticket)
-                })
-                .collect();
-
-            Ok(Snapshot {
-                me: Person { account_id: me.account_id.clone(), name: me.name.clone(), avatar_url: me.avatar_url.clone() },
-                site: site.name.clone(),
-                tickets,
-                events: db.events(&ago(Duration::days(EVENT_WINDOW_DAYS)))?.into_iter().filter(|e| shown(&e.ticket_key)).collect(),
-                watching,
-                last_sync_at: last_sync,
-                sync_error,
-                activity: db.activity(&ago(Duration::days(ACTIVITY_DAYS)))?.into_iter().filter(|a| shown(&a.ticket_key)).collect(),
-            })
-        })
-        .await
-    }
-
-    pub async fn set_unread(&self, id: &str, unread: bool) -> Result<()> {
-        self.with_db(|db| db.set_unread(id, unread)).await
+    /// Marks an event of `connection_id` read or unread. Event ids are per site, so the connection is needed.
+    pub async fn set_unread(&self, connection_id: &str, id: &str, unread: bool) -> Result<()> {
+        let scope = self.scope_of(connection_id).await?;
+        self.with_db_for(&scope, |db| db.set_unread(id, unread)).await
     }
 
     /// The signed-in scope, for work that starts now.
@@ -651,8 +618,9 @@ impl Core {
         Ok(moves.into_iter().map(|m| Transition { id: m.to.id.clone(), name: m.name, to: Status::from(&m.to) }).collect())
     }
 
-    pub async fn mentionable(&self, scope: &Scope, key: &str, query: &str) -> Result<Vec<Person>> {
-        let people = self.tracker(scope)?.people(&Self::item(scope, key), query).await?;
+    pub async fn mentionable(&self, item: &ItemRef, query: &str) -> Result<Vec<Person>> {
+        let scope = self.scope_of(&item.connection_id).await?;
+        let people = self.tracker(&scope)?.people(item, query).await?;
         Ok(people
             .into_iter()
             .map(|p| Person { account_id: p.person_ref.account_id, name: p.display_name, avatar_url: p.avatar_url })
@@ -679,10 +647,15 @@ impl Core {
         }
     }
 
-    /// The cached items that match `filter`. The raw tracker payload is left out; it is for Core, not for the page.
+    /// The cached items of every connection that is on that match `filter`, newest first. The raw tracker payload is left
+    /// out; it is for Core, not for the page.
     pub async fn cache_search(&self, filter: &Filter, include_unwatched: bool) -> Result<Vec<WorkItem>> {
-        let scope = self.scope().await?;
-        Ok(self.search_cached_with(&scope, filter, include_unwatched).await?.into_iter().map(without_extra).collect())
+        let mut found = Vec::new();
+        for account in self.on_accounts().await? {
+            found.extend(self.search_cached_with(&account.scope, filter, include_unwatched).await?);
+        }
+        found.sort_by(|a, b| b.updated.cmp(&a.updated));
+        Ok(found.into_iter().map(without_extra).collect())
     }
 
     /// Like `cache_search`, for `scope` only, and with each item's tracker payload kept. Only watched containers.
@@ -711,8 +684,11 @@ impl Core {
     }
 
     pub async fn cache_containers(&self, include_unwatched: bool) -> Result<Vec<Container>> {
-        let scope = self.scope().await?;
-        self.containers_with(&scope, include_unwatched).await
+        let mut found = Vec::new();
+        for account in self.on_accounts().await? {
+            found.extend(self.containers_with(&account.scope, include_unwatched).await?);
+        }
+        Ok(found)
     }
 
     /// The watched containers of `scope`'s connection.
@@ -736,20 +712,28 @@ impl Core {
         self.with_db_for(scope, |db| db.workflow(container)).await
     }
 
-    /// The signed-in person, across connections.
+    /// The signed-in person, across the connections that are on. The name is the first one's; with every connection
+    /// off it is the primary's.
     pub async fn cache_me(&self) -> Result<Identity> {
-        let (scope, _, me) = self.identity().await?;
-        Ok(identity_of(&scope.connection_id, &me))
+        let on = self.on_accounts().await?;
+        let Some(first) = on.first() else {
+            let (scope, _, me) = self.identity().await?;
+            return Ok(identity_of(&scope.connection_id, &me));
+        };
+        let mut identity = identity_of(&first.scope.connection_id, &first.me);
+        identity.accounts = on.iter().flat_map(|s| identity_of(&s.scope.connection_id, &s.me).accounts).collect();
+        Ok(identity)
     }
 
-    /// People named on cached tickets, so views can show a name for an account id.
+    /// People named on the cached tickets of every connection that is on, so views can show a name for an account id.
     pub async fn cache_people(&self) -> Result<Vec<Person>> {
-        let scope = self.scope().await?;
         let mut seen: HashMap<String, Person> = HashMap::new();
-        for item in self.search_cached(&scope, &Filter::And { filters: vec![] }).await? {
-            let t = ticket_of(&item)?;
-            for p in people_on(&t) {
-                seen.entry(p.account_id.clone()).or_insert_with(|| p.clone());
+        for account in self.on_accounts().await? {
+            for item in self.search_cached(&account.scope, &Filter::And { filters: vec![] }).await? {
+                let t = ticket_of(&item)?;
+                for p in people_on(&t) {
+                    seen.entry(p.account_id.clone()).or_insert_with(|| p.clone());
+                }
             }
         }
         Ok(seen.into_values().collect())
@@ -758,11 +742,8 @@ impl Core {
     /// An item's comments, oldest first. From the cache unless `refresh`, which reads them from the tracker and
     /// falls back to the cached ones when it can't be reached.
     pub async fn cache_comments(&self, item: &ItemRef, refresh: bool) -> Result<Vec<Comment>> {
-        let scope = self.scope().await?;
+        let scope = self.scope_of(&item.connection_id).await?;
         let connection = self.connection(&scope)?;
-        if item.connection_id != connection.id {
-            return Err(Error::SiteChanged);
-        }
         if self.off_name(&connection.id).is_some() {
             return Ok(Vec::new());
         }
@@ -779,21 +760,18 @@ impl Core {
 
     /// The moves open to an item right now; Jira reveals them per item.
     pub async fn cache_transitions(&self, item: &ItemRef) -> Result<Vec<Move>> {
-        let scope = self.scope().await?;
-        if item.connection_id != scope.connection_id {
-            return Err(Error::SiteChanged);
-        }
+        let scope = self.scope_of(&item.connection_id).await?;
         if self.off_name(&scope.connection_id).is_some() {
             return Ok(Vec::new());
         }
         self.tracker(&scope)?.transitions(item).await
     }
 
-    /// The signed-in connection with how its sync is going.
+    /// Each signed-in Jira connection with how its sync is going, then the GitHub ones.
     pub async fn connections(&self) -> Result<Vec<ConnectionInfo>> {
         let mut out = Vec::new();
-        if let Ok((scope, site, me)) = self.identity().await {
-            let connection = self.connection(&scope)?;
+        for SignedIn { scope, site, me, .. } in self.auth.accounts().await {
+            let Ok(connection) = self.connection(&scope) else { continue };
             let last_sync_at = self.with_db_for(&scope, |db| db.meta(LAST_SYNC)).await?;
             let sync = self.sync_state(&connection.id);
             out.push(ConnectionInfo {
@@ -829,34 +807,37 @@ impl Core {
     }
 
     pub async fn cache_events(&self, item: &ItemRef, limit: usize) -> Result<Vec<Event>> {
-        let scope = self.scope().await?;
+        let scope = self.scope_of(&item.connection_id).await?;
         if self.off_name(&scope.connection_id).is_some() {
             return Ok(Vec::new());
         }
         self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
     }
 
+    /// The feed of every connection that is on, merged by `(at, id)`, which is also the cursor.
     pub async fn cache_feed(&self, query: &FeedQuery) -> Result<FeedPage> {
-        let scope = self.scope().await?;
-        let id = self.connection(&scope)?.id;
-        if self.off_name(&id).is_some() {
-            return Ok(FeedPage { entries: Vec::new(), next: None });
+        let mut pages = Vec::new();
+        for account in self.on_accounts().await? {
+            let id = account.connection.id;
+            pages.push(
+                self.with_db_for(&account.scope, |db| {
+                    let visible = if query.include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
+                    db.feed(&id, query, &visible)
+                })
+                .await?,
+            );
         }
-        self.with_db_for(&scope, |db| {
-            let visible = if query.include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
-            db.feed(&id, query, &visible)
-        })
-        .await
+        Ok(FeedPage::merge(pages, Db::feed_limit(query)))
     }
 
-    /// How many feed entries are unread, of `kinds` (every kind when empty).
+    /// How many feed entries of the connections that are on are unread, of `kinds` (every kind when empty).
     pub async fn cache_feed_unread(&self, kinds: &[crate::domain::EventKind]) -> Result<usize> {
-        let scope = self.scope().await?;
-        let id = self.connection(&scope)?.id;
-        if self.off_name(&id).is_some() {
-            return Ok(0);
+        let mut unread = 0;
+        for account in self.on_accounts().await? {
+            let id = account.connection.id;
+            unread += self.with_db_for(&account.scope, |db| db.feed_unread(&id, kinds, &db.watch_set(&id)?.visible())).await?;
         }
-        self.with_db_for(&scope, |db| db.feed_unread(&id, kinds, &db.watch_set(&id)?.visible())).await
+        Ok(unread)
     }
 
     /// The Needs you items already announced by a system notice, kept between launches; `None` before any were recorded.
@@ -979,22 +960,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_in_as_another_account_refuses_the_replaced_accounts_writes_to_the_app_database() {
-        use crate::auth::Credentials;
-
-        let fx = super::testing::fixture().await;
+    async fn replacing_the_account_refuses_the_old_accounts_writes_to_the_app_database_and_fails_its_open_turns() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
-        let site = Site { cloud_id: "site".into(), name: "Acme".into(), url: "https://acme.example".into() };
-        let other = Account { account_id: "someone-else".into(), name: "Else".into(), avatar_url: None };
-        let creds = Credentials { email: "me@example.com".into(), token: "t".into(), expires_on: "2999-01-01".into(), site, me: other };
-        let previous = vec![fx.core.connection(&fx.scope).unwrap()];
-        fx.core.replace_connections(previous, creds.connection());
+
+        fx.core.connect_jira(&token_for("else", "fast"), Some("jira")).await.unwrap();
 
         let finished = fx.core.pip_turn_finish(&fx.scope, "q1", "A's answer", true, None, None, None).await;
         assert!(matches!(finished, Err(Error::SiteChanged)), "{finished:?}");
-        let begun = fx.core.pip_turn_begin(&creds.scope(), "general", "q2", "Hi", &crate::agent::TurnMeta::default(), "running").await;
+        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "failed", "the turn the old account had open is settled");
+        let other = Scope { connection_id: "jira:site:else".into(), account_id: "else".into() };
+        let begun = fx.core.pip_turn_begin(&other, "general", "q2", "Hi", &crate::agent::TurnMeta::default(), "running").await;
         assert!(begun.is_ok(), "{begun:?}");
-        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].text, "");
     }
 
     /// Connects as whoever `email` names; a connect with the token `slow` waits until `release` after saying it has begun.
@@ -1039,7 +1020,7 @@ mod tests {
         let fx = super::testing::fixture_with_authenticator(None, Some(gated.clone())).await;
 
         let core = fx.core.clone();
-        let connecting = tokio::spawn(async move { core.connect_jira(&token_for("b", "slow")).await });
+        let connecting = tokio::spawn(async move { core.connect_jira(&token_for("b", "slow"), None).await });
         gated.begun.notified().await;
         let core = fx.core.clone();
         let removing = tokio::spawn(async move { core.remove_instance("jira:site:b").await });
@@ -1048,24 +1029,113 @@ mod tests {
         connecting.await.unwrap().unwrap();
         removing.await.unwrap().unwrap();
 
-        assert!(fx.core.auth.identity().await.is_none());
+        assert_eq!(fx.core.auth.connections().await.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["jira:site:me"]);
         assert!(fx.core.connection(&Scope { connection_id: "jira:site:b".into(), account_id: "b".into() }).is_err());
         assert!(crate::secrets::keys_with_prefix("jira-token:").unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn a_second_account_through_connect_jira_still_leaves_exactly_one_session() {
+    async fn connecting_without_an_instance_adds_the_account_beside_the_others_with_an_instance_of_its_own() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
         let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
 
-        fx.core.connect_jira(&token_for("a", "fast")).await.unwrap();
-        fx.core.connect_jira(&token_for("b", "fast")).await.unwrap();
+        fx.core.connect_jira(&token_for("a", "fast"), None).await.unwrap();
+        fx.core.connect_jira(&token_for_site("beta", "b", "fast"), None).await.unwrap();
 
+        assert_eq!(crate::secrets::keys_with_prefix("jira-token:").unwrap(), ["jira-token:jira:beta:b", "jira-token:jira:site:a"]);
+        let signed_in: Vec<String> = fx.core.auth.connections().await.into_iter().map(|c| c.id).collect();
+        assert_eq!(signed_in, ["jira:site:me", "jira:site:a", "jira:beta:b"]);
+        assert!(signed_in.iter().all(|id| fx.core.registry.connection(id).is_some()));
+        let config = AppConfig::load(&fx.core.data_dir());
+        let bound: Vec<_> = config.connections.iter().map(|i| (i.id.as_str(), i.bound_to.as_deref().unwrap())).collect();
+        assert_eq!(bound, [("jira", "jira:site:me"), ("jira_2", "jira:site:a"), ("jira_3", "jira:beta:b")]);
+        let rows = fx.core.connections().await.unwrap();
+        assert_eq!(rows.iter().filter(|r| r.kind == RowKind::Jira).count(), 3, "one row per Jira");
+    }
+
+    #[tokio::test]
+    async fn connecting_an_account_an_instance_already_has_is_refused_and_keeps_the_token_it_had() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.core.connect_jira(&token_for("a", "first"), None).await.unwrap();
+
+        let again = fx.core.connect_jira(&token_for("a", "second"), None).await.err().unwrap();
+        assert_eq!(again.to_string(), connections::ALREADY_HAVE_ACCOUNT);
+        let other = fx.core.connect_jira(&token_for("a", "second"), Some("jira")).await.err().unwrap();
+        assert_eq!(other.to_string(), connections::ALREADY_HAVE_ACCOUNT, "an instance can't take another's account either");
+
+        let kept: crate::auth::Credentials = crate::secrets::load("jira-token:jira:site:a").unwrap().unwrap();
+        assert_eq!(kept.token, "first");
+        assert_eq!(AppConfig::load(&fx.core.data_dir()).connections.len(), 2);
+        assert_eq!(fx.core.auth.connections().await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn replacing_an_instances_account_with_itself_renews_the_token_and_changes_nothing_else() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.add_item(2).await;
+
+        fx.core.connect_jira(&token_for("me", "renewed"), Some("jira")).await.unwrap();
+
+        let kept: crate::auth::Credentials = crate::secrets::load("jira-token:jira:site:me").unwrap().unwrap();
+        assert_eq!(kept.token, "renewed");
+        assert_eq!(fx.core.auth.connections().await.len(), 1);
+        assert!(fx.core.cache_item(&fx.item("CA-2")).await.unwrap().is_some(), "the cache is the same account's");
+        assert_eq!(AppConfig::load(&fx.core.data_dir()).connections[0].bound_to.as_deref(), Some("jira:site:me"));
+    }
+
+    #[tokio::test]
+    async fn changing_account_then_relaunching_restores_only_the_new_account_and_the_old_token_is_gone() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.core.connect_jira(&token_for("me", "first"), Some("jira")).await.unwrap();
+        let old_cache = fx.core.connection(&fx.scope).unwrap();
+        fx.core.with_db_for(&fx.scope, |_| Ok(())).await.unwrap();
+
+        fx.core.connect_jira(&token_for("b", "second"), Some("jira")).await.unwrap();
+
+        assert!(fx.core.connection(&fx.scope).is_err(), "unregistered");
+        assert!(!fx.core.db.lock().unwrap().cache.contains_key(&old_cache.id), "its cache handle is closed");
         assert_eq!(crate::secrets::keys_with_prefix("jira-token:").unwrap(), ["jira-token:jira:site:b"]);
-        assert_eq!(fx.core.auth.connection().await.unwrap().id, "jira:site:b");
-        assert!(fx.core.connection(&Scope { connection_id: "jira:site:a".into(), account_id: "a".into() }).is_err());
+        let config = AppConfig::load(&fx.core.data_dir());
+        let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
+        assert_eq!((jira.id.as_str(), jira.bound_to.as_deref()), ("jira", Some("jira:site:b")));
+
+        let relaunched = Core::new(Arc::new(Auth::load(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), fx.dir.clone());
+        relaunched.restore().await;
+        let restored: Vec<String> = relaunched.auth.connections().await.into_iter().map(|c| c.id).collect();
+        assert_eq!(restored, ["jira:site:b"]);
+        assert!(relaunched.registry.connection("jira:site:b").is_some() && relaunched.registry.connection("jira:site:me").is_none());
+    }
+
+    #[tokio::test]
+    async fn replacing_an_instances_account_among_several_leaves_the_others_and_their_open_turns_alone() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.core.connect_jira(&token_for("a", "fast"), None).await.unwrap();
+        fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "running").await.unwrap();
+
+        fx.core.connect_jira(&token_for("c", "fast"), Some("jira_2")).await.unwrap();
+
+        let signed_in: Vec<String> = fx.core.auth.connections().await.into_iter().map(|c| c.id).collect();
+        assert_eq!(signed_in, ["jira:site:me", "jira:site:c"], "the new account takes the old one's place");
+        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "running");
     }
 
     #[tokio::test]
@@ -1081,7 +1151,7 @@ mod tests {
         fx.core.remove_instance(&fx.scope.connection_id).await.unwrap();
         assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1, "readable while disconnected");
 
-        fx.core.connect_jira(&token_for_site("beta", "b", "fast")).await.unwrap();
+        fx.core.connect_jira(&token_for_site("beta", "b", "fast"), None).await.unwrap();
         let (scope, _, _) = fx.core.auth.identity().await.unwrap();
         assert_eq!(scope.connection_id, "jira:beta:b");
         assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1);
@@ -1091,27 +1161,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn two_connects_end_as_the_one_that_began_last_with_the_other_gone_from_the_registry() {
+    async fn two_connects_at_once_both_land_in_the_order_they_began() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
         let fx = super::testing::fixture_with_authenticator(None, Some(gated.clone())).await;
 
         let core = fx.core.clone();
-        let first = tokio::spawn(async move { core.connect_jira(&token_for("a", "slow")).await });
+        let first = tokio::spawn(async move { core.connect_jira(&token_for("a", "slow"), None).await });
         gated.begun.notified().await;
         let core = fx.core.clone();
-        let second = tokio::spawn(async move { core.connect_jira(&token_for("b", "fast")).await });
+        let second = tokio::spawn(async move { core.connect_jira(&token_for("b", "fast"), None).await });
         tokio::task::yield_now().await;
         gated.release.notify_one();
         first.await.unwrap().unwrap();
         second.await.unwrap().unwrap();
 
-        let (scope, _, _) = fx.core.auth.identity().await.unwrap();
-        assert_eq!(scope.account_id, "b");
-        assert!(fx.core.connection(&scope).is_ok());
-        assert!(fx.core.connection(&Scope { connection_id: "jira:site:a".into(), account_id: "a".into() }).is_err());
-        assert!(fx.core.connection(&fx.scope).is_err());
+        let signed_in: Vec<String> = fx.core.auth.connections().await.into_iter().map(|c| c.id).collect();
+        assert_eq!(signed_in, ["jira:site:me", "jira:site:a", "jira:site:b"]);
+        assert!(signed_in.iter().all(|id| fx.core.registry.connection(id).is_some()));
     }
 
     #[tokio::test]
@@ -1311,7 +1379,7 @@ mod tests {
         let scope = Scope { connection_id: "jira:site:b".into(), account_id: "b".into() };
         let sign_in = token_for("b", "fast");
 
-        fx.core.connect_jira(&sign_in).await.unwrap();
+        fx.core.connect_jira(&sign_in, None).await.unwrap();
         let item = tracker::item_from_ticket(&fx.core.connection(&scope).unwrap(), &crate::tracker::testing::sample_ticket()).unwrap();
         let at = item.item.clone();
         fx.core.with_db_for(&scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
@@ -1320,9 +1388,9 @@ mod tests {
 
         fx.core.remove_instance(&scope.connection_id).await.unwrap();
         assert!(!file.exists());
-        assert!(fx.core.db.lock().unwrap().cache.is_empty());
+        assert!(!fx.core.db.lock().unwrap().cache.contains_key(&scope.connection_id));
 
-        fx.core.connect_jira(&sign_in).await.unwrap();
+        fx.core.connect_jira(&sign_in, None).await.unwrap();
         assert!(fx.core.with_db_for(&scope, |db| db.item(&at)).await.unwrap().is_none());
     }
 
@@ -1369,7 +1437,7 @@ mod tests {
         })
         .unwrap();
 
-        fx.core.connect_jira(&token_for("b", "fast")).await.unwrap();
+        fx.core.connect_jira(&token_for("b", "fast"), Some("jira")).await.unwrap();
 
         let config = AppConfig::load(&fx.dir);
         assert_eq!(config.connections.len(), 1);
@@ -1425,14 +1493,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_in_through_connect_jira_points_the_one_instance_at_the_new_account() {
+    async fn replacing_the_account_points_the_instance_at_the_new_one_and_keeps_its_id() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
         let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
         fx.core.adopt_instances().await;
 
-        fx.core.connect_jira(&token_for("b", "fast")).await.unwrap();
+        fx.core.connect_jira(&token_for("b", "fast"), Some("jira")).await.unwrap();
         let config = AppConfig::load(&fx.core.data_dir());
         let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
         assert_eq!((jira.id.as_str(), jira.bound_to.as_deref(), jira.config.email.as_deref()), ("jira", Some("jira:site:b"), Some("b")));
@@ -1501,7 +1569,6 @@ mod tests {
         assert_eq!(item.title, "Do the thing");
         assert_eq!(ticket_of(&item).unwrap().key, "CA-1");
         assert_eq!(db.items_synced_since(&connection.id, "2026-09-28T10:00:00Z", &Visible::All).unwrap().len(), 1);
-        assert_eq!(db.seen().unwrap().len(), 1, "inbox state survives");
         assert_eq!(db.meta(LAST_SYNC).unwrap().as_deref(), Some("2026-09-28T10:00:00Z"));
         assert_eq!(db.sync_state(&connection.id).unwrap().full_at, None, "the first sync is a full one, which fills in labels and links");
         let _ = std::fs::remove_dir_all(&dir);
