@@ -138,7 +138,7 @@ export interface MockHandle {
   /** Whether the scripted Pip has no turn running or waiting anywhere, a wake the supervisor queued included. */
   pipIdle(): boolean;
   /** Changes sample ticket `key` as someone editing it in Jira would (`MockBackend.editTicket`): its summary, description or status (an id or a name). */
-  editTicket(key: string, change: TicketEdit): void;
+  editTicket(item: string | ItemRef, change: TicketEdit): void;
   /** Has the sync of a Jira account after the first fail (`refused` is a token Jira turned down, `offline` a network failure), or recover with null. */
   failJira(instanceId: string, problem: "refused" | "offline" | null): void;
   /** Marks pending draft `id` as edited by the person, so a newer draft of the same kind stays beside it. */
@@ -182,7 +182,7 @@ export interface MockClockParts {
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
   pip?: { hold(on: boolean): void; idle(): boolean };
-  tickets?: { edit(key: string, change: TicketEdit): void };
+  tickets?: { edit(item: string | ItemRef, change: TicketEdit): void };
   jira?: { fail(instanceId: string, problem: "refused" | "offline" | null): void };
   terminals?: readonly string[];
   github?: { probe(state: GithubProbeState): void; refuseToken(): void; finishRecheck(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
@@ -241,7 +241,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     },
     holdPip: (on) => pip?.hold(on),
     pipIdle: () => pip?.idle() ?? true,
-    editTicket: (key, change) => tickets?.edit(key, change),
+    editTicket: (item, change) => tickets?.edit(item, change),
     failJira: (instanceId, problem) => jira?.fail(instanceId, problem),
     noteEdited: (id) => {
       if (!proposals) throw new Error("the sample clock has no drafts");

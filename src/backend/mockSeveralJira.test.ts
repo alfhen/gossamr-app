@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { docFromText, docText } from "../lib/docs";
 import type { ItemRef, ScreenContext } from "../types";
+import type { Intent } from "../types";
 import { MockBackend } from "./mock";
 import { scriptPip } from "./mockPip";
 
@@ -224,5 +225,122 @@ describe("the scripted Pip and a key that two sites have", () => {
   it("falls back to the first site when nothing says which", () => {
     const s = scriptPip("move CA-402 to Copy", context(null));
     expect(s.draft?.intent).toMatchObject({ item: acme("CA-402") });
+  });
+});
+
+const comment = (item: ItemRef, text: string): Intent => ({ type: "comment", item, body: docFromText(text) });
+const move = (item: ItemRef, to: string): Intent => ({ type: "transition", item, to });
+const newItem = (connectionId: string, externalId: string): Intent => ({
+  type: "create",
+  container: { connectionId, externalId },
+  fields: { title: "A task", body: docFromText("Details"), kind: "task", parent: null, assignee: null, priority: null, labels: [] },
+  link: null,
+});
+const two = () => new MockBackend({ jira: 2, githubRepos: 6 });
+
+describe("drafts and writes on the second site", () => {
+  it("rewrites a ticket of the second site, from its own text", async () => {
+    const b = two();
+    const draft = await b.pipRewrite(beta("CA-402"), "description", "r1");
+    expect(draft.intent).toMatchObject({ type: "rewrite", item: beta("CA-402") });
+    await b.proposalsApprove(draft.id);
+    expect(docText((await b.cacheItem(beta("CA-402")))!.body)).toContain("Scope");
+    expect(docText((await b.cacheItem(acme("CA-402")))!.body)).not.toContain("Scope");
+  });
+
+  it("creates an item in a project of the second site", async () => {
+    const b = two();
+    const draft = await b.proposalsCreate(newItem("mock2", "OPS"));
+    const done = await b.proposalsApprove(draft.id);
+    expect(done.state).toMatchObject({ type: "applied" });
+    expect((await b.cacheItem(beta("OPS-1")))?.title).toBe("Renew the staging certificates");
+    await expect(b.proposalsCreate(newItem("mock9", "OPS"))).rejects.toThrow("another connection");
+  });
+
+  it("changes a ticket on the second site when told the site", async () => {
+    const b = two();
+    b.editTicket(beta("CA-402"), { summary: "Renamed" });
+    expect((await b.cacheItem(beta("CA-402")))?.title).toBe("Renamed");
+    expect((await b.cacheItem(acme("CA-402")))?.title).toBe("Subject line variants");
+  });
+
+  it("keeps a move of one site's CA-402 apart from the other site's", async () => {
+    const b = two();
+    const first = b.proposals.draft(move(acme("CA-402"), "Copy"));
+    const second = b.proposals.draft(move(beta("CA-402"), "Working"));
+    expect(b.proposals.list({ item: beta("CA-402"), states: ["pending"] }).map((p) => p.id)).toEqual([second.id]);
+    await b.proposalsApprove(second.id);
+    expect(b.proposals.get(first.id)?.state.type).toBe("pending");
+  });
+
+  it("refuses a write to a site that is off, and leaves the sample tickets alone", async () => {
+    const b = two();
+    const draft = b.proposals.draft(comment(acme("CA-409"), "Hello"));
+    const before = (await b.load()).tickets["CA-409"].comments.length;
+    const seen = (await b.cacheComments(acme("CA-409"))).length;
+    await b.connectionSetEnabled("jira", false);
+    const result = await b.proposals.approve(draft.id);
+    expect(result.state.type).toBe("pending");
+    expect((await b.load()).tickets["CA-409"].comments).toHaveLength(before);
+    await b.connectionSetEnabled("jira", true);
+    expect(await b.cacheComments(acme("CA-409"))).toHaveLength(seen);
+  });
+
+  it("closes the drafts of a site that is removed", async () => {
+    const b = two();
+    const draft = b.proposals.draft(comment(beta("CA-402"), "Sent it"));
+    await b.connectionRemove("jira_2");
+    expect(b.proposals.get(draft.id)?.state).toMatchObject({ type: "retired", reason: "beta.atlassian.net was removed." });
+  });
+});
+
+describe("a watch command for a site that is gone", () => {
+  it("is refused, and no other site's watch list changes", async () => {
+    const b = two();
+    await b.connectionRemove("jira_2");
+    const before = await b.watchGet();
+    await expect(b.watchSetContainers("mock2", [{ containerId: "CA", watched: true }])).rejects.toThrow("gone");
+    await expect(b.watchCatalog("mock2", "")).rejects.toThrow("gone");
+    expect(await b.watchGet()).toEqual(before);
+  });
+});
+
+describe("replacing the login behind a Jira row", () => {
+  it("refuses an account another row has, on a replace as on an add", async () => {
+    const b = two();
+    await expect(b.jiraConnect({ ...input, site: "acme", email: "alf@acme.com" }, "jira_2")).rejects.toThrow("You already have this account");
+    await expect(b.jiraConnect({ ...input, site: "beta", email: "alf@beta.example" }, "jira")).rejects.toThrow("You already have this account");
+  });
+
+  it("refuses the account of a remaining row after the first row was removed", async () => {
+    const b = two();
+    await b.connectionRemove("jira");
+    await expect(b.jiraConnect({ ...input, site: "beta", email: "alf@beta.example" })).rejects.toThrow("You already have this account");
+  });
+
+  it("refuses a row that is not there rather than replacing the first account", async () => {
+    const b = two();
+    await b.connectionRemove("jira_2");
+    await expect(b.jiraConnect(input, "jira_2")).rejects.toThrow("That isn't a Jira connection");
+    expect((await b.connectionsList()).find((c) => c.instanceId === "jira")?.displayName).toBe("acme.atlassian.net");
+  });
+
+  it("gives a different account its own tickets, watch list and drafts", async () => {
+    const b = two();
+    const draft = b.proposals.draft(comment(beta("CA-402"), "Sent it"));
+    await b.jiraConnect(input, "jira_2");
+    const row = (await b.connectionsList()).find((c) => c.instanceId === "jira_2")!;
+    expect(row.displayName).toBe("gamma.atlassian.net");
+    expect(row.id).not.toBe("mock2");
+    expect(await b.cacheItem(beta("CA-402"))).toBeNull();
+    expect(keysOf(await b.cacheSearch({ type: "and", filters: [] })).some((k) => k.startsWith(`${row.id}:`))).toBe(false);
+    expect((await b.watchGet()).find((w) => w.connectionId === row.id)).toMatchObject({ chosen: true, watches: [] });
+    expect(b.proposals.get(draft.id)?.state.type).toBe("retired");
+  });
+
+  it("keeps the tickets when the same account gets a new token", async () => {
+    const b = two();
+    await b.jiraConnect({ ...input, site: "beta", email: "alf@beta.example", token: "new" }, "jira_2");
+    expect((await b.cacheItem(beta("CA-402")))?.title).toBe("Quote template for the pilot");
   });
 });
