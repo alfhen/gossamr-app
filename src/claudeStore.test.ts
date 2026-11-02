@@ -363,3 +363,80 @@ describe("wake turns", () => {
     expect(useClaude.getState().byTicket["ws:w1"].turns[0]).toMatchObject({ requestId: "wake-4", kind: "wake", prompt: wake.prompt });
   });
 });
+
+describe("the model a conversation runs on", () => {
+  const opus = { instanceId: "claude_work", model: "opus", effort: "medium" };
+  beforeEach(() => forgetConversations());
+  afterEach(() => vi.restoreAllMocks());
+
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  const turn = (id: string, conversation = "general") => useClaude.getState().byTicket[conversation].turns.find((t) => t.requestId === id)!;
+
+  it("sends the choice with the question", async () => {
+    const sent: AskRequest[] = [];
+    vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
+    useClaude.getState().choose("general", opus);
+    await useClaude.getState().ask("general", "hi", null, screen);
+    expect(sent[0].model).toEqual(opus);
+  });
+
+  it("sends the Settings default the header shows for a conversation where none was picked", async () => {
+    const sent: AskRequest[] = [];
+    const standing = { instanceId: "claude", model: "sonnet", effort: "medium" };
+    vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
+    useClaude.getState().setFallback(standing);
+    useClaude.getState().choose("ws:w1", opus);
+    await useClaude.getState().ask("general", "hi", null, screen);
+    expect(sent[0].model).toEqual(standing);
+    useClaude.getState().setFallback(null);
+    await useClaude.getState().ask("general", "again", null, screen);
+    expect(sent[1]).not.toHaveProperty("model");
+  });
+
+  it("gives a turn its model only once it has started, so a refused turn has none", async () => {
+    vi.spyOn(claude, "ask").mockImplementation(async () => started);
+    useClaude.getState().choose("general", opus);
+    await useClaude.getState().ask("general", "refused", null, screen);
+    const id = useClaude.getState().byTicket.general.turns[0].requestId;
+    expect(turn(id).model).toBeUndefined();
+    onClaudeEvent(id, { type: "done", sessionId: null, ok: false, message: "Claude work isn't signed in" });
+    await flush();
+    expect(turn(id).model).toBeUndefined();
+
+    await useClaude.getState().ask("general", "runs", null, screen);
+    const ran = useClaude.getState().byTicket.general.turns[1].requestId;
+    vi.spyOn(claude, "turns").mockResolvedValue([stored(ran, { model: opus })]);
+    onClaudeEvent(ran, { type: "started", sessionId: "s1" });
+    await flush();
+    expect(turn(ran).model).toEqual(opus);
+  });
+
+  it("shows the model a wake turn started on, which the page never chose", async () => {
+    const haiku = { instanceId: "claude", model: "haiku" };
+    vi.spyOn(claude, "turns").mockResolvedValue([stored("wake-9", { conversation: "ws:w1", kind: "wake", model: haiku })]);
+    onClaudeEvent("wake-9", { type: "started", sessionId: "s1" }, { conversation: "ws:w1", kind: "wake", prompt: "[Event] run r9 Done" });
+    await flush();
+    expect(turn("wake-9", "ws:w1").model).toEqual(haiku);
+  });
+
+  it("starts from what the last stored turn ran on", async () => {
+    vi.spyOn(claude, "turns").mockResolvedValue([stored("a"), stored("b", { model: opus }), stored("c")]);
+    await useClaude.getState().load("general");
+    expect(useClaude.getState().choices.general).toEqual(opus);
+    expect(useClaude.getState().byTicket.general.turns.map((t) => t.model)).toEqual([undefined, opus, undefined]);
+  });
+
+  it("keeps a choice the person made before the stored turns arrived", async () => {
+    const haiku = { instanceId: "claude", model: "haiku" };
+    useClaude.getState().choose("general", haiku);
+    vi.spyOn(claude, "turns").mockResolvedValue([stored("a", { model: opus })]);
+    await useClaude.getState().load("general");
+    expect(useClaude.getState().choices.general).toEqual(haiku);
+  });
+
+  it("forgets every choice when the conversations are dropped", () => {
+    useClaude.getState().choose("general", opus);
+    forgetConversations();
+    expect(useClaude.getState().choices).toEqual({});
+  });
+});

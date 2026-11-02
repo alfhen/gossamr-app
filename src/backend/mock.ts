@@ -474,6 +474,7 @@ export class MockBackend implements Backend {
       tickets: { edit: (item, change) => this.editTicket(item, change) },
       jira: { fail: (instanceId, problem) => this.failJira(instanceId, problem) },
       terminals: this.terminals,
+      providers: { addClaude: (name, folder, state) => { this.providers.add("claude", name, folder).probe = state; this.connectionsListeners.forEach((l) => l()); } },
       revealedFolders: this.revealedFolders,
       github: { probe: (state) => this.github.setProbe(state), refuseToken: () => this.github.refuseToken(), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept), finishRecheck: () => this.github.finishRecheck() },
     });

@@ -31,6 +31,8 @@ import { TimelineView } from "./Timeline";
 import { useNeedsYou } from "./useNeeds";
 import { useNow } from "./AgentsView";
 import { Button } from "../components/Button";
+import { ModelPicker } from "../components/ModelPicker";
+import { usePipModel } from "./PipModelPicker";
 
 export { AppliedCard, GENERAL_CONVERSATION, PIP_INPUT_ID, workstreamConversation } from "./PipConversation";
 
@@ -186,6 +188,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const drop = useFileDrop((files) => void attached.add(files));
   const proposalList = useConversationDrafts(conversation, workstream);
   const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
+  const model = usePipModel(conversation);
   const needs = useNeedsYou();
   const runs = useRuns((s) => s.runs);
   const now = useNow();
@@ -205,15 +208,20 @@ export function PipPane({ onClose }: { onClose(): void }) {
         <header data-tauri-drag-region className="ws-glass ws-glass-pip ws-glass-regular ws-sheet-fade relative [box-shadow:var(--glass-inner-pip)] before:p-0 before:pb-px z-10 grid gap-1.5 px-3 pt-[14px] pb-2.5 font-medium text-ws-ink [&_[data-status-detail]]:text-ws-ink2 [&_[data-waiting-for-pr]]:text-ws-ink2">
           <div className="flex items-center gap-2">
             <PipAvatar size={26} thinking={running} />
-            <div className="grid leading-tight">
+            <div className="grid min-w-0 flex-1 leading-tight">
               <h2 className="font-display m-0 text-base font-semibold">Pip</h2>
-              <span className="text-xs text-ws-ink2">powered by Claude</span>
+              {model && <ModelPicker {...model.picker} />}
             </div>
-            <kbd className="ml-1 rounded border border-ws-sep2 px-1.5 font-mono text-xs font-medium text-ws-ink2">{showOf("app", "pip")}</kbd>
-            <Button variant="quiet" size="sm" iconOnly className="ml-auto" aria-label="Close Pip" title="Close (Esc)" onClick={onClose}>
+            <kbd className="rounded border border-ws-sep2 px-1.5 font-mono text-xs font-medium text-ws-ink2">{showOf("app", "pip")}</kbd>
+            <Button variant="quiet" size="sm" iconOnly aria-label="Close Pip" title="Close (Esc)" onClick={onClose}>
               ×
             </Button>
           </div>
+          {model?.note && (
+            <p role="status" className="m-0 text-xs text-ws-ink2">
+              {model.note}
+            </p>
+          )}
           <ConversationLine conversation={conversation} workstream={workstream} />
           {workstream && <WorkstreamControls key={workstream.workstream.id} view={workstream} />}
           <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
