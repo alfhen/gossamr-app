@@ -20,6 +20,8 @@ use super::limits::{OwnerAddress, WorkFolderGit};
 /// suite runs hundreds of tests at once on a loaded CI runner, where a plain `git remote get-url` has taken longer, so tests wait
 /// longer rather than fail on the machine's load.
 const GIT_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(30) } else { Duration::from_secs(5) };
+/// `git worktree remove` and `git branch -d` write. Killing one partway leaves a half-deleted worktree that git then refuses to remove.
+const GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const WORD_LIMIT: usize = 16;
 const CONFIG_VALUE_LIMIT: usize = 200;
 /// How many owners' folders Settings reads an address in.
@@ -54,13 +56,17 @@ impl Git {
 
     /// Like `out`, but says why it failed: git couldn't start, ran past the limit, or exited with this last stderr line.
     async fn out_or_why(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
+        self.out_or_why_within(dir, args, GIT_TIMEOUT).await
+    }
+
+    async fn out_or_why_within(&self, dir: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
         let mut cmd = Command::new(&self.program);
         cmd.args(PINNED).arg("-C").arg(dir).arg("--no-optional-locks").args(args);
         self.env.apply(cmd.as_std_mut());
         let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| format!("{} didn't start: {e}", self.program.display()))?;
-        let out = tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output())
+        let out = tokio::time::timeout(limit, child.wait_with_output())
             .await
-            .map_err(|_| format!("git took longer than {} seconds", GIT_TIMEOUT.as_secs()))?
+            .map_err(|_| format!("git took longer than {} seconds", limit.as_secs()))?
             .map_err(|e| format!("git couldn't be waited for: {e}"))?;
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned());
@@ -118,7 +124,7 @@ impl Git {
             return self.out_or_why(clone, &["worktree", "prune"]).await.map(drop);
         }
         let path = worktree.to_string_lossy();
-        self.out_or_why(clone, &["worktree", "remove", "--", &path]).await.map(drop)
+        self.out_or_why_within(clone, &["worktree", "remove", "--", &path], GIT_WRITE_TIMEOUT).await.map(drop)
     }
 
     async fn branch_exists(&self, clone: &Path, branch: &str) -> Result<bool, String> {
@@ -147,7 +153,7 @@ impl Git {
         if !self.branch_exists(clone, branch).await? {
             return Ok(());
         }
-        self.out_or_why(clone, &["branch", "-d", "--", branch]).await.map(drop)
+        self.out_or_why_within(clone, &["branch", "-d", "--", branch], GIT_WRITE_TIMEOUT).await.map(drop)
     }
 
     /// What `origin/HEAD` points at in the clone, when it knows.
