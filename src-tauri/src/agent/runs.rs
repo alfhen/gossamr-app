@@ -666,7 +666,7 @@ mod tests {
     async fn rig() -> Rig {
         let fx = fixture_watching(&["acme/webshop"]).await;
         fx.add_item(2).await;
-        let clone = fx.home.join("webshop");
+        let clone = fx.home.join("Gossamr/agents/acme/webshop");
         std::fs::create_dir_all(clone.join(".git")).unwrap();
         let clone = clone.canonicalize().unwrap();
         let planner = FakePlanner::new(clone.clone());

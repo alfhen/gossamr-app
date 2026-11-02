@@ -139,6 +139,9 @@ pub struct RunSpec {
     /// The key of the ticket the run is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ticket: Option<String>,
+    /// The Jira site the ticket is on. Keys repeat across sites, so the prompt names it beside the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
     /// Snapshot of the ticket, made by `ticket_snapshot` and never taken from a model.
     #[serde(default)]
     pub ticket_block: Option<String>,
@@ -302,10 +305,15 @@ pub fn render_prompt(spec: &RunSpec) -> String {
     let role = spec.role.as_str();
     let article = if role.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
     let on = spec.ticket.as_deref().map_or_else(|| "the task below".to_string(), without_markers);
+    let site = spec.ticket.as_ref().and(spec.site.as_deref()).map(|site| without_markers(&site.split_whitespace().collect::<Vec<_>>().join(" ")));
+    let on_site = site.as_ref().map(|site| format!(" (on {site})")).unwrap_or_default();
     let mut parts = vec![
-        format!("You are working as {article} {role} on {on}."),
+        format!("You are working as {article} {role} on {on}{on_site}."),
         format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
     ];
+    if site.is_some() {
+        parts.push(format!("Another Jira site can have a ticket with the same key. Put the full key, {on}, in the title of any pull request you open."));
+    }
     if let Some(pr) = spec.pr {
         let at = spec.pr_sha.as_deref().map(|sha| format!(" at commit {sha}")).unwrap_or_default();
         parts.push(format!(
@@ -345,6 +353,17 @@ pub enum RunState {
 }
 
 impl RunState {
+    /// Runs in these states are not over: they are polled, and a connection with one stays registered.
+    pub const UNFINISHED: [RunState; 7] = [
+        RunState::Queued,
+        RunState::Launching,
+        RunState::Working,
+        RunState::NeedsAnswer,
+        RunState::NeedsPermission,
+        RunState::SystemBlocked,
+        RunState::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             RunState::Queued => "queued",
@@ -370,7 +389,12 @@ pub enum RunFailure {
     ModeRefused { mode: RefusedMode },
     NotSignedIn,
     ClaudeMissing,
+    /// The clone is gone, or a clone could not be made.
     NoClone,
+    /// A run set up in a folder Gossamr didn't make, which can't start a new session.
+    OutsideWorkFolder { path: PathBuf },
+    /// Something that isn't a clone of the repository is where Gossamr's clone goes.
+    CloneOccupied { path: PathBuf },
     CapReached,
     Other,
 }
@@ -525,6 +549,9 @@ pub struct Run {
     /// The Pip turn that started it, when Pip did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// Whether its clone is in Gossamr's work folder. Worked out whenever a run is read, never taken from what is stored.
+    #[serde(default, skip_deserializing)]
+    pub in_work_folder: bool,
 }
 
 impl Run {
@@ -586,6 +613,7 @@ impl Run {
             unapproved_auto_start: None,
             created_by: CreatedBy::User,
             origin: None,
+            in_work_folder: false,
         }
     }
 
@@ -767,6 +795,21 @@ mod tests {
     }
 
     #[test]
+    fn the_brief_names_the_site_beside_the_key_and_asks_for_the_full_key_in_pull_request_titles() {
+        let p = render_prompt(&RunSpec { site: Some("Acme\nJira".into()), ..ticketed() });
+        assert!(p.starts_with("You are working as a builder on CA-412 (on Acme Jira)."), "{p}");
+        assert!(p.contains("Put the full key, CA-412, in the title of any pull request you open."), "{p}");
+        assert!(p.find("Put the full key").unwrap() < p.find("Find out why").unwrap());
+    }
+
+    #[test]
+    fn a_spec_with_no_site_or_no_ticket_reads_as_it_did_before() {
+        for p in [render_prompt(&ticketed()), render_prompt(&RunSpec { site: Some("Acme Jira".into()), ..spec() })] {
+            assert!(!p.contains("(on ") && !p.contains("full key"), "{p}");
+        }
+    }
+
+    #[test]
     fn the_role_line_reads_an_a_before_a_vowel_and_names_the_task_when_there_is_no_ticket() {
         assert!(render_prompt(&with_role("investigator")).starts_with("You are working as an investigator on the task below."));
         assert!(render_prompt(&with_role("ui-tester")).starts_with("You are working as an ui-tester on the task below."));
@@ -859,7 +902,7 @@ mod tests {
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(keys, ["base", "brief", "clonePath", "name", "pr", "prSha", "repo", "report", "role", "ticket", "ticketBlock", "workstream"]);
-        assert_eq!((json["role"].as_str(), json["brief"].as_str(), json["clonePath"].as_str()), (Some("investigate"), Some("Find out why the cart total is wrong."), Some("/Users/me/Code/webshop")));
+        assert_eq!((json["role"].as_str(), json["brief"].as_str(), json["clonePath"].as_str()), (Some("investigate"), Some("Find out why the cart total is wrong."), Some("/Users/me/Gossamr/agents/acme/webshop")));
         let run = queued(spec());
         assert_eq!(serde_json::from_value::<Run>(serde_json::to_value(&run).unwrap()).unwrap(), run);
         assert!(serde_json::from_str::<ShortId>("\"../etc\"").is_err());
@@ -956,7 +999,7 @@ mod tests {
     fn a_queued_run_expects_its_worktree_under_the_clone() {
         let s = spec();
         let run = queued(s.clone());
-        assert_eq!(run.expected_worktree, PathBuf::from("/Users/me/Code/webshop/.claude/worktrees/eng-1-fix-cart-3f9a"));
+        assert_eq!(run.expected_worktree, PathBuf::from("/Users/me/Gossamr/agents/acme/webshop/.claude/worktrees/eng-1-fix-cart-3f9a"));
         assert_eq!((run.state, run.digest), (RunState::Queued, s.digest()));
     }
 

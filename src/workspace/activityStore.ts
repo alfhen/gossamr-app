@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import type { FeedCursor, FeedEntry } from "../types";
-import { INBOX_KINDS, queryFor, withRead, type InboxFilter } from "./activityLogic";
+import { feedKey, INBOX_KINDS, queryFor, withRead, type InboxFilter } from "./activityLogic";
 import { messageOf, useToasts } from "./toasts";
 
 interface ActivityState {
@@ -20,7 +20,7 @@ interface ActivityState {
   reload(): Promise<void>;
   loadMore(): Promise<void>;
   /** Marks unread entries read. Resolves false when the backend refused. */
-  markRead(ids: string[]): Promise<boolean>;
+  markRead(entries: FeedEntry[]): Promise<boolean>;
   /** Marks everything unread read, not only the entries loaded so far. */
   markAllRead(): Promise<void>;
 }
@@ -81,20 +81,20 @@ export const useActivity = create<ActivityState>((set, get) => ({
     try {
       const page = await backend.cacheFeed({ ...queryFor(filter), before: next });
       if (mine !== seq) return;
-      const seen = new Set(get().entries.map((e) => e.id));
-      set((s) => ({ entries: [...s.entries, ...page.entries.filter((e) => !seen.has(e.id))], next: page.next, loadingMore: false }));
+      const seen = new Set(get().entries.map(feedKey));
+      set((s) => ({ entries: [...s.entries, ...page.entries.filter((e) => !seen.has(feedKey(e)))], next: page.next, loadingMore: false }));
     } catch (e) {
       if (mine === seq) set({ loadingMore: false });
       useToasts.getState().push(`Couldn't load more: ${messageOf(e)}`);
     }
   },
 
-  async markRead(ids) {
+  async markRead(marked) {
     const { backend } = get();
-    if (!backend || !ids.length) return true;
-    set((s) => ({ entries: withRead(s.entries, new Set(ids), false), unread: Math.max(0, s.unread - ids.length) }));
+    if (!backend || !marked.length) return true;
+    set((s) => ({ entries: withRead(s.entries, marked, false), unread: Math.max(0, s.unread - marked.length) }));
     try {
-      await Promise.all(ids.map((id) => backend.setUnread(id, false)));
+      await Promise.all(marked.map((e) => backend.setUnread(e.connectionId, e.id, false)));
       return true;
     } catch (e) {
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
@@ -113,6 +113,6 @@ export const useActivity = create<ActivityState>((set, get) => ({
       useToasts.getState().push(`Couldn't mark read: ${messageOf(e)}`);
       return;
     }
-    if (await get().markRead(page.entries.map((e) => e.id)) && page.next) await get().markAllRead();
+    if (await get().markRead(page.entries) && page.next) await get().markAllRead();
   },
 }));

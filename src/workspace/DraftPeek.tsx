@@ -171,7 +171,7 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
         mentions={fields.mentions}
         onChange={(body, mentions) => onChange({ body, mentions })}
         onBlur={onCommit}
-        ticketKey=""
+        item={{ connectionId: fields.container.connectionId, externalId: "", key: "" }}
         people={people}
         placeholder="Describe the ticket"
         label="Description of the new ticket"

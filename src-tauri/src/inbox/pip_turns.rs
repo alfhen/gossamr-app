@@ -172,7 +172,7 @@ mod tests {
     #[tokio::test]
     async fn a_database_that_cannot_open_does_not_stop_removing_jira() {
         let fx = crate::inbox::testing::fixture().await;
-        fx.core.close_db();
+        fx.core.close_cache(&fx.scope.connection_id);
         // Something that is not a database where the account's file should be.
         let path = fx.dir.join("inbox-site-me.sqlite");
         let _ = std::fs::remove_file(&path);

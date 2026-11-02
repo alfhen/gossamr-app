@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::cli::CliError;
+use super::fresh::{tilde, CloneError};
 use super::toolchain::ToolchainError;
 use crate::domain::{RefusedMode, RunFailure};
 
@@ -15,6 +16,10 @@ pub enum Failure {
     NoEnvironment(String),
     /// The clone is gone, isn't a clone of the repository, or can't be read.
     NoClone(String),
+    /// A new session was asked for in a folder Gossamr didn't make: a run set up before agents moved to the work folder.
+    OutsideWorkFolder { path: PathBuf },
+    /// Something that isn't a clone of the repository is where Gossamr's clone goes.
+    CloneOccupied { repo: String, path: PathBuf },
     /// The approved spec no longer passes validation.
     Invalid(String),
     CapReached(usize),
@@ -34,6 +39,8 @@ impl fmt::Display for Failure {
             Failure::NotSignedIn => write!(f, "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry."),
             Failure::NoEnvironment(why) => write!(f, "{why}"),
             Failure::NoClone(why) | Failure::Invalid(why) => write!(f, "{why}"),
+            Failure::OutsideWorkFolder { path } => write!(f, "This agent was set up in {}, before Gossamr kept its own clones. Ask Pip to start it again, and it will use Gossamr's clone.", tilde(path)),
+            Failure::CloneOccupied { repo, path } => write!(f, "{}", CloneError::Occupied { repo: repo.clone(), path: path.clone() }),
             Failure::CapReached(n) => write!(f, "{n} agents are already running. Stop one or wait for one to finish, then retry."),
             Failure::NeedsTrust { folder } => write!(
                 f,
@@ -66,6 +73,8 @@ impl From<&Failure> for RunFailure {
             Failure::ClaudeMissing => RunFailure::ClaudeMissing,
             Failure::NotSignedIn => RunFailure::NotSignedIn,
             Failure::NoClone(_) => RunFailure::NoClone,
+            Failure::OutsideWorkFolder { path } => RunFailure::OutsideWorkFolder { path: path.clone() },
+            Failure::CloneOccupied { path, .. } => RunFailure::CloneOccupied { path: path.clone() },
             Failure::CapReached(_) => RunFailure::CapReached,
             Failure::ModeRefused { mode, .. } => RunFailure::ModeRefused { mode: *mode },
             Failure::NeedsTrust { folder } => RunFailure::UntrustedFolder { path: folder.clone() },
@@ -125,6 +134,8 @@ mod tests {
             (Failure::NotSignedIn, RunFailure::NotSignedIn),
             (Failure::NoEnvironment("Couldn't read your shell environment.".into()), RunFailure::Other),
             (Failure::NoClone("/x isn't a git clone any more".into()), RunFailure::NoClone),
+            (Failure::OutsideWorkFolder { path: folder.into() }, RunFailure::OutsideWorkFolder { path: folder.into() }),
+            (Failure::CloneOccupied { repo: "acme/webshop".into(), path: folder.into() }, RunFailure::CloneOccupied { path: folder.into() }),
             (Failure::Invalid("the base branch name isn't valid".into()), RunFailure::Other),
             (Failure::CapReached(3), RunFailure::CapReached),
             (Failure::NeedsTrust { folder: folder.into() }, RunFailure::UntrustedFolder { path: folder.into() }),

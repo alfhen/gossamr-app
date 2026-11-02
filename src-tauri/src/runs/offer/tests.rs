@@ -178,6 +178,21 @@ async fn the_sweep_keeps_what_a_live_or_recently_finished_run_may_still_need_and
 }
 
 #[tokio::test]
+async fn the_sweep_keeps_the_files_of_a_run_whose_connection_is_not_registered() {
+    let d = dir("unregistered");
+    let rig = ready_with(reporting(&d)).await;
+    let live = rig.launched_reporting(1, "investigate").await;
+    let channel = rig.svc.agents.clone().unwrap();
+    rig.fx.unregister(&live.connection_id);
+    assert!(rig.fx.core.run(&live.id).await.unwrap().is_none(), "the run is out of reach");
+
+    rig.svc.sweep_agent_files().await;
+
+    assert_eq!(channel.configured(), std::slice::from_ref(&live.id));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[tokio::test]
 async fn the_config_files_of_the_earlier_report_server_follow_the_same_sweep() {
     let d = dir("legacy");
     let rig = ready_with(reporting(&d)).await;

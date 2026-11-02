@@ -1,3 +1,4 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { announceSignedOut } from "../accountEvents";
 import type { ConnectionInfo } from "../types";
 import { useWorkspace } from "../workspaceStore";
@@ -14,7 +15,7 @@ export async function removeConnection(c: Pick<ConnectionInfo, "instanceId" | "k
     useToasts.getState().push(`Couldn't remove ${c.displayName}: ${messageOf(e)}`);
     return false;
   }
-  if (c.kind === "jira") {
+  if (c.kind === "jira" && isTauri()) {
     // Signing out clears the toasts and leaves the workspace that shows them, so Setup is the confirmation.
     announceSignedOut();
     return true;

@@ -915,7 +915,7 @@ fn asking(entry: &mut AgentEntry) {
 
 /// A second start of the app: same accounts and listing, none of the first one's memory.
 fn restarted(rig: &Rig) -> RunService {
-    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), vec![], Arc::new(|_| {})).with_settings(rig.svc.settings())
+    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), Arc::new(|_| {})).with_home(rig.fx.home.clone()).with_settings(rig.svc.settings())
 }
 
 #[tokio::test]
@@ -1080,4 +1080,81 @@ async fn a_question_pip_asks_is_a_need_that_notifies_once_and_clears_when_answer
     rig.poll().await;
     assert_eq!(notices().len(), 2, "once nothing waited, the next question is news again");
     assert_eq!(notices()[1].1, "Pip asks: And the review?");
+}
+
+#[tokio::test]
+async fn a_need_in_the_second_account_notifies_and_is_kept_in_that_accounts_cache() {
+    let told = Arc::new(Announced::default());
+    let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    let rig = crate::runs::rig::ready_on(fx, {
+        let told = told.clone();
+        move |svc| svc.with_notifier(told)
+    })
+    .await;
+    let ws = rig.fx.core.open_workstream(&second, None, Some("Beta work".into())).await.unwrap().id;
+
+    rig.poll().await;
+    rig.fx.core.pip_asks_person(&second, &ws, "Which one?").await.unwrap();
+    rig.poll().await;
+    assert_eq!(*told.0.lock().unwrap(), [("Beta work is waiting on you".to_string(), "Pip asks: Which one?".to_string(), None)]);
+
+    let kept = |scope: crate::auth::Scope| {
+        let core = rig.fx.core.clone();
+        async move { core.announced_needs(&scope).await.unwrap().unwrap_or_default() }
+    };
+    assert_eq!(kept(second).await.len(), 1);
+    assert!(kept(rig.fx.scope.clone()).await.is_empty(), "the first account's cache does not hold the second's");
+}
+
+#[tokio::test]
+async fn a_pending_review_draft_with_no_ticket_is_not_announced_again_after_a_restart() {
+    use crate::domain::{CreatedBy, Intent, Origin};
+    use crate::proposals::Draft;
+    let told = Arc::new(Announced::default());
+    let (fx, _second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    let rig = crate::runs::rig::ready_on(fx, {
+        let told = told.clone();
+        move |svc| svc.with_notifier(told)
+    })
+    .await;
+    rig.poll().await;
+    let intent = Intent::GithubReview {
+        connection_id: "github:ann".into(),
+        item: None,
+        run_id: "run-1".into(),
+        repo: "acme/webshop".into(),
+        number: 12,
+        commit_sha: "a1b2c3d4e5f6".into(),
+        summary: "Review summary.".into(),
+        comments: Vec::new(),
+    };
+    rig.fx.core.propose(&rig.fx.scope, Draft { origin: Origin::chat("review-turn"), created_by: CreatedBy::Pip, intent, label: None, basis: None }).await.unwrap();
+
+    rig.poll().await;
+    assert_eq!(told.0.lock().unwrap().len(), 1, "the draft is announced once");
+
+    let again = restarted(&rig).with_notifier(told.clone());
+    again.poll_at(chrono::Utc::now()).await;
+    assert_eq!(told.0.lock().unwrap().len(), 1, "a restart announces only what is new");
+}
+
+#[tokio::test]
+async fn a_working_run_in_code_is_still_tracked_messaged_answered_and_stopped() {
+    let rig = ready().await;
+    let run = rig.launched_legacy(1).await;
+    assert!(!rig.get(&run).await.in_work_folder);
+    rig.session(&run, working);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    rig.session(&run, asking);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    assert_eq!(rig.svc.answer(&run.id, "Use staging.").await.unwrap().state, RunState::Working);
+    let (_, how) = rig.svc.message_agent(&run.id, "How is it going?", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(how, crate::runs::message::Delivery::Queued);
+    assert_eq!(rig.svc.stop_as(&run.id, crate::domain::Actor::Person).await.unwrap().state, RunState::Stopped);
+    assert!(rig.get(&run).await.failure.is_none());
 }

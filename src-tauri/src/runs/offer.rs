@@ -72,14 +72,14 @@ impl RunService {
     async fn sweep_configs(&self, channel: &AgentChannel) {
         let now = Utc::now();
         for id in channel.configured() {
-            let keep = match self.core.run(&id).await {
+            let keep = match self.core.run_in_store(&id).await {
                 Ok(Some(run)) => match run.state {
                     RunState::Failed => false,
                     RunState::Done | RunState::Stopped => run.worktree_removed_at.is_none() && run.ended_at.is_none_or(|at| now - at <= KEEP_FINISHED),
                     _ => run.worktree_removed_at.is_none(),
                 },
                 Ok(None) => false,
-                // Not this account's run, or no one is signed in: leave it for a later sweep.
+                // The store couldn't be read: leave it for a later sweep.
                 Err(_) => true,
             };
             if !keep {

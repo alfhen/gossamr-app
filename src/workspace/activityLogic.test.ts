@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FeedEntry, WorkstreamEvent } from "../types";
-import { FILTER_LABEL, dayBreaks, dayLabel, eventText, groupByDay, inInbox, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
+import { FILTER_LABEL, dayBreaks, dayLabel, eventText, feedKey, groupByDay, inInbox, initials, queryFor, stepIndex, verb, withRead } from "./activityLogic";
 
 const entry = (id: string, at: string, over: Partial<FeedEntry> = {}): FeedEntry => ({
   id,
@@ -68,7 +68,17 @@ describe("row wording and read state", () => {
 
   it("marks only the named entries", () => {
     const list = [entry("a", "2026-09-30T10:00:00Z", { unread: true }), entry("b", "2026-09-30T09:00:00Z", { unread: true })];
-    expect(withRead(list, new Set(["a"]), false).map((e) => e.unread)).toEqual([false, true]);
+    expect(withRead(list, [list[0]], false).map((e) => e.unread)).toEqual([false, true]);
+  });
+
+  it("tells two sites' events with the same id apart", () => {
+    const list = [entry("a", "2026-09-30T10:00:00Z", { unread: true }), { ...entry("a", "2026-09-30T09:00:00Z", { unread: true }), connectionId: "jira:other:me" }];
+    expect(withRead(list, [list[1]], false).map((e) => e.unread)).toEqual([true, false]);
+  });
+
+  it("names an entry by its connection as well as its id", () => {
+    const here = entry("c:1", "2026-09-30T10:00:00Z");
+    expect(feedKey(here)).not.toBe(feedKey({ ...here, connectionId: "jira:other:me" }));
   });
 });
 

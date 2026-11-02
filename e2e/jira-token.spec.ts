@@ -121,3 +121,56 @@ test.describe("a Jira token close to its expiry", () => {
     await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
   });
 });
+
+test.describe("adding Jira from + Add", () => {
+  test("opens the Connect Jira sheet while no Jira is connected", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await openSettings(page);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await page.getByRole("menuitem", { name: /^Jira account/ }).click();
+    await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
+  });
+
+  test("leaves Jira out of the menu once a token is connected", async ({ page }) => {
+    await openApp(page, "runs=empty&mockJiraToken=refused");
+    await page.getByRole("button", { name: "Make a new token" }).click();
+    const sheet = page.getByRole("dialog", { name: "Connect Jira" });
+    await sheet.getByLabel("API token").fill("good-token");
+    await sheet.getByRole("button", { name: "Connect Jira" }).click();
+    await expect(sheet).toHaveCount(0);
+    await openSettings(page);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await expect(page.getByRole("menuitem", { name: /^GitHub account/ })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: /^Jira account/ })).toHaveCount(0);
+  });
+
+  test("shows the new Jira under Tickets, keeps the sample workspace running, and offers Jira again after Remove", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await openSettings(page);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await page.getByRole("menuitem", { name: /^Jira account/ }).click();
+    const sheet = page.getByRole("dialog", { name: "Connect Jira" });
+    await sheet.getByLabel("Your Jira site").fill("acme.atlassian.net");
+    await sheet.getByLabel("Your Atlassian email").fill("alf@acme.com");
+    await sheet.getByLabel("API token").fill("good-token");
+    await page.waitForTimeout(600);
+    await sheet.getByRole("button", { name: "Connect Jira" }).click();
+    await expect(sheet).toHaveCount(0);
+    await expectToast(page, "Connected to Jira as Alf Henderson.");
+    await expect(page.getByText("Couldn't check your Jira sign-in")).toHaveCount(0);
+    const row = page.getByRole("listitem", { name: "acme.atlassian.net connection" });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("AC");
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Jira account/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await row.click();
+    await page.getByRole("region", { name: "acme.atlassian.net details" }).getByRole("button", { name: "Remove", exact: true }).click();
+    await page.getByRole("alertdialog", { name: /^Remove/ }).getByRole("button", { name: "Yes, remove" }).click();
+    await expect(page.getByRole("listitem", { name: "Sample data connection" })).toBeVisible();
+    await expect(page.getByText("Couldn't check your Jira sign-in")).toHaveCount(0);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Jira account/ })).toBeVisible();
+  });
+});

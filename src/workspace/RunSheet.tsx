@@ -200,15 +200,17 @@ function FailureBox({ run, opened, on }: { run: Run; opened: boolean; on: RunShe
           <p className="m-0 font-semibold text-ws-ink">{help.summary}</p>
           <p className="m-0 text-ws-ink2">{help.detail}</p>
           <div className="flex flex-wrap items-center gap-2">
-            {help.kind === "noClone" && <CloneActions run={run} />}
+            {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
             {help.primary && (
               <Btn tone={stepDone ? "plain" : "primary"} icon={help.primary.act === "terminal" ? "term" : "ext"} onClick={() => on.fix(help.primary!.act)}>
                 {help.primary.label}
               </Btn>
             )}
-            <Btn tone={stepDone || !help.primary ? "primary" : "plain"} icon="retry" disabled={!ready} title={ready ? undefined : "Do the step above first, then retry"} onClick={on.retry}>
-              Retry
-            </Btn>
+            {help.retry && (
+              <Btn tone={stepDone || !help.primary ? "primary" : "plain"} icon="retry" disabled={!ready} title={ready ? undefined : "Do the step above first, then retry"} onClick={on.retry}>
+                Retry
+              </Btn>
+            )}
           </div>
           {help.command && (
             <div className="grid gap-1">
@@ -216,7 +218,7 @@ function FailureBox({ run, opened, on }: { run: Run; opened: boolean; on: RunShe
               <CodeBox text={help.command.text} what="the command" wrap onCopied={on.copied} />
             </div>
           )}
-          <p className="m-0 text-xs text-ws-ink3">Retry looks for a session that already exists first, and only then starts one. Same prompt, nothing to approve again.</p>
+          {help.retry && <p className="m-0 text-xs text-ws-ink3">Retry looks for a session that already exists first, and only then starts one. Same prompt, nothing to approve again.</p>}
           <Details summary="What Gossamr recorded">
             <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{message}</pre>
           </Details>

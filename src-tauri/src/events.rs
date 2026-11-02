@@ -1,6 +1,6 @@
 //! Turns cached tickets into inbox events and "since you last looked" changes.
 
-use crate::model::{CachedTicket, EventKind, FieldChange, MyAction, Person};
+use crate::model::{CachedTicket, EventKind, MyAction, Person};
 
 /// Changelog fields worth surfacing, with the label shown to the user. Everything else (rank, links, description
 /// edits, worklogs…) is noise for an inbox.
@@ -116,28 +116,6 @@ pub fn my_actions(t: &CachedTicket, me: &str) -> Vec<(String, MyAction)> {
     out
 }
 
-/// Field changes by other people after `since` (an RFC 3339 timestamp), oldest first.
-pub fn changes_since(t: &CachedTicket, me: &str, since: &str) -> Vec<FieldChange> {
-    let mut out: Vec<FieldChange> = t
-        .history
-        .iter()
-        .filter(|h| h.author.account_id != me && h.at.as_str() > since)
-        .flat_map(|h| {
-            h.items.iter().filter_map(|i| {
-                Some(FieldChange {
-                    field: label(&i.field)?.to_string(),
-                    from: i.from.clone(),
-                    to: i.to.clone(),
-                    author: h.author.clone(),
-                    at: h.at.clone(),
-                })
-            })
-        })
-        .collect();
-    out.sort_by(|a, b| a.at.cmp(&b.at));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,13 +215,5 @@ mod tests {
         let kinds: Vec<(&str, &str, &str)> = actions.iter().map(|(id, a)| (id.as_str(), a.kind.as_str(), a.text.as_str())).collect();
         assert_eq!(kinds, vec![("h:501:status", "transition", "In Review → Done"), ("created:CA-1", "created", "")]);
         assert!(my_actions(&t, "sam").iter().all(|(_, a)| a.kind != "created"), "Sam didn't create it");
-    }
-
-    #[test]
-    fn changes_since_filters_by_time_and_author() {
-        let t = ticket();
-        assert_eq!(changes_since(&t, "me", "2026-09-28T06:00:00Z").len(), 1);
-        assert!(changes_since(&t, "me", "2026-09-28T07:30:00Z").is_empty());
-        assert!(changes_since(&t, "sam", "2026-09-28T06:00:00Z").is_empty());
     }
 }

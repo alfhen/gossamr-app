@@ -67,7 +67,7 @@ function world(options: MockOptions = { githubRepos: 12 }) {
 
 /** A run with `role` on `item` in workstream `ws`, as Pip's start_agent does. */
 async function start(b: MockBackend, ws: string, role: string, item: ItemRef | null = CA401): Promise<Run> {
-  const spec: RunSpec = { role, repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", name: `${(item?.key ?? "none").toLowerCase()}-${Math.random().toString(16).slice(2, 8)}`, brief: "", ticketBlock: null, workstream: ws };
+  const spec: RunSpec = { role, repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront", base: "main", name: `${(item?.key ?? "none").toLowerCase()}-${Math.random().toString(16).slice(2, 8)}`, brief: "", ticketBlock: null, workstream: ws };
   return b.runs.start(spec, item);
 }
 

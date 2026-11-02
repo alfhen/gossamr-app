@@ -447,11 +447,12 @@ impl Core {
         }
     }
 
-    /// The project keys of the signed-in tracker, which are what a key in a branch or title may name.
+    /// The project keys of the primary connection, which are what a key in a branch or title may name. Whether the
+    /// connection is on is not asked: turning Jira off must not erase the links already found.
     async fn known_keys(&self) -> KnownKeys {
-        let Some((scope, _, _)) = self.auth.identity().await else { return KnownKeys::default() };
-        let connection = scope.connection_id;
-        let keys = self.with_db(|db| db.project_keys(&connection)).await.unwrap_or_default();
+        let Ok(primary) = self.primary().await else { return KnownKeys::default() };
+        let connection = primary.connection.id;
+        let keys = self.with_db_for(&primary.scope, |db| db.project_keys(&connection)).await.unwrap_or_default();
         KnownKeys::new(keys.iter().map(|k| (k.as_str(), connection.as_str())))
     }
 
@@ -1016,10 +1017,9 @@ impl Core {
     /// posted when found; when not found, or when GitHub can't be asked, the draft stays pending and says so
     /// (`REVIEW_NOT_FOUND_NOTE`). Only `post_anyway`, the person's explicit choice, then sends it again.
     pub async fn post_review_draft(&self, id: &str, seen: usize, post_anyway: bool) -> Result<Proposal> {
-        let scope = self.scope().await?;
         let gate = self.draft_gate.lock().await;
         let (claimed, look_for) = self
-            .with_app_db_for(&scope, |db| {
+            .with_proposals(|db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if let Intent::GithubReview { connection_id, .. } = &current.intent {
                     self.refuse_while_held(connection_id)?;
@@ -1058,7 +1058,7 @@ impl Core {
             (Err(e), None) => Err(e),
         };
         let label = format!("{repo}#{number}");
-        self.with_app_db_for(&scope, |db| {
+        self.with_proposals(|db| {
             let at = Utc::now();
             let mut p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             p.updated_at = at;
@@ -2036,7 +2036,7 @@ mod review_tests {
     }
 
     async fn reviewer(fx: &Fixture) -> Run {
-        let clone = fx.home.join("webshop");
+        let clone = fx.home.join("Gossamr/agents/acme/webshop");
         std::fs::create_dir_all(clone.join(".git")).unwrap();
         let spec = crate::domain::fixtures::run_spec();
         let mut run = fx.core.queue_test_run(crate::domain::RunSpec { clone_path: clone, ..spec }, Some(fx.item("CA-1"))).await.unwrap();
@@ -2232,6 +2232,41 @@ mod review_tests {
         assert_eq!(body["comments"].as_array().unwrap().iter().map(|c| (c["path"].as_str().unwrap(), c["line"].as_u64().unwrap())).collect::<Vec<_>>(), [("src/consumer/retry.ts", 42), ("src/consumer/retry.ts", 17)]);
         assert!(fx.tracker.intents().is_empty(), "posting a review writes nothing to Jira");
         assert_eq!(fx.core.proposal(&p.id).await.unwrap(), Some(done));
+    }
+
+    async fn stored_review(fx: &Fixture, item: Option<ItemRef>) -> Proposal {
+        let intent = Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item,
+            run_id: "run-1".into(),
+            repo: "acme/webshop".into(),
+            number: 12,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Review summary.".into(),
+            comments: comments(),
+        };
+        let draft = Draft { origin: Origin::chat("review-turn"), created_by: CreatedBy::Pip, intent, label: None, basis: None };
+        fx.core.with_app_db(|db| proposals::create(db, draft, Utc::now())).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_review_posts_with_no_jira_connection_registered() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![(POST_ROUTE, vec![posted_reply()])]).await;
+        let p = stored_review(&fx, None).await;
+        fx.core.registry.remove(&fx.scope.connection_id);
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
+        assert_eq!(posts(&fx), ["POST /repos/acme/webshop/pulls/12/reviews"]);
+    }
+
+    #[tokio::test]
+    async fn a_review_of_a_ticket_on_the_second_jira_site_posts_while_the_first_is_the_primary() {
+        let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], vec![(POST_ROUTE, vec![posted_reply()])]).await;
+        let on_beta = ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+        let p = stored_review(&fx, Some(on_beta)).await;
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
+        assert_eq!(posts(&fx), ["POST /repos/acme/webshop/pulls/12/reviews"]);
     }
 
     #[tokio::test]
@@ -2619,5 +2654,31 @@ mod review_tests {
         let p = drafted(&fx).await;
         let of_item = fx.core.proposals(&ProposalQuery { item: Some(fx.item("CA-1")), ..Default::default() }).await.unwrap();
         assert!(of_item.iter().any(|d| d.id == p.id), "{of_item:?}");
+    }
+
+    #[tokio::test]
+    async fn project_keys_are_the_primarys_and_survive_turning_it_off() {
+        use crate::domain::{ContainerRef, ContainerSummary};
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let entry = ContainerSummary {
+            container_ref: ContainerRef { connection_id: second.connection_id.clone(), external_id: "10".into() },
+            key: "BETA".into(),
+            name: "Beta".into(),
+            kind: None,
+            archived: false,
+            last_active: None,
+            item_hint: None,
+        };
+        fx.core.with_db_for(&second, |db| db.catalog_upsert(&second.connection_id, &[entry], "2026-09-29T12:00:00Z")).await.unwrap();
+        assert!(fx.core.known_keys().await.item("BETA-1").is_none(), "a second connection adds no keys yet");
+        assert!(fx.core.known_keys().await.item("CA-1").is_some());
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        assert_eq!(fx.core.primary().await.unwrap().scope, second, "the first is off, so the second is primary");
+        assert!(fx.core.known_keys().await.item("BETA-1").is_some());
+
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        assert!(fx.core.known_keys().await.item("CA-1").is_some(), "keys stay when every connection is off");
     }
 }
