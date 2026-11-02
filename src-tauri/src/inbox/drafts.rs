@@ -15,6 +15,7 @@ use crate::domain::{
 use crate::error::{Error, Result};
 use crate::model::MentionRef;
 use crate::proposals::{self, Draft};
+use crate::runs::fresh;
 use crate::tracker;
 
 /// A person's change to a draft, in the terms the editor works in.
@@ -263,17 +264,27 @@ impl Core {
         .await
     }
 
-    /// The clone as the run will use it: an existing folder with a `.git`, under the person's home, by its real path.
-    pub(super) fn resolve_clone(&self, path: &Path) -> Result<PathBuf> {
+    /// The clone as the run will use it, by its real path: Gossamr's clone of `repo` in the work folder, which may not
+    /// exist yet. Any other folder is refused.
+    pub(super) fn resolve_clone(&self, path: &Path, repo: &str) -> Result<PathBuf> {
         let refused = |why: &str| Error::Proposal(format!("{} {why}", path.display()));
-        let real = path.canonicalize().map_err(|_| refused("isn't a folder that exists"))?;
-        if !real.is_dir() || !real.join(".git").exists() {
-            return Err(refused("isn't a git clone"));
+        let home = self.home.as_deref().ok_or_else(|| refused("can't be checked: Gossamr can't find your home folder"))?;
+        let work = fresh::work_path(home, repo).map_err(|e| Error::Proposal(e.to_string()))?;
+        let Ok(real) = path.canonicalize() else {
+            return if path == work { Ok(work) } else { Err(refused("isn't a folder that exists")) };
+        };
+        if !fresh::in_work_folder(home, &real) {
+            return Err(refused("isn't inside ~/Gossamr/agents, where agents work"));
         }
-        match &self.home {
-            Some(home) if real.starts_with(home) && real != *home => Ok(real),
-            _ => Err(refused("isn't inside your home folder")),
+        if real != work {
+            return Err(refused(&format!("isn't Gossamr's clone of {repo}")));
         }
+        Ok(real)
+    }
+
+    fn in_work_folder(&self, mut run: Run) -> Run {
+        run.in_work_folder = self.home.as_deref().is_some_and(|home| fresh::in_work_folder(home, &run.spec.clone_path));
+        run
     }
 
     /// Agents work only in repositories the person watches, whoever drafted the run. Turning GitHub off doesn't stop
@@ -315,11 +326,11 @@ impl Core {
     }
 
     pub async fn runs_list(&self, query: &RunQuery) -> Result<Vec<Run>> {
-        self.with_proposals(|db| db.runs(query)).await
+        Ok(self.with_proposals(|db| db.runs(query)).await?.into_iter().map(|run| self.in_work_folder(run)).collect())
     }
 
     pub async fn run(&self, id: &str) -> Result<Option<Run>> {
-        self.with_proposals(|db| db.run(id)).await
+        Ok(self.with_proposals(|db| db.run(id)).await?.map(|run| self.in_work_folder(run)))
     }
 
     /// `run`, whether or not its connection is registered, so a run that is out of reach is not taken for a missing one.
@@ -772,7 +783,7 @@ mod tests {
     }
 
     async fn queued_run(fx: &crate::inbox::testing::Fixture) -> Run {
-        let spec = RunSpec { clone_path: clone_in(fx, "webshop"), ..crate::domain::fixtures::run_spec() };
+        let spec = RunSpec { clone_path: clone_in(fx, "Gossamr/agents/acme/webshop"), ..crate::domain::fixtures::run_spec() };
         fx.core.queue_test_run(spec, Some(fx.item("CA-1"))).await.unwrap()
     }
 

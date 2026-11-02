@@ -915,7 +915,7 @@ fn asking(entry: &mut AgentEntry) {
 
 /// A second start of the app: same accounts and listing, none of the first one's memory.
 fn restarted(rig: &Rig) -> RunService {
-    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), vec![], Arc::new(|_| {})).with_settings(rig.svc.settings())
+    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), Arc::new(|_| {})).with_home(rig.fx.home.clone()).with_settings(rig.svc.settings())
 }
 
 #[tokio::test]
@@ -1080,4 +1080,23 @@ async fn a_question_pip_asks_is_a_need_that_notifies_once_and_clears_when_answer
     rig.poll().await;
     assert_eq!(notices().len(), 2, "once nothing waited, the next question is news again");
     assert_eq!(notices()[1].1, "Pip asks: And the review?");
+}
+
+#[tokio::test]
+async fn a_working_run_in_code_is_still_tracked_messaged_answered_and_stopped() {
+    let rig = ready().await;
+    let run = rig.launched_legacy(1).await;
+    assert!(!rig.get(&run).await.in_work_folder);
+    rig.session(&run, working);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    rig.session(&run, asking);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    assert_eq!(rig.svc.answer(&run.id, "Use staging.").await.unwrap().state, RunState::Working);
+    let (_, how) = rig.svc.message_agent(&run.id, "How is it going?", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(how, crate::runs::message::Delivery::Queued);
+    assert_eq!(rig.svc.stop_as(&run.id, crate::domain::Actor::Person).await.unwrap().state, RunState::Stopped);
+    assert!(rig.get(&run).await.failure.is_none());
 }

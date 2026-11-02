@@ -134,9 +134,9 @@ describe("starting an agent again after a clone is found", () => {
   const ws = { id: "w1", item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" } };
 
   it("names the run, its role and the pull request it read", () => {
-    expect(pipAsks.again(failed("investigator")).prompt).toBe(`Start the investigator agent of run f again. ${seed[0].spec.repo} has a clone now.`);
-    expect(pipAsks.again(failed("builder")).prompt).toContain("Start the builder agent of run f again.");
-    expect(pipAsks.again(failed("reviewer", { pr: 12 })).prompt).toContain("reviewer agent of run f again, on pull request 12.");
+    expect(pipAsks.again(failed("investigator")).prompt).toBe(`Start the investigator agent of run f again, in Gossamr's own clone of ${seed[0].spec.repo}.`);
+    expect(pipAsks.again(failed("builder")).prompt).toContain("Start the builder agent of run f again,");
+    expect(pipAsks.again(failed("reviewer", { pr: 12 })).prompt).toContain("reviewer agent of run f again, on pull request 12, in Gossamr");
   });
 
   it("is answered by starting that role again with its brief, not an investigation", () => {

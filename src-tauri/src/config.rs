@@ -1,7 +1,6 @@
 //! App-level settings, kept in `config.json` beside the databases.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -64,8 +63,6 @@ impl AgentSettings {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
-    /// The clone the person chose for a repository (`owner/name`) when several match.
-    pub picked_clones: HashMap<String, PathBuf>,
     pub agents: AgentSettings,
     /// Which instance and model Pip and new agents use when nothing narrower says. Read on its own, so another bad preference can't reset it.
     #[serde(skip_deserializing)]
@@ -279,6 +276,8 @@ fn back_up(dir: &Path, bytes: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     fn fresh() -> AppConfig {
@@ -289,10 +288,10 @@ mod tests {
     fn defaults_survive_a_round_trip_and_a_bad_file_and_unknown_keys_are_ignored() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let saved = AppConfig { picked_clones: HashMap::from([("acme/webshop".to_string(), PathBuf::from("/Users/me/Code/webshop"))]), ..fresh() };
+        let saved = AppConfig { agents: AgentSettings { max_runs: 2, ..AgentSettings::default() }, ..fresh() };
         saved.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), saved);
-        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex","agentsEnabled":false,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex","agentsEnabled":false,"agents":{"maxRuns":2},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         assert_eq!(AppConfig::load(&dir), saved, "a key no longer read is skipped");
         std::fs::write(dir.join(FILE), "{ nope").unwrap();
         let broken = AppConfig::load(&dir);
@@ -350,9 +349,9 @@ mod tests {
     #[test]
     fn another_bad_preference_does_not_reset_the_model_defaults() {
         let pip = r#"{"instanceId":"claude_2","model":"opus"}"#;
-        let dir = models_scratch("models-other-bad", &format!(r#"{{"pickedClones":"yes","models":{{"pip":{pip},"agents":null}}}}"#));
+        let dir = models_scratch("models-other-bad", &format!(r#"{{"agents":"yes","models":{{"pip":{pip},"agents":null}}}}"#));
         let loaded = AppConfig::load(&dir);
-        assert!(loaded.picked_clones.is_empty());
+        assert_eq!(loaded.agents.max_runs, AgentSettings::default().max_runs);
         assert_eq!((loaded.models.pip.map(|c| c.instance_id), loaded.models.agents), (Some("claude_2".into()), None));
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -365,26 +364,23 @@ mod tests {
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2,"reportResult":true,"draftOnFinish":false,"wallClockMinutes":10,"tokenCap":100,"autostart":{"triagePlan":true},"managerTurnsPerDay":6},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         let loaded = AppConfig::load(&dir);
         assert_eq!(loaded.agents.max_runs, 2);
-        assert_eq!(loaded.picked_clones.len(), 1);
         loaded.save(&dir).unwrap();
         let saved = std::fs::read_to_string(dir.join(FILE)).unwrap();
-        assert!(["reportResult", "draftOnFinish", "wallClockMinutes", "tokenCap", "autostart", "managerTurnsPerDay"].iter().all(|key| !saved.contains(key)), "{saved}");
+        assert!(["pickedClones", "reportResult", "draftOnFinish", "wallClockMinutes", "tokenCap", "autostart", "managerTurnsPerDay"].iter().all(|key| !saved.contains(key)), "{saved}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn a_picked_clone_round_trips_beside_older_settings_and_a_mistyped_value_gives_the_defaults() {
+    fn a_picked_clone_from_an_older_release_is_ignored_and_dropped_on_the_next_save() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-agents-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex"}"#).unwrap();
-        assert_eq!(AppConfig::load(&dir).picked_clones.len(), 0);
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":true,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         let on = AppConfig::load(&dir);
-        assert_eq!(on.picked_clones.get("acme/webshop"), Some(&PathBuf::from("/Users/me/Code/webshop")));
         on.save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("pickedClones"));
         assert_eq!(AppConfig::load(&dir), on);
-        std::fs::write(dir.join(FILE), r#"{"pickedClones":"yes"}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":"yes"}"#).unwrap();
         assert_eq!(AppConfig::load(&dir), fresh(), "a mistyped value gives the defaults");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -441,7 +437,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json.tmp"), "{ half").unwrap();
-        let on = AppConfig { picked_clones: HashMap::from([("acme/webshop".to_string(), PathBuf::from("/Users/me/Code/webshop"))]), ..AppConfig::default() };
+        let on = AppConfig { agents: AgentSettings { max_runs: 2, ..AgentSettings::default() }, ..AppConfig::default() };
         on.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), on);
         assert!(!dir.join("config.json.tmp").exists());
