@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::binary::find_claude;
+use super::binary::find_binary;
 use super::cli::{ClaudeCli, SystemCli};
-use super::env::{capture, RunEnv};
+use super::env::{RunEnv, ShellCapture};
+use crate::connections::Driver;
 
 #[derive(Clone)]
 pub struct Toolchain {
@@ -27,11 +28,18 @@ pub trait ToolchainSource: Send + Sync {
     async fn get(&self) -> Result<Toolchain, ToolchainError>;
 }
 
-/// Finds `claude` and captures `$SHELL -ilc 'env -0'` on first use. A failure is tried again next time, so fixing the
-/// problem doesn't need a restart.
+/// Finds `claude` on the shell environment `Core` captured, on first use. A failure is tried again next time, so
+/// fixing the problem doesn't need a restart.
 #[derive(Default)]
 pub struct SystemToolchain {
+    shell: Arc<ShellCapture>,
     found: tokio::sync::Mutex<Option<Toolchain>>,
+}
+
+impl SystemToolchain {
+    pub fn new(shell: Arc<ShellCapture>) -> Self {
+        Self { shell, found: Default::default() }
+    }
 }
 
 #[async_trait]
@@ -41,9 +49,12 @@ impl ToolchainSource for SystemToolchain {
         if let Some(t) = &*found {
             return Ok(t.clone());
         }
-        let binary = tokio::task::spawn_blocking(find_claude).await.ok().flatten().ok_or(ToolchainError::ClaudeMissing)?;
-        let env = capture(&std::env::var("SHELL").unwrap_or_default()).await.map_err(|e| ToolchainError::NoEnvironment(e.to_string()))?;
-        let env = Arc::new(env);
+        let env = self.shell.get().await.map_err(|e| ToolchainError::NoEnvironment(e.to_string()))?;
+        let on = env.clone();
+        let Some(binary) = tokio::task::spawn_blocking(move || find_binary(Driver::Claude, &on)).await.ok().flatten() else {
+            self.shell.forget().await;
+            return Err(ToolchainError::ClaudeMissing);
+        };
         let t = Toolchain { cli: Arc::new(SystemCli::new(binary, env.clone())), env };
         *found = Some(t.clone());
         Ok(t)

@@ -17,6 +17,7 @@ use crate::domain::{
 use crate::model::{CachedTicket, Person, Status, Transition};
 use crate::proposals;
 use crate::runs::ask::Asks;
+use crate::runs::env::ShellCapture;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
 
@@ -27,6 +28,7 @@ mod fan_out;
 mod instances;
 mod models;
 mod probes;
+mod providers;
 mod run_outcome;
 mod pip_runs;
 mod pip_turns;
@@ -197,6 +199,8 @@ pub struct Core {
     db: Mutex<Open>,
     jira_sync: Mutex<HashMap<String, JiraSync>>,
     probes: probes::Probes,
+    /// The person's shell environment, which provider instances without a folder take their login from.
+    shell: Arc<ShellCapture>,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
     radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
@@ -234,6 +238,7 @@ impl Core {
             db: Mutex::new(Open::default()),
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
+            shell: Arc::default(),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
             asks: Asks::default(),
@@ -244,6 +249,12 @@ impl Core {
         }
     }
 
+    /// The capture that probes and agents share, so the shell is read once. Pip keeps the app's own environment and takes
+    /// only its login variables from a provider instance.
+    pub fn shell(&self) -> Arc<ShellCapture> {
+        self.shell.clone()
+    }
+
     pub fn asks(&self) -> &Asks {
         &self.asks
     }
@@ -251,6 +262,12 @@ impl Core {
     #[cfg(test)]
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = home.canonicalize().ok();
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_shell(mut self, shell: ShellCapture) -> Self {
+        self.shell = Arc::new(shell);
         self
     }
 
@@ -629,7 +646,8 @@ impl Core {
         self.scope_of(connection_id).await
     }
 
-    /// The scope of every registered, signed-in connection, in the order they were added.
+    /// The scope of every registered, signed-in connection, in the order they were added. Off ones are included: their
+    /// runs and workstreams stay reachable.
     pub async fn scopes(&self) -> Vec<Scope> {
         self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).map(|s| s.scope).collect()
     }
@@ -1872,7 +1890,7 @@ pub(crate) mod testing {
             auth,
             Box::new(move |s, credentials, db| Arc::new(GithubHost::new(factory_http.clone(), &base, credentials, &Connection::github_id(&s.login), &s.login, db))),
         );
-        let mut fx = fixture_signed_in_to(Some(code), authenticator, sessions).await;
+        let mut fx = fixture_signed_in_to(Some(code), authenticator, sessions, None).await;
         fx.github = Some(server.seen.clone());
         fx.github_routes = Some(server.routes.clone());
         fx.core.github_connect(None).await.unwrap();
@@ -1886,7 +1904,12 @@ pub(crate) mod testing {
 
     /// `fixture_with`, signed in to Jira through `authenticator` instead of Atlassian.
     pub async fn fixture_with_authenticator(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>) -> Fixture {
-        fixture_signed_in_to(code, authenticator, vec![credentials("site", "Acme", "me", "Me")]).await
+        fixture_signed_in_to(code, authenticator, vec![credentials("site", "Acme", "me", "Me")], None).await
+    }
+
+    /// `fixture`, with `shell` as the captured shell environment and the data folder inside the home folder, as on a Mac.
+    pub async fn fixture_with_shell(shell: ShellCapture) -> Fixture {
+        fixture_signed_in_to(None, None, vec![credentials("site", "Acme", "me", "Me")], Some(shell)).await
     }
 
     /// The fixture signed in to two Jira accounts on two sites, both registered, with the first as the primary. The
@@ -1899,7 +1922,7 @@ pub(crate) mod testing {
     pub async fn fixture_with_two_jira_and(code: Option<CodeService>) -> (Fixture, Scope) {
         let second = credentials("beta", "Beta", "bo", "Bo");
         let scope = second.scope();
-        let fx = fixture_signed_in_to(code, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second]).await;
+        let fx = fixture_signed_in_to(code, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second], None).await;
         (fx, scope)
     }
 
@@ -1927,7 +1950,7 @@ pub(crate) mod testing {
         Credentials { email: format!("{account_id}@example.com"), token: "t".into(), expires_on: "2999-01-01".into(), site, me }
     }
 
-    async fn fixture_signed_in_to(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>, sessions: Vec<Credentials>) -> Fixture {
+    async fn fixture_signed_in_to(code: Option<CodeService>, authenticator: Option<Arc<dyn crate::auth::Authenticator>>, sessions: Vec<Credentials>, shell: Option<ShellCapture>) -> Fixture {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let scope = sessions[0].scope();
@@ -1940,9 +1963,14 @@ pub(crate) mod testing {
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
+        let data_dir = if shell.is_some() { home.join("data") } else { dir.clone() };
+        std::fs::create_dir_all(&data_dir).unwrap();
         let connections: Vec<Connection> = sessions.iter().map(Credentials::connection).collect();
         let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::new(http)));
-        let mut core = Core::new(Arc::new(Auth::with_sessions(authenticator, sessions)), registry, dir.clone()).with_home(home.clone());
+        let mut core = Core::new(Arc::new(Auth::with_sessions(authenticator, sessions)), registry, data_dir).with_home(home.clone());
+        if let Some(shell) = shell {
+            core = core.with_shell(shell);
+        }
         if let Some(code) = code {
             core = core.with_code(code);
         }

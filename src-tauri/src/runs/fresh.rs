@@ -53,6 +53,28 @@ pub fn agents_root(home: &Path) -> PathBuf {
     home.join("Gossamr").join("agents")
 }
 
+/// The most recently changed clone in each owner's folder of the work folder, by owner name.
+pub fn newest_clone_per_owner(root: &Path) -> Vec<(String, PathBuf)> {
+    let folders = |dir: &Path| -> Vec<(String, PathBuf, std::fs::Metadata)> {
+        let mut found: Vec<_> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| Some((e.file_name().to_string_lossy().into_owned(), e.path(), e.path().symlink_metadata().ok()?)))
+            .filter(|(_, _, meta)| meta.is_dir())
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        found
+    };
+    folders(root)
+        .into_iter()
+        .filter_map(|(owner, path, _)| {
+            let newest = folders(&path).into_iter().filter(|(_, clone, _)| clone.join(".git").exists()).max_by_key(|(_, _, meta)| meta.modified().ok())?;
+            Some((owner, newest.1))
+        })
+        .collect()
+}
+
 /// The nearest existing ancestor made real, with the rest appended: a path that doesn't exist yet still compares equal
 /// to the one it will have once it does, even when a parent is a symlink (`/var` and `/private/var`).
 pub fn real(path: &Path) -> PathBuf {
