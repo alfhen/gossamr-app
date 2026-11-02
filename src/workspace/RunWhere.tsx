@@ -28,11 +28,17 @@ export interface Place {
   what: string;
 }
 
-export const placesOf = (run: Pick<Run, "expectedWorktree" | "spec" | "branch">): Place[] => [
+export const placesOf = (run: Pick<Run, "expectedWorktree" | "spec" | "branch" | "inWorkFolder">): Place[] => [
   { label: "Worktree: where it edits", value: run.expectedWorktree, what: "the worktree path" },
-  { label: "Your clone it was made from", value: run.spec.clonePath, what: "the clone path" },
+  { label: run.inWorkFolder === false ? "Your clone it was made from" : "Gossamr's clone it was made from", value: run.spec.clonePath, what: "the clone path" },
   { label: "Branch", value: branchOf(run), what: "the branch name" },
 ];
+
+/** What the worktree is, for a run in Gossamr's own clone and for one an earlier release set up in the person's. */
+export const whereText = (run: Pick<Run, "spec" | "inWorkFolder">): string =>
+  run.inWorkFolder === false
+    ? "This agent started in your own clone, before Gossamr kept its own. It keeps working there until it's done."
+    : `A worktree of Gossamr's own clone of ${run.spec.repo}. Your own clones are not touched, and stopping keeps everything it wrote.`;
 
 export function RunWhere({ run, disk, onReveal }: { run: Run; disk: number | null | "unknown"; onReveal(path: string): void }) {
   return (
@@ -45,7 +51,7 @@ export function RunWhere({ run, disk, onReveal }: { run: Run; disk: number | nul
           </div>
         ))}
         <p className="m-0 text-sm text-ws-ink2">
-          A separate worktree of your clone. Your own checkout is not touched, and stopping keeps everything it wrote.
+          {whereText(run)}
           {typeof disk === "number" && disk > 0 && <> Its session files take up {formatBytes(disk)}.</>}
           {disk === "unknown" && <> The size of its session files couldn&apos;t be read.</>}
         </p>

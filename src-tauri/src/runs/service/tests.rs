@@ -25,7 +25,7 @@ struct Rig {
 
 fn fake_env(dir: &Path) -> Arc<RunEnv> {
     let bin = install_fake_git(dir);
-    Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display()))]))
+    Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", dir.join("git.log").to_string_lossy().into_owned())]))
 }
 
 async fn build(tools: Option<ToolchainError>, tune: impl FnOnce(RunService) -> RunService) -> Rig {
@@ -34,7 +34,7 @@ async fn build(tools: Option<ToolchainError>, tune: impl FnOnce(RunService) -> R
 
 async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainError>, tune: impl FnOnce(RunService) -> RunService) -> Rig {
     let fx = fixture_watching_with(&["acme/webshop"], routes).await;
-    let clone = fx.home.join("webshop");
+    let clone = fx.home.join("Gossamr/agents/acme/webshop");
     clone_with_origin(&clone, ORIGIN);
     let cli = Arc::new(FakeCli::new());
     cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
@@ -48,7 +48,6 @@ async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainErro
         fx.core.clone(),
         Arc::new(tools),
         RunIndex::load(&fx.dir.join("index")),
-        vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
     .with_home(fx.home.clone())
@@ -374,25 +373,21 @@ async fn problems_found_before_launching_fail_the_run_with_the_reason_and_start_
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     std::fs::write(rig.clone.join(".fake-origin"), "https://github.com/acme/other.git").unwrap();
-    assert_fails_without_launching(&rig, &run, "isn't a clone of acme/webshop", RunFailure::NoClone).await;
+    let occupied = RunFailure::CloneOccupied { path: rig.clone.clone() };
+    assert_fails_without_launching(&rig, &run, "isn't a clone of acme/webshop", occupied.clone()).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     std::fs::remove_file(rig.clone.join(".fake-origin")).unwrap();
-    assert_fails_without_launching(&rig, &run, "couldn't read the origin of", RunFailure::NoClone).await;
-    assert!(rig.get(&run).await.error.unwrap().contains("(git exit status: "), "the reason git gave is kept, so a failure on a busy machine names its cause");
-
-    let rig = rig_with(|_| {}).await;
-    let run = rig.queued(1).await;
-    std::fs::remove_dir_all(&rig.clone).unwrap();
-    assert_fails_without_launching(&rig, &run, "isn't a git clone any more", RunFailure::NoClone).await;
+    assert_fails_without_launching(&rig, &run, "isn't a clone of acme/webshop", RunFailure::CloneOccupied { path: rig.clone.clone() }).await;
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
     let moved = rig.fx.home.join("moved");
-    std::fs::rename(&rig.clone, &moved).unwrap();
-    std::os::unix::fs::symlink(&moved, &rig.clone).unwrap();
-    assert_fails_without_launching(&rig, &run, "isn't its real path", RunFailure::NoClone).await;
+    std::fs::rename(rig.clone.parent().unwrap(), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, rig.clone.parent().unwrap()).unwrap();
+    let after = assert_fails_without_launching(&rig, &run, "before Gossamr kept its own clones", RunFailure::OutsideWorkFolder { path: rig.clone.clone() }).await;
+    assert!(after.error.unwrap().contains("Ask Pip to start it again"));
 
     let rig = rig_with(|_| {}).await;
     let run = rig.queued(1).await;
@@ -729,58 +724,6 @@ fn a_session_belongs_to_a_run_by_worktree_path_or_short_id_and_never_by_name_or_
     let _ = std::fs::remove_dir_all(base);
 }
 
-fn second_clone(rig: &Rig) -> PathBuf {
-    let other = rig.fx.home.join("webshop-copy");
-    clone_with_origin(&other, "git@github.com:acme/webshop.git");
-    other
-}
-
-#[tokio::test]
-async fn clones_of_a_watched_repository_are_found_and_the_chosen_one_comes_first() {
-    let rig = ready().await;
-    let [only] = rig.svc.clones("acme/webshop").await.unwrap().clones.try_into().unwrap();
-    assert_eq!(only.path, rig.clone);
-    let other = second_clone(&rig);
-    rig.svc.clones.clear();
-    let before = rig.svc.clones("Acme/WebShop").await.unwrap();
-    assert_eq!((before.clones.len(), before.picked), (2, None));
-
-    rig.svc.pick_clone("acme/webshop", &other).await.unwrap();
-    let after = rig.svc.clones("acme/webshop").await.unwrap();
-    assert_eq!(after.picked.as_ref(), Some(&other));
-    assert_eq!(after.clones[0].path, other);
-    let config = AppConfig::load(&rig.fx.core.data_dir());
-    assert_eq!(config.picked_clones.get("acme/webshop"), Some(&other));
-
-    std::fs::remove_dir_all(&other).unwrap();
-    rig.svc.clones.clear();
-    assert_eq!(rig.svc.clones("acme/webshop").await.unwrap().picked, None, "a choice that is no longer a clone is ignored");
-}
-
-#[tokio::test]
-async fn only_a_clone_that_was_found_can_be_picked_and_only_for_a_watched_repository() {
-    let rig = ready().await;
-    let stranger = rig.fx.home.join("not-a-clone");
-    std::fs::create_dir_all(&stranger).unwrap();
-    assert!(rig.svc.pick_clone("acme/webshop", &stranger).await.is_err());
-    assert!(rig.svc.pick_clone("acme/webshop", &rig.fx.home.join("missing")).await.is_err());
-    let elsewhere = rig.fx.dir.join("outside");
-    clone_with_origin(&elsewhere, ORIGIN);
-    assert!(rig.svc.pick_clone("acme/webshop", &elsewhere).await.is_err(), "outside the scanned folders");
-    assert!(rig.svc.clones("acme/unwatched").await.is_err());
-    assert!(AppConfig::load(&rig.fx.core.data_dir()).picked_clones.is_empty());
-}
-
-#[tokio::test]
-async fn a_suggested_name_avoids_worktrees_and_leftover_branches() {
-    let rig = ready().await;
-    std::fs::write(rig.clone.join(".fake-branches"), "worktree-eng-1-fix-cart-0001\n").unwrap();
-    let name = rig.svc.suggest_name(&rig.clone, "ENG-1", "Fix cart", ).await.unwrap();
-    assert!(name.starts_with("eng-1-fix-cart-") && name != "eng-1-fix-cart-0001", "{name}");
-    assert!(rig.svc.suggest_name(Path::new("relative"), "K", "t").await.is_err());
-    assert!(rig.svc.suggest_name(&rig.fx.home.join("missing"), "K", "t").await.is_err());
-}
-
 #[tokio::test]
 async fn a_run_must_be_in_a_watched_repository() {
     let rig = ready().await;
@@ -846,7 +789,7 @@ mod through_the_real_spawner {
 
     async fn real() -> Real {
         let fx = fixture_watching(&["acme/webshop"]).await;
-        let clone = fx.home.join("webshop");
+        let clone = fx.home.join("Gossamr/agents/acme/webshop");
         std::fs::create_dir_all(&clone).unwrap();
         git(&clone, &["init", "-q"]);
         git(&clone, &["remote", "add", "origin", ORIGIN]);
@@ -861,7 +804,7 @@ mod through_the_real_spawner {
         ]));
         let cli = Arc::new(SystemCli::new(PathBuf::from(FAKE), env.clone()));
         let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
-        let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), vec![], Arc::new(|_| {})).with_timing(FAST);
+        let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), Arc::new(|_| {})).with_home(fx.home.clone()).with_timing(FAST);
         let rig = Rig { svc: Arc::new(svc), cli: Arc::new(FakeCli::new()), clone: clone.canonicalize().unwrap(), changes: Arc::default(), fx };
         Real { rig, cli, scenario_dir }
     }
@@ -996,76 +939,198 @@ mod roles {
 
 }
 
-fn fresh_path_of(rig: &Rig) -> PathBuf {
-    rig.fx.home.join("Gossamr/agents/acme/webshop")
-}
+mod clones {
+    use super::*;
+    use crate::agent::AgentDriver;
+    use crate::runs::fresh::agents_root;
 
-#[tokio::test]
-async fn with_no_clone_the_folder_and_the_command_are_offered_and_nothing_is_made() {
-    let rig = ready().await;
-    std::fs::remove_dir_all(&rig.clone).unwrap();
-    rig.svc.clones.clear();
-    let choice = rig.svc.clones("acme/webshop").await.unwrap();
-    let fresh = choice.fresh.expect("an offer");
-    assert!(choice.clones.is_empty() && !fresh.occupied);
-    assert_eq!(fresh.path, fresh_path_of(&rig));
-    assert_eq!(fresh.command, format!("git clone https://github.com/acme/webshop.git {}", fresh.path.display()));
-    assert!(!rig.fx.home.join("Gossamr").exists());
-    assert!(rig.fx.core.runs_list(&RunQuery::default()).await.unwrap().is_empty());
-}
+    fn git_log(rig: &Rig) -> String {
+        std::fs::read_to_string(rig.fx.dir.join("git.log")).unwrap_or_default()
+    }
 
-#[tokio::test]
-async fn a_folder_in_the_way_is_flagged_and_a_clone_already_there_is_an_ordinary_choice() {
-    let rig = ready().await;
-    std::fs::remove_dir_all(&rig.clone).unwrap();
-    std::fs::create_dir_all(fresh_path_of(&rig)).unwrap();
-    rig.svc.clones.clear();
-    assert!(rig.svc.clones("acme/webshop").await.unwrap().fresh.unwrap().occupied);
+    fn count(rig: &Rig, what: &str) -> usize {
+        git_log(rig).lines().filter(|l| l.contains(what)).count()
+    }
 
-    clone_with_origin(&fresh_path_of(&rig), ORIGIN);
-    rig.svc.clones.clear();
-    let choice = rig.svc.clones("acme/webshop").await.unwrap();
-    assert_eq!(choice.clones.iter().map(|c| c.path.clone()).collect::<Vec<_>>(), [fresh_path_of(&rig)]);
-    assert!(choice.fresh.is_none(), "an offer is only for when there is nothing to choose");
-    rig.svc.pick_clone("acme/webshop", &fresh_path_of(&rig)).await.unwrap();
-}
+    async fn events(rig: &Rig, run: &Run) -> Vec<String> {
+        rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect()
+    }
 
-#[tokio::test]
-async fn cloning_makes_the_copy_a_clone_that_can_be_drafted_approved_and_launched() {
-    let rig = ready().await;
-    std::fs::remove_dir_all(&rig.clone).unwrap();
-    let clone = rig.svc.clone_fresh("acme/webshop").await.unwrap();
-    assert_eq!(clone.path, fresh_path_of(&rig));
-    let choice = rig.svc.clones("acme/webshop").await.unwrap();
-    assert_eq!(choice.clones.len(), 1);
+    /// The clone is gone and a clone takes a second, so overlapping launches can be told apart.
+    fn slow_new_clone(rig: &Rig) {
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        std::fs::write(rig.clone.parent().unwrap().join(".slow"), "").unwrap();
+    }
 
-    let spec = RunSpec { clone_path: clone.path.clone(), ..rig.spec(7) };
-    let queued = rig.fx.core.queue_test_run(spec, Some(rig.fx.item("CA-1"))).await.unwrap();
-    rig.svc.launch(&queued.id).await.unwrap();
-    assert_eq!(rig.get(&queued).await.state, RunState::Launching);
-    assert_eq!(rig.cli.0.lock().unwrap().launches[0].cwd, clone.path);
-}
+    fn second_service(rig: &Rig) -> Arc<RunService> {
+        let svc = RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index-2")), Arc::new(|_| {})).with_home(rig.fx.home.clone()).with_timing(FAST);
+        Arc::new(svc)
+    }
 
-#[tokio::test]
-async fn only_a_watched_repository_is_cloned_and_only_one_clone_of_it_at_a_time() {
-    let rig = ready().await;
-    assert!(rig.svc.clone_fresh("acme/unwatched").await.is_err());
-    assert!(rig.svc.clone_fresh("../escape/x").await.is_err());
-    assert!(!rig.fx.home.join("Gossamr").exists());
-    let held = fresh::Cloning::take(&rig.svc.cloning, "acme/webshop").unwrap();
-    assert!(rig.svc.clone_fresh("Acme/Webshop").await.unwrap_err().to_string().contains("already being cloned"));
-    drop(held);
-}
+    #[tokio::test]
+    async fn a_run_set_up_in_code_that_never_started_fails_with_the_work_folder_words_and_so_does_its_retry() {
+        let rig = ready().await;
+        let legacy = crate::runs::rig::legacy_clone(&rig.fx);
+        let queued = rig.set(&rig.queued(1).await, |r| r.spec.clone_path = legacy.clone()).await;
+        assert!(!rig.get(&queued).await.in_work_folder && rig.get(&rig.queued(2).await).await.in_work_folder);
+        rig.svc.launch(&queued.id).await.unwrap();
+        let failed = rig.get(&queued).await;
+        assert_eq!((failed.state, failed.failure), (RunState::Failed, Some(RunFailure::OutsideWorkFolder { path: legacy })));
+        assert!(failed.error.as_deref().unwrap().contains("before Gossamr kept its own clones. Ask Pip to start it again"), "{:?}", failed.error);
 
-#[tokio::test]
-async fn the_launch_still_refuses_a_path_that_is_not_a_clone_of_the_repository() {
-    let rig = ready().await;
-    let wrong = fresh_path_of(&rig);
-    clone_with_origin(&wrong, "https://github.com/acme/other");
-    let run = rig.fx.core.queue_test_run(RunSpec { clone_path: wrong, ..rig.spec(8) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    rig.svc.launch(&run.id).await.unwrap();
-    assert_eq!(rig.get(&run).await.state, RunState::Failed);
-    assert_eq!(rig.cli.launches(), 0);
+        rig.svc.retry_launch(&queued.id).await.unwrap();
+        assert!(matches!(rig.get(&queued).await.failure, Some(RunFailure::OutsideWorkFolder { .. })));
+        assert_eq!(rig.cli.launches(), 0);
+        assert!(!git_log(&rig).contains("clone"), "nothing is cloned for a run that can't start");
+    }
+
+    #[tokio::test]
+    async fn two_runs_on_a_new_repository_clone_it_once_and_the_second_waits_for_the_first() {
+        let rig = ready().await;
+        slow_new_clone(&rig);
+        let (a, b) = (rig.queued(1).await, rig.queued(2).await);
+        let (first, second) = tokio::join!(rig.svc.launch(&a.id), rig.svc.launch(&b.id));
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(count(&rig, " clone -- "), 1, "{}", git_log(&rig));
+        assert_eq!((rig.get(&a).await.state, rig.get(&b).await.state), (RunState::Launching, RunState::Launching));
+        assert!(rig.clone.join(".git").is_dir());
+        assert_eq!(std::fs::read_dir(rig.clone.parent().unwrap()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("cloning")).count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_workstream_run_and_launch_waiting_during_a_slow_clone_launch_it_once_after_the_clone() {
+        let rig = ready().await;
+        let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+        let run = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+        slow_new_clone(&rig);
+        let waiting = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            rig.svc.launch_waiting().await
+        };
+        let (launched, _) = tokio::join!(rig.svc.launch(&run.id), waiting);
+        launched.unwrap();
+        assert_eq!(rig.cli.launches(), 1);
+        assert!(rig.clone.join(".git").is_dir(), "the agent started in a clone that was complete");
+        assert_eq!(count(&rig, " clone -- "), 1);
+    }
+
+    #[tokio::test]
+    async fn two_services_sharing_one_home_clone_once_and_delete_nothing_of_each_others() {
+        let rig = ready().await;
+        slow_new_clone(&rig);
+        let other = second_service(&rig);
+        let (a, b) = (rig.queued(1).await, rig.queued(2).await);
+        let (first, second) = tokio::join!(rig.svc.launch(&a.id), other.launch(&b.id));
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(count(&rig, " clone -- "), 1, "{}", git_log(&rig));
+        assert_eq!((rig.get(&a).await.state, rig.get(&b).await.state), (RunState::Launching, RunState::Launching));
+        assert!(rig.clone.join(".git").is_dir() && agents_root(&rig.fx.home).join(".locks/acme__webshop").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_fetch_that_fails_is_noted_on_the_run_and_the_launch_goes_on() {
+        let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-fetch-fails"), "").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        assert_eq!(run.state, RunState::Launching);
+        let notes = events(&rig, &run).await;
+        assert!(notes.iter().any(|t| t.starts_with("Couldn't update Gossamr's clone of acme/webshop: ") && t.ends_with("The agent starts from what was fetched before.")), "{notes:?}");
+    }
+
+    #[tokio::test]
+    async fn a_credential_helper_or_an_insteadof_rule_in_the_clone_skips_the_fetch_and_says_which_keys() {
+        let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-config"), "core.bare=false\ncredential.helper=!echo secret\nurl.https://evil.example/.insteadof=https://github.com/\n").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        assert_eq!(run.state, RunState::Launching);
+        assert_eq!(count(&rig, "fetch"), 0, "{}", git_log(&rig));
+        let notes = events(&rig, &run).await.join("\n");
+        assert!(notes.contains("credential.helper") && notes.contains("insteadof") && !notes.contains("secret"), "{notes}");
+    }
+
+    #[tokio::test]
+    async fn a_clone_is_not_fetched_again_within_two_minutes() {
+        let rig = ready().await;
+        rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        rig.svc.start_now(&rig.queued(2).await.id).await.unwrap();
+        assert_eq!(count(&rig, "fetch"), 1, "{}", git_log(&rig));
+    }
+
+    #[tokio::test]
+    async fn a_failed_clone_fails_the_run_with_no_clone_leaves_no_temp_folder_and_retry_clones_again() {
+        let rig = ready().await;
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        let marker = rig.clone.parent().unwrap().join(".clone-fails");
+        std::fs::write(&marker, "").unwrap();
+        let run = rig.queued(1).await;
+        rig.svc.launch(&run.id).await.unwrap();
+        let failed = rig.get(&run).await;
+        assert_eq!((failed.state, failed.failure.clone()), (RunState::Failed, Some(RunFailure::NoClone)));
+        assert!(failed.error.unwrap().starts_with("Cloning failed: "));
+        let left: Vec<_> = std::fs::read_dir(rig.clone.parent().unwrap()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, [".clone-fails"], "no temporary folder is left");
+
+        std::fs::remove_file(&marker).unwrap();
+        rig.svc.retry_launch(&run.id).await.unwrap();
+        assert_eq!(rig.get(&run).await.state, RunState::Launching);
+        assert!(rig.clone.join(".git").is_dir());
+    }
+
+    #[tokio::test]
+    async fn the_queue_refuses_every_missing_path_but_the_work_path_and_every_existing_one_outside_the_work_folder() {
+        let rig = ready().await;
+        let core = &rig.fx.core;
+        let other = rig.clone.parent().unwrap().join("other");
+        let code = rig.fx.home.join("Code/webshop");
+        for bad in [other, code.clone(), rig.fx.home.join("Gossamr/agents/acme/webshop/missing")] {
+            let err = core.queue_test_run(RunSpec { clone_path: bad.clone(), ..rig.spec(1) }, None).await.unwrap_err();
+            assert!(err.to_string().contains("isn't a folder that exists"), "{bad:?}: {err}");
+        }
+        let legacy = crate::runs::rig::legacy_clone(&rig.fx);
+        let err = core.queue_test_run(RunSpec { clone_path: legacy, ..rig.spec(1) }, None).await.unwrap_err();
+        assert!(err.to_string().contains("isn't inside ~/Gossamr/agents"), "{err}");
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        assert!(core.queue_test_run(rig.spec(2), Some(rig.fx.item("CA-1"))).await.is_ok(), "the work path may not exist yet");
+    }
+
+    #[tokio::test]
+    async fn something_else_at_the_clone_path_gives_clone_occupied_and_is_left_where_it_is() {
+        let rig = ready().await;
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        std::fs::create_dir_all(&rig.clone).unwrap();
+        std::fs::write(rig.clone.join("notes.txt"), "mine").unwrap();
+        let run = rig.queued(1).await;
+        rig.svc.launch(&run.id).await.unwrap();
+        let failed = rig.get(&run).await;
+        assert_eq!(failed.failure, Some(RunFailure::CloneOccupied { path: rig.clone.clone() }));
+        let words = failed.error.unwrap();
+        assert!(words.contains("already exists and isn't a clone of acme/webshop. Move it away, then retry."), "{words}");
+        assert!(!words.contains("yourself"));
+        assert_eq!(std::fs::read_to_string(rig.clone.join("notes.txt")).unwrap(), "mine");
+        assert_eq!(count(&rig, " clone -- "), 0);
+    }
+
+    #[tokio::test]
+    async fn a_linked_gossamr_folder_and_a_mixed_case_name_give_one_path_that_the_launch_accepts_after_the_clone() {
+        let rig = ready().await;
+        std::fs::remove_dir_all(rig.fx.home.join("Gossamr")).unwrap();
+        let disk = rig.fx.dir.join("volume/Gossamr");
+        std::fs::create_dir_all(&disk).unwrap();
+        std::os::unix::fs::symlink(&disk, rig.fx.home.join("Gossamr")).unwrap();
+        let lower = rig.svc.plan("acme/webshop", "CA-1", "x").await.unwrap();
+        let mixed = rig.svc.plan("Acme/WebShop", "CA-1", "x").await.unwrap();
+        assert_eq!(lower.path, mixed.path);
+        assert!(lower.path.starts_with(disk.canonicalize().unwrap()), "the real path, not the link: {}", lower.path.display());
+
+        let run = rig.fx.core.queue_test_run(RunSpec { clone_path: mixed.path.clone(), ..rig.spec(3) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+        rig.svc.launch(&run.id).await.unwrap();
+        let after = rig.get(&run).await;
+        assert_eq!(after.state, RunState::Launching, "{:?}", after.error);
+        assert!(after.in_work_folder);
+        assert_eq!(rig.get(&run).await.spec.clone_path, lower.path);
+    }
 }
 
 mod waiting {

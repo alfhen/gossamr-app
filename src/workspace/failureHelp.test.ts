@@ -28,7 +28,7 @@ describe("failure help", () => {
   });
 
   it("gives the exact command to run in your own terminal, quoted for the shell", () => {
-    expect(failureHelp(of("untrustedFolder"))?.command?.text).toBe("cd '/Users/sample/Code/storefront' && claude");
+    expect(failureHelp(of("untrustedFolder"))?.command?.text).toBe("cd '/Users/sample/Gossamr/agents/acme/storefront' && claude");
     expect(failureHelp(of("notSignedIn"))?.command).toEqual({ text: "claude", note: "Then type /login." });
     expect(failureHelp(of("modeRefused"))?.command?.text).toBe("claude --permission-mode auto");
     expect(failureHelp(of("claudeMissing"))?.command?.text).toBe("curl -fsSL https://claude.ai/install.sh | bash");

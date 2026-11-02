@@ -296,7 +296,7 @@ async fn start_agent_refuses_what_pip_may_not_do_and_starts_nothing() {
 }
 
 #[tokio::test]
-async fn a_start_needs_a_real_git_clone_inside_home() {
+async fn a_start_needs_a_git_clone_inside_the_work_folder() {
     use crate::domain::ClonePlan;
     use crate::inbox::PipRunAsk;
     let d = drive().await;
@@ -315,7 +315,10 @@ async fn a_start_needs_a_real_git_clone_inside_home() {
         async move { fx.core.build_pip_run(&fx.scope, &ws, Some("CA-1"), ask(), "acme/webshop".into(), plan(&path)).await }
     };
 
-    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (plain, "isn't a git clone"), (outside.clone(), "isn't inside your home folder"), (link, "isn't inside your home folder")] {
+    let in_work = fx.home.join("Gossamr/agents/acme/plain");
+    std::fs::create_dir_all(&in_work).unwrap();
+    let outside_words = "isn't inside ~/Gossamr/agents, where agents work";
+    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (in_work, "isn't a git clone"), (plain, outside_words), (outside.clone(), outside_words), (link, outside_words)] {
         let err = build(bad.clone()).await.unwrap_err().to_string();
         assert!(err.contains(why), "{bad:?}: {err}");
     }

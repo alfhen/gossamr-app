@@ -584,18 +584,6 @@ export class MockBackend implements Backend {
     this.runs.signIn(id);
   }
 
-  async runsClones(repo: string) {
-    return this.runs.clones(repo);
-  }
-
-  async runsCloneFresh(repo: string) {
-    return this.runs.cloneFresh(repo);
-  }
-
-  async runsPickClone(repo: string, path: string) {
-    this.runs.pickClone(repo, path);
-  }
-
   async runsOutcome(id: string) {
     return this.runs.outcome(id);
   }

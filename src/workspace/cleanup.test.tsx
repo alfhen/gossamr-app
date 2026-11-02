@@ -135,7 +135,7 @@ describe("the mock settings", () => {
   it("govern how many runs run at once: another waits for a slot", async () => {
     const backend = new MockBackend({ runs: { seed: "empty" } });
     await backend.runsSetSettings({ maxRuns: 1, terminal: "terminal" });
-    const spec = { role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront", base: "main", brief: "Look into it." };
+    const spec = { role: "investigator", repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront", base: "main", brief: "Look into it." };
     const first = backend.runs.start({ ...spec, name: "ca-401-slot-a" }, { connectionId: "mock", externalId: "CA-401", key: "CA-401" });
     backend.runs.advance(first.id);
     const second = backend.runs.start({ ...spec, name: "ca-402-slot-b" }, { connectionId: "mock", externalId: "CA-402", key: "CA-402" });

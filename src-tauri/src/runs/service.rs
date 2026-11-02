@@ -5,21 +5,21 @@
 //! a failure: it stays `Queued`, waiting for a slot, and `launch_waiting` starts it once one frees. A run is joined to its session by
 //! the worktree path chosen before launch, or by the short id once known, never by name or start time.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 
 use super::cli::{AgentEntry, LaunchRequest, ShortId};
 use super::redact::redact;
 use super::failure::Failure;
 use super::index::{Entry, RunIndex};
 use super::launcher::RunLauncher;
-use super::repo::{default_roots, existing_names, find_clones, new_name, origin_matches, CloneCache, Git, LocalClone};
+use super::fresh::in_work_folder;
+use super::repo::{origin_matches, Git};
 use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
@@ -53,16 +53,6 @@ impl Default for Timing {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CloneChoice {
-    pub clones: Vec<LocalClone>,
-    /// The clone the person chose when several matched; listed first.
-    pub picked: Option<PathBuf>,
-    /// What cloning into `~/Gossamr/agents` would do, offered only when there is no clone to choose.
-    pub fresh: Option<FreshCopy>,
-}
-
 pub struct RunService {
     pub(super) core: Arc<Core>,
     pub(super) tools: Arc<dyn ToolchainSource>,
@@ -76,12 +66,12 @@ pub struct RunService {
     in_flight: Mutex<HashSet<String>>,
     /// Runs whose worktree is being removed, so two requests can't both call `claude rm` for one.
     pub(super) cleaning: Mutex<HashSet<String>>,
-    /// Repositories being cloned into `~/Gossamr/agents` right now.
-    cloning: Mutex<HashSet<String>>,
+    /// One lock per repository (lower case), held while its clone in `~/Gossamr/agents` is made or fetched into.
+    repo_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// When each repository was last fetched into, so launches close together fetch once.
+    fetched: Mutex<HashMap<String, Instant>>,
     /// Failed deliveries of a queued message, per run, so a wake that keeps failing is dropped instead of retried forever.
     pub(super) delivery_failures: Mutex<std::collections::HashMap<String, u8>>,
-    clones: CloneCache,
-    pub(super) roots: Vec<PathBuf>,
     pub(super) changed: Arc<dyn Fn(&str) + Send + Sync>,
     pub(super) notifier: Arc<dyn RunNotifier>,
     /// Which workstreams already told the person they wait on them, and the finished runs not yet told.
@@ -102,24 +92,7 @@ pub struct RunService {
     pub(super) started_at: DateTime<Utc>,
 }
 
-/// The nearest existing ancestor made real, with the rest appended: a worktree that doesn't exist yet still compares
-/// equal to the path `claude agents` reports once it does, even when a parent is a symlink (`/var` and `/private/var`).
-pub(super) fn real(path: &Path) -> PathBuf {
-    let mut rest = Vec::new();
-    let mut base = path.to_path_buf();
-    loop {
-        if let Ok(canon) = base.canonicalize() {
-            return rest.iter().rev().fold(canon, |p, part| p.join(part));
-        }
-        match (base.file_name().map(|n| n.to_owned()), base.parent().map(Path::to_path_buf)) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                base = parent;
-            }
-            _ => return path.to_path_buf(),
-        }
-    }
-}
+pub(super) use super::fresh::real;
 
 /// Whether `entry` is the session of `run`. Interactive sessions never are.
 pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
@@ -160,7 +133,7 @@ fn claude_error(why: Failure) -> Error {
 }
 
 impl RunService {
-    pub fn new(core: Arc<Core>, tools: Arc<dyn ToolchainSource>, index: RunIndex, roots: Vec<PathBuf>, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
+    pub fn new(core: Arc<Core>, tools: Arc<dyn ToolchainSource>, index: RunIndex, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
         Self {
             core,
             tools,
@@ -169,10 +142,9 @@ impl RunService {
             recovery: tokio::sync::Mutex::new(()),
             in_flight: Mutex::new(HashSet::new()),
             cleaning: Mutex::new(HashSet::new()),
-            cloning: Mutex::new(HashSet::new()),
+            repo_locks: Mutex::new(HashMap::new()),
+            fetched: Mutex::new(HashMap::new()),
             delivery_failures: Mutex::new(Default::default()),
-            clones: CloneCache::default(),
-            roots,
             changed,
             notifier: Arc::new(NoNotices),
             notices: Mutex::new(Default::default()),
@@ -211,10 +183,6 @@ impl RunService {
     pub fn with_notifier(mut self, notifier: Arc<dyn RunNotifier>) -> Self {
         self.notifier = notifier;
         self
-    }
-
-    pub fn default_roots() -> Vec<PathBuf> {
-        dirs::home_dir().map(|h| default_roots(&h)).unwrap_or_default()
     }
 
     pub fn with_settings(self, settings: AgentSettings) -> Self {
@@ -310,6 +278,10 @@ impl RunService {
     async fn check(&self, run: &Run, tc: &Toolchain) -> std::result::Result<(), Failure> {
         let spec = &run.spec;
         spec.validate().map_err(|e| Failure::Invalid(e.to_string()))?;
+        let home = self.fresh_home().ok_or_else(|| Failure::NoClone("Gossamr can't find your home folder.".into()))?;
+        if !in_work_folder(&home, &spec.clone_path) {
+            return Err(Failure::OutsideWorkFolder { path: spec.clone_path.clone() });
+        }
         self.core.require_watched_repo(&spec.repo).map_err(|e| Failure::Invalid(e.to_string()))?;
         if spec.pr.is_some() {
             self.core.review_current(spec).await.map_err(|e| Failure::Invalid(e.to_string()))?;
@@ -412,11 +384,18 @@ impl RunService {
     /// Starts a queued run, or with `retry` a failed one that never got a session. Returns whether it launched: a queued
     /// run over the cap is left queued, waiting for a slot, and a retry over the cap fails for it as before.
     async fn start(&self, run_id: &str, retry: bool) -> Result<(Run, bool)> {
+        let prepared = match self.load(run_id).await {
+            Ok(listed) if Self::startable(&listed, retry) => self.prepare(&listed).await,
+            _ => Ok(()),
+        };
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        let eligible = if retry { run.state == RunState::Failed && run.short_id.is_none() } else { run.state == RunState::Queued };
-        if !eligible {
+        if !Self::startable(&run, retry) {
             return Ok((run, false));
+        }
+        if let Err(why) = prepared {
+            self.fail(&mut run, &why).await?;
+            return Ok((run, true));
         }
         // Starting a run an earlier release queued on its own is the person's approval of it; without this, one sent to
         // wait for a slot would never pass `workstream_runs`.
@@ -441,8 +420,30 @@ impl RunService {
                 }
             }
         }
+        if !retry && self.held_for_clone(&mut run).await? {
+            return Ok((run, false));
+        }
         self.spawn(&mut run).await?;
         Ok((run, true))
+    }
+
+    /// A queued run, or with `retry` a failed one that never got a session.
+    fn startable(run: &Run, retry: bool) -> bool {
+        if retry {
+            run.state == RunState::Failed && run.short_id.is_none()
+        } else {
+            run.state == RunState::Queued
+        }
+    }
+
+    /// Whether the run's clone doesn't exist yet and is being made right now, in which case the run stays queued and
+    /// the next `launch_waiting` finds it, after `prepare` has waited for the clone to end.
+    async fn held_for_clone(&self, run: &mut Run) -> Result<bool> {
+        if run.spec.clone_path.symlink_metadata().is_ok() || !self.clone_busy(&run.spec.repo) {
+            return Ok(false);
+        }
+        self.wait_for_slot(run).await?;
+        Ok(true)
     }
 
     /// Whether a run approved before `run` is waiting for a slot and may start, so it has the next one. Called under
@@ -538,21 +539,33 @@ impl RunService {
     /// otherwise it is left as it is, marked as waiting for a slot when the cap is all that keeps it. Returns whether it
     /// launched.
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
+        let prepared = match self.load(run_id).await {
+            Ok(listed) if listed.state == RunState::Queued && self.may_start(&listed).await => self.prepare(&listed).await,
+            _ => Ok(()),
+        };
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        let may_start = match run.spec.workstream {
-            Some(_) => self.workstream_runs(&run).await,
-            None => run.slot_wait_since.is_some(),
-        };
-        if run.state != RunState::Queued || !may_start {
+        if run.state != RunState::Queued || !self.may_start(&run).await {
             return Ok(false);
         }
-        if self.live_elsewhere(&run) >= self.cap() {
+        if let Err(why) = prepared {
+            self.fail(&mut run, &why).await?;
+            return Ok(true);
+        }
+        if self.live_elsewhere(&run) >= self.cap() || self.held_for_clone(&mut run).await? {
             self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
         self.spawn(&mut run).await?;
         Ok(true)
+    }
+
+    /// Whether a queued run is one `launch_waiting` may start: in an open workstream, or waiting for a slot.
+    async fn may_start(&self, run: &Run) -> bool {
+        match run.spec.workstream {
+            Some(_) => self.workstream_runs(run).await,
+            None => run.slot_wait_since.is_some(),
+        }
     }
 
     /// Looks for the session of a failed launch and adopts it; only when there is none does it launch again.
@@ -651,59 +664,8 @@ impl RunService {
         }
     }
 
-    async fn git(&self) -> Result<Git> {
+    pub(super) async fn git(&self) -> Result<Git> {
         Ok(Git::new(self.tools.get().await.map_err(|e| claude_error(e.into()))?.env))
-    }
-
-    async fn scan(&self, repo: &str) -> Result<Vec<LocalClone>> {
-        self.core.require_watched_repo(repo)?;
-        let git = self.git().await?;
-        let mut found = find_clones(&git, repo, &self.roots).await;
-        found.extend(self.existing_fresh(&git, repo).await.filter(|c| !found.iter().any(|f| f.path == c.path)));
-        found.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(found)
-    }
-
-    /// Local clones of a watched repository, from a scan cached for ten minutes. The one the person chose, if it is
-    /// still a clone, comes first.
-    pub async fn clones(&self, repo: &str) -> Result<CloneChoice> {
-        let mut clones = match self.clones.get(repo) {
-            Some(cached) => cached,
-            None => {
-                let scanned = self.scan(repo).await?;
-                self.clones.put(repo, scanned.clone());
-                scanned
-            }
-        };
-        let dir = self.core.data_dir();
-        let picked = AppConfig::load(&dir).picked_clones.get(&repo.to_ascii_lowercase()).cloned().filter(|p| clones.iter().any(|c| &c.path == p));
-        if let Some(path) = &picked {
-            clones.sort_by_key(|c| &c.path != path);
-        }
-        let fresh = if clones.is_empty() { self.fresh_offer(repo).await } else { None };
-        Ok(CloneChoice { clones, picked, fresh })
-    }
-
-    /// Remembers which clone to use for a repository. Only a clone the scan finds can be picked.
-    pub async fn pick_clone(&self, repo: &str, path: &Path) -> Result<()> {
-        let path = path.canonicalize().map_err(|_| Error::Proposal(format!("{} isn't a folder that exists", path.display())))?;
-        let scanned = self.scan(repo).await?;
-        self.clones.put(repo, scanned.clone());
-        if !scanned.iter().any(|c| c.path == path) {
-            return Err(Error::Proposal(format!("{} isn't a clone of {repo} that Gossamr found", path.display())));
-        }
-        self.update_config(|config| {
-            config.picked_clones.insert(repo.to_ascii_lowercase(), path);
-        })
-    }
-
-    /// A worktree name for a new run in `clone`, not used by any worktree or leftover branch there.
-    pub(super) async fn suggest_name(&self, clone: &Path, key: &str, title: &str) -> Result<String> {
-        if !(clone.is_absolute() && clone.is_dir()) {
-            return Err(Error::Proposal(format!("{} isn't a folder that exists", clone.display())));
-        }
-        let taken = existing_names(&self.git().await?, clone).await;
-        Ok(new_name(key, title, &taken))
     }
 }
 
@@ -723,7 +685,6 @@ impl RunLauncher for RunService {
 }
 
 mod fresh;
-pub use fresh::FreshCopy;
 
 #[cfg(test)]
 mod tests;

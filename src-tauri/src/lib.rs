@@ -38,7 +38,6 @@ use domain::{
     WatchChange, WorkItem, Workstream, WorkstreamEvent,
 };
 use model::Snapshot;
-use runs::service::CloneChoice;
 use sync::Trigger;
 use wire::Topic;
 
@@ -650,24 +649,6 @@ async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Ve
     core.workstream_events(&core.scope().await?, &id).await
 }
 
-/// Local clones of a watched repository.
-#[tauri::command]
-async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
-    runs.clones(&repo).await
-}
-
-/// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>`. Only for the person's own button press, after the
-/// folder and the command were shown.
-#[tauri::command]
-async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<runs::repo::LocalClone> {
-    runs.clone_fresh(&repo).await
-}
-
-#[tauri::command]
-async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
-    runs.pick_clone(&repo, &path).await
-}
-
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
 #[tauri::command]
 async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
@@ -966,7 +947,6 @@ pub fn run() {
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
-                    runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
@@ -1050,9 +1030,6 @@ pub fn run() {
             runs_worktree_info,
             runs_delete,
             runs_start,
-            runs_clones,
-            runs_clone_fresh,
-            runs_pick_clone,
             runs_stop,
             runs_answer,
             runs_adopt_session,

@@ -9,7 +9,7 @@ import { AGENT_GUARD, GUARD as GUARD_TEXT, mockDigest, renderPrompt } from "./mo
 const spec: RunSpec = {
   role: "investigator",
   repo: "acme/storefront",
-  clonePath: "/Users/sample/Code/storefront",
+  clonePath: "/Users/sample/Gossamr/agents/acme/storefront",
   base: "main",
   name: "ca-412-fix-ab12",
   brief: "Investigate this work.",
@@ -52,7 +52,7 @@ describe("mock runs", () => {
     const backend = new MockBackend();
     const ws = backend.workstreams.open(itemRef("CA-401")).id;
     const run = queue(backend, { workstream: ws }, itemRef("CA-401"));
-    expect(run).toMatchObject({ state: "queued", proposalId: "", createdBy: "pip", digest: mockDigest({ ...spec, ...run.spec }), expectedWorktree: "/Users/sample/Code/storefront/.claude/worktrees/ca-412-fix-ab12" });
+    expect(run).toMatchObject({ state: "queued", proposalId: "", createdBy: "pip", digest: mockDigest({ ...spec, ...run.spec }), expectedWorktree: "/Users/sample/Gossamr/agents/acme/storefront/.claude/worktrees/ca-412-fix-ab12" });
     expect(run.origin).toMatchObject({ type: "chat", workstream: ws });
     expect(backend.workstreams.events(ws).filter((e) => e.action === "agent_started")).toEqual([expect.objectContaining({ actor: "pip", runId: run.id, detail: "investigator · conversation" })]);
     expect((await backend.runs.get(run.id))?.id).toBe(run.id);
@@ -197,8 +197,27 @@ describe("mock runs", () => {
     expect(failures.map((r) => r.failure?.type).sort()).toEqual(["capReached", "claudeMissing", "modeRefused", "noClone", "notSignedIn", "other", "untrustedFolder"]);
     for (const r of failures) expect([r.shortId, typeof r.error]).toEqual([null, "string"]);
     const [busy] = await new MockBackend().runsList({ states: ["failed"] });
-    expect(busy.failure).toEqual({ type: "untrustedFolder", path: "/Users/sample/Code/storefront" });
-    expect(busy.error).toContain("/Users/sample/Code/storefront");
+    expect(busy.failure).toEqual({ type: "untrustedFolder", path: "/Users/sample/Gossamr/agents/acme/storefront" });
+    expect(busy.error).toContain("/Users/sample/Gossamr/agents/acme/storefront");
+  });
+
+  it("keeps one finished sample run in the person's own clone, and starts every new one in Gossamr's", async () => {
+    const backend = new MockBackend();
+    const runs = await backend.runsList({});
+    expect(runs.filter((r) => r.inWorkFolder === false).map((r) => r.item?.key)).toEqual(["DEVOPS-455"]);
+    expect(runs.filter((r) => r.inWorkFolder).every((r) => r.spec.clonePath.startsWith("/Users/sample/Gossamr/agents/acme/"))).toBe(true);
+    const clones = await new MockBackend({ runs: { seed: "clones" } }).runsList({ states: ["failed"] });
+    expect(clones.map((r) => r.failure?.type).sort()).toEqual(["cloneOccupied", "outsideWorkFolder", "untrustedFolder"]);
+    expect(clones.find((r) => r.failure?.type === "outsideWorkFolder")?.inWorkFolder).toBe(false);
+  });
+
+  it("refuses a retry of a run set up outside the work folder, and lets one whose clone failed go again", async () => {
+    const backend = new MockBackend({ runs: { seed: "clones" } });
+    const [outside] = (await backend.runsList({ states: ["failed"] })).filter((r) => r.failure?.type === "outsideWorkFolder");
+    expect((await backend.runsRetryLaunch(outside.id)).state).toBe("failed");
+    const failures = await new MockBackend({ runs: { seed: "failures" } });
+    const [noClone] = (await failures.runsList({ states: ["failed"] })).filter((r) => r.failure?.type === "noClone");
+    expect((await failures.runsRetryLaunch(noClone.id)).state).toBe("queued");
   });
 
   it("opens Terminal to trust or sign in only for the failure it is meant for, and retry waits for it", async () => {
@@ -247,8 +266,8 @@ describe("mock runs", () => {
 });
 
 describe("mock runs with every role", () => {
-  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
-  const webshop = { repo: "acme/webshop", clonePath: "/Users/sample/Code/webshop" };
+  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront" };
+  const webshop = { repo: "acme/webshop", clonePath: "/Users/sample/Gossamr/agents/acme/webshop" };
 
   it("can add one scripted run of each other role, with the build's pull request", async () => {
     const backend = new MockBackend({ runs: { seed: "kinds" } });
@@ -264,7 +283,7 @@ describe("mock runs with every role", () => {
     await watchEveryRepo(backend, "github:ada");
     expect(prepared(backend, { ...storefront, role: "builder" })).toMatchObject({ ticket: "CA-412", report: true });
     expect(prepared(backend, { ...webshop, role: "reviewer", pr: 212 }, itemRef("CA-402"))).toMatchObject({ pr: 212, prSha: "sha2120000", base: "main" });
-    expect(() => prepared(backend, { ...storefront, clonePath: "/nowhere" })).toThrow(/isn't a git clone/);
+    expect(() => prepared(backend, { ...storefront, clonePath: "/nowhere" })).toThrow(/isn't inside ~\/Gossamr\/agents/);
   });
 
   it("changes the digest with the pull request", async () => {
@@ -492,7 +511,7 @@ describe("mock runs over the cap wait for a slot, as begin and launch_waiting", 
 });
 
 describe("mock runs launch with the base guard, as RunService::spawn does", () => {
-  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Code/storefront" };
+  const storefront = { repo: "acme/storefront", clonePath: "/Users/sample/Gossamr/agents/acme/storefront" };
 
   it("records one launch when a run launches, and nothing more as it works and finishes", async () => {
     const b = new MockBackend({ runs: { seed: "empty" } });

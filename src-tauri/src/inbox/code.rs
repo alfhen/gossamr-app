@@ -2036,7 +2036,7 @@ mod review_tests {
     }
 
     async fn reviewer(fx: &Fixture) -> Run {
-        let clone = fx.home.join("webshop");
+        let clone = fx.home.join("Gossamr/agents/acme/webshop");
         std::fs::create_dir_all(clone.join(".git")).unwrap();
         let spec = crate::domain::fixtures::run_spec();
         let mut run = fx.core.queue_test_run(crate::domain::RunSpec { clone_path: clone, ..spec }, Some(fx.item("CA-1"))).await.unwrap();
