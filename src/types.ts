@@ -590,6 +590,10 @@ export interface Run {
   createdItem?: ItemRef | null;
   /** Set while an approved run stays queued only because the most agents allowed are running; it starts by itself once a slot frees. */
   slotWaitSince?: string | null;
+  /** The instance and model it launches on, frozen at launch; absent on a run stored before this existed, which takes the Settings default then. */
+  runsOn?: ModelChoice | null;
+  /** Why a queued run isn't launching though a slot is free: its instance or model can't run it yet. */
+  waitReason?: string | null;
   /** Who started it; absent in sample data and in runs stored before Pip started agents, which are the person's. */
   createdBy?: ProposalMaker;
   /** The Pip turn that started it, when Pip did. */
@@ -689,6 +693,8 @@ export interface RunQuery {
   connectionId?: string;
   /** Runs linked to this workstream. */
   workstream?: string;
+  /** Runs on this provider instance; a run with no choice is on the default instance. */
+  runsOn?: string;
 }
 
 /**
@@ -744,6 +750,8 @@ export interface Workstream {
   closedAt: string | null;
   /** The ticket as it was when the workstream opened; null for a ticketless one. */
   basis: WorkstreamBasis | null;
+  /** What agents queued here run on; absent means the Settings default. */
+  agentsModel?: ModelChoice | null;
 }
 
 /** The fields of a workstream's basis, as `BASIS_SUMMARY`, `BASIS_DESCRIPTION` and `BASIS_STATUS` name them. */

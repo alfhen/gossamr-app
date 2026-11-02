@@ -150,6 +150,14 @@ describe("the runs store", () => {
     expect(useToasts.getState().toasts[0].text).toBe("Every slot is taken, so it waits and starts when one of the running agents finishes.");
   });
 
+  it("gives the choice as the reason when Start now finds the instance can't run it, not a full cap", async () => {
+    await settle();
+    const queued = { ...s().runs[0], state: "queued" as const, slotWaitSince: null, waitReason: "Waits for Claude, which is off." };
+    vi.spyOn(backend, "runsStartNow").mockResolvedValueOnce(queued);
+    await s().startNow(queued.id);
+    expect(useToasts.getState().toasts[0].text).toBe("Waits for Claude, which is off. It starts on its own once that changes.");
+  });
+
   it("reports a failed Stop all instead of swallowing it", async () => {
     await settle();
     vi.spyOn(backend, "runsStopAll").mockRejectedValueOnce(new Error("runs_stop_all is not available yet"));

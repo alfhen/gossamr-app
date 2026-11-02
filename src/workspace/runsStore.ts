@@ -297,8 +297,8 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend) return;
     try {
       const run = await backend.runsStartNow(id);
-      // Every slot is taken: it is left waiting for one rather than started.
-      if (run.state === "queued" && run.slotWaitSince) useToasts.getState().push("Every slot is taken, so it waits and starts when one of the running agents finishes.", "info");
+      if (run.state === "queued" && run.waitReason) useToasts.getState().push(`${run.waitReason} It starts on its own once that changes.`, "info");
+      else if (run.state === "queued" && run.slotWaitSince) useToasts.getState().push("Every slot is taken, so it waits and starts when one of the running agents finishes.", "info");
     } catch (e) {
       useToasts.getState().push(`Couldn't start it: ${messageOf(e)}`);
     }

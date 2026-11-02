@@ -218,8 +218,8 @@ impl Reason {
             Self::NoShellSetup => "Gossamr couldn't read your shell setup, so it can't tell which Claude login to use. Check again in Settings.".into(),
             Self::Removed if pip => "Pick which Claude Pip runs on.".into(),
             Self::Removed => format!("{name} was removed. Pick another."),
-            Self::CantRun(driver) if pip => format!("Pip can't run on {} yet.", driver.label()),
-            Self::CantRun(driver) => format!("Agents can't run on {} yet.", driver.label()),
+            Self::CantRun(_) if pip => format!("Pip can't run on {name} yet."),
+            Self::CantRun(_) => format!("Agents can't run on {name} yet."),
             Self::BadModel if pip => "Pick a model for Pip.".into(),
             Self::BadModel => "Pick a model for this run.".into(),
         }
@@ -251,7 +251,8 @@ fn accepts(provider: &ProviderInstance, model: &str, found: &Found) -> bool {
 /// Whether `choice` names a model the instance lists and, for Pip only, an effort from the fixed list, for a use its driver runs.
 pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice, found: &Found) -> Result<ProviderInstance, Reason> {
     let provider = config.providers.iter().find(|p| p.id == choice.instance_id).ok_or(Reason::Removed)?;
-    if !use_.allowed_on(provider.driver) {
+    // Until runs are tracked per instance, an agent started anywhere but the default would run where nothing watches it.
+    if !use_.allowed_on(provider.driver) || (use_ == Use::Agents && provider.id != crate::connections::DEFAULT_CLAUDE) {
         return Err(Reason::CantRun(provider.driver));
     }
     let listed = accepts(provider, &choice.model, found);

@@ -169,7 +169,8 @@ export function slotText(run: Pick<Run, "id" | "state" | "slotWaitSince">, runs?
 }
 
 /** What a run is doing right now, in the person's words, for working and waiting runs; `runs` places one waiting for a slot in line. */
-export function progressText(run: Pick<Run, "state" | "lastDetail"> & Partial<Pick<Run, "id" | "slotWaitSince">>, runs?: readonly Run[]): string {
+export function progressText(run: Pick<Run, "state" | "lastDetail"> & Partial<Pick<Run, "id" | "slotWaitSince" | "waitReason">>, runs?: readonly Run[]): string {
+  if (run.state === "queued" && run.waitReason) return run.waitReason;
   const slot = run.id ? slotText({ id: run.id, state: run.state, slotWaitSince: run.slotWaitSince }, runs) : null;
   if (slot) return slot;
   if (run.lastDetail?.trim()) return run.lastDetail.trim();

@@ -208,6 +208,7 @@ describe("words on a card", () => {
   it("says what a run is doing, or that it is starting", () => {
     expect(progressText(run("working", { lastDetail: "Reading the code" }))).toBe("Reading the code");
     expect(progressText(run("queued"))).toBe("Waiting to start");
+    expect(progressText(run("queued", { slotWaitSince: "2026-01-01T00:00:00Z", waitReason: "Waits for Claude, which is off." }))).toBe("Waits for Claude, which is off.");
     expect(progressText(run("launching"))).toBe("Starting up");
     // Never the state's own word again, as "Working · Working" read on a card after an answer (N9).
     expect(progressText(run("working"))).toBe("No update from it yet");

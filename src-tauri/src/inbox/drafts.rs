@@ -396,6 +396,11 @@ impl Core {
         }
     }
 
+    /// Changes the choice of a run that is still queued, and says whether it was: a run that has started keeps its own.
+    pub async fn set_queued_run_choice(&self, id: &str, choice: &crate::model_choice::ModelChoice) -> Result<bool> {
+        self.with_proposals(|db| db.set_queued_run_choice(id, choice)).await
+    }
+
     /// Applies a pending proposal through its connection's tracker. Whatever the tracker did is recorded: a failed
     /// attempt returns the proposal to pending with `error` set and the subtasks it did create remembered, so
     /// approving again never repeats them.

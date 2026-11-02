@@ -263,7 +263,7 @@ async fn list(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     if let Some(key) = &key {
         reachable(st, pip, key).await?;
     }
-    let query = RunQuery { states, item: key.as_deref().map(|k| item_ref(scope, k)), connection_id: None, workstream: None };
+    let query = RunQuery { states, item: key.as_deref().map(|k| item_ref(scope, k)), connection_id: None, workstream: None, runs_on: None };
     let found = st.core.runs_in(scope, &query).await.map_err(|e| format!("Couldn't read the runs: {e}"))?;
     let runs = visible(&st.core, scope, &pip.handed, found).await;
     if runs.is_empty() {
@@ -544,7 +544,11 @@ async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str,
     };
     (st.workstreams)(&run.connection_id);
     let on = run.item.as_ref().map_or_else(|| format!("in {repo} with no ticket"), |i| format!("on {} in {repo}", i.key));
-    let wait = if run.slot_wait_since.is_some() { " It waits for a free slot." } else { "" };
+    let wait = match (&run.wait_reason, run.slot_wait_since) {
+        (Some(why), _) => format!(" {why}"),
+        (None, Some(_)) => " It waits for a free slot.".to_owned(),
+        (None, None) => String::new(),
+    };
     Ok(format!("Started {name} (run {}): {} {on}.{wait}", run.id, role.as_str()))
 }
 

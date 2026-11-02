@@ -159,7 +159,7 @@ describe("the mock provider instance", () => {
   });
 
   it("renames, turns off and on, and removes it without touching the others", async () => {
-    const b = new MockBackend({ githubRepos: 6 });
+    const b = new MockBackend({ githubRepos: 6, runs: { seed: "empty" } });
     await b.connectionRename("claude", " Work Claude ");
     await b.connectionSetEnabled("claude", false);
     expect((await b.connectionsList()).find((c) => c.instanceId === "claude")).toMatchObject({ displayName: "Work Claude", enabled: false });

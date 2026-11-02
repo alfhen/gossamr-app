@@ -21,6 +21,7 @@ import type {
   RunsChanged,
   AgentSettings,
   WorkFolderGit,
+  ModelChoice,
   ModelDefaults,
   ModelOption,
   CleanupResult,
@@ -223,6 +224,10 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_stop", { id });
   }
 
+  runsSetModel(id: string, choice: ModelChoice) {
+    return invoke<Run>("runs_set_model", { id, choice });
+  }
+
   runsAnswer(id: string, text: string) {
     return invoke<Run>("runs_answer", { id, text });
   }
@@ -366,6 +371,10 @@ export class JiraBackend implements Backend {
 
   workstreamsOpen(item: ItemRef | null, title?: string) {
     return invoke<Workstream>("workstreams_open", { item, title: title ?? null });
+  }
+
+  workstreamsSetModel(id: string, choice: ModelChoice | null) {
+    return invoke<Workstream>("workstreams_set_model", { id, choice });
   }
 
   workstreamsList(includeClosed = false) {
