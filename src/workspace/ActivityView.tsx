@@ -4,7 +4,7 @@ import { pressed, stepOf } from "../lib/keys";
 import { relativeTime } from "../lib/views";
 import type { FeedEntry } from "../types";
 import { nameOf, useWorkspace } from "../workspaceStore";
-import { FILTER_LABEL, groupByDay, initials, stepIndex, verb, type InboxFilter } from "./activityLogic";
+import { FILTER_LABEL, feedKey, groupByDay, initials, stepIndex, verb, type InboxFilter } from "./activityLogic";
 import { useActivity } from "./activityStore";
 import { showMe } from "./jump";
 import { useTabs } from "./tabsStore";
@@ -12,7 +12,7 @@ import { StrayNotices } from "./WatchNotices";
 import { Button } from "../components/Button";
 import { Segmented } from "../components/Segmented";
 
-export const feedRowId = (id: string) => `feed-${id}`;
+export const feedRowId = (e: Pick<FeedEntry, "connectionId" | "id">) => `feed-${feedKey(e)}`;
 
 export interface FeedRowProps {
   entry: FeedEntry;
@@ -40,7 +40,7 @@ export function FeedRow({ entry: e, actor, title, now, selected, openable, posit
   };
   return (
     <article
-      id={feedRowId(e.id)}
+      id={feedRowId(e)}
       tabIndex={0}
       aria-posinset={position}
       aria-setsize={total}
@@ -131,7 +131,7 @@ export function ActivityView() {
 
   const open = (e: FeedEntry) => {
     useTabs.getState().select(itemKey(e.item));
-    void useActivity.getState().markRead(e.unread ? [e.id] : []);
+    void useActivity.getState().markRead(e.unread ? [e] : []);
   };
 
   const shownRef = useRef(entries);
@@ -150,11 +150,11 @@ export function ActivityView() {
         to?.focus();
         to?.scrollIntoView({ block: "nearest" });
       } else if (pressed(ev, "inbox", "markRead")) {
-        const id = target.closest?.("article")?.id.replace(/^feed-/, "");
-        const entry = shownRef.current.find((e) => e.id === id);
+        const id = target.closest?.("article")?.id;
+        const entry = shownRef.current.find((e) => feedRowId(e) === id);
         if (entry?.unread) {
           ev.preventDefault();
-          void useActivity.getState().markRead([entry.id]);
+          void useActivity.getState().markRead([entry]);
         }
       }
     };
@@ -197,7 +197,7 @@ export function ActivityView() {
                     const item = items[key];
                     return (
                       <FeedRow
-                        key={e.id}
+                        key={feedKey(e)}
                         entry={e}
                         actor={e.actorName ?? nameOf({ names }, e.actor).replace("Unassigned", "Someone")}
                         title={e.itemTitle ?? item?.title ?? ""}
@@ -207,7 +207,7 @@ export function ActivityView() {
                         position={++position}
                         total={entries.length}
                         onOpen={() => open(e)}
-                        onMarkRead={() => void useActivity.getState().markRead([e.id])}
+                        onMarkRead={() => void useActivity.getState().markRead([e])}
                         onShow={() => (open(e), showMe(e.item))}
                       />
                     );

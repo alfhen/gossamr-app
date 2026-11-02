@@ -234,13 +234,29 @@ describe("watch commands", () => {
 describe("GitHub commands", () => {
   const noop = new Proxy({}, { get: () => () => {} }) as CommandActions;
 
-  it("offers to connect, and to manage repositories only once connected", () => {
+  it("offers to manage repositories and the code filters only once connected", () => {
     const labels = (github: boolean) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, github }).map((c) => c.label);
-    expect(labels(false)).toContain("Connect GitHub");
     expect(labels(false)).not.toContain("Manage repositories");
     expect(labels(false).some((l) => l.startsWith("Filter: PR"))).toBe(false);
     expect(labels(true)).toContain("Manage repositories");
     expect(labels(true)).toEqual(expect.arrayContaining(["Filter: Has PR", "Filter: No PR", "Filter: PR open", "Filter: PR merged", "Filter: Checks failing"]));
+  });
+
+  it("always offers Add GitHub account, and Add Jira account only while no Jira is connected", () => {
+    const ids = (jira: boolean) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, jira }).map((c) => c.id);
+    expect(ids(false)).toEqual(expect.arrayContaining(["connection:add-github", "connection:add-jira"]));
+    expect(ids(true)).toContain("connection:add-github");
+    expect(ids(true)).not.toContain("connection:add-jira");
+    expect(ids(false)).not.toContain("github:connect");
+  });
+
+  it("runs the sheet for the account it names", () => {
+    const calls: string[] = [];
+    const actions = { ...noop, addGithub: () => calls.push("github"), addJira: () => calls.push("jira") } as CommandActions;
+    const byId = (id: string) => buildCommands([], [], actions).find((c) => c.id === id)!;
+    byId("connection:add-github").run();
+    byId("connection:add-jira").run();
+    expect(calls).toEqual(["github", "jira"]);
   });
 
   it("opens a pull request named by reference or address, and nothing else", () => {

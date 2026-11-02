@@ -6,7 +6,7 @@ export const INSTALL_URL = "https://code.claude.com/docs/en/setup";
 export type FailureAct = "terminal" | "install";
 
 export interface FailureHelp {
-  kind: "untrustedFolder" | "notSignedIn" | "modeRefused" | "claudeMissing" | "noClone" | "capReached";
+  kind: "untrustedFolder" | "notSignedIn" | "modeRefused" | "claudeMissing" | "noClone" | "outsideWorkFolder" | "cloneOccupied" | "capReached";
   /** One line for a card or row. */
   summary: string;
   /** The sheet's explanation. */
@@ -16,7 +16,19 @@ export interface FailureHelp {
   command: { text: string; note: string | null } | null;
   /** Retry waits for the person to have used Terminal (or copied the command) when there is something to do there first. */
   retryNeedsTerminal: boolean;
+  /** Whether Retry is offered at all. A run set up outside the work folder can only be started again by Pip. */
+  retry: boolean;
 }
+
+const OUTSIDE_WORK_FOLDER = {
+  kind: "outsideWorkFolder",
+  summary: "This agent was set up before Gossamr kept its own clones.",
+  detail: "It was set up in your own clone, which Gossamr no longer starts agents in. Ask Pip to start it again, and it will use Gossamr's clone in ~/Gossamr/agents.",
+  primary: null,
+  command: null,
+  retryNeedsTerminal: false,
+  retry: false,
+} as const satisfies FailureHelp;
 
 /** `path` as one shell word, so the copied command works for a folder with spaces or quotes in its name. */
 export function shellQuote(path: string): string {
@@ -25,10 +37,17 @@ export function shellQuote(path: string): string {
 
 const sentence = (text: string | null | undefined, fallback: string) => (text?.trim() || fallback).replace(/\.?$/, ".");
 
+function occupiedDetail(error: string | null | undefined): string {
+  const said = sentence(error, "A folder that isn't a clone of the repository is in the way.");
+  return `${said} Gossamr never removes it.${/move it away/i.test(said) ? "" : " Move it away, then retry."}`;
+}
+
 /** What to offer for a failed run that never got a session. Null for anything else. */
 export function failureHelp(run: Run): FailureHelp | null {
   if (run.state !== "failed" || run.shortId) return null;
   const failure = run.failure;
+  // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
+  if (run.inWorkFolder === false) return { ...OUTSIDE_WORK_FOLDER };
   switch (failure?.type) {
     case "untrustedFolder":
       return {
@@ -38,6 +57,7 @@ export function failureHelp(run: Run): FailureHelp | null {
         primary: { label: "Trust this folder in Terminal", act: "terminal" },
         command: { text: `cd ${shellQuote(failure.path)} && claude`, note: null },
         retryNeedsTerminal: true,
+        retry: true,
       };
     case "notSignedIn":
       return {
@@ -47,6 +67,7 @@ export function failureHelp(run: Run): FailureHelp | null {
         primary: { label: "Open Terminal to sign in", act: "terminal" },
         command: { text: "claude", note: "Then type /login." },
         retryNeedsTerminal: true,
+        retry: true,
       };
     case "modeRefused": {
       const flag = failure.mode === "auto" ? "--permission-mode auto" : "--dangerously-skip-permissions";
@@ -57,6 +78,7 @@ export function failureHelp(run: Run): FailureHelp | null {
         primary: { label: `Open Terminal to accept ${failure.mode} mode`, act: "terminal" },
         command: { text: `claude ${flag}`, note: "Accept the prompt, then exit." },
         retryNeedsTerminal: true,
+        retry: true,
       };
     }
     case "claudeMissing":
@@ -67,15 +89,29 @@ export function failureHelp(run: Run): FailureHelp | null {
         primary: { label: "Open the install page", act: "install" },
         command: { text: INSTALL_COMMAND, note: null },
         retryNeedsTerminal: false,
+        retry: true,
       };
     case "noClone":
       return {
         kind: "noClone",
-        summary: "The clone this run was set up for can't be used any more.",
-        detail: `${sentence(run.error, "The folder is gone or isn't a clone of the repository.")} Clone ${run.spec.repo} or choose a clone of it, and Pip starts the agent again.`,
+        summary: `Gossamr couldn't make its clone of ${run.spec.repo}.`,
+        detail: `${sentence(run.error, "The clone is gone or can't be read.")} Retry makes it again.`,
         primary: null,
         command: null,
         retryNeedsTerminal: false,
+        retry: true,
+      };
+    case "outsideWorkFolder":
+      return { ...OUTSIDE_WORK_FOLDER };
+    case "cloneOccupied":
+      return {
+        kind: "cloneOccupied",
+        summary: "Something else is where Gossamr keeps its clone.",
+        detail: occupiedDetail(run.error),
+        primary: null,
+        command: null,
+        retryNeedsTerminal: false,
+        retry: true,
       };
     case "capReached":
       return {
@@ -85,6 +121,7 @@ export function failureHelp(run: Run): FailureHelp | null {
         primary: null,
         command: null,
         retryNeedsTerminal: false,
+        retry: true,
       };
     default:
       return null;

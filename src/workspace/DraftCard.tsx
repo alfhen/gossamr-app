@@ -452,7 +452,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
                 setBody(v);
                 setMentions(m);
               }}
-              ticketKey={key}
+              item={intent.item}
               people={people}
               label={`Edit the comment on ${key}`}
               // Grows with its text, and never shorter than about six lines: two lines was too little to edit a comment in.

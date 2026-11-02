@@ -415,7 +415,7 @@ function Composer({ item, disabled, reply, onCancelReply }: { item: WorkItem; di
           setSent(false);
         }}
         onSubmit={() => void submit()}
-        ticketKey={item.item.key}
+        item={item.item}
         people={people}
         placeholder={reply ? "Write your reply." : "Write a comment."}
       />
