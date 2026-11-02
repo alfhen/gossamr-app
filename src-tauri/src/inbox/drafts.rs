@@ -541,7 +541,7 @@ mod tests {
         assert!(fx.tracker.intents().is_empty());
         assert_eq!(fx.core.proposal(&drafted.id).await.unwrap().unwrap().state, ProposalState::Pending);
 
-        fx.core.sync_if_due(crate::sync::Trigger::Now).await.expect("a sync was due").unwrap();
+        fx.core.sync_if_due(crate::sync::Trigger::Now).await.pop().expect("a sync was due").1.unwrap();
         assert!(!fx.core.is_rechecking(&connection_id));
         assert_eq!(fx.core.approve_proposal(&drafted.id).await.unwrap().state, ProposalState::Applied);
     }
@@ -557,7 +557,7 @@ mod tests {
         let broken = rusqlite::Connection::open(cache).unwrap().execute("UPDATE items SET data = 'not json' WHERE external_id = ?1", [&fx.item("CA-1").external_id]).unwrap();
         assert_eq!(broken, 1, "the ticket the draft targets is cached");
 
-        fx.core.sync_if_due(crate::sync::Trigger::Now).await.expect("a sync was due").unwrap();
+        fx.core.sync_if_due(crate::sync::Trigger::Now).await.pop().expect("a sync was due").1.unwrap();
 
         assert!(fx.core.is_rechecking(&connection_id));
         assert!(fx.core.approve_proposal(&drafted.id).await.unwrap_err().to_string().contains("Checking this draft against"));
@@ -569,10 +569,10 @@ mod tests {
         fx.core.adopt_instances().await;
         fx.core.set_instance_enabled("jira", false).await.unwrap();
 
-        assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_none());
+        assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_empty());
 
         fx.core.set_instance_enabled("jira", true).await.unwrap();
-        assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.is_some_and(|synced| synced.is_ok()), "once on, the loop asks the tracker again");
+        assert!(fx.core.sync_if_due(crate::sync::Trigger::Now).await.pop().is_some_and(|(_, synced)| synced.is_ok()), "once on, the loop asks the tracker again");
     }
 
     #[tokio::test]

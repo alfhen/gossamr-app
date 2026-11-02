@@ -230,6 +230,16 @@ mod tests {
         assert_eq!(snapshot_of(&fx.core, "jira").map(|s| s.state), Some(State::NotSignedIn));
     }
 
+    #[tokio::test]
+    async fn each_jira_instance_is_probed_as_its_own_account() {
+        let (fx, _) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.probe_connections(Probe::Launch).await;
+        let account = |id| snapshot_of(&fx.core, id).map(|s| (s.state, s.account));
+        assert_eq!(account("jira"), Some((State::Ready, Some("me".into()))));
+        assert_eq!(account("jira_2"), Some((State::Ready, Some("bo".into()))));
+    }
+
     /// Accepts any token and keeps the expiry day exactly as `connect` was given it.
     struct Accepting;
 
@@ -272,7 +282,7 @@ mod tests {
     async fn signing_in_to_another_jira_account_leaves_the_old_answer_behind_and_the_next_focus_probes_at_once() {
         let fx = jira_fixture(Jira::answering()).await;
         fx.core.probe_connections(Probe::Launch).await;
-        fx.core.bind_instance(Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
+        fx.core.rebind_instance(vec!["jira:site:me".into()], Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
         assert!(snapshot_of(&fx.core, "jira").is_none());
         assert_eq!(fx.core.probe_connections(Probe::Focus).await, ["jira:other:u2"]);
         assert!(snapshot_of(&fx.core, "jira").is_some());
@@ -289,7 +299,7 @@ mod tests {
         let core = fx.core.clone();
         let probing = tokio::spawn(async move { core.probe_connections(Probe::Launch).await });
         asked.notified().await;
-        fx.core.bind_instance(Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
+        fx.core.rebind_instance(vec!["jira:site:me".into()], Binding::jira("jira:other:u2", "Globex", "https://globex.example"));
         gate.notify_one();
         probing.await.unwrap();
         assert!(snapshot_of(&fx.core, "jira").is_none());

@@ -179,7 +179,7 @@ fn use_freed_slot(service: &RunsState) {
 
 #[tauri::command]
 async fn auth_status(core: State<'_, CoreState>) -> Result<AuthStatus> {
-    core.auth.status().await
+    core.jira_status().await
 }
 
 /// The cloud id a Jira site reports about itself, or `None` when the sheet has to ask for it.
@@ -812,10 +812,10 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
         // Launch catches up straight away, from the cursor the last run left in the cache.
         let mut trigger = Trigger::Now;
         loop {
-            if let Some(result) = core.sync_if_due(trigger).await {
+            for (connection_id, result) in core.sync_if_due(trigger).await {
                 match result {
                     Ok(synced) => {
-                        core.set_error(None);
+                        core.set_error(&connection_id, None);
                         if synced.changed {
                             cache_changed(&app, &synced.connection_id);
                         }
@@ -827,7 +827,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         }
                     }
                     Err(e) => {
-                        core.set_sync_failure(&e);
+                        core.set_sync_failure(&connection_id, &e);
                         if e.is_unauthorized() {
                             probe_in_background(&app, &core, Probe::Unauthorized);
                         }
@@ -871,8 +871,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                 }
                 publish(&app, &core).await;
             }
-            // A failed check is tried again at the next interval; nothing depends on it.
-            if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
+            for (connection_id, strays) in core.radar_if_due().await {
                 wire::assigned_elsewhere(&app, &connection_id, &strays);
             }
             trigger = tokio::select! {

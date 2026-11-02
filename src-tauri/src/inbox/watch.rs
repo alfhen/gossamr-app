@@ -111,7 +111,7 @@ impl Core {
     }
 
     async fn jira_watch_state(&self) -> Result<Vec<WatchState>> {
-        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(Vec::new()) };
+        let Ok((scope, _, _)) = self.identity().await else { return Ok(Vec::new()) };
         let id = self.connection(&scope)?.id;
         let state = self
             .with_db_for(&scope, |db| {
@@ -300,23 +300,29 @@ impl Core {
         .await
     }
 
-    /// Runs the check for assigned items in unwatched containers when it is due, and returns the ones that are new
-    /// since the last check. It only reads keys, and never adds a container to the watch set.
-    pub async fn radar_if_due(&self) -> Result<Option<(String, Vec<Stray>)>> {
-        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(None) };
-        let id = scope.connection_id.clone();
-        if self.off_name(&id).is_some() {
-            return Ok(None);
-        }
-        let now = Utc::now();
-        {
-            let mut last = self.radar.lock().expect("radar lock poisoned");
-            if last.get(&id).is_some_and(|at| now - *at < RADAR_EVERY) {
-                return Ok(None);
+    /// Runs the check for assigned items in unwatched containers of each Jira connection that is on and due, and
+    /// returns the ones that are new since its last check. A check that fails is tried again at the next interval. It
+    /// only reads keys, and never adds a container to the watch set.
+    pub async fn radar_if_due(&self) -> Vec<(String, Vec<Stray>)> {
+        let mut found = Vec::new();
+        for session in self.auth.accounts().await {
+            let id = session.connection.id.clone();
+            if self.registry.connection(&id).is_none() || self.off_name(&id).is_some() {
+                continue;
             }
-            last.insert(id.clone(), now);
+            let now = Utc::now();
+            {
+                let mut last = self.radar.lock().expect("radar lock poisoned");
+                if last.get(&id).is_some_and(|at| now - *at < RADAR_EVERY) {
+                    continue;
+                }
+                last.insert(id.clone(), now);
+            }
+            if let Ok(Some(new)) = self.check_assigned_elsewhere(&session.scope).await {
+                found.push((id, new));
+            }
         }
-        Ok(self.check_assigned_elsewhere(&scope).await?.map(|new| (id, new)))
+        found
     }
 
     async fn check_assigned_elsewhere(&self, scope: &Scope) -> Result<Option<Vec<Stray>>> {
@@ -656,10 +662,10 @@ mod tests {
         let fx = fixture().await;
         selected(&fx, &[watch("CA")]).await;
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"])];
-        let first = fx.core.radar_if_due().await.unwrap();
+        let first = fx.core.radar_if_due().await.pop();
         assert_eq!(first.map(|(id, s)| (id, s.len())), Some(("jira:site:me".to_string(), 1)));
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"]), stray("FIN", &["FIN-1"])];
-        assert!(fx.core.radar_if_due().await.unwrap().is_none(), "asked again within the interval");
+        assert!(fx.core.radar_if_due().await.is_empty(), "asked again within the interval");
     }
 
     #[tokio::test]
@@ -733,11 +739,22 @@ mod tests {
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"])];
         fx.core.set_instance_enabled("jira", false).await.unwrap();
 
-        assert!(fx.core.radar_if_due().await.unwrap().is_none());
+        assert!(fx.core.radar_if_due().await.is_empty());
         assert!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().is_empty(), "nothing was recorded for an off Jira");
 
         fx.core.set_instance_enabled("jira", true).await.unwrap();
-        assert_eq!(fx.core.radar_if_due().await.unwrap().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
+        assert_eq!(fx.core.radar_if_due().await.pop().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
         assert_eq!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_watching_pane_follows_the_primary_connection() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+
+        let states = fx.core.watch_state().await.unwrap();
+        assert_eq!(states.iter().map(|s| s.connection_id.as_str()).collect::<Vec<_>>(), [second.connection_id.as_str()]);
     }
 }
