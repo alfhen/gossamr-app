@@ -19,6 +19,7 @@ import type {
   RunsChanged,
   AgentSettings,
   WorkFolderGit,
+  ModelChoice,
   ModelDefaults,
   ModelOption,
   CleanupResult,
@@ -154,6 +155,8 @@ export interface Backend {
   runsList(query?: RunQuery): Promise<Run[]>;
   /** Stops a working run; rejects until it is working. */
   runsStop(id: string): Promise<Run>;
+  /** Changes the instance and model a run launches on, while it is still queued; rejects once it has started or for a choice the instance does not list. */
+  runsSetModel(id: string, choice: ModelChoice): Promise<Run>;
   /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
   runsAnswer(id: string, text: string): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
@@ -225,6 +228,8 @@ export interface Backend {
   onOpenRun(listener: (runId: string) => void): () => void;
   /** Opens a workstream on a cached ticket, or with no ticket and a title. A ticket that has an open one gets that one back. */
   workstreamsOpen(item: ItemRef | null, title?: string): Promise<Workstream>;
+  /** Sets what agents queued in an open workstream run on from now on; `null` goes back to the Settings default. */
+  workstreamsSetModel(id: string, choice: ModelChoice | null): Promise<Workstream>;
   /** The signed-in account's workstreams with their stages, newest first; closed ones only when asked for. */
   workstreamsList(includeClosed?: boolean): Promise<WorkstreamView[]>;
   /** Closes a workstream; its runs and drafts stay as they are. */

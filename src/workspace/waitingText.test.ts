@@ -9,4 +9,9 @@ describe("why a queued agent waits", () => {
     expect(waitingText(run({}))).toMatch(/^Pip started it, and it launches on its own/);
     expect(waitingText(run({ proposalId: "p1" }))).toMatch(/^It is approved and launches on its own/);
   });
+
+  it("says why an instance or model can't run the agent yet, ahead of the slot and workstream words", () => {
+    const waiting = run({ slotWaitSince: "2026-01-01T00:00:00Z", waitReason: "Waits for Claude personal, which is off." });
+    expect(waitingText(waiting)).toBe("Waits for Claude personal, which is off. It starts on its own once that changes.");
+  });
 });

@@ -93,8 +93,8 @@ describe("adding a provider instance in the mock", () => {
     await b.providerAdd("claude", "Work", "~/.claude-work");
     await b.connectionRemove("claude_2");
     expect((await b.providerAdd("claude", "Work", "~/.claude-work")).id).toBe("claude_3");
-    await b.connectionRemove("claude");
-    expect((await b.providerAdd("claude", "Usual")).id).toBe("claude_4");
+    await b.connectionRemove("claude_3");
+    expect((await b.providerAdd("claude", "Home", "~/.claude-home")).id).toBe("claude_4");
   });
 
   it("finds the login on the next check once Terminal was opened on the sign-in, and not before", async () => {

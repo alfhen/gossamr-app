@@ -9,6 +9,7 @@ use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension};
 use super::{stamp, Db};
 use crate::domain::{Run, RunEvent, RunQuery, RunState};
 use crate::error::{Error, Result};
+use crate::model_choice::ModelChoice;
 
 const EVENTS_PER_RUN: u32 = 500;
 const DETAIL_LIMIT: usize = 2_048;
@@ -22,8 +23,8 @@ fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> ru
     let draft = Some(run.proposal_id.as_str()).filter(|p| !p.is_empty());
     conn.execute(
         "INSERT INTO runs (id, proposal_id, start_key, connection_id, item_id, item_key, role, repo, expected_worktree, short_id, session_id,
-           state, queued_at, last_progress_at, ended_at, data)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+           state, queued_at, last_progress_at, ended_at, data, runs_on)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             run.id,
             draft,
@@ -41,6 +42,7 @@ fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> ru
             stamp(run.last_progress_at),
             run.ended_at.map(stamp),
             serde_json::to_string(run).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+            run.instance_id(),
         ],
     )
 }
@@ -149,7 +151,7 @@ impl Db {
         let n = self
             .conn
             .execute(
-                "UPDATE runs SET short_id = ?2, session_id = ?3, state = ?4, last_progress_at = ?5, ended_at = ?6, data = ?7 WHERE id = ?1",
+                "UPDATE runs SET short_id = ?2, session_id = ?3, state = ?4, last_progress_at = ?5, ended_at = ?6, data = ?7, runs_on = ?8 WHERE id = ?1",
                 params![
                     run.id,
                     run.short_id.as_ref().map(|s| s.as_str().to_owned()),
@@ -158,9 +160,23 @@ impl Db {
                     stamp(run.last_progress_at),
                     run.ended_at.map(stamp),
                     serde_json::to_string(run)?,
+                    run.instance_id(),
                 ],
             )
             .map_err(clash)?;
+        Ok(n > 0)
+    }
+
+    /// Changes a run's choice only while it is still queued. A wait reason stays until the launcher settles the new
+    /// choice, so the run stays one that waits. False when the run has started, or is not this handle's.
+    pub fn set_queued_run_choice(&self, id: &str, choice: &ModelChoice) -> Result<bool> {
+        if !self.sees_run(id)? {
+            return Ok(false);
+        }
+        let n = self.conn.execute(
+            "UPDATE runs SET runs_on = ?2, data = json_set(data, '$.runsOn', json(?3)) WHERE id = ?1 AND state = 'queued'",
+            params![id, choice.instance_id, serde_json::to_string(choice)?],
+        )?;
         Ok(n > 0)
     }
 
@@ -193,6 +209,10 @@ impl Db {
         if let Some(c) = &q.connection_id {
             sql.push_str(" AND connection_id = ?");
             args.push(Sql::Text(c.clone()));
+        }
+        if let Some(instance) = &q.runs_on {
+            sql.push_str(" AND runs_on = ?");
+            args.push(Sql::Text(instance.clone()));
         }
         if let Some(w) = &q.workstream {
             sql.push_str(" AND json_extract(data, '$.spec.workstream') = ?");
@@ -595,5 +615,46 @@ mod tests {
         db.archive_runs(&["a".into()], now()).unwrap();
         assert!(db.delete_archived_run("a").unwrap());
         assert!(db.run_message("a").unwrap().is_none());
+    }
+
+    fn choice(instance: &str, model: &str) -> ModelChoice {
+        ModelChoice { instance_id: instance.into(), model: model.into(), effort: None }
+    }
+
+    #[test]
+    fn a_runs_instance_is_kept_in_its_column_and_a_run_without_a_choice_counts_as_the_default() {
+        let db = Db::in_memory().unwrap();
+        let mut on_second = queued("a", "eng-1-cart-0001");
+        on_second.runs_on = Some(choice("claude_2", "opus"));
+        db.insert_run(&on_second).unwrap();
+        db.insert_run(&queued("b", "eng-1-cart-0002")).unwrap();
+        let on = |instance: &str| {
+            let q = RunQuery { runs_on: Some(instance.into()), ..Default::default() };
+            db.runs(&q).unwrap().into_iter().map(|r| r.id).collect::<Vec<_>>()
+        };
+        assert_eq!((on("claude_2"), on("claude")), (vec!["a".to_string()], vec!["b".to_string()]));
+
+        on_second.runs_on = Some(choice("claude", "haiku"));
+        assert!(db.save_run(&on_second).unwrap());
+        assert_eq!(on("claude_2"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_queued_runs_choice_changes_in_one_statement_and_a_started_runs_does_not() {
+        let db = Db::in_memory().unwrap();
+        let mut waiting = queued("a", "eng-1-cart-0001");
+        waiting.runs_on = Some(choice("claude", "default"));
+        waiting.wait_reason = Some("Waits for Claude, which is off.".into());
+        db.insert_run(&waiting).unwrap();
+        stored(&db, "b", RunState::Working);
+
+        assert!(db.set_queued_run_choice("a", &choice("claude_2", "opus")).unwrap());
+        let after = db.run("a").unwrap().unwrap();
+        assert_eq!((after.runs_on, after.wait_reason.as_deref()), (Some(choice("claude_2", "opus")), Some("Waits for Claude, which is off.")));
+        assert_eq!(db.runs(&RunQuery { runs_on: Some("claude_2".into()), ..Default::default() }).unwrap().len(), 1);
+
+        assert!(!db.set_queued_run_choice("b", &choice("claude_2", "opus")).unwrap());
+        assert!(!db.set_queued_run_choice("missing", &choice("claude_2", "opus")).unwrap());
+        assert_eq!(db.run("b").unwrap().unwrap().runs_on, None);
     }
 }

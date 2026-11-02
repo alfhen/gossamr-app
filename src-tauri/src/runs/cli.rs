@@ -166,6 +166,8 @@ pub struct LaunchRequest {
     pub prompt: String,
     /// Offers the session Gossamr's tools.
     pub agent: Option<super::agent_config::AgentLaunch>,
+    /// The model to run on; none passes no `--model`, so the login folder's own setting applies.
+    pub model: Option<String>,
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -401,6 +403,9 @@ impl ClaudeCli for SystemCli {
         if !allowed.is_empty() {
             args.push("--allowedTools");
             args.extend(allowed);
+        }
+        if let Some(model) = &req.model {
+            args.extend(["--model", model]);
         }
         args.extend(["--append-system-prompt", &req.guard, "--", &req.prompt]);
         let out = self.run(&args, Some(&req.cwd), LAUNCH).await?;
@@ -687,6 +692,7 @@ mod tests {
                     guard: "guard text".into(),
                     prompt: "-- look at it; \"quoted\" $(not run) `nor this`".into(),
                     agent: None,
+                    model: None,
                 }
             }
 
@@ -847,6 +853,22 @@ mod tests {
                 assert!(!calls.contains(restricting), "{restricting}");
             }
             assert!(!calls.contains("gsr_") && !calls.contains("Bearer"));
+        }
+
+        #[tokio::test]
+        async fn a_model_adds_one_flag_with_its_id_before_the_guard_and_none_adds_nothing() {
+            let rig = Rig::new("model", "");
+            let mut req = rig.request("ce-4-x-aa11");
+            req.model = Some("opus".into());
+            rig.cli.launch(&req).await.unwrap();
+            let calls = rig.calls();
+            let args: Vec<&str> = calls.lines().skip(2).collect();
+            assert_eq!(args[..7], ["--bg", "--name", "ce-4-x-aa11 investigate", "--worktree", "ce-4-x-aa11", "--model", "opus"]);
+            assert_eq!(args[7], "--append-system-prompt");
+
+            let plain = Rig::new("no-model", "");
+            plain.cli.launch(&plain.request("ce-4-x-aa11")).await.unwrap();
+            assert!(!plain.calls().contains("--model"));
         }
 
         #[tokio::test]

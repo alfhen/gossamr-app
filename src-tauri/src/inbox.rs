@@ -219,6 +219,9 @@ pub struct Core {
     sign_in: tokio::sync::Mutex<()>,
     /// Held while a draft is claimed for posting and while a connection is turned off, so a draft can't be claimed after the check that said its connection was on.
     draft_gate: tokio::sync::Mutex<()>,
+    /// Held from the cap check to the end of a run's launch. Removing a provider instance takes it too, so a launch that
+    /// has resolved its instance can't finish on one that was removed meanwhile. The run service shares this lock.
+    pub(crate) launching: Arc<tokio::sync::Mutex<()>>,
     /// The window gained focus: sync if it has been a while and no failure is being waited out.
     pub focus: Notify,
 }
@@ -254,6 +257,7 @@ impl Core {
             wake: Notify::new(),
             sign_in: tokio::sync::Mutex::new(()),
             draft_gate: tokio::sync::Mutex::new(()),
+            launching: Arc::default(),
             focus: Notify::new(),
         }
     }

@@ -37,6 +37,11 @@ export class MockModels {
     return this.get();
   }
 
+  /** Throws when `choice` is not one agents can run on, with the words the desktop backend uses. */
+  checkAgents(choice: ModelChoice) {
+    this.check("this run", choice);
+  }
+
   /** A removed instance takes the defaults that named it, and its added models. */
   forget(instanceId: string) {
     this.custom.delete(instanceId);

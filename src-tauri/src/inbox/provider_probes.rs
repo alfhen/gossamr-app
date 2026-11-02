@@ -286,7 +286,7 @@ mod tests {
         fx.core.probe_provider_now("claude").await;
         assert_eq!(state_of(&fx, "claude"), Some(State::Ready));
         assert_eq!(runs(&calls).len(), 2, "off spawned nothing");
-        fx.core.provider_remove("claude").unwrap();
+        fx.core.provider_remove("claude").await.unwrap();
         assert_eq!(state_of(&fx, "claude"), None);
     }
 
@@ -443,7 +443,7 @@ mod tests {
         let core = fx.core.clone();
         let probing = tokio::spawn(async move { core.probe_providers(Probe::Launch).await });
         tokio::time::sleep(Duration::from_millis(300)).await;
-        fx.core.provider_remove("claude").unwrap();
+        fx.core.provider_remove("claude").await.unwrap();
         assert!(probing.await.unwrap().is_empty());
         assert_eq!(state_of(&fx, "claude"), None);
     }

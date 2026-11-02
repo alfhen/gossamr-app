@@ -40,6 +40,15 @@ struct RemovalTarget {
     login: Option<String>,
 }
 
+fn refuse_live(runs: &[Run]) -> Result<()> {
+    match runs.len() {
+        0 => Ok(()),
+        _ if runs.iter().all(|r| r.state == RunState::Unknown) => Err(Error::Input("Gossamr can't find its agent's session right now. Try again once it settles.".into())),
+        1 => Err(Error::Input("Stop its running agent first.".into())),
+        n => Err(Error::Input(format!("Stop its {n} running agents first."))),
+    }
+}
+
 fn open_drafts_for(db: &crate::db::Db, connection_id: &str) -> Result<Vec<crate::domain::Proposal>> {
     let open = ProposalQuery { states: Some(vec![StateKind::Pending, StateKind::Applying]), ..Default::default() };
     Ok(db.proposals(&open)?.into_iter().filter(|p| is_for(p, connection_id)).collect())
@@ -374,13 +383,15 @@ impl Core {
     /// Agents that are running or waiting to start keep their tickets' site, so it stays until they are stopped. Runs
     /// of a connection that has left the registry are invisible to the run service, so nothing could stop them.
     pub(super) async fn refuse_while_running(&self, connection_id: &str) -> Result<()> {
-        let runs = self.live_runs(connection_id).await?;
-        match runs.len() {
-            0 => Ok(()),
-            _ if runs.iter().all(|r| r.state == RunState::Unknown) => Err(Error::Input("Gossamr can't find its agent's session right now. Try again once it settles.".into())),
-            1 => Err(Error::Input("Stop its running agent first.".into())),
-            n => Err(Error::Input(format!("Stop its {n} running agents first."))),
-        }
+        refuse_live(&self.live_runs(connection_id).await?)
+    }
+
+    /// An instance with agents running on it stays, because Gossamr could no longer reach their sessions. Queued runs
+    /// don't count: they wait for a new choice.
+    async fn refuse_while_instance_runs(&self, instance_id: &str) -> Result<()> {
+        let states = RunState::UNFINISHED.into_iter().filter(|s| *s != RunState::Queued).collect();
+        let query = RunQuery { states: Some(states), runs_on: Some(instance_id.into()), ..Default::default() };
+        refuse_live(&self.with_app_db(|db| db.runs(&query)).await?)
     }
 
     pub(super) async fn live_runs(&self, connection_id: &str) -> Result<Vec<Run>> {
@@ -466,7 +477,9 @@ impl Core {
     }
 
     /// Removes a provider instance and retires its id. Its config folder and the login in it stay on disk.
-    pub fn provider_remove(&self, instance_id: &str) -> Result<()> {
+    pub async fn provider_remove(&self, instance_id: &str) -> Result<()> {
+        let _no_launch = self.launching.lock().await;
+        self.refuse_while_instance_runs(instance_id).await?;
         let mut removed = false;
         AppConfig::update_if(&self.data_dir, |config| {
             removed = connections::providers_live(config) && connections::remove_provider(config, instance_id);
@@ -1055,7 +1068,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join(".credentials.json"), "{}").unwrap();
         add_provider(&fx, "claude_2", Some(&folder));
-        fx.core.provider_remove("claude_2").unwrap();
+        fx.core.provider_remove("claude_2").await.unwrap();
         assert_eq!(provider_ids(&fx), ["claude"]);
         assert!(AppConfig::load(&fx.core.data_dir()).retired_ids.contains(&"claude_2".to_string()));
         assert!(folder.join(".credentials.json").exists());
@@ -1063,9 +1076,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_provider_with_agents_running_on_it_is_not_removed_but_queued_and_finished_runs_do_not_hold_it() {
+        let fx = adopted().await;
+        add_provider(&fx, "claude_2", None);
+        let on_second = |id: &str, state: RunState| {
+            let mut run = Run::queued(id.into(), format!("p-{id}"), fx.scope.connection_id.clone(), None, crate::domain::fixtures::run_spec(), chrono::Utc::now());
+            run.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "opus".into(), effort: None });
+            run.expected_worktree = format!("/tmp/{id}").into();
+            run.state = state;
+            run
+        };
+        for (id, state) in [("queued", RunState::Queued), ("done", RunState::Done)] {
+            fx.insert_run(&on_second(id, state)).await;
+        }
+        fx.insert_run(&on_second("one", RunState::Working)).await;
+        let one = fx.core.provider_remove("claude_2").await;
+        assert!(matches!(one, Err(Error::Input(words)) if words == "Stop its running agent first."));
+        fx.insert_run(&on_second("two", RunState::NeedsAnswer)).await;
+        let two = fx.core.provider_remove("claude_2").await;
+        assert!(matches!(two, Err(Error::Input(words)) if words == "Stop its 2 running agents first."));
+        assert_eq!(provider_ids(&fx), ["claude", "claude_2"]);
+
+        for id in ["one", "two"] {
+            fx.core.save_run(&on_second(id, RunState::Stopped)).await.unwrap();
+        }
+        fx.core.provider_remove("claude_2").await.unwrap();
+        assert_eq!(provider_ids(&fx), ["claude"]);
+    }
+
+    #[tokio::test]
+    async fn removing_a_provider_waits_for_a_launch_under_way_and_is_then_refused() {
+        let fx = adopted().await;
+        add_provider(&fx, "claude_2", None);
+        let mut run = Run::queued("racing".into(), "p-racing".into(), fx.scope.connection_id.clone(), None, crate::domain::fixtures::run_spec(), chrono::Utc::now());
+        run.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "opus".into(), effort: None });
+        run.expected_worktree = "/tmp/racing".into();
+        fx.insert_run(&run).await;
+
+        let launch = fx.core.launching.lock().await;
+        let core = fx.core.clone();
+        let removal = tokio::spawn(async move { core.provider_remove("claude_2").await });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!removal.is_finished(), "removal waits for the launch lock");
+
+        run.state = RunState::Launching;
+        fx.core.save_run(&run).await.unwrap();
+        drop(launch);
+        let outcome = removal.await.unwrap();
+        assert!(matches!(outcome, Err(Error::Input(words)) if words == "Stop its running agent first."));
+        assert_eq!(provider_ids(&fx), ["claude", "claude_2"]);
+    }
+
+    #[tokio::test]
     async fn removing_every_provider_leaves_the_list_empty_after_a_relaunch() {
         let fx = adopted().await;
-        fx.core.provider_remove("claude").unwrap();
+        fx.core.provider_remove("claude").await.unwrap();
         fx.core.adopt_instances().await;
         assert!(provider_ids(&fx).is_empty());
         assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
@@ -1078,7 +1143,7 @@ mod tests {
         for id in ["jira", "github", "github_9"] {
             assert!(matches!(fx.core.provider_rename(id, "Other"), Err(Error::Input(_))), "{id}");
             assert!(matches!(fx.core.provider_set_enabled(id, false), Err(Error::Input(_))), "{id}");
-            assert!(matches!(fx.core.provider_remove(id), Err(Error::Input(_))), "{id}");
+            assert!(matches!(fx.core.provider_remove(id).await, Err(Error::Input(_))), "{id}");
         }
         assert_eq!((names(&fx), enabled(&fx)), before);
         assert_eq!(provider_ids(&fx), ["claude"]);
@@ -1138,7 +1203,7 @@ mod tests {
         assert!(rows[0].error.as_deref().is_some_and(|e| e.contains("config.json.bak")), "{:?}", rows[0].error);
         let id = rows[0].id.clone();
         assert!(matches!(fx.core.provider_set_enabled(&id, false), Err(Error::Input(_))));
-        assert!(matches!(fx.core.provider_remove(&id), Err(Error::Input(_))));
+        assert!(matches!(fx.core.provider_remove(&id).await, Err(Error::Input(_))));
         assert!(matches!(fx.core.rename_instance(&id, "Other"), Err(Error::Input(_))));
         assert!(matches!(fx.core.provider_set_enabled("claude", false), Err(Error::Input(_))));
         assert!(matches!(fx.core.rename_instance("claude", "Other"), Err(Error::Input(_))));
