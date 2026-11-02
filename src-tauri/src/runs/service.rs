@@ -84,8 +84,9 @@ pub struct RunService {
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) idle_polls: Mutex<std::collections::HashMap<String, u32>>,
-    pub(super) config_dir: Mutex<Option<PathBuf>>,
-    pub(super) projects_dir: Mutex<Option<PathBuf>>,
+    /// What `claude auth status` reported, by instance id: each instance has its own folder.
+    pub(super) config_dir: Mutex<HashMap<String, PathBuf>>,
+    pub(super) projects_dir: Mutex<HashMap<String, PathBuf>>,
     /// Wakes the tracker when the window gains focus.
     pub focus: tokio::sync::Notify,
     /// When this service was made, so recovery can tell a slot wait from before a restart from one of this session's.
@@ -155,8 +156,8 @@ impl RunService {
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             idle_polls: Mutex::new(std::collections::HashMap::new()),
-            config_dir: Mutex::new(None),
-            projects_dir: Mutex::new(None),
+            config_dir: Mutex::new(HashMap::new()),
+            projects_dir: Mutex::new(HashMap::new()),
             focus: tokio::sync::Notify::new(),
             started_at: Utc::now(),
         }
@@ -302,16 +303,16 @@ impl RunService {
             Ok(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
             Err(why) => return Err(Failure::NoClone(format!("Git couldn't read the origin of {} ({why})", clone.display()))),
         }
-        let auth = tc.cli.auth_status().await.map_err(|e| Failure::from_cli(e, clone))?;
+        let auth = tc.cli.auth_status().await.map_err(|e| Failure::from_cli(e, clone, tc))?;
         if !auth.logged_in {
-            return Err(Failure::NotSignedIn);
+            return Err(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
         }
         if let Ok(file) = super::trust::config_file(&tc.env, &auth) {
             if super::trust::trusted(&file, clone) == Some(false) && !super::trust::trusted_above(&file, clone) {
-                return Err(Failure::NeedsTrust { folder: clone.clone() });
+                return Err(Failure::NeedsTrust { folder: clone.clone(), instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
             }
         }
-        if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone))? {
+        if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone, tc))? {
             return Err(Failure::TooOld);
         }
         Ok(())
@@ -324,7 +325,7 @@ impl RunService {
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         loop {
-            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path))?;
+            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc))?;
             if let Some(found) = entries.into_iter().find(|e| belongs_to(e, run)) {
                 return Ok(Some(found));
             }
@@ -380,7 +381,7 @@ impl RunService {
                 self.store(run).await
             }
             Err(e) => {
-                let why = Failure::from_cli(e, &run.spec.clone_path);
+                let why = Failure::from_cli(e, &run.spec.clone_path, &tc);
                 self.fail(run, &why).await
             }
         }

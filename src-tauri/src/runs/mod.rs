@@ -8,6 +8,7 @@ pub mod archive;
 pub mod binary;
 pub mod cleanup;
 pub mod cli;
+pub mod codex_models;
 mod continuation;
 pub mod control;
 pub mod env;

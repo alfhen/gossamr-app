@@ -525,10 +525,10 @@ fn runs_reveal_work_folder(runs: State<'_, RunsState>) -> Result<()> {
     tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| error::Error::Claude(format!("Finder didn't open it: {e}")))
 }
 
-/// The models a provider instance offers: the driver's own, then the ones added to it.
+/// The models a provider instance offers: the driver's own (for Codex, what `codex debug models` lists), then the ones added to it.
 #[tauri::command]
-fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Result<Vec<model_choice::ModelOption>> {
-    core.provider_models(&instance_id)
+async fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Result<Vec<model_choice::ModelOption>> {
+    core.provider_models(&instance_id).await
 }
 
 /// Adds a model id to a provider instance's list and returns the list. An id that breaks the id rule is refused.
@@ -978,7 +978,7 @@ pub fn run() {
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
             let service = runs::service::RunService::new(
                     core.clone(),
-                    Arc::new(runs::toolchain::SystemToolchain::new(core.shell())),
+                    Arc::new(runs::toolchain::SystemToolchain::new(core.clone())),
                     runs::index::RunIndex::load(&core.data_dir()),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )

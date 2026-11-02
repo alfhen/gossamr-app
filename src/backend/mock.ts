@@ -1184,7 +1184,7 @@ export class MockBackend implements Backend {
   private claude: { enabled: boolean } | null = { enabled: true };
   /** Set to show the placeholder row the real backend returns when the providers list can't be read. */
   providersProblem: string | null = null;
-  private readonly models = new MockModels((instanceId) => instanceId === "claude" && this.claude !== null);
+  private readonly models = new MockModels((instanceId) => (instanceId === "claude" && this.claude !== null ? "claude" : null));
 
   async providerModels(instanceId: string) {
     return this.models.list(instanceId);

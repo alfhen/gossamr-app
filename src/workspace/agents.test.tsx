@@ -94,6 +94,19 @@ describe("a failed launch on a card", () => {
     expect(out).not.toContain("accept the trust prompt");
   });
 
+  it("shows what trusting allows beside every Trust button, never one without it", () => {
+    for (const refused of [null, "Claude has no settings file yet."]) {
+      const out = card(failed("untrustedFolder"), false, { trusting: false, refused });
+      expect(buttonsOf(out)).toContain("Trust this clone for Claude");
+      expect(out).toContain("hooks, MCP servers and permission rules");
+      expect(out).toContain("They run on your Mac as you.");
+    }
+    const trusting = card(failed("untrustedFolder"), false, { trusting: true, refused: null });
+    expect(trusting).toContain("They run on your Mac as you.");
+    const outside = card({ ...failed("untrustedFolder"), inWorkFolder: false });
+    expect(outside).not.toContain("They run on your Mac as you.");
+  });
+
   it("shows Trusting… while the clone is being trusted, and keeps the button from being pressed twice", () => {
     const out = card(failed("untrustedFolder"), false, { trusting: true, refused: null });
     expect(buttonsOf(out)).toEqual(["Trusting…", "Trust in Terminal instead", "Retry"]);

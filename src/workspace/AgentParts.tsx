@@ -221,13 +221,15 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
         </div>
       );
     case "failed": {
-      const help = failureHelp(run);
+      const help = failureHelp(run, failure.trust?.refused ?? null);
+      const offersTrust = [help?.primary, help?.secondary].some((step) => step?.act === "trust");
       return (
         <div className="grid gap-2">
           <p className="m-0 flex items-start gap-1.5 text-ws-blocked">
             <Icon name="alert" className="mt-0.5 size-3.5" />
             <span className={`${clamp(3)} min-w-0 [overflow-wrap:anywhere]`}>{help?.summary ?? (run.error?.trim() || "It didn't start")}</span>
           </p>
+          {offersTrust && <p data-trust-detail className="m-0 text-xs text-ws-ink2">{help?.detail}</p>}
           {help && <FailureNext run={run} failure={failure} />}
         </div>
       );

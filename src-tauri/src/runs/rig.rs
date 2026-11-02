@@ -75,7 +75,7 @@ pub async fn ready_in(fx: Fixture, login: &[(&str, String)], tune: impl FnOnce(R
     let bin = install_fake_git(&fx.dir);
     let mut env = RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]);
     login.iter().for_each(|(key, value)| env.set(key, value.as_str()));
-    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: Arc::new(env) }));
+    let tools = FixedToolchain(Ok(Toolchain::new(cli.clone(), Arc::new(env))));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
     let svc = RunService::new(
