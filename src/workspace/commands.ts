@@ -1,6 +1,6 @@
 import { showOf } from "../lib/keys";
-import { itemKey, YOUR_TURN } from "../lib/filter";
-import type { ContainerRef, Intent, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
+import { containerKey, itemKey, YOUR_TURN } from "../lib/filter";
+import type { ContainerRef, Intent, ItemRef, WorkContainer, WorkFilter, WorkItem, WorkstreamView } from "../types";
 import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
@@ -105,7 +105,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "project:all", group: "Projects", icon: "◧", label: "All projects", hint: ctx.project ? undefined : "current", keywords: "everything clear project", run: () => a.goToProject(null) },
     ...containers.map(
       (c): Command => ({
-        id: `project:${c.key}`,
+        id: `project:${containerKey(c.ref)}`,
         group: "Projects",
         icon: "◧",
         label: c.name,
@@ -213,8 +213,8 @@ export function searchOrder(tickets: readonly Command[], ranked: readonly Comman
   return { head: [...byKey, ...named], tickets: tickets.filter((t) => !byKey.includes(t)), commands: ranked.filter((c) => !named.includes(c)) };
 }
 
-/** Tickets whose key or title matches, exact keys first. */
-export function ticketCommands(items: readonly WorkItem[], query: string, jump: (item: WorkItem) => void, limit = 8): Command[] {
+/** Tickets whose key or title matches, exact keys first. A key two matches share says which site each is on. */
+export function ticketCommands(items: readonly WorkItem[], query: string, jump: (item: WorkItem) => void, limit = 8, siteOf: (ref: ItemRef) => string | null = () => null): Command[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const matches: { item: WorkItem; rank: number }[] = [];
@@ -223,10 +223,12 @@ export function ticketCommands(items: readonly WorkItem[], query: string, jump: 
     const rank = key === q ? 0 : key.startsWith(q) ? 1 : item.title.toLowerCase().includes(q) ? 2 : null;
     if (rank !== null) matches.push({ item, rank });
   }
-  return matches
-    .sort((a, b) => a.rank - b.rank || b.item.updated.localeCompare(a.item.updated))
-    .slice(0, limit)
-    .map(({ item }): Command => ({ id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: item.item.key, run: () => jump(item) }));
+  const shown = matches.sort((a, b) => a.rank - b.rank || b.item.updated.localeCompare(a.item.updated)).slice(0, limit);
+  const repeated = new Set(shown.map((m) => m.item.item.key).filter((k, i, all) => all.indexOf(k) !== i));
+  return shown.map(({ item }): Command => {
+    const site = repeated.has(item.item.key) ? siteOf(item.item) : null;
+    return { id: `ticket:${itemKey(item.item)}`, group: "Tickets", icon: "·", label: item.title, hint: site ? `${item.item.key} · ${site}` : item.item.key, run: () => jump(item) };
+  });
 }
 
 /** "Open the workstream on KEY" for each open workstream whose key or title matches the query; nothing for an empty one. */
@@ -290,14 +292,14 @@ export function watchCommands(unwatched: readonly { ref: ContainerRef; key: stri
 export function unwatchCommands(containers: readonly WorkContainer[], query: string, a: Pick<CommandActions, "watch">): Command[] {
   if (!/^\s*(unwatch|stop watching)/i.test(query)) return [];
   return containers.map(
-    (c): Command => ({ id: `unwatch:${c.key}`, group: "Projects", icon: "－", label: `Unwatch ${c.name}`, hint: c.key, keywords: `${c.key} stop watching remove`, run: () => a.watch(c, false) }),
+    (c): Command => ({ id: `unwatch:${containerKey(c.ref)}`, group: "Projects", icon: "－", label: `Unwatch ${c.name}`, hint: c.key, keywords: `${c.key} stop watching remove`, run: () => a.watch(c, false) }),
   );
 }
 
-/** For a query that is a ticket key not in the synced items: opens it in any project, read live. */
-export function keyCommand(query: string, items: readonly WorkItem[], open: (key: string) => void): Command[] {
+/** For a query that is a ticket key not in the synced items, or that another site could have too: opens it in any project, read live. */
+export function keyCommand(query: string, items: readonly WorkItem[], open: (key: string) => void, elsewhere: (key: string) => boolean = () => false): Command[] {
   const key = ticketKeyOf(query);
-  if (!key || items.some((i) => i.item.key.toUpperCase() === key)) return [];
+  if (!key || (items.some((i) => i.item.key.toUpperCase() === key) && !elsewhere(key))) return [];
   return [{ id: `key:${key}`, group: "Tickets", icon: "↗", label: `Open ${key}`, hint: "look up live", keywords: key, run: () => open(key) }];
 }
 
@@ -318,7 +320,7 @@ export function withAskPip(results: readonly Command[], query: string, ask: (que
 /** One entry per project for the new-ticket prompt, the one on screen first. */
 export function projectChoices(containers: readonly WorkContainer[], query: string, current: ContainerRef | null, pick: (c: WorkContainer) => void): Command[] {
   const all = containers.map(
-    (c): Command => ({ id: `new:${c.key}`, group: "Projects", icon: "◧", label: c.name, hint: c.key, keywords: c.key, stay: true, run: () => pick(c) }),
+    (c): Command => ({ id: `new:${containerKey(c.ref)}`, group: "Projects", icon: "◧", label: c.name, hint: c.key, keywords: c.key, stay: true, run: () => pick(c) }),
   );
   const first = containers.findIndex((c) => sameProject(current, c.ref));
   if (first > 0) all.unshift(...all.splice(first, 1));

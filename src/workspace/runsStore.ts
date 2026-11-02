@@ -6,7 +6,7 @@ import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, STILL_UNTRUSTED, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
-import { openTicketByKey, showMe } from "./jump";
+import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
@@ -174,7 +174,7 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
 }
 
 
-const openDraftsOn = (target: ItemRef) => showMe(target, { peek: true }) || void openTicketByKey(target.key);
+const openDraftsOn = (target: ItemRef) => showMe(target, { peek: true }) || void openTicket(target);
 
 /** The toast for archived runs, with an Undo that brings them all back. */
 function offerRestore(get: () => RunsState, ids: readonly string[], text: string) {

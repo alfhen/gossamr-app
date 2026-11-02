@@ -173,6 +173,12 @@ describe("closed workstreams", () => {
     expect(html).toContain("CA-401 already has an open workstream");
   });
 
+  it("keep Reopen for a ticket whose open workstream is on another site", () => {
+    const html = renderToStaticMarkup(<ClosedWorkstreams closed={[closed[0]]} open={[view("ws-2", "CA-401", { connectionId: "mock2" })]} />);
+    expect(html).not.toContain("aria-disabled");
+    expect(html).not.toContain("already has an open workstream");
+  });
+
   it("say so when there are none", () => {
     expect(renderToStaticMarkup(<ClosedWorkstreams closed={[]} open={open} />)).toContain("No closed workstreams.");
   });

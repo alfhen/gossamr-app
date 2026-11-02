@@ -1,11 +1,12 @@
 import { useEffect } from "react";
 import { isTypingTarget } from "../lib/keys";
+import { keyChooserOpen } from "./keyChooserStore";
 import { usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 
 /** Whether Esc is for something else: a field, a control that takes Esc itself, an open dialog or the palette. */
 export function escIsElsewhere(ev: Pick<KeyboardEvent, "key" | "defaultPrevented" | "target">): boolean {
-  if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen) return true;
+  if (ev.key !== "Escape" || ev.defaultPrevented || usePrefs.getState().paletteOpen || keyChooserOpen()) return true;
   const el = ev.target as { closest?: (s: string) => unknown } | null;
   return isTypingTarget(ev.target) || (typeof el?.closest === "function" && !!el.closest("[data-esc-local], [role=dialog], [role=menu], [role=listbox]"));
 }

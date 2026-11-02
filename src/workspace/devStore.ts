@@ -40,7 +40,8 @@ let asked: ItemRef[] = [];
 let pending = new Map<string, CodeSummary>();
 let pendingChanges = new Map<string, ItemRef>();
 
-const changesOf = (links: readonly DevLink[], ref: ItemRef) => links.map((l) => [l.change.externalId, ref] as const);
+// An ambiguous link may belong to another site's ticket, so it never says which ticket a pull request opens.
+const changesOf = (links: readonly DevLink[], ref: ItemRef) => links.filter((l) => !l.ambiguous).map((l) => [l.change.externalId, ref] as const);
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 const inFlight = new Set<string>();
 
