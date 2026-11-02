@@ -34,6 +34,9 @@ pub struct ScreenContext {
     /// Set by Core, not the page: the name of the tracker when it is off, so the open item and selection were dropped.
     #[serde(skip)]
     pub tracker_off: Option<String>,
+    /// Set by Core, not the page: how many tickets the page showed from another connection, left out of this turn.
+    #[serde(skip)]
+    pub left_out: usize,
 }
 
 impl ScreenContext {
@@ -51,8 +54,10 @@ impl ScreenContext {
 
     /// Leaves out the open item and selected items that are on another connection: a turn works in one.
     pub fn only_in(mut self, connection_id: &str) -> Self {
-        self.item.take_if(|r| r.connection_id != connection_id);
+        let item = self.item.take_if(|r| r.connection_id != connection_id).is_some();
+        let selected = self.selection.len();
         self.selection.retain(|r| r.connection_id == connection_id);
+        self.left_out = usize::from(item) + selected - self.selection.len();
         self
     }
 
@@ -66,6 +71,10 @@ impl ScreenContext {
         }
         if !self.selection.is_empty() {
             lines.push(format!("Selected: {}", self.selection.iter().map(|r| r.key.as_str()).collect::<Vec<_>>().join(", ")));
+        }
+        if self.left_out > 0 {
+            let n = self.left_out;
+            lines.push(format!("{n} open or selected ticket(s) are on another site and were left out of this turn. Never act on a key from there; if the person seems to mean one, ask which site."));
         }
         if let Some(name) = &self.tracker_off {
             lines.push(format!("{name} is off, so its tickets are hidden from you."));

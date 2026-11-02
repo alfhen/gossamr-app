@@ -23,7 +23,7 @@ impl Core {
         if asked.is_some() {
             return Ok(asked);
         }
-        let conversation = crate::agent::conversation_id(conversation);
+        let conversation = self.pip_conversation(conversation).await;
         let last = self.with_app_db(|db| db.last_pip_model(&conversation)).await?;
         Ok(last.or_else(|| AppConfig::load(&self.data_dir).models.pip))
     }

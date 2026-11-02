@@ -968,7 +968,7 @@ mod tests {
     async fn removing_either_connection_keeps_pips_conversations() {
         let fx = adopted().await;
         fx.core.pip_turn_begin(&fx.scope, "general", "q1", "Hi", &crate::agent::TurnMeta::default(), "done").await.unwrap();
-        let turns = || fx.core.with_app_db(|db| Ok(db.pip_turns("general")?.len()));
+        let turns = || fx.core.with_app_db(|db| Ok(db.pip_turns_named("general")?.len()));
 
         fx.core.remove_instance("github").await.unwrap();
         assert_eq!(turns().await.unwrap(), 1);
@@ -984,7 +984,7 @@ mod tests {
 
         fx.core.remove_instance("jira").await.unwrap();
 
-        let turns = fx.core.with_app_db(|db| db.pip_turns("general")).await.unwrap();
+        let turns = fx.core.with_app_db(|db| db.pip_turns_named("general")).await.unwrap();
         assert_eq!(turns.len(), 1);
         assert_eq!((turns[0].status.as_str(), turns[0].error.as_deref()), ("failed", Some(crate::db::DISCONNECTED)));
     }

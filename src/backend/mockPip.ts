@@ -275,9 +275,9 @@ function directAgent(prompt: string, runs: readonly Run[], workstream: PipWorkst
   return say(`I sent ${name} your message.`, ["Messaged an agent"], { message: { runId: run.id, text: message![2] } });
 }
 
-/** The Jira connection a turn works in: the workstream's, else the open ticket's, else the drawer's, else the first selected, else the first connection. A key the person types belongs to it. */
+/** The Jira connection a turn works in: the workstream's, else the open ticket's, else the drawer's, else the first connection. A selection does not pick it. A key the person types belongs to it. */
 const turnConnection = (context: ScreenContext, workstream: PipWorkstream | null, drawer: string | null = null) =>
-  workstream?.item?.connectionId ?? context.item?.connectionId ?? drawer ?? context.selection[0]?.connectionId ?? MOCK_CONNECTION;
+  workstream?.item?.connectionId ?? context.item?.connectionId ?? drawer ?? MOCK_CONNECTION;
 
 const asksToMove = /^\s*(?:please\s+)?move\s+(?:it|this|([A-Z][A-Z0-9]*-\d+))\s+to\s+(.+?)\s*[.!]?\s*$/i;
 

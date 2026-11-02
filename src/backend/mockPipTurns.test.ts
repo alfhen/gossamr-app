@@ -109,23 +109,23 @@ describe("the mock pip-turn store", () => {
     expect(openMockPipTurns().turns("general")).toEqual([]);
   });
 
-  it("adopts turns kept under the old 'workspace' name as General's, rewriting them once", () => {
+  it("adopts turns kept under the old 'workspace' name as General's and those with no site as the first site's, rewriting them once", () => {
     const old = (requestId: string, conversation: string) => ({ requestId, conversation, prompt: requestId, imageCount: 0, text: "a", steps: [], status: "done", error: null, sessionId: "s1", usage: null, createdAt: new Date().toISOString() });
     localStorage.setItem(KEY, JSON.stringify([old("w1", "workspace"), old("t1", "CA-1"), old("g1", "general")]));
     const store = openMockPipTurns();
     expect(store.turns("general").map((t) => t.requestId)).toEqual(["w1", "g1"]);
     expect(store.turns("workspace").map((t) => t.requestId)).toEqual(["w1", "g1"]);
-    expect(store.conversationOf("w1")).toBe("general");
-    expect(store.conversationOf("t1")).toBe("CA-1");
+    expect(store.conversationOf("w1")).toBe("mock:general");
+    expect(store.conversationOf("t1")).toBe("mock:CA-1");
     expect(store.conversationOf("nope")).toBeNull();
     const kept = JSON.parse(localStorage.getItem(KEY)!) as { requestId: string; conversation: string }[];
     expect(kept.map((t) => [t.requestId, t.conversation])).toEqual([
-      ["w1", "general"],
-      ["t1", "CA-1"],
-      ["g1", "general"],
+      ["w1", "mock:general"],
+      ["t1", "mock:CA-1"],
+      ["g1", "mock:general"],
     ]);
     store.begin("workspace", "w2", "asked under the old name", { imageCount: 0 });
-    expect(store.conversationOf("w2")).toBe("general");
+    expect(store.conversationOf("w2")).toBe("mock:general");
   });
 
   it("keeps a workstream's conversation apart from General", () => {

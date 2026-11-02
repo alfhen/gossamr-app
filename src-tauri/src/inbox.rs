@@ -934,7 +934,7 @@ impl Core {
         self.with_app_db(|db| {
             let own = OwnSession::list(db.app_meta(PIP_SESSIONS)?);
             let started_here = own.iter().any(|s| s.id() == session_id && s.instance() == Some(instance_id) && s.connection() == Some(connection_id));
-            Ok(started_here || db.is_open_workstream_session(session_id, instance_id)?)
+            Ok(started_here || db.is_open_workstream_session(session_id, instance_id, connection_id)?)
         })
         .await
     }
@@ -1090,7 +1090,7 @@ mod tests {
 
         let finished = fx.core.pip_turn_finish(&fx.scope, "q1", "A's answer", true, None, None, None).await;
         assert!(matches!(finished, Err(Error::SiteChanged)), "{finished:?}");
-        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "failed", "the turn the old account had open is settled");
+        assert_eq!(fx.core.pip_turns("jira:site:me:general").await.unwrap()[0].status, "failed", "the turn the old account had open is settled");
         let other = Scope { connection_id: "jira:site:else".into(), account_id: "else".into() };
         let begun = fx.core.pip_turn_begin(&other, "general", "q2", "Hi", &crate::agent::TurnMeta::default(), "running").await;
         assert!(begun.is_ok(), "{begun:?}");
@@ -1354,7 +1354,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pips_conversations_are_still_there_after_removing_jira_and_connecting_another_site() {
+    async fn pips_conversations_are_kept_after_removing_jira_and_each_site_has_its_own() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
@@ -1369,10 +1369,11 @@ mod tests {
         fx.core.connect_jira(&token_for_site("beta", "b", "fast"), None).await.unwrap();
         let (scope, _, _) = fx.core.auth.identity().await.unwrap();
         assert_eq!(scope.connection_id, "jira:beta:b");
-        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1);
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 0, "the first site's talk is not the second's");
+        assert_eq!(fx.core.pip_turns("jira:site:me:general").await.unwrap().len(), 1, "but it is kept");
         assert_eq!(fx.core.pip_turns("ws:w1").await.unwrap().len(), 1);
         fx.core.pip_turn_begin(&scope, "general", "q3", "In the second site", &meta, "done").await.unwrap();
-        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 2);
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

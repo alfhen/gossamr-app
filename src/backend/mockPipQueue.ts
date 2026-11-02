@@ -4,7 +4,8 @@ import { metaOf, mockAsk, mockCancel, mockPipEvents, type PipDrafter } from "./m
 import { REMOVED, mockPipTurns } from "./mockPipTurns";
 import { eventLine, type WakeFact } from "./mockSupervisor";
 import { defaultModelDefaults, validModelId } from "../lib/models";
-import { GENERAL_CONVERSATION, conversationId, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
+import { GENERAL_CONVERSATION, conversationId, conversationIn, splitConversation, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
+import { MOCK_CONNECTION } from "./mockConnector";
 
 /** How many of Pip's turns may run at once across every conversation (PIP_PROCESSES in src-tauri/src/agent/queue.rs). */
 export const PIP_PROCESSES = 2;
@@ -198,12 +199,17 @@ function enter(conversation: string, item: Waiting): AskOutcome {
  * conversation the person goes first, as `AgentService::ask` has it: a waiting wake is taken out, a running one is
  * stopped and its facts are queued again behind the message, and their message counts the automatic turns from zero.
  */
-export function mockQueueAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace?: number): AskOutcome {
-  if (queue.position(req.requestId) !== null) throw new Error("That question was already sent.");
+export function mockQueueAsk(asked: AskRequest, drafter: Partial<PipDrafter> | null, pace?: number): AskOutcome {
+  if (queue.position(asked.requestId) !== null) throw new Error("That question was already sent.");
+  const wsId = asked.kind === "wake" ? null : workstreamOfConversation(conversationOf(asked));
+  const drawer = asked.connectionId || splitConversation(conversationOf(asked)).connectionId || undefined;
+  const named = asked.context.item?.connectionId || drawer;
+  if (!wsId && named && drafter?.pipConnectionOn && !drafter.pipConnectionOn(named)) throw new Error("That Jira connection is off or gone, so Pip can't work in it.");
+  // Kept under the connection the turn runs on, so each connection has its own conversation, session and model choice.
+  const connection = (wsId && drafter?.pipWorkstreamItem?.(wsId)?.connectionId) || named || MOCK_CONNECTION;
+  const req: AskRequest = { ...asked, conversation: conversationIn(conversationOf(asked), connection), connectionId: drawer };
   const conversation = conversationOf(req);
-  const workstream = req.kind === "wake" ? null : workstreamOfConversation(conversation);
-  const named = req.context.item?.connectionId || req.connectionId;
-  if (!workstream && named && drafter?.pipConnectionOn && !drafter.pipConnectionOn(named)) throw new Error("That Jira connection is off or gone, so Pip can't work in it.");
+  const workstream = wsId;
   let again: { workstream: string; facts: WakeFact[] } | undefined;
   if (workstream) {
     for (const [id, w] of queue.waitingIn(conversation)) if (w.wake) mockQueueCancel(id);
