@@ -75,9 +75,9 @@ impl Snapshot {
         Snapshot { checked_at: String::new(), ..self.clone() } == Snapshot { checked_at: String::new(), ..other.clone() }
     }
 
-    /// A probe that couldn't tell keeps the account the last one found: failing to look is not a different account.
+    /// A probe that couldn't tell, or an instance turned off, keeps the account the last one found: neither is a different account.
     pub fn keeping_account_of(mut self, previous: Option<&Snapshot>) -> Self {
-        if self.state == State::Error && self.account.is_none() {
+        if matches!(self.state, State::Error | State::Off) && self.account.is_none() {
             self.account = previous.and_then(|p| p.account.clone());
         }
         self
@@ -344,6 +344,13 @@ mod tests {
             let before = Snapshot { account: Some("alfhen".into()), ..Snapshot::new(State::Ready, "") };
             assert_eq!(seen.keeping_account_of(Some(&before)).account.as_deref(), Some("alfhen"));
         }
+    }
+
+    #[test]
+    fn an_instance_turned_off_keeps_the_account_found_before() {
+        let before = Snapshot { account: Some("alf@acme.com".into()), ..Snapshot::new(State::Ready, "") };
+        assert_eq!(Snapshot::off().keeping_account_of(Some(&before)).account.as_deref(), Some("alf@acme.com"));
+        assert_eq!(Snapshot::new(State::NotSignedIn, "").keeping_account_of(Some(&before)).account, None);
     }
 
     #[tokio::test]

@@ -91,4 +91,10 @@ describe("the sign-in step", () => {
     expect(step(row("ready", { status: null }))).toContain("Checking…");
     expect(step(row("notFound"))).toContain("`claude` isn&#x27;t installed.");
   });
+
+  it("asks for a plain check when there is no command to have run", () => {
+    const out = step(row("notFound"));
+    expect(out).toContain("Check again");
+    expect(out).not.toContain("I&#x27;ve run it");
+  });
 });

@@ -125,6 +125,20 @@ describe("adding a provider instance in the mock", () => {
     expect(rows.find((c) => c.instanceId === "claude")!.status?.ignored).toBeUndefined();
   });
 
+  it("names OPENAI_API_KEY for a Codex with its own home", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("codex", "Codex", "~/.codex-work");
+    const row = (await b.connectionsList()).find((c) => c.instanceId === "codex")!;
+    expect(row.status?.ignored).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("keeps the account of a signed-in Claude that is turned off", async () => {
+    const b = new MockBackend();
+    await b.connectionSetEnabled("claude", false);
+    const row = (await b.connectionsList()).find((c) => c.instanceId === "claude")!;
+    expect(row.status).toMatchObject({ state: "off", account: "alf@acme.com" });
+  });
+
   it("shows the folder of an instance that has one and refuses the usual setup", async () => {
     const b = new MockBackend();
     await b.providerAdd("claude", "Work", "~/.claude-work");

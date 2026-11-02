@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBackend } from "../backend/useBackend";
 import { Button } from "../components/Button";
 import { Segmented } from "../components/Segmented";
@@ -115,8 +115,11 @@ export function SignInStepView({ row, checking, copied, onCopy, onOpenTerminal, 
   const label = DRIVER_NAME[row?.driver ?? "claude"];
   const status = row?.status ?? null;
   const account = row ? accountOf(row) : null;
+  const group = useRef<HTMLDivElement>(null);
+  // The form's Name input is gone by now; with focus on the body, Escape would reach the page's handler instead of the sheet's.
+  useEffect(() => group.current?.focus({ preventScroll: true }), []);
   return (
-    <div aria-label={`Sign in to ${row?.displayName ?? label}`} role="group" className="grid gap-3.5">
+    <div ref={group} tabIndex={-1} aria-label={`Sign in to ${row?.displayName ?? label}`} role="group" className="grid gap-3.5 outline-none">
       <div>
         <h2 className="font-display m-0 text-lg font-semibold">{row?.displayName ?? label} is added</h2>
         {status?.state === "ready" ? (
@@ -141,7 +144,7 @@ export function SignInStepView({ row, checking, copied, onCopy, onOpenTerminal, 
       <div className="flex justify-end gap-2">
         {status?.state !== "ready" && (
           <Button disabled={checking} onClick={onCheck}>
-            I've run it, check again
+            {status?.fix ? "I've run it, check again" : "Check again"}
           </Button>
         )}
         <Button variant="primary" onClick={onDone}>

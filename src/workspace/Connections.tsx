@@ -12,7 +12,7 @@ import { useConnectionsUi } from "./connectionsUi";
 import { isJira } from "./domains";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
-import { accountOf, ignoredLine, usedForLine } from "./providerLogic";
+import { accountLine, hasLogin, ignoredLine, revealProviderFolder, signOutCommand, usedForLine } from "./providerLogic";
 import { useProviderUi } from "./providerUi";
 import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
@@ -240,6 +240,27 @@ function NameField({ name, onRename }: { name: string; onRename(name: string): P
   );
 }
 
+function ProviderAccount({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
+  const line = accountLine(c);
+  const signOut = c.driver && hasLogin(c) ? signOutCommand(c.driver, c.configDir) : null;
+  return (
+    <>
+      {line && <p className="m-0">{line}</p>}
+      {signOut && (
+        <>
+          <p className="m-0 text-sm text-ws-ink2">To sign out, run this in Terminal.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="selectable rounded bg-ws-sel px-1.5 py-0.5 font-mono text-xs">{signOut}</code>
+            <Button size="sm" onClick={() => p.onCopy(signOut)}>
+              {p.copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function ProviderFields({ c, onReveal }: { c: ConnectionInfo; onReveal(): void }) {
   const ignored = ignoredLine(c);
   return (
@@ -277,7 +298,7 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
       )}
       {!sample && (
         <Field label="Account">
-          {c.kind === "provider" ? <p className="m-0">{accountOf(c) ?? "Not signed in"}</p> : <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>}
+          {c.kind === "provider" ? <ProviderAccount c={c} p={p} /> : <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>}
           <div className="flex flex-wrap gap-2">
             {isJira(c.kind) && (
               <Button variant="quiet" size="sm" onClick={p.onNewToken}>
@@ -408,14 +429,9 @@ export function ConnectionsSection({ now }: { now: Date }) {
       useWorkspace.getState().report("Couldn't open Terminal", e);
     }
   };
-  const revealFolder = async (c: ConnectionInfo | undefined) => {
+  const revealFolder = (c: ConnectionInfo | undefined) => {
     const backend = useWorkspace.getState().backend;
-    if (!c || !backend) return;
-    try {
-      await backend.providerRevealFolder(c.instanceId);
-    } catch (e) {
-      useWorkspace.getState().report("Couldn't show the folder", e);
-    }
+    return c && backend ? revealProviderFolder(backend, c.instanceId, (what, e) => useWorkspace.getState().report(what, e)) : Promise.resolve();
   };
   const toggle = async (c: ConnectionInfo, on: boolean) => {
     setToggling((now) => [...now, c.instanceId]);

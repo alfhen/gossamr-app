@@ -11,6 +11,8 @@ async function openSettings(page: Page) {
 const rowOf = (page: Page, name: string) => page.getByRole("listitem", { name: `${name} connection` });
 const terminals = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { connectionTerminals(): string[] } }).__gossamrMock.connectionTerminals());
 
+const revealed = (page: Page) => page.evaluate(() => (globalThis as unknown as { __gossamrMock: { providerReveals(): string[] } }).__gossamrMock.providerReveals());
+
 async function openAddSheet(page: Page, driver: "Claude" | "Codex") {
   await page.getByRole("button", { name: "+ Add" }).click();
   await page.getByRole("menuitem", { name: new RegExp(`^${driver}`) }).click();
@@ -45,7 +47,22 @@ test.describe("adding Claude and Codex", () => {
 
     await sheet.getByRole("button", { name: "Done" }).click();
     await expect(sheet).toHaveCount(0);
-    await expect(page.getByRole("region", { name: "Claude work details" })).toBeVisible();
+    const detail = page.getByRole("region", { name: "Claude work details" });
+    await expect(detail).toBeVisible();
+    await expect(detail).toContainText("alf@acme.com");
+    await expect(detail.getByText("CLAUDE_CONFIG_DIR=~/.claude-work claude auth logout")).toBeVisible();
+  });
+
+  test("closes the sheet on Escape from the sign-in step and stays in Settings", async ({ page }) => {
+    await openApp(page, QUERY);
+    await openSettings(page);
+    const sheet = await openAddSheet(page, "Claude");
+    await sheet.getByLabel("Name").fill("Claude two");
+    await sheet.getByRole("button", { name: "Add Claude" }).click();
+    await expect(sheet.getByRole("group", { name: "Sign in to Claude two" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
   });
 
   test("adds a Codex whose folder is its home and shows it authenticated with ChatGPT", async ({ page }) => {
@@ -126,7 +143,7 @@ test.describe("a provider's detail", () => {
     await expect(detail).toContainText("Your shell sets ANTHROPIC_API_KEY. Claude personal doesn't use it.");
     await expect(detail).toContainText("Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off.");
     await detail.getByRole("button", { name: "Reveal in Finder" }).click();
-    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect.poll(() => revealed(page)).toEqual(["~/.claude-personal"]);
     await expect(detail.getByRole("button", { name: /^Sync now|Manage/ })).toHaveCount(0);
   });
 
@@ -139,6 +156,8 @@ test.describe("a provider's detail", () => {
     await expect(detail).toContainText("Off. Pip and new agents can't use it.");
     await expect(detail).toContainText("Your usual setup");
     await expect(detail.getByRole("button", { name: "Reveal in Finder" })).toHaveCount(0);
+    await expect(detail).toContainText("alf@acme.com");
+    await expect(detail).not.toContainText("Not signed in");
   });
 
   test("asks before removing a provider and says its login and folder stay", async ({ page }) => {

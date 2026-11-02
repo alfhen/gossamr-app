@@ -234,7 +234,7 @@ describe("a provider in the list", () => {
     const row = { ...claude, displayName: "Claude personal", configDir: "~/.claude-personal", status: claudeSnapshot("ready", CHECKED) };
     const all = view({ connections: [jira, gh, row], selectedId: "claude" });
     const out = all.slice(all.indexOf('aria-label="Claude personal details"'));
-    const at = [">Status<", ">Name<", ">Account<", ">Remove<", ">Config folder<", "~/.claude-personal", "Reveal in Finder", "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."].map((t) => out.indexOf(t));
+    const at = [">Status<", ">Name<", ">Account<", ">Remove<", ">Config folder<", ">~/.claude-personal<", "Reveal in Finder", "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."].map((t) => out.indexOf(t));
     expect(at).not.toContain(-1);
     expect(at).toEqual([...at].sort((a, b) => a - b));
     expect(out).not.toContain("Models</h4>");
@@ -262,6 +262,41 @@ describe("a provider in the list", () => {
     const out = view({ connections: [jira, gh, { ...claude, displayName: "Claude personal" }], selectedId: "claude", confirming: "claude" });
     expect(out).toContain("Remove Claude personal? Gossamr stops offering it.");
     expect(out).toContain("your login and folder stay as they are");
+  });
+
+  const accountOfDetail = (row: ConnectionInfo) => {
+    const all = view({ connections: [jira, gh, row], selectedId: row.id });
+    const from = all.indexOf(">Account<");
+    return all.slice(from, all.indexOf(">Remove<", from));
+  };
+
+  it("keeps the login of a signed-in provider that is turned off, and does not say it is signed out", () => {
+    const off = accountOfDetail({ ...claude, enabled: false, status: { ...claudeSnapshot("off", CHECKED), account: "alf@acme.com" } });
+    expect(off).toContain("alf@acme.com");
+    expect(off).not.toContain("Not signed in");
+    expect(accountOfDetail({ ...claude, enabled: false, status: claudeSnapshot("ready", CHECKED) })).toContain("alf@acme.com");
+  });
+
+  it("keeps the login through a check that failed, and says not signed in only when the answer was signed out", () => {
+    const failed = accountOfDetail({ ...claude, status: { ...claudeSnapshot("error", CHECKED), account: "alf@acme.com" } });
+    expect(failed).toContain("alf@acme.com");
+    expect(failed).not.toContain("Not signed in");
+    expect(accountOfDetail({ ...claude, status: claudeSnapshot("notFound", CHECKED) })).not.toContain("Not signed in");
+    expect(accountOfDetail({ ...claude, status: claudeSnapshot("notSignedIn", CHECKED) })).toContain("Not signed in");
+  });
+
+  it("says not checked yet in the account before the first answer", () => {
+    expect(accountOfDetail(claude)).toContain("Not checked yet");
+  });
+
+  it("shows the sign-out command of a signed-in provider with Copy, built with its folder", () => {
+    const row = { ...claude, displayName: "Claude work", configDir: "~/.claude-work", status: claudeSnapshot("ready", CHECKED) };
+    const out = accountOfDetail(row);
+    expect(out).toContain("CLAUDE_CONFIG_DIR=~/.claude-work claude auth logout");
+    expect(out).toContain(">Copy<");
+    expect(accountOfDetail({ ...row, id: "codex", instanceId: "codex", driver: "codex", configDir: "~/.codex-side" })).toContain("CODEX_HOME=~/.codex-side codex logout");
+    expect(accountOfDetail({ ...row, status: claudeSnapshot("notSignedIn", CHECKED) })).not.toContain("logout");
+    expect(accountOfDetail({ ...row, status: null })).not.toContain("logout");
   });
 
   it("says in the detail pane that a provider with no answer yet is not checked yet", () => {

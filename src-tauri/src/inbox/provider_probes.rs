@@ -291,6 +291,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turning_a_signed_in_instance_off_keeps_the_account_it_had() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        fx.core.probe_providers(Probe::Launch).await;
+        fx.core.set_instance_enabled("claude", false).await.unwrap();
+        fx.core.probe_provider_now("claude").await;
+        let off = fx.core.provider_snapshot("claude").unwrap();
+        assert_eq!((off.state, off.account.as_deref()), (State::Off, Some("alf@acme.com")));
+    }
+
+    #[tokio::test]
     async fn a_focus_asks_a_ready_instance_again_only_after_five_minutes_and_a_signed_out_one_every_time() {
         let fx = fixture().await;
         let calls = install_claude(&fx, IN);
