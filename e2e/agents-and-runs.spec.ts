@@ -173,6 +173,28 @@ test.describe("a free role", () => {
   });
 });
 
+test.describe("who an agent commits as", () => {
+  test("shows on the run's card and sheet once the run has started, and not while it waits", async ({ page }) => {
+    await page.goto("/?runs=empty&runsCap=1&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    await startAgent(page, "CA-401", "investigate");
+    await startAgent(page, "CA-402", "investigate");
+    await expect.poll(async () => (await mockRuns(page)).length).toBe(2);
+    const [started, waiting] = await mockRuns(page);
+    expect([started.state, waiting.state]).toEqual(["queued", "queued"]);
+    await advanceRuns(page, 1, started.id);
+    await railButton(page, /^Work/).click();
+    const card = page.locator(`main article[data-run-id="${started.id}"]`);
+    await expect(card.locator("[data-commits-as]")).toHaveText("Commits as alf@acme.example · gh is signed in as ada");
+    await expect(page.locator(`main article[data-run-id="${waiting.id}"]`)).toBeVisible();
+    await expect(page.locator(`main article[data-run-id="${waiting.id}"] [data-commits-as]`)).toHaveCount(0);
+    await card.click();
+    await expect(runSheet(page).locator("[data-commits-as]")).toHaveText("Commits as alf@acme.example · gh is signed in as ada");
+  });
+});
+
 test.describe("agent rows on Work", () => {
   test("has an agent row with its state and role, Open in Terminal and Stop, and opens the report from it", async ({ page }) => {
     await openApp(page);

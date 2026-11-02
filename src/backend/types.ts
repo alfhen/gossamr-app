@@ -18,6 +18,7 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  WorkFolderGit,
   ModelDefaults,
   ModelOption,
   CleanupResult,
@@ -171,7 +172,11 @@ export interface Backend {
   /** How many agents carry on if the app quits or the person signs out. */
   runsKeepRunning(): Promise<number>;
   revealPath(path: string): Promise<void>;
+  /** Shows `~/Gossamr/agents` in Finder, making it if it is missing. The page names no folder. */
+  runsRevealWorkFolder(): Promise<void>;
   runsSettings(): Promise<AgentSettings>;
+  /** Who git commits as in `~/Gossamr/agents`; null when git can't be asked. Apart from the settings because it runs git. */
+  runsWorkFolderGit(): Promise<WorkFolderGit | null>;
   /** The models provider instance `instanceId` offers: the driver's own, then the ones added to it. */
   providerModels(instanceId: string): Promise<ModelOption[]>;
   /** Adds a model id to the instance's list and returns the list. An id that breaks the id rule is refused. */

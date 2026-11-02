@@ -511,6 +511,20 @@ fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSett
     }
 }
 
+/// Who git commits as in Gossamr's clones, and whether the person's git settings choose that by folder. None when git
+/// can't be asked. It runs git, so Settings asks for it apart from the settings themselves.
+#[tauri::command]
+async fn agent_work_folder_git(runs: State<'_, RunsState>) -> Result<Option<runs::limits::WorkFolderGit>> {
+    Ok(runs.work_folder_git().await)
+}
+
+/// Shows `~/Gossamr/agents` in Finder, making it first. The page names no folder.
+#[tauri::command]
+fn runs_reveal_work_folder(runs: State<'_, RunsState>) -> Result<()> {
+    let folder = runs.make_work_folder()?;
+    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| error::Error::Claude(format!("Finder didn't open it: {e}")))
+}
+
 /// The models a provider instance offers: the driver's own, then the ones added to it.
 #[tauri::command]
 fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Result<Vec<model_choice::ModelOption>> {
@@ -1058,6 +1072,8 @@ pub fn run() {
             workstreams_stop,
             runs_open_terminal,
             runs_disk,
+            runs_reveal_work_folder,
+            agent_work_folder_git,
             runs_events,
             runs_keep_running,
             runs_list,

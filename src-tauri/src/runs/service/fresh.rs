@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use super::*;
-use crate::runs::fresh::{ensure_clone, lock_repo, real, remove_stale_temps, work_path, CloneError, Fetched, FETCH_EVERY};
+use crate::runs::limits::WorkFolderGit;
+use crate::runs::repo::CommitIdentity;
+use crate::runs::fresh::{agents_root, ensure_clone, lock_repo, real, remove_stale_temps, work_path, CloneError, Fetched, FETCH_EVERY};
 
 fn clone_failure(e: CloneError) -> Failure {
     match e {
@@ -71,15 +73,38 @@ impl RunService {
         }
     }
 
+    /// Puts the address and key git commits with in the clone on the run about to start, so its card can say who its
+    /// commits will be from. Called under the launch lock, with the run loaded there.
+    pub(super) async fn record_identity(&self, run: &mut Run, who: Option<CommitIdentity>) -> Result<()> {
+        let Some(who) = who.filter(|w| (&run.commit_email, &run.signing_key) != (&w.email, &w.signing_key)) else { return Ok(()) };
+        (run.commit_email, run.signing_key) = (who.email, who.signing_key);
+        self.store(run).await
+    }
+
+    /// The folder agents work in, made if it is missing. Nothing from the page decides which folder.
+    pub fn make_work_folder(&self) -> Result<PathBuf> {
+        let home = self.fresh_home().ok_or_else(|| Error::Claude("Gossamr can't find your home folder.".into()))?;
+        let root = agents_root(&home);
+        std::fs::create_dir_all(&root).map_err(|e| Error::Claude(format!("Couldn't make {}: {e}", root.display())))?;
+        Ok(root)
+    }
+
+    /// Who git commits as in the work folder, and whether the person's git settings pick that by folder. None when
+    /// git can't be asked.
+    pub async fn work_folder_git(&self) -> Option<WorkFolderGit> {
+        let (home, tools) = (self.fresh_home()?, self.tools.get().await.ok()?);
+        Git::new(tools.env).work_folder_git(&home).await
+    }
+
     /// Makes Gossamr's clone of the run's repository, or fetches into it, before a launch. It takes the repository's
     /// locks, so a second run on the same repository waits for the first one's clone, and it runs outside the launch
     /// lock so a slow clone holds up only runs on this repository. A run set up anywhere but the work folder is left to
-    /// `check()` to refuse. A fetch that can't be made is noted on the run and the launch goes on.
-    pub(super) async fn prepare(&self, run: &Run) -> std::result::Result<(), Failure> {
+    /// `check()` to refuse. A fetch that can't be made is noted on the run and the launch goes on. Says who git commits as in the clone.
+    pub(super) async fn prepare(&self, run: &Run) -> std::result::Result<Option<CommitIdentity>, Failure> {
         let spec = &run.spec;
-        let Some(home) = self.fresh_home() else { return Ok(()) };
+        let Some(home) = self.fresh_home() else { return Ok(None) };
         if work_path(&home, &spec.repo).ok() != Some(real(&spec.clone_path)) {
-            return Ok(());
+            return Ok(None);
         }
         let git = Git::new(self.tools.get().await?.env);
         let lock = self.repo_lock(&spec.repo);
@@ -95,10 +120,11 @@ impl RunService {
         if cloning {
             self.show_progress(&run.id, None).await;
         }
-        if let Some(Fetched::Not(why)) = ensured.map_err(clone_failure)?.fetched {
+        let ensured = ensured.map_err(clone_failure)?;
+        if let Some(Fetched::Not(why)) = &ensured.fetched {
             let text = format!("Couldn't update Gossamr's clone of {}: {why}. The agent starts from what was fetched before.", spec.repo);
             self.note_clone(run, "clone_note", text).await;
         }
-        Ok(())
+        Ok(Some(git.commit_identity(&ensured.path).await))
     }
 }
