@@ -48,6 +48,7 @@ import { docFromText, docText } from "../lib/docs";
 import { ticketBlockText } from "./mockTicket";
 import { bodyChange, docFromMarkdown, markdownOf } from "./mockMarkdown";
 import { MOCK_CONNECTION, MockConnector, PEOPLE, itemRef } from "./mockConnector";
+import { BETA_SITE } from "./mockBetaSite";
 import { basisFieldsOf, heldNote, targetOf, workstreamOf } from "../lib/proposals";
 import { workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { assemblePlan } from "./mockPlanSection";
@@ -58,6 +59,24 @@ import { holdMockPip } from "./mockPip";
 import { MockProposals } from "./mockProposals";
 import { mockPipTurns } from "./mockPipTurns";
 import { MockWorkstreams, lastDriftOf, type LastDrift } from "./mockWorkstreams";
+
+/** One Jira account after the first, with its own sample site. */
+interface SampleJiraAccount {
+  instanceId: string;
+  connector: MockConnector;
+  status: AuthStatus;
+  enabled: boolean;
+  problem: JiraProblem | null;
+}
+
+export type JiraProblem = "refused" | "offline";
+
+const isSampleJira = (connectionId: string) => /^mock\d*$/.test(connectionId);
+
+/** The connection a draft is for. */
+const draftConnection = (p: Proposal): string | null => (p.intent.type === "create" ? p.intent.container.connectionId : p.intent.type === "githubReview" ? p.intent.connectionId : targetOf(p.intent)?.connectionId ?? null);
+
+const dismissKey = (connectionId: string, containerId: string) => `${connectionId}:${containerId}`;
 
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
@@ -363,30 +382,45 @@ export class MockBackend implements Backend {
   private simulated = 0;
 
   /** The multi-project tracker behind the cache reads. */
-  readonly connector: MockConnector;
+  private primary: MockConnector;
+  private readonly options: MockOptions;
+
+  /** The first Jira connection's sample site. */
+  get connector(): MockConnector {
+    return this.primary;
+  }
+
   private jiraToken: MockOptions["jiraToken"];
   private jiraAccount: AuthStatus;
   private jiraEnabled = true;
+  /** The Jira accounts after the first, in the order they were added; `?jira=2` starts with one. */
+  private readonly accounts: SampleJiraAccount[] = [];
+  private nextJira = 2;
 
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
 
   /** `options.catalogSize` sets how many projects there are to choose from; the default is the four sample ones. */
   constructor(options: MockOptions = {}) {
-    this.connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
+    this.options = options;
+    this.primary = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), options);
+    this.watchOn(this.primary);
     this.github = new MockGithub(options.githubRepos ?? 14, Date.now(), options.githubRepos !== undefined, options.reviewAccess === "none" ? "none" : "sample");
     this.jiraToken = options.jiraToken;
-    this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
+    const several = options.jira === 2;
+    this.jiraAccount = options.jiraToken || several ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
+    if (several) this.addAccount(mockJiraStatus("beta.atlassian.net", "alf@beta.example", "2027-10-30"), true);
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
     this.github.holdRecheck = options.githubRecheck === "hold";
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
     this.workstreams = new MockWorkstreams(
       () => this.runs.list(),
-      (ref) => this.connector.item(ref)?.title ?? null,
+      (ref) => this.connectorFor(ref.connectionId)?.item(ref)?.title ?? null,
     );
     this.runs.workstreams = this.workstreams;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
+    this.proposals.hasConnection = (id) => this.connectorFor(id) !== undefined;
     this.proposals.runRole = (id) => this.runs.get(id)?.spec.role ?? null;
     this.proposals.audit = (p, actor, action, detail, workstream) => void this.workstreams.record(workstream ?? workstreamOf(p), actor, action, { proposalId: p.id, ...(detail ? { detail } : {}) });
     this.workstreams.pendingDrafts = () => this.proposals.list({ states: ["pending"] });
@@ -395,11 +429,12 @@ export class MockBackend implements Backend {
     // A run that moved on may have moved its workstream's stage on.
     this.runs.onChanged(() => this.workstreams.changed());
     this.runs.ticketText = (ref) => {
-      const w = this.connector.item(ref);
-      if (!w) return null;
-      return ticketBlockText({ item: w, comments: this.connector.comments(ref), people: this.connector.people, titleOf: (r) => this.connector.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
+      const c = this.connectorFor(ref.connectionId);
+      const w = c?.item(ref);
+      if (!c || !w) return null;
+      return ticketBlockText({ item: w, comments: c.comments(ref), people: c.people, titleOf: (r) => c.item(r)?.title ?? null, code: this.github.code.devLinks(ref) });
     };
-    this.runs.ticketDoc = (ref) => this.connector.item(ref)?.body ?? null;
+    this.runs.ticketDoc = (ref) => this.connectorFor(ref.connectionId)?.item(ref)?.body ?? null;
     // The sample Pip drafts from a finished report when the sample asks it to. The app does not: a real run waits for Pip.
     const sampleDrafts = typeof options.runs === "object" && !!options.runs?.planDescription;
     if (sampleDrafts) {
@@ -431,7 +466,8 @@ export class MockBackend implements Backend {
       workstreams: this.workstreams,
       proposals: this.proposals,
       pip: { hold: holdMockPip, idle: mockPipIdle },
-      tickets: { edit: (key, change) => this.editTicket(key, change) },
+      tickets: { edit: (item, change) => this.editTicket(item, change) },
+      jira: { fail: (instanceId, problem) => this.failJira(instanceId, problem) },
       terminals: this.terminals,
       github: { probe: (state) => this.github.setProbe(state), refuseToken: () => this.github.refuseToken(), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept), finishRecheck: () => this.github.finishRecheck() },
     });
@@ -459,7 +495,7 @@ export class MockBackend implements Backend {
         return created.map((key) => ({ connectionId: "mock", externalId: key, key }));
       }
       case "create":
-        return [this.connector.createItem(intent.container, intent.fields)];
+        return [this.writableConnector(intent.container.connectionId).createItem(intent.container, intent.fields)];
       default:
         throw new Error("the sample data can't apply that");
     }
@@ -698,7 +734,7 @@ export class MockBackend implements Backend {
 
   /** Drafts a text edit the way propose_description_edit does: against the ticket as it reads now, with a sample revision. */
   async pipRewrite(item: ItemRef, part: "title" | "description", requestId: string) {
-    const now = this.connector.item(item);
+    const now = this.connectorFor(item.connectionId)?.item(item);
     if (!now) throw new Error(`${item.key} isn't in the sample data`);
     const from = markdownOf(now.body);
     const scope = "## Scope\n- In: what this ticket describes\n- Out: anything it doesn't name";
@@ -749,7 +785,7 @@ export class MockBackend implements Backend {
   }
 
   private draftPlan(run: Run) {
-    const body = run.item ? this.connector.item(run.item)?.body : null;
+    const body = run.item ? this.connectorFor(run.item.connectionId)?.item(run.item)?.body : null;
     if (!body) return;
     const made = assemblePlan(run, body, docFromMarkdown);
     if ("problem" in made || markdownOf(made.to) === markdownOf(body)) return;
@@ -757,7 +793,7 @@ export class MockBackend implements Backend {
   }
 
   private draftTriage(run: Run, result: string) {
-    const body = run.item ? this.connector.item(run.item)?.body : null;
+    const body = run.item ? this.connectorFor(run.item.connectionId)?.item(run.item)?.body : null;
     if (!body) return;
     const note = result.split("\nFor Jira:\n")[1]?.trim() ?? "";
     const questions = (result.split("Open questions:\n")[1]?.split(/\n\n/)[0] ?? "").split("\n").filter((line) => line.startsWith("- ")).map((line) => line.slice(2).trim());
@@ -873,8 +909,9 @@ export class MockBackend implements Backend {
    * at once (items-changed), and the workstreams tell their listeners, so the supervisor looks again, as a sync bringing
    * the edit would make it.
    */
-  editTicket(key: string, change: TicketEdit) {
-    this.connector.edit(itemRef(key), { title: change.summary, body: change.description === undefined ? undefined : docFromText(change.description), status: change.statusId });
+  editTicket(item: string | ItemRef, change: TicketEdit) {
+    const ref = typeof item === "string" ? itemRef(item) : item;
+    this.watchTarget(ref.connectionId).edit(ref, { title: change.summary, body: change.description === undefined ? undefined : docFromText(change.description), status: change.statusId });
     this.workstreams.changed();
   }
 
@@ -942,27 +979,32 @@ export class MockBackend implements Backend {
 
   private applyToConnector(intent: Intent, already: ItemRef[]): boolean {
     const target = targetOf(intent);
-    if (!target || !this.connector.has(target)) return false;
+    if (!target || !isSampleJira(target.connectionId)) return false;
+    const connector = this.writableConnector(target.connectionId);
+    if (!connector.has(target)) {
+      if (connector === this.connector) return false;
+      throw new Error(`${target.key} isn't in the sample data`);
+    }
     this.appliedToConnector = [];
     switch (intent.type) {
       case "comment":
-        this.connector.comment(intent.item, docText(intent.body), intent.body);
+        connector.comment(intent.item, docText(intent.body), intent.body);
         return true;
       case "transition":
-        this.connector.transition(intent.item, intent.to);
+        connector.transition(intent.item, intent.to);
         return true;
       case "subtasks":
-        this.appliedToConnector = this.connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
+        this.appliedToConnector = connector.createSubtasks(intent.parent, intent.summaries.slice(already.length));
         return true;
       case "link":
-        this.connector.link(intent.from, intent.to, intent.kind);
+        connector.link(intent.from, intent.to, intent.kind);
         return true;
       case "rewrite": {
-        const now = this.connector.item(intent.item)!;
+        const now = connector.item(intent.item)!;
         if ((intent.title && intent.title.from !== now.title) || (intent.body && intent.body.fromText !== markdownOf(now.body))) {
           throw new Error(`${intent.item.key} changed since this was drafted, so nothing was written. Skip this draft and ask Pip to draft it again from the current text.`);
         }
-        this.connector.rewrite(intent.item, { title: intent.title?.to, body: intent.body?.to });
+        connector.rewrite(intent.item, { title: intent.title?.to, body: intent.body?.to });
         return true;
       }
       default:
@@ -970,16 +1012,49 @@ export class MockBackend implements Backend {
     }
   }
 
+  /** Every Jira connection that is on, the first one first. */
+  private get onConnectors(): MockConnector[] {
+    return [...(this.jiraEnabled ? [this.connector] : []), ...this.accounts.filter((a) => a.enabled).map((a) => a.connector)];
+  }
+
+  /** The connection that is on and has this id. */
+  private connectorFor(connectionId: string): MockConnector | undefined {
+    return this.onConnectors.find((c) => c.connectionId === connectionId);
+  }
+
+  /** The connector a write goes to. A connection that is off or gone refuses, so a draft never lands on another account. */
+  private writableConnector(connectionId: string): MockConnector {
+    const connector = this.connectorFor(connectionId);
+    if (!connector) throw new Error("That Jira connection is off or gone, so nothing was written.");
+    return connector;
+  }
+
+  /** The connection a watch command names, off or on. Without an id it is the first, as the one-connection callers have it. */
+  private watchTarget(connectionId?: string): MockConnector {
+    if (connectionId === undefined) return this.connector;
+    const found = [this.connector, ...this.accounts.map((a) => a.connector)].find((c) => c.connectionId === connectionId);
+    if (!found) throw new Error("This connection is gone. Reopen Settings.");
+    return found;
+  }
+
+  private readonly watchListeners = new Set<(c: WatchChanged) => void>();
+
+  private watchOn(connector: MockConnector) {
+    connector.onWatchChanged((c) => this.watchListeners.forEach((l) => l(c)));
+  }
+
   async cacheSearch(filter: WorkFilter, opts: ReadScope = {}) {
-    return this.connector.search(filter, opts.includeUnwatched);
+    return this.onConnectors.flatMap((c) => c.search(filter, opts.includeUnwatched)).sort((a, b) => b.updated.localeCompare(a.updated));
   }
 
   async cacheItem(ref: ItemRef) {
-    return this.connector.cacheItem(ref);
+    return this.connectorFor(ref.connectionId)?.cacheItem(ref) ?? null;
   }
 
   async peekItem(ref: ItemRef) {
-    return this.connector.peek(ref) ?? this.pastTicket(ref);
+    const connector = this.connectorFor(ref.connectionId);
+    if (!connector) return null;
+    return connector.peek(ref) ?? (connector === this.connector ? this.pastTicket(ref) : null);
   }
 
   /**
@@ -1016,43 +1091,48 @@ export class MockBackend implements Backend {
   }
 
   async cacheContainers(opts: ReadScope = {}) {
-    return this.connector.listContainers(opts.includeUnwatched);
+    return this.onConnectors.flatMap((c) => c.listContainers(opts.includeUnwatched));
   }
 
   async watchGet(): Promise<WatchState[]> {
     const github = this.github.watchState();
-    return github ? [this.connector.watchState(), github] : [this.connector.watchState()];
+    const jira = this.onConnectors.map((c) => c.watchState());
+    return github ? [...jira, github] : jira;
   }
 
   async watchSetContainers(connectionId: string, changes: WatchChange[]) {
     if (connectionId === GITHUB_CONNECTION) return this.github.setWatched(changes);
-    this.connector.setWatched(changes);
+    this.watchTarget(connectionId).setWatched(changes);
   }
 
   async watchCatalog(connectionId: string, query: string, cursor: string | null = null): Promise<CatalogPage> {
     if (connectionId === GITHUB_CONNECTION) return this.github.catalogPage(query, cursor);
-    return this.connector.catalogPage(query, cursor);
+    return this.watchTarget(connectionId).catalogPage(query, cursor);
   }
 
   async watchSuggestions(connectionId?: string): Promise<Footprint[]> {
     if (connectionId === GITHUB_CONNECTION) return this.github.footprint();
-    return this.connector.footprint();
+    return this.watchTarget(connectionId).footprint();
   }
 
   private dismissed = new Set<string>();
 
   async watchUnwatchedAssigned(connectionId?: string): Promise<Stray[]> {
     if (connectionId === GITHUB_CONNECTION) return [];
-    return this.connector.strays().filter((s) => !this.dismissed.has(s.container.externalId));
+    return this.watchTarget(connectionId).strays().filter((s) => !this.dismissed.has(dismissKey(s.container.connectionId, s.container.externalId)));
   }
 
-  async watchDismissAssigned(_connectionId: string, containerId: string) {
-    this.dismissed.add(containerId);
+  async watchDismissAssigned(connectionId: string, containerId: string) {
+    this.dismissed.add(dismissKey(connectionId, containerId));
   }
 
   onWatchChanged(listener: (c: WatchChanged) => void) {
-    const off = [this.connector.onWatchChanged(listener), this.github.onWatchChanged(listener)];
-    return () => off.forEach((f) => f());
+    this.watchListeners.add(listener);
+    const off = this.github.onWatchChanged(listener);
+    return () => {
+      this.watchListeners.delete(listener);
+      off();
+    };
   }
 
   /** The sample data has no background check to run, so nothing is ever announced. */
@@ -1061,31 +1141,40 @@ export class MockBackend implements Backend {
   }
 
   async cacheEvents(ref: ItemRef) {
-    return this.connector.eventsFor(ref);
+    return this.connectorFor(ref.connectionId)?.eventsFor(ref) ?? [];
   }
 
+  /** The connections' feeds merged newest first by `(at, id)`, so the cursor needs nothing new. */
   async cacheFeed(query: FeedQuery) {
-    return this.connector.feed(query);
+    const limit = Math.min(query.limit || 50, 200);
+    const pages = this.onConnectors.filter((c) => !query.container || query.container.connectionId === c.connectionId).map((c) => c.feed(query));
+    const merged = pages.flatMap((p) => p.entries).sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+    const entries = merged.slice(0, limit);
+    const last = entries[entries.length - 1];
+    return { entries, next: (merged.length > limit || pages.some((p) => p.next)) && last ? { at: last.at, id: last.id } : null };
   }
 
   async cacheFeedUnread(kinds?: FeedQuery["kinds"]) {
-    return this.connector.feedUnread(kinds);
+    return this.onConnectors.reduce((n, c) => n + c.feedUnread(kinds), 0);
   }
 
   async cachePeople() {
-    return this.connector.people;
+    const seen = new Map<string, Person>();
+    for (const p of this.onConnectors.flatMap((c) => c.people)) if (!seen.has(p.accountId)) seen.set(p.accountId, p);
+    return [...seen.values()];
   }
 
   async cacheMe() {
-    return this.connector.identity();
+    const [first, ...rest] = this.onConnectors.map((c) => c.identity());
+    return first ? { ...first, accounts: [first, ...rest].flatMap((i) => i.accounts) } : this.connector.identity();
   }
 
   async cacheComments(ref: ItemRef) {
-    return this.connector.comments(ref);
+    return this.connectorFor(ref.connectionId)?.comments(ref) ?? [];
   }
 
   async cacheTransitions(ref: ItemRef) {
-    return this.connector.moves(ref);
+    return this.connectorFor(ref.connectionId)?.moves(ref) ?? [];
   }
 
   /** The commands Terminal was opened on, oldest first. */
@@ -1137,8 +1226,11 @@ export class MockBackend implements Backend {
       return;
     }
     if (target.kind === "jira") {
-      this.jiraEnabled = enabled;
+      const account = this.accounts.find((a) => a.instanceId === instanceId);
+      if (account) account.enabled = enabled;
+      else this.jiraEnabled = enabled;
       this.connectionsListeners.forEach((l) => l());
+      this.cacheListeners.forEach((l) => l({ connectionId: target.id }));
       return;
     }
     const posting = this.proposals.list({ states: ["applying"] }).some((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
@@ -1151,6 +1243,15 @@ export class MockBackend implements Backend {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
+    const account = this.accounts.findIndex((a) => a.instanceId === instanceId);
+    if (account >= 0) {
+      this.retireDraftsOf(target.id, `${target.displayName} was removed.`, target.displayName);
+      this.accounts.splice(account, 1);
+      this.names.delete(instanceId);
+      this.connectionsListeners.forEach((l) => l());
+      this.cacheListeners.forEach((l) => l({ connectionId: target.id }));
+      return;
+    }
     if (target.kind === "jira") {
       this.jiraAccount = { site: null, me: null, email: null, expiresOn: null };
       this.jiraEnabled = true;
@@ -1174,15 +1275,30 @@ export class MockBackend implements Backend {
     this.connectionsListeners.forEach((l) => l());
   }
 
+  /** Closes the drafts made for connection `connectionId`, as the desktop app does when its account goes. */
+  private retireDraftsOf(connectionId: string, reason: string, name: string) {
+    const mine = this.proposals.list({ states: ["pending", "applying"] }).filter((d) => draftConnection(d) === connectionId);
+    if (mine.some((d) => d.state.type === "applying")) throw new Error(`Gossamr is posting a draft for ${name} right now. Try again in a moment.`);
+    for (const d of mine) this.proposals.retire(d.id, reason);
+  }
+
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
     if (refresh) this.github.recheck();
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
     const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: site ? this.jiraEnabled : true, kind: site ? "jira" : "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
+    const named: AuthStatus[] = site ? [this.jiraAccount] : [];
+    const accounts = this.accounts.map((a): ConnectionInfo => {
+      const host = a.status.site?.name ?? "";
+      const shared = named.some((n) => n.site?.name === host);
+      named.push(a.status);
+      const message = a.problem === "refused" ? "Jira turned down your token. Make a new one to keep syncing" : a.problem === "offline" ? `Can't reach ${host}. Gossamr tries again at the next sync.` : null;
+      return { id: a.connector.connectionId, instanceId: a.instanceId, displayName: shared ? `${host} (${a.status.email})` : host, enabled: a.enabled, kind: "jira", workspace: host, url: a.status.site?.url ?? null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: message, transient: a.problem === "offline", reauth: a.problem === "refused", status: jiraSnapshot(a.problem === "refused" ? "notSignedIn" : "ready", new Date().toISOString()), rechecking: false };
+    });
     const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: "", account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
     const unreadable: ConnectionInfo[] = this.providersProblem ? [{ ...sample, id: "providers", instanceId: "providers", displayName: "Models", enabled: false, kind: "provider", workspace: "", url: "", account: "", error: this.providersProblem, reauth: false, status: null }] : [];
-    const all = [sample, ...(this.github.connected ? [this.github.info()] : []), ...claude, ...unreadable];
+    const all = [sample, ...accounts, ...(this.github.connected ? [this.github.info()] : []), ...claude, ...unreadable];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }
 
@@ -1278,8 +1394,8 @@ export class MockBackend implements Backend {
     });
   }
 
-  async setUnread(_connectionId: string, eventId: string, unread: boolean) {
-    if (this.connector.setRead(eventId, !unread)) return;
+  async setUnread(connectionId: string, eventId: string, unread: boolean) {
+    if (this.connectorFor(connectionId)?.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
 
@@ -1299,12 +1415,70 @@ export class MockBackend implements Backend {
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
     if (input.cloudId && !host.startsWith("unknown") && input.cloudId !== mockCloudId(host)) throw new Error(`That cloud id isn't the one ${host} reports. Check the site.`);
-    const has = this.jiraAccount;
-    if (instanceId === undefined && has.site?.name === host && has.email === input.email.trim()) throw new Error("You already have this account. Use Make a new token on its row.");
-    this.jiraAccount = mockJiraStatus(host, input.email.trim(), input.expiresOn, input.cloudId);
+    const email = input.email.trim();
+    const status = mockJiraStatus(host, email, input.expiresOn, input.cloudId);
+    const account = this.accounts.find((a) => a.instanceId === instanceId);
+    const taken = [...(instanceId === "jira" ? [] : [this.jiraAccount]), ...this.accounts.filter((a) => a !== account).map((a) => a.status)];
+    if (taken.some((s) => s.site?.name === host && s.email === email)) throw new Error("You already have this account. Use Make a new token on its row.");
+    if (instanceId !== undefined && instanceId !== "jira" && !account) throw new Error("That isn't a Jira connection.");
+    if (account) {
+      if (account.status.site?.name !== host || account.status.email !== email) this.freshConnector(account);
+      account.status = status;
+      account.problem = null;
+      this.connectionsListeners.forEach((l) => l());
+      return status;
+    }
+    if (instanceId === undefined && this.jiraAccount.site && !this.jiraToken) {
+      const added = this.addAccount(status, false);
+      this.connectionsListeners.forEach((l) => l());
+      this.cacheListeners.forEach((l) => l({ connectionId: added.connector.connectionId }));
+      return status;
+    }
+    const was = this.jiraAccount.site;
+    const changed = !!was && (was.name !== host || this.jiraAccount.email !== email);
+    if (changed) this.retireDraftsOf(this.primary.connectionId, `${was.name} was replaced by another account.`, was.name);
+    this.jiraAccount = status;
     this.jiraToken = undefined;
+    if (changed) {
+      this.primary = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), this.options);
+      this.watchOn(this.primary);
+      this.cacheListeners.forEach((l) => l({ connectionId: this.primary.connectionId }));
+    }
     this.connectionsListeners.forEach((l) => l());
     return this.jiraAccount;
+  }
+
+  /** A different login on an account's row is another account: its tickets, watch list and drafts start over. */
+  private freshConnector(account: SampleJiraAccount) {
+    const old = account.connector;
+    this.retireDraftsOf(old.connectionId, "That login was replaced by another account.", account.status.site?.name ?? "");
+    account.connector = this.newAccountConnector(false);
+    this.cacheListeners.forEach((l) => l({ connectionId: old.connectionId }));
+    this.cacheListeners.forEach((l) => l({ connectionId: account.connector.connectionId }));
+  }
+
+  private newAccountConnector(watchAll: boolean): MockConnector {
+    const n = this.nextJira++;
+    const connector = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), {}, { ...BETA_SITE, connectionId: `mock${n}` });
+    if (!watchAll) connector.watch.chosen = true;
+    this.watchOn(connector);
+    return connector;
+  }
+
+  /** A Jira account after the first. A new one starts with nothing watched. */
+  private addAccount(status: AuthStatus, watchAll: boolean): SampleJiraAccount {
+    const connector = this.newAccountConnector(watchAll);
+    const account: SampleJiraAccount = { instanceId: `jira_${this.nextJira - 1}`, connector, status, enabled: true, problem: null };
+    this.accounts.push(account);
+    return account;
+  }
+
+  /** Has one account's sync fail the way the desktop app's would, or recover. */
+  failJira(instanceId: string, problem: JiraProblem | null) {
+    const account = this.accounts.find((a) => a.instanceId === instanceId);
+    if (!account) throw new Error(`no Jira account ${instanceId}`);
+    account.problem = problem;
+    this.connectionsListeners.forEach((l) => l());
   }
 
   async syncNow() {

@@ -45,7 +45,7 @@ export const PEOPLE = {
   maya: "Maya Lindqvist",
   klara: "Klara Nyberg",
 } as const;
-type PersonId = keyof typeof PEOPLE;
+export type PersonId = keyof typeof PEOPLE;
 
 export const itemRef = (key: string): ItemRef => ({ connectionId: MOCK_CONNECTION, externalId: key, key });
 export const personRef = (accountId: string): PersonRef => ({ connectionId: MOCK_CONNECTION, accountId });
@@ -54,7 +54,7 @@ const projectOf = (key: string) => key.split("-")[0];
 
 type Statuses = [name: string, category: WorkCategory][];
 
-interface Project {
+export interface Project {
   key: string;
   name: string;
   statuses: Statuses;
@@ -124,7 +124,7 @@ function workflowOf(p: Project): Workflow {
   return { statuses, transitions: { kind: "graph", moves } };
 }
 
-interface Row {
+export interface Row {
   key: string;
   kind: WorkItemKind;
   title: string;
@@ -137,7 +137,7 @@ interface Row {
   body?: string;
 }
 
-const row = (
+export const row = (
   key: string,
   kind: WorkItemKind,
   title: string,
@@ -211,9 +211,9 @@ const REPLIES: [key: string, author: PersonId, minutesAgo: number, to: PersonId,
   ["DEVOPS-471", "sam", 60 * 2, "jonas", "Stack from staging: Error: connect ETIMEDOUT 10.0.12.34:443 at TCPConnectWrap.afterConnect (node:net:1611:16) at /srv/app/node_modules/payment-client/dist/retry/backoffWithJitter.js:88:21", "That timeout is the connect phase, not the handler. Is the staging egress allow-listed for the provider?"],
 ];
 
-const replyDoc = (to: string, who: string, quoted: string, text: string): WorkDoc => ({
+const replyDoc = (connectionId: string, to: string, who: string, quoted: string, text: string): WorkDoc => ({
   blocks: [
-    { type: "paragraph", content: [{ type: "mention", person: { connectionId: MOCK_CONNECTION, accountId: to }, name: who }] },
+    { type: "paragraph", content: [{ type: "mention", person: { connectionId, accountId: to }, name: who }] },
     { type: "quote", content: [{ type: "paragraph", content: [{ type: "text", text: quoted, marks: [] }] }] },
     { type: "paragraph", content: [{ type: "text", text, marks: [] }] },
   ],
@@ -272,6 +272,29 @@ const CHANGES: [key: string, actor: PersonId, minutesAgo: number, from: string, 
 
 const PRIORITY_FALLBACK: WorkPriority = "medium";
 
+/** Everything one sample Jira site holds: its projects, tickets and the events around them. */
+export interface SiteData {
+  connectionId: string;
+  projects: Project[];
+  rows: Row[];
+  links: [from: string, to: string, kind: WorkLink["kind"]][];
+  replies: typeof REPLIES;
+  comments: typeof COMMENTS;
+  changes: typeof CHANGES;
+  assignments: typeof ASSIGNMENTS;
+}
+
+export const PRIMARY_SITE: SiteData = {
+  connectionId: MOCK_CONNECTION,
+  projects: PROJECTS,
+  rows: ROWS,
+  links: LINKS,
+  replies: REPLIES,
+  comments: [...COMMENTS, ...MORE_COMMENTS],
+  changes: [...CHANGES, ...MORE_CHANGES],
+  assignments: ASSIGNMENTS,
+};
+
 export type Change = { connectionId: string };
 
 /** Events by other people this recent start unread. */
@@ -280,8 +303,8 @@ const FEED_PAGE = 50;
 
 /** A tracker held in memory: several projects, each with its own workflow, and the events around their items. */
 export class MockConnector {
-  readonly connectionId = MOCK_CONNECTION;
-  readonly me = personRef("me");
+  readonly connectionId: string;
+  readonly me: PersonRef;
   readonly people: Person[] = Object.entries(PEOPLE).map(([accountId, name]) => ({ accountId, name }));
   private items = new Map<string, WorkItem>();
   private events = new Map<string, WorkEvent[]>();
@@ -298,27 +321,30 @@ export class MockConnector {
     private readonly now: number = Date.now(),
     private readonly onChange: (c: Change) => void = () => {},
     options: MockOptions = {},
+    site: SiteData = PRIMARY_SITE,
   ) {
-    this.catalog = catalogOf(options.catalogSize ?? PROJECTS.length);
-    this.watch = new MockWatch(MOCK_CONNECTION, this.catalog.length);
-    this.containers = this.catalog.map((p) => ({ ref: containerRef(p.key), key: p.key, name: p.name, workflow: workflowOf(p) }));
+    this.connectionId = site.connectionId;
+    this.me = this.person("me");
+    this.catalog = site.projects === PROJECTS ? catalogOf(options.catalogSize ?? PROJECTS.length) : site.projects;
+    this.watch = new MockWatch(this.connectionId, this.catalog.length);
+    this.containers = this.catalog.map((p) => ({ ref: this.container(p.key), key: p.key, name: p.name, workflow: workflowOf(p) }));
     const at = (minutes: number) => new Date(this.now - minutes * 60_000).toISOString();
     const statusIn = (project: string, name: string) => this.containers.find((c) => c.key === project)!.workflow.statuses.find((s) => s.name === name)!;
 
-    for (const r of ROWS) {
+    for (const r of site.rows) {
       const project = projectOf(r.key);
       const updated = at(r.age * 24 * 60);
       this.items.set(r.key, {
-        item: itemRef(r.key),
-        container: containerRef(project),
+        item: this.ref(r.key),
+        container: this.container(project),
         kind: r.kind,
         title: r.title,
         body: r.body ? docFromText(r.body) : { blocks: [] },
         status: statusIn(project, r.status),
-        assignee: r.assignee ? personRef(r.assignee) : null,
-        reporter: personRef("mette"),
+        assignee: r.assignee ? this.person(r.assignee) : null,
+        reporter: this.person("mette"),
         priority: r.priority ?? PRIORITY_FALLBACK,
-        parent: r.parent ? itemRef(r.parent) : null,
+        parent: r.parent ? this.ref(r.parent) : null,
         labels: r.labels ?? [],
         created: at((r.age + 30) * 24 * 60),
         updated,
@@ -330,35 +356,39 @@ export class MockConnector {
       this.nextNumber[project] = Math.max(this.nextNumber[project] ?? 0, Number(r.key.split("-")[1]) + 1);
       this.record(r.key, "itemCreated", "mette", at((r.age + 30) * 24 * 60), null);
     }
-    for (const [key, author, minutes, to, quoted, text] of REPLIES) {
-      const reply = replyDoc(to, PEOPLE[to], quoted, text);
+    for (const [key, author, minutes, to, quoted, text] of site.replies) {
+      const reply = replyDoc(this.connectionId, to, PEOPLE[to], quoted, text);
       this.record(key, "commentAdded", author, at(minutes), { text: docText(reply), doc: reply });
       const item = this.items.get(key)!;
       item.commentCount += 1;
-      item.lastCommenter = personRef(author);
+      item.lastCommenter = this.person(author);
     }
-    for (const [from, to, kind] of LINKS) {
+    for (const [from, to, kind] of site.links) {
       const item = this.items.get(from)!;
-      item.links = [...item.links, { from: itemRef(from), to: itemRef(to), kind }];
+      item.links = [...item.links, { from: this.ref(from), to: this.ref(to), kind }];
     }
-    for (const [key, author, minutes, text] of [...COMMENTS, ...MORE_COMMENTS]) {
+    for (const [key, author, minutes, text] of site.comments) {
       this.record(key, "commentAdded", author, at(minutes), text.includes("@Alf") ? { text, mention: true } : { text });
       const item = this.items.get(key)!;
       item.commentCount += 1;
-      item.lastCommenter = personRef(author);
+      item.lastCommenter = this.person(author);
     }
-    for (const [key, actor, minutes, from, to] of [...CHANGES, ...MORE_CHANGES]) this.record(key, "statusChanged", actor, at(minutes), { from, to, text: `${from} → ${to}` });
-    for (const [key, actor, minutes] of ASSIGNMENTS) this.record(key, "assigned", actor, at(minutes), { text: "Assigned to you" });
+    for (const [key, actor, minutes, from, to] of site.changes) this.record(key, "statusChanged", actor, at(minutes), { from, to, text: `${from} → ${to}` });
+    for (const [key, actor, minutes] of site.assignments) this.record(key, "assigned", actor, at(minutes), { text: "Assigned to you" });
   }
+
+  private ref = (key: string): ItemRef => ({ connectionId: this.connectionId, externalId: key, key });
+  private person = (accountId: string): PersonRef => ({ connectionId: this.connectionId, accountId });
+  private container = (key: string): ContainerRef => ({ connectionId: this.connectionId, externalId: key });
 
   private record(key: string, kind: WorkEvent["kind"], actor: string | null, at: string, payload: unknown) {
     const event: WorkEvent = {
-      id: `mock-event-${++this.seq}`,
-      connectionId: MOCK_CONNECTION,
+      id: `${this.connectionId}-event-${++this.seq}`,
+      connectionId: this.connectionId,
       at,
       kind,
-      subject: { type: "item", item: itemRef(key) },
-      actor: actor ? personRef(actor) : null,
+      subject: { type: "item", item: this.ref(key) },
+      actor: actor ? this.person(actor) : null,
       payload,
     };
     this.events.set(key, [event, ...(this.events.get(key) ?? [])].sort((a, b) => b.at.localeCompare(a.at)));
@@ -394,7 +424,7 @@ export class MockConnector {
   }
 
   has(ref: ItemRef) {
-    return ref.connectionId === MOCK_CONNECTION && this.items.has(ref.externalId);
+    return ref.connectionId === this.connectionId && this.items.has(ref.externalId);
   }
 
   /** Items that match, newest first. Only watched containers unless `includeUnwatched`. */
@@ -404,7 +434,7 @@ export class MockConnector {
   }
 
   item(ref: ItemRef): WorkItem | null {
-    return ref.connectionId === MOCK_CONNECTION ? (this.items.get(ref.externalId) ?? null) : null;
+    return ref.connectionId === this.connectionId ? (this.items.get(ref.externalId) ?? null) : null;
   }
 
   /** A watched item as the cache has it; any other is read "live" and flagged, the way the real backend peeks. */
@@ -435,8 +465,8 @@ export class MockConnector {
   }
 
   private watchChanged() {
-    this.watchListeners.forEach((l) => l({ connectionId: MOCK_CONNECTION }));
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.watchListeners.forEach((l) => l({ connectionId: this.connectionId }));
+    this.onChange({ connectionId: this.connectionId });
   }
 
   onWatchChanged(listener: (c: Change) => void) {
@@ -490,7 +520,7 @@ export class MockConnector {
   }
 
   workflow(c: ContainerRef): Workflow | null {
-    return this.containers.find((x) => x.ref.externalId === c.externalId && c.connectionId === MOCK_CONNECTION)?.workflow ?? null;
+    return this.containers.find((x) => x.ref.externalId === c.externalId && c.connectionId === this.connectionId)?.workflow ?? null;
   }
 
   identity(): WorkIdentity {
@@ -529,7 +559,7 @@ export class MockConnector {
       if (q.kinds?.length && !q.kinds.includes(e.kind)) continue;
       if (q.mentionsOnly && !entry.mention) continue;
       if (q.unreadOnly && !entry.unread) continue;
-      if (q.container && this.items.get(entry.item.externalId)?.container.externalId !== q.container.externalId) continue;
+      if (q.container && (q.container.connectionId !== this.connectionId || this.items.get(entry.item.externalId)?.container.externalId !== q.container.externalId)) continue;
       const container = this.items.get(entry.item.externalId)?.container.externalId;
       if (!q.includeUnwatched && (!container || !this.watch.isWatched(container))) continue;
       matches.push(entry);
@@ -550,7 +580,7 @@ export class MockConnector {
     if (![...this.events.values()].flat().some((e) => e.id === id)) return false;
     if (read) this.markedRead.add(id);
     else this.markedRead.delete(id);
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
     return true;
   }
 
@@ -589,7 +619,7 @@ export class MockConnector {
     const at = new Date().toISOString();
     this.items.set(ref.externalId, { ...item, status: to, updated: at });
     this.record(ref.externalId, "statusChanged", "me", at, { from: item.status.name, to: to.name });
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
   }
 
   comment(ref: ItemRef, text: string, doc?: WorkDoc) {
@@ -598,7 +628,7 @@ export class MockConnector {
     const at = new Date().toISOString();
     this.items.set(ref.externalId, { ...item, commentCount: item.commentCount + 1, lastCommenter: this.me, updated: at });
     this.record(ref.externalId, "commentAdded", "me", at, doc ? { text, doc } : { text });
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
   }
 
   /**
@@ -614,7 +644,7 @@ export class MockConnector {
     const at = new Date().toISOString();
     this.items.set(ref.externalId, { ...item, ...(change.title !== undefined ? { title: change.title } : {}), ...(change.body ? { body: change.body } : {}), status: to, updated: at });
     if (to.id !== item.status.id) this.record(ref.externalId, "statusChanged", "mette", at, { from: item.status.name, to: to.name });
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
   }
 
   /** Replaces the item's title and/or description. */
@@ -622,7 +652,7 @@ export class MockConnector {
     const item = this.item(ref);
     if (!item) throw new Error(`${ref.key} isn't in the sample data`);
     this.items.set(ref.externalId, { ...item, ...(change.title !== undefined ? { title: change.title } : {}), ...(change.body ? { body: change.body } : {}), updated: new Date().toISOString() });
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
   }
 
   /** Links two items, which then list the link on both ends as Jira does. Linking the same pair twice changes nothing. */
@@ -634,7 +664,7 @@ export class MockConnector {
       if (end.links.some((l) => l.kind === kind && l.from.externalId === link.from.externalId && l.to.externalId === link.to.externalId)) continue;
       this.items.set(end.item.externalId, { ...end, links: [...end.links, link] });
     }
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
   }
 
   /** Creates an item in the first status of `container`'s workflow. */
@@ -645,7 +675,7 @@ export class MockConnector {
     const key = `${container.externalId}-${this.nextNumber[container.externalId]++}`;
     const at = new Date().toISOString();
     this.items.set(key, {
-      item: itemRef(key),
+      item: this.ref(key),
       container,
       kind: fields.kind,
       title: fields.title,
@@ -664,8 +694,8 @@ export class MockConnector {
       extra: null,
     });
     this.record(key, "itemCreated", "me", at, null);
-    this.onChange({ connectionId: MOCK_CONNECTION });
-    return itemRef(key);
+    this.onChange({ connectionId: this.connectionId });
+    return this.ref(key);
   }
 
   /** Creates tasks under `parent`, in the first status of its project. */
@@ -679,7 +709,7 @@ export class MockConnector {
       const key = `${project}-${this.nextNumber[project]++}`;
       this.items.set(key, {
         ...p,
-        item: itemRef(key),
+        item: this.ref(key),
         kind: "task",
         title,
         body: { blocks: [] },
@@ -694,9 +724,9 @@ export class MockConnector {
         lastCommenter: null,
       });
       this.record(key, "itemCreated", "me", at, null);
-      return itemRef(key);
+      return this.ref(key);
     });
-    this.onChange({ connectionId: MOCK_CONNECTION });
+    this.onChange({ connectionId: this.connectionId });
     return created;
   }
 }
