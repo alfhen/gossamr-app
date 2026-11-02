@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { itemKey } from "../lib/filter";
 import { needsIn } from "../lib/needs";
-import type { WorkstreamView } from "../types";
+import type { ItemRef, WorkstreamView } from "../types";
 import { Btn, SheetFrame, pickerOpen } from "./AgentSheet";
 import { WorkstreamHeadExtras, rowTitle } from "./AgentsHome";
 import { lightboxOpen } from "./PipImages";
@@ -11,7 +11,7 @@ import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { isTypingTarget } from "../lib/keys";
 import { StepRail } from "./StepRail";
-import { openTicketByKey } from "./jump";
+import { openTicket as openLive } from "./jump";
 import { NO_WORKSTREAM_ID, useWorkView, type WorkViewFocus } from "./workViewStore";
 import { WorkstreamNeeds } from "./NeedsPane";
 import { useNeedsYou } from "./useNeeds";
@@ -21,10 +21,9 @@ import { useWorkspace } from "../workspaceStore";
 export const WORKSTREAM_SHEET_ID = "workstream-sheet";
 
 /** Opens the ticket in the peek over Agents; a ticket that isn't synced is read live. */
-function openTicket(key: string) {
-  const cached = Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
-  if (cached) return useTabs.getState().select(itemKey(cached.item));
-  void openTicketByKey(key);
+function openTicket(ref: ItemRef) {
+  if (useWorkspace.getState().items[itemKey(ref)]) return useTabs.getState().select(itemKey(ref));
+  void openLive(ref);
 }
 
 /** The element in an open workstream's detail `target` names: a draft's card, a run's card, or the paused banner's Resume (the banner itself without one). */
@@ -76,7 +75,7 @@ function Body({ view }: { view: WorkstreamView }) {
         <WorkstreamHeadExtras view={view} />
         <span className="flex-1" />
         {ws.itemKey && (
-          <Btn tone="ghost" data-workstream-ticket onClick={() => openTicket(ws.itemKey!)}>
+          <Btn tone="ghost" data-workstream-ticket onClick={() => openTicket({ connectionId: ws.connectionId, externalId: ws.itemKey!, key: ws.itemKey! })}>
             Open {ws.itemKey}
           </Btn>
         )}

@@ -3,16 +3,17 @@ import type { PullRef } from "../lib/githubUrl";
 import { useWorkspace } from "../workspaceStore";
 import { useDev } from "./devStore";
 import { openOnGithub } from "./githubUi";
-import { showMe } from "./jump";
+import { openOneOf, showMe } from "./jump";
+import { refsForKey } from "./keyLookup";
 
 const pageOf = (ref: PullRef) => `https://github.com/${ref.repo}/pull/${ref.number}`;
 
 /** Opens a pull request's ticket when one is known, else its page on GitHub. */
 export async function openPull(ref: PullRef): Promise<void> {
   const ws = useWorkspace.getState();
-  const linked = useDev.getState().byChange.get(`pr:${ref.repo}#${ref.number}`);
-  if (linked && ws.items[itemKey(linked)]) {
-    showMe(linked);
+  const known = useDev.getState().byChange.get(`pr:${ref.repo}#${ref.number}`);
+  if (known && ws.items[itemKey(known)]) {
+    showMe(known);
     return;
   }
   const github = ws.connections.find((c) => c.kind === "github");
@@ -20,9 +21,10 @@ export async function openPull(ref: PullRef): Promise<void> {
     try {
       const { change } = await ws.backend.codePullRequest({ connectionId: github.id, repo: ref.repo, number: ref.number });
       const keys = new Set(change.linkedKeys.map((k) => k.toUpperCase()));
-      const item = Object.values(useWorkspace.getState().items).find((i) => keys.has(i.item.key.toUpperCase()));
-      if (item) {
-        showMe(item.item);
+      const linked = Object.values(useWorkspace.getState().items).filter((i) => keys.has(i.item.key.toUpperCase()));
+      if (linked.length) {
+        const key = linked[0].item.key;
+        await openOneOf(key, refsForKey(useWorkspace.getState(), key));
         return;
       }
     } catch {

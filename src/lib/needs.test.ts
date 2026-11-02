@@ -430,7 +430,25 @@ describe("needs: where a need is", () => {
     const failed = run("f", "investigate", "failed", { item: ref("SUP-9"), spec: { ...base.spec, role: "investigate", workstream: null, ticketBlock: "SUP-9: Export timeout\nDescription: none." } });
     expect(needs(input({ runs: [failed] })).map((n) => n.head)).toEqual(["SUP-9 · Export timeout"]);
     // A cached title still comes first.
-    expect(needs(input({ runs: [failed], titleOf: (k) => (k === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");
+    expect(needs(input({ runs: [failed], titleOf: (r) => (r.key === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");
+  });
+
+  it("takes a ticket's title from its own site when two sites have the same key", () => {
+    const beta = (key: string): ItemRef => ({ connectionId: "mock2", externalId: key, key });
+    const titles: Record<string, string> = { "mock\nCA-402": "Subject line variants", "mock2\nCA-402": "Quote template for the pilot" };
+    const list = needs(
+      input({
+        proposals: [draft("a", comment("CA-402"), 10), draft("b", { type: "comment", item: beta("CA-402"), body: docFromText("Looks good"), mentions: [] } as unknown as Intent, 5)],
+        titleOf: (r) => titles[`${r.connectionId}\n${r.key}`],
+      }),
+    );
+    expect(list.map((n) => n.head).sort()).toEqual(["CA-402 · Quote template for the pilot", "CA-402 · Subject line variants"]);
+  });
+
+  it("keeps a workstream's own title for the site it is on", () => {
+    const other = { ...view("ws-b", "CA-402", { title: "CA-402 Quote template" }), workstream: { ...view("ws-b", "CA-402", { title: "CA-402 Quote template" }).workstream, connectionId: "mock2", pausedReason: "ceiling" as const } };
+    const mine = view("ws-a", "CA-402", { title: "CA-402 Subject lines", pausedReason: "ceiling" });
+    expect(needs(input({ workstreams: [mine, other] })).map((n) => n.head).sort()).toEqual(["CA-402 · Quote template", "CA-402 · Subject lines"]);
   });
 
   it("labels a draft a run left with the run and its step", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { needs as buildNeeds, type Need } from "../lib/needs";
+import { atTicket, needs as buildNeeds, type Need, type TicketRef } from "../lib/needs";
 import { useWorkspace } from "../workspaceStore";
 import { lastPausedAt } from "./workViewLogic";
 import { useRuns } from "./runsStore";
@@ -59,10 +59,10 @@ export function useNeedsYou(): Need[] {
   return useMemo(() => buildNeeds({ workstreams, runs, proposals: Object.values(proposals), dismissed, pausedAt, titleOf: titlesOf(items, peeked), connections }), [workstreams, runs, proposals, dismissed, pausedAt, items, peeked, connections]);
 }
 
-/** A ticket's title by its key; one peeked from outside the watched projects has its title in the peek. */
+/** A ticket's title by its connection and key; one peeked from outside the watched projects has its title in the peek. */
 function titlesOf(items: ReturnType<typeof useWorkspace.getState>["items"], peeked: ReturnType<typeof useWorkspace.getState>["peeked"]) {
-  const titles = new Map([...Object.values(peeked).map((p) => [p.item.item.key, p.item.title] as const), ...Object.values(items).map((i) => [i.item.key, i.title] as const)]);
-  return (key: string) => titles.get(key);
+  const titles = new Map([...Object.values(peeked).map((p) => [atTicket(p.item.item), p.item.title] as const), ...Object.values(items).map((i) => [atTicket(i.item), i.title] as const)]);
+  return (ref: TicketRef) => titles.get(atTicket(ref));
 }
 
 /** What needs the person right now, read from the stores when asked rather than kept current: for what Pip is told of the screen. */

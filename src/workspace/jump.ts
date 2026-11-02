@@ -3,11 +3,12 @@ import type { TicketLinks } from "../components/ticketLinks";
 import type { ItemRef } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { useRuns } from "./runsStore";
-import { workConnections, workWatch } from "./domains";
 import { cardId } from "./ItemCard";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
 import { jumpToItem } from "./Palette";
+import { useKeyChooser } from "./keyChooserStore";
+import { cachedWithKey, projectOfKey, refsForKey } from "./keyLookup";
 
 const PULSE_MS = 1400;
 
@@ -47,47 +48,46 @@ export function showMe(ref: ItemRef, opts: { peek?: boolean } = {}) {
   return true;
 }
 
-const cachedByKey = (key: string) => Object.values(useWorkspace.getState().items).find((i) => i.item.key === key);
-
-/** The work connection a ticket key typed by hand is read from, if one is connected. */
-export const connectionOfKeys = (ws: ReturnType<typeof useWorkspace.getState>): string | undefined => workConnections(ws.connections)[0]?.id ?? workWatch(ws.watch)[0]?.connectionId;
-
-export function keyConnectionId(): string | undefined {
-  return connectionOfKeys(useWorkspace.getState());
-}
-
-/** The same connection, as a subscription, so a lookup waiting on a connection runs once it's there. */
-export const useKeyConnectionId = (): string | undefined => useWorkspace(connectionOfKeys);
-
-/**
- * Opens a ticket by key in whichever project it is: the synced one if there is one, otherwise a live read-only
- * peek that is never stored.
- */
-export async function openTicketByKey(key: string): Promise<boolean> {
+/** The ticket a reference names, from the cache when it is synced, else a live read-only peek that is never stored. */
+export async function openTicket(ref: ItemRef): Promise<boolean> {
   const ws = useWorkspace.getState();
-  const cached = Object.values(ws.items).find((i) => i.item.key.toLowerCase() === key.toLowerCase());
+  const cached = ws.items[itemKey(ref)];
   if (cached) return showMe(cached.item);
-  const connectionId = keyConnectionId();
-  if (!connectionId) {
-    useToasts.getState().push("Not connected yet.");
-    return false;
-  }
   try {
-    const item = await ws.peekItem({ connectionId, externalId: key, key });
+    const item = await ws.peekItem(ref);
     if (!item) {
-      useToasts.getState().push(`Couldn't find ${key}. It may not exist, or you may not have access to it.`);
+      useToasts.getState().push(`Couldn't find ${ref.key}. It may not exist, or you may not have access to it.`);
       return false;
     }
-    const known = item.unwatched ? (await ws.backend?.cacheContainers({ includeUnwatched: true }))?.find((c) => c.ref.externalId === item.container.externalId) : undefined;
+    const known = item.unwatched ? (await ws.backend?.cacheContainers({ includeUnwatched: true }))?.find((c) => c.ref.externalId === item.container.externalId && c.ref.connectionId === item.container.connectionId) : undefined;
     useWorkspace.getState().showPeeked({ item, containerName: known?.name ?? null });
     const tabs = useTabs.getState();
     tabs.setRoute("workspace");
     tabs.select(itemKey(item.item));
     return true;
   } catch (e) {
-    useToasts.getState().push(`Couldn't open ${key}: ${e instanceof Error ? e.message : String(e)}`);
+    useToasts.getState().push(`Couldn't open ${ref.key}: ${e instanceof Error ? e.message : String(e)}`);
     return false;
   }
+}
+
+/** Opens one of `refs`, asking which when there are several. Returns the one shown, or null. */
+export async function openOneOf(key: string, refs: ItemRef[]): Promise<ItemRef | null> {
+  const picked = refs.length > 1 ? await useKeyChooser.getState().choose(key, refs) : (refs[0] ?? null);
+  return picked && (await openTicket(picked)) ? picked : null;
+}
+
+/**
+ * Opens a ticket typed by key, in whichever site and project it is: the synced one if there is one, otherwise a live
+ * read-only peek. A key more than one site has opens a chooser. Returns the ticket shown, or null.
+ */
+export async function openTicketByKey(key: string): Promise<ItemRef | null> {
+  const refs = refsForKey(useWorkspace.getState(), key);
+  if (!refs.length) {
+    useToasts.getState().push("Not connected yet.");
+    return null;
+  }
+  return openOneOf(key, refs);
 }
 
 /**
@@ -95,11 +95,11 @@ export async function openTicketByKey(key: string): Promise<boolean> {
  * agent run, or a key in a project it has). Null for any other, which stays text.
  */
 export function knownTicketTitle(key: string): string | null {
-  const cached = cachedByKey(key);
-  if (cached) return cached.title;
+  const cached = cachedWithKey(useWorkspace.getState().items, key);
+  if (cached.length) return cached.length === 1 ? cached[0].title : "";
   const lower = key.toLowerCase();
   if (useRuns.getState().runs.some((r) => r.item?.key.toLowerCase() === lower)) return "";
-  const project = lower.slice(0, lower.lastIndexOf("-"));
+  const project = projectOfKey(key).toLowerCase();
   return Object.values(useWorkspace.getState().containers).some((c) => c.key.toLowerCase() === project) ? "" : null;
 }
 
@@ -113,8 +113,6 @@ export const workspaceTicketLinks: TicketLinks = {
     useRuns((s) => s.runs);
   },
   open(key) {
-    const item = cachedByKey(key);
-    if (item) showMe(item.item);
-    else void openTicketByKey(key);
+    void openTicketByKey(key);
   },
 };

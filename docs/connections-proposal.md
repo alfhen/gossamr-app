@@ -437,7 +437,7 @@ Two sites can both have `TAF-12`. Everything in SQLite is already keyed by conne
 | PR and branch links (`codehost/links.rs` `KnownKeys`, one connection per prefix) | A prefix maps to every connection with that project. A key links to the connections where it is cached and watched, or to every connection with the project when none has it cached yet. When there are several, each link is marked `ambiguous` and the UI says "may be TAF-12 on Acme or on Beta". |
 | Pip's memory (`claude:<key>`, `handed`, `read`, the conversation id) | Keyed by connection (9.6). |
 | `set_unread(id)`: comment ids are per site | Takes the connection (`FeedEntry` has it). |
-| Look-ups by bare key in the front end: `jump.ts` (24 references across `Palette`, `WorkstreamSheet`, `RunSheet`, `runsStore`, `DraftPeek`, `WatchNotices`, `Workspace`), `useNeeds.ts`, `openPull`, `commands`, `PeekSheet`, `screenContext.ts` | Look up by `ItemRef`. A typed key that two sites have opens a chooser. |
+| Look-ups by bare key in the front end: `jump.ts` (24 references across `Palette`, `WorkstreamSheet`, `RunSheet`, `runsStore`, `DraftPeek`, `WatchNotices`, `Workspace`), `useNeeds.ts`, `openPull`, `commands`, `PeekSheet`, `screenContext.ts` | Look up by `ItemRef`. A typed key that two sites have opens a chooser. An uncached key is offered to the sites that have its project, or to every site that is on when none does. |
 | `cardId(key)` gives duplicate DOM ids | Use `itemKey(ref)`. |
 | `keyToRef` splits on the first colon, so `jira:cloud:acct:KEY` reads as connection `jira` | Split on the last colon. |
 | Rail project groups by `c.key` | Label with the site when keys repeat. |

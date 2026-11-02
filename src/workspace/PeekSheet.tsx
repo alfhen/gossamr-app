@@ -135,6 +135,7 @@ export function PeekView(p: PeekViewProps) {
   return (
     <aside
       id="peek-sheet"
+      data-item={draft ? undefined : itemKey(item.item)}
       aria-label={draft ? "Details for a new ticket draft" : `Details for ${item.item.key}`}
       onAnimationEnd={(ev) => ev.target === ev.currentTarget && p.onMotionEnd?.()}
       tabIndex={draft ? -1 : undefined}
@@ -563,11 +564,11 @@ interface PeekFocusable {
  * Tab is one of the peek's own controls rather than the board's behind it. The title sits at the top of the peek, so it
  * is focused without scrolling anything. Gives up after about two seconds. Returns a cancel.
  */
-export function focusPeekOf(key: string, root: { querySelector(selector: string): unknown } = document, frame: (go: () => void) => number = requestAnimationFrame, cancel: (n: number) => void = cancelAnimationFrame): () => void {
+export function focusPeekOf(ref: ItemRef, root: { querySelector(selector: string): unknown } = document, frame: (go: () => void) => number = requestAnimationFrame, cancel: (n: number) => void = cancelAnimationFrame): () => void {
   let handle = 0;
   let tries = 0;
   const find = () => {
-    const peek = root.querySelector(`#peek-sheet[aria-label="Details for ${key.replace(/["\\]/g, "\\$&")}"]`) as PeekFocusable | null;
+    const peek = root.querySelector(`#peek-sheet[data-item="${itemKey(ref).replace(/["\\]/g, "\\$&")}"]`) as PeekFocusable | null;
     if (peek) {
       const el = (peek.querySelector?.("h2") as PeekFocusable | null) ?? peek;
       if (el.hasAttribute && !el.hasAttribute("tabindex")) el.setAttribute?.("tabindex", "-1");
@@ -597,7 +598,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
     const carried = keyboardInPeek;
     keyboardInPeek = false;
     const at = document.activeElement;
-    if (carried && (!at || at === document.body)) focusPeekOf(ref.key);
+    if (carried && (!at || at === document.body)) focusPeekOf(ref);
     return () => void (keyboardInPeek = !!document.activeElement?.closest("#peek-sheet"));
   }, []);
   const width = usePaneWidths().peek;

@@ -72,6 +72,16 @@ describe("the Agents screen", () => {
     ]);
   });
 
+  it("names the site beside a ticket's key only when the words give one", () => {
+    const item = { connectionId: "mock2", externalId: "CA-402", key: "CA-402" };
+    const ctx = { ...buildScreenContext(screen()), item, selection: [item] };
+    const siteOf = () => "beta.atlassian.net";
+    const lines = (words: Parameters<typeof contextLines>[2]) => contextLines(ctx, null, words).filter((l) => /ticket|Ticked/i.test(l));
+    expect(lines({ titleOf: () => "Quote template", describeFilter: () => "", siteOf })).toEqual(["Open ticket: CA-402 on beta.atlassian.net · Quote template", "Ticked tickets: CA-402 on beta.atlassian.net"]);
+    expect(lines({ titleOf: () => "Quote template", describeFilter: () => "" })).toEqual(["Open ticket: CA-402 · Quote template", "Ticked tickets: CA-402"]);
+    expect(contextLabel(ctx, null, () => null, undefined, siteOf).label).toBe("CA-402 on beta.atlassian.net");
+  });
+
   it("labels the chip by the run when a run is open, by the ticket when one is, else by the screen", () => {
     const words = { titleOf: () => "Checkout", runOf: () => "Investigate CA-1 · Working" };
     const ctx = buildScreenContext(screen({}, NO_FILTERS, "b"));

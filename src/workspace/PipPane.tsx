@@ -5,7 +5,7 @@ import { developmentLine } from "../lib/devLinks";
 import { describeFilter, itemKey } from "../lib/filter";
 import type { ItemRef, Proposal, ScreenContext, WorkstreamView } from "../types";
 import { useDev } from "./devStore";
-import { useLookup } from "./hooks";
+import { useLookup, useSiteOf } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
@@ -125,9 +125,11 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
   const context: ScreenContext = pinned ?? live;
   const code = useDev((s) => s.index);
   const runs = useRuns((s) => s.runs);
+  const siteOf = useSiteOf();
   const words = useMemo(
     () => ({
       titleOf: (ref: ItemRef) => screen.items[itemKey(ref)]?.title ?? null,
+      siteOf,
       describeFilter: (f: Parameters<typeof describeFilter>[0]) => describeFilter(f, lookup),
       developmentOf: (ref: ItemRef) => developmentLine(code.get(itemKey(ref))),
       runOf: (id: string) => {
@@ -135,13 +137,13 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
         return run ? describeRun(run, run.item ? screen.items[itemKey(run.item)]?.title : null, Date.now()) : null;
       },
     }),
-    [screen.items, lookup, code, runs],
+    [screen.items, lookup, code, runs, siteOf],
   );
   const openRef = context.item;
   useEffect(() => {
     if (openRef) useDev.getState().ensure([openRef]);
   }, [openRef?.connectionId, openRef?.externalId]);
-  const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf);
+  const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf, words.siteOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
   const scene = { itemKey: open?.item.key ?? null, route: screen.route, runOpen: !!context.run, workstream: !!workstream };
   return { scene, kind, label, context, words, quote, following: pinned === null };

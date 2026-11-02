@@ -79,7 +79,7 @@ export function ClosedWorkstreams({ closed, open }: { closed: readonly Workstrea
         {closed.map((v) => {
           const key = v.workstream.itemKey;
           // The backend refuses a reopen while the ticket has another open workstream: say so instead of pressing a button that does nothing.
-          const blocked = key ? open.some((o) => o.workstream.itemKey === key) : false;
+          const blocked = key ? open.some((o) => o.workstream.itemKey === key && o.workstream.connectionId === v.workstream.connectionId) : false;
           return (
             <li key={v.workstream.id} data-closed-workstream={v.workstream.id} className="grid gap-0.5 px-2.5 py-1 text-sm text-ws-ink3">
               <span className="flex min-w-0 gap-1.5">
