@@ -1,4 +1,4 @@
-//! Workstreams of the signed-in connection: opening one on a ticket (or with no ticket), reading it with the stage its
+//! Workstreams of every connection: opening one on a ticket (or with no ticket), reading it with the stage its
 //! runs give it, closing it, Pip's notes, pausing it, and its audit. Nothing here starts, stops or answers a run or
 //! writes to Jira.
 
@@ -334,6 +334,35 @@ impl Core {
             view.waiting_for_pr = waiting_for(build, self.pull_request_of(build));
         }
         Ok(view)
+    }
+
+    /// The scope of the connection workstream `id` belongs to, which must be registered and signed in.
+    pub async fn workstream_scope(&self, id: &str) -> Result<Scope> {
+        let ws = self.with_app_db(|db| db.workstream(id)).await?.ok_or_else(|| refuse(format!("there is no workstream {id}")))?;
+        self.scope_of(&ws.connection_id).await
+    }
+
+    /// The scope a workstream about `item` is opened in: the item's connection, or the primary for one with no ticket.
+    pub async fn scope_for_new_workstream(&self, item: Option<&ItemRef>) -> Result<Scope> {
+        match item {
+            Some(item) => self.scope_of(&item.connection_id).await,
+            None => self.scope().await,
+        }
+    }
+
+    /// Every connection's workstreams, newest first, each with its stage; closed ones only when asked for.
+    pub async fn all_workstreams(&self, include_closed: bool) -> Result<Vec<WorkstreamView>> {
+        let mut all = Vec::new();
+        for scope in self.scopes().await {
+            match self.workstreams(&scope, include_closed).await {
+                Ok(views) => all.extend(views),
+                // Removed or replaced since the scopes were listed.
+                Err(Error::SiteChanged) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        all.sort_by(|a, b| b.workstream.created_at.cmp(&a.workstream.created_at).then_with(|| a.workstream.id.cmp(&b.workstream.id)));
+        Ok(all)
     }
 
     /// `scope`'s workstreams, newest first, each with its stage; closed ones only when asked for.
@@ -672,13 +701,10 @@ impl Core {
     }
 
     /// Records something `actor` did to a run (`run_stopped`, `run_answered`, `run_retried`) in its workstream's audit. A
-    /// run with no workstream, or of an account that isn't signed in now, records nothing.
+    /// run with no workstream, or of a connection that isn't signed in now, records nothing.
     pub async fn record_run_action_by(&self, run: &Run, actor: Actor, action: &str, detail: Option<String>) -> Result<()> {
         let Some(id) = run.spec.workstream.as_deref() else { return Ok(()) };
-        let scope = self.scope().await?;
-        if scope.connection_id != run.connection_id {
-            return Ok(());
-        }
+        let Ok(scope) = self.scope_of(&run.connection_id).await else { return Ok(()) };
         let mut event = WorkstreamEvent::new(id, actor, action, Utc::now()).run(&run.id);
         if let Some(detail) = detail {
             event = event.detail(detail);
@@ -1285,5 +1311,71 @@ mod tests {
         let taken = rebased(&basis, &now);
         assert_eq!(taken.summary_digest, Some(sha256_hex("Checkout")));
         assert!(drifted(&taken, &now).is_empty());
+    }
+
+    async fn open_on_second(fx: &Fixture, second: &Scope, title: &str) -> Workstream {
+        fx.core.open_workstream(second, None, Some(title.into())).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_list_holds_the_workstreams_of_every_connection_newest_first() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let first = fx.core.open_workstream(&fx.scope, None, Some("On site A".into())).await.unwrap();
+        let other = open_on_second(&fx, &second, "On site B").await;
+
+        let listed: Vec<String> = fx.core.all_workstreams(false).await.unwrap().into_iter().map(|v| v.workstream.id).collect();
+        assert_eq!(listed.len(), 2);
+        assert!(listed.contains(&first.id) && listed.contains(&other.id));
+        let mut by_age = [&first, &other];
+        by_age.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| a.id.cmp(&b.id)));
+        assert_eq!(listed, by_age.iter().map(|w| w.id.clone()).collect::<Vec<_>>());
+        assert_eq!(fx.core.workstreams(&fx.scope, false).await.unwrap().len(), 1, "one connection's own list is unchanged");
+    }
+
+    #[tokio::test]
+    async fn closed_workstreams_of_the_second_connection_are_listed_only_when_asked_for() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let other = open_on_second(&fx, &second, "On site B").await;
+        fx.core.close_workstream(&second, &other.id).await.unwrap();
+        assert!(fx.core.all_workstreams(false).await.unwrap().is_empty());
+        assert_eq!(fx.core.all_workstreams(true).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_id_finds_the_connection_that_owns_the_workstream() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let first = fx.core.open_workstream(&fx.scope, None, Some("On site A".into())).await.unwrap();
+        let other = open_on_second(&fx, &second, "On site B").await;
+        assert_eq!(fx.core.workstream_scope(&first.id).await.unwrap(), fx.scope);
+        assert_eq!(fx.core.workstream_scope(&other.id).await.unwrap(), second);
+        assert!(fx.core.workstream_scope("nope").await.unwrap_err().to_string().contains("no workstream"));
+
+        fx.core.registry.remove(&second.connection_id);
+        assert!(fx.core.workstream_scope(&other.id).await.is_err(), "a connection that is gone has no scope to work in");
+    }
+
+    #[tokio::test]
+    async fn a_workstream_opens_on_its_ticket_s_connection_and_one_with_no_ticket_on_the_primary() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let on_b = crate::domain::ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+        assert_eq!(fx.core.scope_for_new_workstream(Some(&on_b)).await.unwrap(), second);
+        assert_eq!(fx.core.scope_for_new_workstream(Some(&fx.item("CA-1"))).await.unwrap(), fx.scope);
+        assert_eq!(fx.core.scope_for_new_workstream(None).await.unwrap(), fx.scope);
+        let github = crate::domain::ItemRef { connection_id: "github:someone".into(), external_id: "1".into(), key: "x/y#1".into() };
+        assert!(fx.core.scope_for_new_workstream(Some(&github)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn an_action_on_a_run_of_the_second_connection_lands_in_its_workstream_while_the_first_is_the_primary() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let other = open_on_second(&fx, &second, "On site B").await;
+        let spec = RunSpec { workstream: Some(other.id.clone()), ..run_spec() };
+        let run = Run::queued("r-b".into(), "p-b".into(), second.connection_id.clone(), None, spec, Utc::now());
+        fx.core.record_run_action_by(&run, Actor::Person, "run_stopped", None).await.unwrap();
+        assert_eq!(actions(&fx.core.workstream_events(&second, &other.id).await.unwrap()), [(Actor::Person, "opened"), (Actor::Person, "run_stopped")]);
+
+        let gone = Run { connection_id: "jira:elsewhere:someone".into(), ..run };
+        fx.core.record_run_action_by(&gone, Actor::Person, "run_retried", None).await.unwrap();
+        assert_eq!(fx.core.workstream_events(&second, &other.id).await.unwrap().len(), 2, "a run of a connection that isn't signed in records nothing");
     }
 }

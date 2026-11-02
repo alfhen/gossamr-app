@@ -648,7 +648,8 @@ impl Core {
         self.scope_of(connection_id).await
     }
 
-    /// The scope of every registered, signed-in connection, in the order they were added.
+    /// The scope of every registered, signed-in connection, in the order they were added. Off ones are included: their
+    /// runs and workstreams stay reachable.
     pub async fn scopes(&self) -> Vec<Scope> {
         self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).map(|s| s.scope).collect()
     }

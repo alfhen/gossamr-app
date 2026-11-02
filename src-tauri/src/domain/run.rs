@@ -549,6 +549,11 @@ pub struct Run {
     /// The Pip turn that started it, when Pip did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// The address and signing key git commits with in the run's clone, read when the clone was last made ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key: Option<String>,
     /// Whether its clone is in Gossamr's work folder. Worked out whenever a run is read, never taken from what is stored.
     #[serde(default, skip_deserializing)]
     pub in_work_folder: bool,
@@ -613,6 +618,8 @@ impl Run {
             unapproved_auto_start: None,
             created_by: CreatedBy::User,
             origin: None,
+            commit_email: None,
+            signing_key: None,
             in_work_folder: false,
         }
     }
