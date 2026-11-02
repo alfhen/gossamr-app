@@ -172,6 +172,8 @@ export interface Backend {
   /** How many agents carry on if the app quits or the person signs out. */
   runsKeepRunning(): Promise<number>;
   revealPath(path: string): Promise<void>;
+  /** Makes `~/Gossamr/agents` if it is missing and shows it in Finder. The backend works out the folder; the page gives none. */
+  runsRevealWorkFolder(): Promise<void>;
   runsSettings(): Promise<AgentSettings>;
   /** The models provider instance `instanceId` offers: the driver's own, then the ones added to it. */
   providerModels(instanceId: string): Promise<ModelOption[]>;

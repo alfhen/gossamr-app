@@ -10,6 +10,7 @@ import { useStateView } from "./useStateView";
 import { runRef } from "../lib/runNames";
 import { verdictChip, verdictText } from "./runSheetLogic";
 import { Button } from "../components/Button";
+import { CommitsAs } from "./commitLine";
 
 export const agentId = (id: string) => `agent-${id}`;
 
@@ -167,6 +168,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
         </span>
         <RunRef run={run} className="ml-auto shrink-0" />
       </p>
+      <CommitsAs run={run} className="truncate text-xs text-ws-ink3" />
       <KeyAsking text={asking} />
       <RunBody run={run} now={now} onAttach={onAttach} failure={failure} />
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">

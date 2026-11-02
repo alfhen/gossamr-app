@@ -3,6 +3,7 @@ import { type AgentSettings, type Run } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { roleLabel } from "../lib/roles";
 import { slotWaiters, stopAllLabel, stopAllText, stoppable } from "./agentsLogic";
+import { WorkFolderSection } from "./WorkFolderSection";
 
 export interface CleanupOffer {
   count: number;
@@ -23,13 +24,14 @@ export interface SettingsViewProps {
   settingsSaving?: boolean;
   cleanup: CleanupOffer | null;
   onSettings(next: AgentSettings): void;
+  onRevealWorkFolder(): void;
   onCleanup(): void;
   onStopAll(): void;
   onClose(): void;
 }
 
 /** Agent settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onRevealWorkFolder, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
@@ -102,6 +104,8 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
           {settings ? <AgentsForm key={JSON.stringify(settings)} settings={settings} disabled={settingsSaving} onSave={onSettings} /> : <p className="m-0 text-ws-ink3">Loading…</p>}
         </Box>
       </Sec>
+
+      <WorkFolderSection workFolder={settings?.workFolder ?? null} onReveal={onRevealWorkFolder} />
 
       <Sec title="Clean up">
         <Box>

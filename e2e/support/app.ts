@@ -125,6 +125,7 @@ interface Handle {
   blockRun(id: string): void;
   loseRun(id: string): void;
   attached(): string[];
+  workFolderRevealed(): number;
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
@@ -257,6 +258,14 @@ export const mockAttached = (page: Page) =>
     const mock = (globalThis as Mocked).__gossamrMock;
     if (!mock) throw new Error(missing);
     return mock.attached();
+  }, NO_MOCK);
+
+/** How many times Reveal in Finder was used on Gossamr's work folder. */
+export const mockWorkFolderRevealed = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.workFolderRevealed();
   }, NO_MOCK);
 
 /** Every write the sample tracker made, with the draft the person approved for it. */

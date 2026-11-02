@@ -631,6 +631,10 @@ export class MockBackend implements Backend {
     return () => {};
   }
 
+  async runsRevealWorkFolder() {
+    this.runs.revealWorkFolder();
+  }
+
   async runsSetSettings(settings: AgentSettings) {
     return this.runs.setSettings(settings);
   }

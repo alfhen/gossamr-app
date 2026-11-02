@@ -112,6 +112,18 @@ impl Git {
         Some(list.split('\0').filter(|k| !k.is_empty()).map(str::to_owned).collect())
     }
 
+    /// The `user.email` and `user.signingkey` git would use for a commit made in `dir`, with `includeIf` rules for that
+    /// folder applied. Reading settings runs no program.
+    pub async fn commit_identity(&self, dir: &Path) -> (Option<String>, Option<String>) {
+        let read = |key: &'static str| async move { self.out(dir, &["config", key]).await.filter(|v| !v.is_empty()) };
+        (read("user.email").await, read("user.signingkey").await)
+    }
+
+    /// Whether the person's global git settings choose settings by folder (`includeIf "gitdir:…"`).
+    pub async fn has_folder_rules(&self, dir: &Path) -> bool {
+        self.out(dir, &["config", "--global", "--get-regexp", r"^includeif\.gitdir"]).await.is_some_and(|rules| !rules.is_empty())
+    }
+
     /// Every value `key` has in the clone's own `.git/config`; none when it is unset.
     pub async fn local_config_values(&self, clone: &Path, key: &str) -> Vec<String> {
         let list = self.out(clone, &["config", "--local", "--get-all", key]).await.unwrap_or_default();
@@ -226,6 +238,9 @@ case "$*" in
   "ls-remote --symref -- "*) printf 'ref: refs/heads/main\tHEAD\nabc\tHEAD\n' ;;
   "config --local --list --name-only -z") sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
   "config --local --get-all "*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null; true ;;
+  "config user.email") cat "$dir/.fake-email" 2>/dev/null || exit 1 ;;
+  "config user.signingkey") cat "$dir/.fake-signingkey" 2>/dev/null || exit 1 ;;
+  "config --global --get-regexp "*) cat "$dir/.fake-includeif" 2>/dev/null || exit 1 ;;
   "worktree list --porcelain") cat "$dir/.fake-worktrees" 2>/dev/null ;;
   "branch --list worktree-* --format=%(refname:short)") cat "$dir/.fake-branches" 2>/dev/null ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;

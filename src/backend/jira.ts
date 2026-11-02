@@ -271,6 +271,10 @@ export class JiraBackend implements Backend {
     return revealItemInDir(path);
   }
 
+  runsRevealWorkFolder() {
+    return invoke<void>("runs_reveal_work_folder");
+  }
+
   runsDisk(id: string) {
     return invoke<number>("runs_disk", { id });
   }

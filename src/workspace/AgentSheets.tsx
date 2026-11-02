@@ -49,6 +49,10 @@ function Settings() {
       });
   };
 
+  const revealWorkFolder = () => {
+    backend?.runsRevealWorkFolder().catch((e) => useToasts.getState().push(`Couldn't show the work folder: ${messageOf(e)}`));
+  };
+
   const finished = useMemo(() => runs.filter(cleanable), [runs]);
   const [sizes, setSizes] = useState<Record<string, number>>({});
   const ids = finished.map((r) => r.id).join();
@@ -73,7 +77,7 @@ function Settings() {
     setReport(cleanupReport(removed, refused));
   };
   const cleanup = offer ? { count: offer.runs.length, reason: offer.reason, report, busy: cleaning } : report ? { count: 0, reason: "", report, busy: false } : null;
-  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
+  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onRevealWorkFolder={revealWorkFolder} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
 }
 
 /** Whichever sheet the Agents feature has open over the screen, and the keys that go with it. */

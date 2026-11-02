@@ -993,6 +993,43 @@ mod clones {
     }
 
     #[tokio::test]
+    async fn the_commit_address_is_read_from_inside_gossamrs_clone_and_not_from_code() {
+        let rig = ready().await;
+        let legacy = crate::runs::rig::legacy_clone(&rig.fx);
+        std::fs::write(legacy.join(".fake-email"), "alf@personal.example\n").unwrap();
+        std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();
+        std::fs::write(rig.clone.join(".fake-signingkey"), "ABCD1234\n").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        let stored = rig.get(&run).await;
+        assert_eq!((stored.commit_email.as_deref(), stored.signing_key.as_deref()), (Some("alf@acme.example"), Some("ABCD1234")));
+        let log = git_log(&rig);
+        assert!(log.lines().any(|l| l.contains(&format!("-C {} ", rig.clone.display())) && l.ends_with("config user.email")), "{log}");
+        assert!(!log.contains(&legacy.display().to_string()), "{log}");
+    }
+
+    #[tokio::test]
+    async fn a_clone_with_no_commit_address_launches_and_records_none() {
+        let rig = ready().await;
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        let stored = rig.get(&run).await;
+        assert_eq!((stored.state, stored.commit_email, stored.signing_key), (RunState::Launching, None, None));
+    }
+
+    #[tokio::test]
+    async fn a_retry_reads_the_commit_address_again() {
+        let rig = ready().await;
+        let run = rig.queued(1).await;
+        rig.set(&run, |r| {
+            r.state = RunState::Failed;
+            r.commit_email = Some("old@acme.example".into());
+        })
+        .await;
+        std::fs::write(rig.clone.join(".fake-email"), "new@acme.example").unwrap();
+        rig.svc.retry_launch(&run.id).await.unwrap();
+        assert_eq!(rig.get(&run).await.commit_email.as_deref(), Some("new@acme.example"));
+    }
+
+    #[tokio::test]
     async fn two_runs_on_a_new_repository_clone_it_once_and_the_second_waits_for_the_first() {
         let rig = ready().await;
         slow_new_clone(&rig);

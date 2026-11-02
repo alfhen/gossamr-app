@@ -586,3 +586,10 @@ describe("clearance for the floating Pip launcher", () => {
     expect(source).toContain("`${launcherShown ? LAUNCHER_GUTTER : 0}px`");
   });
 });
+
+describe("the commit address on a card", () => {
+  it("shows who the commits are by when the clone was read and no line before", () => {
+    expect(card(run("working", { commitEmail: "alf@acme.example" }))).toContain("Commits as alf@acme.example");
+    expect(card(run("working", { commitEmail: null }))).not.toContain("Commits as");
+  });
+});

@@ -349,6 +349,11 @@ describe("where a run lives", () => {
     expect(legacy("queued", null)).not.toContain("keeps working");
   });
 
+  it("says who the commits are by once the clone was read, and nothing before", () => {
+    expect(sheet(run("working", { commitEmail: "alf@acme.example" }))).toContain("Commits as alf@acme.example");
+    expect(sheet(run("working", { commitEmail: null }))).not.toContain("Commits as");
+  });
+
   it("shows the size of the session files once it is known", () => {
     expect(sheet(run("working"), { disk: 3 * 1024 ** 3 })).toContain("take up 3 GB");
     expect(sheet(run("working"), { disk: "unknown" })).toContain("couldn&#x27;t be read");
@@ -396,7 +401,7 @@ describe("what the agent was told", () => {
 
 describe("agent settings", () => {
   it("counts what Stop all reaches and what keeps running after a quit", () => {
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={seeded()} stopping={false} keepRunning={3} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     // Stop all counts what it can stop, a set apart from Your agents, and says so.
     expect(html).toContain("Stop all (5 stoppable)");
     expect(html).toContain("3 agents keep running if you quit Gossamr or sign out.");
@@ -405,7 +410,7 @@ describe("agent settings", () => {
   });
 
   it("shows the agents at once and the terminal as fields, and no time or token limit", () => {
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={{ ...SETTINGS, terminal: "iTerm" }} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={{ ...SETTINGS, terminal: "iTerm" }} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).toMatch(/<option value="3" selected/);
     expect(html).toMatch(/<option value="iTerm" selected/);
     expect(html).not.toContain("Stop a run after");
@@ -413,19 +418,19 @@ describe("agent settings", () => {
   });
 
   it("holds the fields while a save is under way so a second one can't send stale values", () => {
-    const view = (settingsSaving: boolean) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const view = (settingsSaving: boolean) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} settingsSaving={settingsSaving} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     const fields = (html: string) => [...html.matchAll(/<(?:input|select)[^>]*aria-label="(?:Agents running|Terminal app)[^>]*>/g)].map((m) => /disabled/.test(m[0]));
     expect(fields(view(false))).toEqual([false, false]);
     expect(fields(view(true))).toEqual([true, true]);
   });
 
   it("waits for the backend's answer before showing fields", () => {
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={null} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={null} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).not.toContain("Agents running at once");
   });
 
   it("offers Clean up finished runs only when there is something to offer, and shows what the last one did", () => {
-    const view = (cleanup: CleanupOffer | null) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={cleanup} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const view = (cleanup: CleanupOffer | null) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={cleanup} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(buttons(view(null))).not.toContain("Clean up finished runs (2)");
     const html = view({ count: 2, reason: "Some ended more than 14 days ago.", report: "Removed 1 worktree. 1 kept: unpushed", busy: false });
     expect(buttons(html)).toContain("Clean up finished runs (2)");
@@ -435,14 +440,14 @@ describe("agent settings", () => {
 
   it("counts the runs waiting for a slot in what Stop all reaches", () => {
     const runs = [run("working", { id: "w" }), run("queued", { id: "q1", shortId: null, slotWaitSince: iso(3) }), run("queued", { id: "q2", shortId: null, slotWaitSince: iso(2) })];
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={runs} stopping={false} keepRunning={1} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={runs} stopping={false} keepRunning={1} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(html).toContain("Stop all (3 stoppable)");
-    const waitingOnly = renderToStaticMarkup(<AgentsSettingsView runs={[runs[1]]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const waitingOnly = renderToStaticMarkup(<AgentsSettingsView runs={[runs[1]]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(disabled(waitingOnly, "Stop all \\(1 stoppable\\)")).toBe(false);
   });
 
   it("turns Stop all off when nothing is running", () => {
-    const html = renderToStaticMarkup(<AgentsSettingsView runs={[run("done")]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
+    const html = renderToStaticMarkup(<AgentsSettingsView runs={[run("done")]} stopping={false} keepRunning={0} settings={SETTINGS} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     expect(disabled(html, "Stop all")).toBe(true);
   });
 });

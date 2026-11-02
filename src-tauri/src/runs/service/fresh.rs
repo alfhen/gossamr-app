@@ -13,6 +13,13 @@ fn clone_failure(e: CloneError) -> Failure {
     }
 }
 
+/// What `prepare` found out about a run's clone.
+#[derive(Default)]
+pub(super) struct Ready {
+    /// The `user.email` and `user.signingkey` git uses inside the clone; none when the clone wasn't read.
+    identity: Option<(Option<String>, Option<String>)>,
+}
+
 impl RunService {
     pub(in crate::runs) fn fresh_home(&self) -> Option<PathBuf> {
         self.home.as_ref().map(|h| h.canonicalize().unwrap_or_else(|_| h.clone()))
@@ -71,15 +78,27 @@ impl RunService {
         }
     }
 
+    /// Puts what `prepare` read from the clone onto the run, when it differs. Called under the launch lock with the run
+    /// loaded again, so a stale copy is never written over a launch that started meanwhile.
+    pub(super) async fn keep_identity(&self, run: &mut Run, ready: Ready) -> Result<()> {
+        let Some((commit_email, signing_key)) = ready.identity else { return Ok(()) };
+        if run.commit_email != commit_email || run.signing_key != signing_key {
+            run.commit_email = commit_email;
+            run.signing_key = signing_key;
+            self.store(run).await?;
+        }
+        Ok(())
+    }
+
     /// Makes Gossamr's clone of the run's repository, or fetches into it, before a launch. It takes the repository's
     /// locks, so a second run on the same repository waits for the first one's clone, and it runs outside the launch
     /// lock so a slow clone holds up only runs on this repository. A run set up anywhere but the work folder is left to
     /// `check()` to refuse. A fetch that can't be made is noted on the run and the launch goes on.
-    pub(super) async fn prepare(&self, run: &Run) -> std::result::Result<(), Failure> {
+    pub(super) async fn prepare(&self, run: &Run) -> std::result::Result<Ready, Failure> {
         let spec = &run.spec;
-        let Some(home) = self.fresh_home() else { return Ok(()) };
+        let Some(home) = self.fresh_home() else { return Ok(Ready::default()) };
         if work_path(&home, &spec.repo).ok() != Some(real(&spec.clone_path)) {
-            return Ok(());
+            return Ok(Ready::default());
         }
         let git = Git::new(self.tools.get().await?.env);
         let lock = self.repo_lock(&spec.repo);
@@ -95,10 +114,12 @@ impl RunService {
         if cloning {
             self.show_progress(&run.id, None).await;
         }
-        if let Some(Fetched::Not(why)) = ensured.map_err(clone_failure)?.fetched {
+        let ensured = ensured.map_err(clone_failure)?;
+        let identity = git.commit_identity(&ensured.path).await;
+        if let Some(Fetched::Not(why)) = ensured.fetched {
             let text = format!("Couldn't update Gossamr's clone of {}: {why}. The agent starts from what was fetched before.", spec.repo);
             self.note_clone(run, "clone_note", text).await;
         }
-        Ok(())
+        Ok(Ready { identity: Some(identity) })
     }
 }

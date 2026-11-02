@@ -90,6 +90,31 @@ pub fn work_path(home: &Path, repo: &str) -> Result<PathBuf, CloneError> {
     Ok(if there { path.canonicalize().ok().filter(|p| p.starts_with(&root)).unwrap_or(path) } else { path })
 }
 
+/// Makes `~/Gossamr/agents` if it is missing and returns its real path.
+pub fn make_work_folder(home: &Path) -> std::io::Result<PathBuf> {
+    let root = agents_root(home);
+    std::fs::create_dir_all(&root)?;
+    root.canonicalize()
+}
+
+/// What the person's git settings say about the work folder, for Settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkFolder {
+    /// The address git uses for a commit made in the work folder; none when git has none.
+    pub commit_email: Option<String>,
+    /// Git settings choose by folder, so the clones may not use that address.
+    pub include_if: bool,
+}
+
+/// Reads the work folder's commit address and whether `includeIf` rules exist. Creates nothing: a work folder that is
+/// not there yet is read from the home folder.
+pub async fn read_work_folder(git: &Git, home: &Path) -> WorkFolder {
+    let root = agents_root(home);
+    let dir = if root.is_dir() { root } else { home.to_path_buf() };
+    WorkFolder { commit_email: git.commit_identity(&dir).await.0, include_if: git.has_folder_rules(&dir).await }
+}
+
 /// Whether `path` is a folder inside the work folder, as the disk has it.
 pub fn in_work_folder(home: &Path, path: &Path) -> bool {
     let (root, path) = (real(&agents_root(home)), real(path));

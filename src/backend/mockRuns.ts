@@ -415,7 +415,8 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
     endedAt: ended ? new Date(last).toISOString() : null,
     ...seed.over,
   };
-  return { ...run, inWorkFolder: inWork(run.spec.clonePath) };
+  const inFolder = inWork(run.spec.clonePath);
+  return { ...run, inWorkFolder: inFolder, commitEmail: inFolder ? COMMIT_EMAIL : null, signingKey: null };
 }
 
 /** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
@@ -437,6 +438,8 @@ export interface MockRunsOptions {
   untrusted?: boolean;
   /** How long after a pushing build finishes its draft pull request turns up on the code host; null waits for `surfacePullRequests`. */
   prSurfaceMs?: number | null;
+  /** Git settings choose an address by folder, so Settings warns that Gossamr's clones may not use the one it shows. */
+  gitRules?: boolean;
 }
 
 /** How long the sample code host takes to show the draft pull request a pushing build opened, as a sync would find it. */
@@ -446,6 +449,9 @@ export const PR_SURFACE_MS = 1_500;
 const WATCHED = ["acme/storefront", "acme/payments", "acme/ops", "acme/webshop", "acme/gateway"];
 
 const REFUSAL_DELAY_MS = 600;
+
+/** The address the sample's git commits with in Gossamr's clones. */
+const COMMIT_EMAIL = "alf@acme.example";
 
 const stepIs = (spec: Pick<RunSpec, "role">, step: Step) => stepOf(spec.role) === step;
 /** The six roles whose results Gossamr scripts; any other role writes an investigator's. */
@@ -546,6 +552,7 @@ export class MockRuns {
     this.epoch = o.epoch ?? EPOCH;
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.untrustedClones = !!o.untrusted;
+    this.gitRules = !!o.gitRules;
     this.prSurfaceMs = o.prSurfaceMs === undefined ? PR_SURFACE_MS : o.prSurfaceMs;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
@@ -662,6 +669,8 @@ export class MockRuns {
       digest: mockDigest(spec),
       expectedWorktree,
       inWorkFolder: inWork(spec.clonePath),
+      commitEmail: inWork(spec.clonePath) ? COMMIT_EMAIL : null,
+      signingKey: null,
       state: "queued",
       shortId: null,
       sessionId: null,
@@ -1273,11 +1282,18 @@ export class MockRuns {
   }
 
   private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream" };
+  private gitRules = false;
+  /** How many times Reveal in Finder was used on the work folder, for tests. */
+  revealedWorkFolder = 0;
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
 
   settings(): AgentSettings {
-    return this.limits;
+    return { ...this.limits, workFolder: { commitEmail: COMMIT_EMAIL, includeIf: this.gitRules } };
+  }
+
+  revealWorkFolder() {
+    this.revealedWorkFolder += 1;
   }
 
   setSettings(settings: AgentSettings): AgentSettings {
@@ -1288,7 +1304,7 @@ export class MockRuns {
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
     };
-    return this.limits;
+    return this.settings();
   }
 
   cleanup(id: string): CleanupResult {

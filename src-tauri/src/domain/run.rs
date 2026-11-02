@@ -544,6 +544,12 @@ pub struct Run {
     /// Whether its clone is in Gossamr's work folder. Worked out whenever a run is read, never taken from what is stored.
     #[serde(default, skip_deserializing)]
     pub in_work_folder: bool,
+    /// The `user.email` git uses inside the run's clone, read when the clone was last made ready.
+    #[serde(default)]
+    pub commit_email: Option<String>,
+    /// The `user.signingkey` git uses inside the run's clone, read with `commit_email`.
+    #[serde(default)]
+    pub signing_key: Option<String>,
 }
 
 impl Run {
@@ -606,6 +612,8 @@ impl Run {
             created_by: CreatedBy::User,
             origin: None,
             in_work_folder: false,
+            commit_email: None,
+            signing_key: None,
         }
     }
 

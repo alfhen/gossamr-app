@@ -4,6 +4,7 @@ import type { Run } from "../types";
 import { Btn, Box, CodeBox, Sec } from "./AgentSheet";
 import { branchOf } from "./agentsLogic";
 import { formatBytes } from "./runSheetLogic";
+import { CommitsAs } from "./commitLine";
 
 /** What the session's files take up, read when the sheet opens; null while loading and "unknown" when it can't be read. */
 export function useDisk(backend: Backend | null, runId: string): number | null | "unknown" {
@@ -52,6 +53,7 @@ export function RunWhere({ run, disk, onReveal }: { run: Run; disk: number | nul
             <CodeBox text={p.value} what={p.what} />
           </div>
         ))}
+        <CommitsAs run={run} className="selectable text-sm text-ws-ink2 [overflow-wrap:anywhere]" />
         <p className="m-0 text-sm text-ws-ink2">
           {whereText(run)}
           {typeof disk === "number" && disk > 0 && <> Its session files take up {formatBytes(disk)}.</>}

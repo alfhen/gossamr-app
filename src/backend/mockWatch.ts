@@ -22,7 +22,7 @@ export interface MockOptions {
   pipPace?: number;
   /** "none" is a GitHub token that can't write to pull requests anywhere, so no review draft can be posted. */
   reviewAccess?: "none";
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; prSurfaceMs?: number | null; gitRules?: boolean };
 }
 
 interface Stored {
@@ -119,6 +119,8 @@ export interface MockHandle {
   loseRun(id: string): void;
   /** The run ids Terminal was opened on (`runsAttach`), oldest first. */
   attached(): string[];
+  /** How many times Reveal in Finder was used on the work folder (`runsRevealWorkFolder`). */
+  workFolderRevealed(): number;
   /** The commands Terminal was opened on from a connection's detail, oldest first. */
   connectionTerminals(): string[];
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
@@ -173,7 +175,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[] };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly revealedWorkFolder: number };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
@@ -215,6 +217,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, gi
     blockRun: (id) => void runs.block(id),
     loseRun: (id) => void runs.lose(id),
     attached: () => [...runs.attached],
+    workFolderRevealed: () => runs.revealedWorkFolder,
     connectionTerminals: () => [...(terminals ?? [])],
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent), ...(w.intent.type === "comment" ? { text: docText(w.intent.body) } : {}) })),
     draftReview,
@@ -267,7 +270,7 @@ function writtenKey(intent: Intent): string | null {
 
 type MockHandleEvent = ReturnType<MockHandle["workstreamEvents"]>[number];
 
-/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. The mock always lists the default Claude provider; `?providers=1` shows provider rows in Settings, which hides them otherwise. `?mockGithubRecheck=hold` keeps the sample GitHub checking its drafts after it is turned back on until `__gossamrMock.finishGithubRecheck()`. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
+/** In a dev browser, `?mockProjects=60` sets how many projects the sample catalog lists, and `?mockRepos=30` signs in a GitHub connection with that many repositories. `?runs=busy` (without the other kinds), `empty`, `many`, `failures` or `reports` (a finished run for each way a result can have been read) changes the scripted agent runs, `?runsCap=3` sets how many agents may run at once `?runsUntrusted=1` makes Claude refuse every clone until Trust this folder is used. `?runsGitRules=1` makes the sample's git choose an address by folder, so Settings warns about it, and `__gossamrMock.workFolderRevealed()` counts the times Reveal in Finder was used on the work folder. `?prSurface=manual` keeps a finished build's draft pull request off the code host until `__gossamrMock.surfacePullRequests()` (or Sync now) shows it, rather than after a moment. `?pipPace=200` slows the scripted Pip to 200ms a word, so a question can be queued behind one it is still answering. `?mockGithubProbe=notSignedIn` (or another state) sets what the GitHub probe finds from the start. The mock always lists the default Claude provider; `?providers=1` shows provider rows in Settings, which hides them otherwise. `?mockGithubRecheck=hold` keeps the sample GitHub checking its drafts after it is turned back on until `__gossamrMock.finishGithubRecheck()`. `?mockJiraToken=expiring` or `refused` gives the sample connection a token close to its expiry, or one Jira turned down (the banner asks for a new one). `?mockReviewAccess=none` makes the GitHub token unable to write to any pull request, so a review draft can't be posted and its card offers GitHub instead (repositories the sample can only read never take a review either). The runs move only when told to: see `exposeMockClock` above for `__gossamrMock.advanceRuns()`. */
 export function mockOptionsFromUrl(): MockOptions {
   if (!import.meta.env.DEV || typeof location === "undefined") return {};
   const params = new URLSearchParams(location.search);
@@ -296,6 +299,7 @@ export function mockOptionsFromUrl(): MockOptions {
     cap: count("runsCap"),
     planDescription: true,
     untrusted: params.get("runsUntrusted") === "1",
+    gitRules: params.get("runsGitRules") === "1",
     prSurfaceMs: params.get("prSurface") === "manual" ? null : undefined,
   };
   return options;

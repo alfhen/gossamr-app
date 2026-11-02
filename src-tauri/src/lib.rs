@@ -33,7 +33,7 @@ use auth::{Auth, AuthStatus, TokenSignIn};
 use agent::{AgentService, AskOutcome, AskRequest};
 use tracker::Move;
 use inbox::{CatalogPage, CodeRef, ConnectionInfo, Core, Edit, Probe, WatchState, WorkstreamView};
-use error::Result;
+use error::{Error, Result};
 use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
     WatchChange, WorkItem, Workstream, WorkstreamEvent,
@@ -508,13 +508,22 @@ async fn code_pull_diff(core: State<'_, CoreState>, connection_id: String, repo:
     core.code_pull_diff(&connection_id, &repo, number).await
 }
 
-/// How many agents run at once, the terminal to open and the notices. With `settings`, saves them first, clamped.
+/// How many agents run at once, the terminal to open and the notices, with what git says about the work folder. With `settings`, saves them first, clamped.
 #[tauri::command]
-fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSettings>) -> Result<config::AgentSettings> {
-    match settings {
-        Some(settings) => runs.set_settings(settings),
-        None => Ok(runs.settings()),
-    }
+async fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSettings>) -> Result<runs::limits::AgentSettingsView> {
+    let settings = match settings {
+        Some(settings) => runs.set_settings(settings)?,
+        None => runs.settings(),
+    };
+    Ok(runs.settings_view(settings).await)
+}
+
+/// Makes `~/Gossamr/agents` if it is missing and shows it in Finder. The page names no path.
+#[tauri::command]
+fn runs_reveal_work_folder(runs: State<'_, RunsState>) -> Result<()> {
+    let folder = runs.work_folder_to_reveal()?;
+    let status = std::process::Command::new("/usr/bin/open").arg(&folder).status().map_err(|e| Error::Proposal(format!("Couldn't open Finder: {e}")))?;
+    status.success().then_some(()).ok_or_else(|| Error::Proposal(format!("Finder didn't open {}.", folder.display())))
 }
 
 /// The models a provider instance offers: the driver's own, then the ones added to it.
@@ -1043,6 +1052,7 @@ pub fn run() {
             proposals_approve,
             proposals_post_review,
             agent_settings,
+            runs_reveal_work_folder,
             provider_models,
             provider_add_model,
             model_defaults,
