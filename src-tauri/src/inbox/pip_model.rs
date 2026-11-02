@@ -31,7 +31,7 @@ impl Core {
     /// Keeps `choice` with turn `request_id` when it names a listed model on a Claude instance. A choice that fails that
     /// is never kept, so a conversation can't hand a page's made-up string back to it as the last choice.
     pub async fn pip_turn_model(&self, scope: &Scope, request_id: &str, choice: &ModelChoice) -> Result<()> {
-        if model_choice::check_choice(&AppConfig::load(&self.data_dir), Use::Pip, choice).is_err() {
+        if model_choice::check_choice(&AppConfig::load(&self.data_dir), Use::Pip, choice, &self.codex_models.found()).is_err() {
             return Ok(());
         }
         self.with_app_db_for(scope, |db| db.set_pip_turn_model(request_id, choice)).await
@@ -56,7 +56,7 @@ impl Core {
             // Until provider probes (step p3) answer, a login that has lapsed shows as the CLI's own error.
             signed_in: true,
         };
-        match model_choice::resolve(&config, Use::Pip, choice, standing) {
+        match model_choice::resolve(&config, Use::Pip, choice, &self.codex_models.found(), standing) {
             Resolution::Unavailable(reason) => {
                 let name = choice
                     .or(config.models.pip.as_ref())
