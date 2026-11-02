@@ -97,7 +97,7 @@ describe("answering from the sheet", () => {
 });
 
 describe("a failed launch's own-terminal command", () => {
-  const trust = () => run("failed", { shortId: null, error: "Claude hasn't been opened in this folder", failure: { type: "untrustedFolder", path: "/Users/sample/Code/storefront" } as Run["failure"] });
+  const trust = () => run("failed", { shortId: null, error: "Claude hasn't been opened in this folder", failure: { type: "untrustedFolder", path: "/Users/sample/Gossamr/agents/acme/storefront" } as Run["failure"] });
 
   it("enables Retry once the command was copied, as the Terminal button does", () => {
     const before = sheet(trust());

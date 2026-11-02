@@ -4,7 +4,7 @@
 //! The public listing decides each run's state; a job's `state.json` and timeline only supply words, and everything
 //! taken from them is redacted and capped before it is stored. Sessions that match no run are ignored.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -17,6 +17,7 @@ use super::redact::redact;
 use super::service::{belongs_to, RunService};
 use super::state::{self, map_state, parse_at, progress_at};
 use super::toolchain::Toolchain;
+use crate::db::connection_of;
 use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
 
@@ -265,9 +266,18 @@ impl RunService {
         let Ok(drafts) = self.core.proposals(&ProposalQuery { states: Some(vec![StateKind::Pending]), ..ProposalQuery::default() }).await else { return };
         let drafts: Vec<_> = drafts.into_iter().filter(|p| p.state == ProposalState::Pending && p.superseded_by.is_none() && !matches!(&p.intent, Intent::StartRun { .. } | Intent::FollowUp { .. } | Intent::RunAnswer { .. })).collect();
         // The open workstreams give names, run labels and pauses; the closed ones are only told apart by id,
-        // so what belongs to one is skipped without loading it.
-        let Ok(scope) = self.core.scope().await else { return };
-        let (views, closed_ids) = (self.core.workstreams(&scope, false).await.unwrap_or_default(), self.core.closed_workstream_ids(&scope).await.unwrap_or_default());
+        // so what belongs to one is skipped without loading it. Each connection is asked for its own.
+        let scopes = self.core.scopes().await;
+        if scopes.is_empty() {
+            return;
+        }
+        let (mut views, mut closed_ids) = (Vec::new(), HashSet::new());
+        for scope in &scopes {
+            views.extend(self.core.workstreams(scope, false).await.unwrap_or_default());
+            closed_ids.extend(self.core.closed_workstream_ids(scope).await.unwrap_or_default());
+        }
+        // The connection each item belongs to, because which items were announced is kept in that connection's cache.
+        let mut owners: HashMap<String, String> = HashMap::new();
         let view_of = |id: &str| views.iter().find(|v| v.workstream.id == id);
         // What belongs to a closed workstream counts under General, as `needs()` in `src/lib/needs.ts` files it.
         let place = |id: &Option<String>| id.clone().filter(|id| !closed_ids.contains(id));
@@ -285,6 +295,7 @@ impl RunService {
                     None => format!("{name} has a question"),
                 },
             };
+            owners.insert(format!("run:{}:{:?}", run.id, run.state), run.connection_id.clone());
             needs.entry(ws).or_default().push(Need { key: format!("run:{}:{:?}", run.id, run.state), run_id: Some(run.id.clone()), what, since: run.last_progress_at });
         }
         // A failure is stuck until dealt with, but only the latest run of its kind on its ticket.
@@ -293,17 +304,20 @@ impl RunService {
             let ws = place(&run.spec.workstream);
             let name = label_of(&run.id, &ws).unwrap_or_else(|| topic(run).to_owned());
             let what = format!("{name} failed");
+            owners.insert(format!("run:{}:failed", run.id), run.connection_id.clone());
             needs.entry(ws).or_default().push(Need { key: format!("run:{}:failed", run.id), run_id: Some(run.id.clone()), what, since: run.ended_at.unwrap_or(run.last_progress_at) });
         }
         // A paused workstream waits to be resumed.
         for v in &views {
             if v.workstream.paused_reason.is_some() {
+                owners.insert(format!("paused:{}", v.workstream.id), v.workstream.connection_id.clone());
                 needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("paused:{}", v.workstream.id), run_id: None, what: "It is paused until you resume it".to_owned(), since: v.workstream.created_at });
             }
         }
         // A question Pip asked the person.
         for v in &views {
             if let Some(ask) = &v.pip_ask {
+                owners.insert(format!("pip-ask:{}:{}", v.workstream.id, ask.at.timestamp_micros()), v.workstream.connection_id.clone());
                 let what = format!("Pip asks: {}", cut(&ask.question.split_whitespace().collect::<Vec<_>>().join(" "), 100));
                 needs.entry(Some(v.workstream.id.clone())).or_default().push(Need { key: format!("pip-ask:{}:{}", v.workstream.id, ask.at.timestamp_micros()), run_id: None, what, since: ask.at });
             }
@@ -322,6 +336,7 @@ impl RunService {
                     None => "A draft waits for your approval".to_owned(),
                 },
             };
+            owners.insert(format!("draft:{}", draft.id), connection_of(draft));
             needs.entry(workstream).or_default().push(Need { key: format!("draft:{}", draft.id), run_id: from, what, since: draft.created_at });
         }
         let waiting: Vec<Waiting> = needs.into_iter().map(|(key, needs)| Waiting { key, needs }).collect();
@@ -333,7 +348,12 @@ impl RunService {
         // told is kept, so a restart announces only what is new since.
         let watching = self.notifier.watching();
         if !self.notices.lock().expect("notices lock poisoned").restored() {
-            let record = self.core.announced_needs(&scope).await.unwrap_or_default();
+            let mut record: Option<BTreeSet<String>> = None;
+            for scope in &scopes {
+                if let Some(kept) = self.core.announced_needs(scope).await.unwrap_or_default() {
+                    record.get_or_insert_with(BTreeSet::new).extend(kept);
+                }
+            }
             self.notices.lock().expect("notices lock poisoned").restore(record, &waiting);
         }
         let (before, after) = {
@@ -343,8 +363,14 @@ impl RunService {
             (before, board.seen().clone())
         };
         if before != after {
-            if let Err(e) = self.core.remember_announced_needs(&scope, &after).await {
-                eprintln!("couldn't keep which items were announced: {e}");
+            // A key owned by no Jira scope (a review draft with no ticket goes by the code host) is kept with the primary.
+            let home = self.core.primary().await.map_or_else(|_| scopes[0].connection_id.clone(), |p| p.scope.connection_id);
+            let home_of = |key: &String| owners.get(key).filter(|owner| scopes.iter().any(|s| &s.connection_id == *owner)).cloned().unwrap_or_else(|| home.clone());
+            for scope in &scopes {
+                let mine: BTreeSet<String> = after.iter().filter(|key| home_of(key) == scope.connection_id).cloned().collect();
+                if let Err(e) = self.core.remember_announced_needs(scope, &mine).await {
+                    eprintln!("couldn't keep which items were announced: {e}");
+                }
             }
         }
     }

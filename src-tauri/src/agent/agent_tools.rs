@@ -143,10 +143,7 @@ impl AgentSide {
             return Ok(out.join("\n\n"));
         };
         let unreadable = |e: crate::error::Error| format!("Couldn't read the workstream: {e}");
-        let scope = self.core.scope().await.map_err(unreadable)?;
-        if scope.connection_id != run.connection_id {
-            return Err(NOT_AVAILABLE.into());
-        }
+        let scope = self.core.visible_scope_of(&run.connection_id).await.map_err(unreadable)?;
         let Some(view) = self.core.workstream(&scope, workstream).await.map_err(unreadable)? else {
             out.push("This run's workstream isn't there any more.".into());
             return Ok(out.join("\n\n"));

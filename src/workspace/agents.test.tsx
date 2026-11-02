@@ -105,7 +105,7 @@ describe("a failed launch on a card", () => {
   it.each([
     ["notSignedIn", "Claude isn't signed in.", ["Open Terminal to sign in", "Retry"], true],
     ["claudeMissing", "Claude Code isn't installed, or Gossamr can't find it.", ["Open the install page", "Retry"], false],
-    ["noClone", "The clone this run was set up for can't be used any more.", ["Clone it", "Choose clone", "Retry"], false],
+    ["noClone", "Gossamr couldn't make its clone of acme/storefront.", ["Retry"], false],
     ["capReached", "Too many agents are running at once.", ["Retry"], false],
   ])("gives %s its own line and next step", (type, line, expected, gated) => {
     const out = card(failed(type));

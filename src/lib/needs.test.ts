@@ -315,7 +315,7 @@ describe("needs: failures persist until they are dealt with", () => {
   });
 
   it("keeps a folder to trust as a failure, offering the step in Terminal and Dismiss", () => {
-    const trust = run("r1", "build", "failed", { shortId: null, failure: { type: "untrustedFolder", path: "/Users/sample/Code/storefront" } });
+    const trust = run("r1", "build", "failed", { shortId: null, failure: { type: "untrustedFolder", path: "/Users/sample/Gossamr/agents/acme/storefront" } });
     const [n] = needs(input({ workstreams: [ws], runs: [trust] }));
     expect(n).toMatchObject({ kind: "failure", title: "R1 needs its folder trusted", primary: { id: "open", label: "Trust this folder in Terminal" }, secondary: [{ id: "dismiss", label: "Dismiss" }] });
   });

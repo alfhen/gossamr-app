@@ -38,8 +38,6 @@ use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
     WatchChange, WorkItem, Workstream, WorkstreamEvent,
 };
-use model::Snapshot;
-use runs::service::CloneChoice;
 use sync::Trigger;
 use wire::Topic;
 
@@ -52,10 +50,9 @@ type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
 
-/// Sends the latest snapshot to the window. Failures only mean there is nothing to show yet (e.g. signed out).
-async fn publish(app: &AppHandle, core: &Core) {
-    let Ok(snap) = core.snapshot().await else { return };
-    wire::snapshot(app, snap);
+/// Tells the window something changed. It carries nothing: the window reads what it shows through the cache commands.
+fn publish(app: &AppHandle) {
+    wire::snapshot(app);
 }
 
 #[tauri::command]
@@ -152,10 +149,9 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
             let polled = service.poll().await;
-            // The poll has let go of the launch lock by now, which each start takes again.
-            if let Err(e) = service.launch_waiting().await {
-                eprintln!("couldn't start the runs waiting for a slot: {e}");
-            }
+            // On its own task, so a clone or fetch for a waiting run never holds up the next poll. The poll has let go
+            // of the launch lock by now, which each start takes again.
+            use_freed_slot(&service);
             let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
             let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
             tokio::select! {
@@ -167,8 +163,8 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     });
 }
 
-/// After a stop has freed a slot, starts what waits for one on its own task: the stop has let go of the launch lock by
-/// now, and each start takes it again.
+/// Starts what waits for a slot on its own task, after a stop or a poll: they have let go of the launch lock by now,
+/// and each start takes it again.
 fn use_freed_slot(service: &RunsState) {
     let service = service.clone();
     tauri::async_runtime::spawn(async move {
@@ -191,20 +187,16 @@ async fn jira_cloud_id(core: State<'_, CoreState>, site: String) -> Result<Optio
 
 #[tauri::command]
 async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn, instance_id: Option<String>) -> Result<AuthStatus> {
-    if let Some(id) = instance_id {
-        core.require_jira(&id).await?;
+    if let Some(id) = &instance_id {
+        core.require_jira(id).await?;
     }
-    let status = core.connect_jira(&input).await?;
+    let status = core.connect_jira(&input, instance_id.as_deref()).await?;
+    publish(&app);
     core.wake.notify_one();
     probe_in_background(&app, &core, Probe::Refresh);
     let runs = runs.inner().clone();
     tauri::async_runtime::spawn(async move { runs.recover().await });
     Ok(status)
-}
-
-#[tauri::command]
-async fn snapshot(core: State<'_, CoreState>) -> Result<Snapshot> {
-    core.snapshot().await
 }
 
 #[tauri::command]
@@ -233,17 +225,17 @@ async fn watch_get(core: State<'_, CoreState>) -> Result<Vec<WatchState>> {
 }
 
 /// Everything the page shows and Pip sees depends on what is watched, so a change tells the page to re-read.
-async fn watch_edited(app: &AppHandle, core: &Core, connection_id: &str) {
+fn watch_edited(app: &AppHandle, connection_id: &str) {
     watch_changed(app, connection_id);
     cache_changed(app, connection_id);
-    publish(app, core).await;
+    publish(app);
 }
 
 /// Adds containers to what a connection watches, removes them, or pins them.
 #[tauri::command]
 async fn watch_set(app: AppHandle, core: State<'_, CoreState>, connection_id: String, changes: Vec<WatchChange>) -> Result<()> {
     core.watch_set_containers(&connection_id, &changes).await?;
-    watch_edited(&app, &core, &connection_id).await;
+    watch_edited(&app, &connection_id);
     Ok(())
 }
 
@@ -359,7 +351,7 @@ async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, inst
     wire::changed(&app, wire::Topic::Connections, &connection_id);
     cache_changed(&app, &connection_id);
     dev_links_changed(&app, &connection_id);
-    publish(&app, &core).await;
+    publish(&app);
     Ok(())
 }
 
@@ -479,7 +471,7 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
             runs_changed(&app, &connection);
         }
     }
-    publish(&app, &core).await;
+    publish(&app);
     result
 }
 
@@ -494,7 +486,7 @@ async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: S
     if let Some(connection) = connection {
         proposals_changed(&app, &connection);
     }
-    publish(&app, &core).await;
+    publish(&app);
     result
 }
 
@@ -674,24 +666,6 @@ async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Ve
     core.workstream_events(&scope, &id).await
 }
 
-/// Local clones of a watched repository.
-#[tauri::command]
-async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
-    runs.clones(&repo).await
-}
-
-/// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>`. Only for the person's own button press, after the
-/// folder and the command were shown.
-#[tauri::command]
-async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<runs::repo::LocalClone> {
-    runs.clone_fresh(&repo).await
-}
-
-#[tauri::command]
-async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
-    runs.pick_clone(&repo, &path).await
-}
-
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
 #[tauri::command]
 async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
@@ -798,15 +772,15 @@ fn sync_now(core: State<'_, CoreState>) {
 }
 
 #[tauri::command]
-async fn set_unread(app: AppHandle, core: State<'_, CoreState>, id: String, unread: bool) -> Result<()> {
-    core.set_unread(&id, unread).await?;
-    publish(&app, &core).await;
+async fn set_unread(app: AppHandle, core: State<'_, CoreState>, connection_id: String, id: String, unread: bool) -> Result<()> {
+    core.set_unread(&connection_id, &id, unread).await?;
+    publish(&app);
     Ok(())
 }
 
 #[tauri::command]
-async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
-    core.mentionable(&core.scope().await?, &key, &query).await
+async fn mentionable(core: State<'_, CoreState>, item: ItemRef, query: String) -> Result<Vec<model::Person>> {
+    core.mentionable(&item, &query).await
 }
 
 #[tauri::command]
@@ -857,7 +831,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         }
                     }
                 }
-                publish(&app, &core).await;
+                publish(&app);
             }
             for (connection_id, result) in core.sync_code_if_due(trigger).await {
                 // A failure shows on the connection's own row. It can follow repositories that were stored, so what
@@ -894,7 +868,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         }
                     }
                 }
-                publish(&app, &core).await;
+                publish(&app);
             }
             for (connection_id, strays) in core.radar_if_due().await {
                 wire::assigned_elsewhere(&app, &connection_id, &strays);
@@ -990,7 +964,6 @@ pub fn run() {
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
-                    runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
@@ -1029,7 +1002,6 @@ pub fn run() {
             auth_status,
             jira_cloud_id,
             jira_connect,
-            snapshot,
             cache_search,
             cache_item,
             cache_containers,
@@ -1077,9 +1049,6 @@ pub fn run() {
             runs_worktree_info,
             runs_delete,
             runs_start,
-            runs_clones,
-            runs_clone_fresh,
-            runs_pick_clone,
             runs_stop,
             runs_answer,
             runs_adopt_session,

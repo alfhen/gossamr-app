@@ -358,7 +358,7 @@ const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
 export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
-  private listeners = new Set<(s: Snapshot) => void>();
+  private listeners = new Set<() => void>();
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
@@ -586,18 +586,6 @@ export class MockBackend implements Backend {
 
   async runsSignIn(id: string) {
     this.runs.signIn(id);
-  }
-
-  async runsClones(repo: string) {
-    return this.runs.clones(repo);
-  }
-
-  async runsCloneFresh(repo: string) {
-    return this.runs.cloneFresh(repo);
-  }
-
-  async runsPickClone(repo: string, path: string) {
-    this.runs.pickClone(repo, path);
   }
 
   async runsOutcome(id: string) {
@@ -919,11 +907,12 @@ export class MockBackend implements Backend {
     return this.proposals.onChanged(listener);
   }
 
+  /** The mock's own tickets, which the cache reads are built from. For tests. */
   async load() {
     return this.snap;
   }
 
-  subscribe(listener: (s: Snapshot) => void) {
+  subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
   }
@@ -932,7 +921,7 @@ export class MockBackend implements Backend {
     const next = structuredClone(this.snap);
     fn(next);
     this.snap = next;
-    this.listeners.forEach((l) => l(next));
+    this.listeners.forEach((l) => l());
     this.cacheListeners.forEach((l) => l({ connectionId: "mock" }));
   }
 
@@ -1270,7 +1259,7 @@ export class MockBackend implements Backend {
     return { created: keys, error: null };
   }
 
-  async mentionable(_key: string, query: string) {
+  async mentionable(_item: ItemRef, query: string) {
     const q = fold(query.trim());
     return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => {
       const name = fold(p.name);
@@ -1278,7 +1267,7 @@ export class MockBackend implements Backend {
     });
   }
 
-  async setUnread(eventId: string, unread: boolean) {
+  async setUnread(_connectionId: string, eventId: string, unread: boolean) {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
@@ -1299,6 +1288,8 @@ export class MockBackend implements Backend {
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
     if (input.cloudId && !host.startsWith("unknown") && input.cloudId !== mockCloudId(host)) throw new Error(`That cloud id isn't the one ${host} reports. Check the site.`);
+    const has = this.jiraAccount;
+    if (instanceId === undefined && has.site?.name === host && has.email === input.email.trim()) throw new Error("You already have this account. Use Make a new token on its row.");
     this.jiraAccount = mockJiraStatus(host, input.email.trim(), input.expiresOn, input.cloudId);
     this.jiraToken = undefined;
     this.connectionsListeners.forEach((l) => l());

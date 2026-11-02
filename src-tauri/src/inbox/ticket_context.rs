@@ -25,9 +25,10 @@ impl Core {
     pub async fn ticket_for_agent(&self, run: &Run, key: &str) -> Result<TicketRead> {
         let Some(own) = run.item.as_ref() else { return Ok(TicketRead::NotLinked) };
         self.refuse_hidden(&own.connection_id)?;
+        let scope = self.scope_of(&own.connection_id).await?;
         let key = key.trim();
         let reachable = self
-            .with_db(|db| {
+            .with_db_for(&scope, |db| {
                 if own.key.eq_ignore_ascii_case(key) {
                     return Ok(Some(own.clone()));
                 }
@@ -38,7 +39,7 @@ impl Core {
             .await?;
         let Some(item) = reachable else { return Ok(TicketRead::NotLinked) };
         let links = self.ticket_dev_links(&item);
-        self.with_db(|db| Ok(db.item(&item)?.map_or(TicketRead::NotCached, |work| TicketRead::Found(snapshot(db, &work, &links))))).await
+        self.with_db_for(&scope, |db| Ok(db.item(&item)?.map_or(TicketRead::NotCached, |work| TicketRead::Found(snapshot(db, &work, &links))))).await
     }
 
     /// The code changes linked to `item`, or none when the code index can't be read: a missing link must not stop a draft.

@@ -275,18 +275,6 @@ impl Db {
         Ok(())
     }
 
-    /// The user's transitions and creations at or after `since`, newest first. Their comments are stored too, for
-    /// `needs_me_keys`, but the page derives those from the tickets and would list them twice.
-    pub fn activity(&self, since: &str) -> Result<Vec<MyAction>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT ticket_key, kind, at, text FROM activity WHERE at >= ?1 AND kind != 'comment' ORDER BY at DESC",
-        )?;
-        let rows = stmt.query_map(params![since], |r| {
-            Ok(MyAction { ticket_key: r.get(0)?, kind: r.get(1)?, at: r.get(2)?, text: r.get(3)? })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     pub fn events(&self, since: &str) -> Result<Vec<InboxEvent>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, ticket_key, kind, actor, at, text, unread, done_at, snoozed_until
@@ -355,12 +343,6 @@ impl Db {
         }
     }
 
-    pub fn seen(&self) -> Result<std::collections::HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT ticket_key, at FROM seen")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     pub fn meta(&self, k: &str) -> Result<Option<String>> {
         Ok(self.conn.query_row("SELECT v FROM meta WHERE k = ?1", params![k], |r| r.get(0)).optional()?)
     }
@@ -394,14 +376,13 @@ mod tests {
     use crate::tracker::testing::sample_ticket;
 
     #[test]
-    fn stores_each_action_once_and_reads_back_recent_ones() {
+    fn stores_each_action_once() {
         let db = Db::in_memory().unwrap();
         let action = |at: &str| MyAction { ticket_key: "CA-1".into(), at: at.into(), kind: "transition".into(), text: "A → B".into() };
         let actions = vec![("h:1:status".to_string(), action("2026-09-28T09:00:00Z")), ("h:2:status".to_string(), action("2026-08-01T09:00:00Z"))];
         db.insert_activity(&actions).unwrap();
         db.insert_activity(&actions).unwrap();
-        assert_eq!(db.activity("2026-09-01T00:00:00Z").unwrap(), vec![action("2026-09-28T09:00:00Z")]);
-        assert_eq!(db.activity("2026-01-01T00:00:00Z").unwrap().len(), 2);
+        assert_eq!(db.conn.query_row("SELECT count(*) FROM activity", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]

@@ -394,18 +394,6 @@ impl RunService {
         self.open_claude_in(&run.spec.clone_path, purpose).await
     }
 
-    /// Opens Terminal running plain `claude` in a clone before any run exists, for the one-time trust question. Only a
-    /// folder under the roots Gossamr scans for clones or under `~/Gossamr/agents` qualifies.
-    pub async fn trust_folder(&self, folder: &Path) -> Result<()> {
-        let real = folder.canonicalize().map_err(|_| refuse(format!("{} isn't a folder that exists", folder.display())))?;
-        let agents = self.home.as_deref().map(super::fresh::agents_root);
-        let inside = |root: &PathBuf| root.canonicalize().is_ok_and(|r| real.starts_with(r));
-        if !(self.roots.iter().chain(agents.iter()).any(inside)) {
-            return Err(refuse(format!("{} isn't in a place Gossamr looks for clones.", real.display())));
-        }
-        self.open_claude_in(&real, Purpose::Trust).await
-    }
-
     async fn open_claude_in(&self, folder: &Path, purpose: Purpose) -> Result<()> {
         let tc = self.toolchain().await?;
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;

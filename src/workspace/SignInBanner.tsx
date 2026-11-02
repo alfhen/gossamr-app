@@ -8,12 +8,18 @@ import { isJira } from "./domains";
 import { useJiraUi } from "./jiraUi";
 import { useTabs } from "./tabsStore";
 
-type Lost = Pick<ConnectionInfo, "id" | "kind" | "displayName">;
+type Lost = Pick<ConnectionInfo, "id" | "kind" | "displayName" | "instanceId">;
 
 export function SignInBanner() {
   const connections = useWorkspace((s) => s.connections);
   const lost = useMemo(() => connections.filter(isSignedOut), [connections]);
-  return <SignInBannerView lost={lost} onFix={(c) => (c && isJira(c.kind) ? useJiraUi.getState().openConnect() : showConnection(c))} />;
+  return <SignInBannerView lost={lost} onFix={fixSignIn} />;
+}
+
+/** Jira's token sheet opens on the row that lost its sign-in, so a new token renews that row instead of adding an account. */
+export function fixSignIn(c: Lost | null) {
+  if (c && isJira(c.kind)) useJiraUi.getState().openConnect(c.instanceId);
+  else showConnection(c);
 }
 
 function showConnection(c: Lost | null) {

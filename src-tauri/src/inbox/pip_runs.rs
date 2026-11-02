@@ -101,10 +101,12 @@ impl Core {
     /// a fork is refused.
     pub(crate) async fn build_pip_run(&self, scope: &Scope, workstream: &str, ticket: Option<&str>, ask: PipRunAsk, repo: String, plan: ClonePlan) -> Result<(RunSpec, Option<ItemRef>)> {
         self.require_watched_repo(&repo)?;
-        let clone_path = self.resolve_clone(&plan.path)?;
+        let clone_path = self.resolve_clone(&plan.path, &repo)?;
         let item = ticket.map(|key| Self::item(scope, key));
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let connection_id = scope.connection_id.clone();
+        let (_, site, _) = self.identity_for(scope).await?;
+        let site = site.name;
         let mut spec = RunSpec {
             role: ask.role,
             repo,
@@ -113,6 +115,7 @@ impl Core {
             name: plan.name,
             brief: ask.brief,
             ticket: item.as_ref().map(|i| i.key.clone()),
+            site: item.as_ref().map(|_| site),
             ticket_block: None,
             pr: ask.pr,
             pr_sha: None,
@@ -202,7 +205,7 @@ impl Core {
         let scope = self.scope().await?;
         self.require_watched_repo(&spec.repo)?;
         spec.report = true;
-        spec.clone_path = self.resolve_clone(&spec.clone_path)?;
+        spec.clone_path = self.resolve_clone(&spec.clone_path, &spec.repo)?;
         if spec.brief.trim().is_empty() {
             spec.brief = "Look into this.".into();
         }

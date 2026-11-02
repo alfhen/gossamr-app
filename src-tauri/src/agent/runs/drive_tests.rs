@@ -178,7 +178,7 @@ async fn start_agent_starts_a_run_with_pips_role_and_brief_and_no_draft_and_hand
     assert_eq!((spec.role.as_str(), spec.repo.as_str(), spec.base.as_str(), spec.clone_path.clone()), ("investigator", "acme/webshop", "main", d.rig.clone.clone()));
     assert_eq!((spec.brief.as_str(), spec.ticket.as_deref(), spec.report, spec.workstream.as_deref()), ("Look at the retry loop", Some("CA-1"), true, Some(d.ws.as_str())));
     assert!(spec.ticket_block.as_deref().unwrap().starts_with("CA-1: Ticket 1"));
-    assert_eq!(run.item, Some(d.rig.fx.item("CA-1")));
+    assert_eq!((spec.site.as_deref(), run.item.clone()), (Some("Acme"), Some(d.rig.fx.item("CA-1"))));
     assert!(d.drafts().await.is_empty(), "no draft was made for it");
     assert_eq!(d.audit().await.last(), Some(&(Actor::Pip, "agent_started".to_string(), Some("investigator · conversation".to_string()))));
     assert!(d.changes.load(Ordering::SeqCst) >= 1, "the page hears of the workstream");
@@ -188,7 +188,7 @@ async fn start_agent_starts_a_run_with_pips_role_and_brief_and_no_draft_and_hand
     assert!(launched.short_id.is_some() && d.rig.cli.launches() == 1);
     let request = d.rig.cli.0.lock().unwrap().launches[0].clone();
     assert!(request.name.ends_with("CA-1 investigator"), "{}", request.name);
-    assert!(request.prompt.starts_with("You are working as an investigator on CA-1.") && request.prompt.contains("Look at the retry loop"), "{}", request.prompt);
+    assert!(request.prompt.starts_with("You are working as an investigator on CA-1 (on Acme).") && request.prompt.contains("Put the full key, CA-1, in the title") && request.prompt.contains("Look at the retry loop"), "{}", request.prompt);
 }
 
 #[tokio::test]
@@ -296,7 +296,7 @@ async fn start_agent_refuses_what_pip_may_not_do_and_starts_nothing() {
 }
 
 #[tokio::test]
-async fn a_start_needs_a_real_git_clone_inside_home() {
+async fn a_start_needs_a_git_clone_inside_the_work_folder() {
     use crate::domain::ClonePlan;
     use crate::inbox::PipRunAsk;
     let d = drive().await;
@@ -315,7 +315,10 @@ async fn a_start_needs_a_real_git_clone_inside_home() {
         async move { fx.core.build_pip_run(&fx.scope, &ws, Some("CA-1"), ask(), "acme/webshop".into(), plan(&path)).await }
     };
 
-    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (plain, "isn't a git clone"), (outside.clone(), "isn't inside your home folder"), (link, "isn't inside your home folder")] {
+    let in_work = fx.home.join("Gossamr/agents/acme/plain");
+    std::fs::create_dir_all(&in_work).unwrap();
+    let outside_words = "isn't inside ~/Gossamr/agents, where agents work";
+    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (in_work, "isn't Gossamr's clone of acme/webshop"), (plain, outside_words), (outside.clone(), outside_words), (link, outside_words)] {
         let err = build(bad.clone()).await.unwrap_err().to_string();
         assert!(err.contains(why), "{bad:?}: {err}");
     }
