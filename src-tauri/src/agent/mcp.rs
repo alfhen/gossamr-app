@@ -1004,6 +1004,15 @@ mod tests {
     use crate::tracker::testing::sample_ticket;
     use crate::tracker::Move;
 
+    #[test]
+    fn neither_pips_tools_nor_the_agents_can_trust_a_folder() {
+        for tool in tool_list().iter().chain(agent_tools::tools().iter()) {
+            let name = tool["name"].as_str().unwrap();
+            assert!(!name.to_lowercase().contains("trust"), "{name}");
+            assert!(!tool["description"].as_str().unwrap_or_default().to_lowercase().contains("hastrustdialogaccepted"), "{name}");
+        }
+    }
+
     struct Rig {
         fx: Fixture,
         st: McpState,

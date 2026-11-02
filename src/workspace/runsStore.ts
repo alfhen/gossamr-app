@@ -4,7 +4,7 @@ import { labelsByRun } from "../lib/workstreamStage";
 import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
-import { INSTALL_URL, failureHelp, type FailureAct } from "./failureHelp";
+import { INSTALL_URL, STILL_UNTRUSTED, failureHelp, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { openTicketByKey, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
@@ -56,6 +56,10 @@ interface RunsState {
   dismissed: ReadonlySet<string>;
   /** Ids of failed runs the person has taken the step in Terminal for, or copied its command; Retry waits for this. */
   terminalOpened: ReadonlySet<string>;
+  /** Failed runs Gossamr is trusting the clone of right now. */
+  trusting: ReadonlySet<string>;
+  /** Why Gossamr didn't trust the clone of a failed run, in its own words, by run id; Terminal comes first for these. */
+  trustRefused: ReadonlyMap<string, string>;
   /** Stop all is under way. */
   stopping: boolean;
   /** The run a draft is being made from, so its buttons wait. */
@@ -91,9 +95,10 @@ interface RunsState {
   answer(id: string, text: string): Promise<boolean>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
   adoptSession(id: string, session: string): Promise<void>;
-  retryLaunch(id: string): Promise<void>;
-  /** The step a failed launch needs the person for: Terminal to trust the folder or sign in, or the install page. */
-  fix(id: string, act: Extract<FailureAct, "terminal" | "install">): Promise<void>;
+  /** With `trust`, Gossamr first trusts the run's own clone for its login; a refusal is kept for the run's card. */
+  retryLaunch(id: string, options?: { trust?: boolean }): Promise<void>;
+  /** The step a failed launch needs the person for: trusting the clone, Terminal to sign in or trust the folder, or the install page. */
+  fix(id: string, act: FailureAct): Promise<void>;
   /** Notes that the person copied the command to run it themselves, which is as good as opening Terminal. */
   noteCopied(id: string): void;
   /**
@@ -195,6 +200,8 @@ export const useRuns = create<RunsState>((set, get) => ({
   filters: NO_FILTERS,
   dismissed: loadDismissed(),
   terminalOpened: new Set<string>(),
+  trusting: new Set<string>(),
+  trustRefused: new Map<string, string>(),
   archivedOpen: false,
   stopping: false,
   drafting: null,
@@ -328,24 +335,40 @@ export const useRuns = create<RunsState>((set, get) => ({
     void get().reload();
   },
 
-  async retryLaunch(id) {
+  async retryLaunch(id, options) {
     const { backend } = get();
     if (!backend) return;
+    const trust = !!options?.trust;
+    if (trust) set({ trusting: new Set([...get().trusting, id]) });
+    const refuse = (why: string | null) => {
+      const refused = new Map(get().trustRefused);
+      if (why) refused.set(id, why);
+      else refused.delete(id);
+      set({ trustRefused: refused });
+    };
     try {
       const before = get().runs.find((r) => r.id === id);
-      const after = await backend.runsRetryLaunch(id);
+      const after = await backend.runsRetryLaunch(id, trust ? { trust: true } : undefined);
       const help = after.state === "failed" ? failureHelp(after) : null;
       const again = !!help?.retryNeedsTerminal && help.kind === before?.failure?.type;
+      if (trust) refuse(again ? STILL_UNTRUSTED : null);
       if (!again && get().terminalOpened.has(id)) {
         const opened = new Set(get().terminalOpened);
         opened.delete(id);
         set({ terminalOpened: opened });
       }
-      if (after.state === "failed") {
+      if (after.state === "failed" && !(trust && again)) {
         useToasts.getState().push(again ? `Still blocked: ${help.summary} Finish the step in Terminal, then retry.` : `It failed again: ${after.error ?? "no reason was given"}`);
       }
     } catch (e) {
-      useToasts.getState().push(`Couldn't retry the launch: ${messageOf(e)}`);
+      if (trust) refuse(messageOf(e));
+      else useToasts.getState().push(`Couldn't retry the launch: ${messageOf(e)}`);
+    } finally {
+      if (trust) {
+        const trusting = new Set(get().trusting);
+        trusting.delete(id);
+        set({ trusting });
+      }
     }
     void get().reload();
   },
@@ -355,6 +378,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     if (!backend) return;
     try {
       if (act === "install") return await backend.openUrl(INSTALL_URL);
+      if (act === "trust") return await get().retryLaunch(id, { trust: true });
       const failure = get().runs.find((r) => r.id === id)?.failure;
       if (failure?.type === "modeRefused") await backend.runsAcceptMode(id, failure.mode);
       else await (failure?.type === "notSignedIn" ? backend.runsSignIn(id) : backend.runsTrustFolder(id));
