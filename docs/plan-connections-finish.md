@@ -60,7 +60,7 @@ flowchart LR
   W8 --> W9[Wave 9: C05]
 ```
 
-Two tracks run side by side: runs and Codex (A, C) in `src-tauri/src/runs/`, and Jira (L02, B) in the front end. The runs and Codex track is a chain: A01 and A03 both edit `runs/cleanup.rs`; A02, A03, C01 to C04 edit `runs/{tracker,cli,toolchain,index,control}.rs`. A04, A05, B01 and C05 all edit `src/workspace/Connections.tsx` and `connectionsLogic.ts`, so they sit in different waves. L01 lands before L02 (wave 1, then wave 2), because both touch `src/backend/mock.ts` and `mockPip.ts`, and before A04, which reuses its `ModelPicker`. L02 lands before B01, which also edits `mock.ts` and builds on j22. A01 keeps its mock changes in `mockRuns.ts` and `mockProviders.ts`, so it shares no file with L01 or L02. D01 changes docs only and goes in wave 1 so later entries read the decisions.
+Two tracks run side by side: runs and Codex (A, C) in `src-tauri/src/runs/`, and Jira (L02, B) in the front end. The runs and Codex track is a chain: A01 and A03 both edit `runs/cleanup.rs`; A02, A03, C01 to C04 edit `runs/{tracker,cli,toolchain,index,control}.rs`. A04, B01 and C05 edit `src/workspace/Connections.tsx` and `connectionsLogic.ts`, and A05 and C05 both edit `failureHelp.ts`, so they sit in different waves. L01 lands before L02 (wave 1, then wave 2), because both touch `src/backend/mock.ts` and `mockPip.ts`, and before A04, which reuses its `ModelPicker`. L02 lands before B01, which also edits `mock.ts` and builds on j22. A01 keeps its mock changes in `mockRuns.ts` and `mockProviders.ts`, so it shares no file with L01 or L02. D01 changes docs only and goes in wave 1 so later entries read the decisions.
 
 ## Rules for every PR
 
@@ -79,20 +79,20 @@ Two tracks run side by side: runs and Codex (A, C) in `src-tauri/src/runs/`, and
 **L01 Land the model picker in Pip's drawer (#290, r9).** Touches: `src/backend/mock.ts`, `src/backend/mockWatch.ts`, `src/workspace/connectionsLogic.ts` (conflict resolution only).
 - Merge `main` into `providers/r9-pip-model-picker` and keep both sides. r9 brought `providers.addClaude` (`mock.ts`, `mockWatch.ts`) and the `providersVisible` export (`connectionsLogic.ts`). #292, now on main, brought `revealedFolders` (`mock.ts`, `mockWatch.ts`, including the `exposeMockClock` signature, which takes both) and `codexAsked` (`connectionsLogic.ts`).
 - No new behaviour. CI, Gitar and the bot answers were done before the conflict.
-Regression test: `providersVisible()` in `connectionsLogic.test.ts` (new), plus the existing `ModelPicker.test.tsx`, `modelPicker.test.ts`, `claudeStore.test.ts` and the r9 block in `e2e/pip.spec.ts` still pass after the merge.
-Acceptance: CI green on the merged head. The PR adds an assertion on `providersVisible()` to `src/workspace/connectionsLogic.test.ts` (no test mentions it today), and `pnpm test` fails if the merge drops it, `codexAsked` or `revealedFolders`. The PR names the existing tests that use `codexAsked` and `revealedFolders` and checks each by deleting the export.
+Regression test: a new `providersVisible()` case in the existing `connectionsLogic.test.ts`, plus the existing `ModelPicker.test.tsx`, `modelPicker.test.ts`, `claudeStore.test.ts` and the r9 block in `e2e/pip.spec.ts` still pass after the merge.
+Acceptance: CI green on the merged head. The PR adds an assertion on `providersVisible()` to `src/workspace/connectionsLogic.test.ts` (no test mentions it today), and `pnpm test` fails if the merge drops it, `codexAsked` or `revealedFolders`. `codexAsked` is covered only by `e2e/providers.spec.ts` (through `?codex=1`), so the PR runs that spec too; it names the tests that use `revealedFolders` and checks each by deleting the export.
 
 **D01 Record the Codex decisions in the docs.** Touches: `docs/connections-proposal.md`, `docs/agents-cli-findings.md`.
-- c2 is skipped by owner decision on 2 Nov 2026 (Pip stays on Claude): update lines 135 (the 6.1 table), 364, 532 and 590.
+- c2 is skipped by owner decision on 2 Nov 2026 (Pip stays on Claude): update section 1 (line 19), decision 2 (line 63, "For the owner to confirm"), the 6.1 table (line 135), the c0 row (line 362), lines 364, 532, 590 and 598, and the risk at line 666.
 - Codex agents get no `--sandbox` flag, so the person's own Codex config decides (owner decision, 2 Nov 2026); mark the findings row confirmed and say what `workspace-write` breaks (C6).
 - Codex is a beta provider: a **Beta** label on its row, its sheet and its picker entries, and nothing hidden behind a switch. Add this to 8.x, 10.x and the c6 step.
 - Steps p1 to p6, r7, r8, r11, j15 to j21, j23 to j25, c0, c1, t1 and t2 are marked merged with their PR numbers. j22 stays open until L02 lands.
 Regression test: none (docs only).
-Acceptance: `grep -n "only if c0 says yes" docs/connections-proposal.md` finds nothing; the Beta rule and both decisions appear with their date.
+Acceptance: `grep -n "if c0 says yes" docs/connections-proposal.md` finds nothing, decision 2 no longer says "For the owner to confirm", and the Beta rule and both decisions appear with their date.
 
 ### Wave 2
 
-**L02 Fix the lost cross-site Pip turns and land #291 (j22).** Touches: `src/claudeStore.ts`, `src/lib/conversations.ts`, `src/backend/{mock.ts,mockPip.ts,mockPipQueue.ts,mockPipTurns.ts,claude.ts}`, `src-tauri/src/agent/`, `src-tauri/src/inbox/pip_turns.rs`, `src-tauri/src/db/{pip_turns.rs,workstreams.rs}`, their tests (from #291's file list).
+**L02 Fix the lost cross-site Pip turns and land #291 (j22).** Touches: `src/claudeStore.ts`, `src/claudeStore.test.ts`, and #291's files: `src-tauri/src/agent/{context.rs,mcp.rs,mod.rs,real_tests.rs,runs.rs,runs/drive_tests.rs,supervisor/tests.rs}`, `src-tauri/src/db/{pip_turns.rs,workstreams.rs}`, `src-tauri/src/inbox.rs`, `src-tauri/src/inbox/{instances.rs,pip_model.rs,pip_scope.rs,pip_turns.rs,workstreams.rs}`, `src/backend/{claude.ts,mock.ts,mockPip.ts,mockPipQueue.ts,mockPipTurns.ts,mockPipTurns.test.ts,mockSeveralJira.test.ts}`, `src/lib/conversations.ts`.
 - The page names each conversation with `conversationIn(ticketKey, connectionId)` in `ask`, `load`, `readWakePrompt` and `cancel`, so the turn is stored and read back under the same `<connection>:<name>` key. A bare page name still means the primary connection, so existing conversations keep working. Rust already stores under the qualified key and `pip_conversation` reads one, so the fix is in the page.
 - Merge `main` in after L01 lands (wave 2).
 Regression test: vitest cases that `claudeStore.ask` sends the connection-qualified name and that `load` for a second-site ticket reads back the turn `ask` stored. Both fail on the current branch, where `load` uses the bare key. A Rust test checks that a turn stored under `<connection>:<name>` is returned by `pip_conversation` for that key; it passes before and after and guards the Rust half.
@@ -150,8 +150,9 @@ Regression test: vitest for the defaults written by each picker; e2e changes "Ne
 Acceptance: `pnpm test Settings connectionsLogic` and `pnpm e2e e2e/providers.spec.ts` pass.
 QA: add a second Claude, set it as "New agents use", start an agent and check its card; check the Beta label on Codex in light and dark.
 
-**C01 A run backend trait (c3).** Touches: `src-tauri/src/runs/{cli.rs,toolchain.rs,control.rs,testing.rs,real_tests.rs}`, `src-tauri/src/runs/service/tests.rs`.
-- Generalise `ClaudeCli` into a run backend trait: launch, observe, stop, interrupt-then-resume, final answer, attach, clean-up (session removal) and sign-in commands. Claude implements it with the existing code; `Toolchain.cli` holds the trait object.
+**C01 A run backend trait (c3).** Touches: `src-tauri/src/runs/{cli.rs,toolchain.rs,control.rs,cleanup.rs,answer.rs,message.rs,final_answer.rs,continuation.rs,service.rs,testing.rs,real_tests.rs}`, `src-tauri/src/runs/service/tests.rs`.
+- Add a run backend trait above `ClaudeCli` (which `Toolchain.cli` already holds as `Arc<dyn ClaudeCli>`, `toolchain.rs:19`), as proposal c3 says: launch, observe, stop, interrupt-then-resume, final answer, attach, clean-up (session removal) and sign-in commands. Claude implements it with the existing code.
+- Its methods take a backend-neutral session handle (a Claude short id, or a Codex thread id plus pid) instead of a `ShortId`. The `short_id` and `earlier_sessions` checks in cleanup, control, answer, message, final_answer, continuation and `recover` (`service.rs:646`) move behind the handle, so a run with no Claude short id is not refused before the backend is asked.
 - No behaviour change.
 Regression test: the existing runs tests pass unchanged against the trait; one new test calls every trait method on the Claude backend through `dyn`. A refactor test that would fail if a method silently fell back to the default instance.
 Acceptance: `cargo test runs::` passes with no test edited except type names.
@@ -165,24 +166,24 @@ Regression test: vitest for the Runs on / Ran on text; e2e changes a queued run'
 Acceptance: `pnpm test AgentParts failureHelp` and `pnpm e2e e2e/agents-and-runs.spec.ts e2e/workstreams.spec.ts` pass.
 QA: queue a run, change its model, let it start; sign the second Claude out in the mock and check the banner and the waiting run.
 
-**C02 Codex launch (c4a).** Touches: new `src-tauri/src/runs/codex/{mod.rs,launch.rs}`, `src-tauri/src/runs/{launcher.rs,index.rs,service.rs}`, `src-tauri/src/domain/run.rs`, `src-tauri/src/db/{schema.rs,runs.rs}`, a fake `codex` in `src-tauri/test-support/`.
+**C02 Codex launch (c4a).** Touches: new `src-tauri/src/runs/codex/{mod.rs,launch.rs}`, `src-tauri/src/runs/{toolchain.rs,launcher.rs,index.rs,service.rs}`, `src-tauri/src/domain/run.rs`, `src-tauri/src/db/{schema.rs,runs.rs}`, a fake `codex` in `src-tauri/test-support/`.
 - A Codex backend makes the worktree and branch and runs `codex exec --json -C <worktree> -o <run folder>/final.txt` with stdin closed, in its own session so it outlives Gossamr, with stdout to `events.jsonl` in the run folder. It passes no `--sandbox` flag.
-- It gives the agent Gossamr's MCP server and guard per run through `-c`: `mcp_servers.gossamr.*` with `bearer_token_env_var="GOSSAMR_MCP_TOKEN"` (the token is in the child's environment, never in argv) and `default_tools_approval_mode="approve"` (c0 check C2), plus the agent guard in `developer_instructions` (C3).
+- It gives the agent Gossamr's MCP server and guard per run through `-c`: `mcp_servers.gossamr.*` with `bearer_token_env_var="GOSSAMR_MCP_TOKEN"` (the token is in the child's environment, never in argv) and `default_tools_approval_mode="approve"` (c0 check C2), plus the agent guard in `developer_instructions` (C3), and a per-tool timeout on the Gossamr server above how long `ask` waits (Claude's is `AGENT_CALL_TIMEOUT_MS`, 600 s, `runs/agent_config.rs:61`). c0 did not test a held call, so the builder confirms the real Codex key name (`tool_timeout_sec` is expected) against the CLI's own help or source and records it in `docs/agents-cli-findings.md`.
 - It stores the Codex thread id in `Run.session_id` (`domain/run.rs:487`) and takes the instance from `runs_on`. One appended `APP_STEPS` column holds the pid, and the `RunIndex` entry gets an optional pid beside `short_id`, keyed by instance as in A02.
-- Codex still can't be chosen for agents (`Driver::runs_agents` stays Claude-only until C05).
-Regression test: with the fake codex, a launch writes `events.jsonl`, records the thread id in `session_id` and the pid, and leaves the process running after the launcher returns. The arguments carry the MCP server, approval mode, guard and `-o`, and the token is in the environment only. Fails on main, which has no Codex backend.
-Acceptance: `cargo test codex` passes; a test fails if `--sandbox` appears in the arguments or the token appears in argv.
+- `SystemToolchain::build` (`toolchain.rs:90`) picks the backend by the instance's driver, so a Codex instance gets the Codex backend; `for_instance` keeps refusing a driver whose `runs_agents` is false (`toolchain.rs:120`), so Codex still can't be chosen for agents until C05. `launcher.rs` and `service.rs` change only to call the trait.
+Regression test: with the fake codex, a launch writes `events.jsonl`, records the thread id in `session_id` and the pid, and leaves the process running after the launcher returns. The arguments carry the MCP server, approval mode, tool timeout, guard and `-o`, and the token is in the environment only. Fails on main, which has no Codex backend.
+Acceptance: `cargo test codex` passes; a test fails if `--sandbox` appears in the arguments, the token appears in argv, or the tool timeout is missing; `grep -n "Driver::Codex" src-tauri/src/runs/{launcher,service}.rs` finds nothing.
 
 ### Wave 7
 
-**C03 Codex supervision (c4b).** Touches: `src-tauri/src/runs/codex/{events.rs,recover.rs}`, `src-tauri/src/runs/tracker.rs`, tests.
-- Map Codex events to `RunState` (working, needs answer, done, failed). "Needs answer" comes from the agent's call to Gossamr's ask tool in the event stream, since a Codex agent has no other way to ask. After a restart, find a Codex run again by pid and `events.jsonl`.
+**C03 Codex supervision (c4b).** Touches: `src-tauri/src/runs/codex/{events.rs,recover.rs}`, `src-tauri/src/runs/{tracker.rs,service.rs}`, tests.
+- Map Codex events to working, done and failed. "Needs answer" comes from `core.asks()`, as it does for Claude runs (`runs/ask.rs`, `tracker.rs:471`), not from the event stream, so there is one source for a pending question. After a restart, `recover` (`service.rs:646`) finds a Codex run again by pid and `events.jsonl`.
 - This lives in `runs/codex/` as trait methods (C01); `tracker.rs` changes only to call the trait.
 Regression test: fixture event streams for each state; a restart test with a live fake process and one that has exited. Fails on main.
 Acceptance: `cargo test codex` passes.
 
 **E01 Docs and tidy-up (d28).** Touches: `AGENTS.md`, `README.md`, `docs/agents-cli-findings.md`, `src/backend/mockGithub.ts`, `src/workspace/ConnectGithub.tsx`, their tests.
-- AGENTS.md per proposal section 12 (d28): the layout table (a `runs/codex/` row beside `claude --bg --worktree`), the Read-first list (`docs/connections-proposal.md`, `docs/goals.md`), and rules 2 and 4, including the sentence that Codex agents get no `--sandbox` flag and the test that guards it (C02).
+- AGENTS.md per proposal section 12 (d28): the layout table (a `runs/codex/` row beside `claude --bg --worktree`), the Read-first list (`docs/connections-proposal.md`, `docs/goals.md`), and rules 2 and 4: rule 2 says a Codex agent gets its per-run token through `GOSSAMR_MCP_TOKEN` in its environment, never in argv, and that the token stops working when the run ends; rule 4 says Codex agents get no `--sandbox` flag and names the test that guards it (C02).
 - README: adding a second Claude and a second Jira account. C05 adds Codex (beta) once it can run agents.
 - Findings: one daemon per config folder, with the o10 result.
 - The mock sets `checkedAt` on Connect, so a new GitHub row says "Checked just now". The GitHub sheet is titled "Add GitHub account", matching + Add.
@@ -192,7 +193,7 @@ Acceptance: `pnpm test mockGithub ConnectGithub` passes.
 ### Wave 8
 
 **C04 Codex answer, resume, stop and clean-up (c5).** Touches: `src-tauri/src/runs/codex/control.rs`, `src-tauri/src/runs/{answer.rs,message.rs,control.rs,cleanup.rs}`, tests.
-- Answer and message: SIGINT the running `exec`, then `codex exec resume <thread> --json` with no sandbox flags (c0 check C5), passing the same MCP, approval, guard and `-o` keys as C02. Stop: SIGINT, then SIGKILL after a wait. Clean-up removes the worktree with git (A01's `Git::remove_worktree`) and deletes the Codex session with `codex delete --force <uuid>`.
+- Answer and message: SIGINT the running `exec`, then `codex exec resume <thread> --json` with no sandbox flags (c0 check C5), passing the same MCP, approval, tool timeout, guard and `-o` keys as C02. Stop: SIGINT, then SIGKILL after a wait. Clean-up removes the worktree with git (A01's `Git::remove_worktree`) and deletes the Codex session with `codex delete --force <uuid>`.
 - All of it is trait methods in `runs/codex/`; `answer.rs`, `message.rs`, `control.rs` and `cleanup.rs` change only to call the trait.
 Regression test: with the fake codex, a message resumes the same thread id with the earlier context; stop leaves no process; clean-up leaves no worktree. Fails on main.
 Acceptance: `cargo test codex` passes; `grep -n "Driver::Codex" src-tauri/src/runs/{answer,message,control,cleanup}.rs` finds nothing.
