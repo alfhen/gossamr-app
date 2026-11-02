@@ -748,6 +748,7 @@ mod tests {
             repo: None,
             title: "ENG-1 Fix the cart".into(),
             pip_session: None,
+            pip_instance: None,
             paused_reason: None,
             notes: Some("Investigate found the retry loop.".into()),
             created_at: now(),

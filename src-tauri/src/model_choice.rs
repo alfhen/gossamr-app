@@ -228,7 +228,6 @@ pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice) -> Resu
     }
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "Pip and the run launcher call the resolver once they run on a chosen instance"))]
 /// `choice`, else the Settings default for `use_`. There is no fallback to another instance.
 pub fn resolve(config: &AppConfig, use_: Use, choice: Option<&ModelChoice>, standing: impl Fn(&ProviderInstance) -> Standing) -> Resolution {
     let Some(choice) = choice.or_else(|| config.models.for_use(use_)) else { return Resolution::Unavailable(Reason::Removed) };

@@ -62,6 +62,9 @@ pub struct Workstream {
     /// The Pip session its conversation resumes.
     #[serde(default)]
     pub pip_session: Option<String>,
+    /// The provider instance that session lives in; none for one from before instances, which is the default's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pip_instance: Option<String>,
     /// Why the workstream is paused, while it is. A paused workstream gets no wakes.
     #[serde(default, alias = "heldReason", deserialize_with = "stored_pause")]
     pub paused_reason: Option<PauseReason>,

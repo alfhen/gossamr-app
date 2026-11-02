@@ -62,6 +62,26 @@ impl ProviderEnv {
         Ok(Self { vars })
     }
 
+    #[cfg(test)]
+    pub fn none() -> Self {
+        Self { vars: Vec::new() }
+    }
+
+    #[cfg(test)]
+    pub fn for_test(vars: &[(&'static str, Option<&str>)]) -> Self {
+        Self { vars: vars.iter().map(|(name, value)| (*name, value.map(OsString::from))).collect() }
+    }
+
+    /// Sets or removes the login variables on a command that otherwise keeps the app's environment.
+    pub fn apply(&self, cmd: &mut tokio::process::Command) {
+        for (name, value) in &self.vars {
+            match value {
+                Some(value) => cmd.env(name, value),
+                None => cmd.env_remove(name),
+            };
+        }
+    }
+
     /// `base` with the login variables replaced by this instance's.
     pub fn over(&self, base: &RunEnv) -> RunEnv {
         let mut env = base.clone();

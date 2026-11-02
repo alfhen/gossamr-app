@@ -112,6 +112,23 @@ describe("the scripted Pip's queue", () => {
     expect(turns[1].sessionId).toBe(turns[0].sessionId);
   });
 
+  it("keeps the instance and model a question was asked with, and carries them on to the next one", async () => {
+    const work = { instanceId: "claude_2", model: "opus", effort: "high" };
+    mockQueueAsk({ requestId: "q1", prompt: "Hi", sessionId: null, context, conversation: "general", meta: { imageCount: 0 }, model: work }, null, 1);
+    ask("q2");
+    await settled("q2");
+    expect(mockPipTurns.turns("general").map((t) => t.model)).toEqual([work, work]);
+    ask("q3", "ws:w9");
+    expect(mockPipTurns.turns("ws:w9")[0].model).toEqual({ instanceId: "claude", model: "sonnet", effort: "medium" });
+    await settled("q3", "ws:w9");
+  });
+
+  it("does not keep a made-up model id as a conversation's choice", async () => {
+    mockQueueAsk({ requestId: "q1", prompt: "Hi", sessionId: null, context, conversation: "general", meta: { imageCount: 0 }, model: { instanceId: "claude", model: "--dangerously-skip-permissions" } }, null, 1);
+    expect(mockPipTurns.lastModel("general")).toBeNull();
+    await settled("q1");
+  });
+
   it("removes a waiting question before it runs, and stopping the running one starts the next", async () => {
     ask("q1");
     ask("q2");

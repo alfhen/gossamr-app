@@ -98,12 +98,13 @@ impl Db {
         Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
     }
 
-    /// Whether `session_id` is the Pip session of an open workstream, which keeps it resumable however many other
-    /// sessions Pip has started since.
-    pub fn is_open_workstream_session(&self, session_id: &str) -> Result<bool> {
+    /// Whether `session_id` is the Pip session of an open workstream on `instance_id`, which keeps it resumable however
+    /// many other sessions Pip has started since.
+    pub fn is_open_workstream_session(&self, session_id: &str, instance_id: &str) -> Result<bool> {
         let n: i64 = self.conn.query_row(
-            "SELECT count(*) FROM workstreams WHERE closed_at IS NULL AND json_extract(data, '$.pipSession') = ?1",
-            params![session_id],
+            "SELECT count(*) FROM workstreams WHERE closed_at IS NULL AND json_extract(data, '$.pipSession') = ?1
+             AND COALESCE(json_extract(data, '$.pipInstance'), ?3) = ?2",
+            params![session_id, instance_id, crate::connections::DEFAULT_CLAUDE],
             |r| r.get(0),
         )?;
         Ok(n > 0)
@@ -204,6 +205,7 @@ mod tests {
             repo: None,
             title: format!("{id} title"),
             pip_session: None,
+            pip_instance: None,
             paused_reason: None,
             notes: None,
             created_at: now() + Duration::minutes(mins),
