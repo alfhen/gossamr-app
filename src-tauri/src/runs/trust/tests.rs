@@ -231,7 +231,7 @@ async fn it_waits_for_a_lock_that_is_let_go_and_then_writes() {
         std::thread::sleep(Duration::from_millis(20));
         std::fs::remove_dir(lock).unwrap();
     });
-    assert_eq!(l.trust().await, Ok(true));
+    assert_eq!(trust_with(&l.file, &l.clone, Timing { give_up: Duration::from_secs(10), ..FAST }).await, Ok(true));
     release.join().unwrap();
     assert!(!l.lock().exists());
 }
