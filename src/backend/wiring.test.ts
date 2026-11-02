@@ -65,11 +65,13 @@ describe("the desktop backend's wiring", () => {
     const jira = read("./jira.ts");
     const lib = read("../../src-tauri/src/lib.rs");
     expect(jira).toContain('invoke<void>("connection_open_terminal", { instanceId })');
-    expect(lib).toContain("#[tauri::command(async)]\nfn connection_open_terminal(");
-    expect(lib).toContain("fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()>");
+    expect(lib).toContain("async fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()>");
     const handlers = lib.slice(lib.indexOf("generate_handler!"));
     expect(handlers).toContain("connection_open_terminal,");
     expect(handlers).toContain("connection_rename,");
+    expect(jira).toContain('invoke<ConnectionInfo>("provider_add", { driver, displayName, configDir })');
+    expect(lib).toContain("async fn provider_add(app: AppHandle, core: State<'_, CoreState>, driver: connections::Driver, display_name: String, config_dir: Option<String>)");
+    expect(handlers).toContain("provider_add,");
     expect(jira).toContain('invoke<void>("connection_rename", { instanceId, displayName })');
     expect(lib).toContain("fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: String, display_name: String)");
   });
