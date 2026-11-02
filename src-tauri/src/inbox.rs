@@ -315,12 +315,14 @@ impl Core {
     }
 
     /// Registers the connections restored from the Keychain that an instance is bound to. A token no instance is bound
-    /// to stays in the vault, unregistered. Before the first adoption the first session is registered.
+    /// to stays in the vault; it is registered only when that would leave the person signed out of every account.
+    /// Before the first adoption the first session is registered.
     pub async fn restore(&self) {
         let signed_in = self.auth.accounts().await;
         let config = AppConfig::load(&self.data_dir);
         let registered: Vec<SignedIn> = if connections::is_live(&config) {
-            signed_in.into_iter().filter(|s| config.connections.iter().any(|i| i.bound_to.as_deref() == Some(s.connection.id.as_str()))).collect()
+            let bound: Vec<SignedIn> = signed_in.iter().filter(|s| config.connections.iter().any(|i| i.bound_to.as_deref() == Some(s.connection.id.as_str()))).cloned().collect();
+            if bound.is_empty() { signed_in.into_iter().take(1).collect() } else { bound }
         } else {
             signed_in.into_iter().take(1).collect()
         };
@@ -1325,7 +1327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restoring_with_a_live_list_registers_nothing_when_no_instance_is_bound_to_a_token() {
+    async fn restoring_with_a_live_list_registers_only_the_first_token_when_no_instance_is_bound_to_one() {
         let (fx, second) = super::testing::fixture_with_two_jira().await;
         fx.core.adopt_instances().await;
         fx.core.unbind_instance(&fx.scope.connection_id);
@@ -1334,11 +1336,45 @@ mod tests {
         fx.core.registry.remove(&second.connection_id);
 
         fx.core.restore().await;
-        assert!(fx.core.connection(&fx.scope).is_err());
+        assert!(fx.core.connection(&fx.scope).is_ok(), "the person is not signed out of every account");
         assert!(fx.core.connection(&second).is_err());
         assert_eq!(fx.core.auth.accounts().await.len(), 2, "both tokens are still held");
-        let status = fx.core.jira_status().await.unwrap();
-        assert!(status.site.is_none() && status.me.is_none(), "an unregistered token is not shown as signed in");
+    }
+
+    #[tokio::test]
+    async fn restoring_with_a_live_list_registers_the_bound_tokens_and_leaves_the_others() {
+        let (fx, second) = super::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+        fx.core.registry.remove(&second.connection_id);
+
+        fx.core.restore().await;
+        assert!(fx.core.connection(&second).is_ok());
+        assert!(fx.core.connection(&fx.scope).is_err());
+        assert_eq!(fx.core.primary().await.unwrap().scope, second);
+    }
+
+    #[tokio::test]
+    async fn signing_in_as_an_account_whose_instance_points_at_another_keeps_that_instance() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        AppConfig::update_if(&fx.dir, |config| {
+            config.connections[0].bound_to = Some("jira:site:gone".into());
+            config.connections[0].display_name = "Work Jira".into();
+            true
+        })
+        .unwrap();
+
+        fx.core.connect_jira(&token_for("b", "fast")).await.unwrap();
+
+        let config = AppConfig::load(&fx.dir);
+        assert_eq!(config.connections.len(), 1);
+        let jira = &config.connections[0];
+        assert_eq!((jira.id.as_str(), jira.display_name.as_str(), jira.bound_to.as_deref()), ("jira", "Work Jira", Some("jira:site:b")));
     }
 
     #[tokio::test(flavor = "multi_thread")]

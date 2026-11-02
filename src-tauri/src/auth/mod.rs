@@ -373,13 +373,13 @@ impl Auth {
         self.sessions.lock().await.first().map(|s| (s.scope(), s.site.clone(), s.me.clone()))
     }
 
-    /// The primary connection, if any.
+    /// The first session's connection, if any. `Core::primary` is the connection work runs as.
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn connection(&self) -> Option<Connection> {
         self.sessions.lock().await.first().map(Credentials::connection)
     }
 
-    /// Every signed-in connection, the primary first.
+    /// Every signed-in connection, in the order they were added.
     pub async fn connections(&self) -> Vec<Connection> {
         self.sessions.lock().await.iter().map(Credentials::connection).collect()
     }
