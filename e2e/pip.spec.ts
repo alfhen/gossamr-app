@@ -84,7 +84,8 @@ test("the pane keeps its header and input", async ({ page }) => {
   await openPip(page);
   const pane = pipPane(page);
   await expect(pane.getByRole("heading", { name: "Pip" })).toBeVisible();
-  await expect(pane.getByText("powered by Claude")).toBeVisible();
+  await expect(pane.getByRole("button", { name: "Your next message to Pip runs on Claude · Sonnet" })).toBeVisible();
+  await expect(pane.getByText("powered by Claude")).toHaveCount(0);
   await expect(pane.getByRole("button", { name: "Close Pip" })).toBeVisible();
   await expect(pane.locator('header button[aria-controls="pip-seeing"]')).toBeVisible();
   await expect(pane.getByText("Ask me about a ticket, or tell me what to show or draft.")).toBeVisible();
@@ -95,6 +96,106 @@ test("the pane keeps its header and input", async ({ page }) => {
   const order = await pane.evaluate((el) => [...el.querySelector(".ws-sheet")!.children].map((c) => c.tagName.toLowerCase()));
   expect(order.slice(-2)).toEqual(["form", "p"]);
   expect(order.indexOf("header")).toBeLessThan(order.indexOf("form"));
+});
+
+const addClaude = (page: Page, name: string, folder: string, state: string) =>
+  page.evaluate(([n, f, st]) => (globalThis as unknown as { __gossamrMock: { addClaude(n: string, f: string, s: string): void } }).__gossamrMock.addClaude(n, f, st), [name, folder, state] as const);
+
+test.describe("Pip's model picker", () => {
+  const trigger = (page: Page) => pipPane(page).getByRole("button", { name: /^Your next message to Pip runs on/ });
+  const menu = (page: Page) => pipPane(page).getByRole("menu", { name: "Your next message to Pip runs on" });
+
+  test.beforeEach(async ({ page }) => {
+    await openApp(page, INSTANT_PIP);
+    await openPip(page);
+  });
+
+  test("a model picked is the one the next question runs on, and it is still the choice after a reload", async ({ page }) => {
+    await trigger(page).click();
+    await expect(menu(page).getByRole("menuitemradio", { name: "Sonnet" })).toHaveAttribute("aria-checked", "true");
+    await expect(menu(page).getByRole("menuitemradio", { name: "Sonnet" })).toBeFocused();
+    await expect(menu(page).getByRole("menuitemradio", { name: "Default" })).toHaveCount(0);
+    await menu(page).getByRole("menuitemradio", { name: "Opus" }).click();
+    await expect(menu(page)).toHaveCount(0);
+    await expect(trigger(page)).toHaveAccessibleName("Your next message to Pip runs on Claude · Opus");
+
+    await askPip(page, "Which model are you?");
+    await expect(pipPane(page).getByText("I'm running on Opus through claude.")).toBeVisible();
+    expect((await kept(page)).length).toBe(1);
+
+    await page.reload();
+    await showWorkspace(page);
+    await showPip(page);
+    await expect(trigger(page)).toHaveAccessibleName("Your next message to Pip runs on Claude · Opus");
+  });
+
+  test("Add model… adds an id to the list and picks it, and an id that breaks the rule is refused", async ({ page }) => {
+    await trigger(page).click();
+    await menu(page).getByRole("menuitem", { name: "Add model…" }).click();
+    await page.getByLabel("Model id").fill("not a model");
+    await page.getByLabel("Model id").press("Enter");
+    await expect(menu(page).getByRole("alert")).toContainText("Use letters, digits");
+
+    await page.getByLabel("Model id").fill("claude-next-1");
+    await page.getByLabel("Model id").press("Enter");
+    await expect(menu(page)).toHaveCount(0);
+    await expect(trigger(page)).toHaveAccessibleName("Your next message to Pip runs on Claude · claude-next-1");
+
+    await trigger(page).click();
+    await expect(menu(page).getByRole("menuitemradio", { name: "claude-next-1" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  test("Add model… picks the listed spelling of an id typed in another case and refuses default", async ({ page }) => {
+    await trigger(page).click();
+    await menu(page).getByRole("menuitem", { name: "Add model…" }).click();
+    await page.getByLabel("Model id").fill("default");
+    await page.getByLabel("Model id").press("Enter");
+    await expect(menu(page).getByRole("alert")).toContainText("isn't a model you can pick here");
+
+    await page.getByLabel("Model id").fill("OPUS");
+    await page.getByLabel("Model id").press("Enter");
+    await expect(menu(page)).toHaveCount(0);
+    await expect(trigger(page)).toHaveAccessibleName("Your next message to Pip runs on Claude · Opus");
+    await askPip(page, "Which model are you?");
+    await expect(pipPane(page).getByText("I'm running on Opus through claude.")).toBeVisible();
+  });
+
+  test("Escape closes the list and leaves Pip open, and the list has no way to Settings until provider rows show", async ({ page }) => {
+    await trigger(page).click();
+    await expect(menu(page).getByRole("menuitem", { name: "Add or manage…" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(menu(page)).toHaveCount(0);
+    await expect(pipPane(page)).toBeVisible();
+    await expect(trigger(page)).toBeFocused();
+  });
+
+  test("another Claude starts Pip fresh, says so until Pip has run there, and one with a problem is greyed", async ({ page }) => {
+    await openApp(page, `${INSTANT_PIP}&providers=1`);
+    await showPip(page);
+    await addClaude(page, "Claude work", "~/.claude-work", "ready");
+    await addClaude(page, "Claude broken", "~/.claude-broken", "error");
+    await askPip(page, "Which model are you?");
+    await expect(pipPane(page).getByText("I'm running on Sonnet through claude.")).toBeVisible();
+    await expect(pipPane(page).getByRole("status").filter({ hasText: "Switching to" })).toHaveCount(0);
+
+    await trigger(page).click();
+    await expect(menu(page).getByRole("group", { name: "Claude broken" })).toContainText("Needs attention");
+    await expect(menu(page).getByRole("group", { name: "Claude broken" }).getByRole("menuitemradio")).toHaveCount(0);
+    await menu(page).getByRole("group", { name: "Claude work" }).getByRole("menuitemradio", { name: "Opus" }).click();
+    await expect(pipPane(page).getByRole("status").filter({ hasText: "Switching to Claude work starts Pip fresh" })).toBeVisible();
+
+    await askPip(page, "Which model are you? Again.");
+    await expect(pipPane(page).getByText("I'm running on Opus through claude_2.")).toBeVisible();
+    await expect(pipPane(page).getByRole("status").filter({ hasText: "Switching to" })).toHaveCount(0);
+  });
+
+  test("Add or manage… opens Settings when provider rows show", async ({ page }) => {
+    await openApp(page, `${INSTANT_PIP}&providers=1`);
+    await showPip(page);
+    await trigger(page).click();
+    await menu(page).getByRole("menuitem", { name: "Add or manage…" }).click();
+    await expect(page).toHaveTitle("Settings — Gossamr");
+  });
 });
 
 test.describe("Pip's conversation is kept", () => {

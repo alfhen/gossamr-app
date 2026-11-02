@@ -273,6 +273,17 @@ describe("GitHub commands", () => {
     expect(ids(false)).not.toContain("github:connect");
   });
 
+  it("offers Add Claude and Add Codex only for the providers + Add offers, and opens that driver's sheet", () => {
+    const calls: string[] = [];
+    const actions = { ...noop, addProvider: (d: string) => calls.push(d) } as CommandActions;
+    const ctx = (providers?: ("claude" | "codex")[]) => ({ project: null, view: null, unreadActivity: 0, providers });
+    expect(buildCommands([], [], noop, ctx()).some((c) => c.id.startsWith("connection:add-claude"))).toBe(false);
+    const found = buildCommands([], [], actions, ctx(["claude", "codex"])).filter((c) => c.id === "connection:add-claude" || c.id === "connection:add-codex");
+    expect(found.map((c) => c.label)).toEqual(["Add Claude", "Add Codex"]);
+    found.forEach((c) => c.run());
+    expect(calls).toEqual(["claude", "codex"]);
+  });
+
   it("runs the sheet for the account it names", () => {
     const calls: string[] = [];
     const actions = { ...noop, addGithub: () => calls.push("github"), addJira: () => calls.push("jira") } as CommandActions;

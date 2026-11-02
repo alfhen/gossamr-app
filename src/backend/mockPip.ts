@@ -1,6 +1,7 @@
 import { and } from "../lib/filter";
 import { REVIEW_IS_THE_USERS, isRunDraft, leftByRun, targetOf } from "../lib/proposals";
 import { docFromText, docText } from "../lib/docs";
+import { modelList } from "../lib/models";
 import type { Intent, ItemRef, Proposal, ReviewComment, Run, ScreenContext, WorkFilter } from "../types";
 import { roleLabel, stepOf, type Step } from "../lib/roles";
 import { APPROVE_PLAN, liveCounts, liveWords, needsPerson, planOpenQuestions, resultHeadline, runTitle, stateView } from "../workspace/agentsLogic";
@@ -843,6 +844,10 @@ export function holdMockPip(on: boolean) {
   }
 }
 
+const asksWhichModel = /\b(which|what) model\b/i;
+
+const modelLabel = (id: string) => modelList([]).find((m) => m.id === id)?.label ?? id;
+
 /** Streams the scripted answer for `req` and resolves with the session it used. `drafter` receives the draft the script proposes. */
 export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | null, pace = 25): Promise<string> {
   let stopped = false;
@@ -858,6 +863,8 @@ export async function mockAsk(req: AskRequest, drafter: Partial<PipDrafter> | nu
   if (wsId && req.kind !== "wake" && !req.meta?.shown) await drafter?.pipAskAnswered?.(wsId);
   const script = scriptPip(req.prompt, req.context, req.images, drafter?.pipRuns?.() ?? [], Date.now(), drafter?.pipDrafts?.() ?? [], discussing.get(session) ?? null, workstream, req.connectionId ?? null);
   if (script.discussed) discussing.set(session, script.discussed);
+  const ranOn = mockPipTurns.turns(req.conversation ?? GENERAL_CONVERSATION).find((t) => t.requestId === req.requestId)?.model;
+  if (ranOn && asksWhichModel.test(req.prompt)) Object.assign(script, { steps: [], filter: null, draft: null, start: undefined, message: undefined, stop: undefined, ask: undefined, revise: undefined, rewrite: undefined, text: `I'm running on ${modelLabel(ranOn.model)} through ${ranOn.instanceId}.` });
   emit(req.requestId, { type: "started", sessionId: session });
   let said = "";
   try {

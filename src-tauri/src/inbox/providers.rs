@@ -121,6 +121,18 @@ impl Core {
         added
     }
 
+    /// The folder of provider `instance_id`, for Finder. The page names no path. An instance on its usual setup has no folder of its own.
+    pub fn provider_folder_to_show(&self, instance_id: &str) -> Result<PathBuf> {
+        let config = AppConfig::load(&self.data_dir);
+        let instance = config.providers.iter().find(|p| p.id == instance_id).ok_or_else(not_a_provider)?;
+        let typed = instance.config.config_dir.as_deref().ok_or_else(|| Error::Input("This one uses your usual setup, which has no folder of its own to show.".into()))?;
+        let path = provider_folder::expand(typed, self.home.as_deref().unwrap_or(Path::new("")));
+        if !path.is_dir() {
+            return Err(Error::Input(format!("The folder {typed} is gone.")));
+        }
+        Ok(path)
+    }
+
     /// The row Settings shows for one provider instance.
     pub fn provider_row(&self, instance_id: &str) -> Result<super::ConnectionInfo> {
         self.provider_rows().into_iter().find(|row| row.instance_id == instance_id).ok_or_else(not_a_provider)
@@ -234,6 +246,18 @@ mod tests {
         assert_eq!((env.get("CLAUDE_CONFIG_DIR").unwrap(), env.get("ANTHROPIC_API_KEY").unwrap()), ("/Users/x/.claude-shell".as_ref(), "sk-shell".as_ref()));
         assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn showing_a_providers_folder_needs_a_folder_of_its_own_that_exists() {
+        let fx = fixture_with_shell(ShellCapture::with_shell("/nonexistent/shell")).await;
+        only_default(&fx.core);
+        add(&fx.core, "claude_2", Some("~/.claude-work"));
+        assert_eq!(fx.core.provider_folder_to_show("claude").unwrap_err().to_string(), "This one uses your usual setup, which has no folder of its own to show.");
+        assert_eq!(fx.core.provider_folder_to_show("claude_2").unwrap_err().to_string(), "The folder ~/.claude-work is gone.");
+        std::fs::create_dir_all(fx.home.join(".claude-work")).unwrap();
+        assert_eq!(fx.core.provider_folder_to_show("claude_2").unwrap(), fx.home.join(".claude-work"));
+        assert!(fx.core.provider_folder_to_show("github").is_err(), "an id that is not a provider is refused");
     }
 
     #[tokio::test]
