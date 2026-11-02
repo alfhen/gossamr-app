@@ -14,6 +14,8 @@ const providersAsked = () => typeof location !== "undefined" && new URLSearchPar
 
 const providersOn = () => providersShown || providersAsked();
 
+/** Whether Settings lists provider rows, so a link to them leads somewhere. */
+export const providersVisible = providersOn;
 /** Codex stays out of + Add until it can run agents. The sample backend offers it with `?codex=1` so its sheet can be tried. */
 const codexAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("codex") === "1";
 

@@ -162,6 +162,8 @@ export interface MockHandle {
   finishGithubRecheck(): void;
   /** The next review post's answer is lost, as a 502: GitHub keeps the review when `kept`, and drops it otherwise. */
   loseNextReviewAnswer(kept: boolean): void;
+  /** Adds a Claude with its own config `folder` whose probe finds `state`, and tells the page as a `connections` event does. */
+  addClaude(name: string, folder: string, state: GithubProbeState): void;
 }
 
 /** A GitHub review draft as `reviewDrafts` lists it. */
@@ -191,6 +193,7 @@ export interface MockClockParts {
   tickets?: { edit(item: string | ItemRef, change: TicketEdit): void };
   jira?: { fail(instanceId: string, problem: "refused" | "offline" | null): void };
   terminals?: readonly string[];
+  providers?: { addClaude(name: string, folder: string, state: GithubProbeState): void };
   revealedFolders?: readonly string[];
   github?: { probe(state: GithubProbeState): void; refuseToken(): void; finishRecheck(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
@@ -209,7 +212,7 @@ declare global {
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`, and `refuseGithubToken()` has GitHub turn down the stored token. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, github, terminals, revealedFolders, draftReview }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, github, providers, terminals, revealedFolders, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -263,6 +266,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     refuseGithubToken: () => github?.refuseToken(),
     finishGithubRecheck: () => github?.finishRecheck(),
     loseNextReviewAnswer: (kept) => github?.loseNextAnswer(kept),
+    addClaude: (name, folder, state) => providers?.addClaude(name, folder, state),
   };
 }
 
