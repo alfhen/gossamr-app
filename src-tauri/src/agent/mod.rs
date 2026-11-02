@@ -833,7 +833,7 @@ mod tests {
         assert_eq!((split_conversation("general"), split_conversation("ws:w1")), ((None, "general"), (None, "ws:w1")));
         assert_eq!(conversation_in("workspace", beta), format!("{beta}:general"));
         assert_eq!(conversation_in("CA-1", beta), format!("{beta}:CA-1"));
-        assert_eq!(conversation_in(&format!("jira:other:acme:general"), beta), format!("{beta}:general"), "a turn is kept under the connection it ran on");
+        assert_eq!(conversation_in("jira:other:acme:general", beta), format!("{beta}:general"), "a turn is kept under the connection it ran on");
         assert_eq!(conversation_in("ws:w1", beta), "ws:w1");
         assert_eq!(workstream_of_conversation("ws:w1"), Some("w1"));
         for none in ["ws:", "general", "workspace", "CA-1", "w1"] {
