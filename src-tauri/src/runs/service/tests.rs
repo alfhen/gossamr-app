@@ -513,7 +513,8 @@ async fn retry_adopts_the_session_a_garbled_launch_left_instead_of_starting_anot
 
 #[tokio::test]
 async fn retry_waits_for_a_session_still_listed_at_the_clone_root() {
-    let rig = ready().await;
+    // A grace no slow prepare can use up before the retry's first listing.
+    let rig = build(None, |s| s.with_timing(Timing { worktree_grace: Duration::from_secs(10), ..FAST })).await;
     rig.cli.with(|s| {
         s.outcome = Outcome::Garbled;
         s.lag = true;
@@ -1213,7 +1214,7 @@ mod clones {
     #[tokio::test]
     async fn settings_say_who_git_commits_as_inside_a_clone_and_whether_rules_pick_it_by_folder() {
         let rig = ready().await;
-        std::fs::write(rig.fx.home.join(".fake-global-email"), "alf@global.example\n").unwrap();
+        std::fs::write(rig.fx.dir.join(".fake-global-email"), "alf@global.example\n").unwrap();
         let before = rig.svc.work_folder_git().await.unwrap();
         assert_eq!((before.global_email.as_deref(), before.owners[0].commit_email.as_deref(), before.include_if), (Some("alf@global.example"), None, false));
         std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();

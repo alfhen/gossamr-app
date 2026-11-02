@@ -124,7 +124,7 @@ impl Git {
         if !self.runs(home).await {
             return None;
         }
-        let global_email = self.global_email(home).await;
+        let global_email = self.global_email().await;
         let mut owners = Vec::new();
         for (owner, clone) in newest_clone_per_owner(&agents_root(home)).into_iter().take(OWNERS_SHOWN) {
             owners.push(OwnerAddress { owner, commit_email: self.commit_email(&clone).await });
@@ -145,8 +145,9 @@ impl Git {
     }
 
     /// The address in the person's global git settings, which `includeIf` rules can override inside a repository.
-    pub async fn global_email(&self, dir: &Path) -> Option<String> {
-        self.config_value(dir, &["--global", "user.email"]).await
+    pub async fn global_email(&self) -> Option<String> {
+        // `--global` turns `[include]` off unless `--includes` is given. The root has no repository, so no `includeIf` rule applies.
+        self.config_value(Path::new("/"), &["--global", "--includes", "user.email"]).await
     }
 
     /// Whether git runs at all, so a missing address can be told from a git that couldn't be asked.
@@ -287,7 +288,7 @@ case "$*" in
   "ls-remote --symref -- "*) printf 'ref: refs/heads/main\tHEAD\nabc\tHEAD\n' ;;
   "config --get user.email") cat "$dir/.fake-email" 2>/dev/null || exit 1 ;;
   "config --get user.signingkey") cat "$dir/.fake-signingkey" 2>/dev/null || exit 1 ;;
-  "config --get --global user.email") cat "$dir/.fake-global-email" 2>/dev/null || exit 1 ;;
+  "config --get --global --includes user.email") cat "$(dirname "$FAKE_GIT_LOG")/.fake-global-email" 2>/dev/null || exit 1 ;;
   "version") echo "git version 2.0" ;;
   "config --global --get-regexp ^includeif\\.gitdir") cat "$dir/.fake-includeif" 2>/dev/null || exit 1 ;;
   "config --local --list --name-only -z") sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
@@ -485,6 +486,20 @@ mod tests {
         std::fs::create_dir_all(agents_root(&home)).unwrap();
         let found = git_in(&home).work_folder_git(&home).await.unwrap();
         assert_eq!((found.global_email.as_deref(), found.owners.is_empty(), found.include_if), (Some("alf@global.example"), true, false));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn settings_read_a_global_address_that_comes_from_an_included_file() {
+        let home = scratch("work-folder-included");
+        std::fs::write(home.join("identity.gitconfig"), "[user]\n\temail = alf@included.example\n").unwrap();
+        let rule = rule_for(&home, "Code/acme/", "alf@code.example");
+        std::fs::write(home.join(".gitconfig"), format!("[include]\n\tpath = {}/identity.gitconfig\n{rule}", home.display())).unwrap();
+        init(&home.join("Gossamr/agents/acme/webshop"));
+        let found = git_in(&home).work_folder_git(&home).await.unwrap();
+        assert_eq!(found.global_email.as_deref(), Some("alf@included.example"));
+        assert_eq!(found.owners[0].commit_email.as_deref(), Some("alf@included.example"));
+        assert!(found.include_if, "no rule reaches the work folder");
         let _ = std::fs::remove_dir_all(home);
     }
 
