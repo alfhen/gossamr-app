@@ -54,12 +54,13 @@ impl RunService {
         Ok(())
     }
 
-    /// A run the launcher did not reach (its workstream is paused or closed, or it is an unapproved auto-start) still
-    /// shows the reason of its old choice; it is given the new choice's words, or none when that choice is ready.
+    /// A run the launcher cannot start (its workstream is paused or closed, or it is an unapproved auto-start) still
+    /// shows the reason of its old choice; it is given the new choice's words, or none when that choice is ready. A run
+    /// the launcher may start is left alone: the launcher also checks the toolchain, which this does not.
     async fn resettle_choice_reason(&self, run_id: &str) -> Result<()> {
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        if run.state != RunState::Queued || run.wait_reason.is_none() || run.slot_wait_since.is_some() {
+        if run.state != RunState::Queued || run.wait_reason.is_none() || run.slot_wait_since.is_some() || self.may_start(&run).await {
             return Ok(());
         }
         let words = self.core.agents_target(run.runs_on.as_ref()).err();

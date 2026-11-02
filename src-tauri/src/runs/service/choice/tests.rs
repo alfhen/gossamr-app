@@ -318,3 +318,15 @@ async fn a_new_choice_for_a_run_the_launcher_does_not_reach_replaces_the_old_rea
     assert_eq!((after.state, after.wait_reason), (RunState::Queued, None));
     assert_eq!(rig.cli.launches(), 0);
 }
+
+#[tokio::test]
+async fn a_new_choice_whose_instance_is_off_keeps_the_reason_the_launcher_set() {
+    let rig = ready().await;
+    let off = ToolchainError::Unusable { reason: Reason::Off, name: "Claude".into() };
+    let run = rig.queued(1).await;
+    let blocked = Instances { default: Toolchain::new(rig.cli.clone(), rig_env(&rig)), by_id: HashMap::from([("claude".to_owned(), Err(off))]), gets: AtomicUsize::new(0) };
+    let svc = RunService::new(rig.fx.core.clone(), Arc::new(blocked), RunIndex::load(&rig.fx.dir.join("index2")), Arc::new(|_| {})).with_home(rig.fx.home.canonicalize().unwrap());
+    svc.start_now(&run.id).await.unwrap();
+    let after = svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
+    assert_eq!((after.state, after.wait_reason.as_deref()), (RunState::Queued, Some("Waits for Claude, which is off.")));
+}
