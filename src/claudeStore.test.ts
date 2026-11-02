@@ -62,6 +62,21 @@ describe("ask", () => {
     expect(sent.every((r) => !("cwd" in (r as object)))).toBe(true);
   });
 
+  it("names the open ticket's connection in the conversation it sends", async () => {
+    const sent: AskRequest[] = [];
+    const original = claude.ask;
+    claude.ask = async (req) => (sent.push(req), started);
+    try {
+      const beta = { connectionId: "beta", externalId: "CA-1", key: "CA-1" };
+      await useClaude.getState().ask("CA-1", "here?", null, { ...screen, item: beta });
+      await useClaude.getState().ask("ws:w1", "there?", null, { ...screen, item: beta });
+      await useClaude.getState().ask("CA-1", "no item", null, screen);
+    } finally {
+      claude.ask = original;
+    }
+    expect(sent.map((r) => r.conversation)).toEqual(["beta:CA-1", "ws:w1", "CA-1"]);
+  });
+
   it("sends images with the request and keeps only what's needed to show them in the turn", async () => {
     const sent: AskRequest[] = [];
     const { claude } = await import("./backend/claude");

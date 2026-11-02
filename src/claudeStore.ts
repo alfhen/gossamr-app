@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent, type EventMeta, type StoredTurn, type TurnUsage } from "./backend/claude";
+import { conversationIn } from "./lib/conversations";
 import type { PipImage, ShownImage } from "./lib/pipImages";
 import type { ModelChoice, ScreenContext } from "./types";
 import { useWorkstreams } from "./workspace/workstreamsStore";
@@ -191,7 +192,7 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
         sessionId,
         context,
         ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
-        conversation: ticketKey,
+        conversation: context.item?.connectionId ? conversationIn(ticketKey, context.item.connectionId) : ticketKey,
         ...(model ? { model } : {}),
         meta: {
           ...(shown.quote ? { quote: shown.quote } : {}),
