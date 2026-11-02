@@ -83,12 +83,12 @@ impl ProviderEnv {
 
     #[cfg(test)]
     pub fn none() -> Self {
-        Self { vars: Vec::new() }
+        Self { vars: Vec::new(), from_folder: false }
     }
 
     #[cfg(test)]
     pub fn for_test(vars: &[(&'static str, Option<&str>)]) -> Self {
-        Self { vars: vars.iter().map(|(name, value)| (*name, value.map(OsString::from))).collect() }
+        Self { vars: vars.iter().map(|(name, value)| (*name, value.map(OsString::from))).collect(), from_folder: false }
     }
 
     /// Sets or removes the login variables on a command that otherwise keeps the app's environment.
