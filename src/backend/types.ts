@@ -209,8 +209,12 @@ export interface Backend {
   runsDelete(id: string, removeWorktree: boolean): Promise<DeleteResult>;
   /** Bytes the run's session files take up. */
   runsDisk(id: string): Promise<number>;
-  /** Launches a run whose launch failed, after checking that no session for it exists. */
-  runsRetryLaunch(id: string): Promise<Run>;
+  /**
+   * Launches a run whose launch failed, after checking that no session for it exists. With `trust`, first writes Claude's
+   * trust entry for the run's own clone in the work folder, for the login the run uses, and rejects with the reason when
+   * it won't.
+   */
+  runsRetryLaunch(id: string, options?: { trust?: boolean }): Promise<Run>;
   /** Called when a run was created or changed. Returns an unsubscribe function. */
   onRunsChanged(listener: (change: RunsChanged) => void): () => void;
   /** Called with a run id when a notification should open that run. Returns an unsubscribe function. */

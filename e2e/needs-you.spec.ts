@@ -119,7 +119,7 @@ test("a run set up in the person's own clone says so and offers only Ask Pip to 
   await expect(needsPane(page)).toContainText("This agent was set up before Gossamr kept its own clones.");
   await expect(needsPane(page).getByRole("button", { name: "Ask Pip to start it again" })).toBeVisible();
   await expect(needsPane(page).getByRole("button", { name: "Retry", exact: true })).toHaveCount(0);
-  await expect(needsPane(page).getByRole("button", { name: /Trust this folder/ })).toHaveCount(0);
+  await expect(needsPane(page).getByRole("button", { name: /Trust this clone/ })).toHaveCount(0);
 
   await needRow(page, /SUP-14.*failed/).click();
   await expect(needsPane(page)).toContainText("Move it away, then retry.");
@@ -131,11 +131,11 @@ test("a failed run waits in the list under General, opens its decision, and stay
   await openAgents(page);
   await expandNeedsYou(page);
   // The sample's failed run failed on a folder it may not use yet, so it waits as a failure with a step to take.
-  const failed = needRow(page, /SUP-9.*needs its folder trusted/);
+  const failed = needRow(page, /SUP-9.*needs its clone trusted/);
   await expect(failed).toHaveCount(1);
   await expect(failed).toHaveAttribute("data-kind", "failure");
   await failed.click();
-  await expect(needsPane(page)).toContainText("Trust this folder in Terminal");
+  await expect(needsPane(page)).toContainText("Trust in Terminal instead");
   // The run's own card opens its sheet over Agents.
   await openRunOf(page, "SUP-9");
   const sheet = page.getByRole("dialog", { name: "Agent run" });
@@ -147,7 +147,35 @@ test("a failed run waits in the list under General, opens its decision, and stay
   // Agents shows the failure, and showing it clears nothing: back on Pip home it still waits.
   await openAgents(page);
   await expandNeedsYou(page);
-  await expect(needRow(page, /SUP-9.*needs its folder trusted/)).toHaveCount(1);
+  await expect(needRow(page, /SUP-9.*needs its clone trusted/)).toHaveCount(1);
+});
+
+test("one click trusts Gossamr's clone for a run that failed untrusted, and the run starts again", async ({ page }) => {
+  await openApp(page, "prSurface=manual");
+  await openAgents(page);
+  await expandNeedsYou(page);
+  await needRow(page, /SUP-9.*needs its clone trusted/).click();
+  await expect(needsPane(page)).toContainText("Claude hasn't trusted Gossamr's clone of acme/storefront yet.");
+  await expect(needsPane(page)).toContainText("Gossamr trusts this one folder, for Claude only");
+  const buttons = needsPane(page).getByRole("button", { name: /^Trust/ });
+  await expect(buttons).toHaveText(["Trust this clone for Claude", "Trust in Terminal instead"]);
+
+  await buttons.first().click();
+  await expect(needRow(page, /SUP-9.*needs its clone trusted/)).toHaveCount(0);
+  await expect.poll(async () => (await runOn(page, "SUP-9")).state).not.toBe("failed");
+});
+
+test("a refusal to trust says why and puts Terminal first", async ({ page }) => {
+  await openApp(page, "prSurface=manual&mockTrust=refused");
+  await openAgents(page);
+  await expandNeedsYou(page);
+  await needRow(page, /SUP-9.*needs its clone trusted/).click();
+  await needsPane(page).getByRole("button", { name: "Trust this clone for Claude" }).click();
+
+  await expect(needsPane(page)).toContainText("Claude hasn't made its settings for Claude yet. Trust it in Terminal.");
+  await expect(needsPane(page).getByRole("button", { name: /^Trust/ })).toHaveText(["Trust in Terminal", "Trust this clone for Claude"]);
+  expect((await runOn(page, "SUP-9")).state).toBe("failed");
+  await expect(needRow(page, /SUP-9.*needs its clone trusted/)).toHaveCount(1);
 });
 
 test("Needs you: Pip's question waits in the list and on its row, opens its decision, and leaves once dismissed", async ({ page }) => {
@@ -352,7 +380,7 @@ test.describe("answering a question and retrying a run", () => {
     await openAgents(page);
     // The sheet is where a failed run's command is shown to copy; the decision's link opens it.
     await expandNeedsYou(page);
-    await openNeedRow(page, /SUP-9.*needs its folder trusted/);
+    await openNeedRow(page, /SUP-9.*needs its clone trusted/);
     await closeWorkstreamSheet(page);
     await openRunOf(page, "SUP-9");
     const retry = runSheet(page).getByRole("button", { name: "Retry", exact: true });
@@ -450,7 +478,7 @@ test.describe("a folder to trust keeps waiting on the person", () => {
     await openAgents(page);
     await expect(needsYouCount(page)).toHaveText(count);
     await expandNeedsYou(page);
-    await expect(needRow(page, /needs its folder trusted/)).toHaveCount(1);
+    await expect(needRow(page, /needs its clone trusted/)).toHaveCount(1);
   });
 });
 
@@ -766,7 +794,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await onHome(page);
   await expandGeneral(page);
   const count = Number(await needsYouCount(page).innerText());
-  const failure = need(page, /SUP-9.*needs its folder trusted/);
+  const failure = need(page, /SUP-9.*needs its clone trusted/);
   await expect(failure).toHaveCount(1);
 
   // Opening Agents (the failed run is on screen there, as it always was) clears nothing.
@@ -780,7 +808,7 @@ test("a failure stays in Needs you after Agents is opened, and only a Dismiss (o
   await card.first().locator("[data-in-needs-you]").click();
   await expect(agentsHome(page)).toBeVisible();
   await expect(needsPane(page)).toContainText("SUP-9");
-  await expect(needsPane(page)).toContainText("Claude asks you once per folder");
+  await expect(needsPane(page)).toContainText("Claude hasn't trusted Gossamr's clone of acme/storefront yet.");
   await expect(needsYouCount(page)).toHaveText(String(count));
 
   // Dismissed, it goes; the run stays in Agents.

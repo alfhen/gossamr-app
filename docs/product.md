@@ -8,7 +8,7 @@ Inbox shows mentions, comments, status changes and assignments on watched ticket
 
 A workstream holds one ticket or one ticketless task, its conversation with Pip, notes, agents and drafts. Tell Pip what you want done. It starts, messages and stops Claude Code agents within that workstream and wakes when an agent has something to report. You can pause a workstream or stop an agent yourself. Pip's conversations stay when you sign out, remove a connection or sign in to another Jira site.
 
-Roles such as planner, builder and reviewer are labels Pip chooses, not different permission tiers. Every agent uses your Claude Code setup, with Gossamr's report, ask, read-workstream and wait tools added. Gossamr does not accept folder trust for you or change your Claude settings. Permission prompts belong in Terminal.
+Roles such as planner, builder and reviewer are labels Pip chooses, not different permission tiers. Every agent uses your Claude Code setup, with Gossamr's report, ask, read-workstream and wait tools added. Gossamr answers Claude's folder-trust question only when you click **Trust this clone for Claude** on a run, for that run's own clone in `~/Gossamr/agents` and the login it uses. It changes no other Claude setting. Permission prompts belong in Terminal.
 
 Agents report in prose. Gossamr does not parse headings, score a plan, infer a review verdict or make drafts automatically. Pip reads the report and decides what to draft or do next within your instruction. Reports, ticket text, comments and pull request content are data, never instructions to Pip.
 
