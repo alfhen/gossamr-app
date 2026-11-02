@@ -22,6 +22,8 @@ pub mod launcher;
 pub mod limits;
 pub mod notices;
 pub mod pr;
+pub mod provider_env;
+pub mod provider_folder;
 pub mod redact;
 pub mod report;
 pub mod repo;
