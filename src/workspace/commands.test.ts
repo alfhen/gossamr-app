@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
 import { namesCommand, askToPlanCommands, buildCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { containerKey } from "../lib/filter";
 import { BUILT_IN_VIEWS } from "./filters";
 import type { WorkItem } from "../types";
 
@@ -111,6 +112,15 @@ describe("ticket jump", () => {
     expect(jump).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringMatching(/Retry failed payment/) }));
   });
 
+  it("says which site each ticket is on when two share a key, and only then", async () => {
+    const both = await new MockBackend({ jira: 2, githubRepos: 6 }).cacheSearch({ type: "and", filters: [] });
+    const site = (ref: { connectionId: string }) => (ref.connectionId === "mock2" ? "beta.atlassian.net" : "acme.atlassian.net");
+    const shared = ticketCommands(both, "ca-402", vi.fn(), 8, site);
+    expect(shared.map((c) => c.hint).sort()).toEqual(["CA-402 · acme.atlassian.net", "CA-402 · beta.atlassian.net"]);
+    expect(ticketCommands(both, "ops-3", vi.fn(), 8, site).map((c) => c.hint)).toEqual(["OPS-3"]);
+    expect(ticketCommands(items, "devops-471", vi.fn(), 8, site)[0].hint).toBe("DEVOPS-471");
+  });
+
   it("offers no tickets before anything is typed", () => {
     expect(ticketCommands(items, "", vi.fn())).toEqual([]);
   });
@@ -126,6 +136,13 @@ describe("palette extras", () => {
     expect(new Set(groups).size).toBe(groups.filter((g, i) => g !== groups[i - 1]).length);
   });
 
+  it("gives two projects with the same key on different sites separate commands", async () => {
+    const both = await new MockBackend({ jira: 2, githubRepos: 6 }).cacheContainers();
+    const ids = buildCommands(both, [], a).map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(both.filter((c) => c.key === "CA")).toHaveLength(2);
+  });
+
   it("shows live counts beside Activity and Drafts, and marks what is current", () => {
     const ctx = { project: containerRef("CA"), view: "board" as const, unreadActivity: 22 };
     const live = buildCommands(containers, BUILT_IN_VIEWS, a, ctx);
@@ -133,7 +150,7 @@ describe("palette extras", () => {
     expect(hint("app:activity")).toBe("22 new");
     // Drafts are counted once, in Needs you, so Open drafts carries no number of its own.
     expect(hint("app:drafts")).toBeUndefined();
-    expect(hint("project:CA")).toBe("current");
+    expect(hint(`project:${containerKey(containerRef("CA"))}`)).toBe("current");
     expect(hint("mode:board")).toBe("current");
     expect(hint("mode:list")).toBeUndefined();
     expect(hint("project:all")).toBeUndefined();
@@ -222,6 +239,12 @@ describe("watch commands", () => {
     expect(open).toMatchObject({ label: "Open SUP-99", group: "Tickets" });
     open.run();
     expect(a.openTicket).toHaveBeenCalledWith("SUP-99");
+  });
+
+  it("keeps Open KEY for a synced key that another site could have too", () => {
+    const key = items[0].item.key;
+    const [open] = keyCommand(key.toLowerCase(), items, a.openTicket, () => true);
+    expect(open).toMatchObject({ label: `Open ${key}`, group: "Tickets" });
   });
 
   it("leaves a synced key to the ticket results, and words alone", () => {

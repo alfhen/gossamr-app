@@ -98,12 +98,13 @@ impl Db {
         Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
     }
 
-    /// Whether `session_id` is the Pip session of an open workstream, which keeps it resumable however many other
-    /// sessions Pip has started since.
-    pub fn is_open_workstream_session(&self, session_id: &str) -> Result<bool> {
+    /// Whether `session_id` is the Pip session of an open workstream on `instance_id`, which keeps it resumable however
+    /// many other sessions Pip has started since. A workstream from before instances has no instance and matches none.
+    pub fn is_open_workstream_session(&self, session_id: &str, instance_id: &str) -> Result<bool> {
         let n: i64 = self.conn.query_row(
-            "SELECT count(*) FROM workstreams WHERE closed_at IS NULL AND json_extract(data, '$.pipSession') = ?1",
-            params![session_id],
+            "SELECT count(*) FROM workstreams WHERE closed_at IS NULL AND json_extract(data, '$.pipSession') = ?1
+             AND json_extract(data, '$.pipInstance') = ?2",
+            params![session_id, instance_id],
             |r| r.get(0),
         )?;
         Ok(n > 0)
@@ -204,6 +205,7 @@ mod tests {
             repo: None,
             title: format!("{id} title"),
             pip_session: None,
+            pip_instance: None,
             paused_reason: None,
             notes: None,
             created_at: now() + Duration::minutes(mins),
@@ -211,6 +213,21 @@ mod tests {
             basis: None,
             agents_model: None,
         }
+    }
+
+    #[test]
+    fn a_workstream_session_resumes_only_on_the_instance_stored_with_it() {
+        let db = Db::in_memory().unwrap();
+        let mut on_work = ws("a", "c", None, 0);
+        on_work.pip_session = Some("s-1".into());
+        on_work.pip_instance = Some("claude_2".into());
+        let mut before_instances = ws("b", "c", None, 1);
+        before_instances.pip_session = Some("s-2".into());
+        db.insert_workstream(&on_work).unwrap();
+        db.insert_workstream(&before_instances).unwrap();
+        assert!(db.is_open_workstream_session("s-1", "claude_2").unwrap());
+        assert!(!db.is_open_workstream_session("s-1", "claude").unwrap());
+        assert!(!db.is_open_workstream_session("s-2", "claude").unwrap(), "no folder is known to hold it");
     }
 
     #[test]

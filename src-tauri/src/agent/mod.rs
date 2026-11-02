@@ -26,7 +26,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::auth::Scope;
-use crate::claude::ClaudeCodeProvider;
+use crate::claude::{ClaudeCodeProvider, Launch};
+use crate::model_choice::ModelChoice;
 use crate::db::PipTurn;
 use crate::domain::{ClonePlan, ProposalQuery, Run, StateKind};
 use crate::runs::message::Delivery;
@@ -106,6 +107,7 @@ pub struct AgentRequest {
     pub session: Option<String>,
     /// Screenshots sent with the prompt, inline.
     pub images: Vec<ImageInput>,
+    pub launch: Launch,
 }
 
 /// What Pip's agent tools need from the agent-run service: where a run would be set up, and to start, message and stop
@@ -183,6 +185,10 @@ pub struct AskRequest {
     /// How the page showed the question, kept with it so the conversation reads the same after a restart.
     #[serde(default)]
     pub meta: Option<TurnMeta>,
+    /// The instance and model to run on. Checked in Rust before it reaches the command line. Without one the turn takes
+    /// its conversation's last choice, else the Settings default.
+    #[serde(default)]
+    pub model: Option<ModelChoice>,
     /// For a wake turn only: the `[Event]` lines Rust wrote. Never taken from the page.
     #[serde(skip)]
     pub event: Option<String>,
@@ -397,6 +403,14 @@ impl AgentService {
         meta.shown = shown_line(meta.shown.take());
         // Kept as waiting until its provider has started, so a reload shows it either way.
         recorded(self.core.pip_turn_begin(&scope, &req.conversation, &req.request_id, &req.prompt, &meta, "queued").await);
+        // A choice the page sent is refused now, not when the turns ahead of it end. `start` checks again for a state that
+        // changes while the turn waits.
+        if let Some(asked) = req.model.clone() {
+            if let Err(e) = self.core.pip_launch(Some(&asked), |shell| self.provider.find(shell)).await {
+                recorded(self.core.pip_turn_finish(&scope, &req.request_id, "", false, Some(&e.to_string()), None, None).await);
+                return Err(e);
+            }
+        }
         let workstream = workstream_of_conversation(&req.conversation).map(str::to_string);
         if let Some(id) = workstream.as_ref().filter(|_| meta.shown.is_none()) {
             // What the person types answers a question Pip asked in this workstream, if one is open; a line the page
@@ -514,6 +528,7 @@ impl AgentService {
             images: Vec::new(),
             conversation: conversation.clone(),
             meta: None,
+            model: None,
             event: Some(event_line(&facts)),
         };
         self.wakes.lock().expect("lock poisoned").insert(request_id.clone(), WakeInFlight { conversation, scope: scope.clone(), facts, sink: wake_sink });
@@ -598,6 +613,8 @@ impl AgentService {
 
     async fn start(self: &Arc<Self>, scope: Scope, req: AskRequest, sink: UpdateSink) -> Result<()> {
         images::validate(&req.images)?;
+        let choice = self.core.pip_choice(&req.conversation, req.model.clone()).await?;
+        let (instance, launch) = self.core.pip_launch(choice.as_ref(), |shell| self.provider.find(shell)).await?;
         // A turn in a workstream's conversation works in that workstream, which must be an open one of this account.
         let mut workstream = match workstream_of_conversation(&req.conversation) {
             Some(id) => Some(workstream::for_turn(&self.core, &scope, id).await?),
@@ -642,7 +659,7 @@ impl AgentService {
         // A workstream's conversation continues its own session when the page has none to give.
         let asked = req.session_id.or_else(|| workstream.as_ref().and_then(|w| w.workstream.pip_session.clone()));
         let session = match asked {
-            Some(id) if self.core.is_pip_session(&id).await? => Some(id),
+            Some(id) if self.core.is_pip_session(&id, &instance).await? => Some(id),
             _ => None,
         };
 
@@ -655,6 +672,7 @@ impl AgentService {
             sandbox,
             session,
             images: req.images,
+            launch,
         };
 
         // Registered before the run starts, since the agent may call the tools straight away.
@@ -672,6 +690,10 @@ impl AgentService {
                 return Err(e);
             }
         };
+        // Kept only once the provider has started the turn, so a refused choice never becomes the conversation's last one.
+        if let Some(choice) = &choice {
+            recorded(self.core.pip_turn_model(&scope, &req.request_id, choice).await);
+        }
         if self.stop_early.lock().expect("lock poisoned").remove(&run_id) {
             self.provider.cancel(&run_id);
         }
@@ -711,9 +733,9 @@ impl AgentService {
                 recorded(this.core.pip_turn_finish(&scope, &run_id, &text, false, Some("Pip stopped"), session.as_deref(), None).await);
             }
             if let Some(id) = &session {
-                let _ = this.core.remember_claude_session(&scope, key.as_deref(), id).await;
+                let _ = this.core.remember_claude_session(&scope, key.as_deref(), id, &instance).await;
                 if let Some(ws) = &workstream_id {
-                    recorded(this.core.set_workstream_session(&scope, ws, id).await);
+                    recorded(this.core.set_workstream_session(&scope, ws, id, &instance).await);
                 }
             }
             this.finish(&run_id);
@@ -832,6 +854,7 @@ mod tests {
                 images: Vec::new(),
                 conversation: GENERAL_CONVERSATION.into(),
                 meta: Some(TurnMeta { quote: None, looking: Some("the board".into()), image_count: 0, ..Default::default() }),
+                model: None,
                 event: None,
             }
         }
@@ -1082,6 +1105,7 @@ mod tests {
                 images: Vec::new(),
                 conversation: conversation.into(),
                 meta: None,
+                model: None,
                 event: None,
             }
         }
@@ -1363,5 +1387,316 @@ mod tests {
             assert!(svc.ask(ask("q1", "A"), sink.clone()).await.is_err());
         }
     }
+    }
+
+    mod instance_and_model {
+        use super::*;
+        use crate::agent::runs::testing::FakePlanner;
+        use crate::claude::StandIn;
+        use crate::config::AppConfig;
+        use crate::connections::{self, ProviderConfig, ProviderInstance};
+        use crate::inbox::testing::{fixture_with_shell, Fixture};
+        use crate::runs::env::ShellCapture;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        #[derive(Debug, PartialEq)]
+        struct Launched {
+            session: Option<String>,
+            model: Option<String>,
+            effort: Option<String>,
+            login: Vec<(String, Option<String>)>,
+        }
+
+        #[derive(Default)]
+        struct Recorder {
+            launched: Mutex<Vec<Launched>>,
+            sessions: AtomicUsize,
+            hold: std::sync::atomic::AtomicBool,
+            held: Mutex<Vec<(mpsc::UnboundedSender<AgentEvent>, String)>>,
+        }
+
+        #[async_trait]
+        impl StandIn for Recorder {
+            async fn run(&self, req: AgentRequest) -> Result<EventStream> {
+                let mut cmd = tokio::process::Command::new("claude");
+                req.launch.env.apply(&mut cmd);
+                let login = cmd.as_std().get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
+                self.launched.lock().unwrap().push(Launched { session: req.session.clone(), model: req.launch.model.clone(), effort: req.launch.effort.clone(), login });
+                let session = format!("sess-{}", self.sessions.fetch_add(1, Ordering::SeqCst) + 1);
+                let (tx, rx) = mpsc::unbounded_channel();
+                let _ = tx.send(AgentEvent::Started { session_id: session.clone() });
+                if self.hold.load(Ordering::SeqCst) {
+                    self.held.lock().unwrap().push((tx, session));
+                    return Ok(rx);
+                }
+                let _ = tx.send(AgentEvent::Done { session_id: Some(session), ok: true, message: None, usage: None });
+                Ok(rx)
+            }
+
+            fn cancel(&self, _run_id: &str) {}
+        }
+
+        impl Recorder {
+            fn count(&self) -> usize {
+                self.launched.lock().unwrap().len()
+            }
+
+            fn finish_held(&self) {
+                self.hold.store(false, Ordering::SeqCst);
+                for (tx, session) in self.held.lock().unwrap().drain(..) {
+                    let _ = tx.send(AgentEvent::Done { session_id: Some(session), ok: true, message: None, usage: None });
+                }
+            }
+        }
+
+        /// The default instance and "Claude work", which has its own folder.
+        async fn rig_on(fx: Fixture) -> (Fixture, Arc<AgentService>, Arc<Recorder>) {
+            std::fs::create_dir_all(fx.home.join(".claude-work")).unwrap();
+            AppConfig::update(&fx.core.data_dir(), |config| {
+                config.providers = vec![
+                    connections::default_claude(),
+                    ProviderInstance {
+                        id: "claude_2".into(),
+                        display_name: "Claude work".into(),
+                        config: ProviderConfig { config_dir: Some("~/.claude-work".into()), ..Default::default() },
+                        ..connections::default_claude()
+                    },
+                ];
+            })
+            .unwrap();
+            let recorder = Arc::new(Recorder::default());
+            let server = McpServer::start(fx.core.clone(), FakePlanner::unused(), Arc::new(|_| {}), Arc::new(|_, _, _| {})).await.unwrap();
+            let svc = Arc::new(AgentService::with_provider(fx.core.clone(), server, ClaudeCodeProvider::standing_in(recorder.clone())));
+            (fx, svc, recorder)
+        }
+
+        async fn rig() -> (Fixture, Arc<AgentService>, Arc<Recorder>) {
+            rig_on(fixture_with_shell(ShellCapture::with_env(crate::runs::env::RunEnv::from_pairs([("PATH", "/usr/bin"), ("ANTHROPIC_API_KEY", "sk-shell")]))).await).await
+        }
+
+        fn ask(id: &str, conversation: &str, model: Option<ModelChoice>) -> AskRequest {
+            AskRequest {
+                request_id: id.into(),
+                prompt: "Hi".into(),
+                session_id: None,
+                context: ScreenContext::default(),
+                images: Vec::new(),
+                conversation: conversation.into(),
+                meta: None,
+                model,
+                event: None,
+            }
+        }
+
+        fn pick(instance: &str, model: &str, effort: Option<&str>) -> ModelChoice {
+            ModelChoice { instance_id: instance.into(), model: model.into(), effort: effort.map(Into::into) }
+        }
+
+        async fn done(fx: &Fixture, conversation: &str, id: &str) -> PipTurn {
+            for _ in 0..300 {
+                if let Some(t) = fx.core.pip_turns(conversation).await.unwrap().into_iter().find(|t| t.request_id == id && t.status != "running" && t.status != "queued") {
+                    // The session is recorded just after the turn is.
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    return t;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("turn {id} never finished");
+        }
+
+        async fn say(svc: &Arc<AgentService>, req: AskRequest) -> Result<AskOutcome> {
+            svc.ask(req, Arc::new(|_| {})).await
+        }
+
+        #[tokio::test]
+        async fn a_turn_runs_on_the_instance_model_and_effort_the_page_chose_and_keeps_the_choice() {
+            let (fx, svc, recorder) = rig().await;
+            let choice = pick("claude_2", "opus", Some("high"));
+            say(&svc, ask("q1", "general", Some(choice.clone()))).await.unwrap();
+            let turn = done(&fx, "general", "q1").await;
+
+            let launched = recorder.launched.lock().unwrap();
+            assert_eq!((launched[0].model.as_deref(), launched[0].effort.as_deref()), (Some("opus"), Some("high")));
+            let folder = fx.home.join(".claude-work").to_string_lossy().into_owned();
+            assert!(launched[0].login.contains(&("CLAUDE_CONFIG_DIR".into(), Some(folder))), "{:?}", launched[0].login);
+            assert!(launched[0].login.contains(&("ANTHROPIC_API_KEY".into(), None)), "a key the shell holds can't override the folder's login");
+            assert_eq!(turn.model, Some(choice));
+        }
+
+        #[tokio::test]
+        async fn a_turn_without_a_choice_takes_its_conversations_last_one_and_a_new_conversation_the_settings_default() {
+            let (fx, svc, recorder) = rig().await;
+            say(&svc, ask("q1", "general", Some(pick("claude_2", "haiku", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            say(&svc, ask("q2", "general", None)).await.unwrap();
+            let again = done(&fx, "general", "q2").await;
+            assert_eq!(again.model, Some(pick("claude_2", "haiku", None)));
+
+            say(&svc, ask("q3", "CA-1", None)).await.unwrap();
+            let fresh = done(&fx, "CA-1", "q3").await;
+            assert_eq!(fresh.model, Some(pick("claude", "sonnet", Some("medium"))), "the default Pip uses");
+            let launched = recorder.launched.lock().unwrap();
+            assert_eq!(launched.iter().map(|l| l.model.as_deref()).collect::<Vec<_>>(), [Some("haiku"), Some("haiku"), Some("sonnet")]);
+            assert_eq!(launched[2].effort.as_deref(), Some("medium"));
+        }
+
+        #[tokio::test]
+        async fn a_choice_without_an_effort_runs_at_medium_and_keeps_its_own_when_it_has_one() {
+            let (fx, svc, recorder) = rig().await;
+            say(&svc, ask("q1", "general", Some(pick("claude_2", "opus", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            say(&svc, ask("q2", "general", Some(pick("claude_2", "opus", Some("high"))))).await.unwrap();
+            done(&fx, "general", "q2").await;
+            let efforts: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.effort.clone()).collect();
+            assert_eq!(efforts, [Some("medium".into()), Some("high".into())]);
+        }
+
+        #[tokio::test]
+        async fn a_session_from_before_instances_is_not_resumed_on_any_instance() {
+            let (fx, svc, recorder) = rig().await;
+            fx.core.with_app_db(|db| db.set_app_meta("pip_sessions", r#"["legacy-1"]"#)).await.unwrap();
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap().id;
+            fx.core
+                .with_app_db(|db| {
+                    let mut w = db.workstream(&ws)?.unwrap();
+                    w.pip_session = Some("legacy-2".into());
+                    db.save_workstream(&w).map(drop)
+                })
+                .await
+                .unwrap();
+            let mut question = ask("q1", "general", Some(pick("claude", "sonnet", None)));
+            question.session_id = Some("legacy-1".into());
+            say(&svc, question).await.unwrap();
+            done(&fx, "general", "q1").await;
+            let conversation = format!("ws:{ws}");
+            say(&svc, ask("q2", &conversation, Some(pick("claude", "sonnet", None)))).await.unwrap();
+            done(&fx, &conversation, "q2").await;
+            let sessions: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.session.clone()).collect();
+            assert_eq!(sessions, [None, None], "the first turn after the upgrade starts fresh");
+        }
+
+        #[tokio::test]
+        async fn the_instance_without_a_folder_takes_its_login_variables_from_the_shell() {
+            let (fx, svc, recorder) = rig().await;
+            say(&svc, ask("q1", "general", Some(pick("claude", "sonnet", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            let launched = recorder.launched.lock().unwrap();
+            assert!(launched[0].login.contains(&("ANTHROPIC_API_KEY".into(), Some("sk-shell".into()))), "{:?}", launched[0].login);
+            assert!(launched[0].login.contains(&("CLAUDE_CONFIG_DIR".into(), None)), "a variable the shell lacks is removed, not taken from the app");
+        }
+
+        #[tokio::test]
+        async fn a_session_is_resumed_only_on_the_instance_that_wrote_it() {
+            let (fx, svc, recorder) = rig().await;
+            let mut last = None;
+            for (id, instance) in [("q1", "claude"), ("q2", "claude_2"), ("q3", "claude_2"), ("q4", "claude")] {
+                let mut question = ask(id, "general", Some(pick(instance, "sonnet", None)));
+                question.session_id = last.take();
+                say(&svc, question).await.unwrap();
+                last = done(&fx, "general", id).await.session_id;
+            }
+            let sessions: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.session.clone()).collect();
+            assert_eq!(sessions, [None, None, Some("sess-2".into()), None], "switching starts fresh, staying continues, and each folder keeps its own");
+            assert!(fx.core.is_pip_session("sess-1", "claude").await.unwrap() && !fx.core.is_pip_session("sess-1", "claude_2").await.unwrap());
+        }
+
+        #[tokio::test]
+        async fn a_workstream_keeps_its_session_with_the_instance_and_does_not_resume_it_on_another() {
+            let (fx, svc, recorder) = rig().await;
+            let ws = fx.core.open_workstream(&fx.scope, Some(fx.item("CA-1")), None).await.unwrap().id;
+            let conversation = format!("ws:{ws}");
+            say(&svc, ask("q1", &conversation, Some(pick("claude_2", "sonnet", None)))).await.unwrap();
+            done(&fx, &conversation, "q1").await;
+            let kept = fx.core.workstream(&fx.scope, &ws).await.unwrap().unwrap().workstream;
+            assert_eq!((kept.pip_session.as_deref(), kept.pip_instance.as_deref()), (Some("sess-1"), Some("claude_2")));
+
+            say(&svc, ask("q2", &conversation, Some(pick("claude", "sonnet", None)))).await.unwrap();
+            done(&fx, &conversation, "q2").await;
+            let sessions: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.session.clone()).collect();
+            assert_eq!(sessions, [None, None]);
+        }
+
+        async fn refused(svc: &Arc<AgentService>, fx: &Fixture, choice: Option<ModelChoice>) -> String {
+            let err = say(svc, ask("q9", "general", choice)).await.unwrap_err().to_string();
+            let turn = fx.core.pip_turns("general").await.unwrap().into_iter().find(|t| t.request_id == "q9").unwrap();
+            assert_eq!((turn.status.as_str(), turn.error.as_deref()), ("failed", Some(err.as_str())));
+            fx.core.pip_turn_forget(&fx.scope, "q9").await.unwrap();
+            err
+        }
+
+        #[tokio::test]
+        async fn a_choice_that_cannot_run_is_refused_at_once_in_the_words_of_the_table_and_nothing_starts() {
+            let (fx, svc, recorder) = rig().await;
+            assert_eq!(refused(&svc, &fx, Some(pick("claude_9", "sonnet", None))).await, "Pick which Claude Pip runs on.");
+            assert_eq!(refused(&svc, &fx, Some(pick("claude_2", "default", None))).await, "Pick a model for Pip.");
+            assert_eq!(refused(&svc, &fx, Some(pick("claude_2", "sonnet", Some("ludicrous")))).await, "Pick a model for Pip.");
+            AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].enabled = false).unwrap();
+            assert_eq!(refused(&svc, &fx, Some(pick("claude_2", "sonnet", None))).await, "Pip runs on Claude work, which is off. Turn it on in Settings or pick another.");
+            assert_eq!(recorder.count(), 0, "it never falls back to the other instance");
+        }
+
+        #[tokio::test]
+        async fn a_choice_that_cannot_run_is_refused_at_once_even_behind_a_running_turn() {
+            let (fx, svc, recorder) = rig().await;
+            AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].enabled = false).unwrap();
+            recorder.hold.store(true, Ordering::SeqCst);
+            assert!(!say(&svc, ask("q1", "general", Some(pick("claude", "sonnet", None)))).await.unwrap().queued);
+
+            let words = refused(&svc, &fx, Some(pick("claude_2", "sonnet", None))).await;
+            assert_eq!(words, "Pip runs on Claude work, which is off. Turn it on in Settings or pick another.");
+            assert_eq!(refused(&svc, &fx, Some(pick("claude", "claude-opus-9", None))).await, "Pick a model for Pip.");
+            assert_eq!(recorder.count(), 1, "nothing was queued behind the running turn");
+            recorder.finish_held();
+            done(&fx, "general", "q1").await;
+            assert_eq!(recorder.count(), 1);
+        }
+
+        #[tokio::test]
+        async fn a_refused_choice_is_not_the_conversations_last_one_and_the_next_turn_runs_on_the_one_that_ran() {
+            let (fx, svc, recorder) = rig().await;
+            say(&svc, ask("q1", "general", Some(pick("claude", "haiku", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].enabled = false).unwrap();
+            refused(&svc, &fx, Some(pick("claude_2", "sonnet", None))).await;
+            assert_eq!(fx.core.pip_choice("general", None).await.unwrap(), Some(pick("claude", "haiku", None)));
+            say(&svc, ask("q2", "general", None)).await.unwrap();
+            done(&fx, "general", "q2").await;
+            let models: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.model.clone()).collect();
+            assert_eq!(models, [Some("haiku".into()), Some("haiku".into())]);
+        }
+
+        #[tokio::test]
+        async fn a_turn_that_fails_before_the_provider_starts_does_not_leave_its_choice_as_the_conversations_last() {
+            let (fx, svc, recorder) = rig().await;
+            let conversation = "ws:gone";
+            let err = say(&svc, ask("q1", conversation, Some(pick("claude_2", "opus", None)))).await.unwrap_err();
+            assert!(!err.to_string().is_empty());
+            assert_eq!(recorder.count(), 0);
+            assert_eq!(fx.core.pip_choice(conversation, None).await.unwrap(), Some(pick("claude", "sonnet", Some("medium"))), "the Settings default");
+        }
+
+        #[tokio::test]
+        async fn a_hostile_model_string_never_reaches_the_command_line_or_the_conversation() {
+            let (fx, svc, recorder) = rig().await;
+            for hostile in ["--dangerously-skip-permissions", "opus --tools Bash", "sonnet\n--add-dir /", "$(id)"] {
+                for instance in ["claude", "claude_2"] {
+                    assert_eq!(refused(&svc, &fx, Some(pick(instance, hostile, None))).await, "Pick a model for Pip.");
+                }
+            }
+            assert_eq!(recorder.count(), 0);
+            assert_eq!(fx.core.pip_choice("general", None).await.unwrap(), Some(pick("claude", "sonnet", Some("medium"))), "a refused string is not kept as the conversation's choice");
+        }
+
+        #[tokio::test]
+        async fn an_unreadable_shell_setup_refuses_the_instance_without_a_folder_and_leaves_one_with_a_folder_running() {
+            let (fx, svc, recorder) = rig_on(fixture_with_shell(ShellCapture::with_shell("/nonexistent/shell")).await).await;
+            let words = refused(&svc, &fx, Some(pick("claude", "sonnet", None))).await;
+            assert!(words.starts_with("Gossamr couldn't read your shell setup"), "{words}");
+            assert_eq!(recorder.count(), 0);
+            say(&svc, ask("q1", "general", Some(pick("claude_2", "sonnet", None)))).await.unwrap();
+            done(&fx, "general", "q1").await;
+            assert_eq!(recorder.count(), 1);
+        }
     }
 }

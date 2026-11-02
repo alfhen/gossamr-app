@@ -5,7 +5,7 @@ import { developmentLine } from "../lib/devLinks";
 import { describeFilter, itemKey } from "../lib/filter";
 import type { ItemRef, Proposal, ScreenContext, WorkstreamView } from "../types";
 import { useDev } from "./devStore";
-import { useLookup } from "./hooks";
+import { useLookup, useSiteOf } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
 import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
@@ -13,6 +13,7 @@ import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { popoverOpen } from "./Popover";
 import { currentContext, useScreen } from "./pipHooks";
 import { usePip } from "./pipStore";
+import { keyChooserOpen } from "./keyChooserStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
 import { describeRun } from "./pipRuns";
@@ -93,7 +94,7 @@ function usePaneEscape(onClose: () => void) {
         inPipInput: field?.id === PIP_INPUT_ID,
         // A confirmation or popover that takes Esc itself (`data-esc-local`) closes, not the pane.
         // On Agents an open decision or batch preview closes before the drawer does, when the keyboard is out in the page.
-        handled: ev.defaultPrevented || (tabs.route === "agents" && (useWorkView.getState().deciding !== null || useWorkView.getState().batch !== null) && !(field instanceof HTMLElement && field.closest("aside[data-pip-root]"))) || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local], #workstream-sheet")),
+        handled: ev.defaultPrevented || keyChooserOpen() || (tabs.route === "agents" && (useWorkView.getState().deciding !== null || useWorkView.getState().batch !== null) && !(field instanceof HTMLElement && field.closest("aside[data-pip-root]"))) || usePrefs.getState().paletteOpen || lightboxOpen() || popoverOpen() || (field instanceof HTMLElement && !!field.closest("[data-esc-local], #workstream-sheet")),
       });
       if (!close) return;
       ev.preventDefault();
@@ -125,6 +126,7 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
   const context: ScreenContext = pinned ?? live;
   const code = useDev((s) => s.index);
   const runs = useRuns((s) => s.runs);
+  const siteOf = useSiteOf();
   const words = useMemo(
     () => ({
       titleOf: (ref: ItemRef) => screen.items[itemKey(ref)]?.title ?? null,
@@ -141,7 +143,7 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
   useEffect(() => {
     if (openRef) useDev.getState().ensure([openRef]);
   }, [openRef?.connectionId, openRef?.externalId]);
-  const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf);
+  const { kind, label } = contextLabel(context, quote, words.titleOf, words.runOf, siteOf);
   const open = screen.route !== "settings" && screen.selected ? screen.items[screen.selected] : undefined;
   const scene = { itemKey: open?.item.key ?? null, route: screen.route, runOpen: !!context.run, workstream: !!workstream };
   return { scene, kind, label, context, words, quote, following: pinned === null };

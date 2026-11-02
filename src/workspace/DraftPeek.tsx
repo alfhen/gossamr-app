@@ -10,7 +10,7 @@ import { allContainers, useWorkspace } from "../workspaceStore";
 import { createdItemKey, draftAfter, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, placeOf, waitingCreates, type DraftFields, type DraftPlace } from "./draftTicket";
 import { askPip } from "./askPip";
 import { DraftAccount, useHeldNote } from "./draftHold";
-import { openTicketByKey } from "./jump";
+import { openTicket } from "./jump";
 import { pipAsks } from "./runSheetLogic";
 import { FromRun } from "./RunProvenance";
 import { useRuns } from "./runsStore";
@@ -353,7 +353,7 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
     const done = await run(job);
     if (!done || !next) return;
     const made = done.created[0];
-    if (made) useToasts.getState().push(`Created ${made.key}.`, "info", { label: "Open", run: () => void openTicketByKey(made.key) });
+    if (made) useToasts.getState().push(`Created ${made.key}.`, "info", { label: "Open", run: () => void openTicket(made) });
     useTabs.getState().select(draftKey(next));
   };
 
@@ -416,7 +416,7 @@ function OpenDraft({ proposal: p, ...motion }: { proposal: Create } & Motion) {
       if (!here()) return;
       useTabs.getState().select(null);
       const made = p.created[0];
-      useToasts.getState().push(made ? `Created ${made.key}.` : "Created.", "info", made ? { label: "Open", run: () => void openTicketByKey(made.key) } : undefined);
+      useToasts.getState().push(made ? `Created ${made.key}.` : "Created.", "info", made ? { label: "Open", run: () => void openTicket(made) } : undefined);
     }, HANDOVER_MS);
     return () => clearTimeout(timeout);
   }, [applied, createdKey, arrived, p.id]);

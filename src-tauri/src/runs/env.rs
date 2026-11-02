@@ -122,6 +122,12 @@ impl ShellCapture {
         Self { shell: Some(shell.into()), found: Default::default() }
     }
 
+    /// A capture that already holds `env`, so a test never starts a shell.
+    #[cfg(test)]
+    pub fn with_env(env: RunEnv) -> Self {
+        Self { shell: None, found: tokio::sync::Mutex::new(Some(Arc::new(env))) }
+    }
+
     /// Drops a kept capture, so the next `get` reads the shell again.
     pub async fn forget(&self) {
         *self.found.lock().await = None;

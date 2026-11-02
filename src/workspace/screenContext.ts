@@ -90,6 +90,8 @@ export interface ContextWords {
   runOf?(id: string): string | null;
 }
 
+const onSite = (site: string | null | undefined) => (site ? ` on ${site}` : "");
+
 const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)}…` : text);
 
 /** What Pip can see, one line per thing sent: built from the very context that goes with the question, plus the selected text if any. */
@@ -110,12 +112,12 @@ export function contextLines(ctx: ScreenContext, quote: string | null, words: Co
   ];
 }
 
-/** The chip's two parts: what kind of thing Pip is looking at, and its name. */
-export function contextLabel(ctx: ScreenContext, quote: string | null, titleOf: ContextWords["titleOf"], runOf?: ContextWords["runOf"]): { kind: string; label: string } {
+/** The chip's two parts: what kind of thing Pip is looking at, and its name. `siteOf` is for the chip only; Pip's prompt names no site. */
+export function contextLabel(ctx: ScreenContext, quote: string | null, titleOf: ContextWords["titleOf"], runOf?: ContextWords["runOf"], siteOf?: (ref: ItemRef) => string | null): { kind: string; label: string } {
   const plus = quote ? " + selection" : "";
   if (ctx.item) {
     const title = titleOf(ctx.item);
-    return { kind: "Ticket", label: `${ctx.item.key}${title ? ` · ${title}` : ""}${plus}` };
+    return { kind: "Ticket", label: `${ctx.item.key}${onSite(siteOf?.(ctx.item))}${title ? ` · ${title}` : ""}${plus}` };
   }
   const run = ctx.run ? runOf?.(ctx.run) : null;
   if (run) return { kind: "Agent run", label: `${run}${plus}` };

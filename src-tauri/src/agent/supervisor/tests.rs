@@ -216,6 +216,7 @@ fn ask(id: &str, conversation: &str) -> AskRequest {
         images: Vec::new(),
         conversation: conversation.into(),
         meta: None,
+        model: None,
         event: None,
     }
 }

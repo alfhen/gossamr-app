@@ -4,6 +4,7 @@
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
+use crate::inbox::OwnSession;
 
 /// The inbox's own tables, as every release before the connector-neutral cache created them. Idempotent, so a legacy
 /// file passes through untouched and a fresh one gets them.
@@ -567,9 +568,6 @@ pub fn clear_app_copies(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
-fn own_sessions(json: Option<String>) -> Vec<String> {
-    json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
-}
 
 /// Copies the app state a cache file holds into the app database, once per cache file. The cache keeps its rows until
 /// `clear_app_copies`, which the caller runs after this returns. Needs the cache attached as `cache`. Returns
@@ -630,10 +628,10 @@ fn has_cached_table(conn: &Connection, table: &str) -> Result<bool> {
 }
 
 fn copy_cached_meta(tx: &rusqlite::Transaction) -> Result<()> {
-    let mine: Vec<String> = own_sessions(tx.query_row("SELECT v FROM main.app_meta WHERE k = 'pip_sessions'", [], |r| r.get(0)).optional()?);
-    let theirs: Vec<String> = own_sessions(tx.query_row("SELECT v FROM cache.meta WHERE k = 'pip_sessions'", [], |r| r.get(0)).optional()?);
+    let mine = OwnSession::list(tx.query_row("SELECT v FROM main.app_meta WHERE k = 'pip_sessions'", [], |r| r.get(0)).optional()?);
+    let theirs = OwnSession::list(tx.query_row("SELECT v FROM cache.meta WHERE k = 'pip_sessions'", [], |r| r.get(0)).optional()?);
     let mut merged = mine.clone();
-    merged.extend(theirs.into_iter().filter(|s| !mine.contains(s)));
+    merged.extend(theirs.into_iter().filter(|s| !mine.iter().any(|m| m.id() == s.id())));
     merged.truncate(crate::inbox::OWN_SESSIONS_KEPT);
     if merged != mine {
         tx.execute(

@@ -2,13 +2,14 @@
 //! `user`, or the supervisor's event lines, role `wake`) and Pip's answer. Only `insert_pip_turn` inserts; every later
 //! write is an update, so a turn whose rows were cleared stays gone.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::Db;
 use crate::agent::{TurnMeta, TurnUsage};
 use crate::domain::{Actor, WorkstreamEvent};
 use crate::error::Result;
+use crate::model_choice::ModelChoice;
 
 /// Why a turn that was running when the app last closed is shown as failed.
 pub const INTERRUPTED: &str = "Gossamr closed before Pip finished";
@@ -54,9 +55,18 @@ pub struct PipTurn {
     pub error: Option<String>,
     pub session_id: Option<String>,
     pub usage: Option<TurnUsage>,
+    /// The instance and model the turn ran on, once it was started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelChoice>,
     pub created_at: String,
     /// `user` for a question the person sent, `wake` for a turn the supervisor started.
     pub kind: String,
+}
+
+/// The part of a turn's `meta` that holds its choice.
+#[derive(Deserialize)]
+struct ChoiceMeta {
+    model: Option<ModelChoice>,
 }
 
 /// The roles a turn can start with.
@@ -95,8 +105,35 @@ impl Db {
 
     /// Rewrites a wake turn's event lines and facts, as when more were merged into it while it waited.
     pub fn set_pip_wake(&self, request_id: &str, lines: &str, facts: &[(String, String)]) -> Result<()> {
-        self.conn.execute("UPDATE pip_turns SET prompt = ?2, meta = ?3 WHERE request_id = ?1 AND role = 'wake'", params![request_id, lines, wake_facts_json(facts)?])?;
+        self.conn.execute(
+            "UPDATE pip_turns SET prompt = ?2, meta = json_set(COALESCE(meta, '{}'), '$.wakes', json(?3)) WHERE request_id = ?1 AND role = 'wake'",
+            params![request_id, lines, serde_json::to_string(facts)?],
+        )?;
         Ok(())
+    }
+
+    /// Keeps the instance and model a turn ran with in its `meta`.
+    pub fn set_pip_turn_model(&self, request_id: &str, choice: &ModelChoice) -> Result<()> {
+        self.conn.execute(
+            "UPDATE pip_turns SET meta = json_set(COALESCE(meta, '{}'), '$.model', json(?2)) WHERE request_id = ?1 AND role IN ('user', 'wake')",
+            params![request_id, serde_json::to_string(choice)?],
+        )?;
+        Ok(())
+    }
+
+    /// The choice the latest turn of `conversation` that kept one ran with.
+    pub fn last_pip_model(&self, conversation: &str) -> Result<Option<ModelChoice>> {
+        let kept: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT json_extract(meta, '$.model') FROM pip_turns
+                 WHERE conversation = ?1 AND role IN ('user', 'wake') AND json_extract(meta, '$.model') IS NOT NULL
+                 ORDER BY created_at DESC, request_id DESC LIMIT 1",
+                params![conversation],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(kept.and_then(|k| serde_json::from_str(&k).ok()))
     }
 
     /// Forgets a turn that was recorded but never queued.
@@ -167,6 +204,7 @@ impl Db {
         for row in rows {
             let (request_id, prompt, meta, text, steps, status, error, session_id, usage, created_at, role) = row?;
             // A part that no longer parses reads as empty rather than hiding the turn.
+            let model = meta.as_deref().and_then(|m| serde_json::from_str::<ChoiceMeta>(m).ok()).and_then(|m| m.model);
             let meta: TurnMeta = meta.and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default();
             out.push(PipTurn {
                 request_id,
@@ -182,6 +220,7 @@ impl Db {
                 error,
                 session_id,
                 usage: usage.and_then(|u| serde_json::from_str(&u).ok()),
+                model,
                 created_at,
                 kind: if role == ROLE_WAKE { ROLE_WAKE.into() } else { ROLE_USER.into() },
             });
@@ -288,6 +327,7 @@ mod tests {
                 error: None,
                 session_id: Some("s1".into()),
                 usage: Some(usage()),
+                model: None,
                 created_at: "2026-10-01T10:00:00.000Z".into(),
                 kind: "user".into(),
             }]
@@ -295,6 +335,50 @@ mod tests {
         let v = serde_json::to_value(&turns[0]).unwrap();
         assert_eq!((v["requestId"].as_str(), v["imageCount"].as_u64(), v["usage"]["inputTokens"].as_u64()), (Some("q1"), Some(2), Some(10)));
         assert!(v.get("shown").is_none(), "a question as typed has no short line");
+    }
+
+    fn pick(instance: &str, model: &str) -> ModelChoice {
+        ModelChoice { instance_id: instance.into(), model: model.into(), effort: None }
+    }
+
+    #[test]
+    fn the_choice_a_turn_ran_with_is_kept_in_its_meta_beside_what_the_page_showed() {
+        let db = Db::in_memory().unwrap();
+        db.begin_pip_turn("general", "q1", "Hi", &meta(Some("quoted"), 1), "running", "t1").unwrap();
+        db.set_pip_turn_model("q1", &pick("claude_2", "opus")).unwrap();
+        let turn = &db.pip_turns("general").unwrap()[0];
+        assert_eq!(turn.model, Some(pick("claude_2", "opus")));
+        assert_eq!((turn.quote.as_deref(), turn.image_count), (Some("quoted"), 1));
+        assert_eq!(serde_json::to_value(turn).unwrap()["model"]["instanceId"], "claude_2");
+    }
+
+    #[test]
+    fn a_conversation_s_last_choice_is_the_latest_turn_that_kept_one_and_other_conversations_have_their_own() {
+        let db = Db::in_memory().unwrap();
+        assert_eq!(db.last_pip_model("general").unwrap(), None);
+        db.begin_pip_turn("general", "q1", "a", &TurnMeta::default(), "done", "t1").unwrap();
+        db.begin_pip_turn("general", "q2", "b", &TurnMeta::default(), "done", "t2").unwrap();
+        db.begin_pip_turn("general", "q3", "c", &TurnMeta::default(), "done", "t3").unwrap();
+        db.begin_pip_turn("ws:w1", "q4", "d", &TurnMeta::default(), "done", "t4").unwrap();
+        db.set_pip_turn_model("q1", &pick("claude", "sonnet")).unwrap();
+        db.set_pip_turn_model("q2", &pick("claude_2", "opus")).unwrap();
+        db.set_pip_turn_model("q4", &pick("claude", "haiku")).unwrap();
+        assert_eq!(db.last_pip_model("general").unwrap(), Some(pick("claude_2", "opus")), "q3 kept none");
+        assert_eq!(db.last_pip_model("ws:w1").unwrap(), Some(pick("claude", "haiku")));
+    }
+
+    #[test]
+    fn a_wake_keeps_its_choice_when_more_facts_are_merged_into_it() {
+        let db = Db::in_memory().unwrap();
+        let fact = |run: &str| (run.to_string(), "k".to_string());
+        db.begin_pip_wake("ws:w1", "wake-1", "lines", &[fact("r1")], "running", "t1").unwrap();
+        db.set_pip_turn_model("wake-1", &pick("claude", "sonnet")).unwrap();
+        db.set_pip_wake("wake-1", "more lines", &[fact("r1"), fact("r2")]).unwrap();
+        assert_eq!(db.last_pip_model("ws:w1").unwrap(), Some(pick("claude", "sonnet")));
+        let turn = &db.pip_turns("ws:w1").unwrap()[0];
+        assert_eq!(turn.prompt, "more lines");
+        let wakes: WakeMeta = serde_json::from_str(&db.conn.query_row("SELECT meta FROM pip_turns WHERE request_id = 'wake-1' AND role = 'wake'", [], |r| r.get::<_, String>(0)).unwrap()).unwrap();
+        assert_eq!(wakes.wakes, [fact("r1"), fact("r2")]);
     }
 
     #[test]
