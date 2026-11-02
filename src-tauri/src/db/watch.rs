@@ -1,11 +1,11 @@
 //! What each connection follows, and the catalog of containers it could follow.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension};
 
 use super::Db;
-use crate::domain::{ContainerRef, ContainerSummary, Visible, Watch, WatchChange, WatchMode, WatchSet, WatchSource};
+use crate::domain::{ContainerRef, ContainerSummary, Watch, WatchChange, WatchMode, WatchSet, WatchSource};
 use crate::error::Result;
 
 /// `col IN (?, ?, …)` over `n` ids, or a clause that never matches when there are none.
@@ -138,16 +138,6 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Keys of the items in the visible containers, or `None` when every item is visible.
-    pub fn visible_keys(&self, connection_id: &str, visible: &Visible) -> Result<Option<HashSet<String>>> {
-        let Visible::Only(ids) = visible else { return Ok(None) };
-        let sql = format!("SELECT key FROM items WHERE connection_id = ? AND {}", in_list("container_id", ids.len()));
-        let mut stmt = self.conn.prepare(&sql)?;
-        let args = std::iter::once(connection_id).chain(ids.iter().map(String::as_str));
-        let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(0))?;
-        Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
-    }
-
     /// Adds or refreshes catalog entries as the tracker listed them.
     pub fn catalog_upsert(&self, connection_id: &str, entries: &[ContainerSummary], seen_at: &str) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
@@ -188,6 +178,7 @@ impl Db {
 mod tests {
     use super::*;
     use crate::domain::fixtures::work_item;
+    use crate::domain::Visible;
 
     const C: &str = "c";
 
@@ -311,20 +302,17 @@ mod tests {
         let mut left: Vec<String> = db.items_synced_since(C, "", &Visible::All).unwrap().into_iter().map(|i| i.item.external_id).collect();
         left.sort();
         assert_eq!(left, ["1", "3"]);
-        assert_eq!(db.activity("").unwrap().len(), 1, "the person's own history stays");
+        assert_eq!(db.conn.query_row("SELECT count(*) FROM activity", [], |r| r.get::<_, i64>(0)).unwrap(), 1, "the person's own history stays");
     }
 
     #[test]
-    fn counts_and_visible_keys_follow_the_visible_containers() {
+    fn counts_follow_the_containers() {
         let db = Db::in_memory().unwrap();
         item_in(&db, "1", "A", "t");
         item_in(&db, "2", "A", "t");
         item_in(&db, "3", "B", "t");
         assert_eq!(db.item_counts(C).unwrap().get("A"), Some(&2));
-        assert_eq!(db.visible_keys(C, &Visible::All).unwrap(), None);
-        let only_b = db.visible_keys(C, &Visible::Only(vec!["B".into()])).unwrap().unwrap();
-        assert_eq!(only_b.len(), 1);
-        assert!(db.visible_keys(C, &Visible::Only(vec![])).unwrap().unwrap().is_empty());
+        assert_eq!(db.item_counts(C).unwrap().get("B"), Some(&1));
     }
 
     #[test]

@@ -276,6 +276,8 @@ export interface WorkEvent {
 export interface FeedCursor {
   at: string;
   id: string;
+  /** Breaks a tie between the same event on two connections. Sent back as received. */
+  connectionId?: string;
 }
 
 /** What a feed shows, mirroring src-tauri/src/domain/event.rs. No kinds means every kind. */

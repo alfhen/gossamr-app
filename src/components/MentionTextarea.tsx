@@ -3,7 +3,7 @@ import { filesIn } from "../lib/attachments";
 import { activeQuery, insertMention, rankPeople, segments, type ActiveQuery, type Mention } from "../lib/mentions";
 import { useBackend } from "../backend/useBackend";
 import { useAutoHeight } from "./autoHeight";
-import type { Person } from "../types";
+import type { ItemRef, Person } from "../types";
 import { Avatar } from "./primitives";
 
 const SEARCH_DELAY_MS = 150;
@@ -17,7 +17,7 @@ export function MentionTextarea({
   value,
   mentions,
   onChange,
-  ticketKey,
+  item,
   people,
   placeholder,
   label,
@@ -32,7 +32,8 @@ export function MentionTextarea({
   value: string;
   mentions: Mention[];
   onChange: (value: string, mentions: Mention[]) => void;
-  ticketKey: string;
+  /** What the comment is about, which decides who is suggested. A new ticket has an empty `externalId`. */
+  item: ItemRef;
   /** People on the ticket, suggested first. */
   people: Person[];
   placeholder?: string;
@@ -52,33 +53,34 @@ export function MentionTextarea({
   const mirror = useRef<HTMLDivElement>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const [query, setQuery] = useState<ActiveQuery | null>(null);
-  // Tagged with its ticket, so people found for one ticket are never offered on another.
-  const [remote, setRemote] = useState<{ ticketKey: string; people: Person[] }>({ ticketKey, people: [] });
+  // Tagged with its item, so people found for one item are never offered on another.
+  const target = `${item.connectionId}:${item.externalId}`;
+  const [remote, setRemote] = useState<{ target: string; people: Person[] }>({ target, people: [] });
   const [index, setIndex] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   useAutoHeight(ref, value, !!fill);
 
   const suggestions = useMemo(() => {
     if (!query) return [];
-    const found = remote.ticketKey === ticketKey ? remote.people : [];
+    const found = remote.target === target ? remote.people : [];
     return rankPeople([...people, ...found], query.query);
-  }, [query, people, remote, ticketKey]);
+  }, [query, people, remote, target]);
   const open = !!query && suggestions.length > 0;
 
   useEffect(() => {
-    if (!query || !backend || query.query.length === 0) return setRemote({ ticketKey, people: [] });
+    if (!query || !backend || query.query.length === 0) return setRemote({ target, people: [] });
     let live = true;
     const t = setTimeout(() => {
       backend
-        .mentionable(ticketKey, query.query)
-        .then((found) => live && setRemote({ ticketKey, people: found }))
-        .catch(() => live && setRemote({ ticketKey, people: [] }));
+        .mentionable(item, query.query)
+        .then((found) => live && setRemote({ target, people: found }))
+        .catch(() => live && setRemote({ target, people: [] }));
     }, SEARCH_DELAY_MS);
     return () => {
       live = false;
       clearTimeout(t);
     };
-  }, [query?.query, ticketKey, backend]);
+  }, [query?.query, target, backend]);
 
   useLayoutEffect(() => {
     if (!open || !anchor.current || !ref.current) return setPos(null);
