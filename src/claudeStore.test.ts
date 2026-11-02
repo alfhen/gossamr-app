@@ -369,21 +369,54 @@ describe("the model a conversation runs on", () => {
   beforeEach(() => forgetConversations());
   afterEach(() => vi.restoreAllMocks());
 
-  it("sends the choice with the question and keeps it on the turn", async () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  const turn = (id: string, conversation = "general") => useClaude.getState().byTicket[conversation].turns.find((t) => t.requestId === id)!;
+
+  it("sends the choice with the question", async () => {
     const sent: AskRequest[] = [];
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
     useClaude.getState().choose("general", opus);
     await useClaude.getState().ask("general", "hi", null, screen);
     expect(sent[0].model).toEqual(opus);
-    expect(useClaude.getState().byTicket.general.turns[0].model).toEqual(opus);
   });
 
-  it("sends no choice for a conversation where none was picked, so the app uses the Settings default", async () => {
+  it("sends the Settings default the header shows for a conversation where none was picked", async () => {
     const sent: AskRequest[] = [];
+    const standing = { instanceId: "claude", model: "sonnet", effort: "medium" };
     vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
+    useClaude.getState().setFallback(standing);
     useClaude.getState().choose("ws:w1", opus);
     await useClaude.getState().ask("general", "hi", null, screen);
-    expect(sent[0]).not.toHaveProperty("model");
+    expect(sent[0].model).toEqual(standing);
+    useClaude.getState().setFallback(null);
+    await useClaude.getState().ask("general", "again", null, screen);
+    expect(sent[1]).not.toHaveProperty("model");
+  });
+
+  it("gives a turn its model only once it has started, so a refused turn has none", async () => {
+    vi.spyOn(claude, "ask").mockImplementation(async () => started);
+    useClaude.getState().choose("general", opus);
+    await useClaude.getState().ask("general", "refused", null, screen);
+    const id = useClaude.getState().byTicket.general.turns[0].requestId;
+    expect(turn(id).model).toBeUndefined();
+    onClaudeEvent(id, { type: "done", sessionId: null, ok: false, message: "Claude work isn't signed in" });
+    await flush();
+    expect(turn(id).model).toBeUndefined();
+
+    await useClaude.getState().ask("general", "runs", null, screen);
+    const ran = useClaude.getState().byTicket.general.turns[1].requestId;
+    vi.spyOn(claude, "turns").mockResolvedValue([stored(ran, { model: opus })]);
+    onClaudeEvent(ran, { type: "started", sessionId: "s1" });
+    await flush();
+    expect(turn(ran).model).toEqual(opus);
+  });
+
+  it("shows the model a wake turn started on, which the page never chose", async () => {
+    const haiku = { instanceId: "claude", model: "haiku" };
+    vi.spyOn(claude, "turns").mockResolvedValue([stored("wake-9", { conversation: "ws:w1", kind: "wake", model: haiku })]);
+    onClaudeEvent("wake-9", { type: "started", sessionId: "s1" }, { conversation: "ws:w1", kind: "wake", prompt: "[Event] run r9 Done" });
+    await flush();
+    expect(turn("wake-9", "ws:w1").model).toEqual(haiku);
   });
 
   it("starts from what the last stored turn ran on", async () => {

@@ -29,7 +29,7 @@ export interface Turn {
   at?: string;
   /** When Pip began on it after it waited in the queue, as an ISO time. */
   startedAt?: string;
-  /** The instance and model it ran with, or was asked to run with when the person had picked one. */
+  /** The instance and model it ran with. Set once the turn has started, so a turn that was refused has none. */
   model?: ModelChoice;
 }
 
@@ -44,8 +44,12 @@ interface ClaudeState {
   byTicket: Record<string, Conversation>;
   /** The instance and model each conversation's next turns run on, once one is known: picked, or the last that ran. Without one the Settings default applies. */
   choices: Record<string, ModelChoice>;
+  /** What a question runs on in a conversation with no choice yet: the Settings default, as Pip's header shows it. */
+  fallback: ModelChoice | null;
   /** Sets what the conversation's next turns run on. */
   choose(ticketKey: string, choice: ModelChoice): void;
+  /** Sets the choice a question takes when the conversation has none. */
+  setFallback(choice: ModelChoice | null): void;
   ask(ticketKey: string, prompt: string, sessionId: string | null, context: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[]; shown?: string }): Promise<void>;
   /** Stops the turn being answered in the conversation. Turns queued behind it stay queued. */
   cancel(ticketKey: string): void;
@@ -153,16 +157,21 @@ export function mergeStored(conv: Conversation, stored: StoredTurn[]): Conversat
 export const useClaude = create<ClaudeState>()((set, get) => ({
   byTicket: {},
   choices: {},
+  fallback: null,
 
   choose(ticketKey, choice) {
     set({ choices: { ...get().choices, [ticketKey]: choice } });
+  },
+
+  setFallback(choice) {
+    set({ fallback: choice });
   },
 
   async ask(ticketKey, prompt, sessionId, context, extra = {}) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
     const { images = [], ...shown } = extra;
-    const model = get().choices[ticketKey];
+    const model = get().choices[ticketKey] ?? get().fallback ?? undefined;
     const turn: Turn = {
       requestId,
       prompt,
@@ -171,7 +180,6 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       status: "running",
       error: null,
       at: new Date().toISOString(),
-      ...(model ? { model } : {}),
       ...shown,
       ...(images.length ? { images: images.map(({ id, url, width, height }) => ({ id, url, width, height })) } : {}),
     };
@@ -287,6 +295,21 @@ function settle(requestId: string) {
     });
 }
 
+/** Shows the instance and model turn `requestId` runs on, as its stored turn has them once it started. */
+function readTurnModel(requestId: string) {
+  const conversation = conversationOf(requestId);
+  if (!conversation) return;
+  const mine = generation;
+  void claude
+    .turns(conversation)
+    .catch(() => [] as StoredTurn[])
+    .then((stored) => {
+      const model = stored.find((t) => t.requestId === requestId)?.model;
+      if (!model || mine !== generation) return;
+      updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId ? { ...t, model } : t)) }));
+    });
+}
+
 /**
  * A wake turn the page hears of for the first time, in its conversation: a turn of its own with the event lines as its
  * prompt, when the event says them; otherwise they are read from the stored turn.
@@ -334,6 +357,7 @@ export function onClaudeEvent(requestId: string, e: ClaudeEvent, meta?: EventMet
     readWakePrompt(requestId, meta.conversation!);
   }
   updateByRequest(requestId, (c) => applyEvent(c, requestId, e));
+  if (e.type === "started") readTurnModel(requestId);
   if (e.type === "done" && restoredLive.has(requestId)) settle(requestId);
 }
 

@@ -23,14 +23,14 @@ const menu = (over: Partial<Parameters<typeof ModelMenu>[0]> = {}) =>
 
 describe("ModelPicker", () => {
   it("names the instance and model it runs on in the trigger and keeps the list closed", () => {
-    const html = renderToStaticMarkup(<ModelPicker instances={[work]} models={models} value={value} onChange={noop} onAddModel={async () => {}} />);
+    const html = renderToStaticMarkup(<ModelPicker instances={[work]} models={models} value={value} onChange={noop} onAddModel={async () => []} />);
     expect(html).toContain("Claude work · Sonnet");
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('role="menu"');
   });
 
   it("says to choose a model when the choice names an instance that is gone", () => {
-    const html = renderToStaticMarkup(<ModelPicker instances={[work]} models={models} value={{ instanceId: "removed", model: "opus" }} onChange={noop} onAddModel={async () => {}} />);
+    const html = renderToStaticMarkup(<ModelPicker instances={[work]} models={models} value={{ instanceId: "removed", model: "opus" }} onChange={noop} onAddModel={async () => []} />);
     expect(html).toContain("Choose a model");
   });
 });

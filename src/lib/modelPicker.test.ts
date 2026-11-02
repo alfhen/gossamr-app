@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectionInfo, ProbeSnapshot } from "../types";
-import { choiceLabel, movesTo, pickerInstances, pipModels, switchingLine, unavailableReason } from "./modelPicker";
+import { choiceLabel, listedId, movesTo, pickerInstances, pipModels, switchingLine, unavailableReason } from "./modelPicker";
 
 const status = (state: ProbeSnapshot["state"]): ProbeSnapshot => ({ installed: true, version: null, state, account: null, activeLogin: null, message: "", detail: null, fix: null, checkedAt: "" });
 const row = (over: Partial<ConnectionInfo>): ConnectionInfo => ({ id: "claude", instanceId: "claude", displayName: "Claude", enabled: true, kind: "provider", driver: "claude", workspace: "", url: "", account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: status("ready"), rechecking: false, ...over });
@@ -14,6 +14,14 @@ describe("unavailableReason", () => {
     expect(unavailableReason(row({ enabled: false }))).toBe("Off");
     expect(unavailableReason(row({ status: status("notSignedIn") }))).toBe("Not signed in");
     expect(unavailableReason(row({ status: status("notFound") }))).toBe("Not installed");
+  });
+
+  it("says a Claude whose probe ended in error needs attention", () => {
+    expect(unavailableReason(row({ status: status("error") }))).toBe("Needs attention");
+  });
+
+  it("lets a Claude that has not been probed yet run, as a launch does not wait for the probe", () => {
+    expect(unavailableReason(row({ status: null }))).toBeNull();
   });
 
   it("says Pip can't run on Codex yet", () => {
@@ -75,5 +83,18 @@ describe("movesTo", () => {
 
   it("is none without a choice", () => {
     expect(movesTo(instances, null, "claude", "claude")).toBeUndefined();
+  });
+});
+
+describe("listedId", () => {
+  const listed = [{ id: "opus", label: "Opus" }, { id: "claude-next-1", label: "claude-next-1" }];
+
+  it("gives the listed spelling of an id typed in another case", () => {
+    expect(listedId(listed, "Opus")).toBe("opus");
+    expect(listedId(listed, "CLAUDE-NEXT-1")).toBe("claude-next-1");
+  });
+
+  it("is none for an id Pip's list leaves out, such as default", () => {
+    expect(listedId(pipModels([{ id: "default", label: "Default" }, ...listed]), "default")).toBeNull();
   });
 });

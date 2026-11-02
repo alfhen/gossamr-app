@@ -22,10 +22,10 @@ function useOptions() {
     try {
       const [connections, defaults] = await Promise.all([backend.connectionsList(), backend.modelDefaults()]);
       const instances = pickerInstances(connections);
-      const lists = await Promise.all(instances.map((i) => (i.unavailable ? Promise.resolve([]) : backend.providerModels(i.id).then(pipModels, () => []))));
+      const lists = await Promise.all(instances.map((i) => backend.providerModels(i.id).then(pipModels, () => [])));
       setOptions({ instances, models: Object.fromEntries(instances.map((i, at) => [i.id, lists[at]])), defaults });
     } catch {
-      // The header still shows the choice without names; Settings reports what is wrong with a provider.
+      // Settings reports what is wrong with a provider; the list stays as it was.
     }
   }, [backend]);
   useEffect(() => {
@@ -40,8 +40,10 @@ export function usePipModel(conversation: string): { picker: ModelPickerProps; n
   const { instances, models, defaults, backend, read } = useOptions();
   const chosen = useClaude((s) => s.choices[conversation]);
   const ranOn = useClaude((s) => [...(s.byTicket[conversation]?.turns ?? [])].reverse().find((t) => t.model)?.model?.instanceId);
+  const fallback = defaults?.pip ?? null;
+  useEffect(() => useClaude.getState().setFallback(fallback), [fallback]);
   if (!backend) return null;
-  const value: ModelChoice | null = chosen ?? defaults?.pip ?? null;
+  const value: ModelChoice | null = chosen ?? fallback;
   const target = movesTo(instances, value, ranOn, defaults?.pip?.instanceId);
   return {
     picker: {
@@ -49,9 +51,12 @@ export function usePipModel(conversation: string): { picker: ModelPickerProps; n
       models,
       value,
       onChange: (choice) => useClaude.getState().choose(conversation, choice),
+      name: "Your next message to Pip runs on",
+      title: "Choose the Claude and model for your next message to Pip",
       onAddModel: async (instanceId, model) => {
-        await backend.providerAddModel(instanceId, model);
+        const listed = await backend.providerAddModel(instanceId, model);
         await read();
+        return pipModels(listed);
       },
       ...(providersVisible() ? { onManage: () => useTabs.getState().openSettings("connections") } : {}),
     },

@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { MODEL_ID_LIMIT, validModelId } from "../lib/models";
-import { choiceLabel, type PickerInstance } from "../lib/modelPicker";
+import { choiceLabel, listedId, type PickerInstance } from "../lib/modelPicker";
 import { usePopover } from "../workspace/Popover";
 import type { ModelChoice, ModelOption } from "../types";
 import { Button } from "./Button";
@@ -11,12 +11,16 @@ export interface ModelPickerProps {
   models: Readonly<Record<string, readonly ModelOption[]>>;
   value: ModelChoice | null;
   onChange(choice: ModelChoice): void;
-  /** Adds an id to the instance's list. A refusal is shown under the field. */
-  onAddModel(instanceId: string, model: string): Promise<void>;
+  /** Adds an id to the instance's list and returns the list the instance offers now. A refusal is shown under the field. */
+  onAddModel(instanceId: string, model: string): Promise<readonly ModelOption[]>;
   /** Opens Settings › Connections. Without it the last entry is left out. */
   onManage?(): void;
   /** What the trigger says when `value` names no listed instance. */
   empty?: string;
+  /** What the choice is for, as the trigger and the list name it to a screen reader: "<name> <instance> · <model>". */
+  name?: string;
+  /** The trigger's tooltip. */
+  title?: string;
 }
 
 const ID_RULE = `Use letters, digits and . _ - [ ], starting with a letter or digit, up to ${MODEL_ID_LIMIT} characters.`;
@@ -24,7 +28,7 @@ const ID_RULE = `Use letters, digits and . _ - [ ], starting with a letter or di
 const items = (menu: HTMLElement) => Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"], [data-menu-action]'));
 
 /** A popover list of instances and their models, with Add model… for the chosen instance. */
-export function ModelPicker({ instances, models, value, onChange, onAddModel, onManage, empty = "Choose a model" }: ModelPickerProps) {
+export function ModelPicker({ instances, models, value, onChange, onAddModel, onManage, empty = "Choose a model", name = "Runs on", title = "Choose the Claude and model" }: ModelPickerProps) {
   const { open, setOpen, root } = usePopover();
   const [adding, setAdding] = useState(false);
   const [id, setId] = useState("");
@@ -39,7 +43,9 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
     setProblem(null);
   }, [open]);
   useEffect(() => {
-    if (open) root.current?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"], [role="menuitemradio"]')?.focus();
+    if (!open) return;
+    const radio = (checked: string) => root.current?.querySelector<HTMLElement>(`[role="menuitemradio"]${checked}`);
+    (radio('[aria-checked="true"]') ?? radio(""))?.focus();
   }, [open, root]);
   useEffect(() => {
     if (adding) root.current?.querySelector<HTMLElement>(`#${CSS.escape(field)}`)?.focus();
@@ -67,11 +73,12 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
     ev.preventDefault();
     const model = id.trim();
     if (!validModelId(model)) return setProblem(ID_RULE);
-    if (!value) return;
+    if (!value) return setProblem("Choose a model first.");
     setBusy(true);
     try {
-      await onAddModel(value.instanceId, model);
-      pick(value.instanceId, model);
+      const listed = listedId(await onAddModel(value.instanceId, model), model);
+      if (!listed) return setProblem(`${model} isn't a model you can pick here.`);
+      pick(value.instanceId, listed);
     } catch (e) {
       setProblem(e instanceof Error ? e.message : String(e));
     } finally {
@@ -81,7 +88,7 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
 
   return (
     <div ref={root} className="relative flex min-w-0" data-model-picker>
-      <Button variant="quiet" size="sm" data-popover-trigger aria-haspopup="menu" aria-expanded={open} aria-label={`Pip runs on ${label}`} title="Choose the Claude and model Pip runs on" className="max-w-full -ml-1.5 !px-1.5 text-xs" onClick={() => setOpen(!open)}>
+      <Button variant="quiet" size="sm" data-popover-trigger aria-haspopup="menu" aria-expanded={open} aria-label={`${name} ${label}`} title={title} className="max-w-full -ml-1.5 !px-1.5 text-xs" onClick={() => setOpen(!open)}>
         <span className="truncate">{label}</span>
         <span aria-hidden className="text-ws-ink3">
           ▾
@@ -89,6 +96,7 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
       </Button>
       {open && (
         <ModelMenu
+          name={name}
           instances={instances}
           models={models}
           value={value}
@@ -114,6 +122,7 @@ interface AddState {
 }
 
 export interface ModelMenuProps extends Pick<ModelPickerProps, "instances" | "models" | "value"> {
+  name?: string;
   onPick(instanceId: string, model: string): void;
   onKeyDown?(ev: KeyboardEvent<HTMLElement>): void;
   onManage?(): void;
@@ -121,18 +130,18 @@ export interface ModelMenuProps extends Pick<ModelPickerProps, "instances" | "mo
 }
 
 /** The open list: each instance with its models, Add model… under the chosen one, and a way to Settings. */
-export function ModelMenu({ instances, models, value, onPick, onKeyDown, onManage, add }: ModelMenuProps) {
+export function ModelMenu({ name = "Runs on", instances, models, value, onPick, onKeyDown, onManage, add }: ModelMenuProps) {
   const row = "block w-full rounded-md px-2 py-1 text-left ws-glass-item";
   const selected = "[background:linear-gradient(var(--color-ws-sel),var(--color-ws-sel)),var(--glass-lens)] font-semibold";
   return (
-    <div role="menu" aria-label="Pip runs on" onKeyDown={onKeyDown} className="absolute top-full left-0 z-40 mt-1 w-[260px] ws-pop rounded-xl border border-ws-sep2 bg-ws-win p-1.5 text-sm text-ws-ink shadow-ws-pop">
+    <div role="menu" aria-label={name} onKeyDown={onKeyDown} className="absolute top-full left-0 z-40 mt-1 w-[260px] ws-glass ws-glass-regular ws-pop rounded-xl p-1.5 text-sm text-ws-ink">
       {instances.map((instance) => {
         const chosen = value?.instanceId === instance.id;
         return (
           <div key={instance.id} role="group" aria-label={instance.name}>
-            <div className="flex items-baseline gap-2 px-2 pt-1.5 pb-1 font-semibold text-ws-ink2">
+            <div className={`flex items-baseline gap-2 px-2 pt-1.5 pb-1 font-semibold ${instance.unavailable ? "text-ws-ink3" : "text-ws-ink"}`}>
               <span className="truncate">{instance.name}</span>
-              {instance.unavailable && <span className="ml-auto shrink-0 font-normal text-ws-ink3">{instance.unavailable}</span>}
+              {instance.unavailable && <span className="ml-auto shrink-0 font-normal text-ws-ink2">{instance.unavailable}</span>}
             </div>
             {!instance.unavailable &&
               (models[instance.id] ?? []).map((m) => {
