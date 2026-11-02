@@ -62,10 +62,10 @@ describe("Where agents work in Settings", () => {
   });
 
   it("warns when the person's git settings choose an address by folder", () => {
-    expect(INCLUDE_IF_WARNING).toBe("Your git settings choose an address by folder. Add a rule for ~/Gossamr/agents/<owner>/ to use it in Gossamr's clones too.");
+    expect(INCLUDE_IF_WARNING).toBe("Your git settings have rules that pick settings by folder. If one of them sets user.email, add a rule for ~/Gossamr/agents/<owner>/ to use that address in Gossamr's clones too.");
     const html = withGit(folder({ includeIf: true }));
     expect(html).toContain("data-include-if");
-    expect(html).toContain("Add a rule for ~/Gossamr/agents/&lt;owner&gt;/ to use it in Gossamr&#x27;s clones too.");
+    expect(html).toContain("add a rule for ~/Gossamr/agents/&lt;owner&gt;/ to use that address in Gossamr&#x27;s clones too.");
     expect(html).not.toMatch(/data-include-if[^>]*text-ws-warn/);
   });
 

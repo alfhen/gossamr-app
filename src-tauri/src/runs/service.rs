@@ -393,13 +393,13 @@ impl RunService {
         if !Self::startable(&run, retry) {
             return Ok((run, false));
         }
-        match prepared {
-            Ok(who) => self.record_identity(&mut run, who).await?,
+        let who = match prepared {
+            Ok(who) => who,
             Err(why) => {
                 self.fail(&mut run, &why).await?;
                 return Ok((run, true));
             }
-        }
+        };
         self.settle_clone_path(&mut run).await?;
         // Starting a run an earlier release queued on its own is the person's approval of it; without this, one sent to
         // wait for a slot would never pass `workstream_runs`.
@@ -411,6 +411,7 @@ impl RunService {
             self.wait_for_slot(&mut run).await?;
             return Ok((run, false));
         }
+        self.record_identity(&mut run, who).await?;
         if retry {
             match self.find_session(&run).await {
                 Ok(Some(found)) => {
@@ -552,11 +553,8 @@ impl RunService {
         if run.state != RunState::Queued || !self.may_start(&run).await {
             return Ok(false);
         }
-        let skipped = match prepared {
-            Ok((done, who)) => {
-                self.record_identity(&mut run, who).await?;
-                !done
-            }
+        let (skipped, who) = match prepared {
+            Ok((done, who)) => (!done, who),
             Err(why) => {
                 self.fail(&mut run, &why).await?;
                 return Ok(true);
@@ -567,6 +565,7 @@ impl RunService {
             self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
+        self.record_identity(&mut run, who).await?;
         self.spawn(&mut run).await?;
         Ok(true)
     }

@@ -143,7 +143,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, work
   );
 }
 
-export const INCLUDE_IF_WARNING = "Your git settings choose an address by folder. Add a rule for ~/Gossamr/agents/<owner>/ to use it in Gossamr's clones too.";
+export const INCLUDE_IF_WARNING = "Your git settings have rules that pick settings by folder. If one of them sets user.email, add a rule for ~/Gossamr/agents/<owner>/ to use that address in Gossamr's clones too.";
 
 const LINE = "m-0 border-b border-ws-sep py-2.5 first:pt-0";
 
@@ -160,7 +160,7 @@ function WorkFolder({ git, onReveal }: { git: WorkFolderGit | null | undefined; 
   return (
     <div className="grid">
       <p className={`${LINE} text-ws-ink2`}>
-        Agents work in Gossamr&apos;s own clones in ~/Gossamr/agents, one per repository, each agent in its own worktree and branch. Gossamr clones a repository the first time an agent works on it, and fetches before each agent starts. Your clones in ~/Code and other folders aren&apos;t used or changed, so Claude Code, T3 Code and your own work there stay apart.
+        Agents work in Gossamr&apos;s own clones in ~/Gossamr/agents, one per repository, each agent in its own worktree and branch. Gossamr clones a repository the first time an agent works on it, and fetches when an agent starts, at most once every two minutes per repository. Your clones in ~/Code and other folders aren&apos;t used or changed, so Claude Code, T3 Code and your own work there stay apart.
       </p>
       {git === null && <p className={`${LINE} text-ws-ink2`}>Gossamr couldn&apos;t ask git who commits there.</p>}
       {git &&

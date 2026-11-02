@@ -140,6 +140,22 @@ async fn a_run_of_any_role_launches_in_the_persons_own_configuration_and_records
 }
 
 #[tokio::test]
+async fn a_run_waiting_for_a_slot_records_no_commit_address_until_it_launches() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let first = rig.queued(1).await;
+    rig.svc.launch(&first.id).await.unwrap();
+    std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();
+    let waiting = rig.queued(2).await;
+    rig.svc.launch(&waiting.id).await.unwrap();
+    assert!(rig.get(&waiting).await.slot_wait_since.is_some());
+    assert_eq!(rig.get(&waiting).await.commit_email, None);
+    rig.set(&first, |r| r.state = RunState::Done).await;
+    rig.svc.index.mark_terminal(&first.id).unwrap();
+    rig.svc.launch_waiting().await.unwrap();
+    assert_eq!(rig.get(&waiting).await.commit_email.as_deref(), Some("alf@acme.example"));
+}
+
+#[tokio::test]
 async fn a_retried_run_and_one_that_waited_for_a_slot_launch_the_same_way() {
     let rig = build(None, |s| s.with_cap(1)).await;
     rig.cli.with(|s| s.outcome = Outcome::Exits);
@@ -523,7 +539,8 @@ async fn retry_waits_for_a_session_still_listed_at_the_clone_root() {
     rig.svc.launch(&run.id).await.unwrap();
     let before = rig.cli.0.lock().unwrap().listings;
     let (adopted, ()) = tokio::join!(rig.svc.retry_launch(&run.id), async {
-        while rig.cli.0.lock().unwrap().listings <= before {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while rig.cli.0.lock().unwrap().listings <= before && std::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         rig.cli.settle();
