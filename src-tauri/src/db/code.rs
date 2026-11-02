@@ -1,9 +1,11 @@
 //! What a code host connection keeps: the last answer to each request, so polling can be conditional.
 
+use rusqlite::types::Value as Sql;
 use rusqlite::{params, OptionalExtension};
 
+use super::watch::in_list;
 use super::Db;
-use crate::domain::{CodeChange, DevLink, ItemRef, LinkSource};
+use crate::domain::{CodeChange, DevLink, ItemRef, LinkSource, Visible};
 use crate::error::Result;
 
 /// An answer to a GET and the validators it came with.
@@ -131,32 +133,53 @@ impl Db {
     /// The links stored for one work item, strongest first, then newest.
     pub fn dev_links(&self, item: &ItemRef) -> Result<Vec<DevLink>> {
         let mut stmt = self.conn.prepare(
-            "SELECT l.item_key, l.provenance, l.confidence, c.data FROM item_links l
+            "SELECT l.item_key, l.provenance, l.confidence, c.data,
+                    EXISTS (SELECT 1 FROM item_links o WHERE o.connection_id = l.connection_id AND o.code_id = l.code_id AND o.item_key = l.item_key
+                            AND o.item_connection_id <> l.item_connection_id)
+             FROM item_links l
              JOIN code_changes c ON c.connection_id = l.connection_id AND c.external_id = l.code_id
              WHERE l.item_connection_id = ?1 AND l.item_id = ?2 ORDER BY l.confidence DESC, c.updated_at DESC, c.external_id",
         )?;
         let rows = stmt.query_map(params![item.connection_id, item.external_id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?, r.get::<_, String>(3)?))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?, r.get::<_, String>(3)?, r.get::<_, bool>(4)?))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (key, provenance, confidence, data) = row?;
+            let (key, provenance, confidence, data, ambiguous) = row?;
             if let Ok(change) = serde_json::from_str(&data) {
                 out.push(DevLink {
                     item: ItemRef { connection_id: item.connection_id.clone(), external_id: item.external_id.clone(), key },
                     change,
                     provenance: LinkSource::parse(&provenance),
                     confidence: confidence as f32,
+                    ambiguous,
                 });
             }
         }
         Ok(out)
     }
 
-    /// What links are stored, to tell whether a rebuild changed any: `(item id, code id, provenance)`, sorted.
-    pub fn link_signature(&self, connection_id: &str) -> Result<Vec<(String, String, String)>> {
-        let mut stmt = self.conn.prepare("SELECT item_id, code_id, provenance FROM item_links WHERE connection_id = ?1 ORDER BY item_id, code_id")?;
-        let rows = stmt.query_map(params![connection_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    /// What links are stored, to tell whether a rebuild changed any: `(item connection, item id, code id, provenance)`,
+    /// sorted. A key two sites share has the same item id on each, so the connection is part of it.
+    pub fn link_signature(&self, connection_id: &str) -> Result<Vec<(String, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT item_connection_id, item_id, code_id, provenance FROM item_links WHERE connection_id = ?1 ORDER BY item_connection_id, item_id, code_id",
+        )?;
+        let rows = stmt.query_map(params![connection_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The keys of the connection's cached items in project `prefix`, within the watched containers.
+    pub fn item_keys_in(&self, connection_id: &str, prefix: &str, visible: &Visible) -> Result<Vec<String>> {
+        let head = format!("{}-", prefix.to_ascii_uppercase());
+        let mut sql = String::from("SELECT key FROM items WHERE connection_id = ? AND substr(key, 1, ?) = ?");
+        let mut args = vec![Sql::Text(connection_id.into()), Sql::Integer(head.chars().count() as i64), Sql::Text(head)];
+        if let Visible::Only(ids) = visible {
+            sql.push_str(&format!(" AND {}", in_list("container_id", ids.len())));
+            args.extend(ids.iter().map(|i| Sql::Text(i.clone())));
+        }
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -216,6 +239,7 @@ mod tests {
             change: c.clone(),
             provenance,
             confidence: provenance.confidence(),
+            ambiguous: false,
         }
     }
 
@@ -266,6 +290,64 @@ mod tests {
         assert!(db.dev_links(&item).unwrap().is_empty());
         let other = ItemRef { connection_id: "jira:other:me".into(), ..item };
         assert!(db.dev_links(&other).unwrap().is_empty(), "another connection's CA-1 is a different item");
+    }
+
+    #[test]
+    fn a_change_linked_to_the_same_key_on_two_connections_reads_back_ambiguous_on_each() {
+        let db = Db::in_memory().unwrap();
+        let (a, b) = (change(1, "acme/webshop", "2026-09-20T00:00:00Z"), change(2, "acme/webshop", "2026-09-25T00:00:00Z"));
+        db.upsert_code_changes(&[a.clone(), b.clone()], "t").unwrap();
+        let on = |connection: &str, mut l: DevLink| {
+            l.item.connection_id = connection.into();
+            l
+        };
+        let links = [
+            on("jira:one:me", link("CA-1", &a, LinkSource::Branch)),
+            on("jira:two:me", link("CA-1", &a, LinkSource::Branch)),
+            on("jira:one:me", link("CA-1", &b, LinkSource::Branch)),
+        ];
+        db.replace_item_links("github:ann", &links, "t").unwrap();
+        let read = |connection: &str| db.dev_links(&ItemRef { connection_id: connection.into(), external_id: "CA-1".into(), key: "CA-1".into() }).unwrap();
+        let (one, two) = (read("jira:one:me"), read("jira:two:me"));
+        let flags = |links: &[DevLink]| links.iter().map(|l| (l.change.number.unwrap(), l.ambiguous)).collect::<Vec<_>>();
+        assert_eq!(flags(&one), [(2, false), (1, true)]);
+        assert_eq!(flags(&two), [(1, true)]);
+    }
+
+    #[test]
+    fn a_link_that_moves_to_the_same_key_on_another_connection_changes_the_signature() {
+        let db = Db::in_memory().unwrap();
+        let a = change(1, "acme/webshop", "2026-09-20T00:00:00Z");
+        db.upsert_code_changes(std::slice::from_ref(&a), "t").unwrap();
+        let on = |connection: &str| {
+            let mut l = link("CA-1", &a, LinkSource::Branch);
+            l.item.connection_id = connection.into();
+            l
+        };
+        db.replace_item_links("github:ann", &[on("jira:one:me")], "t").unwrap();
+        let before = db.link_signature("github:ann").unwrap();
+        db.replace_item_links("github:ann", &[on("jira:two:me")], "t").unwrap();
+        assert_ne!(db.link_signature("github:ann").unwrap(), before);
+    }
+
+    #[test]
+    fn cached_item_keys_are_listed_by_project_and_limited_to_watched_containers() {
+        let db = Db::in_memory().unwrap();
+        let put = |id: &str, container: &str| {
+            let mut i = crate::domain::fixtures::work_item(id, "todo");
+            i.item.key = id.into();
+            i.container.external_id = container.into();
+            db.upsert_items(&[i], "t").unwrap();
+        };
+        put("TAF-1", "10");
+        put("TAF-2", "11");
+        put("TAFX-3", "10");
+        let connection = "c";
+        let mut all = db.item_keys_in(connection, "taf", &Visible::All).unwrap();
+        all.sort();
+        assert_eq!(all, ["TAF-1", "TAF-2"]);
+        assert_eq!(db.item_keys_in(connection, "TAF", &Visible::Only(vec!["11".into()])).unwrap(), ["TAF-2"]);
+        assert!(db.item_keys_in(connection, "TAF", &Visible::Only(vec![])).unwrap().is_empty());
     }
 
     #[test]

@@ -800,7 +800,7 @@ mod tests {
 
     fn link_pr(fx: &crate::inbox::testing::Fixture, number: u64) {
         let change = crate::codehost::links::tests::pr(number, "ca-1-fix-total", "Fix the total", "");
-        let linked = [crate::domain::DevLink { item: fx.item("CA-1"), change: change.clone(), provenance: crate::domain::LinkSource::Branch, confidence: 1.0 }];
+        let linked = [crate::domain::DevLink { item: fx.item("CA-1"), change: change.clone(), provenance: crate::domain::LinkSource::Branch, confidence: 1.0, ambiguous: false }];
         fx.core
             .with_code_db("github:ann", |db| {
                 db.upsert_code_changes(&[change], "2026-09-29T00:00:00Z")?;

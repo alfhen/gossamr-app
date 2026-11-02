@@ -30,7 +30,7 @@ const change = (over: Partial<CodeChange>): CodeChange => ({
   ...over,
 });
 
-const link = (over: Partial<CodeChange>): DevLink => ({ item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" }, change: change(over), provenance: "branch", confidence: 0.95 });
+const link = (over: Partial<CodeChange>): DevLink => ({ item: { connectionId: "mock", externalId: "CA-1", key: "CA-1" }, change: change(over), provenance: "branch", confidence: 0.95, ambiguous: false });
 
 describe("the state of a ticket's pull requests", () => {
   it("picks the most relevant state: open, then draft, merged, closed", () => {

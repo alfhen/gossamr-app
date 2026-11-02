@@ -273,7 +273,8 @@ pub fn compose(
                 r.key
             ));
             prs.iter().take(LINKED_PRS_SHOWN).for_each(|l| {
-                out.push_str(&format!("{}\n", super::github::change_line(&l.change)))
+                let note = if l.ambiguous { " (may belong to the same key on another site)" } else { "" };
+                out.push_str(&format!("{}{note}\n", super::github::change_line(&l.change)))
             });
             if prs.len() > LINKED_PRS_SHOWN {
                 out.push_str(&format!("…and {} more.\n", prs.len() - LINKED_PRS_SHOWN));
@@ -569,6 +570,7 @@ mod tests {
             change,
             provenance: crate::domain::LinkSource::Branch,
             confidence: 0.95,
+            ambiguous: false,
         }
     }
 
