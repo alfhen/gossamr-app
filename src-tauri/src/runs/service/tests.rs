@@ -140,6 +140,22 @@ async fn a_run_of_any_role_launches_in_the_persons_own_configuration_and_records
 }
 
 #[tokio::test]
+async fn a_run_waiting_for_a_slot_records_no_commit_address_until_it_launches() {
+    let rig = build(None, |s| s.with_cap(1)).await;
+    let first = rig.queued(1).await;
+    rig.svc.launch(&first.id).await.unwrap();
+    std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();
+    let waiting = rig.queued(2).await;
+    rig.svc.launch(&waiting.id).await.unwrap();
+    assert!(rig.get(&waiting).await.slot_wait_since.is_some());
+    assert_eq!(rig.get(&waiting).await.commit_email, None);
+    rig.set(&first, |r| r.state = RunState::Done).await;
+    rig.svc.index.mark_terminal(&first.id).unwrap();
+    rig.svc.launch_waiting().await.unwrap();
+    assert_eq!(rig.get(&waiting).await.commit_email.as_deref(), Some("alf@acme.example"));
+}
+
+#[tokio::test]
 async fn a_retried_run_and_one_that_waited_for_a_slot_launch_the_same_way() {
     let rig = build(None, |s| s.with_cap(1)).await;
     rig.cli.with(|s| s.outcome = Outcome::Exits);
@@ -513,20 +529,25 @@ async fn retry_adopts_the_session_a_garbled_launch_left_instead_of_starting_anot
 
 #[tokio::test]
 async fn retry_waits_for_a_session_still_listed_at_the_clone_root() {
-    let rig = ready().await;
+    // A grace no slow prepare can use up before the retry's first listing.
+    let rig = build(None, |s| s.with_timing(Timing { worktree_grace: Duration::from_secs(10), ..FAST })).await;
     rig.cli.with(|s| {
         s.outcome = Outcome::Garbled;
         s.lag = true;
     });
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
+    let before = rig.cli.0.lock().unwrap().listings;
     let (adopted, ()) = tokio::join!(rig.svc.retry_launch(&run.id), async {
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while rig.cli.0.lock().unwrap().listings <= before && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         rig.cli.settle();
     });
     assert_eq!(adopted.unwrap().short_id.as_ref().map(ShortId::as_str), Some("b0000001"));
     assert_eq!(rig.cli.launches(), 1, "no second session");
-    assert!(rig.cli.0.lock().unwrap().listings > 2);
+    assert!(rig.cli.0.lock().unwrap().listings > before + 1, "it listed again after the first listing showed the session at the clone root");
 }
 
 #[tokio::test]
@@ -1185,6 +1206,53 @@ mod clones {
         assert_eq!(after.state, RunState::Launching, "{:?}", after.error);
         assert!(after.in_work_folder);
         assert_eq!(rig.get(&run).await.spec.clone_path, lower.path);
+    }
+
+    #[tokio::test]
+    async fn a_launch_records_who_git_commits_as_inside_the_clone() {
+        let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();
+        std::fs::write(rig.clone.join(".fake-signingkey"), "ABC123\n").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        assert_eq!(run.state, RunState::Launching);
+        let stored = rig.get(&run).await;
+        assert_eq!((stored.commit_email.as_deref(), stored.signing_key.as_deref()), (Some("alf@acme.example"), Some("ABC123")));
+        assert!(git_log(&rig).lines().any(|l| l.contains(&format!("-C {} ", rig.clone.display())) && l.ends_with("config --get user.email")), "{}", git_log(&rig));
+    }
+
+    #[tokio::test]
+    async fn a_clone_where_git_has_no_address_leaves_the_run_without_one() {
+        let rig = ready().await;
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        let stored = rig.get(&run).await;
+        assert_eq!((stored.state, stored.commit_email, stored.signing_key), (RunState::Launching, None, None));
+    }
+
+    #[tokio::test]
+    async fn settings_say_who_git_commits_as_inside_a_clone_and_whether_rules_pick_it_by_folder() {
+        let rig = ready().await;
+        std::fs::write(rig.fx.dir.join(".fake-global-email"), "alf@global.example\n").unwrap();
+        let before = rig.svc.work_folder_git().await.unwrap();
+        assert_eq!((before.global_email.as_deref(), before.owners[0].commit_email.as_deref(), before.include_if), (Some("alf@global.example"), None, false));
+        std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();
+        std::fs::write(rig.fx.home.join(".fake-includeif"), "includeif.gitdir:~/Code/acme/.path ~/.gitconfig-acme\n").unwrap();
+        let found = rig.svc.work_folder_git().await.unwrap();
+        assert_eq!(found.owners.iter().map(|o| (o.owner.as_str(), o.commit_email.as_deref())).collect::<Vec<_>>(), vec![("acme", Some("alf@acme.example"))]);
+        assert!(!found.include_if, "a clone already gets another address than the global one");
+        let log = git_log(&rig);
+        assert!(log.contains(&format!("-C {} --no-optional-locks config --get user.email", rig.clone.display())), "{log}");
+        assert!(!log.contains(&format!("-C {} ", agents_root(&rig.svc.fresh_home().unwrap()).display())), "never ask git at the work folder itself: {log}");
+        assert!(!log.contains("/Code"), "never ask about the person's own clones: {log}");
+    }
+
+    #[tokio::test]
+    async fn revealing_the_work_folder_makes_it_when_it_is_missing_and_takes_no_path() {
+        let rig = ready().await;
+        let root = agents_root(&rig.svc.fresh_home().unwrap());
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(rig.svc.make_work_folder().unwrap(), root);
+        assert!(root.is_dir());
+        assert_eq!(rig.svc.make_work_folder().unwrap(), root, "it is fine when the folder is already there");
     }
 }
 

@@ -19,7 +19,7 @@ use super::failure::Failure;
 use super::index::{Entry, RunIndex};
 use super::launcher::RunLauncher;
 use super::fresh::is_work_path;
-use super::repo::{origin_matches, Git};
+use super::repo::{origin_matches, CommitIdentity, Git};
 use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
@@ -386,17 +386,20 @@ impl RunService {
     async fn start(&self, run_id: &str, retry: bool) -> Result<(Run, bool)> {
         let prepared = match self.load(run_id).await {
             Ok(listed) if Self::startable(&listed, retry) => self.prepare(&listed).await,
-            _ => Ok(()),
+            _ => Ok(None),
         };
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if !Self::startable(&run, retry) {
             return Ok((run, false));
         }
-        if let Err(why) = prepared {
-            self.fail(&mut run, &why).await?;
-            return Ok((run, true));
-        }
+        let who = match prepared {
+            Ok(who) => who,
+            Err(why) => {
+                self.fail(&mut run, &why).await?;
+                return Ok((run, true));
+            }
+        };
         self.settle_clone_path(&mut run).await?;
         // Starting a run an earlier release queued on its own is the person's approval of it; without this, one sent to
         // wait for a slot would never pass `workstream_runs`.
@@ -408,6 +411,7 @@ impl RunService {
             self.wait_for_slot(&mut run).await?;
             return Ok((run, false));
         }
+        self.record_identity(&mut run, who).await?;
         if retry {
             match self.find_session(&run).await {
                 Ok(Some(found)) => {
@@ -542,15 +546,15 @@ impl RunService {
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
         let prepared = match self.load(run_id).await {
             Ok(listed) if listed.state == RunState::Queued && self.may_start(&listed).await => self.prepare_if_free(&listed).await,
-            _ => Ok(true),
+            _ => Ok((true, None)),
         };
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if run.state != RunState::Queued || !self.may_start(&run).await {
             return Ok(false);
         }
-        let skipped = match prepared {
-            Ok(done) => !done,
+        let (skipped, who) = match prepared {
+            Ok((done, who)) => (!done, who),
             Err(why) => {
                 self.fail(&mut run, &why).await?;
                 return Ok(true);
@@ -561,6 +565,7 @@ impl RunService {
             self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
+        self.record_identity(&mut run, who).await?;
         self.spawn(&mut run).await?;
         Ok(true)
     }
@@ -568,11 +573,11 @@ impl RunService {
     /// `prepare` for a run that waits, unless it can't start anyway for want of a slot, or its repository's clone is
     /// being made or fetched into by someone else: that run stays queued, and the next pass finds the clone ready.
     /// This keeps a slow clone from holding up the runs on other repositories.
-    async fn prepare_if_free(&self, run: &Run) -> std::result::Result<bool, Failure> {
+    async fn prepare_if_free(&self, run: &Run) -> std::result::Result<(bool, Option<CommitIdentity>), Failure> {
         if self.live_elsewhere(run) >= self.cap() || self.clone_busy(&run.spec.repo) {
-            return Ok(false);
+            return Ok((false, None));
         }
-        self.prepare(run).await.map(|()| true)
+        self.prepare(run).await.map(|who| (true, who))
     }
 
     /// Whether a queued run is one `launch_waiting` may start: in an open workstream, or waiting for a slot.

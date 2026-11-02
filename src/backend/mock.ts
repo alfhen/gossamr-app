@@ -608,12 +608,20 @@ export class MockBackend implements Backend {
     if (isTauri()) await revealItemInDir(path);
   }
 
+  async runsRevealWorkFolder() {
+    this.runs.workFolderReveals += 1;
+  }
+
   async runsDisk(id: string) {
     return this.runs.disk(id);
   }
 
   async runsSettings() {
     return this.runs.settings();
+  }
+
+  async runsWorkFolderGit() {
+    return this.runs.workFolderGit();
   }
 
   async setNeedsBadge(_count: number) {}

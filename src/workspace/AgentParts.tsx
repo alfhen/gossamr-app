@@ -12,6 +12,7 @@ import { PermissionAsk } from "./PermissionAsk";
 import { useStateView } from "./useStateView";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, type Tone } from "./agentsLogic";
 import { Button } from "../components/Button";
+import { CommitsAs } from "./CommitsAs";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
   pip: { text: "text-ws-accent", soft: "bg-(--prominent)/12", color: "var(--prominent)" },
@@ -231,6 +232,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
           <p data-slot-wait={run.slotWaitSince ? "" : undefined} className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>
             {progressText(run, runs)}
           </p>
+          <CommitsAs run={run} />
           {quiet !== null && (
             <div className="flex flex-wrap items-center gap-2">
               <OpenInTerminal run={run} onOpen={onAttach} filled={false} />

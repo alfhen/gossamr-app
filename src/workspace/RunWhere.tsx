@@ -3,6 +3,7 @@ import type { Backend } from "../backend/types";
 import type { Run } from "../types";
 import { Btn, Box, CodeBox, Sec } from "./AgentSheet";
 import { branchOf } from "./agentsLogic";
+import { CommitsAs } from "./CommitsAs";
 import { formatBytes } from "./runSheetLogic";
 
 /** What the session's files take up, read when the sheet opens; null while loading and "unknown" when it can't be read. */
@@ -57,6 +58,7 @@ export function RunWhere({ run, disk, onReveal }: { run: Run; disk: number | nul
           {typeof disk === "number" && disk > 0 && <> Its session files take up {formatBytes(disk)}.</>}
           {disk === "unknown" && <> The size of its session files couldn&apos;t be read.</>}
         </p>
+        <CommitsAs run={run} />
       </Box>
     </Sec>
   );

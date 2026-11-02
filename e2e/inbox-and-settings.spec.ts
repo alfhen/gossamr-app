@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { agentsHome, openAgents, openApp, openPip, pipPane } from "./support/app";
 
 test.describe("Esc in Settings", () => {
@@ -40,6 +40,34 @@ test.describe("Settings", () => {
     await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agent settings");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("dialog", { name: "Agent settings" }).getByRole("checkbox", { name: "Notifications" })).not.toBeChecked();
+  });
+});
+
+test.describe("Where agents work", () => {
+  const openAgentSettings = async (page: Page) => {
+    await openAgents(page);
+    await page.keyboard.press("ControlOrMeta+k");
+    await page.getByRole("dialog", { name: "Command palette" }).getByRole("combobox").fill("agent settings");
+    await page.keyboard.press("Enter");
+    return page.getByRole("dialog", { name: "Agent settings" });
+  };
+
+  test("says where agents work and who git commits as there, and reveals the folder", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    const settings = await openAgentSettings(page);
+    const section = settings.locator("section", { has: page.getByRole("heading", { name: "Where agents work" }) });
+    await expect(section).toContainText("Agents work in Gossamr's own clones in ~/Gossamr/agents");
+    await expect(section.locator("[data-commit-address]")).toHaveText("In ~/Gossamr/agents/acme/ git commits as alf@acme.example.");
+    await expect(section.locator("[data-include-if]")).toHaveCount(0);
+    expect(await page.evaluate(() => globalThis.__gossamrMock?.workFolderReveals())).toBe(0);
+    await section.getByRole("button", { name: "Reveal in Finder" }).click();
+    await expect.poll(() => page.evaluate(() => globalThis.__gossamrMock?.workFolderReveals())).toBe(1);
+  });
+
+  test("warns when git settings choose an address by folder", async ({ page }) => {
+    await openApp(page, "runs=empty&runsGitRules=1");
+    const settings = await openAgentSettings(page);
+    await expect(settings.getByRole("note")).toHaveText("Your git settings have rules that pick settings by folder. If one of them sets user.email, add a rule for ~/Gossamr/agents/<owner>/ to use that address in Gossamr's clones too.");
   });
 });
 
