@@ -17,7 +17,8 @@ export interface MockProvider {
   displayName: string;
   enabled: boolean;
   configDir?: string;
-  probe: GithubProbeState;
+  /** `null` until the first check answers, as the desktop backend's row is when it is added. */
+  probe: GithubProbeState | null;
   checkedAt: string;
 }
 
@@ -54,11 +55,13 @@ function folderProblem(driver: Driver, typed: string, others: MockProvider[]): s
 function signInCommand(driver: Driver, folder?: string): string {
   if (!folder) return SIGN_IN[driver];
   const plain = /^[A-Za-z0-9._~/-]*$/.test(folder);
-  return `${FOLDER_VARIABLE[driver]}=${plain ? folder : `'${folder}'`} ${SIGN_IN[driver]}`;
+  const value = plain ? folder : folder.startsWith("~/") ? `~/'${folder.slice(2)}'` : `'${folder}'`;
+  return `${FOLDER_VARIABLE[driver]}=${value} ${SIGN_IN[driver]}`;
 }
 
 function snapshot(p: MockProvider) {
-  const state = p.enabled ? p.probe : "off";
+  if (p.enabled && p.probe === null) return null;
+  const state = p.enabled ? p.probe! : "off";
   const found = claudeSnapshot(state, p.checkedAt);
   if (p.driver === "claude") return state === "notSignedIn" ? { ...found, fix: signInCommand("claude", p.configDir) } : found;
   switch (state) {
@@ -93,6 +96,15 @@ export class MockProviders {
     for (const p of this.items) p.checkedAt = now;
   }
 
+  /** The first check of each added instance answers: signed out, the state a fresh folder is in. */
+  settle() {
+    for (const p of this.items) p.probe ??= "notSignedIn";
+  }
+
+  has(id: string): boolean {
+    return this.items.some((p) => p.id === id);
+  }
+
   add(driver: Driver, displayName: string, configDir?: string | null): MockProvider {
     const problem = nameProblem(displayName);
     if (problem) throw new Error(problem);
@@ -104,7 +116,7 @@ export class MockProviders {
       const usual = this.items.find((p) => p.driver === driver && !p.configDir);
       if (usual) throw new Error(`Your usual setup is already added as ${usual.displayName}.`);
     }
-    const added: MockProvider = { id: this.nextId(driver), driver, displayName: displayName.trim(), enabled: true, configDir: typed, probe: "notSignedIn", checkedAt: new Date().toISOString() };
+    const added: MockProvider = { id: this.nextId(driver), driver, displayName: displayName.trim(), enabled: true, configDir: typed, probe: null, checkedAt: new Date().toISOString() };
     this.items.push(added);
     return added;
   }

@@ -142,7 +142,7 @@ impl Core {
             ProviderState::Error(problem) => return Err(Error::Input(problem)),
             ProviderState::Unavailable(why) => return Err(Error::Input(why.message().into())),
         };
-        if self.provider_snapshot(instance_id).is_none_or(|s| s.state != State::NotSignedIn) {
+        if self.provider_snapshot_for(&instance).is_none_or(|s| s.state != State::NotSignedIn) {
             return Err(Error::Input("Gossamr opens Terminal to sign in only when the last check found you signed out. Check it again.".into()));
         }
         let binary = find_binary_from(self.home.as_deref(), instance.driver, &login.over(&shell)).ok_or_else(|| Error::Input(format!("`{}` isn't installed.", instance.driver.binary())))?;

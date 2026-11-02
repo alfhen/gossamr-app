@@ -4,25 +4,54 @@ import { MockBackend } from "./mock";
 const home = "/Users/sample";
 
 describe("adding a provider instance in the mock", () => {
-  it("lists it after the default with its folder as typed, signed out, and names the next id", async () => {
+  it("lists it after the default with its folder as typed, unchecked until the next list, and names the next id", async () => {
     const b = new MockBackend();
     const row = await b.providerAdd("claude", " Claude personal ", "~/.claude-personal");
-    expect(row).toMatchObject({ id: "claude_2", instanceId: "claude_2", kind: "provider", driver: "claude", displayName: "Claude personal", enabled: true, configDir: "~/.claude-personal" });
-    expect(row.status).toMatchObject({ state: "notSignedIn", fix: "CLAUDE_CONFIG_DIR=~/.claude-personal claude auth login" });
-    expect((await b.connectionsList()).filter((c) => c.kind === "provider").map((c) => c.instanceId)).toEqual(["claude", "claude_2"]);
+    expect(row).toMatchObject({ id: "claude_2", instanceId: "claude_2", kind: "provider", driver: "claude", displayName: "Claude personal", enabled: true, configDir: "~/.claude-personal", status: null });
+    const listed = (await b.connectionsList()).filter((c) => c.kind === "provider");
+    expect(listed.map((c) => c.instanceId)).toEqual(["claude", "claude_2"]);
+    expect(listed[1]!.status).toMatchObject({ state: "notSignedIn", fix: "CLAUDE_CONFIG_DIR=~/.claude-personal claude auth login" });
   });
 
   it("opens Terminal on the sign-in with the folder, and the default's has none", async () => {
     const b = new MockBackend({ claudeProbe: "notSignedIn" });
     await b.providerAdd("claude", "Work", "~/My Claude");
+    await b.connectionsList();
     await b.connectionOpenTerminal("claude_2");
     await b.connectionOpenTerminal("claude");
-    expect(b.terminals).toEqual(["CLAUDE_CONFIG_DIR='~/My Claude' claude auth login", "claude auth login"]);
+    expect(b.terminals).toEqual(["CLAUDE_CONFIG_DIR=~/'My Claude' claude auth login", "claude auth login"]);
+  });
+
+  it("quotes a folder with a space or a Codex folder outside ~ the way the desktop backend shows it", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("claude", "Work", "~/My Claude");
+    await b.providerAdd("codex", "Codex", `${home}/Code Work`);
+    const fixes = (await b.connectionsList()).flatMap((c) => (c.kind === "provider" && c.status?.fix ? [c.status.fix] : []));
+    expect(fixes).toEqual(["CLAUDE_CONFIG_DIR=~/'My Claude' claude auth login", `CODEX_HOME='${home}/Code Work' codex login`]);
+  });
+
+  it("refuses Terminal on a just-added instance until its first check has answered", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("claude", "Work", "~/.claude-work");
+    await expect(b.connectionOpenTerminal("claude_2")).rejects.toThrow("Check it again.");
+    expect(b.terminals).toEqual([]);
+    await b.connectionsList();
+    await b.connectionOpenTerminal("claude_2");
+    expect(b.terminals).toEqual(["CLAUDE_CONFIG_DIR=~/.claude-work claude auth login"]);
+  });
+
+  it("adds and signs in nothing while the providers list can't be read", async () => {
+    const b = new MockBackend({ claudeProbe: "notSignedIn" });
+    b.providersProblem = "Gossamr can't read the providers in config.json.";
+    await expect(b.providerAdd("claude", "Work", "~/.claude-work")).rejects.toThrow("can't add one");
+    await expect(b.connectionOpenTerminal("claude")).rejects.toThrow("can't read the providers");
+    expect(b.terminals).toEqual([]);
   });
 
   it("adds a Codex instance whose models are Codex's and whose sign-in is codex login", async () => {
     const b = new MockBackend();
-    const row = await b.providerAdd("codex", "Codex", "~/.codex-work");
+    const added = await b.providerAdd("codex", "Codex", "~/.codex-work");
+    const row = (await b.connectionsList()).find((c) => c.instanceId === added.instanceId)!;
     expect(row.status).toMatchObject({ state: "notSignedIn", message: "Not signed in to Codex.", fix: "CODEX_HOME=~/.codex-work codex login" });
     expect(row.id).toBe("codex");
     expect((await b.providerModels("codex")).length).toBeGreaterThan(0);

@@ -1206,17 +1206,19 @@ export class MockBackend implements Backend {
   }
 
   async providerAdd(driver: Driver, displayName: string, configDir?: string) {
+    if (this.providersProblem) throw new Error("Gossamr can't read the providers in config.json, so it can't add one. Fix the file first.");
     const added = this.providers.add(driver, displayName, configDir);
     this.connectionsListeners.forEach((l) => l());
     return this.providers.rows().find((r) => r.instanceId === added.id)!;
   }
 
   async connectionOpenTerminal(instanceId: string) {
-    const row = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
-    if (row?.kind === "provider") {
+    if (this.providers.has(instanceId)) {
+      if (this.providersProblem) throw new Error(this.providersProblem);
       this.terminals.push(this.providers.signIn(instanceId));
       return;
     }
+    const row = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     const fix = row?.status?.fix;
     if (!fix) throw new Error("There's nothing to run for this connection. Check it again.");
     this.terminals.push(fix);
@@ -1301,6 +1303,7 @@ export class MockBackend implements Backend {
       this.github.recheck();
       this.providers.touch();
     }
+    this.providers.settle();
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;

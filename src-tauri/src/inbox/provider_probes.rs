@@ -75,6 +75,12 @@ impl Core {
         self.provider_probes.answers.lock().expect("provider probe lock poisoned").get(instance_id).map(|a| a.snapshot.clone())
     }
 
+    /// The last answer for `instance`, only when it was taken for the folder the instance has now.
+    pub(super) fn provider_snapshot_for(&self, instance: &ProviderInstance) -> Option<Snapshot> {
+        let answers = self.provider_probes.answers.lock().expect("provider probe lock poisoned");
+        answers.get(&instance.id).filter(|a| a.folder == instance.config.config_dir).map(|a| a.snapshot.clone())
+    }
+
     /// A row just turned on must not keep reading Off while it is asked.
     pub(super) fn provider_answer_forget(&self, instance_id: &str) {
         self.provider_probes.answers.lock().expect("provider probe lock poisoned").remove(instance_id);
@@ -488,6 +494,19 @@ mod tests {
         fx.core.probe_providers(Probe::Refresh).await;
         let refused = fx.core.provider_signin("claude_2").await.unwrap_err().to_string();
         assert!(refused.starts_with("This folder can't be used: "), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_answer_about_one_folder_does_not_unlock_the_sign_in_of_another() {
+        let fx = fixture().await;
+        install_claude(&fx, OUT);
+        add(&fx, "claude_2", Some("~/.claude-a"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        assert!(fx.core.provider_signin("claude_2").await.is_ok());
+        AppConfig::update(&fx.core.data_dir(), |config| config.providers[1].config.config_dir = Some("~/.claude-b".into())).unwrap();
+        assert!(fx.core.provider_signin("claude_2").await.unwrap_err().to_string().contains("Check it again"));
+        fx.core.probe_providers(Probe::Refresh).await;
+        assert!(fx.core.provider_signin("claude_2").await.is_ok());
     }
 
     #[tokio::test]
