@@ -615,10 +615,6 @@ impl AgentService {
         images::validate(&req.images)?;
         let choice = self.core.pip_choice(&req.conversation, req.model.clone()).await?;
         let (instance, launch) = self.core.pip_launch(choice.as_ref(), |shell| self.provider.find(shell)).await?;
-        // Kept only once the turn can run, so a refused choice never becomes the conversation's last one.
-        if let Some(choice) = &choice {
-            recorded(self.core.pip_turn_model(&scope, &req.request_id, choice).await);
-        }
         // A turn in a workstream's conversation works in that workstream, which must be an open one of this account.
         let mut workstream = match workstream_of_conversation(&req.conversation) {
             Some(id) => Some(workstream::for_turn(&self.core, &scope, id).await?),
@@ -694,6 +690,10 @@ impl AgentService {
                 return Err(e);
             }
         };
+        // Kept only once the provider has started the turn, so a refused choice never becomes the conversation's last one.
+        if let Some(choice) = &choice {
+            recorded(self.core.pip_turn_model(&scope, &req.request_id, choice).await);
+        }
         if self.stop_early.lock().expect("lock poisoned").remove(&run_id) {
             self.provider.cancel(&run_id);
         }
@@ -1664,6 +1664,16 @@ mod tests {
             done(&fx, "general", "q2").await;
             let models: Vec<Option<String>> = recorder.launched.lock().unwrap().iter().map(|l| l.model.clone()).collect();
             assert_eq!(models, [Some("haiku".into()), Some("haiku".into())]);
+        }
+
+        #[tokio::test]
+        async fn a_turn_that_fails_before_the_provider_starts_does_not_leave_its_choice_as_the_conversations_last() {
+            let (fx, svc, recorder) = rig().await;
+            let conversation = "ws:gone";
+            let err = say(&svc, ask("q1", conversation, Some(pick("claude_2", "opus", None)))).await.unwrap_err();
+            assert!(!err.to_string().is_empty());
+            assert_eq!(recorder.count(), 0);
+            assert_eq!(fx.core.pip_choice(conversation, None).await.unwrap(), Some(pick("claude", "sonnet", Some("medium"))), "the Settings default");
         }
 
         #[tokio::test]

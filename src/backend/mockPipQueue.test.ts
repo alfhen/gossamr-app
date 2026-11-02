@@ -123,6 +123,15 @@ describe("the scripted Pip's queue", () => {
     await settled("q3", "ws:w9");
   });
 
+  it("does not keep the choice of a question cancelled while it waited", async () => {
+    ask("q1");
+    const work = { instanceId: "claude_2", model: "opus", effort: "high" };
+    mockQueueAsk({ requestId: "q2", prompt: "Hi", sessionId: null, context, conversation: "general", meta: { imageCount: 0 }, model: work }, null, 1);
+    mockQueueCancel("q2");
+    expect(mockPipTurns.lastModel("general")).toEqual({ instanceId: "claude", model: "sonnet", effort: "medium" });
+    await settled("q1");
+  });
+
   it("does not keep a made-up model id as a conversation's choice", async () => {
     mockQueueAsk({ requestId: "q1", prompt: "Hi", sessionId: null, context, conversation: "general", meta: { imageCount: 0 }, model: { instanceId: "claude", model: "--dangerously-skip-permissions" } }, null, 1);
     expect(mockPipTurns.lastModel("general")).toBeNull();

@@ -160,6 +160,7 @@ const sameFact = (a: WakeFact, b: WakeFact) => a.run === b.run && a.state === b.
 const conversationOf = (req: AskRequest) => conversationId(req.conversation ?? GENERAL_CONVERSATION);
 
 function start({ req, drafter, pace, wake }: Waiting) {
+  recordChoice(conversationOf(req), req.requestId, req.model);
   mockPipTurns.setStatus(req.requestId, "running");
   mockPipEvents.emit(req.requestId, { type: "running" }, metaOf(req));
   if (wake) wakesRunning.set(req.requestId, wake);
@@ -212,7 +213,6 @@ export function mockQueueAsk(req: AskRequest, drafter: Partial<PipDrafter> | nul
     }
   }
   mockPipTurns.begin(conversation, req.requestId, req.prompt, req.meta ?? { imageCount: req.images?.length ?? 0 }, "queued", new Date(), { context: req.context, sessionId: req.sessionId });
-  recordChoice(conversation, req.requestId, req.model);
   const outcome = enter(conversation, { req, drafter, pace });
   if (workstream) {
     if (again) mockQueueWake(again.workstream, again.facts, drafter, pace);
@@ -220,7 +220,7 @@ export function mockQueueAsk(req: AskRequest, drafter: Partial<PipDrafter> | nul
   return outcome;
 }
 
-/** Keeps the choice a turn takes: the one asked for, else its conversation's last, else the Settings default. As `Core::pip_turn_model` keeps it, a made-up model id is not kept. */
+/** Keeps the choice a turn takes when it starts, so one cancelled while waiting never becomes its conversation's last: the one asked for, else its conversation's last, else the Settings default. As `Core::pip_turn_model` keeps it, a made-up model id is not kept. */
 function recordChoice(conversation: string, requestId: string, asked: AskRequest["model"]) {
   const choice = asked ?? mockPipTurns.lastModel(conversation) ?? defaultModelDefaults().pip;
   if (choice && validModelId(choice.model)) mockPipTurns.setModel(requestId, choice);
@@ -245,7 +245,6 @@ export function mockQueueWake(workstream: string, facts: WakeFact[], drafter: Pa
   }
   const req: AskRequest = { requestId: `wake-${Date.now().toString(36)}-${++wakeSeq}`, prompt: eventLine(facts), context: NO_SCREEN, sessionId: null, conversation, kind: "wake" };
   mockPipTurns.begin(conversation, req.requestId, req.prompt, { imageCount: 0 }, "queued", new Date(), undefined, "wake");
-  recordChoice(conversation, req.requestId, undefined);
   enter(conversation, { req, drafter, pace, wake: { workstream, facts } });
   return req.requestId;
 }
