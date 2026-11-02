@@ -122,8 +122,13 @@ impl ModelDefaults {
 impl ModelDefaults {
     /// Reads the `models` value of `config.json`. A key that is absent keeps its default and a `null` stays cleared.
     /// A key that is there but unreadable is cleared, so the work asks to be picked again instead of running on another
-    /// login, and its raw value is returned so a save can write it back.
-    pub fn from_file(stored: Option<&Value>) -> (Self, Map<String, Value>) {
+    /// login. The raw value comes back, an object of the unreadable keys or the whole `models` value when that is not an
+    /// object, so a save can write it back.
+    pub fn from_file(stored: Option<&Value>) -> (Self, Option<Value>) {
+        match stored {
+            Some(raw) if !raw.is_object() && !raw.is_null() => return (Self { pip: None, agents: None }, Some(raw.clone())),
+            _ => {}
+        }
         let fallback = Self::default();
         let mut unreadable = Map::new();
         let mut read = |key: &str, fallback: Option<ModelChoice>| match stored.and_then(|s| s.get(key)) {
@@ -135,7 +140,7 @@ impl ModelDefaults {
             }),
         };
         let (pip, agents) = (read("pip", fallback.pip), read("agents", fallback.agents));
-        (Self { pip, agents }, unreadable)
+        (Self { pip, agents }, (!unreadable.is_empty()).then_some(Value::Object(unreadable)))
     }
 }
 
@@ -467,13 +472,17 @@ mod tests {
     fn defaults_read_back_as_written_and_an_unreadable_half_is_cleared_and_kept_aside() {
         let read = |json: &str| ModelDefaults::from_file(Some(&serde_json::from_str(json).unwrap()));
         let mine = ModelDefaults { pip: Some(pick("claude_2", "opus")), agents: None };
-        assert_eq!(read(&serde_json::to_string(&mine).unwrap()), (mine, Map::new()));
+        assert_eq!(read(&serde_json::to_string(&mine).unwrap()), (mine, None));
         let (half, kept) = read(r#"{"pip":{"instanceId":"claude_2","model":{"id":"opus","ctx":"1m"}},"agents":{"instanceId":"claude_2","model":"haiku"}}"#);
         assert_eq!((half.pip, half.agents), (None, Some(pick("claude_2", "haiku"))));
-        assert_eq!(kept.keys().collect::<Vec<_>>(), ["pip"]);
+        assert_eq!(kept.unwrap().as_object().unwrap().keys().collect::<Vec<_>>(), ["pip"]);
         assert_eq!(read("{}").0, ModelDefaults::default());
         assert_eq!(ModelDefaults::from_file(None).0, ModelDefaults::default());
-        assert_eq!(read("5").0, ModelDefaults::default());
+        for raw in ["5", r#"[{"use":"pip","instanceId":"claude_2"}]"#, r#""claude_2""#, "true"] {
+            let (defaults, kept) = read(raw);
+            assert_eq!((defaults.pip, defaults.agents, kept), (None, None, Some(serde_json::from_str(raw).unwrap())), "{raw}");
+        }
+        assert_eq!(read("null").0, ModelDefaults::default());
     }
 
     #[test]

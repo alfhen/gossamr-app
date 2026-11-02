@@ -89,9 +89,9 @@ pub struct AppConfig {
     pub providers_error: Option<String>,
     #[serde(skip)]
     unreadable_connections: Option<Map<String, Value>>,
-    /// Raw `models` entries this build couldn't read. They are saved back as they were until a default is set again.
+    /// The raw `models` entries (or the whole value, when it isn't an object) this build couldn't read. They are saved back as they were until a default is set again.
     #[serde(skip)]
-    unreadable_models: Map<String, Value>,
+    unreadable_models: Option<Value>,
     #[serde(skip)]
     unreadable_providers: Option<Value>,
     /// The file has no `providers` key and the retired ids that decide the default instance couldn't be read, so the key is left out of what is saved.
@@ -185,7 +185,7 @@ impl AppConfig {
     /// Replaces both defaults, including any a newer build wrote that this one couldn't read.
     pub fn set_models(&mut self, models: ModelDefaults) {
         self.models = models;
-        self.unreadable_models.clear();
+        self.unreadable_models = None;
     }
 
     fn locked(problem: String) -> Self {
@@ -229,8 +229,10 @@ impl AppConfig {
             }
             map.extend(kept.clone());
         }
-        if let Some(Value::Object(models)) = value.get_mut(MODELS_KEY) {
-            models.extend(self.unreadable_models.clone());
+        match (&self.unreadable_models, value.get_mut(MODELS_KEY)) {
+            (Some(Value::Object(kept)), Some(Value::Object(models))) => models.extend(kept.clone()),
+            (Some(raw), Some(models)) => *models = raw.clone(),
+            _ => {}
         }
         if let Value::Object(map) = &mut value {
             match &self.unreadable_providers {
@@ -317,6 +319,19 @@ mod tests {
         let saved = saved_value(&dir);
         assert_eq!(saved["models"]["pip"], serde_json::from_str::<Value>(newer).unwrap());
         assert_eq!(saved["models"]["agents"]["instanceId"], "claude");
+        AppConfig::update(&dir, |config| config.set_models(ModelDefaults::default())).unwrap();
+        assert_eq!(saved_value(&dir)["models"]["pip"]["instanceId"], "claude");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_models_value_that_is_not_an_object_is_cleared_and_saved_back_as_it_was() {
+        let raw = r#"[{"use":"pip","instanceId":"claude_2","model":"opus"}]"#;
+        let dir = models_scratch("models-not-object", &format!(r#"{{"models":{raw}}}"#));
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.models.pip.clone(), loaded.models.agents.clone()), (None, None));
+        AppConfig::update(&dir, |config| config.agents.max_runs = 2).unwrap();
+        assert_eq!(saved_value(&dir)["models"], serde_json::from_str::<Value>(raw).unwrap());
         AppConfig::update(&dir, |config| config.set_models(ModelDefaults::default())).unwrap();
         assert_eq!(saved_value(&dir)["models"]["pip"]["instanceId"], "claude");
         std::fs::remove_dir_all(&dir).unwrap();
