@@ -301,3 +301,20 @@ async fn retrying_a_failed_run_whose_instance_is_off_queues_it_to_wait_and_count
     let retried = svc.retry_launch(&failed.id).await.unwrap();
     assert_eq!((retried.state, retried.wait_reason.as_deref()), (RunState::Queued, Some("Waits for Claude, which is off.")));
 }
+
+#[tokio::test]
+async fn a_new_choice_for_a_run_the_launcher_does_not_reach_replaces_the_old_reason() {
+    let rig = ready().await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    let run = rig.queued(1).await;
+    let run = rig
+        .set(&run, |r| {
+            r.spec.workstream = Some(ws.clone());
+            r.unapproved_auto_start = Some(serde_json::json!({ "rule": "investigate_triage", "afterRun": "r0" }));
+            r.wait_reason = Some("Waits for Claude, which is off.".into());
+        })
+        .await;
+    let after = rig.svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
+    assert_eq!((after.state, after.wait_reason), (RunState::Queued, None));
+    assert_eq!(rig.cli.launches(), 0);
+}

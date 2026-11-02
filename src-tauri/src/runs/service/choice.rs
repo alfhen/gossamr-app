@@ -54,6 +54,22 @@ impl RunService {
         Ok(())
     }
 
+    /// A run the launcher did not reach (its workstream is paused or closed, or it is an unapproved auto-start) still
+    /// shows the reason of its old choice; it is given the new choice's words, or none when that choice is ready.
+    async fn resettle_choice_reason(&self, run_id: &str) -> Result<()> {
+        let _turn = self.launching.lock().await;
+        let mut run = self.load(run_id).await?;
+        if run.state != RunState::Queued || run.wait_reason.is_none() || run.slot_wait_since.is_some() {
+            return Ok(());
+        }
+        let words = self.core.agents_target(run.runs_on.as_ref()).err();
+        if run.wait_reason != words {
+            run.wait_reason = words;
+            self.store(&run).await?;
+        }
+        Ok(())
+    }
+
     /// Changes what a run launches on, only while it is queued. A run that was waiting for its choice is tried on the
     /// new one at once.
     pub async fn set_model(&self, run_id: &str, choice: ModelChoice) -> Result<Run> {
@@ -69,6 +85,7 @@ impl RunService {
             if let Err(e) = self.launch_waiting().await {
                 eprintln!("couldn't start waiting runs after a new choice for run {run_id}: {e}");
             }
+            self.resettle_choice_reason(run_id).await?;
         }
         self.load(run_id).await
     }
