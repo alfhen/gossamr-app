@@ -44,12 +44,21 @@ pub struct Event {
     pub payload: Value,
 }
 
-/// Where the next page of a feed starts: strictly after this entry in newest-first order.
+/// Where the next page of a feed starts: strictly after this entry in newest-first order. Two accounts on one site
+/// store the same event under the same `at` and `id`, so the connection breaks the tie.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedCursor {
     pub at: String,
     pub id: String,
+    #[serde(default)]
+    pub connection_id: String,
+}
+
+impl FeedCursor {
+    pub fn of(entry: &FeedEntry) -> Self {
+        Self { at: entry.at.clone(), id: entry.id.clone(), connection_id: entry.connection_id.clone() }
+    }
 }
 
 /// What a feed shows. Empty `kinds` means every kind.
@@ -102,10 +111,10 @@ impl FeedPage {
     pub fn merge(pages: Vec<FeedPage>, limit: usize) -> FeedPage {
         let more = pages.iter().any(|p| p.next.is_some());
         let mut entries: Vec<FeedEntry> = pages.into_iter().flat_map(|p| p.entries).collect();
-        entries.sort_by(|a, b| (&b.at, &b.id).cmp(&(&a.at, &a.id)));
+        entries.sort_by(|a, b| (&b.at, &b.id, &b.connection_id).cmp(&(&a.at, &a.id, &a.connection_id)));
         let cut = entries.len() > limit;
         entries.truncate(limit);
-        let next = (cut || more).then(|| entries.last().map(|e| FeedCursor { at: e.at.clone(), id: e.id.clone() })).flatten();
+        let next = (cut || more).then(|| entries.last().map(FeedCursor::of)).flatten();
         FeedPage { entries, next }
     }
 }
@@ -132,7 +141,7 @@ mod tests {
     }
 
     fn page(entries: Vec<FeedEntry>, next: bool) -> FeedPage {
-        let next = next.then(|| entries.last().map(|e| FeedCursor { at: e.at.clone(), id: e.id.clone() })).flatten();
+        let next = next.then(|| entries.last().map(FeedCursor::of)).flatten();
         FeedPage { entries, next }
     }
 
@@ -155,14 +164,23 @@ mod tests {
         let b = page(vec![entry("b", "c:9", "2026-09-30T09:00:00Z"), entry("b", "c:3", "2026-09-30T08:00:00Z")], false);
         let merged = FeedPage::merge(vec![a, b], 3);
         assert_eq!(ids(&merged), ["a/c:2", "b/c:9", "b/c:3"]);
-        assert_eq!(merged.next, Some(FeedCursor { at: "2026-09-30T08:00:00Z".into(), id: "c:3".into() }));
+        assert_eq!(merged.next, Some(FeedCursor { at: "2026-09-30T08:00:00Z".into(), id: "c:3".into(), connection_id: "b".into() }));
     }
 
     #[test]
     fn a_connection_with_more_pages_keeps_the_merged_feed_going_even_when_nothing_was_cut() {
         let a = page(vec![entry("a", "c:2", "2026-09-30T10:00:00Z")], true);
         let merged = FeedPage::merge(vec![a, page(Vec::new(), false)], 1);
-        assert_eq!(merged.next, Some(FeedCursor { at: "2026-09-30T10:00:00Z".into(), id: "c:2".into() }));
+        assert_eq!(merged.next, Some(FeedCursor { at: "2026-09-30T10:00:00Z".into(), id: "c:2".into(), connection_id: "a".into() }));
+    }
+
+    #[test]
+    fn the_same_event_on_two_connections_is_ordered_by_connection_and_the_cursor_names_the_one_kept() {
+        let a = page(vec![entry("a", "c:7", "2026-09-30T10:00:00Z")], false);
+        let b = page(vec![entry("b", "c:7", "2026-09-30T10:00:00Z")], false);
+        let merged = FeedPage::merge(vec![a, b], 1);
+        assert_eq!(ids(&merged), ["b/c:7"]);
+        assert_eq!(merged.next, Some(FeedCursor { at: "2026-09-30T10:00:00Z".into(), id: "c:7".into(), connection_id: "b".into() }));
     }
 
     #[test]

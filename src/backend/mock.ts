@@ -1266,6 +1266,8 @@ export class MockBackend implements Backend {
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
     if (input.cloudId && !host.startsWith("unknown") && input.cloudId !== mockCloudId(host)) throw new Error(`That cloud id isn't the one ${host} reports. Check the site.`);
+    const has = this.jiraAccount;
+    if (instanceId === undefined && has.site?.name === host && has.email === input.email.trim()) throw new Error("You already have this account. Use Make a new token on its row.");
     this.jiraAccount = mockJiraStatus(host, input.email.trim(), input.expiresOn, input.cloudId);
     this.jiraToken = undefined;
     this.connectionsListeners.forEach((l) => l());

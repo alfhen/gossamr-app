@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
 import { ConnectionsView, type ConnectionsViewProps } from "./Connections";
-import { SignInBannerView } from "./SignInBanner";
+import { useJiraUi } from "./jiraUi";
+import { SignInBannerView, fixSignIn } from "./SignInBanner";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const CHECKED = "2026-10-30T11:57:00Z";
@@ -228,6 +229,12 @@ describe("the banner for a connection that is signed out", () => {
     const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={noop} />);
     expect(out).toContain("Jira turned down your token");
     expect(out).toContain("Make a new token");
+  });
+
+  it("opens the token sheet on the row that lost its sign-in", () => {
+    fixSignIn(jira);
+    expect(useJiraUi.getState()).toMatchObject({ connectOpen: true, connectInstanceId: "jira" });
+    useJiraUi.getState().closeConnect();
   });
 
   it("sends the others, and any several, to the connections", () => {

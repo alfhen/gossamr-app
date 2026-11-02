@@ -131,6 +131,37 @@ async fn the_feed_merges_by_time_and_id_and_pages_through_both_connections() {
 }
 
 #[tokio::test]
+async fn one_event_seen_by_two_connections_is_not_lost_when_a_page_ends_between_them() {
+    let (fx, second) = fixture_with_two_jira().await;
+    add_to(&fx, &second, "CA-1", "CA", "2026-09-29T10:00:00Z").await;
+    event_in(&fx, &fx.scope, "c:10500", "CA-1", "2026-09-29T09:00:00Z").await;
+    event_in(&fx, &second, "c:10500", "CA-1", "2026-09-29T09:00:00Z").await;
+    let seen = |page: &crate::domain::FeedPage| page.entries.iter().map(|e| e.connection_id.clone()).collect::<Vec<_>>();
+
+    let first = fx.core.cache_feed(&FeedQuery { limit: 1, ..Default::default() }).await.unwrap();
+    let rest = fx.core.cache_feed(&FeedQuery { limit: 1, before: first.next.clone(), ..Default::default() }).await.unwrap();
+
+    let mut both = seen(&first);
+    both.extend(seen(&rest));
+    both.sort();
+    assert_eq!(both, ["jira:beta:bo", "jira:site:me"]);
+    assert_eq!(rest.next, None);
+}
+
+#[tokio::test]
+async fn a_feed_of_one_container_reads_only_the_connection_that_container_belongs_to() {
+    let (fx, second) = fixture_with_two_jira().await;
+    add_to(&fx, &second, "CA-1", "CA", "2026-09-29T10:00:00Z").await;
+    event_in(&fx, &fx.scope, "c:1", "CA-1", "2026-09-29T09:00:00Z").await;
+    event_in(&fx, &second, "c:2", "CA-1", "2026-09-29T09:00:00Z").await;
+    let ca = crate::domain::ContainerRef { connection_id: "jira:site:me".into(), external_id: "CA".into() };
+
+    let page = fx.core.cache_feed(&FeedQuery { container: Some(ca), ..Default::default() }).await.unwrap();
+
+    assert_eq!(page.entries.iter().map(|e| e.connection_id.as_str()).collect::<Vec<_>>(), ["jira:site:me"]);
+}
+
+#[tokio::test]
 async fn unread_counts_add_up_and_marking_an_event_read_touches_only_its_own_connection() {
     let (fx, second) = fixture_with_two_jira().await;
     add_to(&fx, &second, "CA-1", "CA", "2026-09-29T10:00:00Z").await;

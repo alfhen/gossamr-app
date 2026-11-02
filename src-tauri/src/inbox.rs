@@ -277,12 +277,18 @@ impl Core {
         self.data_dir.clone()
     }
 
-    /// Signs in with an API token. Without `instance_id` the account is added beside the others. With one it takes over
-    /// that instance, and when it is another account than the instance had, the old one is disconnected completely.
+    /// Signs in with an API token. Without `instance_id` the account is added beside the others, unless an instance
+    /// is left with no sign-in for it (see `orphaned_instance`), which it takes back. With one it takes over that
+    /// instance, and when it is another account than the instance had, the old one is disconnected completely.
     pub async fn connect_jira(&self, input: &TokenSignIn, instance_id: Option<&str>) -> Result<AuthStatus> {
         let _alone = self.sign_in.lock().await;
         let credentials = self.auth.verify(input).await?;
         let connection = credentials.connection();
+        let orphan = match instance_id {
+            None => self.orphaned_instance(&connection.id).await,
+            Some(_) => None,
+        };
+        let instance_id = instance_id.or(orphan.as_deref());
         self.refuse_taken_account(&connection.id, instance_id)?;
         let binding = Binding::jira(&connection.id, &credentials.site.name, &credentials.site.url).with_email(input.email.trim());
         match instance_id {
@@ -295,13 +301,22 @@ impl Core {
             }
             Some(id) => {
                 let old = self.bound_account(id);
+                let changing = old != connection.id;
+                let _gate = if changing { Some(self.draft_gate.lock().await) } else { None };
+                let name = self.instance_name(id);
+                if changing {
+                    self.refuse_while_posting(&old, &name).await?;
+                }
                 self.auth.replace(&old, credentials).await?;
                 if let Err(e) = self.rebind_instance(id, binding) {
                     eprintln!("couldn't save the connections to config.json: {e}");
                 }
-                if old != connection.id {
+                if changing {
                     self.unregister_jira(&old).await;
                     self.close_cache(&old);
+                    if let Err(e) = self.close_drafts(&old, &format!("{name} now uses another account.")).await {
+                        eprintln!("couldn't close the drafts for {name}: {e}");
+                    }
                 }
             }
         }
@@ -814,11 +829,15 @@ impl Core {
         self.with_db_for(&scope, |db| db.events_for_item(item, limit)).await
     }
 
-    /// The feed of every connection that is on, merged by `(at, id)`, which is also the cursor.
+    /// The feed of every connection that is on, merged by `(at, id, connection)`, which is also the cursor. A feed of one
+    /// container reads only that container's connection.
     pub async fn cache_feed(&self, query: &FeedQuery) -> Result<FeedPage> {
         let mut pages = Vec::new();
         for account in self.on_accounts().await? {
             let id = account.connection.id;
+            if query.container.as_ref().is_some_and(|c| c.connection_id != id) {
+                continue;
+            }
             pages.push(
                 self.with_db_for(&account.scope, |db| {
                     let visible = if query.include_unwatched { Visible::All } else { db.watch_set(&id)?.visible() };
@@ -1119,6 +1138,103 @@ mod tests {
         let restored: Vec<String> = relaunched.auth.connections().await.into_iter().map(|c| c.id).collect();
         assert_eq!(restored, ["jira:site:b"]);
         assert!(relaunched.registry.connection("jira:site:b").is_some() && relaunched.registry.connection("jira:site:me").is_none());
+    }
+
+    async fn transition_draft(fx: &super::testing::Fixture) -> crate::domain::Proposal {
+        let intent = crate::domain::Intent::Transition { item: fx.item("CA-1"), to: "10001".into() };
+        let draft = crate::proposals::Draft { origin: crate::domain::Origin::Board, created_by: crate::domain::CreatedBy::User, intent, label: None, basis: None };
+        fx.core.with_app_db(|db| crate::proposals::create(db, draft, Utc::now())).await.unwrap()
+    }
+
+    async fn state_of(fx: &super::testing::Fixture, id: &str) -> crate::domain::ProposalState {
+        fx.core.with_app_db(|db| Ok(db.proposal(id)?.unwrap().state)).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn replacing_an_instances_account_with_another_closes_the_old_accounts_pending_drafts() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        let draft = transition_draft(&fx).await;
+
+        fx.core.connect_jira(&token_for("b", "fast"), Some("jira")).await.unwrap();
+
+        assert_eq!(state_of(&fx, &draft.id).await, crate::domain::ProposalState::Retired("Acme now uses another account.".into()));
+    }
+
+    #[tokio::test]
+    async fn replacing_an_instances_account_with_itself_keeps_its_pending_drafts() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        let draft = transition_draft(&fx).await;
+
+        fx.core.connect_jira(&token_for("me", "renewed"), Some("jira")).await.unwrap();
+
+        assert_eq!(state_of(&fx, &draft.id).await, crate::domain::ProposalState::Pending);
+    }
+
+    #[tokio::test]
+    async fn an_account_cannot_replace_the_one_whose_draft_is_being_posted() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        let posting = transition_draft(&fx).await;
+        fx.core.with_app_db(|db| db.begin_applying(&posting.id, Utc::now())).await.unwrap();
+
+        let refused = fx.core.connect_jira(&token_for("b", "fast"), Some("jira")).await.err().unwrap();
+
+        assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft")), "{refused}");
+        assert_eq!(state_of(&fx, &posting.id).await, crate::domain::ProposalState::Applying);
+        assert_eq!(crate::secrets::keys_with_prefix("jira-token:").unwrap().len(), 0, "nothing was stored");
+        assert!(fx.core.connection(&fx.scope).is_ok());
+        assert_eq!(AppConfig::load(&fx.core.data_dir()).connections[0].bound_to.as_deref(), Some("jira:site:me"));
+    }
+
+    #[tokio::test]
+    async fn a_new_token_for_an_account_whose_token_is_gone_renews_its_instance_instead_of_being_refused() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.core.auth.disconnect(&fx.scope.connection_id).await.unwrap();
+        fx.core.registry.remove(&fx.scope.connection_id);
+
+        fx.core.connect_jira(&token_for("me", "again"), None).await.unwrap();
+
+        let config = AppConfig::load(&fx.core.data_dir());
+        let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
+        assert_eq!((jira.id.as_str(), jira.bound_to.as_deref()), ("jira", Some("jira:site:me")));
+        assert!(fx.core.registry.connection("jira:site:me").is_some());
+    }
+
+    #[tokio::test]
+    async fn signing_in_as_another_account_takes_over_a_lone_instance_whose_account_has_no_sign_in() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.core.auth.disconnect(&fx.scope.connection_id).await.unwrap();
+        fx.core.registry.remove(&fx.scope.connection_id);
+        AppConfig::update_if(&fx.core.data_dir(), |config| {
+            config.connections[0].display_name = "Work Jira".into();
+            true
+        })
+        .unwrap();
+
+        fx.core.connect_jira(&token_for("b", "fast"), None).await.unwrap();
+
+        let config = AppConfig::load(&fx.core.data_dir());
+        let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
+        assert_eq!((jira.id.as_str(), jira.display_name.as_str(), jira.bound_to.as_deref()), ("jira", "Work Jira", Some("jira:site:b")));
     }
 
     #[tokio::test]

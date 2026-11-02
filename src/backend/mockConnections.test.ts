@@ -19,6 +19,14 @@ describe("the mock connection actions", () => {
     expect((await b.connectionsList())[0]).toMatchObject({ displayName: "acme.atlassian.net", status: { state: "ready", account: "Alf Henderson" } });
   });
 
+  it("adds without an instance, refuses an account it already has, and renews it from its row", async () => {
+    const b = new MockBackend();
+    const input = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+    await b.jiraConnect(input);
+    await expect(b.jiraConnect({ ...input, token: "again" })).rejects.toThrow("You already have this account");
+    await expect(b.jiraConnect({ ...input, token: "again" }, "jira")).resolves.toMatchObject({ email: "alf@acme.com" });
+  });
+
   it("renames an instance, trimmed, and tells the page", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     let told = 0;

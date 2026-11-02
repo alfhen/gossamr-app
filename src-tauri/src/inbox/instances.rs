@@ -137,6 +137,32 @@ impl Core {
         listed.and_then(|i| i.bound_to.clone()).unwrap_or_else(|| instance_id.into())
     }
 
+    /// The name Settings shows for `instance_id`, or the id when it isn't listed.
+    pub(super) fn instance_name(&self, instance_id: &str) -> String {
+        let config = AppConfig::load(&self.data_dir);
+        config.connections.iter().find(|i| i.id == instance_id).map_or_else(|| instance_id.into(), |i| i.display_name.clone())
+    }
+
+    /// The Jira instance that signing in as `connection_id` should take back instead of adding another: the one bound to
+    /// that account, or the only Jira instance, when the account it is bound to has no sign-in (a Keychain that was reset,
+    /// a config.json restored from an older copy, or a write that failed). Such an instance has no row to renew.
+    pub(super) async fn orphaned_instance(&self, connection_id: &str) -> Option<String> {
+        let config = AppConfig::load(&self.data_dir);
+        if !connections::is_live(&config) {
+            return None;
+        }
+        let signed_in = self.auth.accounts().await;
+        let has_sign_in = |account: &str| signed_in.iter().any(|s| s.connection.id == account);
+        let listed: Vec<_> = config.connections.iter().filter(|i| i.kind == ConnectionKind::Jira).collect();
+        if let Some(own) = listed.iter().find(|i| i.bound_to.as_deref() == Some(connection_id)) {
+            return (!has_sign_in(connection_id)).then(|| own.id.clone());
+        }
+        match listed.as_slice() {
+            [only] if !has_sign_in(only.bound_to.as_deref().unwrap_or(&only.id)) => Some(only.id.clone()),
+            _ => None,
+        }
+    }
+
     pub(super) fn unbind_instance(&self, connection_id: &str) {
         self.change_instances(|config| connections::unbind(config, connection_id));
     }
@@ -293,7 +319,7 @@ impl Core {
         finished
     }
 
-    async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
+    pub(super) async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
         let posting = self.with_app_db(|db| open_drafts_for(db, connection_id).map(|mine| mine.iter().any(|p| p.state == ProposalState::Applying))).await?;
         if posting {
             return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
@@ -303,13 +329,17 @@ impl Core {
 
     /// Closes the pending drafts for the removed connection. Says whether a closed draft was in a workstream.
     async fn close_drafts_for(&self, target: &RemovalTarget) -> Result<bool> {
-        let reason = format!("{} was removed.", target.name);
+        self.close_drafts(&target.connection_id, &format!("{} was removed.", target.name)).await
+    }
+
+    /// Retires the pending drafts for `connection_id` with `reason`. Says whether a closed draft was in a workstream.
+    pub(super) async fn close_drafts(&self, connection_id: &str, reason: &str) -> Result<bool> {
         let now = chrono::Utc::now();
         self.with_app_db(|db| {
             db.atomically(|db| {
                 let mut workstreams = false;
-                for p in open_drafts_for(db, &target.connection_id)?.into_iter().filter(|p| p.state == ProposalState::Pending) {
-                    let closed = proposals::retire(db, &p.id, &reason, now)?;
+                for p in open_drafts_for(db, connection_id)?.into_iter().filter(|p| p.state == ProposalState::Pending) {
+                    let closed = proposals::retire(db, &p.id, reason, now)?;
                     proposals::record(db, &closed, Actor::Person, "draft_retired", now);
                     workstreams |= closed.workstream().is_some();
                 }

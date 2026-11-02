@@ -216,4 +216,14 @@ describe("the activity store on the mock", () => {
     expect(useActivity.getState().entries.map((e) => e.id)).toEqual(all.slice(0, 10).map((e) => e.id));
     expect(useActivity.getState().next).toBeNull();
   });
+
+  it("keeps the same event from a second connection when it lands on the next page", async () => {
+    const spy = vi.spyOn(backend, "cacheFeed");
+    const first = entry({ id: "c:1", connectionId: "jira:a:me" });
+    const second = entry({ id: "c:1", connectionId: "jira:b:me" });
+    spy.mockImplementation((q) => Promise.resolve(q.before ? { entries: [second], next: null } : { entries: [first], next: { at: first.at, id: first.id, connectionId: first.connectionId } }));
+    await useActivity.getState().reload();
+    await useActivity.getState().loadMore();
+    expect(useActivity.getState().entries.map((e) => e.connectionId)).toEqual(["jira:a:me", "jira:b:me"]);
+  });
 });

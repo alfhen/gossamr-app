@@ -370,8 +370,13 @@ impl Db {
             args.extend(ids.iter().map(|i| Sql::Text(i.clone())));
         }
         if let Some(cursor) = &q.before {
-            sql.push_str(" AND (c.at < ? OR (c.at = ? AND c.id < ?))");
+            sql.push_str(" AND (c.at < ? OR (c.at = ? AND c.id < ?)");
             args.extend([Sql::Text(cursor.at.clone()), Sql::Text(cursor.at.clone()), Sql::Text(cursor.id.clone())]);
+            if connection_id < cursor.connection_id.as_str() {
+                sql.push_str(" OR (c.at = ? AND c.id = ?)");
+                args.extend([Sql::Text(cursor.at.clone()), Sql::Text(cursor.id.clone())]);
+            }
+            sql.push(')');
         }
         sql.push_str(" ORDER BY c.at DESC, c.id DESC LIMIT ?");
         args.push(Sql::Integer(limit as i64 + 1));
@@ -385,7 +390,7 @@ impl Db {
         let next = (entries.len() > limit).then(|| {
             entries.truncate(limit);
             let last = entries.last().expect("a full page has a last entry");
-            crate::domain::FeedCursor { at: last.at.clone(), id: last.id.clone() }
+            crate::domain::FeedCursor::of(last)
         });
         Ok(FeedPage { entries, next })
     }
@@ -439,7 +444,7 @@ mod tests {
 
     use super::*;
     use crate::domain::fixtures::{item_ref, now, person, work_item};
-    use crate::domain::{Category, EventKind, Identity, Link, LinkKind, StatusDef, Transition};
+    use crate::domain::{Category, EventKind, FeedCursor, Identity, Link, LinkKind, StatusDef, Transition};
 
     fn ctx() -> FilterContext {
         FilterContext { me: Identity { display_name: "Me".into(), accounts: vec![person("me")] }, now: now(), needs_me: HashSet::new() }
@@ -701,6 +706,16 @@ mod tests {
         let third = db.feed("c", &FeedQuery { limit: 2, before: second.next, ..Default::default() }, &Visible::All).unwrap();
         assert_eq!(third.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e1"]);
         assert!(third.next.is_none());
+    }
+
+    #[test]
+    fn a_cursor_from_a_later_connection_still_returns_the_same_event_on_this_one() {
+        let db = feed_db();
+        let at = db.feed("c", &FeedQuery { limit: 1, ..Default::default() }, &Visible::All).unwrap().entries.remove(0);
+        let cursor = |connection: &str| FeedQuery { before: Some(FeedCursor { at: at.at.clone(), id: at.id.clone(), connection_id: connection.into() }), ..Default::default() };
+        assert_eq!(feed_ids(&db, &cursor("z")), ["e5", "e4", "e3", "e2", "e1"]);
+        assert_eq!(feed_ids(&db, &cursor("c")), ["e4", "e3", "e2", "e1"]);
+        assert_eq!(feed_ids(&db, &cursor("")), ["e4", "e3", "e2", "e1"]);
     }
 
     #[test]

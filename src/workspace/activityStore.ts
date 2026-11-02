@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import type { FeedCursor, FeedEntry } from "../types";
-import { INBOX_KINDS, queryFor, withRead, type InboxFilter } from "./activityLogic";
+import { feedKey, INBOX_KINDS, queryFor, withRead, type InboxFilter } from "./activityLogic";
 import { messageOf, useToasts } from "./toasts";
 
 interface ActivityState {
@@ -81,8 +81,8 @@ export const useActivity = create<ActivityState>((set, get) => ({
     try {
       const page = await backend.cacheFeed({ ...queryFor(filter), before: next });
       if (mine !== seq) return;
-      const seen = new Set(get().entries.map((e) => e.id));
-      set((s) => ({ entries: [...s.entries, ...page.entries.filter((e) => !seen.has(e.id))], next: page.next, loadingMore: false }));
+      const seen = new Set(get().entries.map(feedKey));
+      set((s) => ({ entries: [...s.entries, ...page.entries.filter((e) => !seen.has(feedKey(e)))], next: page.next, loadingMore: false }));
     } catch (e) {
       if (mine === seq) set({ loadingMore: false });
       useToasts.getState().push(`Couldn't load more: ${messageOf(e)}`);
