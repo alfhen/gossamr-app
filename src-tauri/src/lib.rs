@@ -151,10 +151,9 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
             let polled = service.poll().await;
-            // The poll has let go of the launch lock by now, which each start takes again.
-            if let Err(e) = service.launch_waiting().await {
-                eprintln!("couldn't start the runs waiting for a slot: {e}");
-            }
+            // On its own task, so a clone or fetch for a waiting run never holds up the next poll. The poll has let go
+            // of the launch lock by now, which each start takes again.
+            use_freed_slot(&service);
             let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
             let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
             tokio::select! {
@@ -166,8 +165,8 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     });
 }
 
-/// After a stop has freed a slot, starts what waits for one on its own task: the stop has let go of the launch lock by
-/// now, and each start takes it again.
+/// Starts what waits for a slot on its own task, after a stop or a poll: they have let go of the launch lock by now,
+/// and each start takes it again.
 fn use_freed_slot(service: &RunsState) {
     let service = service.clone();
     tauri::async_runtime::spawn(async move {

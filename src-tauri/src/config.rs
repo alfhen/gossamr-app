@@ -349,9 +349,9 @@ mod tests {
     #[test]
     fn another_bad_preference_does_not_reset_the_model_defaults() {
         let pip = r#"{"instanceId":"claude_2","model":"opus"}"#;
-        let dir = models_scratch("models-other-bad", &format!(r#"{{"pickedClones":"yes","models":{{"pip":{pip},"agents":null}}}}"#));
+        let dir = models_scratch("models-other-bad", &format!(r#"{{"agents":"yes","models":{{"pip":{pip},"agents":null}}}}"#));
         let loaded = AppConfig::load(&dir);
-        assert!(loaded.picked_clones.is_empty());
+        assert_eq!(loaded.agents.max_runs, AgentSettings::default().max_runs);
         assert_eq!((loaded.models.pip.map(|c| c.instance_id), loaded.models.agents), (Some("claude_2".into()), None));
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -380,7 +380,7 @@ mod tests {
         on.save(&dir).unwrap();
         assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("pickedClones"));
         assert_eq!(AppConfig::load(&dir), on);
-        std::fs::write(dir.join(FILE), r#"{"pickedClones":"yes"}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":"yes"}"#).unwrap();
         assert_eq!(AppConfig::load(&dir), fresh(), "a mistyped value gives the defaults");
         std::fs::remove_dir_all(&dir).unwrap();
     }

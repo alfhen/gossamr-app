@@ -13,7 +13,7 @@ use std::time::Duration;
 use super::repo::{origin_matches, random_hex, Git, PINNED};
 use crate::domain::valid_repo;
 
-const CLONE_LIMIT: Duration = Duration::from_secs(120);
+const CLONE_LIMIT: Duration = Duration::from_secs(600);
 const FETCH_LIMIT: Duration = Duration::from_secs(30);
 const GH_AUTH_LIMIT: Duration = Duration::from_secs(10);
 const LS_REMOTE_LIMIT: Duration = Duration::from_secs(10);
@@ -74,16 +74,20 @@ pub fn real(path: &Path) -> PathBuf {
 
 /// The only place the path of a repository's clone is worked out. Makes `~/Gossamr/agents` if it is missing and takes
 /// its real path, so a linked `~/Gossamr` gives the path Claude's trust lookup and `check()` see. The folder is
-/// `<owner>/<repo>` in lower case, or, when a clone is already there, the real path of that clone, which is the case
-/// the disk keeps. One repository so always has one path, however it was spelled.
+/// `<owner>/<repo>` in lower case, with each part taking the case the disk already keeps for it. One repository so always
+/// has one path, however it was spelled, and it is the path `check()` accepts once the clone is there.
 pub fn work_path(home: &Path, repo: &str) -> Result<PathBuf, CloneError> {
     let (owner, name) = repo.split_once('/').filter(|_| valid_repo(repo)).ok_or_else(|| CloneError::Invalid(repo.to_owned()))?;
     let root = agents_root(home);
     let failed = |e: std::io::Error| CloneError::Failed(format!("couldn't make {}: {e}", root.display()));
     std::fs::create_dir_all(&root).map_err(failed)?;
-    let path = root.canonicalize().map_err(failed)?.join(owner.to_ascii_lowercase()).join(name.to_ascii_lowercase());
+    let root = root.canonicalize().map_err(failed)?;
+    let lower = root.join(owner.to_ascii_lowercase());
+    // A link that leaves the work folder is not followed: the path stays the plain one, and `check()` refuses it.
+    let owner_folder = Some(real(&lower)).filter(|p| p.starts_with(&root)).unwrap_or(lower);
+    let path = owner_folder.join(name.to_ascii_lowercase());
     let there = path.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink());
-    Ok(if there { path.canonicalize().unwrap_or(path) } else { path })
+    Ok(if there { path.canonicalize().ok().filter(|p| p.starts_with(&root)).unwrap_or(path) } else { path })
 }
 
 /// Whether `path` is a folder inside the work folder, as the disk has it.
@@ -183,22 +187,67 @@ fn written_by_gossamr_tools(key: &str) -> bool {
     }
 }
 
+/// The key with any middle part (a URL, a remote name) replaced by `*`, so a note can name the setting without
+/// repeating text an agent may have put in it, such as a token inside a URL.
+fn key_shape(key: &str) -> String {
+    match (key.split_once('.'), key.rsplit_once('.')) {
+        (Some((section, _)), Some((middle, name))) if middle.len() > section.len() => format!("{section}.*.{name}"),
+        _ => key.to_owned(),
+    }
+}
+
+/// Whether the remote's fetch rules are the ones `git clone` writes. A changed rule can map remote branches onto
+/// local ones, and `--prune` would then delete branches that agents have unpushed commits on.
+async fn default_fetch_rules(git: &Git, path: &Path, keys: &[String]) -> bool {
+    for remote in ["origin", "upstream"] {
+        let key = format!("remote.{remote}.fetch");
+        if !keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
+            continue;
+        }
+        let want = format!("+refs/heads/*:refs/remotes/{remote}/*");
+        if git.local_config_values(path, &key).await.iter().any(|v| *v != want) {
+            return false;
+        }
+    }
+    true
+}
+
 /// A fetch can run a program named in the clone's own config, and agents can change that config. So it happens only
-/// when every key is one Gossamr's tools write. The keys are named in the answer, never their values.
+/// when every key is one Gossamr's tools write and the fetch rules are the default. The settings are named in the
+/// answer in a shape that leaves out any URL, never their values. The refspec is given on the command line so the
+/// configured one is not used.
 async fn fetch(git: &Git, path: &Path) -> Fetched {
     let Some(keys) = git.local_config_keys(path).await else { return Fetched::Not("Git couldn't read the clone's settings".into()) };
-    let mut odd: Vec<String> = keys.into_iter().filter(|k| !written_by_gossamr_tools(k)).map(|k| k.to_ascii_lowercase()).collect();
+    let mut odd: Vec<String> = keys.iter().filter(|k| !written_by_gossamr_tools(k)).map(|k| key_shape(&k.to_ascii_lowercase())).collect();
     odd.sort();
     odd.dedup();
     if !odd.is_empty() {
         odd.truncate(5);
         return Fetched::Not(format!("the clone has settings Gossamr didn't make ({}), which a fetch would honour", odd.join(", ")));
     }
+    if !default_fetch_rules(git, path, &keys).await {
+        return Fetched::Not("the clone's fetch rules were changed, and a fetch would follow them".into());
+    }
     let mut args: Vec<OsString> = PINNED.iter().map(OsString::from).collect();
-    args.extend(["-C".into(), path.into(), "fetch".into(), "--prune".into(), "--quiet".into(), "origin".into()]);
+    args.extend(["-C".into(), path.into(), "fetch".into(), "--prune".into(), "--quiet".into(), "origin".into(), "+refs/heads/*:refs/remotes/origin/*".into()]);
     match git.run(git.git_program(), args, &[NO_PROMPT], FETCH_LIMIT).await {
         Ok(()) => Fetched::Done,
         Err(line) => Fetched::Not(line),
+    }
+}
+
+/// Removes the folders an earlier clone of `repo` left behind when Gossamr stopped in the middle of it. Called with the
+/// repository's locks held, so a folder that old is nobody's work in progress.
+pub fn remove_stale_temps(home: &Path, repo: &str) {
+    let Ok(path) = work_path(home, repo) else { return };
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name().map(|n| n.to_string_lossy().into_owned())) else { return };
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    let prefix = format!(".{name}.cloning-");
+    for entry in entries.flatten() {
+        let old = entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| at.elapsed().is_ok_and(|age| age >= CLONE_LIMIT));
+        if old && entry.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
     }
 }
 
@@ -222,6 +271,9 @@ pub async fn ensure_clone(git: &Git, home: &Path, repo: &str, fetch_due: bool) -
     let placed = match made {
         Ok(()) if path.symlink_metadata().is_ok() => Err(CloneError::Failed(format!("{} appeared while it was being cloned", tilde(&path)))),
         Ok(()) => std::fs::rename(&temp, &path).map_err(|e| CloneError::Failed(format!("couldn't move the clone into place: {e}"))),
+        Err(CloneError::Failed(line)) if line.starts_with("took longer than") => {
+            Err(CloneError::Failed(format!("{line}. You can run git clone {} {} yourself, then retry", clone_url(repo), path.display())))
+        }
         Err(e) => Err(e),
     };
     match placed {

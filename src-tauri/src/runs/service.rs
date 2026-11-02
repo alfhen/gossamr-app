@@ -397,6 +397,7 @@ impl RunService {
             self.fail(&mut run, &why).await?;
             return Ok((run, true));
         }
+        self.settle_clone_path(&mut run).await?;
         // Starting a run an earlier release queued on its own is the person's approval of it; without this, one sent to
         // wait for a slot would never pass `workstream_runs`.
         if run.unapproved_auto_start.take().is_some() {
@@ -437,7 +438,7 @@ impl RunService {
     }
 
     /// Whether the run's clone doesn't exist yet and is being made right now, in which case the run stays queued and
-    /// the next `launch_waiting` finds it, after `prepare` has waited for the clone to end.
+    /// the next `launch_waiting` finds it, after the clone has ended.
     async fn held_for_clone(&self, run: &mut Run) -> Result<bool> {
         if run.spec.clone_path.symlink_metadata().is_ok() || !self.clone_busy(&run.spec.repo) {
             return Ok(false);
@@ -540,7 +541,7 @@ impl RunService {
     /// launched.
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
         let prepared = match self.load(run_id).await {
-            Ok(listed) if listed.state == RunState::Queued && self.may_start(&listed).await => self.prepare(&listed).await,
+            Ok(listed) if listed.state == RunState::Queued && self.may_start(&listed).await => self.prepare_if_free(&listed).await,
             _ => Ok(()),
         };
         let _turn = self.launching.lock().await;
@@ -552,12 +553,23 @@ impl RunService {
             self.fail(&mut run, &why).await?;
             return Ok(true);
         }
+        self.settle_clone_path(&mut run).await?;
         if self.live_elsewhere(&run) >= self.cap() || self.held_for_clone(&mut run).await? {
             self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
         self.spawn(&mut run).await?;
         Ok(true)
+    }
+
+    /// `prepare` for a run that waits, unless it can't start anyway for want of a slot, or its repository's clone is
+    /// being made or fetched into by someone else: that run stays queued, and the next pass finds the clone ready.
+    /// This keeps a slow clone from holding up the runs on other repositories.
+    async fn prepare_if_free(&self, run: &Run) -> std::result::Result<(), Failure> {
+        if self.live_elsewhere(run) >= self.cap() || self.clone_busy(&run.spec.repo) {
+            return Ok(());
+        }
+        self.prepare(run).await
     }
 
     /// Whether a queued run is one `launch_waiting` may start: in an open workstream, or waiting for a slot.

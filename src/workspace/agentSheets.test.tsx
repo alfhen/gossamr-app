@@ -10,7 +10,7 @@ import { RunSheetView, type RunSheetActions, type RunSheetViewProps } from "./Ru
 import { sheetTopOn } from "./runSheetLogic";
 import { PipLauncher } from "./PipExtras";
 import { useRuns } from "./runsStore";
-import { placesOf } from "./RunWhere";
+import { placesOf, whereText } from "./RunWhere";
 import { offsetText } from "./RunTimeline";
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
@@ -340,6 +340,13 @@ describe("where a run lives", () => {
     expect(placesOf(r).map((p) => p.value)).toEqual(["/Users/sample/Gossamr/agents/acme/storefront/.claude/worktrees/ca-1-fix-ab12", "/Users/sample/Gossamr/agents/acme/storefront", "worktree-ca-1-fix-ab12"]);
     const html = sheet(r);
     for (const p of placesOf(r)) expect(html).toContain(`data-copy="${p.value}"`);
+  });
+
+  it("says a legacy run keeps working in your clone only when it has a session", () => {
+    const legacy = (state: Parameters<typeof run>[0], shortId: string | null) => whereText(run(state, { shortId, inWorkFolder: false }));
+    expect(legacy("working", "1000a000")).toContain("It keeps working there");
+    expect(legacy("failed", null)).toContain("Ask Pip to start it again in Gossamr's clone");
+    expect(legacy("queued", null)).not.toContain("keeps working");
   });
 
   it("shows the size of the session files once it is known", () => {

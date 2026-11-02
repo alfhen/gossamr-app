@@ -37,12 +37,17 @@ export function shellQuote(path: string): string {
 
 const sentence = (text: string | null | undefined, fallback: string) => (text?.trim() || fallback).replace(/\.?$/, ".");
 
+function occupiedDetail(error: string | null | undefined): string {
+  const said = sentence(error, "A folder that isn't a clone of the repository is in the way.");
+  return `${said} Gossamr never removes it.${/move it away/i.test(said) ? "" : " Move it away, then retry."}`;
+}
+
 /** What to offer for a failed run that never got a session. Null for anything else. */
 export function failureHelp(run: Run): FailureHelp | null {
   if (run.state !== "failed" || run.shortId) return null;
   const failure = run.failure;
-  // A retry in a folder outside the work folder is refused, so no step in Terminal would help.
-  if (run.inWorkFolder === false && (failure?.type === "untrustedFolder" || failure?.type === "outsideWorkFolder")) return { ...OUTSIDE_WORK_FOLDER };
+  // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
+  if (run.inWorkFolder === false) return { ...OUTSIDE_WORK_FOLDER };
   switch (failure?.type) {
     case "untrustedFolder":
       return {
@@ -102,7 +107,7 @@ export function failureHelp(run: Run): FailureHelp | null {
       return {
         kind: "cloneOccupied",
         summary: "Something else is where Gossamr keeps its clone.",
-        detail: `${sentence(run.error, "A folder that isn't a clone of the repository is in the way.")} Gossamr never removes it. Move it away, then retry.`,
+        detail: occupiedDetail(run.error),
         primary: null,
         command: null,
         retryNeedsTerminal: false,

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use super::*;
-use crate::runs::fresh::{ensure_clone, lock_repo, work_path, CloneError, Fetched, FETCH_EVERY};
+use crate::runs::fresh::{ensure_clone, lock_repo, real, remove_stale_temps, work_path, CloneError, Fetched, FETCH_EVERY};
 
 fn clone_failure(e: CloneError) -> Failure {
     match e {
@@ -37,7 +37,22 @@ impl RunService {
         due
     }
 
+    /// Points a run whose clone path is the work folder's under another spelling (a folder case, a link) at the path
+    /// `work_path` gives, which is the one `check()` accepts. Called under the launch lock.
+    pub(super) async fn settle_clone_path(&self, run: &mut Run) -> Result<()> {
+        let Some(home) = self.fresh_home() else { return Ok(()) };
+        match work_path(&home, &run.spec.repo) {
+            Ok(path) if run.spec.clone_path != path && real(&run.spec.clone_path) == path => {
+                run.spec.clone_path = path;
+                run.expected_worktree = run.spec.worktree();
+                self.store(run).await
+            }
+            _ => Ok(()),
+        }
+    }
+
     async fn note_clone(&self, run: &Run, kind: &str, text: String) {
+        let text = redact(&text);
         let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: kind.into(), text, detail: None };
         if let Err(e) = self.core.append_run_events(&run.id, &[event]).await {
             eprintln!("couldn't record {kind} on run {}: {e}", run.id);
@@ -63,14 +78,15 @@ impl RunService {
     pub(super) async fn prepare(&self, run: &Run) -> std::result::Result<(), Failure> {
         let spec = &run.spec;
         let Some(home) = self.fresh_home() else { return Ok(()) };
-        if work_path(&home, &spec.repo).ok().as_ref() != Some(&spec.clone_path) {
+        if work_path(&home, &spec.repo).ok() != Some(real(&spec.clone_path)) {
             return Ok(());
         }
         let git = Git::new(self.tools.get().await?.env);
         let lock = self.repo_lock(&spec.repo);
         let _turn = lock.lock().await;
         let _other_process = lock_repo(&home, &spec.repo).await.map_err(clone_failure)?;
-        let cloning = spec.clone_path.symlink_metadata().is_err();
+        remove_stale_temps(&home, &spec.repo);
+        let cloning = real(&spec.clone_path).symlink_metadata().is_err();
         if cloning {
             self.note_clone(run, "clone_started", format!("Cloning {} into ~/Gossamr/agents", spec.repo)).await;
             self.show_progress(&run.id, Some(format!("Cloning {}…", spec.repo))).await;

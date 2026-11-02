@@ -35,9 +35,11 @@ export const placesOf = (run: Pick<Run, "expectedWorktree" | "spec" | "branch" |
 ];
 
 /** What the worktree is, for a run in Gossamr's own clone and for one an earlier release set up in the person's. */
-export const whereText = (run: Pick<Run, "spec" | "inWorkFolder">): string =>
+export const whereText = (run: Pick<Run, "spec" | "inWorkFolder" | "state" | "shortId">): string =>
   run.inWorkFolder === false
-    ? "This agent started in your own clone, before Gossamr kept its own. It keeps working there until it's done."
+    ? !run.shortId && (run.state === "failed" || run.state === "queued")
+      ? "This agent was set up in your own clone, before Gossamr kept its own. It never started there. Ask Pip to start it again in Gossamr's clone."
+      : "This agent started in your own clone, before Gossamr kept its own. It keeps working there until it's done."
     : `A worktree of Gossamr's own clone of ${run.spec.repo}. Your own clones are not touched, and stopping keeps everything it wrote.`;
 
 export function RunWhere({ run, disk, onReveal }: { run: Run; disk: number | null | "unknown"; onReveal(path: string): void }) {
