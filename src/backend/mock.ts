@@ -31,6 +31,7 @@ import type {
   RunQuery,
   RunsChanged,
   AgentSettings,
+  ModelDefaults,
   Snapshot,
   Status,
   Ticket,
@@ -61,6 +62,7 @@ import { MockWorkstreams, lastDriftOf, type LastDrift } from "./mockWorkstreams"
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
 import { MockRuns, STOPPABLE } from "./mockRuns";
+import { MockModels } from "./mockModels";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
@@ -1092,6 +1094,23 @@ export class MockBackend implements Backend {
   private readonly names = new Map<string, string>();
   /** The default Claude provider instance, until it is removed. */
   private claude: { enabled: boolean } | null = { enabled: true };
+  private readonly models = new MockModels((instanceId) => instanceId === "claude" && this.claude !== null);
+
+  async providerModels(instanceId: string) {
+    return this.models.list(instanceId);
+  }
+
+  async providerAddModel(instanceId: string, model: string) {
+    return this.models.add(instanceId, model);
+  }
+
+  async modelDefaults() {
+    return this.models.get();
+  }
+
+  async modelSetDefaults(defaults: ModelDefaults) {
+    return this.models.set(defaults);
+  }
 
   async connectionOpenTerminal(instanceId: string) {
     const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
@@ -1128,6 +1147,7 @@ export class MockBackend implements Backend {
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
     if (target.kind === "provider") {
       this.claude = null;
+      this.models.forget(instanceId);
       this.names.delete(instanceId);
       this.connectionsListeners.forEach((l) => l());
       return;

@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 
 use crate::connections::{self, Instance, ProviderInstance, VERSION};
 use crate::error::Result;
+use crate::model_choice::ModelDefaults;
 use crate::runs::notices::NoticeMode;
 
 const FILE: &str = "config.json";
@@ -17,6 +18,7 @@ const BACKUP: &str = "config.json.bak";
 const CONNECTION_KEYS: [&str; 3] = ["version", "connections", "retiredIds"];
 
 const PROVIDERS_KEY: &str = "providers";
+const MODELS_KEY: &str = "models";
 
 static WRITER: Mutex<()> = Mutex::new(());
 
@@ -65,6 +67,9 @@ pub struct AppConfig {
     /// The clone the person chose for a repository (`owner/name`) when several match.
     pub picked_clones: HashMap<String, PathBuf>,
     pub agents: AgentSettings,
+    /// Which instance and model Pip and new agents use when nothing narrower says. Read on its own, so another bad preference can't reset it.
+    #[serde(skip_deserializing)]
+    pub models: ModelDefaults,
     /// Which version of the instance list was written; 0 until the sign-ins already there have been adopted.
     #[serde(skip_deserializing)]
     pub version: u32,
@@ -84,6 +89,9 @@ pub struct AppConfig {
     pub providers_error: Option<String>,
     #[serde(skip)]
     unreadable_connections: Option<Map<String, Value>>,
+    /// The raw `models` entries (or the whole value, when it isn't an object) this build couldn't read. They are saved back as they were until a default is set again.
+    #[serde(skip)]
+    unreadable_models: Option<Value>,
     #[serde(skip)]
     unreadable_providers: Option<Value>,
     /// The file has no `providers` key and the retired ids that decide the default instance couldn't be read, so the key is left out of what is saved.
@@ -123,6 +131,7 @@ impl AppConfig {
         };
         let mut config: Self = serde_json::from_value(Value::Object(file.clone())).unwrap_or_default();
         config.agents = config.agents.clamped();
+        (config.models, config.unreadable_models) = ModelDefaults::from_file(file.get(MODELS_KEY));
         let block: Map<String, Value> = CONNECTION_KEYS.iter().filter_map(|k| Some((k.to_string(), file.get(*k)?.clone()))).collect();
         let problem = match serde_json::from_value::<Roster>(Value::Object(block.clone())) {
             Ok(roster) if roster.version <= VERSION => {
@@ -173,6 +182,22 @@ impl AppConfig {
         self.unreadable_providers = Some(stored.clone());
     }
 
+    /// Replaces both defaults, including any a newer build wrote that this one couldn't read.
+    pub fn set_models(&mut self, models: ModelDefaults) {
+        self.models = models;
+        self.unreadable_models = None;
+    }
+
+    /// Drops the unreadable stored defaults that name `instance_id`, so a removed instance is not written back.
+    pub fn forget_unreadable_models(&mut self, instance_id: &str) {
+        if let Some(Value::Object(kept)) = &mut self.unreadable_models {
+            kept.retain(|_, raw| raw.get("instanceId").and_then(Value::as_str) != Some(instance_id));
+            if kept.is_empty() {
+                self.unreadable_models = None;
+            }
+        }
+    }
+
     fn locked(problem: String) -> Self {
         Self { connections_error: Some(problem), file_unreadable: true, ..Self::default() }
     }
@@ -213,6 +238,11 @@ impl AppConfig {
                 map.remove(key);
             }
             map.extend(kept.clone());
+        }
+        match (&self.unreadable_models, value.get_mut(MODELS_KEY)) {
+            (Some(Value::Object(kept)), Some(Value::Object(models))) => models.extend(kept.clone()),
+            (Some(raw), Some(models)) => *models = raw.clone(),
+            _ => {}
         }
         if let Value::Object(map) = &mut value {
             match &self.unreadable_providers {
@@ -270,6 +300,60 @@ mod tests {
         assert!(broken.connections_error.is_some());
         std::fs::write(dir.join(FILE), "{}").unwrap();
         assert_eq!(AppConfig::load(&dir), fresh());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn models_scratch(name: &str, json: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), json).unwrap();
+        dir
+    }
+
+    #[test]
+    fn model_defaults_round_trip_and_an_unreadable_one_is_cleared_without_resetting_the_other_settings() {
+        let dir = models_scratch("models", r#"{"agents":{"maxRuns":2},"models":{"pip":{"instanceId":["claude"]},"agents":null}}"#);
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.agents.max_runs, loaded.models.pip.clone(), loaded.models.agents.clone()), (2, None, None));
+        loaded.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), loaded, "a cleared default stays cleared");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_default_this_build_cannot_read_is_saved_back_as_it_was_until_a_default_is_set() {
+        let newer = r#"{"instanceId":"claude_2","model":{"id":"opus","ctx":"1m"}}"#;
+        let dir = models_scratch("models-newer", &format!(r#"{{"models":{{"pip":{newer}}}}}"#));
+        AppConfig::update(&dir, |config| config.agents.max_runs = 2).unwrap();
+        let saved = saved_value(&dir);
+        assert_eq!(saved["models"]["pip"], serde_json::from_str::<Value>(newer).unwrap());
+        assert_eq!(saved["models"]["agents"]["instanceId"], "claude");
+        AppConfig::update(&dir, |config| config.set_models(ModelDefaults::default())).unwrap();
+        assert_eq!(saved_value(&dir)["models"]["pip"]["instanceId"], "claude");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_models_value_that_is_not_an_object_is_cleared_and_saved_back_as_it_was() {
+        let raw = r#"[{"use":"pip","instanceId":"claude_2","model":"opus"}]"#;
+        let dir = models_scratch("models-not-object", &format!(r#"{{"models":{raw}}}"#));
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.models.pip.clone(), loaded.models.agents.clone()), (None, None));
+        AppConfig::update(&dir, |config| config.agents.max_runs = 2).unwrap();
+        assert_eq!(saved_value(&dir)["models"], serde_json::from_str::<Value>(raw).unwrap());
+        AppConfig::update(&dir, |config| config.set_models(ModelDefaults::default())).unwrap();
+        assert_eq!(saved_value(&dir)["models"]["pip"]["instanceId"], "claude");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn another_bad_preference_does_not_reset_the_model_defaults() {
+        let pip = r#"{"instanceId":"claude_2","model":"opus"}"#;
+        let dir = models_scratch("models-other-bad", &format!(r#"{{"pickedClones":"yes","models":{{"pip":{pip},"agents":null}}}}"#));
+        let loaded = AppConfig::load(&dir);
+        assert!(loaded.picked_clones.is_empty());
+        assert_eq!((loaded.models.pip.map(|c| c.instance_id), loaded.models.agents), (Some("claude_2".into()), None));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -617,6 +701,15 @@ mod tests {
         assert!(saved_value(&dir).get("providers").is_none());
         std::fs::write(dir.join(FILE), r#"{"version":1,"connections":[],"retiredIds":[]}"#).unwrap();
         assert_eq!(providers_in(&dir), ["claude"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_an_instance_forgets_the_unreadable_default_that_named_it() {
+        let pip = r#"{"instanceId":"claude_2","model":5}"#;
+        let dir = models_scratch("models-forget", &format!(r#"{{"models":{{"pip":{pip},"agents":null}}}}"#));
+        AppConfig::update(&dir, |c| c.forget_unreadable_models("claude_2")).unwrap();
+        assert!(saved_value(&dir)["models"].get("pip").is_none_or(|v| v.is_null()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
