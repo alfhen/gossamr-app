@@ -9,6 +9,7 @@ import { askPip } from "./askPip";
 import { useToasts } from "./toasts";
 import { unwatchWithUndo } from "./unwatch";
 import { useActivity } from "./activityStore";
+import { couldBeElsewhere } from "./keyLookup";
 import { buildCommands, askToPlanCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, PIP_ICON, type Command, type CommandActions, type CommandContext } from "./commands";
 import { workContainers } from "./domains";
 import { projectOf, withProject } from "./filters";
@@ -17,6 +18,7 @@ import { useRuns } from "./runsStore";
 import { activeTab, allSavedViews, useTabs } from "./tabsStore";
 import { openTicketByKey } from "./jump";
 import { focusPeekOf } from "./PeekSheet";
+import { useSiteOf } from "./hooks";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
 import { openPull } from "./openPull";
@@ -196,7 +198,7 @@ export function appActions(): CommandActions {
       );
     },
     // A ticket opened from here takes the keyboard into its peek, not back to the board behind it.
-    openTicket: (key) => void openTicketByKey(key).then((shown) => shown && focusPeekOf(key)),
+    openTicket: (key) => void openTicketByKey(key).then((shown) => shown && focusPeekOf(shown)),
     openActivity: () => tabs.setRoute("activity"),
     openDrafts: () => {
       const draft = currentNeeds().find((need) => need.target.type === "draft");
@@ -232,7 +234,7 @@ export function appActions(): CommandActions {
     },
     jumpToItem: (item) => {
       jumpToItem(item);
-      focusPeekOf(item.item.key);
+      focusPeekOf(item.item);
     },
     askPip,
     openAgents: showAllRuns,
@@ -308,7 +310,9 @@ export function Palette() {
   const containers = useWorkspace((s) => s.containers);
   const items = useWorkspace((s) => s.items);
   const watch = useWorkspace((s) => s.watch);
+  const connections = useWorkspace((s) => s.connections);
   const proposals = useWorkspace((s) => s.proposals);
+  const siteOf = useSiteOf();
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const jira = useWorkspace((s) => !s.connectionsLoaded || s.connections.some((c) => c.kind === "jira"));
   const unread = useActivity((s) => s.unread);
@@ -353,14 +357,14 @@ export function Palette() {
     };
     const commands = buildCommands(sorted, allSavedViews({ savedViews }), actions, ctx);
     const all = Object.values(items);
-    const tickets = ticketCommands(all, query, actions.jumpToItem);
+    const tickets = ticketCommands(all, query, actions.jumpToItem, undefined, siteOf);
     // A typed ticket key stays first; any other ticket comes after the commands the query names ("runs", "agents").
     const ranked = rankCommands([...contextEntries(subject), ...undoEntries(), ...commands, ...unwatchCommands(sorted.filter((c) => watch.find((w) => w.connectionId === c.ref.connectionId)?.chosen), query, actions)], query);
     const order = searchOrder(tickets, ranked, query);
     const found = [
       ...order.head,
       ...order.tickets,
-      ...keyCommand(query, all, actions.openTicket),
+      ...keyCommand(query, all, actions.openTicket, (key) => couldBeElsewhere({ items, containers, connections, watch }, key)),
       ...pullCommand(query, actions.openPull),
       ...askToPlanCommands(all, query, actions),
       ...workstreamCommands(workstreams, query, actions),
@@ -368,7 +372,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, proposals, github, jira, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject]);
+  }, [containers, items, watch, connections, proposals, github, jira, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject, siteOf]);
 
   // A new ticket's project and title are steps back to the search.
   const prompting = step.type === "project" || step.type === "title";

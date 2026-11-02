@@ -14,6 +14,7 @@ import { itemKey, usesCode, withoutCode } from "../lib/filter";
 import { pressed } from "../lib/keys";
 import { showsCode } from "./connectionsLogic";
 import { workspaceTicketLinks } from "./jump";
+import { KeyChooser } from "./KeyChooser";
 import { workConnections } from "./domains";
 import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
@@ -346,6 +347,7 @@ export function Workspace({ backend }: { backend: Backend }) {
       </div>
       <ConnectGithubDialog />
       <ConnectJiraDialog />
+      <KeyChooser />
     </TicketLinksContext.Provider>
   );
 }

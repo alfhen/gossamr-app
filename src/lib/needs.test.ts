@@ -314,10 +314,10 @@ describe("needs: failures persist until they are dealt with", () => {
     expect(needs(input({ workstreams: [ws], runs: [{ ...failed, state: "queued" }] }))).toEqual([]);
   });
 
-  it("keeps a folder to trust as a failure, offering the step in Terminal and Dismiss", () => {
+  it("keeps a clone to trust as a failure, offering to review it and Dismiss", () => {
     const trust = run("r1", "build", "failed", { shortId: null, failure: { type: "untrustedFolder", path: "/Users/sample/Gossamr/agents/acme/storefront" } });
     const [n] = needs(input({ workstreams: [ws], runs: [trust] }));
-    expect(n).toMatchObject({ kind: "failure", title: "R1 needs its folder trusted", primary: { id: "open", label: "Trust this folder in Terminal" }, secondary: [{ id: "dismiss", label: "Dismiss" }] });
+    expect(n).toMatchObject({ kind: "failure", title: "R1 needs its clone trusted", primary: { id: "open", label: "Review and trust" }, secondary: [{ id: "dismiss", label: "Dismiss" }] });
   });
 
   it("offers Retry for a launch that failed with no step to take, and Dismiss", () => {
@@ -359,7 +359,7 @@ describe("needs: a failure is a need only while it is the latest of its kind on 
   it("collapses several plan runs that failed for the same untrusted folder into one need, on the latest run", () => {
     const list = only([failedAt("r1", 90, trust), failedAt("r2", 60, trust), failedAt("r3", 30, trust)]);
     expect(list.map((n) => [n.kind, n.runId])).toEqual([["failure", "r3"]]);
-    expect(list[0].title).toBe("R3 needs its folder trusted");
+    expect(list[0].title).toBe("R3 needs its clone trusted");
   });
 
   it("drops a failure once a newer run of the same kind on the ticket is running or finished", () => {
@@ -430,7 +430,25 @@ describe("needs: where a need is", () => {
     const failed = run("f", "investigate", "failed", { item: ref("SUP-9"), spec: { ...base.spec, role: "investigate", workstream: null, ticketBlock: "SUP-9: Export timeout\nDescription: none." } });
     expect(needs(input({ runs: [failed] })).map((n) => n.head)).toEqual(["SUP-9 · Export timeout"]);
     // A cached title still comes first.
-    expect(needs(input({ runs: [failed], titleOf: (k) => (k === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");
+    expect(needs(input({ runs: [failed], titleOf: (r) => (r.key === "SUP-9" ? "Export times out" : null) }))[0].head).toBe("SUP-9 · Export times out");
+  });
+
+  it("takes a ticket's title from its own site when two sites have the same key", () => {
+    const beta = (key: string): ItemRef => ({ connectionId: "mock2", externalId: key, key });
+    const titles: Record<string, string> = { "mock\nCA-402": "Subject line variants", "mock2\nCA-402": "Quote template for the pilot" };
+    const list = needs(
+      input({
+        proposals: [draft("a", comment("CA-402"), 10), draft("b", { type: "comment", item: beta("CA-402"), body: docFromText("Looks good"), mentions: [] } as unknown as Intent, 5)],
+        titleOf: (r) => titles[`${r.connectionId}\n${r.key}`],
+      }),
+    );
+    expect(list.map((n) => n.head).sort()).toEqual(["CA-402 · Quote template for the pilot", "CA-402 · Subject line variants"]);
+  });
+
+  it("keeps a workstream's own title for the site it is on", () => {
+    const other = { ...view("ws-b", "CA-402", { title: "CA-402 Quote template" }), workstream: { ...view("ws-b", "CA-402", { title: "CA-402 Quote template" }).workstream, connectionId: "mock2", pausedReason: "ceiling" as const } };
+    const mine = view("ws-a", "CA-402", { title: "CA-402 Subject lines", pausedReason: "ceiling" });
+    expect(needs(input({ workstreams: [mine, other] })).map((n) => n.head).sort()).toEqual(["CA-402 · Quote template", "CA-402 · Subject lines"]);
   });
 
   it("labels a draft a run left with the run and its step", () => {

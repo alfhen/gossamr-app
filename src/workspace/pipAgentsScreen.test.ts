@@ -72,6 +72,15 @@ describe("the Agents screen", () => {
     ]);
   });
 
+  it("names the site on the chip but never in the lines that stand for Pip's prompt", () => {
+    const item = { connectionId: "mock2", externalId: "CA-402", key: "CA-402" };
+    const ctx = { ...buildScreenContext(screen()), item, selection: [item] };
+    const lines = contextLines(ctx, null, { titleOf: () => "Quote template", describeFilter: () => "" }).filter((l) => /ticket|Ticked/i.test(l));
+    expect(lines).toEqual(["Open ticket: CA-402 · Quote template", "Ticked tickets: CA-402"]);
+    expect(contextLabel(ctx, null, () => null, undefined, () => "beta.atlassian.net").label).toBe("CA-402 on beta.atlassian.net");
+    expect(contextLabel(ctx, null, () => null).label).toBe("CA-402");
+  });
+
   it("labels the chip by the run when a run is open, by the ticket when one is, else by the screen", () => {
     const words = { titleOf: () => "Checkout", runOf: () => "Investigate CA-1 · Working" };
     const ctx = buildScreenContext(screen({}, NO_FILTERS, "b"));

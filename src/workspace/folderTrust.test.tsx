@@ -46,7 +46,7 @@ describe("starting in a folder Claude refuses", () => {
     expect(run).toMatchObject({ state: "failed", failure: { type: "untrustedFolder", path: "/Users/sample/Gossamr/agents/acme/storefront" } });
     expect(runs().launching.size).toBe(0);
     const toast = useToasts.getState().toasts.slice(-1)[0];
-    expect(toast.text).toMatch(/^The agent on CA-401 didn't start\. Claude asks you once per folder/);
+    expect(toast.text).toMatch(/^The agent on CA-401 didn't start\. Claude hasn't trusted Gossamr's clone of acme\/storefront yet/);
     expect(toast.action?.label).toBe("Fix it");
 
     await runs().fix(run.id, "terminal");

@@ -1,8 +1,8 @@
 import { useState } from "react";
-import type { Stray } from "../types";
+import type { ItemRef, Stray } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { askPip } from "./askPip";
-import { openTicketByKey } from "./jump";
+import { openTicket } from "./jump";
 import { nounFor, strayText, type Noun } from "./watchLogic";
 import { Button } from "../components/Button";
 
@@ -39,7 +39,7 @@ export interface StrayCardProps {
   stray: Stray;
   noun: Noun;
   busy?: boolean;
-  onOpen(key: string): void;
+  onOpen(ref: ItemRef): void;
   onWatch(): void;
   onDismiss(): void;
 }
@@ -51,7 +51,7 @@ export function StrayCard({ stray, noun, busy, onOpen, onWatch, onDismiss }: Str
         <div>{strayText(stray)}.</div>
         <div className="flex flex-wrap gap-x-2 text-sm">
           {stray.keys.slice(0, 6).map((k) => (
-            <button key={k} type="button" onClick={() => onOpen(k)} className="font-mono font-semibold text-ws-ink2 hover:underline">
+            <button key={k} type="button" onClick={() => onOpen({ connectionId: stray.container.connectionId, externalId: k, key: k })} className="font-mono font-semibold text-ws-ink2 hover:underline">
               {k}
             </button>
           ))}
@@ -68,7 +68,7 @@ export function StrayCard({ stray, noun, busy, onOpen, onWatch, onDismiss }: Str
   );
 }
 
-export function StrayList({ strays, noun, busy, onOpen, onWatch, onDismiss }: { strays: Stray[]; noun: (s: Stray) => Noun; busy: string | null; onOpen(key: string): void; onWatch(s: Stray): void; onDismiss(s: Stray): void }) {
+export function StrayList({ strays, noun, busy, onOpen, onWatch, onDismiss }: { strays: Stray[]; noun: (s: Stray) => Noun; busy: string | null; onOpen(ref: ItemRef): void; onWatch(s: Stray): void; onDismiss(s: Stray): void }) {
   if (!strays.length) return null;
   return (
     <ul aria-label="Assigned in projects you don't watch" className="m-0 grid list-none gap-2 p-0 pt-3">
@@ -95,7 +95,7 @@ export function StrayNotices() {
       setBusy(null);
     }
   };
-  return <StrayList strays={strays} noun={nounOf} busy={busy} onOpen={(k) => void openTicketByKey(k)} onWatch={(s) => void watch(s)} onDismiss={(s) => void useWorkspace.getState().dismissStray(s)} />;
+  return <StrayList strays={strays} noun={nounOf} busy={busy} onOpen={(ref) => void openTicket(ref)} onWatch={(s) => void watch(s)} onDismiss={(s) => void useWorkspace.getState().dismissStray(s)} />;
 }
 
 export function PeekNotice({ unwatched, containerName, connectionId, containerId }: { unwatched: boolean; containerName: string | null; connectionId: string; containerId: string }) {

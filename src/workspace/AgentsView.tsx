@@ -212,6 +212,9 @@ export interface AgentsScreenProps {
   archivedSection?: ReactNode;
   /** Failed runs the person has taken the Terminal step for. */
   opened: ReadonlySet<string>;
+  /** Failed runs whose clone Gossamr is trusting now, and why it wouldn't for others, by run id. */
+  trusting?: ReadonlySet<string>;
+  trustRefused?: ReadonlyMap<string, string>;
   /** How many things need the person, as Needs you counts them (the rail badge and the composer say the same). */
   needsYou?: number;
   /** The runs that are one of those things, by run id, with the need's key; each shows an "In Needs you" pill that opens it. */
@@ -235,7 +238,7 @@ export interface AgentsScreenProps {
 }
 
 /** The whole screen as a function of its state; `AgentsView` connects it to the stores. */
-export function AgentsScreen({ runs, status, error, filters, selectedId, workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
+export function AgentsScreen({ runs, status, error, filters, selectedId, workstreams = NO_WORKSTREAMS, openWorkstream = null, needed, tools, closedSection, side, stopping, clear, archivedSection, opened, trusting, trustRefused, needsYou, inNeeds, asking, now, ticketTitle, draftReady, breakdownReady, descriptionReady, reviewThis, reviewOf, on, onOrder }: AgentsScreenProps) {
   const footer = useFooterHeight();
   // While the pointer is over the list or focus is in it, cards keep their places; the normal sort applies once both leave.
   const [hovered, setHovered] = useState(false);
@@ -282,7 +285,7 @@ export function AgentsScreen({ runs, status, error, filters, selectedId, workstr
     onDraftComment: run.state === "done" && commentControl(run).enabled ? () => on.draftComment(run.id) : undefined,
     onOpenNeed: inNeeds?.has(run.id) ? () => on.openNeed?.(inNeeds.get(run.id)!) : undefined,
     asking: asking && inNeeds?.get(run.id)?.key === asking.key ? asking.text : undefined,
-    failure: { opened: opened.has(run.id), on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
+    failure: { opened: opened.has(run.id), trust: { trusting: !!trusting?.has(run.id), refused: trustRefused?.get(run.id) ?? null }, on: { act: (act) => on.fix(run.id, act), retry: () => on.retryLaunch(run.id), copied: () => on.copied(run.id) } },
   });
 
   let position = 0;
@@ -417,6 +420,8 @@ export function AgentsView() {
   const selectedId = useRuns((s) => s.selectedId);
   const stopping = useRuns((s) => s.stopping);
   const opened = useRuns((s) => s.terminalOpened);
+  const trusting = useRuns((s) => s.trusting);
+  const trustRefused = useRuns((s) => s.trustRefused);
   const needs = useNeedsYou();
   const asking = useWorkView((s) => s.asking);
   const needed = useMemo(() => needsScope(needs), [needs]);
@@ -516,6 +521,8 @@ export function AgentsView() {
         clear={<ClearFinished runs={runs} />}
         archivedSection={<ArchivedSection runs={archived} now={now} />}
         opened={opened}
+        trusting={trusting}
+        trustRefused={trustRefused}
         needsYou={needs.length}
         inNeeds={inNeeds}
         asking={asking}

@@ -621,13 +621,15 @@ async fn runs_delete(runs: State<'_, RunsState>, id: String, remove_worktree: bo
 }
 
 /// Starts a run that is still queued, as after a restart. With `retry`, launches one whose launch failed, looking for its
-/// session first and starting one only if there is none.
+/// session first and starting one only if there is none. With `retry` and `trust`, first trusts the run's own clone for
+/// its login, for a run that failed because Claude doesn't trust it.
 #[tauri::command]
-async fn runs_start(runs: State<'_, RunsState>, id: String, retry: bool) -> Result<Run> {
-    if retry {
-        runs.retry_launch(&id).await
-    } else {
-        runs.start_now(&id).await
+async fn runs_start(runs: State<'_, RunsState>, id: String, retry: bool, trust: Option<bool>) -> Result<Run> {
+    match (retry, trust.unwrap_or(false)) {
+        (true, true) => runs.retry_with_trust(&id).await,
+        (true, false) => runs.retry_launch(&id).await,
+        (false, false) => runs.start_now(&id).await,
+        (false, true) => Err(crate::error::Error::Input("Trust goes with a retry.".into())),
     }
 }
 
@@ -1032,6 +1034,7 @@ pub fn run() {
             app.manage::<RunsState>(service.clone());
             spawn_run_tracker(app.handle().clone(), service.clone());
             service.clean_attach_files();
+            service.clean_trust_leftovers();
             tauri::async_runtime::spawn(async move {
                 service.warm().await;
                 service.recover().await;

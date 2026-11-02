@@ -1,4 +1,4 @@
-import { type ConnectionInfo, type Intent, type Proposal, type Run, type WorkstreamView } from "../types";
+import { type ConnectionInfo, type Intent, type ItemRef, type Proposal, type Run, type WorkstreamView } from "../types";
 import { permissionRequest } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { docText } from "./docs";
@@ -85,8 +85,8 @@ export interface NeedsInput {
   dismissed: ReadonlySet<string>;
   /** When each paused workstream was last paused, by id, where that is known; otherwise its `createdAt` stands in. */
   pausedAt?: Readonly<Record<string, string>>;
-  /** A ticket's title by its key, when it is cached. */
-  titleOf?(key: string): string | null | undefined;
+  /** A ticket's title, when it is cached. */
+  titleOf?(ref: TicketRef): string | null | undefined;
   /** The connections, so a draft for one that is off is left out of "Approve N safe drafts". */
   connections?: readonly ConnectionInfo[];
 }
@@ -212,11 +212,17 @@ function runName(run: Run, ws: WorkstreamView | null): string {
 /** The title a workstream gives its ticket, which it took when it opened: "KEY title" less the key. */
 const lessKey = (title: string, key: string | null) => (key && title.startsWith(`${key} `) ? title.slice(key.length).trim() : key && title === key ? "" : title);
 
+/** A ticket's key and the connection it is on: two sites can have the same key. */
+export type TicketRef = Pick<ItemRef, "connectionId" | "key">;
+
+export const atTicket = (r: TicketRef) => `${r.connectionId}\n${r.key}`;
+
 function workstreamTitles(workstreams: readonly WorkstreamView[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const { workstream: w } of workstreams) {
     const rest = w.itemKey && w.title.startsWith(`${w.itemKey} `) ? w.title.slice(w.itemKey.length).trim() : "";
-    if (w.itemKey && rest && !out.has(w.itemKey)) out.set(w.itemKey, rest);
+    const at = w.itemKey ? atTicket({ connectionId: w.connectionId, key: w.itemKey }) : null;
+    if (at && rest && !out.has(at)) out.set(at, rest);
   }
   return out;
 }
@@ -230,14 +236,14 @@ export function titleFromTicketBlock(block: string | null | undefined, key: stri
   return first.startsWith(`${key}: `) ? first.slice(key.length + 2).trim() || null : null;
 }
 
-/** The titles runs kept of their tickets, by key: the last resort for a ticket's title. */
+/** The titles runs kept of their tickets, by connection and key: the last resort for a ticket's title. */
 function snapshotTitles(runs: readonly Run[]): Map<string, string> {
   const out = new Map<string, string>();
-  const add = (key: string | null | undefined, block: string | null | undefined) => {
-    const title = key && !out.has(key) ? titleFromTicketBlock(block, key) : null;
-    if (key && title) out.set(key, title);
-  };
-  for (const r of runs) add(r.item?.key, r.spec.ticketBlock);
+  for (const r of runs) {
+    const at = r.item ? atTicket(r.item) : null;
+    const title = r.item && at && !out.has(at) ? titleFromTicketBlock(r.spec.ticketBlock, r.item.key) : null;
+    if (at && title) out.set(at, title);
+  }
   return out;
 }
 
@@ -299,14 +305,15 @@ export function latestRuns(runs: readonly Pick<Run, "id" | "item" | "spec" | "qu
 export function needs({ workstreams, runs, proposals, dismissed, pausedAt, titleOf, connections = [] }: NeedsInput): Need[] {
   const kept = workstreamTitles(workstreams);
   const snapped = snapshotTitles(runs);
-  const titleFor = (key: string | null | undefined) => (key ? titleOf?.(key)?.trim() || kept.get(key) || snapped.get(key) : undefined);
+  const titleFor = (ref: TicketRef | undefined) => (ref ? titleOf?.(ref)?.trim() || kept.get(atTicket(ref)) || snapped.get(atTicket(ref)) : undefined);
   const open = workstreams.filter((v) => v.workstream.closedAt === null);
   const byId = new Map(open.map((v) => [v.workstream.id, v]));
   /** What every need carries of where it is and which ticket it is about. */
-  const where = (workstreamId: string | null, key: string | null | undefined) => {
+  const where = (workstreamId: string | null, ref: TicketRef | null | undefined) => {
     const ws = workstreamId ? byId.get(workstreamId) : undefined;
-    const ticketKey = key ?? ws?.workstream.itemKey ?? undefined;
-    const title = titleFor(ticketKey);
+    const ticket = ref ?? (ws?.workstream.itemKey ? { connectionId: ws.workstream.connectionId, key: ws.workstream.itemKey } : undefined);
+    const ticketKey = ticket?.key;
+    const title = titleFor(ticket);
     const own = ws ? lessKey(ws.workstream.title, ws.workstream.itemKey) : "";
     return {
       workstreamId,
@@ -324,8 +331,9 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
     const workstreamId = draftWorkstream(p, open);
     const ws = workstreamId ? byId.get(workstreamId) : undefined;
     const target = { type: "draft", id: p.id } as const;
-    const key = targetOf(p.intent)?.key;
-    const base = { key: `draft:${p.id}`, at: p.createdAt, target, ...where(workstreamId, key) };
+    const ticket = targetOf(p.intent);
+    const key = ticket?.key;
+    const base = { key: `draft:${p.id}`, at: p.createdAt, target, ...where(workstreamId, ticket) };
     // A draft a run left says which run, so a review's comments can be told apart: "R5 review · comment".
     const from = p.origin.type === "run" ? p.origin.runId : null;
     const label = from && ws?.labels.find(([id]) => id === from)?.[1];
@@ -375,8 +383,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
     const ws = runWorkstream(open, run);
     const name = runName(run, ws);
     const at = run.endedAt ?? run.lastProgressAt;
-    const key = run.item?.key;
-    const base = { key: `run:${run.id}`, runId: run.id, at, target: { type: "run", id: run.id } as const, ...where(ws?.workstream.id ?? null, key) };
+    const base = { key: `run:${run.id}`, runId: run.id, at, target: { type: "run", id: run.id } as const, ...where(ws?.workstream.id ?? null, run.item) };
     const stays = base.ticketKey ? `nothing else in ${base.ticketKey} moves` : "nothing else it blocks moves";
     if (run.state === "needsAnswer") {
       out.push({
@@ -424,10 +431,10 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         ...base,
         group: "unblock",
         kind: "failure",
-        title: trust ? `${name} needs its folder trusted` : `${name} failed`,
-        why: `${name} ${trust ? "can't start until its folder is trusted" : "failed"}: ${sentence(help?.summary ?? (run.error?.trim() || "no reason was recorded"))}`,
+        title: trust ? `${name} needs its clone trusted` : `${name} failed`,
+        why: `${name} ${trust ? "can't start until its clone is trusted" : "failed"}: ${sentence(help?.summary ?? (run.error?.trim() || "no reason was recorded"))}`,
         ifYouWait: "Nothing retries by itself; it stays here until you retry or dismiss it.",
-        primary: help?.primary ? action("open", help.primary.label) : help?.retry === false ? action("open", "Open the run") : action("retry", run.shortId ? "Open in Terminal" : "Retry"),
+        primary: help?.primary ? action("open", help.primary.act === "trust" ? "Review and trust" : help.primary.label) : help?.retry === false ? action("open", "Open the run") : action("retry", run.shortId ? "Open in Terminal" : "Retry"),
         secondary: [action("dismiss", "Dismiss")],
         batchable: false,
       });
@@ -441,7 +448,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
       key: `pip-ask:${id}`,
       group: "decide",
       kind: "pipAsk",
-      ...where(id, v.workstream.itemKey),
+      ...where(id, null),
       title: "Pip asks you",
       why: `Pip asks: “${clip(v.pipAsk.question, 140)}”`,
       ifYouWait: "Pip waits for your answer in the conversation.",
@@ -462,7 +469,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
       key: `paused:${id}`,
       group: "unblock",
       kind: "paused",
-      ...where(id, v.workstream.itemKey),
+      ...where(id, null),
       title: paused,
       why: reason === "ceiling" ? "Pip was woken too often today, so Gossamr paused it." : "You paused it.",
       ifYouWait: "Pip isn't woken; its agents carry on.",
