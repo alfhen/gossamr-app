@@ -117,7 +117,7 @@ QA: add a second Jira account with a different name, check both rows, the Inbox 
 Regression test: with two fake CLIs, stopping, answering and messaging a run on `claude_2` call only `claude_2`'s binary and folder; a `model_choice` test accepts `claude_2` for agents. Both fail on main. A trust write on `claude_2` changes only its `.claude.json`; that case already passes on main (`service/trust.rs` uses `toolchain_of`) and guards it against this change.
 Acceptance: `cargo test runs::` passes; the gate test fails if the gate is put back.
 
-**B02 Show which Jira account each item comes from (j27).** Touches: `src/workspace/{ItemCard.tsx,ListView.tsx,BoardView.tsx,PeekSheet.tsx,PeekParts.tsx,DraftCard.tsx,FilterBar.tsx,Rail.tsx,PipPane.tsx}`, `src/lib/filter.ts`, `src/claudeStore.ts`, new `e2e/multi-jira.spec.ts`.
+**B02 Show which Jira account each item comes from (j27).** Touches: `src/workspace/{ItemCard.tsx,ListView.tsx,BoardView.tsx,PeekSheet.tsx,PeekParts.tsx,DraftCard.tsx,FilterBar.tsx,Rail.tsx,PipPane.tsx}`, `src/lib/filter.ts`, `src/claudeStore.ts`, new `src/workspace/ItemCard.test.tsx`, `src/lib/filter.test.ts`, new `e2e/multi-jira.spec.ts`.
 - With two or more Jira connections on, cards, rows, the peek and drafts show the connection's name as a chip; with one, nothing changes.
 - An Account filter in the filter bar. Rail project groups name the site when two sites share a project key. The ambiguous pull request link (`DevLink.ambiguous`) says which sites could own it.
 - Pip's drawer gets a connection control for a conversation with no ticket; it sends `connectionId`.
@@ -138,14 +138,14 @@ QA: add a second Claude, set it as "New agents use", start an agent and check it
 
 ### Wave 6
 
-**A05 Run and workstream pickers (r14b).** Touches: `src/workspace/{RunSheet.tsx,AgentParts.tsx,RunCleanup.tsx,failureHelp.ts,WorkstreamControls.tsx,WorkstreamSheet.tsx,workstreamsStore.ts,SignInBanner.tsx}`, `src/backend/{mockRuns.ts,mock.ts}`, `e2e/agents-and-runs.spec.ts`, `e2e/workstreams.spec.ts`.
+**A05 Run and workstream pickers (r14b).** Touches: `src/workspace/{RunSheet.tsx,AgentParts.tsx,RunCleanup.tsx,failureHelp.ts,WorkstreamControls.tsx,WorkstreamSheet.tsx,workstreamsStore.ts,SignInBanner.tsx}`, `src/backend/{mockRuns.ts,mock.ts}`, new `src/workspace/AgentParts.test.tsx`, `src/workspace/failureHelp.test.ts`, `e2e/agents-and-runs.spec.ts`, `e2e/workstreams.spec.ts`.
 - A queued run's card and sheet say "Runs on <instance> · <model>" with Change; a started run says "Ran on". The workstream sheet has "New agents use".
 - Failure help and the signed-out banner name the instance and its sign-in command.
 Regression test: vitest for the Runs on / Ran on text; e2e changes a queued run's model and checks it starts on the new one. Fails on main, which has no Change.
 Acceptance: `pnpm test AgentParts failureHelp` and `pnpm e2e e2e/agents-and-runs.spec.ts e2e/workstreams.spec.ts` pass.
 QA: queue a run, change its model, let it start; sign the second Claude out in the mock and check the banner and the waiting run.
 
-**E01 Docs and tidy-up (d28).** Touches: `AGENTS.md`, `README.md`, `docs/agents-cli-findings.md`, `src/backend/mockGithub.ts`, `src/workspace/ConnectGithub.tsx`, their tests.
+**E01 Docs and tidy-up (d28).** Touches: `AGENTS.md`, `README.md`, `docs/agents-cli-findings.md`, `src/backend/mockGithub.ts`, `src/backend/mockGithub.test.ts`, `src/workspace/ConnectGithub.tsx`, new `src/workspace/ConnectGithub.test.tsx` (the sheet title).
 - AGENTS.md per proposal section 12 (d28): the Read-first list (`docs/connections-proposal.md`, `docs/goals.md`) and rules 2 and 4 as they stand after A01 to A05: several Claude config folders, each agent run on its own instance's login. The Codex rows of the layout table and rules wait for the Codex runner's plan.
 - README: adding a second Claude and a second Jira account, and Codex (beta): can be added in + Add and shows in Settings with its models, not yet able to run agents.
 - Findings: one daemon per config folder, with the o10 result.
