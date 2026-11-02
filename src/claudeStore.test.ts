@@ -363,3 +363,47 @@ describe("wake turns", () => {
     expect(useClaude.getState().byTicket["ws:w1"].turns[0]).toMatchObject({ requestId: "wake-4", kind: "wake", prompt: wake.prompt });
   });
 });
+
+describe("the model a conversation runs on", () => {
+  const opus = { instanceId: "claude_work", model: "opus", effort: "medium" };
+  beforeEach(() => forgetConversations());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends the choice with the question and keeps it on the turn", async () => {
+    const sent: AskRequest[] = [];
+    vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
+    useClaude.getState().choose("general", opus);
+    await useClaude.getState().ask("general", "hi", null, screen);
+    expect(sent[0].model).toEqual(opus);
+    expect(useClaude.getState().byTicket.general.turns[0].model).toEqual(opus);
+  });
+
+  it("sends no choice for a conversation where none was picked, so the app uses the Settings default", async () => {
+    const sent: AskRequest[] = [];
+    vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), started));
+    useClaude.getState().choose("ws:w1", opus);
+    await useClaude.getState().ask("general", "hi", null, screen);
+    expect(sent[0]).not.toHaveProperty("model");
+  });
+
+  it("starts from what the last stored turn ran on", async () => {
+    vi.spyOn(claude, "turns").mockResolvedValue([stored("a"), stored("b", { model: opus }), stored("c")]);
+    await useClaude.getState().load("general");
+    expect(useClaude.getState().choices.general).toEqual(opus);
+    expect(useClaude.getState().byTicket.general.turns.map((t) => t.model)).toEqual([undefined, opus, undefined]);
+  });
+
+  it("keeps a choice the person made before the stored turns arrived", async () => {
+    const haiku = { instanceId: "claude", model: "haiku" };
+    useClaude.getState().choose("general", haiku);
+    vi.spyOn(claude, "turns").mockResolvedValue([stored("a", { model: opus })]);
+    await useClaude.getState().load("general");
+    expect(useClaude.getState().choices.general).toEqual(haiku);
+  });
+
+  it("forgets every choice when the conversations are dropped", () => {
+    useClaude.getState().choose("general", opus);
+    forgetConversations();
+    expect(useClaude.getState().choices).toEqual({});
+  });
+});

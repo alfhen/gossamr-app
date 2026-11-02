@@ -13,6 +13,9 @@ const providersAsked = () => typeof location !== "undefined" && new URLSearchPar
 
 const providersOn = () => providersShown || providersAsked();
 
+/** Whether Settings lists provider rows, so a link to them leads somewhere. */
+export const providersVisible = providersOn;
+
 /** The rows Settings and the rest of the page work with. */
 export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersOn()): T[] =>
   shown ? [...connections] : connections.filter((c) => c.kind !== "provider");

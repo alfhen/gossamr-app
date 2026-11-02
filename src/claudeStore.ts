@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent, type EventMeta, type StoredTurn, type TurnUsage } from "./backend/claude";
 import type { PipImage, ShownImage } from "./lib/pipImages";
-import type { ScreenContext } from "./types";
+import type { ModelChoice, ScreenContext } from "./types";
 import { useWorkstreams } from "./workspace/workstreamsStore";
 
 export interface Turn {
@@ -29,6 +29,8 @@ export interface Turn {
   at?: string;
   /** When Pip began on it after it waited in the queue, as an ISO time. */
   startedAt?: string;
+  /** The instance and model it ran with, or was asked to run with when the person had picked one. */
+  model?: ModelChoice;
 }
 
 export interface Conversation {
@@ -40,6 +42,10 @@ export interface Conversation {
 interface ClaudeState {
   /** Conversations by id: `general` and `ws:<id>`. */
   byTicket: Record<string, Conversation>;
+  /** The instance and model each conversation's next turns run on, once one is known: picked, or the last that ran. Without one the Settings default applies. */
+  choices: Record<string, ModelChoice>;
+  /** Sets what the conversation's next turns run on. */
+  choose(ticketKey: string, choice: ModelChoice): void;
   ask(ticketKey: string, prompt: string, sessionId: string | null, context: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[]; shown?: string }): Promise<void>;
   /** Stops the turn being answered in the conversation. Turns queued behind it stay queued. */
   cancel(ticketKey: string): void;
@@ -107,6 +113,7 @@ export function turnFromStored(t: StoredTurn): Turn {
     ...(t.imageCount ? { imageCount: t.imageCount } : {}),
     ...(t.usage ? { usage: t.usage } : {}),
     ...(t.kind === "wake" ? { kind: "wake" as const } : {}),
+    ...(t.model ? { model: t.model } : {}),
     ...(t.createdAt ? { at: t.createdAt } : {}),
   };
 }
@@ -145,11 +152,17 @@ export function mergeStored(conv: Conversation, stored: StoredTurn[]): Conversat
 
 export const useClaude = create<ClaudeState>()((set, get) => ({
   byTicket: {},
+  choices: {},
+
+  choose(ticketKey, choice) {
+    set({ choices: { ...get().choices, [ticketKey]: choice } });
+  },
 
   async ask(ticketKey, prompt, sessionId, context, extra = {}) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
     const { images = [], ...shown } = extra;
+    const model = get().choices[ticketKey];
     const turn: Turn = {
       requestId,
       prompt,
@@ -158,6 +171,7 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       status: "running",
       error: null,
       at: new Date().toISOString(),
+      ...(model ? { model } : {}),
       ...shown,
       ...(images.length ? { images: images.map(({ id, url, width, height }) => ({ id, url, width, height })) } : {}),
     };
@@ -170,6 +184,7 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
         context,
         ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
         conversation: ticketKey,
+        ...(model ? { model } : {}),
         meta: {
           ...(shown.quote ? { quote: shown.quote } : {}),
           ...(shown.looking ? { looking: shown.looking } : {}),
@@ -208,6 +223,8 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       const stored = await claude.turns(ticketKey).catch(() => [] as StoredTurn[]);
       // Another account's turns must not land in a store that was cleared while they loaded.
       if (!stored.length || mine !== generation) return;
+      const ranOn = [...stored].reverse().find((t) => t.model)?.model;
+      if (ranOn && !get().choices[ticketKey]) set({ choices: { ...get().choices, [ticketKey]: ranOn } });
       const before = get().byTicket[ticketKey] ?? empty;
       const shown = new Set(before.turns.map((t) => t.requestId));
       const restored = stored.filter((t) => !shown.has(t.requestId));
@@ -236,7 +253,7 @@ export function forgetConversations() {
   for (const conversation of Object.values(useClaude.getState().byTicket)) {
     conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
   }
-  useClaude.setState({ byTicket: {} });
+  useClaude.setState({ byTicket: {}, choices: {} });
   // Which workstreams there are, and so which conversations, belongs to the account as well.
   useWorkstreams.getState().dispose();
 }
