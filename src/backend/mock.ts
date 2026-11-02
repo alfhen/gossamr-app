@@ -1093,7 +1093,7 @@ export class MockBackend implements Backend {
   private readonly names = new Map<string, string>();
   /** The default Claude provider instance, until it is removed. */
   private claude: { enabled: boolean } | null = { enabled: true };
-  private readonly models = new MockModels((instanceId) => instanceId === "claude" && this.claude !== null);
+  private readonly models = new MockModels((instanceId) => (instanceId === "claude" && this.claude !== null ? "claude" : null));
 
   async providerModels(instanceId: string) {
     return this.models.list(instanceId);

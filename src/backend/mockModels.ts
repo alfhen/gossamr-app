@@ -1,5 +1,5 @@
 import type { ModelChoice, ModelDefaults, ModelOption } from "../types";
-import { DEFAULT_MODEL, EFFORTS, MODEL_ID_LIMIT, defaultModelDefaults, modelList, validModelId } from "../lib/models";
+import { DEFAULT_MODEL, EFFORTS, MODEL_ID_LIMIT, defaultModelDefaults, modelList, validModelId, type Driver } from "../lib/models";
 
 const NOT_A_PROVIDER = "This isn't a provider. Reopen Settings.";
 const CUSTOM_MODEL_LIMIT = 20;
@@ -9,11 +9,11 @@ export class MockModels {
   private custom = new Map<string, string[]>();
   private defaults: ModelDefaults = defaultModelDefaults();
 
-  constructor(private readonly isProvider: (instanceId: string) => boolean) {}
+  constructor(private readonly driverOf: (instanceId: string) => Driver | null) {}
 
   list(instanceId: string): ModelOption[] {
     this.require(instanceId);
-    return modelList(this.custom.get(instanceId) ?? []);
+    return modelList(this.custom.get(instanceId) ?? [], this.driverOf(instanceId) ?? "claude");
   }
 
   add(instanceId: string, model: string): ModelOption[] {
@@ -44,15 +44,15 @@ export class MockModels {
   }
 
   private require(instanceId: string) {
-    if (!this.isProvider(instanceId)) throw new Error(NOT_A_PROVIDER);
+    if (!this.driverOf(instanceId)) throw new Error(NOT_A_PROVIDER);
   }
 
   private check(what: string, choice: ModelChoice | null) {
     if (!choice) return;
     const forPip = what === "Pip";
-    const listed = this.isProvider(choice.instanceId) && this.list(choice.instanceId).some((m) => m.id === choice.model);
+    const listed = this.driverOf(choice.instanceId) && this.list(choice.instanceId).some((m) => m.id === choice.model);
     const effortOk = choice.effort == null || (forPip && (EFFORTS as readonly string[]).includes(choice.effort));
-    if (!this.isProvider(choice.instanceId)) throw new Error(forPip ? "Pick which Claude Pip runs on." : "That instance was removed. Pick another.");
+    if (!this.driverOf(choice.instanceId)) throw new Error(forPip ? "Pick which Claude Pip runs on." : "That instance was removed. Pick another.");
     if (!listed || !effortOk || (forPip && choice.model === DEFAULT_MODEL)) throw new Error(`Pick a model for ${what}.`);
   }
 }

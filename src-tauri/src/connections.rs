@@ -48,6 +48,8 @@ pub enum Driver {
 }
 
 impl Driver {
+    /// Codex stays off Pip: its built-in tools (a script tool, `collaboration.*`) can't be switched off by any flag, which
+    /// rule 3 needs (docs/agents-cli-findings.md, smoke test C1).
     pub fn runs_pip(self) -> bool {
         matches!(self, Self::Claude)
     }
