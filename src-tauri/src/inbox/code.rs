@@ -447,11 +447,12 @@ impl Core {
         }
     }
 
-    /// The project keys of the signed-in tracker, which are what a key in a branch or title may name.
+    /// The project keys of the primary connection, which are what a key in a branch or title may name. Whether the
+    /// connection is on is not asked: turning Jira off must not erase the links already found.
     async fn known_keys(&self) -> KnownKeys {
-        let Some((scope, _, _)) = self.auth.identity().await else { return KnownKeys::default() };
-        let connection = scope.connection_id;
-        let keys = self.with_db(|db| db.project_keys(&connection)).await.unwrap_or_default();
+        let Ok(primary) = self.primary().await else { return KnownKeys::default() };
+        let connection = primary.connection.id;
+        let keys = self.with_db_for(&primary.scope, |db| db.project_keys(&connection)).await.unwrap_or_default();
         KnownKeys::new(keys.iter().map(|k| (k.as_str(), connection.as_str())))
     }
 
@@ -2619,5 +2620,31 @@ mod review_tests {
         let p = drafted(&fx).await;
         let of_item = fx.core.proposals(&ProposalQuery { item: Some(fx.item("CA-1")), ..Default::default() }).await.unwrap();
         assert!(of_item.iter().any(|d| d.id == p.id), "{of_item:?}");
+    }
+
+    #[tokio::test]
+    async fn project_keys_are_the_primarys_and_survive_turning_it_off() {
+        use crate::domain::{ContainerRef, ContainerSummary};
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let entry = ContainerSummary {
+            container_ref: ContainerRef { connection_id: second.connection_id.clone(), external_id: "10".into() },
+            key: "BETA".into(),
+            name: "Beta".into(),
+            kind: None,
+            archived: false,
+            last_active: None,
+            item_hint: None,
+        };
+        fx.core.with_db_for(&second, |db| db.catalog_upsert(&second.connection_id, &[entry], "2026-09-29T12:00:00Z")).await.unwrap();
+        assert!(fx.core.known_keys().await.item("BETA-1").is_none(), "a second connection adds no keys yet");
+        assert!(fx.core.known_keys().await.item("CA-1").is_some());
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        assert_eq!(fx.core.primary().await.unwrap().scope, second, "the first is off, so the second is primary");
+        assert!(fx.core.known_keys().await.item("BETA-1").is_some());
+
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        assert!(fx.core.known_keys().await.item("CA-1").is_some(), "keys stay when every connection is off");
     }
 }
