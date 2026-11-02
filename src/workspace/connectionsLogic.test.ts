@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
@@ -210,5 +210,20 @@ describe("hasRealConnection", () => {
     expect(hasRealConnection([{ ...base, kind: "mock" }, claude()])).toBe(false);
     expect(hasRealConnection([base])).toBe(true);
     expect(hasRealConnection([jira()])).toBe(true);
+  });
+});
+
+describe("the row for a providers list that can't be read", () => {
+  const unreadable = claude({ id: "providers", instanceId: "providers", displayName: "Models", driver: undefined, enabled: false, error: "config.json: providers is not a list" });
+
+  it("says the problem instead of Off", () => {
+    expect(isUnreadableProviders(unreadable)).toBe(true);
+    expect(isUnreadableProviders(claude())).toBe(false);
+    expect(statusLine(unreadable, false)).toEqual({ text: "config.json: providers is not a list", tone: "error" });
+  });
+
+  it("has no switch", () => {
+    expect(canSwitch(unreadable)).toBe(false);
+    expect(canSwitch(claude())).toBe(true);
   });
 });

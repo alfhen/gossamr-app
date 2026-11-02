@@ -55,6 +55,31 @@ pub(super) fn not_a_provider() -> Error {
     Error::Input("This isn't a provider. Reopen Settings.".into())
 }
 
+/// Stands in for providers that can't be read. No provider has this id, so every provider command refuses it.
+const UNREADABLE_PROVIDERS_ID: &str = "providers";
+
+fn unreadable_providers_row(problem: String) -> ConnectionInfo {
+    ConnectionInfo {
+        id: UNREADABLE_PROVIDERS_ID.into(),
+        instance_id: UNREADABLE_PROVIDERS_ID.into(),
+        display_name: "Models".into(),
+        enabled: false,
+        kind: RowKind::Provider,
+        driver: None,
+        config_dir: None,
+        workspace: String::new(),
+        url: String::new(),
+        account: String::new(),
+        last_sync_at: None,
+        syncing: false,
+        error: Some(problem),
+        transient: false,
+        reauth: false,
+        status: None,
+        rechecking: false,
+    }
+}
+
 fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
@@ -463,10 +488,15 @@ impl Core {
         changed.then(|| instance_id.to_string()).ok_or_else(not_a_provider)
     }
 
-    /// The provider instances as Settings rows, after the connections. A list that can't be read gives none.
+    /// The provider instances as Settings rows, after the connections. A providers list that can't be read gives one row
+    /// that says so.
     pub(super) fn provider_rows(&self) -> Vec<ConnectionInfo> {
         let config = AppConfig::load(&self.data_dir);
-        if let Some(problem) = config.providers_error.as_ref().or(config.connections_error.as_ref()) {
+        if let Some(problem) = &config.providers_error {
+            eprintln!("{problem}");
+            return vec![unreadable_providers_row(problem.clone())];
+        }
+        if let Some(problem) = &config.connections_error {
             eprintln!("{problem}");
             return Vec::new();
         }
@@ -1097,15 +1127,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_providers_list_that_cant_be_read_shows_no_provider_rows_and_changes_nothing() {
+    async fn a_providers_list_that_cant_be_read_shows_one_row_with_the_problem_and_changes_nothing() {
         let fx = adopted().await;
         let dir = fx.core.data_dir();
         let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
         file["providers"] = serde_json::json!([{ "id": "claude", "driver": "gemini" }]);
         std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
-        assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
+        let rows: Vec<_> = fx.core.settings_rows().await.unwrap().into_iter().filter(|c| c.kind == RowKind::Provider).collect();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].error.as_deref().is_some_and(|e| e.contains("config.json.bak")), "{:?}", rows[0].error);
+        let id = rows[0].id.clone();
+        assert!(matches!(fx.core.provider_set_enabled(&id, false), Err(Error::Input(_))));
+        assert!(matches!(fx.core.provider_remove(&id), Err(Error::Input(_))));
+        assert!(matches!(fx.core.rename_instance(&id, "Other"), Err(Error::Input(_))));
         assert!(matches!(fx.core.provider_set_enabled("claude", false), Err(Error::Input(_))));
         assert!(matches!(fx.core.rename_instance("claude", "Other"), Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn jira_connect_accepts_a_signed_in_jira_connection_while_the_connections_block_is_unreadable() {
+        let fx = fixture_with_authenticator(None, None).await;
+        let connection_id = fx.core.auth.connection().await.unwrap().id;
+        let dir = fx.core.data_dir();
+        std::fs::write(dir.join("config.json"), serde_json::json!({ "connections": "broken" }).to_string()).unwrap();
+        assert!(AppConfig::load(&dir).connections_error.is_some());
+        assert!(fx.core.require_jira(&connection_id).await.is_ok());
+        assert!(matches!(fx.core.require_jira("claude").await, Err(Error::Input(_))));
     }
 
     #[tokio::test]

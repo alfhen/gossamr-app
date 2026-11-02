@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
 import { AddMenu } from "./AddMenu";
-import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type AddEntry, type AddEntryId, type LineTone } from "./connectionsLogic";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isUnreadableProviders, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type AddEntry, type AddEntryId, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { isJira } from "./domains";
 import { useGithubUi } from "./githubUi";
@@ -128,6 +128,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const loud = s !== null && (s.state === "notSignedIn" || s.state === "notFound");
   const jira = isJira(c.kind);
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
+  if (isUnreadableProviders(c)) return <p role="status" className="m-0 text-ws-blocked">{c.error}</p>;
   if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
   if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : c.kind === "provider" ? "No check runs for this provider." : "Not checked yet."}</p>;
   return (
@@ -240,7 +241,7 @@ function NameField({ name, onRename }: { name: string; onRename(name: string): P
 function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const sync = syncLine(c, p.now);
   const watch = p.watch.find((w) => w.connectionId === c.id);
-  const sample = c.kind === "mock";
+  const sample = c.kind === "mock" || isUnreadableProviders(c);
   return (
     <section aria-label={`${c.displayName} details`} className="pt-3">
       <h3 className="font-display m-0 mb-1 text-base font-semibold">{c.displayName}</h3>

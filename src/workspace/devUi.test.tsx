@@ -36,7 +36,7 @@ const change = (over: Partial<CodeChange> = {}): CodeChange => ({
   linkedKeys: ["CA-208"],
   ...over,
 });
-const link = (c: CodeChange, provenance: DevLink["provenance"] = "branch"): DevLink => ({ item: { connectionId: "mock", externalId: "CA-208", key: "CA-208" }, change: c, provenance, confidence: 0.95 });
+const link = (c: CodeChange, provenance: DevLink["provenance"] = "branch"): DevLink => ({ item: { connectionId: "mock", externalId: "CA-208", key: "CA-208" }, change: c, provenance, confidence: 0.95, ambiguous: false });
 
 const view = (over: Partial<DevelopmentViewProps> = {}) =>
   renderToStaticMarkup(
