@@ -5,14 +5,16 @@ use std::path::PathBuf;
 
 use super::cli::CliError;
 use super::fresh::{tilde, CloneError};
-use super::toolchain::ToolchainError;
+use super::toolchain::{Toolchain, ToolchainError};
 use crate::domain::{RefusedMode, RunFailure};
+use crate::model_choice::{Reason, Use};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
     ClaudeMissing { instance: String },
     TooOld,
-    NotSignedIn { instance: String },
+    /// `own_folder`: the instance has a folder, so a `claude` in the person's own Terminal would sign in to another login.
+    NotSignedIn { instance: String, own_folder: bool },
     NoEnvironment(String),
     /// The clone is gone, isn't a clone of the repository, or can't be read.
     NoClone(String),
@@ -23,7 +25,7 @@ pub enum Failure {
     /// The approved spec no longer passes validation.
     Invalid(String),
     CapReached(usize),
-    NeedsTrust { folder: PathBuf, instance: String },
+    NeedsTrust { folder: PathBuf, instance: String, own_folder: bool },
     /// `--bg` won't start in the person's permission mode until they accept it once in Terminal; Claude's own words.
     ModeRefused { mode: RefusedMode, message: String },
     CommandFailed(String),
@@ -36,15 +38,21 @@ impl fmt::Display for Failure {
         match self {
             Failure::ClaudeMissing { instance } => write!(f, "Claude Code isn't installed, or Gossamr can't find it for {instance}."),
             Failure::TooOld => write!(f, "Your Claude Code is too old to run background agents. Update it, then retry."),
-            Failure::NotSignedIn { instance } => write!(f, "{instance} isn't signed in. Run `claude` in Terminal and sign in, then retry."),
+            Failure::NotSignedIn { instance, own_folder: false } => write!(f, "{instance} isn't signed in. Run `claude` in Terminal and sign in, then retry."),
+            Failure::NotSignedIn { instance, own_folder: true } => write!(f, "{instance} isn't signed in. Sign in with Gossamr's Open Terminal button, not your own terminal, which would use another login. Then retry."),
             Failure::NoEnvironment(why) => write!(f, "{why}"),
             Failure::NoClone(why) | Failure::Invalid(why) => write!(f, "{why}"),
             Failure::OutsideWorkFolder { path } => write!(f, "This agent was set up in {}, before Gossamr kept its own clones. Ask Pip to start it again, and it will use Gossamr's clone.", tilde(path)),
             Failure::CloneOccupied { repo, path } => write!(f, "{}", CloneError::Occupied { repo: repo.clone(), path: path.clone() }),
             Failure::CapReached(n) => write!(f, "{n} agents are already running. Stop one or wait for one to finish, then retry."),
-            Failure::NeedsTrust { folder, instance } => write!(
+            Failure::NeedsTrust { folder, instance, own_folder: false } => write!(
                 f,
                 "{instance} doesn't trust {} yet. Open Terminal in that folder, run `claude`, accept the trust prompt, then retry.",
+                folder.display()
+            ),
+            Failure::NeedsTrust { folder, instance, own_folder: true } => write!(
+                f,
+                "{instance} doesn't trust {} yet. Open Terminal with Gossamr's trust button, not your own terminal, which would use another login. Accept the trust prompt, then retry.",
                 folder.display()
             ),
             Failure::ModeRefused { message, .. } => write!(f, "{message}"),
@@ -62,8 +70,10 @@ impl From<ToolchainError> for Failure {
     fn from(e: ToolchainError) -> Self {
         match e {
             ToolchainError::ClaudeMissing { instance } => Failure::ClaudeMissing { instance },
-            ToolchainError::NoEnvironment(why) | ToolchainError::Unusable(why) => Failure::NoEnvironment(why),
-            ToolchainError::UnknownInstance(id) => Failure::NoEnvironment(format!("There is no Claude called {id}. Pick another.")),
+            ToolchainError::NoEnvironment(why) | ToolchainError::ConfigUnreadable(why) => Failure::NoEnvironment(why),
+            ToolchainError::Unusable { reason, name } => Failure::NoEnvironment(reason.words(Use::Agents, &name)),
+            ToolchainError::BadFolder { name, problem } => Failure::NoEnvironment(format!("{name}: {problem}")),
+            ToolchainError::UnknownInstance(_) => Failure::NoEnvironment(Reason::Removed.words(Use::Agents, "That Claude")),
         }
     }
 }
@@ -85,10 +95,11 @@ impl From<&Failure> for RunFailure {
 }
 
 impl Failure {
-    /// What a failed `claude` call means. `folder` is where the launch ran, and `instance` is the name of the one it ran as.
-    pub fn from_cli(e: CliError, folder: &std::path::Path, instance: &str) -> Self {
+    /// What a failed `claude` call means. `folder` is where the launch ran, and `tc` is the toolchain it ran as.
+    pub fn from_cli(e: CliError, folder: &std::path::Path, tc: &Toolchain) -> Self {
+        let instance = tc.instance_name.as_str();
         if e.stderr_mentions("Workspace not trusted") {
-            return Failure::NeedsTrust { folder: folder.to_path_buf(), instance: instance.into() };
+            return Failure::NeedsTrust { folder: folder.to_path_buf(), instance: instance.into(), own_folder: tc.has_own_folder() };
         }
         match e {
             CliError::Spawn(io) if io.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
@@ -108,23 +119,30 @@ impl Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::env::RunEnv;
+    use crate::runs::testing::FakeCli;
+    use std::sync::Arc;
+
+    fn claude() -> Toolchain {
+        Toolchain::new(Arc::new(FakeCli::new()), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])))
+    }
 
     #[test]
     fn cli_errors_map_to_what_the_person_can_do() {
         let folder = std::path::Path::new("/Users/me/Code/webshop");
         let failed = |stderr: &str| CliError::Failed { code: Some(1), stderr: stderr.into() };
-        assert_eq!(Failure::from_cli(failed("Workspace not trusted. Run `claude` in /x once"), folder, "Claude"), Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into() });
-        assert_eq!(Failure::from_cli(failed("boom\nsomething broke"), folder, "Claude"), Failure::CommandFailed("something broke".into()));
-        assert_eq!(Failure::from_cli(CliError::Unparseable { stdout: "hm".into() }, folder, "Claude"), Failure::Unparseable("hm".into()));
-        assert_eq!(Failure::from_cli(CliError::TimedOut, folder, "Claude"), Failure::CommandFailed("claude took too long to answer".into()));
+        assert_eq!(Failure::from_cli(failed("Workspace not trusted. Run `claude` in /x once"), folder, &claude()), Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false });
+        assert_eq!(Failure::from_cli(failed("boom\nsomething broke"), folder, &claude()), Failure::CommandFailed("something broke".into()));
+        assert_eq!(Failure::from_cli(CliError::Unparseable { stdout: "hm".into() }, folder, &claude()), Failure::Unparseable("hm".into()));
+        assert_eq!(Failure::from_cli(CliError::TimedOut, folder, &claude()), Failure::CommandFailed("claude took too long to answer".into()));
         let auto = "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively.";
         let bypass = "--bg with bypassPermissions requires accepting the disclaimer first. Run `claude --dangerously-skip-permissions` once interactively.";
-        assert_eq!(Failure::from_cli(failed(auto), folder, "Claude"), Failure::ModeRefused { mode: RefusedMode::Auto, message: auto.into() });
-        assert_eq!(Failure::from_cli(failed(&format!("Starting background service\n{bypass}\n")), folder, "Claude"), Failure::ModeRefused { mode: RefusedMode::Bypass, message: bypass.into() });
-        assert_eq!(Failure::from_cli(failed(auto), folder, "Claude").to_string(), auto, "Claude's own words, nothing added");
+        assert_eq!(Failure::from_cli(failed(auto), folder, &claude()), Failure::ModeRefused { mode: RefusedMode::Auto, message: auto.into() });
+        assert_eq!(Failure::from_cli(failed(&format!("Starting background service\n{bypass}\n")), folder, &claude()), Failure::ModeRefused { mode: RefusedMode::Bypass, message: bypass.into() });
+        assert_eq!(Failure::from_cli(failed(auto), folder, &claude()).to_string(), auto, "Claude's own words, nothing added");
         let missing = CliError::Spawn(std::io::Error::from(std::io::ErrorKind::NotFound));
-        assert_eq!(Failure::from_cli(missing, folder, "Claude"), Failure::ClaudeMissing { instance: "Claude".into() });
-        assert!(Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into() }.to_string().contains("/Users/me/Code/webshop"));
+        assert_eq!(Failure::from_cli(missing, folder, &claude()), Failure::ClaudeMissing { instance: "Claude".into() });
+        assert!(Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false }.to_string().contains("/Users/me/Code/webshop"));
         assert_eq!(Failure::Interrupted.to_string(), "Launch was interrupted");
     }
 
@@ -132,9 +150,9 @@ mod tests {
     fn the_three_failures_that_depend_on_a_login_name_the_instance_and_are_still_recognised_from_their_text() {
         let folder = std::path::Path::new("/Users/me/My Code/web shop");
         let named = [
-            (Failure::NotSignedIn { instance: "Claude personal".into() }, RunFailure::NotSignedIn),
+            (Failure::NotSignedIn { instance: "Claude personal".into(), own_folder: false }, RunFailure::NotSignedIn),
             (Failure::ClaudeMissing { instance: "Claude personal".into() }, RunFailure::ClaudeMissing),
-            (Failure::NeedsTrust { folder: folder.into(), instance: "Claude personal".into() }, RunFailure::UntrustedFolder { path: folder.into() }),
+            (Failure::NeedsTrust { folder: folder.into(), instance: "Claude personal".into(), own_folder: false }, RunFailure::UntrustedFolder { path: folder.into() }),
         ];
         for (why, kind) in named {
             assert!(why.to_string().contains("Claude personal"), "{why:?}");
@@ -142,18 +160,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_instance_with_its_own_folder_is_sent_to_gossamrs_buttons_and_is_still_recognised_from_its_text() {
+        let folder = std::path::Path::new("/Users/me/My Code/web shop");
+        let own = [
+            (Failure::NotSignedIn { instance: "Claude personal".into(), own_folder: true }, RunFailure::NotSignedIn),
+            (Failure::NeedsTrust { folder: folder.into(), instance: "Claude personal".into(), own_folder: true }, RunFailure::UntrustedFolder { path: folder.into() }),
+        ];
+        for (why, kind) in own {
+            let text = why.to_string();
+            assert!(text.contains("Claude personal") && text.contains("Open Terminal button") || text.contains("trust button"), "{text}");
+            assert!(!text.contains("run `claude`") && !text.contains("Run `claude`"), "plain claude would use the shell's login: {text}");
+            assert_eq!(RunFailure::from_message(&text), kind, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_toolchain_error_says_what_the_resolver_says() {
+        let words = |e: ToolchainError| Failure::from(e).to_string();
+        let name = || "Claude personal".to_owned();
+        assert_eq!(words(ToolchainError::Unusable { reason: Reason::Off, name: name() }), Reason::Off.words(Use::Agents, "Claude personal"));
+        assert_eq!(words(ToolchainError::Unusable { reason: Reason::CantRun(crate::connections::Driver::Codex), name: "Codex".into() }), "Agents can't run on Codex yet.");
+        assert_eq!(words(ToolchainError::Unusable { reason: Reason::NoShellSetup, name: name() }), Reason::NoShellSetup.words(Use::Agents, ""));
+        let removed = words(ToolchainError::UnknownInstance("claude_2".into()));
+        assert!(removed.ends_with("was removed. Pick another.") && !removed.contains("claude_2"), "{removed}");
+        assert_eq!(words(ToolchainError::ConfigUnreadable("config.json can't be read".into())), "config.json can't be read");
+    }
+
     fn every_failure(folder: &std::path::Path) -> Vec<(Failure, RunFailure)> {
         vec![
             (Failure::ClaudeMissing { instance: "Claude".into() }, RunFailure::ClaudeMissing),
             (Failure::TooOld, RunFailure::Other),
-            (Failure::NotSignedIn { instance: "Claude".into() }, RunFailure::NotSignedIn),
+            (Failure::NotSignedIn { instance: "Claude".into(), own_folder: false }, RunFailure::NotSignedIn),
             (Failure::NoEnvironment("Couldn't read your shell environment.".into()), RunFailure::Other),
             (Failure::NoClone("/x isn't a git clone any more".into()), RunFailure::NoClone),
             (Failure::OutsideWorkFolder { path: folder.into() }, RunFailure::OutsideWorkFolder { path: folder.into() }),
             (Failure::CloneOccupied { repo: "acme/webshop".into(), path: folder.into() }, RunFailure::CloneOccupied { path: folder.into() }),
             (Failure::Invalid("the base branch name isn't valid".into()), RunFailure::Other),
             (Failure::CapReached(3), RunFailure::CapReached),
-            (Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into() }, RunFailure::UntrustedFolder { path: folder.into() }),
+            (Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false }, RunFailure::UntrustedFolder { path: folder.into() }),
             (Failure::CommandFailed("boom".into()), RunFailure::Other),
             (Failure::Unparseable("hm".into()), RunFailure::Other),
             (Failure::ModeRefused { mode: RefusedMode::Auto, message: "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively.".into() }, RunFailure::ModeRefused { mode: RefusedMode::Auto }),

@@ -103,11 +103,16 @@ fn login_lines(login: Option<&ProviderEnv>) -> Result<String> {
     Ok(format!("{unset}export {name}='{folder}'\n"))
 }
 
-/// Writes `<dir>/<name>.command` with the script, private to the user. `name` is made here from a session id or a
-/// digest, never from outside text.
+fn digest_of(text: &str) -> String {
+    Sha256::digest(text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Writes `<dir>/<name>-<digest of the script>.command` with the script, private to the user. `name` is made here
+/// from a session id or a fixed word, never from outside text. The digest keeps scripts with different content, such
+/// as the same clone opened as two instances, from sharing a path that Terminal may not have read yet.
 fn write_script(dir: &Path, name: &str, script: &str) -> Result<PathBuf> {
     std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let file = dir.join(format!("{name}.command"));
+    let file = dir.join(format!("{name}-{}.command", digest_of(script)));
     match std::fs::remove_file(&file) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
         _ => {}
@@ -117,7 +122,7 @@ fn write_script(dir: &Path, name: &str, script: &str) -> Result<PathBuf> {
     Ok(file)
 }
 
-/// Writes `<dir>/<short id>.command`: `cd` into the worktree, then `claude attach`. Nothing from a model or a ticket
+/// Writes `<dir>/<short id>-<digest>.command`: `cd` into the worktree, then `claude attach`. Nothing from a model or a ticket
 /// can be in it: the id is eight hex characters, and both paths are checked.
 pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, claude: &Path, worktree: &Path, id: &ShortId) -> Result<PathBuf> {
     let id = ShortId::parse(id.as_str()).ok_or_else(|| refuse("that isn't a session id"))?;
@@ -186,17 +191,16 @@ fn checked_clone(clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     Ok(real)
 }
 
-/// Writes `<dir>/<trust|signin|auto|bypass>-<digest of the folder>.command`: `cd` into the clone, then `claude`, which is
+/// Writes `<dir>/<trust|signin|auto|bypass>-<digest>.command`: `cd` into the clone, then `claude`, which is
 /// interactive and, for a refused mode, started in that mode. Both paths are checked, and the name is a digest, so no outside text reaches the script or its name.
 pub fn write_claude_file(dir: &Path, login: Option<&ProviderEnv>, purpose: Purpose, claude: &Path, clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let clone = checked_clone(clone, home)?;
     let (claude, clone_text) = (quotable(claude)?, quotable(&clone)?);
     let login_text = login_lines(login)?;
-    let digest: String = Sha256::digest(clone_text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
-    write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\n{login_text}cd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
+    write_script(dir, purpose.prefix(), &format!("#!/bin/zsh\n{login_text}cd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
 }
 
-/// Writes `<dir>/fix-<digest of the command>.command` running `command`. The command comes from a probe's fixed
+/// Writes `<dir>/fix-<digest>.command` running `command`. The command comes from a probe's fixed
 /// strings, but its host part is read from config.json, so only plain words, dots, dashes, colons and underscores
 /// pass: nothing in it can be quoting, a separator or a substitution.
 pub fn write_fix_file(dir: &Path, command: &str) -> Result<PathBuf> {
@@ -204,8 +208,7 @@ pub fn write_fix_file(dir: &Path, command: &str) -> Result<PathBuf> {
     if !plain {
         return Err(refuse("Gossamr won't run that command: it has a character in it that a fix never needs."));
     }
-    let digest: String = Sha256::digest(command.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
-    write_script(dir, &format!("fix-{digest}"), &format!("#!/bin/zsh\nunset GH_TOKEN GITHUB_TOKEN GH_HOST\n{command}\n"))
+    write_script(dir, "fix", &format!("#!/bin/zsh\nunset GH_TOKEN GITHUB_TOKEN GH_HOST\n{command}\n"))
 }
 
 /// Deletes attach scripts older than a day.

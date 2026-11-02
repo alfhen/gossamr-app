@@ -8,9 +8,11 @@ use async_trait::async_trait;
 use super::binary::find_binary;
 use super::cli::{ClaudeCli, SystemCli};
 use super::env::RunEnv;
-use super::provider_env::{ProviderEnv, ProviderState};
+use super::provider_env::{ProviderEnv, ProviderState, Unavailable};
+use crate::config::AppConfig;
 use crate::connections::{self, Driver};
-use crate::inbox::Core;
+use crate::inbox::{Core, Lookup};
+use crate::model_choice::Reason;
 
 #[derive(Clone)]
 pub struct Toolchain {
@@ -28,6 +30,11 @@ impl Toolchain {
     pub fn new(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>) -> Self {
         Self { cli, env, instance_id: connections::DEFAULT_CLAUDE.into(), instance_name: "Claude".into(), login: None }
     }
+
+    /// Whether the instance has a folder of its own, which a plain `claude` in the person's Terminal doesn't use.
+    pub fn has_own_folder(&self) -> bool {
+        self.login.as_ref().is_some_and(ProviderEnv::uses_own_folder)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,8 +45,13 @@ pub enum ToolchainError {
     NoEnvironment(String),
     /// No instance has this id, or it was removed. Never answered with another instance's toolchain.
     UnknownInstance(String),
-    /// The instance is off, in error, or can't run agents, in words for the person.
-    Unusable(String),
+    /// The instance is off, can't run agents, or has no readable shell setup behind it: `Off`, `CantRun` or
+    /// `NoShellSetup`. The words are `Reason::words`, the same ones the resolver uses.
+    Unusable { reason: Reason, name: String },
+    /// The instance's folder fails the rules in 6.2.
+    BadFolder { name: String, problem: String },
+    /// `config.json` can't be read, so no instance can be found. Not the same as a removed instance.
+    ConfigUnreadable(String),
 }
 
 #[async_trait]
@@ -72,12 +84,11 @@ impl SystemToolchain {
         self
     }
 
-    async fn build(&self, id: &str, name: &str, login: Option<ProviderEnv>) -> Result<Toolchain, ToolchainError> {
-        let shell = self.core.shell();
-        let env = shell.get().await.map_err(|e| ToolchainError::NoEnvironment(e.to_string()))?;
+    async fn build(&self, id: &str, name: &str, login: Option<ProviderEnv>, shell: Result<Arc<RunEnv>, String>) -> Result<Toolchain, ToolchainError> {
+        let env = shell.map_err(ToolchainError::NoEnvironment)?;
         let (find, on) = (self.find, env.clone());
         let Some(binary) = tokio::task::spawn_blocking(move || find(Driver::Claude, &on)).await.ok().flatten() else {
-            shell.forget().await;
+            self.core.shell().forget().await;
             return Err(ToolchainError::ClaudeMissing { instance: name.into() });
         };
         let run_env = login.as_ref().map_or_else(|| env.clone(), |login| Arc::new(login.over(&env)));
@@ -92,23 +103,28 @@ impl ToolchainSource for SystemToolchain {
         if let Some(t) = &*found {
             return Ok(t.clone());
         }
-        let name = self.core.provider(connections::DEFAULT_CLAUDE).await.map_or_else(|| "Claude".to_owned(), |(p, _)| p.display_name);
-        let t = self.build(connections::DEFAULT_CLAUDE, &name, None).await?;
+        let name = AppConfig::load(&self.core.data_dir()).providers.into_iter().find(|p| p.id == connections::DEFAULT_CLAUDE).map_or_else(|| "Claude".to_owned(), |p| p.display_name);
+        let shell = self.core.shell().get().await.map_err(|e| e.to_string());
+        let t = self.build(connections::DEFAULT_CLAUDE, &name, None, shell).await?;
         *found = Some(t.clone());
         Ok(t)
     }
 
     async fn for_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
-        let Some((instance, state)) = self.core.provider(id).await else { return Err(ToolchainError::UnknownInstance(id.into())) };
-        let name = &instance.display_name;
+        let (instance, state, shell) = match self.core.lookup_provider(id).await {
+            Lookup::Found { instance, state, shell } => (instance, state, shell),
+            Lookup::Missing => return Err(ToolchainError::UnknownInstance(id.into())),
+            Lookup::Unreadable(why) => return Err(ToolchainError::ConfigUnreadable(why)),
+        };
+        let name = instance.display_name.clone();
         if !instance.driver.runs_agents() {
-            return Err(ToolchainError::Unusable(format!("{name} can't run agents.")));
+            return Err(ToolchainError::Unusable { reason: Reason::CantRun(instance.driver), name });
         }
         match state {
-            ProviderState::Off => Err(ToolchainError::Unusable(format!("{name} is turned off."))),
-            ProviderState::Error(problem) => Err(ToolchainError::Unusable(format!("{name}: {problem}"))),
-            ProviderState::Unavailable(why) => Err(ToolchainError::NoEnvironment(why.message().into())),
-            ProviderState::Ready(login) => self.build(&instance.id, name, Some(login)).await,
+            ProviderState::Off => Err(ToolchainError::Unusable { reason: Reason::Off, name }),
+            ProviderState::Error(problem) => Err(ToolchainError::BadFolder { name, problem }),
+            ProviderState::Unavailable(Unavailable::NoShellSetup) => Err(ToolchainError::Unusable { reason: Reason::NoShellSetup, name }),
+            ProviderState::Ready(login) => self.build(&instance.id, &name, Some(login), shell).await,
         }
     }
 }
@@ -232,13 +248,48 @@ mod tests {
         add(&fx, "off", Driver::Claude, Some("~/.claude-off"), false);
         add(&fx, "bad", Driver::Claude, Some("/tmp/outside-home"), true);
         add(&fx, "codex", Driver::Codex, Some("~/.codex-work"), true);
-        let words = |e: Option<ToolchainError>| match e {
-            Some(ToolchainError::Unusable(words)) => words,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(words(tools.for_instance("off").await.err()), "off name is turned off.");
-        assert!(words(tools.for_instance("bad").await.err()).starts_with("bad name: This folder can't be used: "));
-        assert_eq!(words(tools.for_instance("codex").await.err()), "codex name can't run agents.");
+        assert_eq!(tools.for_instance("off").await.err(), Some(ToolchainError::Unusable { reason: Reason::Off, name: "off name".into() }));
+        assert!(matches!(tools.for_instance("bad").await.err(), Some(ToolchainError::BadFolder { name, problem }) if name == "bad name" && problem.starts_with("This folder can't be used: ")));
+        assert_eq!(tools.for_instance("codex").await.err(), Some(ToolchainError::Unusable { reason: Reason::CantRun(Driver::Codex), name: "codex name".into() }));
+    }
+
+    #[tokio::test]
+    async fn a_shell_that_cannot_be_read_stops_the_instance_that_uses_the_shells_login_and_gives_the_one_with_a_folder_no_environment() {
+        let fx = fixture_with_shell(ShellCapture::with_shell("/nonexistent/shell")).await;
+        let tools = SystemToolchain::new(fx.core.clone()).with_finder(the_fake);
+        add(&fx, "claude_2", Driver::Claude, Some("~/.claude-work"), true);
+        assert_eq!(tools.for_instance("claude").await.err(), Some(ToolchainError::Unusable { reason: Reason::NoShellSetup, name: "Claude".into() }));
+        assert!(matches!(tools.for_instance("claude_2").await.err(), Some(ToolchainError::NoEnvironment(_))), "no environment to start it in");
+        assert!(matches!(tools.get().await.err(), Some(ToolchainError::NoEnvironment(_))));
+    }
+
+    #[tokio::test]
+    async fn a_config_that_cannot_be_read_is_not_a_removed_instance() {
+        let (fx, tools) = rig("unreadable").await;
+        std::fs::write(fx.core.data_dir().join("config.json"), "{ not json").unwrap();
+        for id in ["claude", "claude_2"] {
+            assert!(matches!(tools.for_instance(id).await.err(), Some(ToolchainError::ConfigUnreadable(_))), "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_uncached_toolchain_reads_the_shell_once() {
+        let dir = std::env::temp_dir().join(format!("gossamr-toolchain-count-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let counter = dir.join("runs");
+        let _ = std::fs::remove_file(&counter);
+        let shell = dir.join("failing-shell");
+        std::fs::write(&shell, format!("#!/bin/sh\necho x >> '{}'\nexit 1\n", counter.display())).unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fx = fixture_with_shell(ShellCapture::with_shell(&shell.display().to_string())).await;
+        let tools = SystemToolchain::new(fx.core.clone()).with_finder(the_fake);
+        add(&fx, "claude_2", Driver::Claude, Some("~/.claude-work"), true);
+        let runs = || std::fs::read_to_string(&counter).map_or(0, |t| t.lines().count());
+        assert!(tools.get().await.is_err());
+        assert_eq!(runs(), 1, "get");
+        assert!(tools.for_instance("claude_2").await.is_err());
+        assert_eq!(runs(), 2, "for_instance");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

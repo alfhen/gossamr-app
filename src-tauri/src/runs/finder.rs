@@ -40,7 +40,7 @@ impl AgentDriver for RunService {
             Err(e) => return Some(e.to_string()),
         };
         match tc.cli.auth_status().await {
-            Ok(auth) if !auth.logged_in => Some(Failure::NotSignedIn { instance: tc.instance_name.clone() }.to_string()),
+            Ok(auth) if !auth.logged_in => Some(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() }.to_string()),
             Err(CliError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing { instance: tc.instance_name.clone() }.to_string()),
             _ => None,
         }

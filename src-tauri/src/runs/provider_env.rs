@@ -65,6 +65,11 @@ impl ProviderEnv {
         Ok(Self { vars, from_folder })
     }
 
+    /// Whether the login comes from the instance's own folder, not from the shell.
+    pub fn uses_own_folder(&self) -> bool {
+        self.from_folder
+    }
+
     /// What a Terminal script does to run as this instance: the variables to remove and the folder variable to set.
     /// None without a folder, where Terminal's own environment picks the login.
     pub fn terminal_login(&self) -> Option<TerminalLogin<'_>> {

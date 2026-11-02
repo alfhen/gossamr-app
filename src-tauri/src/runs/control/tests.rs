@@ -224,7 +224,9 @@ fn the_attach_file_is_exactly_three_lines_and_private() {
     let (id, claude) = ids();
     let worktree = Path::new("/Users/me/My Code/webshop/.claude/worktrees/ce-1-fix-cart-0a1b");
     let file = write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
-    assert_eq!(file, dir.join("1a2b3c4d.command"));
+    assert_eq!(file.parent(), Some(dir.as_path()));
+    let name = file.file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("1a2b3c4d-") && name.ends_with(".command"), "{name}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "#!/bin/zsh\ncd '/Users/me/My Code/webshop/.claude/worktrees/ce-1-fix-cart-0a1b'\nexec '/opt/fake/bin/claude' attach 1a2b3c4d\n"
@@ -263,7 +265,7 @@ fn a_path_that_could_reach_the_shell_is_refused_and_nothing_is_written() {
         let refused = write_attach_file(&dir, None, Path::new(bad), Path::new("/work/ok"), &id);
         assert!(refused.is_err(), "{bad:?} as the claude path");
     }
-    assert!(!dir.join("1a2b3c4d.command").exists());
+    assert!(std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none()));
 }
 
 #[test]
@@ -301,9 +303,10 @@ async fn attach_writes_the_file_for_the_stored_run_and_opens_it() {
     let (rig, run) = working().await;
     rig.svc.attach(&run.id).await.unwrap();
     let opened = rig.opened.0.lock().unwrap().clone();
-    let expected = rig.fx.core.data_dir().join("attach").join(format!("{}.command", run.short_id.as_ref().unwrap()));
-    assert_eq!(opened, std::slice::from_ref(&expected));
-    let script = std::fs::read_to_string(&expected).unwrap();
+    let [expected] = opened.as_slice() else { panic!("{opened:?}") };
+    assert_eq!(expected.parent(), Some(rig.fx.core.data_dir().join("attach").as_path()));
+    assert!(expected.file_name().unwrap().to_str().unwrap().starts_with(&format!("{}-", run.short_id.as_ref().unwrap())));
+    let script = std::fs::read_to_string(expected).unwrap();
     assert_eq!(script, format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude' attach {}\n", run.expected_worktree.display(), run.short_id.as_ref().unwrap()));
 }
 
@@ -684,4 +687,37 @@ async fn terminal_opens_as_the_login_of_the_toolchain_the_run_goes_through() {
     let file = rig.opened.0.lock().unwrap().last().cloned().unwrap();
     let script = std::fs::read_to_string(file).unwrap();
     assert!(script.contains("export CLAUDE_CONFIG_DIR='/Users/me/.claude-work'\ncd '"), "{script}");
+}
+
+#[test]
+fn the_same_clone_opened_as_two_instances_gets_two_files_so_one_cannot_replace_the_other() {
+    let (dir, home) = (tmp("two-logins"), home("two-logins"));
+    let clone = clone_in(&home, "webshop");
+    let (id, claude) = ids();
+    let login = folder_login();
+    for purpose in [Purpose::Trust, Purpose::SignIn, Purpose::Mode(RefusedMode::Auto)] {
+        let plain = write_claude_file(&dir, None, purpose, &claude, &clone, Some(&home)).unwrap();
+        let personal = write_claude_file(&dir, Some(&login), purpose, &claude, &clone, Some(&home)).unwrap();
+        assert_ne!(plain, personal, "{purpose:?}");
+        assert!(!std::fs::read_to_string(&plain).unwrap().contains("CLAUDE_CONFIG_DIR"));
+        assert!(std::fs::read_to_string(&personal).unwrap().contains("export CLAUDE_CONFIG_DIR="));
+    }
+    let worktree = Path::new("/work/ok");
+    let plain = write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
+    let personal = write_attach_file(&dir, Some(&login), &claude, worktree, &id).unwrap();
+    assert_ne!(plain, personal, "two daemons can hand out the same short id");
+    assert!(!std::fs::read_to_string(&plain).unwrap().contains("CLAUDE_CONFIG_DIR"));
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_failed_call_as_an_instance_with_a_folder_says_so_and_one_without_does_not() {
+    let plain = Toolchain::new(Arc::new(FakeCli::new()), Arc::new(crate::runs::env::RunEnv::from_pairs([("PATH", "/bin")])));
+    let personal = Toolchain { login: Some(folder_login()), instance_name: "Claude personal".into(), ..plain.clone() };
+    let folder = Path::new("/Users/me/Code/webshop");
+    let untrusted = || crate::runs::cli::CliError::Failed { code: Some(1), stderr: "Workspace not trusted".into() };
+    assert!(matches!(Failure::from_cli(untrusted(), folder, &plain), Failure::NeedsTrust { own_folder: false, .. }));
+    assert!(matches!(Failure::from_cli(untrusted(), folder, &personal), Failure::NeedsTrust { own_folder: true, .. }));
+    assert!(personal.has_own_folder() && !plain.has_own_folder());
 }

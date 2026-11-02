@@ -431,7 +431,7 @@ impl RunFailure {
         }
         if let Some(mode) = RefusedMode::reads(message) {
             RunFailure::ModeRefused { mode }
-        } else if message.contains(" isn't signed in. Run `claude` in Terminal") {
+        } else if message.contains(" isn't signed in. Run `claude` in Terminal") || message.contains(" isn't signed in. Sign in with Gossamr's Open Terminal button") {
             RunFailure::NotSignedIn
         } else if message.starts_with("Claude Code isn't installed") {
             RunFailure::ClaudeMissing

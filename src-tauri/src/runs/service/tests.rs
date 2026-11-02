@@ -499,7 +499,7 @@ async fn retry_after_the_folder_is_trusted_launches_a_run_that_never_had_a_sessi
 async fn a_run_failed_before_failures_were_typed_gets_its_kind_from_its_message_when_read() {
     let rig = ready().await;
     let run = rig.queued(1).await;
-    let message = Failure::NeedsTrust { folder: rig.clone.clone(), instance: "Claude".into() }.to_string();
+    let message = Failure::NeedsTrust { folder: rig.clone.clone(), instance: "Claude".into(), own_folder: false }.to_string();
     rig.set(&run, |r| {
         r.state = RunState::Failed;
         r.error = Some(message.clone());

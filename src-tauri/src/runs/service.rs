@@ -303,11 +303,11 @@ impl RunService {
             Ok(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
             Err(why) => return Err(Failure::NoClone(format!("Git couldn't read the origin of {} ({why})", clone.display()))),
         }
-        let auth = tc.cli.auth_status().await.map_err(|e| Failure::from_cli(e, clone, &tc.instance_name))?;
+        let auth = tc.cli.auth_status().await.map_err(|e| Failure::from_cli(e, clone, tc))?;
         if !auth.logged_in {
-            return Err(Failure::NotSignedIn { instance: tc.instance_name.clone() });
+            return Err(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
         }
-        if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone, &tc.instance_name))? {
+        if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone, tc))? {
             return Err(Failure::TooOld);
         }
         Ok(())
@@ -320,7 +320,7 @@ impl RunService {
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         loop {
-            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc.instance_name))?;
+            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc))?;
             if let Some(found) = entries.into_iter().find(|e| belongs_to(e, run)) {
                 return Ok(Some(found));
             }
@@ -376,7 +376,7 @@ impl RunService {
                 self.store(run).await
             }
             Err(e) => {
-                let why = Failure::from_cli(e, &run.spec.clone_path, &tc.instance_name);
+                let why = Failure::from_cli(e, &run.spec.clone_path, &tc);
                 self.fail(run, &why).await
             }
         }
