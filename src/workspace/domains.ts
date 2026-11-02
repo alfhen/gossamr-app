@@ -8,7 +8,9 @@ export type ContainerDomain = "work" | "code" | "model";
 
 type Kind = ConnectionInfo["kind"] | string | undefined;
 
-export const domainOfKind = (kind: Kind): ContainerDomain => (kind === "github" ? "code" : kind === "provider" ? "model" : "work");
+const PROVIDER_ID = /^(claude|codex)(_\d+)?$/;
+
+export const domainOfKind = (kind: Kind): ContainerDomain => (kind === "github" ? "code" : kind === "provider" || PROVIDER_ID.test(kind ?? "") ? "model" : "work");
 
 /** Whether a connection is a Jira one, the sample included. Anything that is neither GitHub nor Jira (a provider) is not. */
 export const isJira = (kind: Kind) => kind === "jira" || kind === "mock";
