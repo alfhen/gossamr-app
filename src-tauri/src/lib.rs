@@ -310,9 +310,7 @@ async fn probe_connections(app: &AppHandle, core: &CoreState, why: Probe) {
     let providers = {
         let (app, core) = (app.clone(), core.clone());
         tauri::async_runtime::spawn(async move {
-            for instance_id in core.probe_providers(why).await {
-                wire::changed(&app, wire::Topic::Connections, &instance_id);
-            }
+            core.probe_providers_each(why, |instance_id| wire::changed(&app, wire::Topic::Connections, instance_id)).await;
         })
     };
     drop(providers);

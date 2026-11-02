@@ -69,6 +69,18 @@ enum Ran {
     Done { code: Option<i32>, stdout: String, stderr: String },
 }
 
+/// The most of a CLI's stdout or stderr that is kept. The login lines are a few hundred bytes.
+const KEPT_BYTES: u64 = 64 * 1024;
+
+/// Keeps the first `KEPT_BYTES` of `pipe` and reads the rest away, so a chatty CLI neither fills memory nor blocks on a full pipe.
+async fn capped(mut pipe: impl tokio::io::AsyncRead + Unpin, limit: u64) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut kept = Vec::new();
+    let _ = (&mut pipe).take(limit).read_to_end(&mut kept).await;
+    let _ = tokio::io::copy(&mut pipe, &mut tokio::io::sink()).await;
+    String::from_utf8_lossy(&kept).into_owned()
+}
+
 /// Runs without a shell and without input, and stops the process after `timeout`.
 async fn run(binary: &Path, args: &[&str], env: &RunEnv, timeout: Duration) -> Ran {
     let mut command = std::process::Command::new(binary);
@@ -76,10 +88,12 @@ async fn run(binary: &Path, args: &[&str], env: &RunEnv, timeout: Duration) -> R
     env.apply(&mut command);
     let mut command = Command::from(command);
     command.kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
+    let Ok(mut child) = command.spawn() else { return Ran::Failed };
+    let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else { return Ran::Failed };
+    match tokio::time::timeout(timeout, async { tokio::join!(capped(stdout, KEPT_BYTES), capped(stderr, KEPT_BYTES), child.wait()) }).await {
         Err(_) => Ran::TimedOut,
-        Ok(Err(_)) => Ran::Failed,
-        Ok(Ok(out)) => Ran::Done { code: out.status.code(), stdout: String::from_utf8_lossy(&out.stdout).into_owned(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() },
+        Ok((_, _, Err(_))) => Ran::Failed,
+        Ok((stdout, stderr, Ok(status))) => Ran::Done { code: status.code(), stdout, stderr },
     }
 }
 
@@ -194,6 +208,17 @@ mod tests {
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    #[tokio::test]
+    async fn only_the_start_of_a_chatty_cli_is_kept_and_the_rest_is_read_away() {
+        let big = vec![b'x'; 300_000];
+        assert_eq!(capped(&big[..], 100).await.len(), 100);
+        assert_eq!(capped(&b"short"[..], 100).await, "short");
+        let dir = scratch("chatty");
+        let noisy = cli(&dir, "claude", "[ \"$1\" = \"--version\" ] && { echo '2.1.316 (Claude Code)'; exit 0; }\necho '{\"loggedIn\":true,\"email\":\"a@b.c\"}'\nhead -c 3000000 /dev/zero | tr '\\0' x >&2");
+        let seen = probe(Driver::Claude, Some(&noisy), None, &env(), Timeouts::default()).await;
+        assert_eq!(seen.state, State::Ready);
     }
 
     fn env() -> RunEnv {

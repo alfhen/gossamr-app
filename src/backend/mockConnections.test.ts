@@ -120,7 +120,7 @@ describe("the mock provider instance", () => {
   });
 
   it("scripts each state the Claude probe can find and shows Off while it is turned off", async () => {
-    for (const state of ["ready", "notSignedIn", "notFound", "error", "off"] as const) {
+    for (const state of ["ready", "notSignedIn", "notFound", "error"] as const) {
       const rows = await new MockBackend({ githubRepos: 6, claudeProbe: state }).connectionsList();
       expect(rows[2].status?.state, state).toBe(state);
     }

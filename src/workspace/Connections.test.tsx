@@ -228,9 +228,9 @@ describe("a provider in the list", () => {
     expect(out).not.toContain("Open Terminal");
   });
 
-  it("says in the detail pane that no check runs", () => {
+  it("says in the detail pane that a provider with no answer yet is not checked yet", () => {
     const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
-    expect(out).toContain("No check runs for this provider.");
+    expect(out).toContain("Not checked yet.");
   });
 });
 

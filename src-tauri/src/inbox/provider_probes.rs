@@ -20,6 +20,8 @@ const FOCUS_AFTER: Duration = Duration::from_secs(5 * 60);
 
 struct Answer {
     snapshot: Snapshot,
+    /// The folder the instance had when asked, so a changed folder is never answered from here.
+    folder: Option<String>,
     at: Instant,
 }
 
@@ -33,7 +35,13 @@ pub(super) struct ProviderProbes {
 impl Core {
     /// Probes every provider instance at the same time and returns the ids whose answer changed. A refresh reports all
     /// of them, because the page shows when they were checked. A Jira or GitHub refusal says nothing about a CLI login.
+    #[cfg(test)]
     pub async fn probe_providers(self: &Arc<Self>, why: Probe) -> Vec<String> {
+        self.probe_providers_each(why, |_| {}).await
+    }
+
+    /// Like `probe_providers`, and calls `answered` with each changed id as soon as its own probe is done.
+    pub async fn probe_providers_each(self: &Arc<Self>, why: Probe, answered: impl Fn(&str)) -> Vec<String> {
         if why == Probe::Unauthorized {
             return Vec::new();
         }
@@ -43,7 +51,14 @@ impl Core {
             let (core, shell) = (self.clone(), setup.shell.clone());
             probing.spawn(async move { (at, core.probe_provider(instance, state, shell, why).await) });
         }
-        let mut found = probing.join_all().await;
+        let mut found = Vec::new();
+        while let Some(done) = probing.join_next().await {
+            let Ok((at, changed)) = done else { continue };
+            if let Some(id) = &changed {
+                answered(id);
+            }
+            found.push((at, changed));
+        }
         found.sort_by_key(|(at, _)| *at);
         found.into_iter().filter_map(|(_, changed)| changed).collect()
     }
@@ -85,26 +100,29 @@ impl Core {
         };
         let previous = {
             let answers = self.provider_probes.answers.lock().expect("provider probe lock poisoned");
-            answers.get(&instance.id).map(|a| (a.snapshot.clone(), a.at.elapsed()))
+            answers.get(&instance.id).map(|a| (a.snapshot.clone(), a.at.elapsed(), a.folder == instance.config.config_dir))
         };
-        if why == Probe::Focus && previous.as_ref().is_some_and(|(s, age)| s.state == State::Ready && *age < FOCUS_AFTER) {
+        if why == Probe::Focus && previous.as_ref().is_some_and(|(s, age, same_folder)| s.state == State::Ready && *age < FOCUS_AFTER && *same_folder) {
             return None;
         }
-        let previous = previous.map(|(snapshot, _)| snapshot);
+        let previous = previous.map(|(snapshot, ..)| snapshot);
         let now = self.provider_answer(&instance, &state, shell.as_deref()).await.keeping_account_of(previous.as_ref());
         let changed = why == Probe::Refresh || previous.as_ref().is_none_or(|p| !p.same_as(&now));
         // An answer about an instance that was removed, turned on or off, or given another folder while it was
-        // being asked is about the wrong thing.
+        // being asked is about the wrong thing. The answers lock is held across the check and the insert, so a forget
+        // that follows a config change waits and then removes this answer instead of being overtaken by it.
+        let mut answers = self.provider_probes.answers.lock().expect("provider probe lock poisoned");
         if !self.provider_unchanged(&instance) {
             return None;
         }
-        self.provider_probes.answers.lock().expect("provider probe lock poisoned").insert(instance.id.clone(), Answer { snapshot: now, at: Instant::now() });
+        answers.insert(instance.id.clone(), Answer { snapshot: now, folder: instance.config.config_dir.clone(), at: Instant::now() });
+        drop(answers);
         changed.then_some(instance.id)
     }
 
     fn provider_unchanged(&self, instance: &ProviderInstance) -> bool {
         let config = crate::config::AppConfig::load(&self.data_dir);
-        config.providers.iter().any(|p| p.id == instance.id && p.enabled == instance.enabled && p.config.config_dir == instance.config.config_dir)
+        config.providers.iter().any(|p| p.id == instance.id && p.driver == instance.driver && p.enabled == instance.enabled && p.config.config_dir == instance.config.config_dir)
     }
 
     /// Off and error instances spawn nothing.
@@ -273,6 +291,40 @@ mod tests {
         fx.core.probe_providers(Probe::Focus).await;
         fx.core.probe_providers(Probe::Focus).await;
         assert_eq!(runs(&calls).len(), 5);
+    }
+
+    #[tokio::test]
+    async fn a_focus_asks_again_when_the_folder_changed_since_the_last_answer() {
+        let fx = fixture().await;
+        let calls = install_claude(&fx, IN);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        assert_eq!(runs(&calls).len(), 2);
+        fx.core.probe_providers(Probe::Focus).await;
+        assert_eq!(runs(&calls).len(), 2, "same folders, fresh answers");
+        AppConfig::update(&fx.core.data_dir(), |config| config.providers.iter_mut().find(|p| p.id == "claude_2").unwrap().config.config_dir = Some("~/.claude-other".into())).unwrap();
+        fx.core.probe_providers(Probe::Focus).await;
+        let seen = runs(&calls);
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().any(|l| l.contains(".claude-other")), "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn each_changed_id_is_reported_as_its_probe_ends_and_an_answer_for_another_driver_is_dropped() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        let heard = Mutex::new(Vec::new());
+        let returned = fx.core.probe_providers_each(Probe::Launch, |id| heard.lock().unwrap().push(id.to_string())).await;
+        let mut heard = heard.into_inner().unwrap();
+        heard.sort();
+        assert_eq!(heard, ["claude", "claude_2"]);
+        assert_eq!(returned, ["claude", "claude_2"]);
+
+        let mut stale = connections::default_claude();
+        stale.driver = Driver::Codex;
+        assert!(!fx.core.provider_unchanged(&stale));
+        assert!(fx.core.provider_unchanged(&connections::default_claude()));
     }
 
     #[tokio::test]
