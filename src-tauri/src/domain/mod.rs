@@ -79,6 +79,7 @@ pub(crate) mod fixtures {
             name: "eng-1-fix-cart-3f9a".into(),
             brief: "Find out why the cart total is wrong.".into(),
             ticket: None,
+            site: None,
             ticket_block: None,
             pr: None,
             pr_sha: None,

@@ -1243,6 +1243,18 @@ mod waiting {
     }
 
     #[tokio::test]
+    async fn a_run_waits_on_its_own_connections_workstream_not_the_primary_s() {
+        use crate::runs::rig::queued_in_a_workstream_of_the_second_account;
+        let (rig, run, ws, second) = queued_in_a_workstream_of_the_second_account().await;
+        rig.fx.core.pause_workstream(&second, &ws, PauseReason::Person, Actor::Person).await.unwrap();
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "its workstream is paused");
+        assert_eq!(rig.get(&run).await.state, RunState::Queued);
+
+        rig.fx.core.resume_workstream(&second, &ws).await.unwrap();
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&run.id));
+    }
+
+    #[tokio::test]
     async fn a_closed_workstream_s_run_waits_and_a_paused_one_starts_once_resumed() {
         let rig = ready().await;
         rig.fx.add_item(2).await;

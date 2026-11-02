@@ -139,6 +139,9 @@ pub struct RunSpec {
     /// The key of the ticket the run is about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ticket: Option<String>,
+    /// The Jira site the ticket is on. Keys repeat across sites, so the prompt names it beside the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
     /// Snapshot of the ticket, made by `ticket_snapshot` and never taken from a model.
     #[serde(default)]
     pub ticket_block: Option<String>,
@@ -302,10 +305,15 @@ pub fn render_prompt(spec: &RunSpec) -> String {
     let role = spec.role.as_str();
     let article = if role.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
     let on = spec.ticket.as_deref().map_or_else(|| "the task below".to_string(), without_markers);
+    let site = spec.ticket.as_ref().and(spec.site.as_deref()).map(|site| without_markers(&site.split_whitespace().collect::<Vec<_>>().join(" ")));
+    let on_site = site.as_ref().map(|site| format!(" (on {site})")).unwrap_or_default();
     let mut parts = vec![
-        format!("You are working as {article} {role} on {on}."),
+        format!("You are working as {article} {role} on {on}{on_site}."),
         format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
     ];
+    if site.is_some() {
+        parts.push(format!("Another Jira site can have a ticket with the same key. Put the full key, {on}, in the title of any pull request you open."));
+    }
     if let Some(pr) = spec.pr {
         let at = spec.pr_sha.as_deref().map(|sha| format!(" at commit {sha}")).unwrap_or_default();
         parts.push(format!(
@@ -784,6 +792,21 @@ mod tests {
         assert!(at("You are working as") < at("git fetch origin main") && at("git fetch origin main") < at("Find out why the cart total is wrong.") && at("Find out why") < at("<<<TICKET"));
         assert!(!p.contains("pull/"), "no pull request step without a pull request");
         assert!(p.ends_with("TICKET>>>"));
+    }
+
+    #[test]
+    fn the_brief_names_the_site_beside_the_key_and_asks_for_the_full_key_in_pull_request_titles() {
+        let p = render_prompt(&RunSpec { site: Some("Acme\nJira".into()), ..ticketed() });
+        assert!(p.starts_with("You are working as a builder on CA-412 (on Acme Jira)."), "{p}");
+        assert!(p.contains("Put the full key, CA-412, in the title of any pull request you open."), "{p}");
+        assert!(p.find("Put the full key").unwrap() < p.find("Find out why").unwrap());
+    }
+
+    #[test]
+    fn a_spec_with_no_site_or_no_ticket_reads_as_it_did_before() {
+        for p in [render_prompt(&ticketed()), render_prompt(&RunSpec { site: Some("Acme Jira".into()), ..spec() })] {
+            assert!(!p.contains("(on ") && !p.contains("full key"), "{p}");
+        }
     }
 
     #[test]

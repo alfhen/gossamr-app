@@ -505,6 +505,8 @@ export interface RunSpec {
   brief: string;
   /** The key of the ticket the run is about. */
   ticket?: string | null;
+  /** The Jira site the ticket is on, named beside the key in the agent's prompt. */
+  site?: string | null;
   /** Snapshot of the ticket made by the backend, never taken from a model. */
   ticketBlock?: string | null;
   /** The pull request the run checks out. */
