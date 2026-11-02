@@ -130,7 +130,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
   if (isUnreadableProviders(c)) return <p role="status" className="m-0 text-ws-blocked">{c.error}</p>;
   if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
-  if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : c.kind === "provider" ? "No check runs for this provider." : "Not checked yet."}</p>;
+  if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : "Not checked yet."}</p>;
   return (
     <>
       <p data-probe={s.state} role={loud ? "status" : undefined} className={`m-0 ${loud ? "text-ws-blocked" : "text-ws-ink"}`}>
@@ -142,9 +142,11 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           <Button size="sm" onClick={() => p.onCopy(s.fix as string)}>
             {p.copied ? "Copied" : "Copy"}
           </Button>
-          <Button size="sm" onClick={p.onOpenTerminal}>
-            Open Terminal
-          </Button>
+          {c.kind !== "provider" && (
+            <Button size="sm" onClick={p.onOpenTerminal}>
+              Open Terminal
+            </Button>
+          )}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
