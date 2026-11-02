@@ -202,6 +202,8 @@ pub struct Core {
     probes: probes::Probes,
     /// The person's shell environment, which provider instances without a folder take their login from.
     shell: Arc<ShellCapture>,
+    /// What `codex debug models` last said, per Codex instance.
+    codex_models: models::Seen,
     schedules: Mutex<HashMap<String, Schedule>>,
     /// When each connection was last checked for work assigned outside what it watches.
     radar: Mutex<HashMap<String, chrono::DateTime<Utc>>>,
@@ -240,6 +242,7 @@ impl Core {
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
             shell: Arc::default(),
+            codex_models: Default::default(),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
             asks: Asks::default(),
