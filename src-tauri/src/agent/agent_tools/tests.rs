@@ -9,7 +9,7 @@ use crate::agent::mcp::{bind, McpServer, PipRun};
 use crate::domain::{Actor, Link, LinkKind, RunSpec, RunState};
 use crate::runs::ask::ASK_WAIT;
 use crate::runs::report::new_token;
-use crate::runs::rig::{ready_with, Rig};
+use crate::runs::rig::{ready_on, ready_with, Rig};
 use crate::runs::tracker::Attention;
 
 const OPEN: &str = "<<<AGENT_OUTPUT";
@@ -38,6 +38,24 @@ async fn live(tag: &str) -> Live {
     let rig = ready_with(move |svc| svc.with_agent_channel(channel).with_cap(6)).await;
     let server = McpServer::start_on(bound, rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
     Live { rig, server, port, dir, http: reqwest::Client::new() }
+}
+
+/// Two Jira accounts, the first the primary. The second has `BETA-1` cached and a workstream on it with notes.
+async fn live_on_two_accounts(tag: &str) -> (Live, crate::auth::Scope, String) {
+    let dir = std::env::temp_dir().join(format!("gossamr-agent-tools-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let bound = bind(dir.join("agents")).await.unwrap();
+    let channel = bound.channel();
+    let port = channel.port();
+    let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    fx.add_item_in(&second, "BETA-1").await;
+    let rig = ready_on(fx, move |svc| svc.with_agent_channel(channel).with_cap(6)).await;
+    let server = McpServer::start_on(bound, rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
+    let item = crate::domain::ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+    let ws = rig.fx.core.open_workstream(&second, Some(item), None).await.unwrap().id;
+    rig.fx.core.set_workstream_notes(&second, &ws, "Beta prefers the small fix.", Actor::Pip).await.unwrap();
+    (Live { rig, server, port, dir, http: reqwest::Client::new() }, second, ws)
 }
 
 impl Live {
@@ -603,6 +621,23 @@ async fn read_workstream_stays_within_its_budget_and_says_what_it_left_out() {
     assert!(!is_error);
     assert!(text.chars().count() < RUNS_CHARS + TICKET_CHARS + 4_000, "{}", text.chars().count());
     assert!(text.contains("(cut short)"), "a long plan is cut and says so");
+}
+
+#[tokio::test]
+async fn a_run_on_the_second_account_reads_its_own_ticket_and_workstream() {
+    let (t, second, ws) = live_on_two_accounts("second-account").await;
+    let core = &t.rig.fx.core;
+    core.set_instance_enabled("jira", false).await.unwrap();
+    let item = crate::domain::ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+    let queued = core.queue_test_run(RunSpec { workstream: Some(ws), ..t.rig.spec(1) }, Some(item)).await.unwrap();
+    core.set_instance_enabled("jira", true).await.unwrap();
+    assert_ne!(core.scope().await.unwrap(), second, "the primary is the first account");
+    let run = t.rig.svc.start_now(&queued.id).await.unwrap();
+
+    let (ticket, is_error) = t.call(&run, "read_ticket", json!({ "key": "BETA-1" })).await;
+    assert!(!is_error && ticket.contains("BETA-1: Ticket BETA-1"), "{ticket}");
+    let (workstream, is_error) = t.call(&run, "read_workstream", json!({})).await;
+    assert!(!is_error && workstream.contains("<<<PIP_NOTES\nBeta prefers the small fix.\nPIP_NOTES>>>"), "{workstream}");
 }
 
 #[tokio::test]

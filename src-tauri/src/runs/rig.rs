@@ -102,6 +102,20 @@ pub async fn working_on_the_second_account() -> (Rig, Run, Scope) {
     (rig, run, second)
 }
 
+/// Two Jira accounts, the first the primary, and a queued run in a workstream (with no ticket) of the second.
+pub async fn queued_in_a_workstream_of_the_second_account() -> (Rig, Run, String, Scope) {
+    let (fx, second) = fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    fx.core.set_instance_enabled("jira", false).await.unwrap();
+    let rig = ready_on(fx, |svc| svc).await;
+    let ws = rig.fx.core.open_workstream(&second, None, Some("Beta work".into())).await.unwrap().id;
+    let queued = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws.clone()), ..rig.spec(1) }, None).await.unwrap();
+    rig.fx.core.set_instance_enabled("jira", true).await.unwrap();
+    assert_eq!(rig.fx.core.primary().await.unwrap().scope, rig.fx.scope);
+    assert_eq!(queued.connection_id, second.connection_id);
+    (rig, queued, ws, second)
+}
+
 pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {
     TimelineLine { at: Some(at.into()), state: Some(state.into()), detail: None, text: Some(text.into()) }
 }

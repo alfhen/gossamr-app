@@ -43,7 +43,7 @@ impl RunService {
     /// Why Pip may not wake `run` now: its workstream is closed or paused, as `start_agent` words it.
     async fn workstream_hold(&self, run: &Run) -> Option<String> {
         let ws = run.spec.workstream.as_deref()?;
-        let scope = self.core.scope().await.ok()?;
+        let scope = self.core.scope_of(&run.connection_id).await.ok()?;
         let view = self.core.workstream(&scope, ws).await.ok()??.workstream;
         if view.closed_at.is_some() {
             return Some(format!("The workstream “{}” is closed.", view.title));

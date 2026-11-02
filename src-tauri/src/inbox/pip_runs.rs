@@ -105,6 +105,8 @@ impl Core {
         let item = ticket.map(|key| Self::item(scope, key));
         let links = item.as_ref().map(|i| self.ticket_dev_links(i)).unwrap_or_default();
         let connection_id = scope.connection_id.clone();
+        let (_, site, _) = self.identity_for(scope).await?;
+        let site = site.name;
         let mut spec = RunSpec {
             role: ask.role,
             repo,
@@ -113,6 +115,7 @@ impl Core {
             name: plan.name,
             brief: ask.brief,
             ticket: item.as_ref().map(|i| i.key.clone()),
+            site: item.as_ref().map(|_| site),
             ticket_block: None,
             pr: ask.pr,
             pr_sha: None,

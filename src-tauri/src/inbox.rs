@@ -659,6 +659,11 @@ impl Core {
         signed_in.map(|s| s.scope).ok_or(Error::SiteChanged)
     }
 
+    /// The scope of every registered, signed-in connection, in the order they were added.
+    pub async fn scopes(&self) -> Vec<Scope> {
+        self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).map(|s| s.scope).collect()
+    }
+
     /// The signed-in scope, for work that starts now.
     pub async fn scope(&self) -> Result<Scope> {
         let (scope, _, _) = self.identity().await?;
@@ -1611,6 +1616,15 @@ pub(crate) mod testing {
             item.item = connection.item(&key);
             item.title = format!("Ticket {n}");
             self.core.with_db_for(&self.scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        }
+
+        /// Adds an item with `key` (a copy of the sample ticket, titled "Ticket <key>") to `scope`'s cache.
+        pub async fn add_item_in(&self, scope: &Scope, key: &str) {
+            let connection = self.core.connection(scope).unwrap();
+            let mut item = tracker::item_from_ticket(&connection, &sample_ticket()).unwrap();
+            item.item = connection.item(key);
+            item.title = format!("Ticket {key}");
+            self.core.with_db_for(scope, |db| db.upsert_items(&[item], "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
         }
 
         /// Stores `run` as it is, without a draft or an approval.

@@ -1081,3 +1081,28 @@ async fn a_question_pip_asks_is_a_need_that_notifies_once_and_clears_when_answer
     assert_eq!(notices().len(), 2, "once nothing waited, the next question is news again");
     assert_eq!(notices()[1].1, "Pip asks: And the review?");
 }
+
+#[tokio::test]
+async fn a_need_in_the_second_account_notifies_and_is_kept_in_that_accounts_cache() {
+    let told = Arc::new(Announced::default());
+    let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    let rig = crate::runs::rig::ready_on(fx, {
+        let told = told.clone();
+        move |svc| svc.with_notifier(told)
+    })
+    .await;
+    let ws = rig.fx.core.open_workstream(&second, None, Some("Beta work".into())).await.unwrap().id;
+
+    rig.poll().await;
+    rig.fx.core.pip_asks_person(&second, &ws, "Which one?").await.unwrap();
+    rig.poll().await;
+    assert_eq!(*told.0.lock().unwrap(), [("Beta work is waiting on you".to_string(), "Pip asks: Which one?".to_string(), None)]);
+
+    let kept = |scope: crate::auth::Scope| {
+        let core = rig.fx.core.clone();
+        async move { core.announced_needs(&scope).await.unwrap().unwrap_or_default() }
+    };
+    assert_eq!(kept(second).await.len(), 1);
+    assert!(kept(rig.fx.scope.clone()).await.is_empty(), "the first account's cache does not hold the second's");
+}
