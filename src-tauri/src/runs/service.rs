@@ -18,7 +18,7 @@ use super::redact::redact;
 use super::failure::Failure;
 use super::index::{Entry, RunIndex};
 use super::launcher::RunLauncher;
-use super::fresh::in_work_folder;
+use super::fresh::is_work_path;
 use super::repo::{origin_matches, Git};
 use super::toolchain::{Toolchain, ToolchainSource};
 use super::control::{MacTerminal, Terminal};
@@ -279,7 +279,7 @@ impl RunService {
         let spec = &run.spec;
         spec.validate().map_err(|e| Failure::Invalid(e.to_string()))?;
         let home = self.fresh_home().ok_or_else(|| Failure::NoClone("Gossamr can't find your home folder.".into()))?;
-        if !in_work_folder(&home, &spec.clone_path) {
+        if !is_work_path(&home, &spec.repo, &spec.clone_path) {
             return Err(Failure::OutsideWorkFolder { path: spec.clone_path.clone() });
         }
         self.core.require_watched_repo(&spec.repo).map_err(|e| Failure::Invalid(e.to_string()))?;
@@ -542,19 +542,22 @@ impl RunService {
     async fn start_waiting(&self, run_id: &str) -> Result<bool> {
         let prepared = match self.load(run_id).await {
             Ok(listed) if listed.state == RunState::Queued && self.may_start(&listed).await => self.prepare_if_free(&listed).await,
-            _ => Ok(()),
+            _ => Ok(true),
         };
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         if run.state != RunState::Queued || !self.may_start(&run).await {
             return Ok(false);
         }
-        if let Err(why) = prepared {
-            self.fail(&mut run, &why).await?;
-            return Ok(true);
-        }
+        let skipped = match prepared {
+            Ok(done) => !done,
+            Err(why) => {
+                self.fail(&mut run, &why).await?;
+                return Ok(true);
+            }
+        };
         self.settle_clone_path(&mut run).await?;
-        if self.live_elsewhere(&run) >= self.cap() || self.held_for_clone(&mut run).await? {
+        if self.live_elsewhere(&run) >= self.cap() || skipped || self.held_for_clone(&mut run).await? {
             self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
@@ -565,11 +568,11 @@ impl RunService {
     /// `prepare` for a run that waits, unless it can't start anyway for want of a slot, or its repository's clone is
     /// being made or fetched into by someone else: that run stays queued, and the next pass finds the clone ready.
     /// This keeps a slow clone from holding up the runs on other repositories.
-    async fn prepare_if_free(&self, run: &Run) -> std::result::Result<(), Failure> {
+    async fn prepare_if_free(&self, run: &Run) -> std::result::Result<bool, Failure> {
         if self.live_elsewhere(run) >= self.cap() || self.clone_busy(&run.spec.repo) {
-            return Ok(());
+            return Ok(false);
         }
-        self.prepare(run).await
+        self.prepare(run).await.map(|()| true)
     }
 
     /// Whether a queued run is one `launch_waiting` may start: in an open workstream, or waiting for a slot.

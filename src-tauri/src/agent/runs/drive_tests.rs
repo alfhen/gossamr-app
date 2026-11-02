@@ -318,7 +318,7 @@ async fn a_start_needs_a_git_clone_inside_the_work_folder() {
     let in_work = fx.home.join("Gossamr/agents/acme/plain");
     std::fs::create_dir_all(&in_work).unwrap();
     let outside_words = "isn't inside ~/Gossamr/agents, where agents work";
-    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (in_work, "isn't a git clone"), (plain, outside_words), (outside.clone(), outside_words), (link, outside_words)] {
+    for (bad, why) in [(fx.home.join("missing"), "isn't a folder that exists"), (in_work, "isn't Gossamr's clone of acme/webshop"), (plain, outside_words), (outside.clone(), outside_words), (link, outside_words)] {
         let err = build(bad.clone()).await.unwrap_err().to_string();
         assert!(err.contains(why), "{bad:?}: {err}");
     }

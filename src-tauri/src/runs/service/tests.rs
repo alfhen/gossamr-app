@@ -386,7 +386,15 @@ async fn problems_found_before_launching_fail_the_run_with_the_reason_and_start_
     let moved = rig.fx.home.join("moved");
     std::fs::rename(rig.clone.parent().unwrap(), &moved).unwrap();
     std::os::unix::fs::symlink(&moved, rig.clone.parent().unwrap()).unwrap();
-    let after = assert_fails_without_launching(&rig, &run, "before Gossamr kept its own clones", RunFailure::OutsideWorkFolder { path: rig.clone.clone() }).await;
+    assert_fails_without_launching(&rig, &run, "isn't its real path any more", RunFailure::NoClone).await;
+
+    let rig = rig_with(|_| {}).await;
+    let run = rig.queued(1).await;
+    let worktree = rig.clone.join(".claude/worktrees/ca-1-fix-ab12");
+    std::fs::create_dir_all(&worktree).unwrap();
+    std::fs::write(worktree.join(".git"), "gitdir: elsewhere").unwrap();
+    rig.set(&run, |r| r.spec.clone_path = worktree.clone()).await;
+    let after = assert_fails_without_launching(&rig, &run, "before Gossamr kept its own clones", RunFailure::OutsideWorkFolder { path: worktree }).await;
     assert!(after.error.unwrap().contains("Ask Pip to start it again"));
 
     let rig = rig_with(|_| {}).await;
@@ -1029,6 +1037,19 @@ mod clones {
         assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
         assert_eq!(rig.get(&run).await.state, RunState::Queued);
         assert_eq!((count(&rig, " clone -- "), count(&rig, "fetch")), before, "{}", git_log(&rig));
+    }
+
+    #[tokio::test]
+    async fn a_waiting_run_stays_queued_while_another_holds_the_lock_of_a_clone_that_exists() {
+        let rig = ready().await;
+        let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+        let run = rig.fx.core.queue_test_run(RunSpec { workstream: Some(ws), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+        let lock = rig.svc.repo_lock("acme/webshop");
+        let fetching = lock.lock().await;
+        assert!(rig.svc.launch_waiting().await.unwrap().is_empty());
+        assert_eq!((rig.get(&run).await.state, rig.cli.launches()), (RunState::Queued, 0));
+        drop(fetching);
+        assert_eq!(rig.svc.launch_waiting().await.unwrap(), vec![run.id.clone()]);
     }
 
     #[tokio::test]

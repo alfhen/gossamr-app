@@ -255,8 +255,8 @@ impl Core {
         .await
     }
 
-    /// The clone as the run will use it, by its real path: Gossamr's clone of `repo` (which may not exist yet), or a
-    /// clone that exists inside the work folder. Anywhere else is refused.
+    /// The clone as the run will use it, by its real path: Gossamr's clone of `repo` in the work folder, which may not
+    /// exist yet. Any other folder is refused.
     pub(super) fn resolve_clone(&self, path: &Path, repo: &str) -> Result<PathBuf> {
         let refused = |why: &str| Error::Proposal(format!("{} {why}", path.display()));
         let home = self.home.as_deref().ok_or_else(|| refused("can't be checked: Gossamr can't find your home folder"))?;
@@ -267,8 +267,8 @@ impl Core {
         if !fresh::in_work_folder(home, &real) {
             return Err(refused("isn't inside ~/Gossamr/agents, where agents work"));
         }
-        if real != work && !(real.is_dir() && real.join(".git").exists()) {
-            return Err(refused("isn't a git clone"));
+        if real != work {
+            return Err(refused(&format!("isn't Gossamr's clone of {repo}")));
         }
         Ok(real)
     }

@@ -18,7 +18,7 @@ impl RunService {
         self.home.as_ref().map(|h| h.canonicalize().unwrap_or_else(|_| h.clone()))
     }
 
-    fn repo_lock(&self, repo: &str) -> Arc<tokio::sync::Mutex<()>> {
+    pub(in crate::runs) fn repo_lock(&self, repo: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.repo_locks.lock().expect("repo locks poisoned").entry(repo.to_ascii_lowercase()).or_default().clone()
     }
 
