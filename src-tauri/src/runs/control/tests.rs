@@ -223,15 +223,17 @@ fn the_attach_file_is_exactly_three_lines_and_private() {
     let dir = tmp("attach-file");
     let (id, claude) = ids();
     let worktree = Path::new("/Users/me/My Code/webshop/.claude/worktrees/ce-1-fix-cart-0a1b");
-    let file = write_attach_file(&dir, &claude, worktree, &id).unwrap();
-    assert_eq!(file, dir.join("1a2b3c4d.command"));
+    let file = write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
+    assert_eq!(file.parent(), Some(dir.as_path()));
+    let name = file.file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("1a2b3c4d-") && name.ends_with(".command"), "{name}");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "#!/bin/zsh\ncd '/Users/me/My Code/webshop/.claude/worktrees/ce-1-fix-cart-0a1b'\nexec '/opt/fake/bin/claude' attach 1a2b3c4d\n"
     );
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
-    write_attach_file(&dir, &claude, worktree, &id).unwrap();
+    write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -258,12 +260,12 @@ fn a_path_that_could_reach_the_shell_is_refused_and_nothing_is_written() {
         "/work/'; touch /tmp/pwned; echo '",
         "/work/esc\u{1b}[31m",
     ] {
-        let refused = write_attach_file(&dir, &claude, Path::new(bad), &id);
+        let refused = write_attach_file(&dir, None, &claude, Path::new(bad), &id);
         assert!(refused.is_err(), "{bad:?}");
-        let refused = write_attach_file(&dir, Path::new(bad), Path::new("/work/ok"), &id);
+        let refused = write_attach_file(&dir, None, Path::new(bad), Path::new("/work/ok"), &id);
         assert!(refused.is_err(), "{bad:?} as the claude path");
     }
-    assert!(!dir.join("1a2b3c4d.command").exists());
+    assert!(std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none()));
 }
 
 #[test]
@@ -271,7 +273,7 @@ fn spaces_dollars_and_backticks_stay_inert_inside_single_quotes() {
     let dir = tmp("attach-inert");
     let (id, claude) = ids();
     let worktree = "/work/with space/$(touch /tmp/pwned)/`id`/${HOME}/a\"b/c\\d";
-    let file = write_attach_file(&dir, &claude, Path::new(worktree), &id).unwrap();
+    let file = write_attach_file(&dir, None, &claude, Path::new(worktree), &id).unwrap();
     let script = std::fs::read_to_string(&file).unwrap();
     assert_eq!(script.lines().nth(1).unwrap(), format!("cd '{worktree}'"));
 
@@ -301,9 +303,10 @@ async fn attach_writes_the_file_for_the_stored_run_and_opens_it() {
     let (rig, run) = working().await;
     rig.svc.attach(&run.id).await.unwrap();
     let opened = rig.opened.0.lock().unwrap().clone();
-    let expected = rig.fx.core.data_dir().join("attach").join(format!("{}.command", run.short_id.as_ref().unwrap()));
-    assert_eq!(opened, std::slice::from_ref(&expected));
-    let script = std::fs::read_to_string(&expected).unwrap();
+    let [expected] = opened.as_slice() else { panic!("{opened:?}") };
+    assert_eq!(expected.parent(), Some(rig.fx.core.data_dir().join("attach").as_path()));
+    assert!(expected.file_name().unwrap().to_str().unwrap().starts_with(&format!("{}-", run.short_id.as_ref().unwrap())));
+    let script = std::fs::read_to_string(expected).unwrap();
     assert_eq!(script, format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude' attach {}\n", run.expected_worktree.display(), run.short_id.as_ref().unwrap()));
 }
 
@@ -418,13 +421,13 @@ fn the_trust_and_sign_in_files_are_exactly_three_lines_named_by_a_digest_and_pri
     let claude = Path::new("/opt/fake/bin/claude");
     let script = format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude'\n", clone.display());
     for (purpose, prefix) in [(Purpose::Trust, "trust-"), (Purpose::SignIn, "signin-")] {
-        let file = write_claude_file(&dir, purpose, claude, &clone, Some(&home)).unwrap();
+        let file = write_claude_file(&dir, None, purpose, claude, &clone, Some(&home)).unwrap();
         let name = file.file_name().unwrap().to_str().unwrap().to_owned();
         let digest = name.strip_prefix(prefix).and_then(|n| n.strip_suffix(".command")).unwrap();
         assert!(digest.len() == 16 && digest.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), script);
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(write_claude_file(&dir, purpose, claude, &clone, Some(&home)).unwrap(), file, "writing again replaces it");
+        assert_eq!(write_claude_file(&dir, None, purpose, claude, &clone, Some(&home)).unwrap(), file, "writing again replaces it");
     }
     assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
     let _ = std::fs::remove_dir_all(dir);
@@ -438,7 +441,7 @@ fn zsh_reads_a_hostile_but_quotable_folder_back_as_the_same_path_and_runs_nothin
     let bin = home.join("fake-claude");
     std::fs::write(&bin, "#!/bin/zsh\nprint -rn -- \"$PWD|$#\" > \"$GOSSAMR_OUT\"\n").unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let file = write_claude_file(&dir, Purpose::Trust, &bin, &clone, Some(&home)).unwrap();
+    let file = write_claude_file(&dir, None, Purpose::Trust, &bin, &clone, Some(&home)).unwrap();
 
     let out = home.join("out.txt");
     let status = std::process::Command::new("/bin/zsh").arg(&file).env("GOSSAMR_OUT", &out).status().unwrap();
@@ -474,10 +477,10 @@ fn a_folder_that_is_not_a_plain_clone_inside_home_gets_no_file() {
         (Path::new("relative/path"), "relative"),
     ];
     for (folder, why) in cases {
-        assert!(write_claude_file(&dir, Purpose::Trust, claude, folder, Some(&home)).is_err(), "{why}");
+        assert!(write_claude_file(&dir, None, Purpose::Trust, claude, folder, Some(&home)).is_err(), "{why}");
     }
-    assert!(write_claude_file(&dir, Purpose::Trust, claude, &real, None).is_err(), "no home to compare with");
-    assert!(write_claude_file(&dir, Purpose::Trust, Path::new("/opt/it's/claude"), &real, Some(&home)).is_err(), "a hostile claude path");
+    assert!(write_claude_file(&dir, None, Purpose::Trust, claude, &real, None).is_err(), "no home to compare with");
+    assert!(write_claude_file(&dir, None, Purpose::Trust, Path::new("/opt/it's/claude"), &real, Some(&home)).is_err(), "a hostile claude path");
     assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing was written");
     let _ = std::fs::remove_dir_all(outside.parent().unwrap());
     let _ = std::fs::remove_dir_all(home);
@@ -586,7 +589,7 @@ async fn the_folder_comes_from_the_stored_spec_and_a_hostile_one_is_refused() {
 #[tokio::test]
 async fn nothing_opens_when_agents_are_off() {
     let (rig, run) = untrusted().await;
-    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::SystemToolchain::default()), crate::runs::index::RunIndex::load(&tmp("off-trust")), Arc::new(|_| {}));
+    let off = RunService::new(rig.fx.core.clone(), Arc::new(crate::runs::toolchain::FixedToolchain(Err(crate::runs::toolchain::ToolchainError::NoEnvironment("agents are off".into())))), crate::runs::index::RunIndex::load(&tmp("off-trust")), Arc::new(|_| {}));
     assert!(off.open_claude(&run.id, Purpose::Trust).await.is_err());
 }
 
@@ -616,4 +619,105 @@ async fn a_run_of_a_connection_that_was_turned_off_can_still_be_seen_and_stopped
     assert_eq!((stopped.state, stopped.connection_id), (RunState::Stopped, second.connection_id));
     assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1);
     assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+}
+
+fn folder_login() -> crate::runs::provider_env::ProviderEnv {
+    use crate::connections::{Driver, ProviderConfig, ProviderInstance};
+    use crate::runs::provider_env::{states, ProviderState};
+    use crate::runs::provider_folder::Places;
+    let instance = ProviderInstance {
+        id: "claude_2".into(),
+        driver: Driver::Claude,
+        display_name: "Claude personal".into(),
+        enabled: true,
+        config: ProviderConfig { config_dir: Some("/Users/me/.claude-work".into()), ..Default::default() },
+        extra: Default::default(),
+    };
+    let places = Places { home: Some(Path::new("/Users/me")), data_dir: Path::new("/Users/me/data") };
+    match states(&[instance], &places, Some(&crate::runs::env::RunEnv::from_pairs([("PATH", "/bin")]))).remove(0).1 {
+        ProviderState::Ready(login) => login,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_script_for_an_instance_with_a_folder_removes_the_other_logins_and_sets_the_folder_before_anything_runs() {
+    let dir = tmp("login-lines");
+    let (id, claude) = ids();
+    let login = folder_login();
+    let attach = std::fs::read_to_string(write_attach_file(&dir, Some(&login), &claude, Path::new("/work/ok"), &id).unwrap()).unwrap();
+    let lines: Vec<_> = attach.lines().collect();
+    assert_eq!(lines[0], "#!/bin/zsh");
+    let unset: Vec<_> = lines[1].strip_prefix("unset ").expect("an unset line").split(' ').collect();
+    assert_eq!(unset, crate::connections::Driver::Claude.login_variables()[1..], "every login variable but the folder's");
+    assert_eq!(lines[2..], ["export CLAUDE_CONFIG_DIR='/Users/me/.claude-work'", "cd '/work/ok'", "exec '/opt/fake/bin/claude' attach 1a2b3c4d"]);
+
+    let home = dir.join("home");
+    let clone = clone_in(&home, "webshop");
+    let trust = std::fs::read_to_string(write_claude_file(&dir, Some(&login), Purpose::Trust, &claude, &clone, Some(&home)).unwrap()).unwrap();
+    assert!(trust.starts_with(&format!("#!/bin/zsh\n{}\nexport CLAUDE_CONFIG_DIR='/Users/me/.claude-work'\ncd '", lines[1])), "{trust}");
+    assert!(trust.ends_with("exec '/opt/fake/bin/claude'\n"), "{trust}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The rig's toolchain, as the instance `folder_login` describes.
+struct AsFolderInstance(Arc<dyn crate::runs::toolchain::ToolchainSource>);
+
+#[async_trait::async_trait]
+impl crate::runs::toolchain::ToolchainSource for AsFolderInstance {
+    async fn get(&self) -> std::result::Result<Toolchain, crate::runs::toolchain::ToolchainError> {
+        Ok(Toolchain { login: Some(folder_login()), ..self.0.get().await? })
+    }
+
+    async fn for_instance(&self, _: &str) -> std::result::Result<Toolchain, crate::runs::toolchain::ToolchainError> {
+        self.get().await
+    }
+}
+
+#[tokio::test]
+async fn terminal_opens_as_the_login_of_the_toolchain_the_run_goes_through() {
+    let rig = crate::runs::rig::ready_with(|mut svc| {
+        svc.tools = Arc::new(AsFolderInstance(svc.tools.clone()));
+        svc
+    })
+    .await;
+    let run = rig.launched(1).await;
+    rig.poll().await;
+    rig.svc.attach(&run.id).await.unwrap();
+    let file = rig.opened.0.lock().unwrap().last().cloned().unwrap();
+    let script = std::fs::read_to_string(file).unwrap();
+    assert!(script.contains("export CLAUDE_CONFIG_DIR='/Users/me/.claude-work'\ncd '"), "{script}");
+}
+
+#[test]
+fn the_same_clone_opened_as_two_instances_gets_two_files_so_one_cannot_replace_the_other() {
+    let (dir, home) = (tmp("two-logins"), home("two-logins"));
+    let clone = clone_in(&home, "webshop");
+    let (id, claude) = ids();
+    let login = folder_login();
+    for purpose in [Purpose::Trust, Purpose::SignIn, Purpose::Mode(RefusedMode::Auto)] {
+        let plain = write_claude_file(&dir, None, purpose, &claude, &clone, Some(&home)).unwrap();
+        let personal = write_claude_file(&dir, Some(&login), purpose, &claude, &clone, Some(&home)).unwrap();
+        assert_ne!(plain, personal, "{purpose:?}");
+        assert!(!std::fs::read_to_string(&plain).unwrap().contains("CLAUDE_CONFIG_DIR"));
+        assert!(std::fs::read_to_string(&personal).unwrap().contains("export CLAUDE_CONFIG_DIR="));
+    }
+    let worktree = Path::new("/work/ok");
+    let plain = write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
+    let personal = write_attach_file(&dir, Some(&login), &claude, worktree, &id).unwrap();
+    assert_ne!(plain, personal, "two daemons can hand out the same short id");
+    assert!(!std::fs::read_to_string(&plain).unwrap().contains("CLAUDE_CONFIG_DIR"));
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn a_failed_call_as_an_instance_with_a_folder_says_so_and_one_without_does_not() {
+    let plain = Toolchain::new(Arc::new(FakeCli::new()), Arc::new(crate::runs::env::RunEnv::from_pairs([("PATH", "/bin")])));
+    let personal = Toolchain { login: Some(folder_login()), instance_name: "Claude personal".into(), ..plain.clone() };
+    let folder = Path::new("/Users/me/Code/webshop");
+    let untrusted = || crate::runs::cli::CliError::Failed { code: Some(1), stderr: "Workspace not trusted".into() };
+    assert!(matches!(Failure::from_cli(untrusted(), folder, &plain), Failure::NeedsTrust { own_folder: false, .. }));
+    assert!(matches!(Failure::from_cli(untrusted(), folder, &personal), Failure::NeedsTrust { own_folder: true, .. }));
+    assert!(personal.has_own_folder() && !plain.has_own_folder());
 }

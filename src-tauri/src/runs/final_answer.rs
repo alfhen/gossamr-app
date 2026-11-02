@@ -51,13 +51,13 @@ fn adopt(run: &mut Run, answer: &str) -> bool {
 
 impl RunService {
     /// `projects` under the config directory `claude auth status` reports.
-    async fn claude_projects_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
-        if let Some(known) = self.projects_dir.lock().expect("projects dir lock poisoned").clone() {
-            return Some(known);
+    pub(super) async fn claude_projects_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
+        if let Some(known) = self.projects_dir.lock().expect("projects dir lock poisoned").get(&tc.instance_id) {
+            return Some(known.clone());
         }
         let status = tc.cli.auth_status().await.ok()?;
         let found = status.projects_directory.or_else(|| status.config_directory.map(|c| c.join("projects")))?;
-        *self.projects_dir.lock().expect("projects dir lock poisoned") = Some(found.clone());
+        self.projects_dir.lock().expect("projects dir lock poisoned").insert(tc.instance_id.clone(), found.clone());
         Some(found)
     }
 
