@@ -251,12 +251,12 @@ async fn a_stale_finish_notice_is_not_woken_after_the_run_continues() {
     let stale = WakeFact::new(&finished, WakeState::Done);
     let resumed = Run { state: RunState::Working, continued_at: Some(Utc::now()), ended_at: None, ..finished };
     t.fx.core.save_run(&resumed).await.unwrap();
-    t.sup.handle(&t.ws, vec![stale.clone()], Utc::now()).await;
+    t.sup.handle(&t.fx.scope, &t.ws, vec![stale.clone()], Utc::now()).await;
     t.idle().await;
     assert!(t.wakes().await.is_empty());
     let finished_again = Run { state: RunState::Done, ended_at: Some(Utc::now()), ..resumed };
     t.fx.core.save_run(&finished_again).await.unwrap();
-    t.sup.handle(&t.ws, vec![stale], Utc::now()).await;
+    t.sup.handle(&t.fx.scope, &t.ws, vec![stale], Utc::now()).await;
     assert!(t.wakes().await.is_empty());
     t.sweep().await;
     assert_eq!(t.wakes().await, [("r1".into(), WakeFact::new(&finished_again, WakeState::Done).key().into())]);
@@ -518,9 +518,60 @@ async fn nothing_happens_before_the_supervisor_is_bound() {
     fx.insert_run(&run).await;
     sup.notify(&run, Attention::Done);
     sup.sweep_at(Utc::now()).await;
-    sup.clone().handle(&ws.id, vec![WakeFact::new(&run, WakeState::Done)], Utc::now()).await;
+    sup.clone().handle(&fx.scope, &ws.id, vec![WakeFact::new(&run, WakeState::Done)], Utc::now()).await;
     tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap().iter().all(|e| e.action != "wake"));
+}
+
+// Several Jira connections.
+
+/// A workstream on the second Jira connection with a finished run, a supervisor bound to an agent service, and the
+/// first connection as the primary.
+async fn on_second_connection() -> (T, crate::auth::Scope, Run) {
+    let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+    let ws = fx.core.open_workstream(&second, None, Some("On site B".into())).await.unwrap();
+    let fake = Fake::default();
+    let svc = service(&fx, &fake).await;
+    let emitted: Emitted = Arc::default();
+    let sup = supervisor(&fx, &svc, &emitted);
+    let spec = RunSpec { workstream: Some(ws.id.clone()), ..run_spec() };
+    let mut run = Run::queued("r-b".into(), "p-b".into(), second.connection_id.clone(), None, spec, Utc::now());
+    run.state = RunState::Done;
+    run.ended_at = Some(Utc::now());
+    fx.insert_run(&run).await;
+    (T { fx, svc, sup, fake, ws: ws.id, emitted }, second, run)
+}
+
+#[tokio::test]
+async fn the_sweep_wakes_pip_in_a_workstream_of_the_second_connection_as_that_connection() {
+    let (t, second, run) = on_second_connection().await;
+    t.sup.sweep_at(Utc::now()).await;
+    t.idle().await;
+    let events = t.fx.core.workstream_events(&second, &t.ws).await.unwrap();
+    let woken: Vec<_> = events.iter().filter(|e| e.action == "wake").map(|e| e.run_id.as_deref().unwrap_or_default()).collect();
+    assert_eq!(woken, [run.id.as_str()]);
+    assert_eq!(t.wake_turns().await.len(), 1);
+
+    t.sup.sweep_at(Utc::now()).await;
+    t.idle().await;
+    assert_eq!(t.wake_turns().await.len(), 1, "a second sweep finds nothing new");
+}
+
+#[tokio::test]
+async fn a_notice_about_a_run_of_the_second_connection_wakes_pip_in_its_workstream() {
+    let (t, second, run) = on_second_connection().await;
+    t.noticed(&run, Attention::Done).await;
+    let events = t.fx.core.workstream_events(&second, &t.ws).await.unwrap();
+    assert_eq!(events.iter().filter(|e| e.action == "wake").count(), 1);
+    assert_eq!(t.wake_turns().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_wake_that_never_ran_is_given_back_in_the_second_connections_workstream() {
+    let (t, second, run) = on_second_connection().await;
+    t.sup.unmark(WakeFacts { workstream: t.ws.clone(), facts: vec![WakeFact::new(&run, WakeState::Done)] }).await;
+    let events = t.fx.core.workstream_events(&second, &t.ws).await.unwrap();
+    assert_eq!(events.iter().filter(|e| e.action == "wake_dropped").count(), 1);
 }
 
 // What the person's message does to wakes.

@@ -659,6 +659,12 @@ impl Core {
         signed_in.map(|s| s.scope).ok_or(Error::SiteChanged)
     }
 
+    /// The scope of every registered, signed-in connection, in the order they were added. Off ones are included: their
+    /// runs and workstreams stay reachable.
+    pub(crate) async fn scopes(&self) -> Vec<Scope> {
+        self.auth.accounts().await.into_iter().filter(|s| self.registry.connection(&s.connection.id).is_some()).map(|s| s.scope).collect()
+    }
+
     /// The signed-in scope, for work that starts now.
     pub async fn scope(&self) -> Result<Scope> {
         let (scope, _, _) = self.identity().await?;

@@ -352,17 +352,22 @@ impl Supervisor {
         if self.agent().is_none() {
             return;
         }
-        let Ok(scope) = self.core.scope().await else { return };
-        let Ok(views) = self.core.workstreams(&scope, false).await else { return };
+        for scope in self.core.scopes().await {
+            self.sweep_connection(&scope, now).await;
+        }
+    }
+
+    async fn sweep_connection(&self, scope: &Scope, now: DateTime<Utc>) {
+        let Ok(views) = self.core.workstreams(scope, false).await else { return };
         for view in views {
             let ws = &view.workstream;
             if ws.paused_reason.is_some() {
                 continue;
             }
-            let Ok(mut runs) = self.linked(&scope, &ws.id).await else { continue };
+            let Ok(mut runs) = self.linked(scope, &ws.id).await else { continue };
             // `runs_in` lists newest first; Pip reads runs oldest first.
             runs.sort_by(|a, b| a.queued_at.cmp(&b.queued_at).then_with(|| a.id.cmp(&b.id)));
-            let Ok(events) = self.core.workstream_events(&scope, &ws.id).await else { continue };
+            let Ok(events) = self.core.workstream_events(scope, &ws.id).await else { continue };
             let woken = woken_in(&events);
             let is_new = |fact: &WakeFact| !woken.contains(&(fact.run.clone(), fact.key().to_string()));
             let mut facts = Vec::new();
@@ -372,10 +377,10 @@ impl Supervisor {
                     continue;
                 }
                 if is_new(&WakeFact::new(run, state)) {
-                    facts.push(self.fact_of(&scope, run, state).await);
+                    facts.push(self.fact_of(scope, run, state).await);
                 }
             }
-            self.handle(&ws.id, facts, now).await;
+            self.handle(scope, &ws.id, facts, now).await;
         }
     }
 
@@ -398,13 +403,10 @@ impl Supervisor {
 
     async fn on_run(self: Arc<Self>, run: Run, why: Attention) {
         let Some(ws) = run.spec.workstream.clone() else { return };
-        let Ok(scope) = self.core.scope().await else { return };
-        if scope.connection_id != run.connection_id {
-            return;
-        }
+        let Ok(scope) = self.core.scope_of(&run.connection_id).await else { return };
         let state = WakeState::of_attention(&run, why);
         let fact = self.fact_of(&scope, &run, state).await;
-        self.handle(&ws, vec![fact], Utc::now()).await;
+        self.handle(&scope, &ws, vec![fact], Utc::now()).await;
     }
 
     /// Whether `(ws, run, key)` was woken, from memory and the workstream's audit, where a later `wake_dropped` line
@@ -437,7 +439,7 @@ impl Supervisor {
                 seen.remove(&(ws.clone(), f.run.clone(), f.key().to_string()));
             }
         }
-        let Ok(scope) = self.core.scope().await else { return };
+        let Ok(scope) = self.core.workstream_scope(&ws).await else { return };
         for f in &facts.facts {
             self.record(&scope, WorkstreamEvent::new(&ws, Actor::Supervisor, "wake_dropped", Utc::now()).run(&f.run).detail(f.key())).await;
         }
@@ -445,17 +447,16 @@ impl Supervisor {
 
     /// Notes the ticket of `ws_id` drifting, then wakes Pip with the `facts` it wasn't woken for yet, unless the
     /// workstream is closed, paused or backing off.
-    async fn handle(&self, ws_id: &str, facts: Vec<WakeFact>, now: DateTime<Utc>) {
+    async fn handle(&self, scope: &Scope, ws_id: &str, facts: Vec<WakeFact>, now: DateTime<Utc>) {
         let _one = self.work.lock().await;
         let Some(agent) = self.agent() else { return };
-        let Ok(scope) = self.core.scope().await else { return };
-        let Ok(Some(view)) = self.core.workstream(&scope, ws_id).await else { return };
+        let Ok(Some(view)) = self.core.workstream(scope, ws_id).await else { return };
         let ws = view.workstream;
         if ws.closed_at.is_some() || ws.paused_reason.is_some() {
             return;
         }
         let connection = ws.connection_id.clone();
-        match self.core.note_basis_drift(&scope, ws_id).await {
+        match self.core.note_basis_drift(scope, ws_id).await {
             Ok(true) => (self.changed)(&connection),
             Ok(false) => {}
             Err(e) => eprintln!("couldn't check the ticket of workstream {ws_id} for changes: {e}"),
@@ -463,8 +464,8 @@ impl Supervisor {
         if self.backing_off(ws_id) {
             return;
         }
-        let Ok(runs) = self.linked(&scope, ws_id).await else { return };
-        let Ok(events) = self.core.workstream_events(&scope, ws_id).await else { return };
+        let Ok(runs) = self.linked(scope, ws_id).await else { return };
+        let Ok(events) = self.core.workstream_events(scope, ws_id).await else { return };
         let woken = self.woken(ws_id, &events);
         let mut fresh: Vec<WakeFact> = Vec::new();
         for f in facts {
@@ -482,7 +483,7 @@ impl Supervisor {
                 fresh.push(f);
             }
         }
-        self.wake_for(&agent, &scope, &ws, fresh, now).await;
+        self.wake_for(&agent, scope, &ws, fresh, now).await;
     }
 
     /// Wakes Pip in `ws_id` with `fresh`, unless the workstream has had its ceiling of wakes.
