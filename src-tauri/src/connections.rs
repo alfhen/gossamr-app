@@ -194,16 +194,15 @@ fn kind_name(kind: ConnectionKind) -> &'static str {
 fn next_id(config: &AppConfig, kind: ConnectionKind) -> String {
     let name = kind_name(kind);
     let taken = config.connections.iter().map(|i| i.id.as_str()).chain(config.providers.iter().map(|p| p.id.as_str())).chain(config.retired_ids.iter().map(String::as_str));
-    let highest = taken
+    let used: std::collections::BTreeSet<u64> = taken
         .filter_map(|id| match id.strip_prefix(name)? {
             "" => Some(1),
-            rest => rest.strip_prefix('_')?.parse::<u64>().ok().filter(|n| *n < u64::MAX),
+            rest => rest.strip_prefix('_')?.parse::<u64>().ok(),
         })
-        .max();
-    match highest {
-        None => name.to_string(),
-        Some(n) => format!("{name}_{}", n + 1),
-    }
+        .collect();
+    let Some(&highest) = used.last() else { return name.to_string() };
+    let next = highest.checked_add(1).or_else(|| (2..).find(|n| !used.contains(n))).unwrap_or(u64::MAX);
+    format!("{name}_{next}")
 }
 
 /// What `bind` says when the account already has an instance.
@@ -482,7 +481,18 @@ mod tests {
     fn an_id_with_the_largest_suffix_does_not_wrap_the_next_id() {
         let mut config = AppConfig::default();
         config.providers.push(provider(&format!("github_{}", u64::MAX), Driver::Claude));
-        assert_eq!(next_id(&config, ConnectionKind::Github), "github");
+        assert_eq!(next_id(&config, ConnectionKind::Github), "github_2");
+        config.providers.push(provider("github_2", Driver::Claude));
+        assert_eq!(next_id(&config, ConnectionKind::Github), "github_3");
+    }
+
+    #[test]
+    fn the_next_id_is_never_one_that_is_taken_next_to_the_largest_suffix() {
+        let mut config = AppConfig::default();
+        config.retired_ids = vec![format!("github_{}", u64::MAX - 1), format!("github_{}", u64::MAX)];
+        let id = next_id(&config, ConnectionKind::Github);
+        assert!(!config.retired_ids.contains(&id), "{id}");
+        assert_eq!(id, "github_2");
     }
 
     #[test]
