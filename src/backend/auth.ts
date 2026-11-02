@@ -34,8 +34,7 @@ export interface TokenSignIn {
 export const auth = {
   status: () => invoke<AuthStatus>("auth_status"),
   cloudId: (site: string) => invoke<string | null>("jira_cloud_id", { site }),
-  connect: (input: TokenSignIn) => invoke<AuthStatus>("jira_connect", { input }),
-  signOut: () => invoke<void>("sign_out"),
+  connect: (input: TokenSignIn, instanceId?: string) => invoke<AuthStatus>("jira_connect", { input, instanceId }),
 };
 
 /** What the first-run screen asks of `gh`, before any connection exists. */

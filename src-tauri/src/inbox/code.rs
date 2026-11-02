@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 
+use super::instances::OffNames;
 use super::watch::{CatalogEntry, CatalogPage, WatchRow, WatchState};
 use super::{now_iso, Core};
 use crate::auth::Scope;
 use crate::config::AppConfig;
-use crate::connections::{self, Binding};
+use crate::connections::{self, Binding, RowKind};
 use crate::auth::{CredentialSource, GithubAuth, GithubSession};
 use crate::codehost::diff::{commentable, relative_path};
 use crate::codehost::events::{derive, from_notice, recent};
@@ -119,7 +120,9 @@ fn info(session: &GithubSession, last_sync_at: Option<String>, error: Option<(St
         instance_id: session.connection().id,
         display_name: session.login.clone(),
         enabled: true,
-        kind: ConnectionKind::Github,
+        kind: RowKind::Github,
+        driver: None,
+        config_dir: None,
         workspace: session.login.clone(),
         url: format!("https://github.com/{}", session.login),
         account: session.name.clone().unwrap_or_else(|| session.login.clone()),
@@ -407,7 +410,11 @@ impl Core {
     /// The repositories a connection follows: the ones chosen, or every repository of a catalog small enough to watch
     /// whole. A large catalog nobody has chosen from yields none, and archived repositories are left out of a whole-catalog watch.
     pub fn watched_repos(&self, id: &str) -> Result<Vec<String>> {
-        if self.off_name(id).is_some() {
+        self.watched_repos_in(&self.off_names(), id)
+    }
+
+    pub(super) fn watched_repos_in(&self, off: &OffNames, id: &str) -> Result<Vec<String>> {
+        if off.name(id).is_some() {
             return Ok(Vec::new());
         }
         self.chosen_repos(id)
@@ -440,11 +447,12 @@ impl Core {
         }
     }
 
-    /// The project keys of the signed-in tracker, which are what a key in a branch or title may name.
+    /// The project keys of the primary connection, which are what a key in a branch or title may name. Whether the
+    /// connection is on is not asked: turning Jira off must not erase the links already found.
     async fn known_keys(&self) -> KnownKeys {
-        let Some((scope, _, _)) = self.auth.identity().await else { return KnownKeys::default() };
-        let connection = scope.connection_id;
-        let keys = self.with_db(|db| db.project_keys(&connection)).await.unwrap_or_default();
+        let Ok(primary) = self.primary().await else { return KnownKeys::default() };
+        let connection = primary.connection.id;
+        let keys = self.with_db_for(&primary.scope, |db| db.project_keys(&connection)).await.unwrap_or_default();
         KnownKeys::new(keys.iter().map(|k| (k.as_str(), connection.as_str())))
     }
 
@@ -716,9 +724,10 @@ impl Core {
 
     /// The code changes cached for a work item, from every GitHub connection, in repositories that are watched.
     pub fn dev_links(&self, item: &ItemRef) -> Result<Vec<DevLink>> {
+        let off = self.off_names();
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
-            let repos = self.watched_repos(&id)?;
+            let repos = self.watched_repos_in(&off, &id)?;
             out.extend(self.with_code_db(&id, |db| db.dev_links(item))?.into_iter().filter(|l| is_watched_repo(&repos, &l.change.repo)));
         }
         newest_first(&mut out);
@@ -735,11 +744,9 @@ impl Core {
                 known = KnownKeys::new([(prefix, item.connection_id.as_str())]);
             }
         }
+        let off = self.off_names();
         for id in self.code.connection_ids() {
-            if self.off_name(&id).is_some() {
-                continue;
-            }
-            let repos = self.watched_repos(&id)?;
+            let repos = self.watched_repos_in(&off, &id)?;
             if repos.is_empty() {
                 continue;
             }
@@ -773,9 +780,10 @@ impl Core {
     /// The connection that watches `repo` (compared without regard to case) and the repository as it is spelled there.
     /// A repository of a connection that is off is refused as off, not as unwatched.
     pub fn code_connection_for(&self, repo: &str) -> Result<(String, String)> {
+        let off = self.off_names();
         for id in self.code.connection_ids() {
             if let Some(found) = self
-                .watched_repos(&id)?
+                .watched_repos_in(&off, &id)?
                 .into_iter()
                 .find(|r| r.eq_ignore_ascii_case(repo))
             {
@@ -802,11 +810,12 @@ impl Core {
     /// The name of a GitHub connection that is off and hides something: the one that follows `repo` when one is given,
     /// else any that has repositories chosen.
     pub fn off_code_name(&self, repo: Option<&str>) -> Result<Option<String>> {
+        let off = self.off_names();
         for id in self.code.connection_ids() {
-            let Some(name) = self.off_name(&id) else { continue };
+            let Some(name) = off.name(&id) else { continue };
             let repos = self.chosen_repos(&id)?;
             if repo.map_or(!repos.is_empty(), |repo| is_watched_repo(&repos, repo)) {
-                return Ok(Some(name));
+                return Ok(Some(name.to_string()));
             }
         }
         Ok(None)
@@ -814,10 +823,11 @@ impl Core {
 
     /// Every watched repository with the connection that watches it.
     pub fn watched_code_repos(&self) -> Result<Vec<(String, String)>> {
+        let off = self.off_names();
         let mut out = Vec::new();
         for id in self.code.connection_ids() {
             out.extend(
-                self.watched_repos(&id)?
+                self.watched_repos_in(&off, &id)?
                     .into_iter()
                     .map(|r| (id.clone(), r)),
             );
@@ -1007,10 +1017,9 @@ impl Core {
     /// posted when found; when not found, or when GitHub can't be asked, the draft stays pending and says so
     /// (`REVIEW_NOT_FOUND_NOTE`). Only `post_anyway`, the person's explicit choice, then sends it again.
     pub async fn post_review_draft(&self, id: &str, seen: usize, post_anyway: bool) -> Result<Proposal> {
-        let scope = self.scope().await?;
         let gate = self.draft_gate.lock().await;
         let (claimed, look_for) = self
-            .with_app_db_for(&scope, |db| {
+            .with_proposals(|db| {
                 let current = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
                 if let Intent::GithubReview { connection_id, .. } = &current.intent {
                     self.refuse_while_held(connection_id)?;
@@ -1049,7 +1058,7 @@ impl Core {
             (Err(e), None) => Err(e),
         };
         let label = format!("{repo}#{number}");
-        self.with_app_db_for(&scope, |db| {
+        self.with_proposals(|db| {
             let at = Utc::now();
             let mut p = db.proposal(id)?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
             p.updated_at = at;
@@ -1215,7 +1224,7 @@ pub(crate) mod tests {
     async fn connecting_through_gh_registers_a_github_connection_and_lists_it() {
         let fx = fixture(REPOS).await;
         let connected = fx.core.github_connect(Some("ann")).await.unwrap();
-        assert_eq!((connected.id.as_str(), connected.kind, connected.workspace.as_str(), connected.account.as_str()), ("github:ann", ConnectionKind::Github, "ann", "Ann Example"));
+        assert_eq!((connected.id.as_str(), connected.kind, connected.workspace.as_str(), connected.account.as_str()), ("github:ann", RowKind::Github, "ann", "Ann Example"));
         assert_eq!(fx.core.registry.connection("github:ann").unwrap().kind, ConnectionKind::Github);
         let listed = fx.core.connections().await.unwrap();
         assert_eq!(listed.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["github:ann"]);
@@ -1802,7 +1811,7 @@ pub(crate) mod tests {
         let lx = linked(vec![], Some("repo")).await;
         lx.core().adopt_instances().await;
         let instance = AppConfig::load(&lx.fx.dir).connections.into_iter().find(|i| i.kind == ConnectionKind::Github).unwrap().id;
-        let rechecking = || async { lx.core().connections().await.unwrap().into_iter().find(|c| c.kind == ConnectionKind::Github).unwrap().rechecking };
+        let rechecking = || async { lx.core().connections().await.unwrap().into_iter().find(|c| c.kind == RowKind::Github).unwrap().rechecking };
         lx.core().set_instance_enabled(&instance, false).await.unwrap();
         assert!(!rechecking().await, "off is its own note, not a check");
 
@@ -2027,7 +2036,7 @@ mod review_tests {
     }
 
     async fn reviewer(fx: &Fixture) -> Run {
-        let clone = fx.home.join("webshop");
+        let clone = fx.home.join("Gossamr/agents/acme/webshop");
         std::fs::create_dir_all(clone.join(".git")).unwrap();
         let spec = crate::domain::fixtures::run_spec();
         let mut run = fx.core.queue_test_run(crate::domain::RunSpec { clone_path: clone, ..spec }, Some(fx.item("CA-1"))).await.unwrap();
@@ -2223,6 +2232,41 @@ mod review_tests {
         assert_eq!(body["comments"].as_array().unwrap().iter().map(|c| (c["path"].as_str().unwrap(), c["line"].as_u64().unwrap())).collect::<Vec<_>>(), [("src/consumer/retry.ts", 42), ("src/consumer/retry.ts", 17)]);
         assert!(fx.tracker.intents().is_empty(), "posting a review writes nothing to Jira");
         assert_eq!(fx.core.proposal(&p.id).await.unwrap(), Some(done));
+    }
+
+    async fn stored_review(fx: &Fixture, item: Option<ItemRef>) -> Proposal {
+        let intent = Intent::GithubReview {
+            connection_id: "github:ann".into(),
+            item,
+            run_id: "run-1".into(),
+            repo: "acme/webshop".into(),
+            number: 12,
+            commit_sha: "a1b2c3d4e5f6".into(),
+            summary: "Review summary.".into(),
+            comments: comments(),
+        };
+        let draft = Draft { origin: Origin::chat("review-turn"), created_by: CreatedBy::Pip, intent, label: None, basis: None };
+        fx.core.with_app_db(|db| proposals::create(db, draft, Utc::now())).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_review_posts_with_no_jira_connection_registered() {
+        let fx = fixture_watching_with(&["acme/webshop"], vec![(POST_ROUTE, vec![posted_reply()])]).await;
+        let p = stored_review(&fx, None).await;
+        fx.core.registry.remove(&fx.scope.connection_id);
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
+        assert_eq!(posts(&fx), ["POST /repos/acme/webshop/pulls/12/reviews"]);
+    }
+
+    #[tokio::test]
+    async fn a_review_of_a_ticket_on_the_second_jira_site_posts_while_the_first_is_the_primary() {
+        let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], vec![(POST_ROUTE, vec![posted_reply()])]).await;
+        let on_beta = ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+        let p = stored_review(&fx, Some(on_beta)).await;
+        let done = fx.core.post_review_draft(&p.id, p.revisions.len(), false).await.unwrap();
+        assert_eq!((done.state.clone(), done.error.clone()), (ProposalState::Applied, None));
+        assert_eq!(posts(&fx), ["POST /repos/acme/webshop/pulls/12/reviews"]);
     }
 
     #[tokio::test]
@@ -2610,5 +2654,31 @@ mod review_tests {
         let p = drafted(&fx).await;
         let of_item = fx.core.proposals(&ProposalQuery { item: Some(fx.item("CA-1")), ..Default::default() }).await.unwrap();
         assert!(of_item.iter().any(|d| d.id == p.id), "{of_item:?}");
+    }
+
+    #[tokio::test]
+    async fn project_keys_are_the_primarys_and_survive_turning_it_off() {
+        use crate::domain::{ContainerRef, ContainerSummary};
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let entry = ContainerSummary {
+            container_ref: ContainerRef { connection_id: second.connection_id.clone(), external_id: "10".into() },
+            key: "BETA".into(),
+            name: "Beta".into(),
+            kind: None,
+            archived: false,
+            last_active: None,
+            item_hint: None,
+        };
+        fx.core.with_db_for(&second, |db| db.catalog_upsert(&second.connection_id, &[entry], "2026-09-29T12:00:00Z")).await.unwrap();
+        assert!(fx.core.known_keys().await.item("BETA-1").is_none(), "a second connection adds no keys yet");
+        assert!(fx.core.known_keys().await.item("CA-1").is_some());
+
+        fx.core.set_instance_enabled("jira", false).await.unwrap();
+        assert_eq!(fx.core.primary().await.unwrap().scope, second, "the first is off, so the second is primary");
+        assert!(fx.core.known_keys().await.item("BETA-1").is_some());
+
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        assert!(fx.core.known_keys().await.item("CA-1").is_some(), "keys stay when every connection is off");
     }
 }

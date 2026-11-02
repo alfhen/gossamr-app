@@ -7,7 +7,7 @@ export interface FirstRunApi {
   github(): Promise<ProbeSnapshot>;
   openTerminal(): Promise<void>;
   jiraCloudId(site: string): Promise<string | null>;
-  jiraConnect(input: TokenSignIn): Promise<AuthStatus>;
+  jiraConnect(input: TokenSignIn, instanceId?: string): Promise<AuthStatus>;
   /** The dev mock only: the backend that took the connection, so the workspace opens on it. */
   sampleBackend?(): Backend;
 }

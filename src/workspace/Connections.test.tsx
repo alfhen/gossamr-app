@@ -2,8 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { ConnectionsView, type ConnectionsViewProps } from "./Connections";
-import { SignInBannerView } from "./SignInBanner";
+import { badgeText, ConnectionsView, type ConnectionsViewProps } from "./Connections";
+import { addEntries } from "./connectionsLogic";
+import { useJiraUi } from "./jiraUi";
+import { SignInBannerView, fixSignIn } from "./SignInBanner";
 
 const NOW = new Date("2026-10-30T12:00:00Z");
 const CHECKED = "2026-10-30T11:57:00Z";
@@ -35,6 +37,8 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onRemove={vi.fn()}
       onToggle={vi.fn()}
       onConnectGithub={vi.fn()}
+      addable={addEntries([])}
+      onAdd={vi.fn()}
       {...over}
     />,
   );
@@ -61,8 +65,8 @@ describe("the connections list", () => {
     expect(view({ selectedId: jira.id })).toContain('aria-label="Acme Jira details"');
   });
 
-  it("falls back to the first connection when the selected one is gone", () => {
-    expect(view({ selectedId: "github:gone" })).toContain('aria-label="Acme Jira details"');
+  it("falls back to the first connection shown when the selected one is gone", () => {
+    expect(view({ selectedId: "github:gone" })).toContain('aria-label="GitHub details"');
   });
 
   it("offers the command that fixes a connection, to copy and then check again", () => {
@@ -186,8 +190,53 @@ describe("the connections list", () => {
   });
 });
 
+describe("a row's badge", () => {
+  it("takes a Jira row's from the first two letters of its site, so two sites differ", () => {
+    expect(badgeText(jira)).toBe("AC");
+    expect(badgeText({ ...jira, workspace: "https://beta.atlassian.net" })).toBe("BE");
+    expect(view()).toContain(">AC<");
+  });
+
+  it("keeps SD for the sample data and CL and CX for the providers", () => {
+    expect(badgeText({ ...gh, kind: "mock", workspace: "Sample data" })).toBe("SD");
+    expect(badgeText({ ...gh, kind: "provider", driver: "claude" })).toBe("CL");
+    expect(badgeText({ ...gh, kind: "provider", driver: "codex" })).toBe("CX");
+  });
+});
+
+describe("a provider in the list", () => {
+  const claude: ConnectionInfo = { ...gh, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider", driver: "claude", workspace: "", account: "", status: null };
+
+  it("is not offered Jira's Change account or GitHub's Sign in again", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    expect(out).toContain('aria-label="Claude details"');
+    expect(out).not.toContain("Change account");
+    expect(out).not.toContain("Sign in again");
+    expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Change account");
+  });
+
+  it("has no Sync, Watching or Site sections, which belong to tickets and code", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    for (const word of ["Sync now", "Manage projects", "Manage repositories", ">Site<", ">Host<"]) expect(out).not.toContain(word);
+    expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
+  });
+
+  it("says in the detail pane that no check runs", () => {
+    const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
+    expect(out).toContain("No check runs for this provider.");
+  });
+});
+
 describe("the banner for a connection that is signed out", () => {
   const noop = vi.fn();
+
+  it("never offers a provider the Jira token", () => {
+    const claude: ConnectionInfo = { ...gh, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider" };
+    const out = renderToStaticMarkup(<SignInBannerView lost={[claude]} onFix={noop} />);
+    expect(out).toContain("Claude is signed out");
+    expect(out).toContain("Open connections");
+    expect(out).not.toContain("Make a new token");
+  });
 
   it("shows nothing while every connection is signed in", () => {
     expect(renderToStaticMarkup(<SignInBannerView lost={[]} onFix={noop} />)).toBe("");
@@ -197,6 +246,12 @@ describe("the banner for a connection that is signed out", () => {
     const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={noop} />);
     expect(out).toContain("Jira turned down your token");
     expect(out).toContain("Make a new token");
+  });
+
+  it("opens the token sheet on the row that lost its sign-in", () => {
+    fixSignIn(jira);
+    expect(useJiraUi.getState()).toMatchObject({ connectOpen: true, connectInstanceId: "jira" });
+    useJiraUi.getState().closeConnect();
   });
 
   it("sends the others, and any several, to the connections", () => {
@@ -212,5 +267,33 @@ describe("the sign-in banner text", () => {
     const out = renderToStaticMarkup(<SignInBannerView lost={[jira]} onFix={vi.fn()} />);
     expect(out).toContain("Jira isn&#x27;t syncing");
     expect(out).not.toContain("nothing is syncing");
+  });
+});
+
+describe("the + Add button and the groups", () => {
+  it("groups the rows under Code and Tickets, with the group headings as plain text", () => {
+    const out = view();
+    expect(out.indexOf(">Code<")).toBeLessThan(out.indexOf("GitHub connection"));
+    expect(out.indexOf("GitHub connection")).toBeLessThan(out.indexOf(">Tickets<"));
+    expect(out.indexOf(">Tickets<")).toBeLessThan(out.indexOf("Acme Jira connection"));
+    expect(out).not.toContain(">Models<");
+  });
+
+  it("shows a Models group when provider rows are shown", () => {
+    const claude: ConnectionInfo = { ...gh, id: "claude", instanceId: "claude", displayName: "Claude", kind: "provider", driver: "claude" };
+    expect(view({ connections: [jira, gh, claude] })).toContain(">Models<");
+  });
+
+  it("puts + Add beside Check all, secondary once a connection exists and primary before", () => {
+    const withOne = view();
+    expect(withOne).toMatch(/aria-haspopup="menu"[^>]*ws-btn--secondary[^>]*>\+ Add</);
+    expect(withOne.indexOf("Check all")).toBeLessThan(withOne.indexOf("+ Add"));
+    expect(view({ connections: [{ ...gh, kind: "mock" }] })).toMatch(/aria-haspopup="menu"[^>]*ws-btn--primary[^>]*>\+ Add</);
+  });
+
+  it("has no footer button for connecting GitHub", () => {
+    const out = view();
+    expect(out).not.toContain("Connect another GitHub account");
+    expect(out).not.toContain("behind each ticket");
   });
 });

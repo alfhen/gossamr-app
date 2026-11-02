@@ -1,16 +1,17 @@
 //! Core's side of the connection instances: creating them from the sign-ins already there, keeping them in step with
 //! signing in and out, and naming each connection by its instance.
 
-use super::{db_file, ConnectionInfo, Core};
+use super::{ConnectionInfo, Core};
 use crate::config::AppConfig;
-use crate::connections::{self, Binding};
-use crate::db::is_for;
-use crate::domain::{Actor, ProposalQuery, ProposalState, StateKind};
+use crate::connections::{self, Binding, RowKind};
+use crate::db::{connection_of, is_for};
+use crate::domain::{Actor, ProposalQuery, ProposalState, Run, RunQuery, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::secrets;
 use crate::tracker::{Connection, ConnectionKind};
 use chrono::Utc;
+use std::collections::HashMap;
 
 const NAME_LIMIT: usize = 60;
 
@@ -20,6 +21,15 @@ pub struct Removed {
     pub connection_id: String,
     pub kind: ConnectionKind,
     pub workstreams: bool,
+}
+
+/// Which connections are off and what their instances are called, as `Core::off_names` read them.
+pub struct OffNames(HashMap<String, String>);
+
+impl OffNames {
+    pub fn name(&self, connection_id: &str) -> Option<&str> {
+        self.0.get(connection_id).map(String::as_str)
+    }
 }
 
 struct RemovalTarget {
@@ -35,10 +45,14 @@ fn open_drafts_for(db: &crate::db::Db, connection_id: &str) -> Result<Vec<crate:
     Ok(db.proposals(&open)?.into_iter().filter(|p| is_for(p, connection_id)).collect())
 }
 
-fn remove_db_files(path: &std::path::Path) {
+pub(super) fn remove_db_files(path: &std::path::Path) {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
     }
+}
+
+pub(super) fn not_a_provider() -> Error {
+    Error::Input("This isn't a provider. Reopen Settings.".into())
 }
 
 fn clean_name(name: &str) -> Result<String> {
@@ -62,6 +76,9 @@ impl Core {
     /// failed to load.
     pub async fn adopt_instances(&self) {
         let config = AppConfig::load(&self.data_dir);
+        if let Some(problem) = &config.providers_error {
+            eprintln!("{problem}");
+        }
         if let Some(problem) = &config.connections_error {
             eprintln!("{problem}");
             return;
@@ -69,10 +86,7 @@ impl Core {
         if config.version >= connections::VERSION {
             return;
         }
-        let jira = match (self.auth.connection().await, self.auth.identity().await) {
-            (Some(Connection { id, .. }), Some((_, site, _))) => Some(Binding::jira(&id, &site.name, &site.url)),
-            _ => None,
-        };
+        let jira: Vec<Binding> = self.auth.accounts().await.iter().map(|s| Binding::jira(&s.connection.id, &s.site.name, &s.site.url).with_email(&s.email)).collect();
         let logins = self.code.auth.try_logins();
         if let Err(e) = &logins {
             eprintln!("couldn't read the saved GitHub sign-ins, so the connections aren't adopted yet: {e}");
@@ -85,6 +99,7 @@ impl Core {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn bind_instance(&self, binding: Binding) {
         if let Err(e) = self.try_bind_instance(binding) {
             eprintln!("couldn't save the connections to config.json: {e}");
@@ -92,9 +107,60 @@ impl Core {
         self.probes_rebound();
     }
 
-    /// Binds the instance for `binding` when the connections are live, and reports a failed write.
+    /// Binds the instance for `binding` when the connections are live, and reports a failed write or an account that
+    /// already has an instance.
     pub(super) fn try_bind_instance(&self, binding: Binding) -> Result<()> {
-        self.try_change_instances(|config| connections::bind(config, binding))
+        self.try_change_instances_checked(|config| connections::bind(config, binding))
+    }
+
+    /// Points the Jira instance `instance_id` at `binding`'s account, which the next probe asks about.
+    pub(super) fn rebind_instance(&self, instance_id: &str, binding: Binding) -> Result<()> {
+        self.try_change_instances_checked(|config| connections::replace_account(config, instance_id, binding))?;
+        self.probes_rebound();
+        Ok(())
+    }
+
+    /// Refuses an account that an instance other than `replacing` already has.
+    pub(super) fn refuse_taken_account(&self, connection_id: &str, replacing: Option<&str>) -> Result<()> {
+        let config = AppConfig::load(&self.data_dir);
+        if connections::is_live(&config) && connections::account_taken(&config, connection_id, replacing) {
+            return Err(Error::Input(connections::ALREADY_HAVE_ACCOUNT.into()));
+        }
+        Ok(())
+    }
+
+    /// The connection the Jira instance `instance_id` is bound to, or `instance_id` itself when no instance is listed
+    /// under it, as `require_jira` accepts.
+    pub(super) fn bound_account(&self, instance_id: &str) -> String {
+        let config = AppConfig::load(&self.data_dir);
+        let listed = config.connections.iter().find(|i| i.kind == ConnectionKind::Jira && (i.id == instance_id || i.bound_to.as_deref() == Some(instance_id)));
+        listed.and_then(|i| i.bound_to.clone()).unwrap_or_else(|| instance_id.into())
+    }
+
+    /// The name Settings shows for `instance_id`, or the id when it isn't listed.
+    pub(super) fn instance_name(&self, instance_id: &str) -> String {
+        let config = AppConfig::load(&self.data_dir);
+        config.connections.iter().find(|i| i.id == instance_id).map_or_else(|| instance_id.into(), |i| i.display_name.clone())
+    }
+
+    /// The Jira instance that signing in as `connection_id` should take back instead of adding another: the one bound to
+    /// that account, or the only Jira instance, when the account it is bound to has no sign-in (a Keychain that was reset,
+    /// a config.json restored from an older copy, or a write that failed). Such an instance has no row to renew.
+    pub(super) async fn orphaned_instance(&self, connection_id: &str) -> Option<String> {
+        let config = AppConfig::load(&self.data_dir);
+        if !connections::is_live(&config) {
+            return None;
+        }
+        let signed_in = self.auth.accounts().await;
+        let has_sign_in = |account: &str| signed_in.iter().any(|s| s.connection.id == account);
+        let listed: Vec<_> = config.connections.iter().filter(|i| i.kind == ConnectionKind::Jira).collect();
+        if let Some(own) = listed.iter().find(|i| i.bound_to.as_deref() == Some(connection_id)) {
+            return (!has_sign_in(connection_id)).then(|| own.id.clone());
+        }
+        match listed.as_slice() {
+            [only] if !has_sign_in(only.bound_to.as_deref().unwrap_or(&only.id)) => Some(only.id.clone()),
+            _ => None,
+        }
     }
 
     pub(super) fn unbind_instance(&self, connection_id: &str) {
@@ -104,6 +170,9 @@ impl Core {
     /// Saves the name Settings shows for `instance_id`, and returns the connection (or instance) to tell the page about.
     pub fn rename_instance(&self, instance_id: &str, name: &str) -> Result<String> {
         let name = clean_name(name)?;
+        if self.is_provider(instance_id) {
+            return self.provider_rename(instance_id, &name);
+        }
         let mut renamed = None;
         AppConfig::update_if(&self.data_dir, |config| {
             let Some(instance) = connections::is_live(config).then(|| config.connections.iter_mut().find(|i| i.id == instance_id)).flatten() else {
@@ -119,6 +188,9 @@ impl Core {
     /// Turns `instance_id` on or off, and returns the connection (or instance) to tell the page about. Turning off refuses
     /// while one of its drafts is being posted. The cache and the token stay either way.
     pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
+        if self.is_provider(instance_id) {
+            return self.provider_set_enabled(instance_id, enabled);
+        }
         let _alone = self.sign_in.lock().await;
         let _gate = self.draft_gate.lock().await;
         let config = AppConfig::load(&self.data_dir);
@@ -149,6 +221,10 @@ impl Core {
         let _gate = self.draft_gate.lock().await;
         let target = self.removal_target(instance_id).await?;
         self.refuse_while_posting(&target.connection_id, &target.name).await?;
+        if target.kind == ConnectionKind::Jira {
+            self.refuse_while_review_listed_under_is_posting(&target.connection_id, &target.name).await?;
+            self.refuse_while_running(&target.connection_id).await?;
+        }
         match target.kind {
             ConnectionKind::Github => self.forget_github(&target).await?,
             ConnectionKind::Jira => self.forget_jira(&target.connection_id).await?,
@@ -177,7 +253,8 @@ impl Core {
             let login = instance.config.login.clone();
             return Ok(RemovalTarget { kind: instance.kind, connection_id, name: instance.display_name.clone(), instance_id: Some(instance.id.clone()), login });
         }
-        if let Some(connection) = self.auth.connection().await.filter(|c| c.id == id) {
+        if let Some(session) = self.auth.accounts().await.into_iter().find(|s| s.connection.id == id) {
+            let connection = session.connection;
             return Ok(RemovalTarget { kind: ConnectionKind::Jira, connection_id: connection.id, name: connection.display_name, instance_id: None, login: None });
         }
         if let Ok(session) = self.code.session(id) {
@@ -186,11 +263,22 @@ impl Core {
         Err(Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
+    /// The instances that are turned off, read from `config.json` once. A request that looks at several connections takes
+    /// one of these instead of calling `off_name` for each.
+    pub fn off_names(&self) -> OffNames {
+        let config = AppConfig::load(&self.data_dir);
+        let mut names = HashMap::new();
+        if connections::is_live(&config) {
+            for i in config.connections.iter().filter(|i| !i.enabled) {
+                names.entry(i.bound_to.clone().unwrap_or_else(|| i.id.clone())).or_insert_with(|| i.display_name.clone());
+            }
+        }
+        OffNames(names)
+    }
+
     /// The name of the instance `connection_id` belongs to, when it is turned off. Nothing is off while the list can't be read.
     pub fn off_name(&self, connection_id: &str) -> Option<String> {
-        let config = AppConfig::load(&self.data_dir);
-        let off = |i: &&connections::Instance| !i.enabled && i.bound_to.as_deref().unwrap_or(&i.id) == connection_id;
-        connections::is_live(&config).then(|| config.connections.iter().find(off).map(|i| i.display_name.clone())).flatten()
+        self.off_names().name(connection_id).map(String::from)
     }
 
     /// Turns away a read of a connection that is off: its items are hidden from the views, from Pip and from agents.
@@ -235,7 +323,22 @@ impl Core {
         finished
     }
 
-    async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
+    /// A review is stored under its ticket's Jira connection, so it vanishes from the registry-limited views once that
+    /// connection is removed; posting must finish first.
+    async fn refuse_while_review_listed_under_is_posting(&self, connection_id: &str, name: &str) -> Result<()> {
+        let posting = self
+            .with_app_db(|db| {
+                let applying = ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() };
+                Ok(db.proposals(&applying)?.iter().any(|p| connection_of(p) == connection_id))
+            })
+            .await?;
+        if posting {
+            return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
         let posting = self.with_app_db(|db| open_drafts_for(db, connection_id).map(|mine| mine.iter().any(|p| p.state == ProposalState::Applying))).await?;
         if posting {
             return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
@@ -243,15 +346,36 @@ impl Core {
         Ok(())
     }
 
+    /// Agents that are running or waiting to start keep their tickets' site, so it stays until they are stopped. Runs
+    /// of a connection that has left the registry are invisible to the run service, so nothing could stop them.
+    pub(super) async fn refuse_while_running(&self, connection_id: &str) -> Result<()> {
+        let runs = self.live_runs(connection_id).await?;
+        match runs.len() {
+            0 => Ok(()),
+            _ if runs.iter().all(|r| r.state == RunState::Unknown) => Err(Error::Input("Gossamr can't find its agent's session right now. Try again once it settles.".into())),
+            1 => Err(Error::Input("Stop its running agent first.".into())),
+            n => Err(Error::Input(format!("Stop its {n} running agents first."))),
+        }
+    }
+
+    pub(super) async fn live_runs(&self, connection_id: &str) -> Result<Vec<Run>> {
+        let query = RunQuery { states: Some(RunState::UNFINISHED.to_vec()), connection_id: Some(connection_id.into()), ..Default::default() };
+        self.with_app_db(|db| db.runs(&query)).await
+    }
+
     /// Closes the pending drafts for the removed connection. Says whether a closed draft was in a workstream.
     async fn close_drafts_for(&self, target: &RemovalTarget) -> Result<bool> {
-        let reason = format!("{} was removed.", target.name);
+        self.close_drafts(&target.connection_id, &format!("{} was removed.", target.name)).await
+    }
+
+    /// Retires the pending drafts for `connection_id` with `reason`. Says whether a closed draft was in a workstream.
+    pub(super) async fn close_drafts(&self, connection_id: &str, reason: &str) -> Result<bool> {
         let now = chrono::Utc::now();
         self.with_app_db(|db| {
             db.atomically(|db| {
                 let mut workstreams = false;
-                for p in open_drafts_for(db, &target.connection_id)?.into_iter().filter(|p| p.state == ProposalState::Pending) {
-                    let closed = proposals::retire(db, &p.id, &reason, now)?;
+                for p in open_drafts_for(db, connection_id)?.into_iter().filter(|p| p.state == ProposalState::Pending) {
+                    let closed = proposals::retire(db, &p.id, reason, now)?;
                     proposals::record(db, &closed, Actor::Person, "draft_retired", now);
                     workstreams |= closed.workstream().is_some();
                 }
@@ -274,17 +398,105 @@ impl Core {
         Ok(())
     }
 
-    /// Forgets the Jira token and deletes the site's cache, if `connection_id` is the signed-in connection.
+    /// Forgets the Jira token of `connection_id` and deletes its cache. The cache goes even when no token was loaded
+    /// (the Keychain item couldn't be read, or an earlier removal got as far as the token), so adding the account again
+    /// starts empty.
     async fn forget_jira(&self, connection_id: &str) -> Result<()> {
-        let Some(connection) = self.auth.connection().await else { return Ok(()) };
-        if connection.id != connection_id {
-            return Err(Error::Input("Jira is signed in to another account now. Reopen Settings.".into()));
+        let held = self.auth.accounts().await.into_iter().map(|s| s.connection).find(|c| c.id == connection_id);
+        if held.is_some() {
+            self.auth.disconnect(connection_id).await?;
         }
-        self.auth.sign_out().await?;
-        self.registry.remove(&connection.id);
-        self.close_db();
-        self.settle_pip_turns(crate::db::DISCONNECTED).await;
-        remove_db_files(&self.data_dir.join(db_file(&connection)));
+        let Some(connection) = held.or_else(|| Connection::from_jira_id(connection_id)) else { return Ok(()) };
+        self.unregister_jira(&connection.id).await;
+        self.delete_cache(&connection);
+        Ok(())
+    }
+
+    pub fn is_provider(&self, instance_id: &str) -> bool {
+        AppConfig::load(&self.data_dir).providers.iter().any(|p| p.id == instance_id)
+    }
+
+    /// Refuses an id that isn't a Jira instance, so a provider's or GitHub's row can't be signed in as Jira.
+    /// A Jira row not yet in the list is named by its connection id, so that is accepted too.
+    pub async fn require_jira(&self, instance_id: &str) -> Result<()> {
+        let config = AppConfig::load(&self.data_dir);
+        let listed = config.connections.iter().any(|i| i.kind == ConnectionKind::Jira && (i.id == instance_id || i.bound_to.as_deref() == Some(instance_id)));
+        if listed || self.auth.connections().await.iter().any(|c| c.id == instance_id) {
+            return Ok(());
+        }
+        Err(Error::Input("That isn't a Jira connection.".into()))
+    }
+
+    pub fn provider_rename(&self, instance_id: &str, name: &str) -> Result<String> {
+        let name = clean_name(name)?;
+        self.change_provider(instance_id, |provider| provider.display_name = name)
+    }
+
+    pub fn provider_set_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {
+        self.change_provider(instance_id, |provider| provider.enabled = enabled)
+    }
+
+    /// Removes a provider instance and retires its id. Its config folder and the login in it stay on disk.
+    pub fn provider_remove(&self, instance_id: &str) -> Result<()> {
+        let mut removed = false;
+        AppConfig::update_if(&self.data_dir, |config| {
+            removed = connections::providers_live(config) && connections::remove_provider(config, instance_id);
+            removed
+        })?;
+        removed.then_some(()).ok_or_else(not_a_provider)?;
+        self.probes_forget(instance_id);
+        Ok(())
+    }
+
+    fn change_provider(&self, instance_id: &str, change: impl FnOnce(&mut connections::ProviderInstance)) -> Result<String> {
+        let mut changed = false;
+        AppConfig::update_if(&self.data_dir, |config| {
+            let Some(provider) = connections::provider_mut(config, instance_id) else { return false };
+            change(provider);
+            changed = true;
+            true
+        })?;
+        changed.then(|| instance_id.to_string()).ok_or_else(not_a_provider)
+    }
+
+    /// The provider instances as Settings rows, after the connections. A list that can't be read gives none.
+    pub(super) fn provider_rows(&self) -> Vec<ConnectionInfo> {
+        let config = AppConfig::load(&self.data_dir);
+        if let Some(problem) = config.providers_error.as_ref().or(config.connections_error.as_ref()) {
+            eprintln!("{problem}");
+            return Vec::new();
+        }
+        config
+            .providers
+            .into_iter()
+            .map(|p| ConnectionInfo {
+                instance_id: p.id.clone(),
+                id: p.id,
+                display_name: p.display_name,
+                enabled: p.enabled,
+                kind: RowKind::Provider,
+                driver: Some(p.driver),
+                config_dir: p.config.config_dir,
+                workspace: String::new(),
+                url: String::new(),
+                account: String::new(),
+                last_sync_at: None,
+                syncing: false,
+                error: None,
+                transient: false,
+                reauth: false,
+                status: None,
+                rechecking: false,
+            })
+            .collect()
+    }
+
+    fn try_change_instances_checked(&self, change: impl FnOnce(&mut AppConfig) -> std::result::Result<(), connections::AlreadyBound>) -> Result<()> {
+        let mut refused = false;
+        self.try_change_instances(|config| refused = change(config).is_err())?;
+        if refused {
+            return Err(Error::Input(connections::ALREADY_HAVE_ACCOUNT.into()));
+        }
         Ok(())
     }
 
@@ -322,6 +534,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inbox::db_file;
     use crate::domain::{CreatedBy, Intent, Origin, Proposal};
     use crate::inbox::testing::fixture_with_authenticator;
     use crate::proposals::Draft;
@@ -335,6 +548,15 @@ mod tests {
 
     fn names(fx: &crate::inbox::testing::Fixture) -> Vec<String> {
         AppConfig::load(&fx.core.data_dir()).connections.into_iter().map(|i| i.display_name).collect()
+    }
+
+    #[tokio::test]
+    async fn adopting_several_signed_in_accounts_makes_an_instance_for_each_bound_to_its_own() {
+        let (fx, _) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let config = AppConfig::load(&fx.core.data_dir());
+        let rows: Vec<_> = config.connections.iter().map(|i| (i.id.as_str(), i.display_name.as_str(), i.bound_to.as_deref(), i.config.email.as_deref())).collect();
+        assert_eq!(rows, [("jira", "Acme", Some("jira:site:me"), Some("me@example.com")), ("jira_2", "Beta", Some("jira:beta:bo"), Some("bo@example.com"))]);
     }
 
     #[tokio::test]
@@ -450,6 +672,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_review_being_posted_stops_the_removal_of_the_jira_site_it_is_listed_under() {
+        let fx = adopted().await;
+        let posting = draft_for(&fx, review_on_github(&fx)).await;
+        fx.core.with_app_db(|db| db.begin_posting_review(&posting.id, chrono::Utc::now(), None)).await.unwrap();
+
+        let refused = fx.core.remove_instance("jira").await.unwrap_err();
+
+        assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft")), "{refused}");
+        assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    #[tokio::test]
     async fn removing_an_instance_that_is_already_gone_says_so_and_changes_nothing() {
         let fx = adopted().await;
         assert!(matches!(fx.core.remove_instance("github_9").await, Err(Error::Input(_))));
@@ -553,6 +787,21 @@ mod tests {
 
         fx.core.set_instance_enabled("jira", false).await.unwrap();
         fx.core.set_instance_enabled("jira", true).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn one_read_of_the_off_instances_names_each_connection_that_is_off_and_none_while_the_list_cant_be_read() {
+        let fx = adopted().await;
+        fx.core.set_instance_enabled("github", false).await.unwrap();
+
+        let off = fx.core.off_names();
+
+        assert_eq!(off.name("github:alfhen"), Some("GitHub"));
+        assert_eq!(off.name("jira"), None);
+        assert_eq!(fx.core.off_name("github:alfhen").as_deref(), Some("GitHub"));
+
+        std::fs::write(fx.dir.join("config.json"), "{ nope").unwrap();
+        assert_eq!(fx.core.off_names().name("github:alfhen"), None);
     }
 
     #[tokio::test]
@@ -716,5 +965,217 @@ mod tests {
         assert!(fx.core.auth.connection().await.is_none());
         assert_eq!(state_of(&fx, &review.id).await, ProposalState::Retired("GitHub was removed.".into()));
         assert_eq!(std::fs::read_to_string(fx.dir.join("config.json")).unwrap(), "{ nope");
+    }
+
+    fn provider_ids(fx: &crate::inbox::testing::Fixture) -> Vec<String> {
+        AppConfig::load(&fx.core.data_dir()).providers.into_iter().map(|p| p.id).collect()
+    }
+
+    fn add_provider(fx: &crate::inbox::testing::Fixture, id: &str, folder: Option<&std::path::Path>) {
+        AppConfig::update(&fx.core.data_dir(), |config| {
+            config.providers.push(connections::ProviderInstance {
+                id: id.into(),
+                driver: connections::Driver::Claude,
+                display_name: "Claude personal".into(),
+                enabled: true,
+                config: connections::ProviderConfig { config_dir: folder.map(|f| f.display().to_string()), ..Default::default() },
+                extra: Default::default(),
+            });
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_list_ends_with_the_provider_rows_which_carry_the_driver_and_the_folder() {
+        let fx = adopted().await;
+        add_provider(&fx, "claude_2", Some(std::path::Path::new("/tmp/claude-two")));
+        let rows = fx.core.settings_rows().await.unwrap();
+        let shown: Vec<_> = rows.iter().map(|c| (c.instance_id.as_str(), c.kind)).collect();
+        assert_eq!(shown, [("jira", RowKind::Jira), ("claude", RowKind::Provider), ("claude_2", RowKind::Provider)]);
+        let second = rows.last().unwrap();
+        assert_eq!((second.driver, second.config_dir.as_deref(), second.status.is_none(), second.display_name.as_str()), (Some(connections::Driver::Claude), Some("/tmp/claude-two"), true, "Claude personal"));
+        let json = serde_json::to_value(&rows[0]).unwrap();
+        assert!(json.get("driver").is_none() && json.get("configDir").is_none());
+        assert_eq!(serde_json::to_value(second).unwrap()["driver"], "claude");
+    }
+
+    #[tokio::test]
+    async fn a_provider_can_be_renamed_and_turned_off_and_on_through_the_instance_commands() {
+        let fx = adopted().await;
+        assert_eq!(fx.core.rename_instance("claude", "  Work Claude ").unwrap(), "claude");
+        assert_eq!(fx.core.set_instance_enabled("claude", false).await.unwrap(), "claude");
+        let row = |fx: &crate::inbox::testing::Fixture| AppConfig::load(&fx.core.data_dir()).providers.into_iter().find(|p| p.id == "claude").map(|p| (p.display_name, p.enabled));
+        assert_eq!(row(&fx), Some(("Work Claude".into(), false)));
+        fx.core.set_instance_enabled("claude", true).await.unwrap();
+        assert_eq!(row(&fx).map(|r| r.1), Some(true));
+        assert!(matches!(fx.core.rename_instance("claude", "  "), Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn removing_a_provider_retires_its_id_and_deletes_nothing_on_disk() {
+        let fx = adopted().await;
+        let folder = fx.core.data_dir().join("claude-two-login");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(".credentials.json"), "{}").unwrap();
+        add_provider(&fx, "claude_2", Some(&folder));
+        fx.core.provider_remove("claude_2").unwrap();
+        assert_eq!(provider_ids(&fx), ["claude"]);
+        assert!(AppConfig::load(&fx.core.data_dir()).retired_ids.contains(&"claude_2".to_string()));
+        assert!(folder.join(".credentials.json").exists());
+        assert_eq!(ids(&fx), ["jira", "github"], "the connections are untouched");
+    }
+
+    #[tokio::test]
+    async fn removing_every_provider_leaves_the_list_empty_after_a_relaunch() {
+        let fx = adopted().await;
+        fx.core.provider_remove("claude").unwrap();
+        fx.core.adopt_instances().await;
+        assert!(provider_ids(&fx).is_empty());
+        assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
+    }
+
+    #[tokio::test]
+    async fn the_provider_commands_refuse_an_id_that_is_not_a_provider() {
+        let fx = adopted().await;
+        let before = (names(&fx), enabled(&fx));
+        for id in ["jira", "github", "github_9"] {
+            assert!(matches!(fx.core.provider_rename(id, "Other"), Err(Error::Input(_))), "{id}");
+            assert!(matches!(fx.core.provider_set_enabled(id, false), Err(Error::Input(_))), "{id}");
+            assert!(matches!(fx.core.provider_remove(id), Err(Error::Input(_))), "{id}");
+        }
+        assert_eq!((names(&fx), enabled(&fx)), before);
+        assert_eq!(provider_ids(&fx), ["claude"]);
+    }
+
+    #[tokio::test]
+    async fn a_provider_row_cannot_be_removed_as_a_connection_and_a_connection_cannot_be_removed_as_a_provider() {
+        let fx = adopted().await;
+        assert!(matches!(fx.core.remove_instance("claude").await, Err(Error::Input(_))));
+        assert_eq!(provider_ids(&fx), ["claude"]);
+    }
+
+    #[tokio::test]
+    async fn jira_connect_refuses_an_id_that_is_not_a_jira_instance() {
+        let fx = adopted().await;
+        assert!(fx.core.require_jira("jira").await.is_ok());
+        for id in ["claude", "github", "github_9", ""] {
+            assert!(matches!(fx.core.require_jira(id).await, Err(Error::Input(_))), "{id:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn jira_connect_accepts_a_signed_in_jira_connection_that_has_no_instance_yet() {
+        let fx = fixture_with_authenticator(None, None).await;
+        let connection_id = fx.core.auth.connection().await.unwrap().id;
+        assert!(AppConfig::load(&fx.core.data_dir()).connections.is_empty());
+        assert!(fx.core.require_jira(&connection_id).await.is_ok());
+        assert!(matches!(fx.core.require_jira("github").await, Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn jira_connect_accepts_the_connection_id_an_instance_is_bound_to() {
+        let fx = adopted().await;
+        let connection_id = fx.core.auth.connection().await.unwrap().id;
+        assert!(fx.core.require_jira(&connection_id).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_connections_block_shows_no_provider_rows() {
+        let fx = adopted().await;
+        let dir = fx.core.data_dir();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        file["connections"] = serde_json::json!("broken");
+        std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
+        assert!(fx.core.provider_rows().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_providers_list_that_cant_be_read_shows_no_provider_rows_and_changes_nothing() {
+        let fx = adopted().await;
+        let dir = fx.core.data_dir();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        file["providers"] = serde_json::json!([{ "id": "claude", "driver": "gemini" }]);
+        std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
+        assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
+        assert!(matches!(fx.core.provider_set_enabled("claude", false), Err(Error::Input(_))));
+        assert!(matches!(fx.core.rename_instance("claude", "Other"), Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn a_jira_connection_with_a_live_run_is_not_removed_until_the_run_is_stopped() {
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+        let refused = core.remove_instance("jira_2").await.unwrap_err();
+        assert_eq!(refused.to_string(), "Stop its running agent first.");
+        assert!(core.auth.accounts().await.iter().any(|s| s.connection.id == second.connection_id), "the account is still signed in");
+
+        rig.svc.stop(&run.id).await.unwrap();
+        let removed = core.remove_instance("jira_2").await.unwrap();
+        assert_eq!(removed.connection_id, second.connection_id);
+    }
+
+    #[tokio::test]
+    async fn a_jira_connection_whose_run_has_lost_its_session_is_not_removed() {
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+        rig.set(&run, |r| r.state = RunState::Unknown).await;
+
+        let refused = core.remove_instance("jira_2").await.unwrap_err();
+
+        assert_eq!(refused.to_string(), "Gossamr can't find its agent's session right now. Try again once it settles.");
+        assert!(core.runs_list(&RunQuery::default()).await.unwrap().iter().any(|r| r.id == run.id), "the run is still in reach");
+        assert!(core.auth.accounts().await.iter().any(|s| s.connection.id == second.connection_id));
+    }
+
+    fn sign_in_as(site: &str, email: &str) -> crate::auth::TokenSignIn {
+        crate::auth::TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: "t".into(), expires_on: "2999-01-01".into() }
+    }
+
+    #[tokio::test]
+    async fn taking_over_an_instance_with_another_account_is_refused_while_an_agent_works_on_the_account_it_had() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+
+        let refused = core.connect_jira(&sign_in_as("gamma", "gus"), Some("jira_2")).await.err().expect("refused");
+
+        assert!(refused.to_string().contains("running agent"), "{refused}");
+        let signed_in: Vec<String> = core.auth.accounts().await.into_iter().map(|s| s.connection.id).collect();
+        assert!(signed_in.contains(&second.connection_id) && signed_in.len() == 2, "{signed_in:?}");
+        assert!(core.run(&run.id).await.unwrap().is_some(), "the run is still in reach");
+        rig.svc.stop(&run.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn taking_over_an_instance_again_as_the_account_with_the_agent_is_allowed() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let (rig, run, _second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+
+        core.connect_jira(&sign_in_as("beta", "bo"), Some("jira_2")).await.unwrap();
+
+        assert!(core.run(&run.id).await.unwrap().is_some(), "the run is still in reach");
+        rig.svc.stop(&run.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_run_cannot_be_queued_while_its_connection_is_being_removed() {
+        let (rig, run, _second) = crate::runs::rig::working_on_the_second_account().await;
+        rig.svc.stop(&run.id).await.unwrap();
+        let removing = rig.fx.core.draft_gate.lock().await;
+        let (core, spec, item) = (rig.fx.core.clone(), rig.spec(2), rig.fx.item("CA-1"));
+        let queuing = tokio::spawn(async move { core.queue_test_run(spec, Some(item)).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert!(!queuing.is_finished(), "the run was queued while a removal held the gate");
+        drop(removing);
+        queuing.await.unwrap().unwrap();
     }
 }

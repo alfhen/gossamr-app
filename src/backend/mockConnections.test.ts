@@ -19,6 +19,42 @@ describe("the mock connection actions", () => {
     expect((await b.connectionsList())[0]).toMatchObject({ displayName: "acme.atlassian.net", status: { state: "ready", account: "Alf Henderson" } });
   });
 
+  it("adds without an instance, refuses an account it already has, and renews it from its row", async () => {
+    const b = new MockBackend();
+    const input = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+    await b.jiraConnect(input);
+    await expect(b.jiraConnect({ ...input, token: "again" })).rejects.toThrow("You already have this account");
+    await expect(b.jiraConnect({ ...input, token: "again" }, "jira")).resolves.toMatchObject({ email: "alf@acme.com" });
+  });
+
+  it("lists a connected Jira as a Jira row, and the sample again once it is removed", async () => {
+    const b = new MockBackend();
+    expect((await b.connectionsList())[0].kind).toBe("mock");
+    await b.jiraConnect({ site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" });
+    expect((await b.connectionsList())[0].kind).toBe("jira");
+    await b.connectionRemove("jira");
+    expect((await b.connectionsList())[0]).toMatchObject({ kind: "mock", displayName: "Sample data" });
+  });
+
+  it("turns a connected Jira off and on without touching GitHub", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await b.jiraConnect({ site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" });
+    const enabled = async (id: string) => (await b.connectionsList()).find((c) => c.instanceId === id)?.enabled;
+    await b.connectionSetEnabled("jira", false);
+    expect(await enabled("jira")).toBe(false);
+    expect(await enabled("github")).toBe(true);
+    await b.connectionSetEnabled("jira", true);
+    expect(await enabled("jira")).toBe(true);
+  });
+
+  it("takes a new token for a connected Jira, and still refuses a row that isn't Jira", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const input = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+    await b.jiraConnect(input);
+    await expect(b.jiraConnect({ ...input, token: "t2" }, "jira")).resolves.toMatchObject({ site: { name: "acme.atlassian.net" } });
+    await expect(b.jiraConnect(input, "github")).rejects.toThrow("That isn't a Jira connection.");
+  });
+
   it("renames an instance, trimmed, and tells the page", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     let told = 0;
@@ -41,11 +77,11 @@ describe("the mock connection actions", () => {
     let told = 0;
     b.onConnectionsChanged(() => told++);
     await b.connectionRemove("github");
-    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira"]);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "claude"]);
     expect(b.proposals.get(draft.id)?.state).toEqual({ type: "retired", reason: "GitHub was removed." });
     expect(told).toBe(1);
     await b.githubConnect();
-    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2"]);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github_2", "claude"]);
   });
 
   it("refuses to remove GitHub while one of its reviews is being posted, and leaves every draft as it was", async () => {
@@ -56,14 +92,44 @@ describe("the mock connection actions", () => {
     void b.proposals.postReview(posting.id, 0, () => new Promise(() => {}), async () => null);
     await expect(b.connectionRemove("github")).rejects.toThrow("posting a draft for GitHub right now");
     expect(b.proposals.get(waiting.id)?.state).toEqual({ type: "pending" });
-    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github"]);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
   });
 
   it("refuses the sample data and an instance that is gone", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     await expect(b.connectionRemove("jira")).rejects.toThrow("built in");
     await expect(b.connectionRemove("github_9")).rejects.toThrow("gone");
-    expect(await b.connectionsList()).toHaveLength(2);
+    expect(await b.connectionsList()).toHaveLength(3);
+  });
+});
+
+describe("the mock provider instance", () => {
+  it("always lists one default Claude row, after the others", async () => {
+    const rows = await new MockBackend({ githubRepos: 6 }).connectionsList();
+    expect(rows.map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
+    expect(rows[2]).toMatchObject({ kind: "provider", driver: "claude", displayName: "Claude", enabled: true, status: null });
+    expect(rows[2].configDir).toBeUndefined();
+  });
+
+  it("refuses a Jira sign-in started from a row that is not the Jira one", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const input = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+    await expect(b.jiraConnect(input, "claude")).rejects.toThrow("isn't a Jira connection");
+    await expect(b.jiraConnect(input, "github")).rejects.toThrow("isn't a Jira connection");
+    expect((await b.connectionsList())[0].displayName).toBe("Sample data");
+    await b.jiraConnect(input, "jira");
+    expect((await b.connectionsList())[0].displayName).toBe("acme.atlassian.net");
+  });
+
+  it("renames, turns off and on, and removes it without touching the others", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await b.connectionRename("claude", " Work Claude ");
+    await b.connectionSetEnabled("claude", false);
+    expect((await b.connectionsList()).find((c) => c.instanceId === "claude")).toMatchObject({ displayName: "Work Claude", enabled: false });
+    await b.connectionSetEnabled("claude", true);
+    expect((await b.connectionsList()).find((c) => c.instanceId === "claude")?.enabled).toBe(true);
+    await b.connectionRemove("claude");
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github"]);
   });
 });
 

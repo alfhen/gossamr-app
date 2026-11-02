@@ -12,7 +12,7 @@ import { jumpToItem } from "./Palette";
 const PULSE_MS = 1400;
 
 /** The element that stands for an item on whichever canvas is showing: a board or age card, or a list row. */
-export const canvasElement = (ref: ItemRef) => document.getElementById(cardId(ref.key)) ?? document.getElementById(`row-${itemKey(ref)}`);
+export const canvasElement = (ref: ItemRef) => document.getElementById(cardId(ref)) ?? document.getElementById(`row-${itemKey(ref)}`);
 
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 

@@ -70,6 +70,28 @@ enum State {
     Unavailable(String),
 }
 
+/// One change in an `apply`.
+pub enum Op {
+    Save(String, Value),
+    Delete(String),
+}
+
+impl Op {
+    pub fn save<T: Serialize>(account: &str, value: &T) -> Result<Self> {
+        Ok(Self::Save(account.into(), serde_json::to_value(value)?))
+    }
+
+    pub fn delete(account: &str) -> Self {
+        Self::Delete(account.into())
+    }
+
+    fn account(&self) -> &str {
+        match self {
+            Self::Save(account, _) | Self::Delete(account) => account,
+        }
+    }
+}
+
 pub struct Vault {
     backend: Box<dyn Backend>,
     state: Mutex<State>,
@@ -159,6 +181,33 @@ impl Vault {
             Ok(())
         })
     }
+
+    /// Applies every change in one vault write, so a failure leaves all of them undone.
+    pub fn apply(&self, ops: &[Op]) -> Result<()> {
+        self.with_ready(|backend, ready| {
+            let mut next = ready.doc.clone();
+            let first_touch: Vec<&str> = ops.iter().map(Op::account).filter(|a| !ready.doc.probed.contains(*a)).collect();
+            for op in ops {
+                match op {
+                    Op::Save(account, value) => next.secrets.insert(account.clone(), value.clone()),
+                    Op::Delete(account) => next.secrets.remove(account),
+                };
+                next.probed.insert(op.account().into());
+            }
+            if next.secrets != ready.doc.secrets || !first_touch.is_empty() {
+                write_vault(backend, &next)?;
+                ready.doc = next;
+            }
+            for account in first_touch {
+                forget_legacy(backend, account);
+            }
+            Ok(())
+        })
+    }
+
+    pub fn keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        self.with_ready(|_, ready| Ok(ready.doc.secrets.keys().filter(|k| k.starts_with(prefix)).cloned().collect()))
+    }
 }
 
 fn write_vault(backend: &dyn Backend, doc: &Doc) -> Result<()> {
@@ -232,6 +281,15 @@ pub fn save<T: Serialize>(account: &str, value: &T) -> Result<()> {
 
 pub fn delete(account: &str) -> Result<()> {
     with_global(|v| v.delete(account))
+}
+
+pub fn apply(ops: &[Op]) -> Result<()> {
+    with_global(|v| v.apply(ops))
+}
+
+/// The stored accounts that start with `prefix`, in order. Fails while the vault can't be read.
+pub fn keys_with_prefix(prefix: &str) -> Result<Vec<String>> {
+    with_global(|v| v.keys_with_prefix(prefix))
 }
 
 #[cfg(test)]
@@ -514,6 +572,48 @@ mod tests {
         assert!(message.contains("Keychain Access"));
         assert!(v.save("a", &"x").is_err());
         assert_eq!(fake.get(VAULT_ACCOUNT).as_deref(), Some("not json"));
+    }
+
+    #[test]
+    fn apply_makes_every_change_in_one_write() {
+        let fake = Fake::default();
+        let v = vault(&fake);
+        v.save("old", &"one").unwrap();
+        fake.reset_counts();
+        v.apply(&[Op::save("new", &"two").unwrap(), Op::delete("old")]).unwrap();
+        assert_eq!(fake.writes(), 1);
+        let v = vault(&fake);
+        assert_eq!((v.load::<String>("new").unwrap().as_deref(), v.load::<String>("old").unwrap()), (Some("two"), None));
+    }
+
+    #[test]
+    fn a_failed_apply_changes_nothing() {
+        let fake = Fake::default();
+        let v = vault(&fake);
+        v.save("old", &"one").unwrap();
+        fake.deny_writes(true);
+        assert!(v.apply(&[Op::save("new", &"two").unwrap(), Op::delete("old")]).is_err());
+        fake.deny_writes(false);
+        assert_eq!((v.load::<String>("old").unwrap().as_deref(), v.load::<String>("new").unwrap()), (Some("one"), None));
+        let v = vault(&fake);
+        assert_eq!((v.load::<String>("old").unwrap().as_deref(), v.load::<String>("new").unwrap()), (Some("one"), None));
+    }
+
+    #[test]
+    fn keys_are_listed_by_prefix_in_order() {
+        let fake = Fake::default();
+        let v = vault(&fake);
+        for key in ["jira-token:b", "jira-token", "jira-token:a", "github:ann"] {
+            v.save(key, &"x").unwrap();
+        }
+        assert_eq!(v.keys_with_prefix("jira-token:").unwrap(), ["jira-token:a", "jira-token:b"]);
+    }
+
+    #[test]
+    fn keys_cannot_be_listed_while_the_vault_is_unreadable() {
+        let fake = Fake::default();
+        fake.deny_reads_of(VAULT_ACCOUNT);
+        assert!(vault(&fake).keys_with_prefix("jira-token:").is_err());
     }
 
     #[test]

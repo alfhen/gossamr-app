@@ -347,7 +347,7 @@ export const pipAsks = {
   build: (run: { id: string }): PipAsk => ({ prompt: `Build it, following the plan of run ${run.id}.`, shown: PIP_SHOWN.build }),
   again: (run: AgainOf): PipAsk => {
     const following = run.spec.pr ? `, on pull request ${run.spec.pr}` : "";
-    return { prompt: `Start the ${run.spec.role} agent of run ${run.id} again${following}. ${run.spec.repo} has a clone now.`, shown: PIP_SHOWN.again };
+    return { prompt: `Start the ${run.spec.role} agent of run ${run.id} again${following}, in Gossamr's own clone of ${run.spec.repo}.`, shown: PIP_SHOWN.again };
   },
   review: (run: { id: string }): PipAsk => ({ prompt: `Review it: the pull request the build ${run.id} opened.`, shown: PIP_SHOWN.reviewBuild }),
   breakdown: (run: RunOf, draftId: string | null = null): PipAsk => ({ prompt: breakdownWithPipPrompt(run, draftId), shown: draftId ? PIP_SHOWN.breakdown : PIP_SHOWN.subtasks }),

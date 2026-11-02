@@ -1,10 +1,11 @@
 import { useEffect, useRef, type DragEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { Cobweb } from "../components/Cobweb";
 import { PipGlyph } from "../components/PipGlyph";
+import { itemKey } from "../lib/filter";
 import { pressed } from "../lib/keys";
 import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";
-import type { StatusDef, WorkItem, WorkPriority } from "../types";
+import type { ItemRef, StatusDef, WorkItem, WorkPriority } from "../types";
 import { daysQuiet } from "./boardLogic";
 import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
@@ -52,7 +53,7 @@ const PRIORITY: Partial<Record<WorkPriority, { glyph: string; label: string; ton
   lowest: { glyph: "▽▽", label: "Lowest priority", tone: "text-ws-ink3" },
 };
 
-export const cardId = (key: string) => `card-${key}`;
+export const cardId = (ref: ItemRef) => `card-${itemKey(ref)}`;
 
 /** A ticket as a card on the board. */
 export function ItemCard(p: ItemCardProps) {
@@ -90,7 +91,7 @@ export function ItemCard(p: ItemCardProps) {
       ev.preventDefault();
       ev.stopPropagation();
       p.onMenu(false);
-      document.getElementById(cardId(item.item.key))?.focus();
+      document.getElementById(cardId(item.item))?.focus();
       return;
     }
     const step = ev.key === "ArrowDown" ? 1 : ev.key === "ArrowUp" ? -1 : 0;
@@ -106,7 +107,7 @@ export function ItemCard(p: ItemCardProps) {
 
   return (
     <article
-      id={cardId(item.item.key)}
+      id={cardId(item.item)}
       tabIndex={0}
       aria-label={`${item.item.key} ${item.title}`}
       aria-current={p.selected ? "true" : undefined}

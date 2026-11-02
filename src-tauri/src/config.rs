@@ -1,20 +1,23 @@
 //! App-level settings, kept in `config.json` beside the databases.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::connections::{Instance, VERSION};
+use crate::connections::{self, Instance, ProviderInstance, VERSION};
 use crate::error::Result;
+use crate::model_choice::ModelDefaults;
 use crate::runs::notices::NoticeMode;
 
 const FILE: &str = "config.json";
 const BACKUP: &str = "config.json.bak";
 /// The keys that make up the instance list. They are read apart from the preferences, and a copy that can't be read is kept as it is.
 const CONNECTION_KEYS: [&str; 3] = ["version", "connections", "retiredIds"];
+
+const PROVIDERS_KEY: &str = "providers";
+const MODELS_KEY: &str = "models";
 
 static WRITER: Mutex<()> = Mutex::new(());
 
@@ -60,9 +63,10 @@ impl AgentSettings {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
-    /// The clone the person chose for a repository (`owner/name`) when several match.
-    pub picked_clones: HashMap<String, PathBuf>,
     pub agents: AgentSettings,
+    /// Which instance and model Pip and new agents use when nothing narrower says. Read on its own, so another bad preference can't reset it.
+    #[serde(skip_deserializing)]
+    pub models: ModelDefaults,
     /// Which version of the instance list was written; 0 until the sign-ins already there have been adopted.
     #[serde(skip_deserializing)]
     pub version: u32,
@@ -74,8 +78,22 @@ pub struct AppConfig {
     /// Why the instance list could not be used. While it is set, the list is neither changed nor replaced.
     #[serde(skip)]
     pub connections_error: Option<String>,
+    /// The model providers (Claude, Codex logins). Read apart from `connections`, and not part of its version.
+    #[serde(skip_deserializing)]
+    pub providers: Vec<ProviderInstance>,
+    /// Why the provider list could not be used. While it is set, the list is neither changed nor replaced.
+    #[serde(skip)]
+    pub providers_error: Option<String>,
     #[serde(skip)]
     unreadable_connections: Option<Map<String, Value>>,
+    /// The raw `models` entries (or the whole value, when it isn't an object) this build couldn't read. They are saved back as they were until a default is set again.
+    #[serde(skip)]
+    unreadable_models: Option<Value>,
+    #[serde(skip)]
+    unreadable_providers: Option<Value>,
+    /// The file has no `providers` key and the retired ids that decide the default instance couldn't be read, so the key is left out of what is saved.
+    #[serde(skip)]
+    providers_withheld: bool,
     /// The file couldn't be read as a whole, so anything saved would replace what is really there. Saving is refused.
     #[serde(skip)]
     file_unreadable: bool,
@@ -97,7 +115,7 @@ impl AppConfig {
     pub fn load(dir: &Path) -> Self {
         let bytes = match std::fs::read(dir.join(FILE)) {
             Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self { providers: vec![connections::default_claude()], ..Self::default() },
             Err(e) => return Self::locked(format!("{FILE} can't be read ({e}); it was left as it is")),
         };
         let Ok(text) = String::from_utf8(bytes.clone()) else {
@@ -110,6 +128,7 @@ impl AppConfig {
         };
         let mut config: Self = serde_json::from_value(Value::Object(file.clone())).unwrap_or_default();
         config.agents = config.agents.clamped();
+        (config.models, config.unreadable_models) = ModelDefaults::from_file(file.get(MODELS_KEY));
         let block: Map<String, Value> = CONNECTION_KEYS.iter().filter_map(|k| Some((k.to_string(), file.get(*k)?.clone()))).collect();
         let problem = match serde_json::from_value::<Roster>(Value::Object(block.clone())) {
             Ok(roster) if roster.version <= VERSION => {
@@ -124,7 +143,56 @@ impl AppConfig {
             config.connections_error = Some(problem);
             config.unreadable_connections = Some(block);
         }
+        config.load_providers(dir, &bytes, file.get(PROVIDERS_KEY));
         config
+    }
+
+    fn load_providers(&mut self, dir: &Path, bytes: &[u8], stored: Option<&Value>) {
+        let Some(stored) = stored else {
+            if self.connections_error.is_some() {
+                self.providers_withheld = true;
+            } else if !self.retired_ids.iter().any(|id| id == connections::DEFAULT_CLAUDE) {
+                self.providers.push(connections::default_claude());
+            }
+            return;
+        };
+        match serde_json::from_value::<Vec<ProviderInstance>>(stored.clone()) {
+            Ok(list) if has_duplicate_ids(&list) => self.lock_providers(dir, bytes, stored, "two of them share an id".into()),
+            Ok(list) if self.names_a_connection(&list) => self.lock_providers(dir, bytes, stored, "one of them shares an id with a connection".into()),
+            Ok(list) => {
+                self.providers = list;
+                if self.connections_error.is_some() {
+                    self.unreadable_providers = Some(stored.clone());
+                }
+            }
+            Err(e) => self.lock_providers(dir, bytes, stored, e.to_string()),
+        }
+    }
+
+    fn names_a_connection(&self, list: &[ProviderInstance]) -> bool {
+        list.iter().any(|p| self.connections.iter().any(|i| i.id == p.id || i.bound_to.as_deref() == Some(p.id.as_str())) || self.retired_ids.contains(&p.id))
+    }
+
+    fn lock_providers(&mut self, dir: &Path, bytes: &[u8], stored: &Value, why: String) {
+        back_up(dir, bytes);
+        self.providers_error = Some(format!("the providers in {FILE} can't be read ({why}); a copy is in {BACKUP}"));
+        self.unreadable_providers = Some(stored.clone());
+    }
+
+    /// Replaces both defaults, including any a newer build wrote that this one couldn't read.
+    pub fn set_models(&mut self, models: ModelDefaults) {
+        self.models = models;
+        self.unreadable_models = None;
+    }
+
+    /// Drops the unreadable stored defaults that name `instance_id`, so a removed instance is not written back.
+    pub fn forget_unreadable_models(&mut self, instance_id: &str) {
+        if let Some(Value::Object(kept)) = &mut self.unreadable_models {
+            kept.retain(|_, raw| raw.get("instanceId").and_then(Value::as_str) != Some(instance_id));
+            if kept.is_empty() {
+                self.unreadable_models = None;
+            }
+        }
     }
 
     fn locked(problem: String) -> Self {
@@ -168,12 +236,32 @@ impl AppConfig {
             }
             map.extend(kept.clone());
         }
+        match (&self.unreadable_models, value.get_mut(MODELS_KEY)) {
+            (Some(Value::Object(kept)), Some(Value::Object(models))) => models.extend(kept.clone()),
+            (Some(raw), Some(models)) => *models = raw.clone(),
+            _ => {}
+        }
+        if let Value::Object(map) = &mut value {
+            match &self.unreadable_providers {
+                Some(kept) => {
+                    map.insert(PROVIDERS_KEY.into(), kept.clone());
+                }
+                None if self.providers_withheld => {
+                    map.remove(PROVIDERS_KEY);
+                }
+                None => {}
+            }
+        }
         std::fs::write(&temp, serde_json::to_string_pretty(&value)?)?;
         std::fs::rename(&temp, &file).inspect_err(|_| {
             let _ = std::fs::remove_file(&temp);
         })?;
         Ok(())
     }
+}
+
+fn has_duplicate_ids(list: &[ProviderInstance]) -> bool {
+    list.iter().enumerate().any(|(at, p)| list[..at].iter().any(|q| q.id == p.id))
 }
 
 fn back_up(dir: &Path, bytes: &[u8]) {
@@ -188,23 +276,83 @@ fn back_up(dir: &Path, bytes: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    fn fresh() -> AppConfig {
+        AppConfig { providers: vec![connections::default_claude()], ..AppConfig::default() }
+    }
 
     #[test]
     fn defaults_survive_a_round_trip_and_a_bad_file_and_unknown_keys_are_ignored() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let saved = AppConfig { picked_clones: HashMap::from([("acme/webshop".to_string(), PathBuf::from("/Users/me/Code/webshop"))]), ..AppConfig::default() };
+        let saved = AppConfig { agents: AgentSettings { max_runs: 2, ..AgentSettings::default() }, ..fresh() };
         saved.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), saved);
-        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex","agentsEnabled":false,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex","agentsEnabled":false,"agents":{"maxRuns":2},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         assert_eq!(AppConfig::load(&dir), saved, "a key no longer read is skipped");
         std::fs::write(dir.join(FILE), "{ nope").unwrap();
         let broken = AppConfig::load(&dir);
         assert_eq!(AppConfig { connections_error: None, file_unreadable: false, ..broken.clone() }, AppConfig::default());
         assert!(broken.connections_error.is_some());
         std::fs::write(dir.join(FILE), "{}").unwrap();
-        assert_eq!(AppConfig::load(&dir), AppConfig::default());
+        assert_eq!(AppConfig::load(&dir), fresh());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn models_scratch(name: &str, json: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), json).unwrap();
+        dir
+    }
+
+    #[test]
+    fn model_defaults_round_trip_and_an_unreadable_one_is_cleared_without_resetting_the_other_settings() {
+        let dir = models_scratch("models", r#"{"agents":{"maxRuns":2},"models":{"pip":{"instanceId":["claude"]},"agents":null}}"#);
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.agents.max_runs, loaded.models.pip.clone(), loaded.models.agents.clone()), (2, None, None));
+        loaded.save(&dir).unwrap();
+        assert_eq!(AppConfig::load(&dir), loaded, "a cleared default stays cleared");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_default_this_build_cannot_read_is_saved_back_as_it_was_until_a_default_is_set() {
+        let newer = r#"{"instanceId":"claude_2","model":{"id":"opus","ctx":"1m"}}"#;
+        let dir = models_scratch("models-newer", &format!(r#"{{"models":{{"pip":{newer}}}}}"#));
+        AppConfig::update(&dir, |config| config.agents.max_runs = 2).unwrap();
+        let saved = saved_value(&dir);
+        assert_eq!(saved["models"]["pip"], serde_json::from_str::<Value>(newer).unwrap());
+        assert_eq!(saved["models"]["agents"]["instanceId"], "claude");
+        AppConfig::update(&dir, |config| config.set_models(ModelDefaults::default())).unwrap();
+        assert_eq!(saved_value(&dir)["models"]["pip"]["instanceId"], "claude");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_models_value_that_is_not_an_object_is_cleared_and_saved_back_as_it_was() {
+        let raw = r#"[{"use":"pip","instanceId":"claude_2","model":"opus"}]"#;
+        let dir = models_scratch("models-not-object", &format!(r#"{{"models":{raw}}}"#));
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.models.pip.clone(), loaded.models.agents.clone()), (None, None));
+        AppConfig::update(&dir, |config| config.agents.max_runs = 2).unwrap();
+        assert_eq!(saved_value(&dir)["models"], serde_json::from_str::<Value>(raw).unwrap());
+        AppConfig::update(&dir, |config| config.set_models(ModelDefaults::default())).unwrap();
+        assert_eq!(saved_value(&dir)["models"]["pip"]["instanceId"], "claude");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn another_bad_preference_does_not_reset_the_model_defaults() {
+        let pip = r#"{"instanceId":"claude_2","model":"opus"}"#;
+        let dir = models_scratch("models-other-bad", &format!(r#"{{"agents":"yes","models":{{"pip":{pip},"agents":null}}}}"#));
+        let loaded = AppConfig::load(&dir);
+        assert_eq!(loaded.agents.max_runs, AgentSettings::default().max_runs);
+        assert_eq!((loaded.models.pip.map(|c| c.instance_id), loaded.models.agents), (Some("claude_2".into()), None));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -216,27 +364,24 @@ mod tests {
         std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":2,"reportResult":true,"draftOnFinish":false,"wallClockMinutes":10,"tokenCap":100,"autostart":{"triagePlan":true},"managerTurnsPerDay":6},"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         let loaded = AppConfig::load(&dir);
         assert_eq!(loaded.agents.max_runs, 2);
-        assert_eq!(loaded.picked_clones.len(), 1);
         loaded.save(&dir).unwrap();
         let saved = std::fs::read_to_string(dir.join(FILE)).unwrap();
-        assert!(["reportResult", "draftOnFinish", "wallClockMinutes", "tokenCap", "autostart", "managerTurnsPerDay"].iter().all(|key| !saved.contains(key)), "{saved}");
+        assert!(["pickedClones", "reportResult", "draftOnFinish", "wallClockMinutes", "tokenCap", "autostart", "managerTurnsPerDay"].iter().all(|key| !saved.contains(key)), "{saved}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn a_picked_clone_round_trips_beside_older_settings_and_a_mistyped_value_gives_the_defaults() {
+    fn a_picked_clone_from_an_older_release_is_ignored_and_dropped_on_the_next_save() {
         let dir = std::env::temp_dir().join(format!("gossamr-config-agents-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(FILE), r#"{"agentProvider":"codex"}"#).unwrap();
-        assert_eq!(AppConfig::load(&dir).picked_clones.len(), 0);
         std::fs::write(dir.join(FILE), r#"{"agentsEnabled":true,"pickedClones":{"acme/webshop":"/Users/me/Code/webshop"}}"#).unwrap();
         let on = AppConfig::load(&dir);
-        assert_eq!(on.picked_clones.get("acme/webshop"), Some(&PathBuf::from("/Users/me/Code/webshop")));
         on.save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("pickedClones"));
         assert_eq!(AppConfig::load(&dir), on);
-        std::fs::write(dir.join(FILE), r#"{"pickedClones":"yes"}"#).unwrap();
-        assert_eq!(AppConfig::load(&dir), AppConfig::default(), "a mistyped value gives the defaults");
+        std::fs::write(dir.join(FILE), r#"{"agents":"yes"}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir), fresh(), "a mistyped value gives the defaults");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -292,7 +437,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.json.tmp"), "{ half").unwrap();
-        let on = AppConfig { picked_clones: HashMap::from([("acme/webshop".to_string(), PathBuf::from("/Users/me/Code/webshop"))]), ..AppConfig::default() };
+        let on = AppConfig { agents: AgentSettings { max_runs: 2, ..AgentSettings::default() }, ..AppConfig::default() };
         on.save(&dir).unwrap();
         assert_eq!(AppConfig::load(&dir), on);
         assert!(!dir.join("config.json.tmp").exists());
@@ -408,6 +553,159 @@ mod tests {
         let loaded = AppConfig::load(&dir);
         assert_eq!((loaded.version, loaded.connections.is_empty(), loaded.connections_error), (0, true, None));
         assert!(!dir.join(BACKUP).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn providers_in(dir: &Path) -> Vec<String> {
+        AppConfig::load(dir).providers.into_iter().map(|p| p.id).collect()
+    }
+
+    fn saved_value(dir: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_missing_file_and_a_file_without_the_providers_key_start_with_the_default_claude() {
+        let dir = scratch("providers-absent");
+        std::fs::remove_file(dir.join(FILE)).ok();
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.providers, loaded.providers_error), (vec![connections::default_claude()], None));
+        std::fs::write(dir.join(FILE), format!("{{{INSTANCES}}}")).unwrap();
+        assert_eq!(providers_in(&dir), ["claude"]);
+        assert_eq!(AppConfig::load(&dir).connections.len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_empty_providers_list_means_they_were_all_removed_and_stays_empty() {
+        let dir = scratch("providers-empty");
+        std::fs::write(dir.join(FILE), r#"{"providers":[]}"#).unwrap();
+        assert!(providers_in(&dir).is_empty());
+        AppConfig::update(&dir, |c| c.agents.max_runs = 2).unwrap();
+        assert_eq!(saved_value(&dir)["providers"], serde_json::json!([]));
+        assert!(providers_in(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_saved_by_a_build_that_predates_providers_gets_the_default_claude_back_and_keeps_its_connections() {
+        let dir = scratch("providers-older-build");
+        let providers = r#""providers":[{"id":"claude_2","driver":"claude","displayName":"Personal","enabled":true,"config":{"configDir":"~/.claude-personal"}}]"#;
+        std::fs::write(dir.join(FILE), format!("{{{INSTANCES},{providers}}}")).unwrap();
+        assert_eq!(providers_in(&dir), ["claude_2"]);
+        let without = format!("{{{INSTANCES}}}");
+        std::fs::write(dir.join(FILE), &without).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert_eq!((loaded.version, loaded.connections.len(), loaded.providers.len()), (1, 1, 1));
+        assert_eq!(loaded.providers[0].id, "claude");
+        assert_eq!(loaded.providers[0].config.config_dir, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_retired_claude_is_not_added_again() {
+        let dir = scratch("providers-retired");
+        std::fs::write(dir.join(FILE), r#"{"version":1,"connections":[],"retiredIds":["claude"]}"#).unwrap();
+        assert!(providers_in(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn providers_round_trip_with_their_folder_and_beside_the_connections() {
+        let dir = scratch("providers-round-trip");
+        std::fs::write(dir.join(FILE), format!("{{{INSTANCES}}}")).unwrap();
+        AppConfig::update(&dir, |c| {
+            c.providers.push(connections::ProviderInstance {
+                id: "codex".into(),
+                driver: connections::Driver::Codex,
+                display_name: "Codex work".into(),
+                enabled: false,
+                config: connections::ProviderConfig { config_dir: Some("~/.codex-work".into()), ..Default::default() },
+                extra: Default::default(),
+            });
+        })
+        .unwrap();
+        let again = AppConfig::load(&dir);
+        assert_eq!(again.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["claude", "codex"]);
+        let saved = saved_value(&dir);
+        assert_eq!(saved["providers"][1], serde_json::json!({ "id": "codex", "driver": "codex", "displayName": "Codex work", "enabled": false, "config": { "configDir": "~/.codex-work" } }));
+        assert_eq!(saved["providers"][0]["config"], serde_json::json!({}));
+        assert_eq!((saved["version"].clone(), again.connections.len()), (1.into(), 1));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_providers_list_that_cant_be_read_is_kept_copied_and_reported_while_the_connections_still_load() {
+        for (name, providers) in [
+            ("driver", r#"[{"id":"x","driver":"gemini","displayName":"X","enabled":true,"config":{}}]"#),
+            ("shape", r#"{"claude":true}"#),
+            ("field", r#"[{"id":"claude","driver":"claude","enabled":true,"config":{}}]"#),
+            ("connection", r#"[{"id":"github","driver":"claude","displayName":"A","enabled":true,"config":{}}]"#),
+            ("retired", r#"[{"id":"github_2","driver":"claude","displayName":"A","enabled":true,"config":{}}]"#),
+            ("twice", r#"[{"id":"claude","driver":"claude","displayName":"A","enabled":true,"config":{}},{"id":"claude","driver":"codex","displayName":"B","enabled":true,"config":{}}]"#),
+        ] {
+            let dir = scratch(&format!("providers-broken-{name}"));
+            let text = format!(r#"{{{INSTANCES},"agents":{{"maxRuns":2}},"providers":{providers}}}"#);
+            std::fs::write(dir.join(FILE), &text).unwrap();
+            let loaded = AppConfig::load(&dir);
+            assert!(loaded.providers_error.as_deref().is_some_and(|e| e.contains("config.json.bak")), "{name}: {:?}", loaded.providers_error);
+            assert_eq!((loaded.providers.len(), loaded.connections.len(), loaded.connections_error.clone(), loaded.agents.max_runs), (0, 1, None, 2), "{name}");
+            assert_eq!(std::fs::read_to_string(dir.join(BACKUP)).unwrap(), text);
+            AppConfig::update(&dir, |c| c.agents.max_runs = 5).unwrap();
+            let saved = saved_value(&dir);
+            assert_eq!(saved["providers"], serde_json::from_str::<Value>(providers).unwrap(), "{name}");
+            assert_eq!((saved["agents"]["maxRuns"].clone(), saved["connections"].as_array().map(Vec::len)), (5.into(), Some(1)), "{name}");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn keys_a_later_build_added_to_a_provider_survive_a_change_made_here() {
+        let dir = scratch("providers-unknown-keys");
+        let providers = serde_json::json!([{ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "accentColor": "teal", "config": { "configDir": "~/.claude-work", "customModels": ["fable-x"] } }]);
+        std::fs::write(dir.join(FILE), format!(r#"{{{INSTANCES},"providers":{providers}}}"#)).unwrap();
+        AppConfig::update(&dir, |c| {
+            c.providers[0].display_name = "Work".into();
+            c.agents.max_runs = 3;
+        })
+        .unwrap();
+        let saved = saved_value(&dir)["providers"][0].clone();
+        assert_eq!((saved["displayName"].clone(), saved["accentColor"].clone(), saved["config"]["customModels"].clone()), ("Work".into(), "teal".into(), serde_json::json!(["fable-x"])));
+        assert_eq!(saved["config"]["configDir"], "~/.claude-work");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn providers_are_written_back_word_for_word_while_the_connections_come_from_a_newer_build() {
+        let dir = scratch("providers-newer-file");
+        let providers = serde_json::json!([{ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "environment": {"A": "b"}, "config": { "customModels": ["fable-x"] } }]);
+        std::fs::write(dir.join(FILE), serde_json::json!({ "version": 2, "connections": [], "providers": providers }).to_string()).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert!(loaded.connections_error.is_some() && loaded.providers_error.is_none());
+        AppConfig::update(&dir, |c| c.agents.max_runs = 4).unwrap();
+        assert_eq!(saved_value(&dir)["providers"], providers);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_connections_list_that_cant_be_read_gets_no_default_claude_and_no_providers_key_is_written() {
+        let dir = scratch("providers-withheld");
+        std::fs::write(dir.join(FILE), r#"{"version":1,"connections":[{"id":"github","kind":"gitlab"}],"retiredIds":["claude"]}"#).unwrap();
+        let loaded = AppConfig::load(&dir);
+        assert!(loaded.connections_error.is_some() && loaded.providers.is_empty());
+        AppConfig::update(&dir, |c| c.agents.max_runs = 4).unwrap();
+        assert!(saved_value(&dir).get("providers").is_none());
+        std::fs::write(dir.join(FILE), r#"{"version":1,"connections":[],"retiredIds":[]}"#).unwrap();
+        assert_eq!(providers_in(&dir), ["claude"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_an_instance_forgets_the_unreadable_default_that_named_it() {
+        let pip = r#"{"instanceId":"claude_2","model":5}"#;
+        let dir = models_scratch("models-forget", &format!(r#"{{"models":{{"pip":{pip},"agents":null}}}}"#));
+        AppConfig::update(&dir, |c| c.forget_unreadable_models("claude_2")).unwrap();
+        assert!(saved_value(&dir)["models"].get("pip").is_none_or(|v| v.is_null()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

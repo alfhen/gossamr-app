@@ -12,7 +12,7 @@ use crate::domain::{
     ContainerQuery, ContainerRef, ContainerSummary, Footprint, ItemRef, Stray, Watch, WatchChange, WatchMode, WatchSet, WorkItem, AUTO_EVERYTHING_MAX,
 };
 use crate::error::{Error, Result};
-use crate::tracker::{Connection, WorkTracker};
+use crate::tracker::WorkTracker;
 
 const CATALOG_SIZE: &str = "watch_catalog_size";
 const CATALOG_PROBED: &str = "watch_catalog_probed_at";
@@ -83,14 +83,6 @@ fn meta_json<T: for<'de> Deserialize<'de>>(db: &Db, key: &str) -> Result<Option<
 }
 
 impl Core {
-    fn own_connection(&self, scope: &Scope, connection_id: &str) -> Result<Connection> {
-        let c = self.connection(scope)?;
-        if c.id != connection_id {
-            return Err(Error::SiteChanged);
-        }
-        Ok(c)
-    }
-
     /// What `scope`'s connection follows. Writers ask this before acting on an item.
     pub async fn watch_set_of(&self, scope: &Scope) -> Result<WatchSet> {
         let id = scope.connection_id.clone();
@@ -110,34 +102,39 @@ impl Core {
         Ok(states)
     }
 
+    /// What each Jira connection that is on follows. Signed out is none, as it is for GitHub.
     async fn jira_watch_state(&self) -> Result<Vec<WatchState>> {
-        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(Vec::new()) };
-        let id = self.connection(&scope)?.id;
-        let state = self
-            .with_db_for(&scope, |db| {
-                let set = db.watch_set(&id)?;
-                let counts = db.item_counts(&id)?;
-                let known: std::collections::HashMap<String, (String, String)> =
-                    db.containers(&id)?.into_iter().map(|c| (c.container_ref.external_id, (c.key, c.name))).collect();
-                let size: Option<usize> = db.meta(CATALOG_SIZE)?.and_then(|s| s.parse().ok());
-                let watches = set
-                    .watches
-                    .iter()
-                    .map(|w| {
-                        let ext = &w.container.external_id;
-                        let (key, name) = known
-                            .get(ext)
-                            .cloned()
-                            .or_else(|| db.catalog_search(&id, ext, 5).ok()?.into_iter().find(|c| &c.container_ref.external_id == ext).map(|c| (c.key, c.name)))
-                            .unwrap_or_else(|| (ext.clone(), ext.clone()));
-                        WatchRow { watch: w.clone(), key, name, cached_items: counts.get(ext).copied().unwrap_or(0) }
-                    })
-                    .collect();
-                let needs_choice = set.mode == WatchMode::Unset && size.is_some_and(|n| n > AUTO_EVERYTHING_MAX);
-                Ok(WatchState { connection_id: id.clone(), chosen: set.mode == WatchMode::Selected, needs_choice, catalog_size: size, watches })
-            })
-            .await?;
-        Ok(vec![state])
+        let Ok(on) = self.on_accounts().await else { return Ok(Vec::new()) };
+        let mut states = Vec::new();
+        for account in on {
+            let id = account.connection.id;
+            states.push(
+                self.with_db_for(&account.scope, |db| {
+                    let set = db.watch_set(&id)?;
+                    let counts = db.item_counts(&id)?;
+                    let known: std::collections::HashMap<String, (String, String)> =
+                        db.containers(&id)?.into_iter().map(|c| (c.container_ref.external_id, (c.key, c.name))).collect();
+                    let size: Option<usize> = db.meta(CATALOG_SIZE)?.and_then(|s| s.parse().ok());
+                    let watches = set
+                        .watches
+                        .iter()
+                        .map(|w| {
+                            let ext = &w.container.external_id;
+                            let (key, name) = known
+                                .get(ext)
+                                .cloned()
+                                .or_else(|| db.catalog_search(&id, ext, 5).ok()?.into_iter().find(|c| &c.container_ref.external_id == ext).map(|c| (c.key, c.name)))
+                                .unwrap_or_else(|| (ext.clone(), ext.clone()));
+                            WatchRow { watch: w.clone(), key, name, cached_items: counts.get(ext).copied().unwrap_or(0) }
+                        })
+                        .collect();
+                    let needs_choice = set.mode == WatchMode::Unset && size.is_some_and(|n| n > AUTO_EVERYTHING_MAX);
+                    Ok(WatchState { connection_id: id.clone(), chosen: set.mode == WatchMode::Selected, needs_choice, catalog_size: size, watches })
+                })
+                .await?,
+            );
+        }
+        Ok(states)
     }
 
     /// Makes the next sync read everything in the window again and refresh the containers, which is how a container
@@ -172,8 +169,7 @@ impl Core {
         if super::code::is_code_connection(connection_id) {
             return self.code_watch_set_mode(connection_id, mode).await;
         }
-        let scope = self.scope().await?;
-        self.own_connection(&scope, connection_id)?;
+        let scope = self.scope_of(connection_id).await?;
         self.changed_watch(&scope, connection_id, |db| db.set_watch_mode(connection_id, mode, &now_iso())).await
     }
 
@@ -181,8 +177,7 @@ impl Core {
         if super::code::is_code_connection(connection_id) {
             return self.code_watch_set_containers(connection_id, changes).await;
         }
-        let scope = self.scope().await?;
-        self.own_connection(&scope, connection_id)?;
+        let scope = self.scope_of(connection_id).await?;
         self.changed_watch(&scope, connection_id, |db| db.apply_watch_changes(connection_id, changes, &now_iso())).await
     }
 
@@ -192,8 +187,7 @@ impl Core {
         if super::code::is_code_connection(connection_id) {
             return self.code_watch_catalog(connection_id, query, cursor).await;
         }
-        let scope = self.scope().await?;
-        self.own_connection(&scope, connection_id)?;
+        let scope = self.scope_of(connection_id).await?;
         let set = self.watch_set_of(&scope).await?;
         let q = ContainerQuery { query: query.trim().into(), cursor, limit: CATALOG_PAGE };
         let entry = |summary: ContainerSummary| {
@@ -252,8 +246,7 @@ impl Core {
         if super::code::is_code_connection(connection_id) {
             return self.code_watch_suggestions(connection_id, refresh).await;
         }
-        let scope = self.scope().await?;
-        self.own_connection(&scope, connection_id)?;
+        let scope = self.scope_of(connection_id).await?;
         if self.off_name(connection_id).is_some() {
             return Ok(Vec::new());
         }
@@ -272,8 +265,7 @@ impl Core {
         if super::code::is_code_connection(connection_id) {
             return Ok(Vec::new());
         }
-        let scope = self.scope().await?;
-        self.own_connection(&scope, connection_id)?;
+        let scope = self.scope_of(connection_id).await?;
         if self.off_name(connection_id).is_some() {
             return Ok(Vec::new());
         }
@@ -288,8 +280,7 @@ impl Core {
         if super::code::is_code_connection(connection_id) {
             return Ok(());
         }
-        let scope = self.scope().await?;
-        self.own_connection(&scope, connection_id)?;
+        let scope = self.scope_of(connection_id).await?;
         self.with_db_for(&scope, |db| {
             let mut dismissed: Vec<String> = meta_json(db, STRAYS_DISMISSED)?.unwrap_or_default();
             if !dismissed.iter().any(|d| d == container_id) {
@@ -300,23 +291,29 @@ impl Core {
         .await
     }
 
-    /// Runs the check for assigned items in unwatched containers when it is due, and returns the ones that are new
-    /// since the last check. It only reads keys, and never adds a container to the watch set.
-    pub async fn radar_if_due(&self) -> Result<Option<(String, Vec<Stray>)>> {
-        let Some((scope, _, _)) = self.auth.identity().await else { return Ok(None) };
-        let id = scope.connection_id.clone();
-        if self.off_name(&id).is_some() {
-            return Ok(None);
-        }
-        let now = Utc::now();
-        {
-            let mut last = self.radar.lock().expect("radar lock poisoned");
-            if last.get(&id).is_some_and(|at| now - *at < RADAR_EVERY) {
-                return Ok(None);
+    /// Runs the check for assigned items in unwatched containers of each Jira connection that is on and due, and
+    /// returns the ones that are new since its last check. A check that fails is tried again at the next interval. It
+    /// only reads keys, and never adds a container to the watch set.
+    pub async fn radar_if_due(&self) -> Vec<(String, Vec<Stray>)> {
+        let mut found = Vec::new();
+        for session in self.auth.accounts().await {
+            let id = session.connection.id.clone();
+            if self.registry.connection(&id).is_none() || self.off_name(&id).is_some() {
+                continue;
             }
-            last.insert(id.clone(), now);
+            let now = Utc::now();
+            {
+                let mut last = self.radar.lock().expect("radar lock poisoned");
+                if last.get(&id).is_some_and(|at| now - *at < RADAR_EVERY) {
+                    continue;
+                }
+                last.insert(id.clone(), now);
+            }
+            if let Ok(Some(new)) = self.check_assigned_elsewhere(&session.scope).await {
+                found.push((id, new));
+            }
         }
-        Ok(self.check_assigned_elsewhere(&scope).await?.map(|new| (id, new)))
+        found
     }
 
     async fn check_assigned_elsewhere(&self, scope: &Scope) -> Result<Option<Vec<Stray>>> {
@@ -383,10 +380,7 @@ impl Core {
     /// An item read live, for a container that may not be watched. Nothing is stored. `None` when the tracker says
     /// it doesn't exist or can't be seen.
     pub async fn peek_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
-        let scope = self.scope().await?;
-        if item.connection_id != self.connection(&scope)?.id {
-            return Err(Error::SiteChanged);
-        }
+        let scope = self.scope_of(&item.connection_id).await?;
         if self.off_name(&item.connection_id).is_some() {
             return Ok(None);
         }
@@ -403,7 +397,10 @@ impl Core {
 
     /// The watched cached item, or a live read of it. A failed read is `None`: this stands in for a cache lookup.
     pub async fn cache_item(&self, item: &ItemRef) -> Result<Option<WorkItem>> {
-        let scope = self.scope().await?;
+        let scope = match self.scope_of(&item.connection_id).await {
+            Err(Error::SiteChanged) => return Ok(None),
+            other => other?,
+        };
         if self.off_name(&item.connection_id).is_some() {
             return Ok(None);
         }
@@ -485,29 +482,6 @@ mod tests {
         assert_eq!(keys(&fx, false).await, Vec::<String>::new());
         fx.core.watch_set_containers("jira:site:me", &[watch("CA")]).await.unwrap();
         assert_eq!(keys(&fx, false).await, ["CA-1"], "watching again soon needs no refetch");
-    }
-
-    #[tokio::test]
-    async fn the_snapshot_the_inbox_reads_is_scoped_too() {
-        let fx = fixture().await;
-        fx.add_in("OTH-1", "OTH").await;
-        let actor = crate::model::Person { account_id: "sam".into(), name: "Sam".into(), avatar_url: None };
-        let event = |id: &str, key: &str| crate::events::NewEvent {
-            id: id.into(),
-            kind: crate::model::EventKind::Comment,
-            ticket_key: key.into(),
-            actor: actor.clone(),
-            at: crate::inbox::now_iso(),
-            text: "hi".into(),
-            field: None,
-        };
-        fx.core.with_db_for(&fx.scope, |db| db.insert_events(&[event("a", "CA-1"), event("b", "OTH-1")], "2000-01-01T00:00:00Z").map(|_| ())).await.unwrap();
-        let before = fx.core.snapshot().await.unwrap();
-        assert_eq!((before.tickets.len(), before.events.len()), (2, 2));
-        selected(&fx, &[watch("CA")]).await;
-        let after = fx.core.snapshot().await.unwrap();
-        assert_eq!(after.tickets.keys().collect::<Vec<_>>(), ["CA-1"]);
-        assert_eq!(after.events.iter().map(|e| e.ticket_key.as_str()).collect::<Vec<_>>(), ["CA-1"]);
     }
 
     #[tokio::test]
@@ -656,10 +630,10 @@ mod tests {
         let fx = fixture().await;
         selected(&fx, &[watch("CA")]).await;
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"])];
-        let first = fx.core.radar_if_due().await.unwrap();
+        let first = fx.core.radar_if_due().await.pop();
         assert_eq!(first.map(|(id, s)| (id, s.len())), Some(("jira:site:me".to_string(), 1)));
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"]), stray("FIN", &["FIN-1"])];
-        assert!(fx.core.radar_if_due().await.unwrap().is_none(), "asked again within the interval");
+        assert!(fx.core.radar_if_due().await.is_empty(), "asked again within the interval");
     }
 
     #[tokio::test]
@@ -695,23 +669,20 @@ mod tests {
                 (
                     fx.cache_search(&everything, true).await.unwrap().len(),
                     fx.cache_containers(true).await.unwrap().len(),
-                    fx.snapshot().await.unwrap().tickets.len(),
                     fx.cache_item(&item).await.unwrap().is_some(),
                     fx.cache_people().await.unwrap().len(),
                     fx.cache_feed(&feed).await.unwrap().entries.len(),
                     fx.cache_feed_unread(&[]).await.unwrap(),
                     fx.cache_events(&item, 10).await.unwrap().len(),
-                    fx.snapshot().await.unwrap().events.len(),
-                    fx.snapshot().await.unwrap().activity.len(),
                 )
             }
         };
         let before = shown(&fx).await;
-        assert!(before.0 == 2 && before.1 > 0 && before.2 > 0 && before.3 && before.4 > 0, "{before:?}");
-        assert!(before.5 > 0 && before.6 > 0 && before.7 > 0 && before.8 > 0 && before.9 > 0, "the Inbox has something to hide: {before:?}");
+        assert!(before.0 == 2 && before.1 > 0 && before.2 && before.3 > 0, "{before:?}");
+        assert!(before.4 > 0 && before.5 > 0 && before.6 > 0, "the Inbox has something to hide: {before:?}");
 
         fx.core.set_instance_enabled("jira", false).await.unwrap();
-        assert_eq!(shown(&fx).await, (0, 0, 0, false, 0, 0, 0, 0, 0, 0));
+        assert_eq!(shown(&fx).await, (0, 0, false, 0, 0, 0, 0));
         assert!(fx.core.search_cached(&fx.scope, &everything).await.unwrap().is_empty());
         assert!(fx.core.cache_comments(&item, true).await.unwrap().is_empty());
         assert!(fx.core.cache_transitions(&item).await.unwrap().is_empty());
@@ -733,11 +704,22 @@ mod tests {
         *fx.tracker.strays.lock().unwrap() = vec![stray("WHS", &["WHS-1"])];
         fx.core.set_instance_enabled("jira", false).await.unwrap();
 
-        assert!(fx.core.radar_if_due().await.unwrap().is_none());
+        assert!(fx.core.radar_if_due().await.is_empty());
         assert!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().is_empty(), "nothing was recorded for an off Jira");
 
         fx.core.set_instance_enabled("jira", true).await.unwrap();
-        assert_eq!(fx.core.radar_if_due().await.unwrap().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
+        assert_eq!(fx.core.radar_if_due().await.pop().map(|(_, s)| s.len()), Some(1), "the skipped check does not count against the interval");
         assert_eq!(fx.core.watch_unwatched_assigned("jira:site:me", false).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_watching_pane_follows_the_primary_connection() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        fx.core.unbind_instance(&fx.scope.connection_id);
+        fx.core.registry.remove(&fx.scope.connection_id);
+
+        let states = fx.core.watch_state().await.unwrap();
+        assert_eq!(states.iter().map(|s| s.connection_id.as_str()).collect::<Vec<_>>(), [second.connection_id.as_str()]);
     }
 }

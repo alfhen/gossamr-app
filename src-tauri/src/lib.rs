@@ -12,6 +12,7 @@ mod events;
 mod inbox;
 mod legacy;
 mod model;
+mod model_choice;
 mod net;
 mod notify;
 mod probe;
@@ -37,8 +38,6 @@ use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
     WatchChange, WorkItem, Workstream, WorkstreamEvent,
 };
-use model::Snapshot;
-use runs::service::CloneChoice;
 use sync::Trigger;
 use wire::Topic;
 
@@ -51,10 +50,9 @@ type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
 
-/// Sends the latest snapshot to the window. Failures only mean there is nothing to show yet (e.g. signed out).
-async fn publish(app: &AppHandle, core: &Core) {
-    let Ok(snap) = core.snapshot().await else { return };
-    wire::snapshot(app, snap);
+/// Tells the window something changed. It carries nothing: the window reads what it shows through the cache commands.
+fn publish(app: &AppHandle) {
+    wire::snapshot(app);
 }
 
 #[tauri::command]
@@ -151,10 +149,9 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
             let polled = service.poll().await;
-            // The poll has let go of the launch lock by now, which each start takes again.
-            if let Err(e) = service.launch_waiting().await {
-                eprintln!("couldn't start the runs waiting for a slot: {e}");
-            }
+            // On its own task, so a clone or fetch for a waiting run never holds up the next poll. The poll has let go
+            // of the launch lock by now, which each start takes again.
+            use_freed_slot(&service);
             let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
             let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
             tokio::select! {
@@ -166,8 +163,8 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     });
 }
 
-/// After a stop has freed a slot, starts what waits for one on its own task: the stop has let go of the launch lock by
-/// now, and each start takes it again.
+/// Starts what waits for a slot on its own task, after a stop or a poll: they have let go of the launch lock by now,
+/// and each start takes it again.
 fn use_freed_slot(service: &RunsState) {
     let service = service.clone();
     tauri::async_runtime::spawn(async move {
@@ -179,7 +176,7 @@ fn use_freed_slot(service: &RunsState) {
 
 #[tauri::command]
 async fn auth_status(core: State<'_, CoreState>) -> Result<AuthStatus> {
-    core.auth.status().await
+    core.jira_status().await
 }
 
 /// The cloud id a Jira site reports about itself, or `None` when the sheet has to ask for it.
@@ -189,27 +186,17 @@ async fn jira_cloud_id(core: State<'_, CoreState>, site: String) -> Result<Optio
 }
 
 #[tauri::command]
-async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn) -> Result<AuthStatus> {
-    let status = core.connect_jira(&input).await?;
+async fn jira_connect(app: AppHandle, core: State<'_, CoreState>, runs: State<'_, RunsState>, input: TokenSignIn, instance_id: Option<String>) -> Result<AuthStatus> {
+    if let Some(id) = &instance_id {
+        core.require_jira(id).await?;
+    }
+    let status = core.connect_jira(&input, instance_id.as_deref()).await?;
+    publish(&app);
     core.wake.notify_one();
     probe_in_background(&app, &core, Probe::Refresh);
     let runs = runs.inner().clone();
     tauri::async_runtime::spawn(async move { runs.recover().await });
     Ok(status)
-}
-
-#[tauri::command]
-async fn sign_out(app: AppHandle, core: State<'_, CoreState>) -> Result<()> {
-    core.sign_out().await?;
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.set_badge_count(None);
-    }
-    Ok(())
-}
-
-#[tauri::command]
-async fn snapshot(core: State<'_, CoreState>) -> Result<Snapshot> {
-    core.snapshot().await
 }
 
 #[tauri::command]
@@ -238,17 +225,17 @@ async fn watch_get(core: State<'_, CoreState>) -> Result<Vec<WatchState>> {
 }
 
 /// Everything the page shows and Pip sees depends on what is watched, so a change tells the page to re-read.
-async fn watch_edited(app: &AppHandle, core: &Core, connection_id: &str) {
+fn watch_edited(app: &AppHandle, connection_id: &str) {
     watch_changed(app, connection_id);
     cache_changed(app, connection_id);
-    publish(app, core).await;
+    publish(app);
 }
 
 /// Adds containers to what a connection watches, removes them, or pins them.
 #[tauri::command]
 async fn watch_set(app: AppHandle, core: State<'_, CoreState>, connection_id: String, changes: Vec<WatchChange>) -> Result<()> {
     core.watch_set_containers(&connection_id, &changes).await?;
-    watch_edited(&app, &core, &connection_id).await;
+    watch_edited(&app, &connection_id);
     Ok(())
 }
 
@@ -313,7 +300,7 @@ async fn connections_list(app: AppHandle, core: State<'_, CoreState>, refresh: b
     if refresh {
         probe_connections(&app, &core, Probe::Refresh).await;
     }
-    core.connections().await
+    core.settings_rows().await
 }
 
 /// Asks each instance how it stands, and tells the page about the ones that answered differently.
@@ -353,6 +340,10 @@ fn connection_rename(app: AppHandle, core: State<'_, CoreState>, instance_id: St
 #[tauri::command]
 async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, instance_id: String, enabled: bool) -> Result<()> {
     let connection_id = core.set_instance_enabled(&instance_id, enabled).await?;
+    if core.is_provider(&instance_id) {
+        wire::changed(&app, wire::Topic::Connections, &connection_id);
+        return Ok(());
+    }
     if enabled {
         core.wake.notify_one();
     }
@@ -360,13 +351,18 @@ async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, inst
     wire::changed(&app, wire::Topic::Connections, &connection_id);
     cache_changed(&app, &connection_id);
     dev_links_changed(&app, &connection_id);
-    publish(&app, &core).await;
+    publish(&app);
     Ok(())
 }
 
 /// Removes a connection instance: its token, cache and open drafts go, and its id is never used again.
 #[tauri::command]
 async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()> {
+    if core.is_provider(&instance_id) {
+        core.provider_remove(&instance_id)?;
+        wire::changed(&app, wire::Topic::Connections, &instance_id);
+        return Ok(());
+    }
     let removed = core.remove_instance(&instance_id).await?;
     let connection_id = removed.connection_id;
     if let Some(win) = app.get_webview_window("main").filter(|_| removed.kind == tracker::ConnectionKind::Jira) {
@@ -434,14 +430,14 @@ async fn proposals_list(core: State<'_, CoreState>, query: Option<ProposalQuery>
 #[tauri::command]
 async fn proposals_create(app: AppHandle, core: State<'_, CoreState>, intent: Intent, label: Option<String>) -> Result<Proposal> {
     let made = core.draft_as_user(intent, label).await?;
-    proposals_changed(&app, &core.scope().await?.connection_id);
+    proposals_changed(&app, &db::connection_of(&made));
     Ok(made)
 }
 
 #[tauri::command]
 async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, edit: Edit) -> Result<Proposal> {
     let edited = core.edit_proposal(&id, &edit).await?;
-    proposals_changed(&app, &core.scope().await?.connection_id);
+    proposals_changed(&app, &db::connection_of(&edited));
     Ok(edited)
 }
 
@@ -450,7 +446,7 @@ async fn proposals_edit(app: AppHandle, core: State<'_, CoreState>, id: String, 
 #[tauri::command]
 async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, undo: bool) -> Result<Proposal> {
     let done = if undo { core.unskip_proposal(&id).await? } else { core.skip_proposal(&id).await? };
-    let connection = core.scope().await?.connection_id;
+    let connection = db::connection_of(&done);
     proposals_changed(&app, &connection);
     // A draft in a workstream is a line in its audit, which its timeline's counts read.
     if done.workstream().is_some() {
@@ -462,8 +458,9 @@ async fn proposals_skip(app: AppHandle, core: State<'_, CoreState>, id: String, 
 /// Applies the draft. A failed attempt still returns it, back to pending with `error` set.
 #[tauri::command]
 async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<Proposal> {
+    let connection = core.draft_connection(&id).await;
     let result = core.approve_proposal(&id).await;
-    if let Ok(connection) = core.scope().await.map(|s| s.connection_id) {
+    if let Some(connection) = connection {
         proposals_changed(&app, &connection);
         cache_changed(&app, &connection);
         // Approving a draft in a workstream is a line in its audit, which its timeline's counts read.
@@ -474,7 +471,7 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
             runs_changed(&app, &connection);
         }
     }
-    publish(&app, &core).await;
+    publish(&app);
     result
 }
 
@@ -484,11 +481,12 @@ async fn proposals_approve(app: AppHandle, core: State<'_, CoreState>, id: Strin
 /// choice to send a review that may be on GitHub already, which Gossamr looked for and didn't find.
 #[tauri::command]
 async fn proposals_post_review(app: AppHandle, core: State<'_, CoreState>, id: String, revisions: usize, post_anyway: Option<bool>) -> Result<Proposal> {
+    let connection = core.draft_connection(&id).await;
     let result = core.post_review_draft(&id, revisions, post_anyway.unwrap_or(false)).await;
-    if let Ok(connection) = core.scope().await.map(|s| s.connection_id) {
+    if let Some(connection) = connection {
         proposals_changed(&app, &connection);
     }
-    publish(&app, &core).await;
+    publish(&app);
     result
 }
 
@@ -511,6 +509,24 @@ fn agent_settings(runs: State<'_, RunsState>, settings: Option<config::AgentSett
         Some(settings) => runs.set_settings(settings),
         None => Ok(runs.settings()),
     }
+}
+
+/// The models a provider instance offers: the driver's own, then the ones added to it.
+#[tauri::command]
+fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Result<Vec<model_choice::ModelOption>> {
+    core.provider_models(&instance_id)
+}
+
+/// Adds a model id to a provider instance's list and returns the list. An id that breaks the id rule is refused.
+#[tauri::command]
+fn provider_add_model(core: State<'_, CoreState>, instance_id: String, model: String) -> Result<Vec<model_choice::ModelOption>> {
+    core.provider_add_model(&instance_id, &model)
+}
+
+/// The instance and model Pip and new agents use when nothing narrower says. With `set`, saves them first, checked as a run's choice would be.
+#[tauri::command]
+fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaultsSet>) -> Result<model_choice::ModelDefaults> {
+    core.model_defaults(set.map(Into::into))
 }
 
 /// Removes a finished run's worktree with `claude rm`, never forcing it.
@@ -647,24 +663,6 @@ async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Ve
     core.workstream_events(&core.scope().await?, &id).await
 }
 
-/// Local clones of a watched repository.
-#[tauri::command]
-async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
-    runs.clones(&repo).await
-}
-
-/// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>`. Only for the person's own button press, after the
-/// folder and the command were shown.
-#[tauri::command]
-async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<runs::repo::LocalClone> {
-    runs.clone_fresh(&repo).await
-}
-
-#[tauri::command]
-async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
-    runs.pick_clone(&repo, &path).await
-}
-
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
 #[tauri::command]
 async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
@@ -771,15 +769,15 @@ fn sync_now(core: State<'_, CoreState>) {
 }
 
 #[tauri::command]
-async fn set_unread(app: AppHandle, core: State<'_, CoreState>, id: String, unread: bool) -> Result<()> {
-    core.set_unread(&id, unread).await?;
-    publish(&app, &core).await;
+async fn set_unread(app: AppHandle, core: State<'_, CoreState>, connection_id: String, id: String, unread: bool) -> Result<()> {
+    core.set_unread(&connection_id, &id, unread).await?;
+    publish(&app);
     Ok(())
 }
 
 #[tauri::command]
-async fn mentionable(core: State<'_, CoreState>, key: String, query: String) -> Result<Vec<model::Person>> {
-    core.mentionable(&core.scope().await?, &key, &query).await
+async fn mentionable(core: State<'_, CoreState>, item: ItemRef, query: String) -> Result<Vec<model::Person>> {
+    core.mentionable(&item, &query).await
 }
 
 #[tauri::command]
@@ -809,10 +807,10 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
         // Launch catches up straight away, from the cursor the last run left in the cache.
         let mut trigger = Trigger::Now;
         loop {
-            if let Some(result) = core.sync_if_due(trigger).await {
+            for (connection_id, result) in core.sync_if_due(trigger).await {
                 match result {
                     Ok(synced) => {
-                        core.set_error(None);
+                        core.set_error(&connection_id, None);
                         if synced.changed {
                             cache_changed(&app, &synced.connection_id);
                         }
@@ -824,13 +822,13 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         }
                     }
                     Err(e) => {
-                        core.set_sync_failure(&e);
+                        core.set_sync_failure(&connection_id, &e);
                         if e.is_unauthorized() {
                             probe_in_background(&app, &core, Probe::Unauthorized);
                         }
                     }
                 }
-                publish(&app, &core).await;
+                publish(&app);
             }
             for (connection_id, result) in core.sync_code_if_due(trigger).await {
                 // A failure shows on the connection's own row. It can follow repositories that were stored, so what
@@ -847,6 +845,7 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                             wire::changed(&app, Topic::Connections, &connection_id);
                         }
                         if synced.reviews_changed {
+                            proposals_changed(&app, &connection_id);
                             if let Ok(scope) = core.scope().await {
                                 proposals_changed(&app, &scope.connection_id);
                             }
@@ -866,10 +865,9 @@ fn spawn_sync_loop(app: AppHandle, core: CoreState) {
                         }
                     }
                 }
-                publish(&app, &core).await;
+                publish(&app);
             }
-            // A failed check is tried again at the next interval; nothing depends on it.
-            if let Ok(Some((connection_id, strays))) = core.radar_if_due().await {
+            for (connection_id, strays) in core.radar_if_due().await {
                 wire::assigned_elsewhere(&app, &connection_id, &strays);
             }
             trigger = tokio::select! {
@@ -963,7 +961,6 @@ pub fn run() {
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
-                    runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
@@ -1002,8 +999,6 @@ pub fn run() {
             auth_status,
             jira_cloud_id,
             jira_connect,
-            sign_out,
-            snapshot,
             cache_search,
             cache_item,
             cache_containers,
@@ -1041,6 +1036,9 @@ pub fn run() {
             proposals_approve,
             proposals_post_review,
             agent_settings,
+            provider_models,
+            provider_add_model,
+            model_defaults,
             runs_cleanup,
             runs_archive,
             runs_clear_preview,
@@ -1048,9 +1046,6 @@ pub fn run() {
             runs_worktree_info,
             runs_delete,
             runs_start,
-            runs_clones,
-            runs_clone_fresh,
-            runs_pick_clone,
             runs_stop,
             runs_answer,
             runs_adopt_session,

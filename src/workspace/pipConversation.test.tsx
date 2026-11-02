@@ -18,7 +18,7 @@ import { Markdown } from "../components/Markdown";
 import { TicketLinksContext } from "../components/ticketLinks";
 import { knownTicketTitle, workspaceTicketLinks } from "./jump";
 
-const spec: RunSpec = { role: "investigate", repo: "acme/web", clonePath: "/Users/sample/Code/web", base: "main", name: "ca-412-fix-ab12", brief: "Investigate this work." };
+const spec: RunSpec = { role: "investigate", repo: "acme/web", clonePath: "/Users/sample/Gossamr/agents/acme/web", base: "main", name: "ca-412-fix-ab12", brief: "Investigate this work." };
 
 const draft = (id: string, intent: Intent, over: Partial<Proposal> = {}): Proposal => ({
   id,

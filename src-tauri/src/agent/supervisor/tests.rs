@@ -426,7 +426,7 @@ async fn a_pull_request_that_was_there_when_the_build_finished_is_no_second_wake
 async fn a_wake_that_fails_before_its_sink_hears_of_it_gives_its_facts_back_once() {
     let t = setup().await;
     let signed_out = fixture().await;
-    signed_out.core.sign_out().await.unwrap();
+    signed_out.core.remove_instance(&signed_out.scope.connection_id).await.unwrap();
     let svc = service(&signed_out, &Fake::default()).await;
     let sup = supervisor(&t.fx, &svc, &t.emitted);
     let r1 = t.run("r1", "investigate", RunState::Done, |_| {}).await;

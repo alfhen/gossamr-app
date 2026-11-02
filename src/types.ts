@@ -276,6 +276,8 @@ export interface WorkEvent {
 export interface FeedCursor {
   at: string;
   id: string;
+  /** Breaks a tie between the same event on two connections. Sent back as received. */
+  connectionId?: string;
 }
 
 /** What a feed shows, mirroring src-tauri/src/domain/event.rs. No kinds means every kind. */
@@ -503,6 +505,8 @@ export interface RunSpec {
   brief: string;
   /** The key of the ticket the run is about. */
   ticket?: string | null;
+  /** The Jira site the ticket is on, named beside the key in the agent's prompt. */
+  site?: string | null;
   /** Snapshot of the ticket made by the backend, never taken from a model. */
   ticketBlock?: string | null;
   /** The pull request the run checks out. */
@@ -524,6 +528,8 @@ export type RunFailure =
   | { type: "claudeMissing" }
   | { type: "modeRefused"; mode: "auto" | "bypass" }
   | { type: "noClone" }
+  | { type: "outsideWorkFolder"; path: string }
+  | { type: "cloneOccupied"; path: string }
   | { type: "capReached" }
   | { type: "other" };
 
@@ -537,6 +543,8 @@ export interface Run {
   /** What the person read when approving. */
   digest: string;
   expectedWorktree: string;
+  /** Whether its clone is in Gossamr's work folder, `~/Gossamr/agents`. False for a run an earlier release set up in the person's own clone. Read as true when absent. */
+  inWorkFolder?: boolean;
   state: RunState;
   shortId: string | null;
   sessionId: string | null;
@@ -671,34 +679,6 @@ export interface RunEvent {
   detail: string | null;
 }
 
-/** A local clone of a repository, as found on this Mac. */
-export interface LocalClone {
-  path: string;
-  branch: string;
-  dirty: boolean;
-  /** What `origin/HEAD` points at, when the clone knows. */
-  defaultBranch: string | null;
-}
-
-/** What cloning into `~/Gossamr/agents` would do, shown before the person chooses it. */
-export interface FreshCopy {
-  path: string;
-  /** The command Gossamr runs, as a shell would read it. */
-  command: string;
-  /** `gh` is on the shell's PATH, so a sign-in failure falls back to `gh repo clone`. */
-  ghFallback: boolean;
-  /** Something that isn't a clone of this repository is already at `path`. */
-  occupied: boolean;
-}
-
-export interface CloneChoice {
-  clones: LocalClone[];
-  /** The clone the person chose when several matched; listed first. */
-  picked: string | null;
-  /** Offered only when there is no clone to choose. */
-  fresh: FreshCopy | null;
-}
-
 /** Which runs to list. Every field that is set must match. */
 export interface RunQuery {
   states?: RunState[];
@@ -820,6 +800,25 @@ export interface AgentSettings {
   notifications?: NoticeMode;
 }
 
+/** Which provider instance and model a piece of work runs on. `model` is an id from `Backend.providerModels`; `effort` is one of low, medium, high, xhigh or max. */
+export interface ModelChoice {
+  instanceId: string;
+  model: string;
+  effort?: string;
+}
+
+/** A model an instance offers. "default" passes no `--model`. */
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
+/** What Pip and new agents use when nothing narrower says. A default is `null` after its instance was removed. */
+export interface ModelDefaults {
+  pip: ModelChoice | null;
+  agents: ModelChoice | null;
+}
+
 /** System notices for each new thing in Needs you ("workstream", the stored name), or none. */
 export type NoticeMode = "workstream" | "off";
 
@@ -898,7 +897,11 @@ export interface ConnectionInfo {
   instanceId: string;
   displayName: string;
   enabled: boolean;
-  kind: "jira" | "github" | "mock";
+  kind: "jira" | "github" | "mock" | "provider";
+  /** Which CLI a provider row runs. Absent on the others. */
+  driver?: "claude" | "codex";
+  /** The folder a provider's login is kept in, as typed. Absent when it uses its CLI's own default. */
+  configDir?: string;
   /** The site or organisation; for GitHub, the account's login. */
   workspace: string;
   url: string | null;

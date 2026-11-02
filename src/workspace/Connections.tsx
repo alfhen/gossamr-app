@@ -6,8 +6,10 @@ import type { ConnectionInfo, WatchState } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { removeConnection } from "./connectionRemoval";
 import { setConnectionEnabled } from "./connectionToggle";
-import { actingAs, canSwitch, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type LineTone } from "./connectionsLogic";
+import { AddMenu } from "./AddMenu";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, OFF_DETAIL, oldestCheck, removalWarning, rowAfter, statusLine, syncLine, type AddEntry, type AddEntryId, type LineTone } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
+import { isJira } from "./domains";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
 import { keyInitials } from "./projects";
@@ -37,8 +39,9 @@ export function StatusLine({ line }: { line: { text: string; tone: LineTone } })
   );
 }
 
-function badgeText(c: ConnectionInfo) {
-  return c.kind === "mock" ? "SD" : c.kind === "jira" ? "JI" : keyInitials(c.workspace);
+export function badgeText(c: ConnectionInfo) {
+  if (c.kind === "provider") return c.driver === "codex" ? "CX" : "CL";
+  return c.kind === "mock" ? "SD" : keyInitials(c.workspace.replace(/^https?:\/\//, ""));
 }
 
 export interface ConnectionsViewProps {
@@ -68,6 +71,9 @@ export interface ConnectionsViewProps {
   onRemove(): void;
   onToggle(c: ConnectionInfo, on: boolean): void;
   onConnectGithub(): void;
+  /** What + Add offers. */
+  addable: readonly AddEntry[];
+  onAdd(id: AddEntryId): void;
 }
 
 interface RowProps {
@@ -120,10 +126,10 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const s = c.status;
   const loud = s !== null && (s.state === "notSignedIn" || s.state === "notFound");
-  const jira = c.kind !== "github";
+  const jira = isJira(c.kind);
   const needsToken = jira && s !== null && (s.state === "expiresSoon" || s.state === "notSignedIn");
   if (!c.enabled || s?.state === "off") return <p className="m-0 text-ws-ink3">{OFF_DETAIL}</p>;
-  if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : "Not checked yet."}</p>;
+  if (!s) return <p className="m-0 text-ws-ink3">{c.kind === "mock" ? "Built-in sample tickets. Nothing is sent anywhere." : c.kind === "provider" ? "No check runs for this provider." : "Not checked yet."}</p>;
   return (
     <>
       <p data-probe={s.state} role={loud ? "status" : undefined} className={`m-0 ${loud ? "text-ws-blocked" : "text-ws-ink"}`}>
@@ -146,7 +152,7 @@ function StatusField({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
             Make a new token
           </Button>
         )}
-        {!jira && s.state === "notSignedIn" && (
+        {c.kind === "github" && s.state === "notSignedIn" && (
           <Button variant="primary" size="sm" onClick={p.onConnectGithub}>
             Sign in again
           </Button>
@@ -246,9 +252,9 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
       )}
       {!sample && (
         <Field label="Account">
-          <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>
+          {c.kind !== "provider" && <p className="m-0">{c.kind === "github" ? c.workspace : c.account}</p>}
           <div className="flex flex-wrap gap-2">
-            {c.kind !== "github" && (
+            {isJira(c.kind) && (
               <Button variant="quiet" size="sm" onClick={p.onNewToken}>
                 Change account
               </Button>
@@ -272,25 +278,29 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
           )}
         </Field>
       )}
-      <Field label="Sync">
-        <p role={sync.tone === "ok" ? undefined : "status"} className={`m-0 text-sm ${sync.tone === "error" ? "text-ws-blocked" : "text-ws-ink2"}`}>
-          {sync.text}
-        </p>
-        <div>
-          <Button variant="quiet" size="sm" disabled={c.syncing || !c.enabled} onClick={p.onSync}>
-            Sync now
-          </Button>
-        </div>
-      </Field>
-      <Field label="Watching">
-        <p className="m-0">{watchSummary(watch, nounFor(c.kind))}</p>
-        <div>
-          <Button variant="quiet" size="sm" onClick={p.onManage}>
-            {c.kind === "github" ? "Manage repositories" : "Manage projects"}
-          </Button>
-        </div>
-      </Field>
-      {!sample && <Field label={c.kind === "github" ? "Host" : "Site"}>{c.kind === "github" ? "github.com" : c.workspace}</Field>}
+      {c.kind !== "provider" && (
+        <>
+        <Field label="Sync">
+          <p role={sync.tone === "ok" ? undefined : "status"} className={`m-0 text-sm ${sync.tone === "error" ? "text-ws-blocked" : "text-ws-ink2"}`}>
+            {sync.text}
+          </p>
+          <div>
+            <Button variant="quiet" size="sm" disabled={c.syncing || !c.enabled} onClick={p.onSync}>
+              Sync now
+            </Button>
+          </div>
+        </Field>
+        <Field label="Watching">
+          <p className="m-0">{watchSummary(watch, nounFor(c.kind))}</p>
+          <div>
+            <Button variant="quiet" size="sm" onClick={p.onManage}>
+              {c.kind === "github" ? "Manage repositories" : "Manage projects"}
+            </Button>
+          </div>
+        </Field>
+        {!sample && <Field label={c.kind === "github" ? "Host" : "Site"}>{c.kind === "github" ? "github.com" : c.workspace}</Field>}
+        </>
+      )}
       {actingAs(c).map((line) => (
         <p key={line} className="m-0 border-b border-ws-sep py-2.5 text-sm text-ws-ink2 last:border-b-0">
           {line}
@@ -302,43 +312,46 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
 
 export function ConnectionsView(p: ConnectionsViewProps) {
   const list = useRef<HTMLUListElement>(null);
-  const selected = p.connections.find((c) => c.id === p.selectedId) ?? p.connections[0];
+  const groups = groupedConnections(p.connections);
+  const selected = p.connections.find((c) => c.id === p.selectedId) ?? groups[0]?.rows[0];
   const checked = oldestCheck(p.connections);
   const onKeyDown = (ev: KeyboardEvent) => {
     if ((ev.target as HTMLElement).closest('[role="switch"]')) return;
-    const next = rowAfter(p.connections.map((c) => c.id), selected?.id ?? null, ev.key);
+    const next = rowAfter(groups.flatMap((g) => g.rows.map((c) => c.id)), selected?.id ?? null, ev.key);
     if (!next) return;
     ev.preventDefault();
     p.onSelect(next);
     requestAnimationFrame(() => list.current?.querySelector<HTMLElement>(`[data-connection="${next}"]`)?.focus());
   };
-  const hasGithub = p.connections.some((c) => c.kind === "github");
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-3 text-sm text-ws-ink3">
         <span>{checked ? `Checked ${agoText(checked, p.now)}` : ""}</span>
-        <Button variant="quiet" size="sm" disabled={p.checking} onClick={p.onCheck}>
-          Check all
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="quiet" size="sm" disabled={p.checking} onClick={p.onCheck}>
+            Check all
+          </Button>
+          <AddMenu entries={p.addable} primary={!hasRealConnection(p.connections)} onAdd={p.onAdd} />
+        </div>
       </div>
       <ul ref={list} aria-label="Connections" onKeyDown={onKeyDown} className="m-0 grid list-none gap-0 border-y border-ws-sep p-0">
-        {p.connections.map((c) => (
-          <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} pending={p.toggling.includes(c.instanceId)} onSelect={() => p.onSelect(c.id)} onToggle={(on) => p.onToggle(c, on)} />
-        ))}
+        {groups.flatMap(({ group, rows }) => [
+          <li key={`group:${group}`} role="presentation" className="px-2 pt-3 pb-1 text-sm font-semibold text-ws-ink2">
+            {group}
+          </li>,
+          ...rows.map((c) => (
+            <Row key={c.id} c={c} selected={c.id === selected?.id} checking={p.checking} pending={p.toggling.includes(c.instanceId)} onSelect={() => p.onSelect(c.id)} onToggle={(on) => p.onToggle(c, on)} />
+          )),
+        ])}
       </ul>
       {selected && <Detail key={selected.id} c={selected} p={p} />}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-3">
-        <span className="min-w-0 flex-1 text-sm text-ws-ink3">See the pull requests, branches and checks behind each ticket.</span>
-        <Button variant={hasGithub ? "secondary" : "primary"} onClick={p.onConnectGithub}>
-          {hasGithub ? "Connect another GitHub account" : "Connect GitHub"}
-        </Button>
-      </div>
     </div>
   );
 }
 
 export function ConnectionsSection({ now }: { now: Date }) {
   const connections = useWorkspace((s) => s.connections);
+  const loaded = useWorkspace((s) => s.connectionsLoaded);
   const watch = useWorkspace((s) => s.watch);
   const selectedId = useConnectionsUi((s) => s.selected);
   const [checking, setChecking] = useState(false);
@@ -346,7 +359,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [pending, setPending] = useState<string[]>([]);
   const [toggling, setToggling] = useState<string[]>([]);
-  const current = connections.find((c) => c.id === selectedId) ?? connections[0];
+  const current = connections.find((c) => c.id === selectedId) ?? groupedConnections(connections)[0]?.rows[0];
   const select = (id: string) => {
     setConfirming(null);
     setCopied(false);
@@ -415,7 +428,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       onOpenTerminal={() => void openTerminal(current)}
       onRename={(name) => rename(current, name)}
       onManage={() => useTabs.getState().openSettings("watching")}
-      onNewToken={() => useJiraUi.getState().openConnect()}
+      onNewToken={() => useJiraUi.getState().openConnect(current?.instanceId)}
       onAskRemove={() => setConfirming(current?.id ?? null)}
       onCancel={() => setConfirming(null)}
       onRemove={() => {
@@ -430,6 +443,12 @@ export function ConnectionsSection({ now }: { now: Date }) {
       }}
       onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
+      // Claude and Codex have no sheet to open yet.
+      addable={addEntries(connections, undefined, loaded).filter((e) => e.group !== "Models")}
+      onAdd={(id) => {
+        if (id === "github") useGithubUi.getState().openConnect();
+        else if (id === "jira") useJiraUi.getState().openConnect();
+      }}
     />
   );
 }

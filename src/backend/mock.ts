@@ -31,6 +31,7 @@ import type {
   RunQuery,
   RunsChanged,
   AgentSettings,
+  ModelDefaults,
   Snapshot,
   Status,
   Ticket,
@@ -61,9 +62,11 @@ import { MockWorkstreams, lastDriftOf, type LastDrift } from "./mockWorkstreams"
 /** Where the sample backend keeps the drafts Pip made in its conversations. */
 const KEPT_DRAFTS = "gossamr-mock-pip-drafts";
 import { MockRuns, STOPPABLE } from "./mockRuns";
+import { MockModels } from "./mockModels";
 import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
+import { isJira } from "../workspace/domains";
 import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
 import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
@@ -355,7 +358,7 @@ const SIMULATED: [EventKind, string, keyof typeof P, string][] = [
 export class MockBackend implements Backend {
   readonly kind = "mock" as const;
   private snap = sampleSnapshot();
-  private listeners = new Set<(s: Snapshot) => void>();
+  private listeners = new Set<() => void>();
   private cacheListeners = new Set<(c: CacheChanged) => void>();
   private simulated = 0;
 
@@ -363,6 +366,7 @@ export class MockBackend implements Backend {
   readonly connector: MockConnector;
   private jiraToken: MockOptions["jiraToken"];
   private jiraAccount: AuthStatus;
+  private jiraEnabled = true;
 
   /** The sample GitHub connection: signed out until a sign-in command runs, unless `githubRepos` is set. */
   readonly github: MockGithub;
@@ -582,18 +586,6 @@ export class MockBackend implements Backend {
 
   async runsSignIn(id: string) {
     this.runs.signIn(id);
-  }
-
-  async runsClones(repo: string) {
-    return this.runs.clones(repo);
-  }
-
-  async runsCloneFresh(repo: string) {
-    return this.runs.cloneFresh(repo);
-  }
-
-  async runsPickClone(repo: string, path: string) {
-    this.runs.pickClone(repo, path);
   }
 
   async runsOutcome(id: string) {
@@ -915,11 +907,12 @@ export class MockBackend implements Backend {
     return this.proposals.onChanged(listener);
   }
 
+  /** The mock's own tickets, which the cache reads are built from. For tests. */
   async load() {
     return this.snap;
   }
 
-  subscribe(listener: (s: Snapshot) => void) {
+  subscribe(listener: () => void) {
     this.listeners.add(listener);
     return () => void this.listeners.delete(listener);
   }
@@ -928,7 +921,7 @@ export class MockBackend implements Backend {
     const next = structuredClone(this.snap);
     fn(next);
     this.snap = next;
-    this.listeners.forEach((l) => l(next));
+    this.listeners.forEach((l) => l());
     this.cacheListeners.forEach((l) => l({ connectionId: "mock" }));
   }
 
@@ -1090,6 +1083,25 @@ export class MockBackend implements Backend {
   /** The commands Terminal was opened on, oldest first. */
   readonly terminals: string[] = [];
   private readonly names = new Map<string, string>();
+  /** The default Claude provider instance, until it is removed. */
+  private claude: { enabled: boolean } | null = { enabled: true };
+  private readonly models = new MockModels((instanceId) => instanceId === "claude" && this.claude !== null);
+
+  async providerModels(instanceId: string) {
+    return this.models.list(instanceId);
+  }
+
+  async providerAddModel(instanceId: string, model: string) {
+    return this.models.add(instanceId, model);
+  }
+
+  async modelDefaults() {
+    return this.models.get();
+  }
+
+  async modelSetDefaults(defaults: ModelDefaults) {
+    return this.models.set(defaults);
+  }
 
   async connectionOpenTerminal(instanceId: string) {
     const fix = (await this.connectionsList()).find((c) => c.instanceId === instanceId)?.status?.fix;
@@ -1109,6 +1121,16 @@ export class MockBackend implements Backend {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be turned off.");
+    if (target.kind === "provider") {
+      this.claude = { enabled };
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
+    if (target.kind === "jira") {
+      this.jiraEnabled = enabled;
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
     const posting = this.proposals.list({ states: ["applying"] }).some((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
     if (!enabled && posting) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
     this.github.setEnabled(enabled);
@@ -1119,6 +1141,20 @@ export class MockBackend implements Backend {
     const target = (await this.connectionsList()).find((c) => c.instanceId === instanceId);
     if (!target) throw new Error("This connection is gone. Reopen Settings.");
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be removed.");
+    if (target.kind === "jira") {
+      this.jiraAccount = { site: null, me: null, email: null, expiresOn: null };
+      this.jiraEnabled = true;
+      this.names.delete(instanceId);
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
+    if (target.kind === "provider") {
+      this.claude = null;
+      this.models.forget(instanceId);
+      this.names.delete(instanceId);
+      this.connectionsListeners.forEach((l) => l());
+      return;
+    }
     const reason = `${target.displayName} was removed.`;
     const mine = this.proposals.list({ states: ["pending", "applying"] }).filter((d) => d.intent.type === "githubReview" && d.intent.connectionId === target.id);
     if (mine.some((d) => d.state.type === "applying")) throw new Error(`Gossamr is posting a draft for ${target.displayName} right now. Try again in a moment.`);
@@ -1133,8 +1169,9 @@ export class MockBackend implements Backend {
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
-    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: true, kind: "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
-    const all = this.github.connected ? [sample, this.github.info()] : [sample];
+    const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: site ? this.jiraEnabled : true, kind: site ? "jira" : "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
+    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
+    const all = [sample, ...(this.github.connected ? [this.github.info()] : []), ...claude];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }
 
@@ -1222,7 +1259,7 @@ export class MockBackend implements Backend {
     return { created: keys, error: null };
   }
 
-  async mentionable(_key: string, query: string) {
+  async mentionable(_item: ItemRef, query: string) {
     const q = fold(query.trim());
     return [...Object.values(P), ...EXTRA_PEOPLE].filter((p) => {
       const name = fold(p.name);
@@ -1230,7 +1267,7 @@ export class MockBackend implements Backend {
     });
   }
 
-  async setUnread(eventId: string, unread: boolean) {
+  async setUnread(_connectionId: string, eventId: string, unread: boolean) {
     if (this.connector.setRead(eventId, !unread)) return;
     this.update((s) => void (this.event(s, eventId).unread = unread));
   }
@@ -1245,11 +1282,14 @@ export class MockBackend implements Backend {
     return host.startsWith("unknown") ? null : mockCloudId(host);
   }
 
-  async jiraConnect(input: TokenSignIn) {
+  async jiraConnect(input: TokenSignIn, instanceId?: string) {
+    if (instanceId !== undefined && !isJira((await this.connectionsList()).find((c) => c.instanceId === instanceId)?.kind)) throw new Error("That isn't a Jira connection.");
     const host = mockJiraHost(input.site);
     if (input.token.trim() === "slow") await new Promise((r) => setTimeout(r, 2000));
     if (input.token.trim() === "bad") throw new Error("Jira didn't accept that email and token. Check both, and that the token has the three scopes.");
     if (input.cloudId && !host.startsWith("unknown") && input.cloudId !== mockCloudId(host)) throw new Error(`That cloud id isn't the one ${host} reports. Check the site.`);
+    const has = this.jiraAccount;
+    if (instanceId === undefined && has.site?.name === host && has.email === input.email.trim()) throw new Error("You already have this account. Use Make a new token on its row.");
     this.jiraAccount = mockJiraStatus(host, input.email.trim(), input.expiresOn, input.cloudId);
     this.jiraToken = undefined;
     this.connectionsListeners.forEach((l) => l());

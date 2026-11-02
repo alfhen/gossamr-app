@@ -297,3 +297,16 @@ async fn a_queued_message_whose_wake_fails_is_kept_for_a_few_tries_then_dropped_
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Newer."));
 }
 
+
+#[tokio::test]
+async fn pip_cannot_wake_an_agent_in_a_paused_workstream_of_the_second_account() {
+    use crate::domain::workstream::PauseReason;
+    let (rig, queued, ws, second) = crate::runs::rig::queued_in_a_workstream_of_the_second_account().await;
+    rig.svc.start_now(&queued.id).await.unwrap();
+    rig.poll().await;
+    rig.set(&queued, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+    rig.fx.core.pause_workstream(&second, &ws, PauseReason::Person, Actor::Person).await.unwrap();
+
+    let why = rig.svc.message_agent(&queued.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("is paused; only the person resumes it"), "{why}");
+}

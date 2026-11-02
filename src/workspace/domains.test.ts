@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WatchState, WorkContainer } from "../types";
 import { allContainers } from "../workspaceStore";
-import { codeWatch, domainOfConnection, domainOfKind, isWorkConnection, workConnections, workContainers, workWatch } from "./domains";
+import { codeWatch, domainOfConnection, domainOfKind, githubConnections, isJira, isWorkConnection, workConnections, workContainers, workWatch } from "./domains";
 import { railSplit } from "./watchLogic";
 
 const container = (connectionId: string, key: string): WorkContainer => ({ ref: { connectionId, externalId: key }, key, name: key, workflow: null }) as unknown as WorkContainer;
@@ -18,6 +18,19 @@ describe("work and code containers", () => {
     expect(isWorkConnection("mock")).toBe(true);
     expect(isWorkConnection("github:ada")).toBe(false);
     expect(workConnections([{ kind: "jira" }, { kind: "github" }, { kind: "mock" }]).map((c) => c.kind)).toEqual(["jira", "mock"]);
+  });
+
+  it("gives a provider the model domain, so it is neither a ticket connection nor a code one", () => {
+    expect(domainOfKind("provider")).toBe("model");
+    expect(domainOfConnection([{ id: "claude", kind: "provider" }], "claude")).toBe("model");
+    const rows = [{ kind: "jira" as const }, { kind: "provider" as const }, { kind: "github" as const }, { kind: "mock" as const }];
+    expect(workConnections(rows).map((c) => c.kind)).toEqual(["jira", "mock"]);
+    expect(githubConnections(rows).map((c) => c.kind)).toEqual(["github"]);
+    expect(codeWatch([state("claude"), state("github:ada")]).map((w) => w.connectionId)).toEqual(["github:ada"]);
+  });
+
+  it("tells Jira, the sample included, from GitHub and from a provider", () => {
+    expect(["jira", "mock", "github", "provider"].map(isJira)).toEqual([true, true, false, false]);
   });
 
   it("keeps repositories out of the containers the rail, filters and switcher are made of", () => {

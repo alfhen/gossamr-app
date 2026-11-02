@@ -13,6 +13,7 @@ import {
   itemByRef,
   itemsByFilter,
   itemsInContainer,
+  keyToRef,
   knownMoves,
   nameOf,
   needsMeItems,
@@ -45,6 +46,26 @@ describe("connection probes", () => {
     github.github.setProbe("notSignedIn");
     await flush();
     expect(s().connections.find((c) => c.kind === "github")?.status?.state).toBe("notSignedIn");
+  });
+
+  it("keeps the provider rows the backend lists out of the store while they are hidden", async () => {
+    expect((await backend.connectionsList()).map((c) => c.kind)).toContain("provider");
+    await s().refreshConnections();
+    expect(s().connections.map((c) => c.kind)).not.toContain("provider");
+  });
+
+  it("marks the connections loaded only once they have been read, and not when reading them fails", async () => {
+    const failing = new MockBackend();
+    failing.connectionsList = async () => {
+      throw new Error("settings_rows failed");
+    };
+    await s().init(failing);
+    await flush();
+    expect(s().connections).toEqual([]);
+    expect(s().connectionsLoaded).toBe(false);
+    await s().init(new MockBackend());
+    await flush();
+    expect(s().connectionsLoaded).toBe(true);
   });
 
   it("asks the backend to probe again only when told to refresh", async () => {
@@ -497,5 +518,15 @@ describe("a new Jira token after Jira turned the old one down", () => {
     await show(dead());
     await show({ ...dead(), error: null as never, reauth: false });
     expect(s().reauth).toBe(false);
+  });
+});
+
+describe("keyToRef", () => {
+  it("reads a connection id that has colons in it as the connection, and the rest as the key", () => {
+    expect(keyToRef("jira:cloud:acct:TAF-12")).toEqual({ connectionId: "jira:cloud:acct", externalId: "TAF-12", key: "TAF-12" });
+  });
+
+  it("reads a simple connection id the same way", () => {
+    expect(keyToRef("mock:DEVOPS-473")).toEqual({ connectionId: "mock", externalId: "DEVOPS-473", key: "DEVOPS-473" });
   });
 });

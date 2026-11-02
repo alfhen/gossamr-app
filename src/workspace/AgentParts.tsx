@@ -127,17 +127,19 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
   const why = `retry-waits-${run.id}`;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {help.kind === "noClone" && <CloneActions run={run} />}
+      {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
       {help.primary && (
         <Button variant={next ? "primary" : "secondary"} size="sm" onClick={(ev) => (ev.stopPropagation(), failure.on.act(help.primary!.act))}>
           <Icon name={help.primary.act === "terminal" ? "term" : "ext"} />
           {help.primary.label}
         </Button>
       )}
-      <Button variant={ready && !next ? "primary" : "secondary"} size="sm" disabled={!ready} aria-describedby={ready ? undefined : why} onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}>
-        <Icon name="retry" />
-        Retry
-      </Button>
+      {help.retry && (
+        <Button variant={ready && !next ? "primary" : "secondary"} size="sm" disabled={!ready} aria-describedby={ready ? undefined : why} onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}>
+          <Icon name="retry" />
+          Retry
+        </Button>
+      )}
       {!ready && (
         <span id={why} className="text-xs text-ws-ink2">
           {RETRY_WAITS}

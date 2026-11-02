@@ -26,15 +26,21 @@ mod workstreams;
 pub use cache::{stamp, SyncState, Upserted};
 pub use runs::ARCHIVABLE;
 pub use code::CachedHttp;
-pub use proposals::is_for;
-pub use pip_turns::{PipTurn, DISCONNECTED, NEVER_RAN, SIGNED_OUT};
+pub use proposals::{connection_of, is_for};
+pub use pip_turns::{PipTurn, DISCONNECTED, NEVER_RAN};
 #[cfg(test)]
 pub use pip_turns::INTERRUPTED;
 
+/// Which connections' drafts and runs a handle may see.
+enum Reach {
+    All,
+    Home(String),
+    Among(Vec<String>),
+}
+
 pub struct Db {
     conn: Connection,
-    /// The connection whose drafts and runs this handle may see; `None` sees all of them.
-    home: Option<String>,
+    reach: Reach,
 }
 
 impl Db {
@@ -50,7 +56,7 @@ impl Db {
     fn init(mut conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         schema::migrate(&mut conn)?;
-        Ok(Self { conn, home: None })
+        Ok(Self { conn, reach: Reach::All })
     }
 
     /// A cache file with the app database attached, which is where drafts, runs, workstreams and Pip's conversations
@@ -80,7 +86,7 @@ impl Db {
         if let Some(dir) = app.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, home: None })
+        Ok(Self { conn: Self::migrated_app(Connection::open(app)?)?, reach: Reach::All })
     }
 
     fn open_file(path: &Path) -> Result<Connection> {
@@ -95,23 +101,43 @@ impl Db {
     /// Limits the drafts and runs this handle lists and claims to `connection_id`'s, and to the code host's, whose
     /// drafts are made and posted through whichever account is signed in.
     pub fn for_connection(mut self, connection_id: &str) -> Self {
-        self.home = Some(connection_id.to_string());
+        self.reach = Reach::Home(connection_id.to_string());
         self
     }
 
-    /// ` AND (connection_id = ? OR connection_id LIKE 'github:%')` and its argument, when this handle has a home.
+    /// ` AND (connection_id = ? OR connection_id LIKE 'github:%')` and its argument, when this handle has a home; the
+    /// same with `IN (...)` over the connections it reaches among.
     fn visible(&self, sql: &mut String, args: &mut Vec<rusqlite::types::Value>) {
-        if let Some(home) = &self.home {
-            sql.push_str(" AND (connection_id = ? OR connection_id LIKE 'github:%')");
-            args.push(rusqlite::types::Value::Text(home.clone()));
-        }
+        let ids = match &self.reach {
+            Reach::All => return,
+            Reach::Home(home) => std::slice::from_ref(home),
+            Reach::Among(ids) => ids.as_slice(),
+        };
+        let marks = vec!["?"; ids.len()].join(",");
+        sql.push_str(&format!(" AND (connection_id IN ({marks}) OR connection_id LIKE 'github:%')"));
+        args.extend(ids.iter().cloned().map(rusqlite::types::Value::Text));
+    }
+
+    /// Whether this handle is limited to some connections' drafts and runs.
+    fn is_limited(&self) -> bool {
+        !matches!(self.reach, Reach::All)
     }
 
     /// Runs `f` with this handle limited to `connection_id`'s drafts and runs, as `for_connection` limits it for good.
     pub fn homed<T>(&mut self, connection_id: &str, f: impl FnOnce(&Self) -> T) -> T {
-        self.home = Some(connection_id.to_string());
+        self.limited(Reach::Home(connection_id.to_string()), f)
+    }
+
+    /// Runs `f` with this handle limited to the drafts and runs of the connections in `ids`, whichever of them it is
+    /// about, so a handle needs no one connection to be signed in.
+    pub fn among<T>(&mut self, ids: Vec<String>, f: impl FnOnce(&Self) -> T) -> T {
+        self.limited(Reach::Among(ids), f)
+    }
+
+    fn limited<T>(&mut self, reach: Reach, f: impl FnOnce(&Self) -> T) -> T {
+        self.reach = reach;
         let out = f(self);
-        self.home = None;
+        self.reach = Reach::All;
         out
     }
 
@@ -124,7 +150,7 @@ impl Db {
     fn attach(conn: Connection, cache: &str) -> Result<Self> {
         let conn = Self::migrated_app(conn)?;
         conn.execute("ATTACH DATABASE ?1 AS cache", [cache])?;
-        Ok(Self { conn, home: None })
+        Ok(Self { conn, reach: Reach::All })
     }
 
     /// A cache file as the releases before the move to the app database left it, with its own app tables.
@@ -132,7 +158,7 @@ impl Db {
     pub fn open_before_the_move(path: &Path) -> Result<Self> {
         let mut file = Self::open_file(path)?;
         schema::apply(&mut file, &schema::STEPS[..schema::CACHE_STEPS_WITH_APP_STATE])?;
-        Ok(Self { conn: file, home: None })
+        Ok(Self { conn: file, reach: Reach::All })
     }
 
     #[cfg(test)]
@@ -249,18 +275,6 @@ impl Db {
         Ok(())
     }
 
-    /// The user's transitions and creations at or after `since`, newest first. Their comments are stored too, for
-    /// `needs_me_keys`, but the page derives those from the tickets and would list them twice.
-    pub fn activity(&self, since: &str) -> Result<Vec<MyAction>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT ticket_key, kind, at, text FROM activity WHERE at >= ?1 AND kind != 'comment' ORDER BY at DESC",
-        )?;
-        let rows = stmt.query_map(params![since], |r| {
-            Ok(MyAction { ticket_key: r.get(0)?, kind: r.get(1)?, at: r.get(2)?, text: r.get(3)? })
-        })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     pub fn events(&self, since: &str) -> Result<Vec<InboxEvent>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, ticket_key, kind, actor, at, text, unread, done_at, snoozed_until
@@ -329,12 +343,6 @@ impl Db {
         }
     }
 
-    pub fn seen(&self) -> Result<std::collections::HashMap<String, String>> {
-        let mut stmt = self.conn.prepare("SELECT ticket_key, at FROM seen")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
     pub fn meta(&self, k: &str) -> Result<Option<String>> {
         Ok(self.conn.query_row("SELECT v FROM meta WHERE k = ?1", params![k], |r| r.get(0)).optional()?)
     }
@@ -368,14 +376,13 @@ mod tests {
     use crate::tracker::testing::sample_ticket;
 
     #[test]
-    fn stores_each_action_once_and_reads_back_recent_ones() {
+    fn stores_each_action_once() {
         let db = Db::in_memory().unwrap();
         let action = |at: &str| MyAction { ticket_key: "CA-1".into(), at: at.into(), kind: "transition".into(), text: "A → B".into() };
         let actions = vec![("h:1:status".to_string(), action("2026-09-28T09:00:00Z")), ("h:2:status".to_string(), action("2026-08-01T09:00:00Z"))];
         db.insert_activity(&actions).unwrap();
         db.insert_activity(&actions).unwrap();
-        assert_eq!(db.activity("2026-09-01T00:00:00Z").unwrap(), vec![action("2026-09-28T09:00:00Z")]);
-        assert_eq!(db.activity("2026-01-01T00:00:00Z").unwrap().len(), 2);
+        assert_eq!(db.conn.query_row("SELECT count(*) FROM activity", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]

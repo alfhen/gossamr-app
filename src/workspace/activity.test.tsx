@@ -129,7 +129,7 @@ describe("the activity store on the mock", () => {
   it("marks one entry read at once and keeps it read after the backend answers", async () => {
     const first = useActivity.getState().entries.find((e) => e.unread)!;
     const before = useActivity.getState().unread;
-    const done = useActivity.getState().markRead([first.id]);
+    const done = useActivity.getState().markRead([first]);
     expect(useActivity.getState().entries.find((e) => e.id === first.id)!.unread).toBe(false);
     expect(useActivity.getState().unread).toBe(before - 1);
     await done;
@@ -215,5 +215,15 @@ describe("the activity store on the mock", () => {
     await useActivity.getState().loadMore();
     expect(useActivity.getState().entries.map((e) => e.id)).toEqual(all.slice(0, 10).map((e) => e.id));
     expect(useActivity.getState().next).toBeNull();
+  });
+
+  it("keeps the same event from a second connection when it lands on the next page", async () => {
+    const spy = vi.spyOn(backend, "cacheFeed");
+    const first = entry({ id: "c:1", connectionId: "jira:a:me" });
+    const second = entry({ id: "c:1", connectionId: "jira:b:me" });
+    spy.mockImplementation((q) => Promise.resolve(q.before ? { entries: [second], next: null } : { entries: [first], next: { at: first.at, id: first.id, connectionId: first.connectionId } }));
+    await useActivity.getState().reload();
+    await useActivity.getState().loadMore();
+    expect(useActivity.getState().entries.map((e) => e.connectionId)).toEqual(["jira:a:me", "jira:b:me"]);
   });
 });
