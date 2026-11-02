@@ -5,7 +5,9 @@ import type { SavedView } from "./filters";
 import { THEMES, THEME_LABEL, type ThemeMode } from "./prefs";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
 import { parsePullRef, pullLabel, type PullRef } from "../lib/githubUrl";
+import type { Driver } from "../lib/models";
 import { isWorkConnection } from "./domains";
+import { DRIVER_NAME } from "./providerLogic";
 import { ticketKeyOf } from "./watchLogic";
 import { VIEW_LABEL, VIEW_MODES, type ViewMode } from "./tabsStore";
 
@@ -43,6 +45,7 @@ export interface CommandActions {
   openDrafts(): void;
   addGithub(): void;
   addJira(): void;
+  addProvider(driver: Driver): void;
   manageRepositories(): void;
   /** Opens the pull request's ticket when one is known, else its page on GitHub. */
   openPull(ref: PullRef): void;
@@ -75,6 +78,8 @@ export interface CommandContext {
   github?: boolean;
   /** A Jira account is connected. */
   jira?: boolean;
+  /** The model providers + Add offers, so the palette offers the same. */
+  providers?: readonly Driver[];
   /** How many things need the person (Needs you's one count), for the hint beside "Show what needs me". */
   needsYou?: number;
   /** The synced ticket the peek shows, and whether it has an open workstream already. */
@@ -135,6 +140,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
     { id: "filter:clear", group: "Filters", icon: "⏷", label: "Clear filters", keywords: "reset remove", run: a.clearFilters },
     { id: "connection:add-github", group: "Connections", icon: "＋", label: "Add GitHub account", keywords: "connect sign in pull requests code", run: a.addGithub },
     ...(ctx.jira ? [] : [{ id: "connection:add-jira", group: "Connections" as const, icon: "＋", label: "Add Jira account", keywords: "connect sign in token tickets", run: a.addJira }]),
+    ...(ctx.providers ?? []).map((d): Command => ({ id: `connection:add-${d}`, group: "Connections", icon: "＋", label: `Add ${DRIVER_NAME[d]}`, keywords: "connect sign in login model provider", run: () => a.addProvider(d) })),
     ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),
     { id: "agents:needs", group: "Agents", icon: "✋", label: "Show what needs me", hint: ctx.needsYou ? `${ctx.needsYou} waiting` : undefined, keywords: "needs you agents waiting permission question blocked failed drafts approve decide", run: a.showNeedsYou },

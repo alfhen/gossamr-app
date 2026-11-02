@@ -348,6 +348,13 @@ async fn provider_add(app: AppHandle, core: State<'_, CoreState>, driver: connec
     Ok(row)
 }
 
+/// Shows a provider instance's config folder in Finder. The page names no path.
+#[tauri::command]
+fn provider_reveal_folder(core: State<'_, CoreState>, instance_id: String) -> Result<()> {
+    let folder = core.provider_folder_to_show(&instance_id)?;
+    tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|e| error::Error::Claude(format!("Finder didn't open it: {e}")))
+}
+
 /// What `gh` says about itself before any connection exists: the first-run screen's GitHub line.
 #[tauri::command]
 async fn first_run_github(core: State<'_, CoreState>) -> Result<probe::Snapshot> {
@@ -1093,6 +1100,7 @@ pub fn run() {
             connections_list,
             connection_open_terminal,
             provider_add,
+            provider_reveal_folder,
             first_run_github,
             first_run_open_terminal,
             connection_rename,

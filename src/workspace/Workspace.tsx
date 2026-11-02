@@ -34,6 +34,7 @@ import { Header } from "./Header";
 import { ScreenBar } from "./ScreenBar";
 import { ConnectGithubDialog } from "./ConnectGithub";
 import { ConnectJiraDialog } from "./ConnectJira";
+import { AddProviderDialog } from "./ProviderSheet";
 import { useGithubUi } from "./githubUi";
 import { FILTER_LIMIT, useDev } from "./devStore";
 import { ChooseWatch } from "./WatchPicker";
@@ -347,6 +348,7 @@ export function Workspace({ backend }: { backend: Backend }) {
       </div>
       <ConnectGithubDialog />
       <ConnectJiraDialog />
+      <AddProviderDialog />
       <KeyChooser />
     </TicketLinksContext.Provider>
   );

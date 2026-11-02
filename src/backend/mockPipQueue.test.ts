@@ -123,6 +123,12 @@ describe("the scripted Pip's queue", () => {
     await settled("q3", "ws:w9");
   });
 
+  it("says which model it is running on when asked", async () => {
+    mockQueueAsk({ requestId: "q1", prompt: "Which model are you?", sessionId: null, context, conversation: "general", meta: { imageCount: 0 }, model: { instanceId: "claude", model: "opus" } }, null, 1);
+    await settled("q1");
+    expect(mockPipTurns.turns("general")[0].text).toBe("I'm running on Opus through claude.");
+  });
+
   it("does not keep the choice of a question cancelled while it waited", async () => {
     ask("q1");
     const work = { instanceId: "claude_2", model: "opus", effort: "high" };

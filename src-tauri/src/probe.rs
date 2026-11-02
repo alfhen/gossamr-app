@@ -50,12 +50,15 @@ pub struct Snapshot {
     pub detail: Option<String>,
     /// The command that fixes it, when there is one.
     pub fix: Option<String>,
+    /// Names of login variables the shell sets that this instance's folder overrides. Never their values.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<String>,
     pub checked_at: String,
 }
 
 impl Snapshot {
     pub(crate) fn new(state: State, message: impl Into<String>) -> Self {
-        Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, checked_at: crate::inbox::now_iso() }
+        Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, ignored: Vec::new(), checked_at: crate::inbox::now_iso() }
     }
 
     pub(crate) fn fix(mut self, command: impl Into<String>) -> Self {
@@ -72,9 +75,9 @@ impl Snapshot {
         Snapshot { checked_at: String::new(), ..self.clone() } == Snapshot { checked_at: String::new(), ..other.clone() }
     }
 
-    /// A probe that couldn't tell keeps the account the last one found: failing to look is not a different account.
+    /// A probe that couldn't tell, or an instance turned off, keeps the account the last one found: neither is a different account.
     pub fn keeping_account_of(mut self, previous: Option<&Snapshot>) -> Self {
-        if self.state == State::Error && self.account.is_none() {
+        if matches!(self.state, State::Error | State::Off) && self.account.is_none() {
             self.account = previous.and_then(|p| p.account.clone());
         }
         self
@@ -341,6 +344,13 @@ mod tests {
             let before = Snapshot { account: Some("alfhen".into()), ..Snapshot::new(State::Ready, "") };
             assert_eq!(seen.keeping_account_of(Some(&before)).account.as_deref(), Some("alfhen"));
         }
+    }
+
+    #[test]
+    fn an_instance_turned_off_keeps_the_account_found_before() {
+        let before = Snapshot { account: Some("alf@acme.com".into()), ..Snapshot::new(State::Ready, "") };
+        assert_eq!(Snapshot::off().keeping_account_of(Some(&before)).account.as_deref(), Some("alf@acme.com"));
+        assert_eq!(Snapshot::new(State::NotSignedIn, "").keeping_account_of(Some(&before)).account, None);
     }
 
     #[tokio::test]

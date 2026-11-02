@@ -147,7 +147,8 @@ impl Core {
         let typed = instance.config.config_dir.as_deref();
         let path = typed.map(|t| provider_folder::expand(t, self.home.as_deref().unwrap_or(Path::new(""))));
         let folder = typed.zip(path.as_deref()).map(|(typed, path)| Folder { typed, path });
-        provider_probe::probe(instance.driver, binary.as_deref(), folder, &env, Timeouts::default()).await
+        let ignored = shell.map(|shell| login.ignored(shell)).unwrap_or_default();
+        Snapshot { ignored, ..provider_probe::probe(instance.driver, binary.as_deref(), folder, &env, Timeouts::default()).await }
     }
 
     #[cfg(test)]
@@ -242,6 +243,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_instance_with_a_folder_names_the_shells_login_variables_it_ignores_and_the_default_names_none() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        add(&fx, "claude_2", Some("~/.claude-work"), true);
+        fx.core.probe_providers(Probe::Launch).await;
+        assert_eq!(fx.core.provider_snapshot("claude_2").unwrap().ignored, ["ANTHROPIC_API_KEY"]);
+        assert!(fx.core.provider_snapshot("claude").unwrap().ignored.is_empty());
+    }
+
+    #[tokio::test]
     async fn an_instance_that_is_off_or_has_an_unusable_folder_spawns_nothing_and_says_why() {
         let fx = fixture().await;
         let calls = install_claude(&fx, IN);
@@ -283,6 +294,17 @@ mod tests {
         assert_eq!(runs(&calls).len(), 2, "off spawned nothing");
         fx.core.provider_remove("claude").await.unwrap();
         assert_eq!(state_of(&fx, "claude"), None);
+    }
+
+    #[tokio::test]
+    async fn turning_a_signed_in_instance_off_keeps_the_account_it_had() {
+        let fx = fixture().await;
+        install_claude(&fx, IN);
+        fx.core.probe_providers(Probe::Launch).await;
+        fx.core.set_instance_enabled("claude", false).await.unwrap();
+        fx.core.probe_provider_now("claude").await;
+        let off = fx.core.provider_snapshot("claude").unwrap();
+        assert_eq!((off.state, off.account.as_deref()), (State::Off, Some("alf@acme.com")));
     }
 
     #[tokio::test]

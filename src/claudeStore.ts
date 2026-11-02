@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent, type EventMeta, type StoredTurn, type TurnUsage } from "./backend/claude";
 import type { PipImage, ShownImage } from "./lib/pipImages";
-import type { ScreenContext } from "./types";
+import type { ModelChoice, ScreenContext } from "./types";
 import { useWorkstreams } from "./workspace/workstreamsStore";
 
 export interface Turn {
@@ -29,6 +29,8 @@ export interface Turn {
   at?: string;
   /** When Pip began on it after it waited in the queue, as an ISO time. */
   startedAt?: string;
+  /** The instance and model it ran with. Set once the turn has started, so a turn that was refused has none. */
+  model?: ModelChoice;
 }
 
 export interface Conversation {
@@ -40,6 +42,14 @@ export interface Conversation {
 interface ClaudeState {
   /** Conversations by id: `general` and `ws:<id>`. */
   byTicket: Record<string, Conversation>;
+  /** The instance and model each conversation's next turns run on, once one is known: picked, or the last that ran. Without one the Settings default applies. */
+  choices: Record<string, ModelChoice>;
+  /** What a question runs on in a conversation with no choice yet: the Settings default, as Pip's header shows it. */
+  fallback: ModelChoice | null;
+  /** Sets what the conversation's next turns run on. */
+  choose(ticketKey: string, choice: ModelChoice): void;
+  /** Sets the choice a question takes when the conversation has none. */
+  setFallback(choice: ModelChoice | null): void;
   ask(ticketKey: string, prompt: string, sessionId: string | null, context: ScreenContext, extra?: { looking?: string; quote?: string; images?: PipImage[]; shown?: string }): Promise<void>;
   /** Stops the turn being answered in the conversation. Turns queued behind it stay queued. */
   cancel(ticketKey: string): void;
@@ -107,6 +117,7 @@ export function turnFromStored(t: StoredTurn): Turn {
     ...(t.imageCount ? { imageCount: t.imageCount } : {}),
     ...(t.usage ? { usage: t.usage } : {}),
     ...(t.kind === "wake" ? { kind: "wake" as const } : {}),
+    ...(t.model ? { model: t.model } : {}),
     ...(t.createdAt ? { at: t.createdAt } : {}),
   };
 }
@@ -145,11 +156,22 @@ export function mergeStored(conv: Conversation, stored: StoredTurn[]): Conversat
 
 export const useClaude = create<ClaudeState>()((set, get) => ({
   byTicket: {},
+  choices: {},
+  fallback: null,
+
+  choose(ticketKey, choice) {
+    set({ choices: { ...get().choices, [ticketKey]: choice } });
+  },
+
+  setFallback(choice) {
+    set({ fallback: choice });
+  },
 
   async ask(ticketKey, prompt, sessionId, context, extra = {}) {
     const requestId = newRequestId();
     const conv = get().byTicket[ticketKey] ?? empty;
     const { images = [], ...shown } = extra;
+    const model = get().choices[ticketKey] ?? get().fallback ?? undefined;
     const turn: Turn = {
       requestId,
       prompt,
@@ -170,6 +192,7 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
         context,
         ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
         conversation: ticketKey,
+        ...(model ? { model } : {}),
         meta: {
           ...(shown.quote ? { quote: shown.quote } : {}),
           ...(shown.looking ? { looking: shown.looking } : {}),
@@ -208,6 +231,8 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       const stored = await claude.turns(ticketKey).catch(() => [] as StoredTurn[]);
       // Another account's turns must not land in a store that was cleared while they loaded.
       if (!stored.length || mine !== generation) return;
+      const ranOn = [...stored].reverse().find((t) => t.model)?.model;
+      if (ranOn && !get().choices[ticketKey]) set({ choices: { ...get().choices, [ticketKey]: ranOn } });
       const before = get().byTicket[ticketKey] ?? empty;
       const shown = new Set(before.turns.map((t) => t.requestId));
       const restored = stored.filter((t) => !shown.has(t.requestId));
@@ -236,7 +261,7 @@ export function forgetConversations() {
   for (const conversation of Object.values(useClaude.getState().byTicket)) {
     conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
   }
-  useClaude.setState({ byTicket: {} });
+  useClaude.setState({ byTicket: {}, choices: {} });
   // Which workstreams there are, and so which conversations, belongs to the account as well.
   useWorkstreams.getState().dispose();
 }
@@ -267,6 +292,21 @@ function settle(requestId: string) {
       const { text, steps, status, error, usage } = turnFromStored(end);
       const settled = (t: Turn): Turn => ({ ...t, text, steps, status, error, ...(usage ? { usage } : {}) });
       updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId ? settled(t) : t)) }));
+    });
+}
+
+/** Shows the instance and model turn `requestId` runs on, as its stored turn has them once it started. */
+function readTurnModel(requestId: string) {
+  const conversation = conversationOf(requestId);
+  if (!conversation) return;
+  const mine = generation;
+  void claude
+    .turns(conversation)
+    .catch(() => [] as StoredTurn[])
+    .then((stored) => {
+      const model = stored.find((t) => t.requestId === requestId)?.model;
+      if (!model || mine !== generation) return;
+      updateByRequest(requestId, (c) => ({ ...c, turns: c.turns.map((t) => (t.requestId === requestId ? { ...t, model } : t)) }));
     });
 }
 
@@ -317,6 +357,7 @@ export function onClaudeEvent(requestId: string, e: ClaudeEvent, meta?: EventMet
     readWakePrompt(requestId, meta.conversation!);
   }
   updateByRequest(requestId, (c) => applyEvent(c, requestId, e));
+  if (e.type === "started") readTurnModel(requestId);
   if (e.type === "done" && restoredLive.has(requestId)) settle(requestId);
 }
 
