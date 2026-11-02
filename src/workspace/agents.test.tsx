@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState, WorkstreamView } from "../types";
 import { AgentCard, RunLabel, onActivate } from "./AgentCard";
-import { FailureNext, OpenInTerminal } from "./AgentParts";
+import { FailureNext, OpenInTerminal, type FailureState } from "./AgentParts";
 import { NeedsBadge } from "./AgentsHome";
 import { AgentsScreen, StopAll, keyAction, type AgentsActions, type AgentsScreenProps } from "./AgentsView";
 import { NO_FILTERS } from "./agentsLogic";
+import { STILL_UNTRUSTED } from "./failureHelp";
 
 // The cards are called as plain functions in "opening a run", outside a render, so the store hook behind their state label is stood in for by the pure `stateView`.
 vi.mock("./useStateView", async () => {
@@ -74,8 +75,8 @@ const run = (state: RunState, over: Partial<Run> = {}): Run => ({ ...eight()[0],
 
 const buttonsOf = (html: string) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, "").trim());
 
-const card = (r: Run, opened = false) =>
-  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
+const card = (r: Run, opened = false, trust?: FailureState["trust"]) =>
+  renderToStaticMarkup(<AgentCard run={r} now={NOW} selected={false} position={1} total={1} ticketTitle={null} onOpen={vi.fn()} onAttach={vi.fn()} failure={{ opened, trust, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } }} />);
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
@@ -85,19 +86,44 @@ const failures = () => new MockBackend({ runs: { seed: "failures" } }).runs.list
 const failed = (type: string) => failures().find((r) => r.failure?.type === type)!;
 
 describe("a failed launch on a card", () => {
-  it("explains an untrusted folder in a line and offers Trust, with Retry waiting until Terminal was used", () => {
+  it("explains an untrusted clone in a line and offers Trust, then Terminal, with Retry waiting until Terminal was used", () => {
     const out = card(failed("untrustedFolder"));
-    expect(out).toContain("Claude asks you once per folder before it will work there.");
-    expect(buttonsOf(out)).toEqual(["Trust this folder in Terminal", "Retry"]);
+    expect(out).toContain("Claude hasn&#x27;t trusted Gossamr&#x27;s clone of acme/storefront yet.");
+    expect(buttonsOf(out)).toEqual(["Trust this clone for Claude", "Trust in Terminal instead", "Retry"]);
     expect(out).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Retry/);
     expect(out).not.toContain("accept the trust prompt");
+  });
+
+  it("shows Trusting… while the clone is being trusted, and keeps the button from being pressed twice", () => {
+    const out = card(failed("untrustedFolder"), false, { trusting: true, refused: null });
+    expect(buttonsOf(out)).toEqual(["Trusting…", "Trust in Terminal instead", "Retry"]);
+    expect(out).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Trusting…/);
+  });
+
+  it("puts Terminal first and says why after Gossamr refused to trust the clone", () => {
+    const why = "Claude hasn't made its settings for Claude yet. Trust it in Terminal.";
+    const out = card(failed("untrustedFolder"), false, { trusting: false, refused: why });
+    expect(buttonsOf(out)).toEqual(["Trust in Terminal", "Trust this clone for Claude", "Retry"]);
+    expect(out).toContain(why.replace(/'/g, "&#x27;"));
+    expect(out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Trust in Terminal<\/button>/)![0]).toContain("ws-btn--primary");
+  });
+
+  it("drops the one-click button for good once Claude refused after the trust was saved", () => {
+    const out = card(failed("untrustedFolder"), false, { trusting: false, refused: STILL_UNTRUSTED });
+    expect(buttonsOf(out)).toEqual(["Trust in Terminal", "Retry"]);
+    expect(out).toContain("Claude still doesn&#x27;t trust it. Its settings may have changed in a new version.");
+  });
+
+  it("offers a run set up in the person's own clone no trust button", () => {
+    const out = card({ ...failed("untrustedFolder"), inWorkFolder: false });
+    expect(buttonsOf(out)).not.toContain("Trust this clone for Claude");
   });
 
   it("enables Retry once Terminal was opened, and makes it the next step", () => {
     const out = card(failed("untrustedFolder"), true);
     expect(out).not.toMatch(/<button[^>]*disabled=""/);
     const retry = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Retry<\/button>/)![0];
-    const trust = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Trust this folder in Terminal<\/button>/)![0];
+    const trust = out.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Trust this clone for Claude<\/button>/)![0];
     expect(retry).toContain("ws-btn--primary");
     expect(trust).not.toContain("ws-btn--primary");
   });
@@ -128,7 +154,7 @@ describe("a failed launch on a card", () => {
 
   it("shows the short line on each failure card", () => {
     const out = screen({ runs: failures() });
-    expect(out).toContain("Claude asks you once per folder before it will work there.");
+    expect(out).toContain("Claude hasn&#x27;t trusted Gossamr&#x27;s clone of acme/storefront yet.");
     expect(out).toContain("Too many agents are running at once.");
   });
 });
@@ -542,9 +568,9 @@ describe("controls inside a card", () => {
   it("keeps a click on the failure buttons from also opening the run", () => {
     const failure = { opened: true, on: { act: vi.fn(), retry: vi.fn(), copied: vi.fn() } };
     const bs = buttons(FailureNext({ run: failed("untrustedFolder"), failure }));
-    expect(bs).toHaveLength(2);
+    expect(bs).toHaveLength(3);
     for (const b of bs) expect(click(b)).toHaveBeenCalledOnce();
-    expect(failure.on.act).toHaveBeenCalledOnce();
+    expect(failure.on.act.mock.calls).toEqual([["trust"], ["terminal"]]);
     expect(failure.on.retry).toHaveBeenCalledOnce();
   });
 });

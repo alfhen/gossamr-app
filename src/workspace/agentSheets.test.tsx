@@ -188,10 +188,10 @@ describe("the run sheet, by state", () => {
 
     it("walks through trusting a folder: explanation, one main button, the command to copy, and Retry that waits", () => {
       const html = sheet(failedOf("untrustedFolder"));
-      expect(html).toContain("Claude asks you once per folder before it will work there.");
-      expect(html).toContain("hasn&#x27;t been trusted in /Users/sample/Gossamr/agents/acme/storefront yet");
-      expect(html).toContain("Gossamr doesn&#x27;t change Claude&#x27;s settings for you.");
-      expect(buttons(html).filter((b) => !b.startsWith("Copy") && !b.startsWith("×") && !/^[⤢⤡]/.test(b))).toEqual(expect.arrayContaining(["Trust this folder in Terminal", "Retry"]));
+      expect(html).toContain("Claude hasn&#x27;t trusted Gossamr&#x27;s clone of acme/storefront yet.");
+      expect(html).toContain("the hooks, MCP servers and permission rules in its .claude folder and .mcp.json");
+      expect(html).toContain("Gossamr trusts this one folder, for Claude only, and then starts the agent.");
+      expect(buttons(html).filter((b) => /^(Trust|Retry)/.test(b))).toEqual(["Trust this clone for Claude", "Trust in Terminal instead", "Retry"]);
       expect(html).toContain("data-copy=\"cd &#x27;/Users/sample/Gossamr/agents/acme/storefront&#x27; &amp;&amp; claude\"");
       expect(disabled(html, "Retry")).toBe(true);
       expect(html).toContain("What Gossamr recorded");
@@ -236,14 +236,14 @@ describe("the run sheet, by state", () => {
       expect(buttons(html)).toContain("Ask Pip to start it again");
       expect(buttons(html)).not.toContain("Retry");
       expect(html).toContain("before Gossamr kept its own clones");
-      expect(html).not.toContain("Trust this folder in Terminal");
+      expect(html).not.toContain("Trust this clone for Claude");
     });
 
     it("keeps the trust steps off a run set up in the person's own clone, but not off one in the work folder", () => {
       const legacy = { ...failedOf("untrustedFolder"), inWorkFolder: false };
       expect(buttons(sheet(legacy))).toEqual(expect.arrayContaining(["Ask Pip to start it again"]));
-      expect(buttons(sheet(legacy))).not.toContain("Trust this folder in Terminal");
-      expect(buttons(sheet(failedOf("untrustedFolder")))).toContain("Trust this folder in Terminal");
+      expect(buttons(sheet(legacy))).not.toContain("Trust this clone for Claude");
+      expect(buttons(sheet(failedOf("untrustedFolder")))).toContain("Trust this clone for Claude");
     });
 
     it("tells a folder in the way to be moved and then retried", () => {

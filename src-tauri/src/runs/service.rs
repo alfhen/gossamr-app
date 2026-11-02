@@ -306,6 +306,11 @@ impl RunService {
         if !auth.logged_in {
             return Err(Failure::NotSignedIn);
         }
+        if let Ok(file) = super::trust::config_file(&tc.env, &auth) {
+            if super::trust::trusted(&file, clone) == Some(false) && !super::trust::trusted_above(&file, clone) {
+                return Err(Failure::NeedsTrust { folder: clone.clone() });
+            }
+        }
         if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone))? {
             return Err(Failure::TooOld);
         }
@@ -334,7 +339,7 @@ impl RunService {
     /// longer waiting for a slot either way.
     async fn spawn(&self, run: &mut Run) -> Result<()> {
         run.slot_wait_since = None;
-        let tc = match self.tools.get().await {
+        let tc = match self.toolchain_of(run).await {
             Ok(tc) => tc,
             Err(e) => return self.fail(run, &e.into()).await,
         };
@@ -705,6 +710,7 @@ impl RunLauncher for RunService {
 }
 
 mod fresh;
+mod trust;
 
 #[cfg(test)]
 mod tests;

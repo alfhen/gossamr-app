@@ -83,7 +83,7 @@ impl Terminal for MacTerminal {
 
 /// A path that can sit inside single quotes in a script: absolute, and no quote or control character (newline and NUL
 /// included). One with a quote is refused rather than escaped, so there is no quoting to get wrong.
-fn quotable(path: &Path) -> Result<&str> {
+pub(super) fn quotable(path: &Path) -> Result<&str> {
     let text = path.to_str().ok_or_else(|| refuse("that path isn't valid text"))?;
     if !path.is_absolute() || text.chars().any(|c| c == '\'' || c.is_control()) {
         return Err(refuse(format!("Gossamr won't open Terminal in {}: the path has a quote or an unusual character in it", text.escape_debug())));

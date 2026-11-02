@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { roleLabel } from "../lib/roles";
 import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSheet";
-import { StateChip, useSlotQueue } from "./AgentParts";
+import { StateChip, useSlotQueue, type TrustState } from "./AgentParts";
 import { agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { openTicketByKey } from "./jump";
@@ -74,6 +74,7 @@ export interface RunSheetViewProps {
   answering: boolean;
   /** Terminal was opened for this failed run, or its command copied. */
   opened: boolean;
+  trust?: TrustState;
   /** The person's answer went through and the run hasn't reported anything since. */
   answerSent?: boolean;
   /** Why this run is worth cleaning up, when it is. */
@@ -131,7 +132,7 @@ export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
   );
 }
 
-function Attention({ run, label, opened, answering, slotPlace, on }: { run: Run; label?: string; opened: boolean; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
+function Attention({ run, label, opened, trust, answering, slotPlace, on }: { run: Run; label?: string; opened: boolean; trust?: TrustState; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
   switch (run.state) {
     case "needsPermission":
       return (
@@ -160,7 +161,7 @@ function Attention({ run, label, opened, answering, slotPlace, on }: { run: Run;
         </Box>
       );
     case "failed":
-      return <FailureBox run={run} opened={opened} on={on} />;
+      return <FailureBox run={run} opened={opened} trust={trust} on={on} />;
     case "queued":
       return (
         <Box tone="plain" label="Waiting to start">
@@ -185,8 +186,9 @@ export function waitingText(run: Run, place: number | null = null): string {
   return "It is approved but has not been launched, as after a restart. Nothing runs until you start it.";
 }
 
-function FailureBox({ run, opened, on }: { run: Run; opened: boolean; on: RunSheetActions }) {
-  const help = failureHelp(run);
+function FailureBox({ run, opened, trust, on }: { run: Run; opened: boolean; trust?: TrustState; on: RunSheetActions }) {
+  const { trusting = false, refused = null } = trust ?? {};
+  const help = failureHelp(run, refused);
   const message = run.error?.trim() || "No reason was recorded.";
   const ready = help ? retryEnabled(help, opened) : true;
   const stepDone = !!help?.primary && help.retryNeedsTerminal && opened;
@@ -199,12 +201,20 @@ function FailureBox({ run, opened, on }: { run: Run; opened: boolean; on: RunShe
         <>
           <p className="m-0 font-semibold text-ws-ink">{help.summary}</p>
           <p className="m-0 text-ws-ink2">{help.detail}</p>
+          {help.refusal && (
+            <p role="status" className="m-0 text-ws-blocked">
+              {help.refusal}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
-            {help.primary && (
-              <Btn tone={stepDone ? "plain" : "primary"} icon={help.primary.act === "terminal" ? "term" : "ext"} onClick={() => on.fix(help.primary!.act)}>
-                {help.primary.label}
-              </Btn>
+            {[help.primary, help.secondary].map(
+              (step, i) =>
+                step && (
+                  <Btn key={step.act} tone={i === 0 && !stepDone ? "primary" : "plain"} icon={step.act === "terminal" ? "term" : step.act === "trust" ? "shield" : "ext"} disabled={step.act === "trust" && trusting} onClick={() => on.fix(step.act)}>
+                    {step.act === "trust" && trusting ? "Trusting…" : step.label}
+                  </Btn>
+                ),
             )}
             {help.retry && (
               <Btn tone={stepDone || !help.primary ? "primary" : "plain"} icon="retry" disabled={!ready} title={ready ? undefined : "Do the step above first, then retry"} onClick={on.retry}>
@@ -277,7 +287,7 @@ function Facts({ run, now, ticketTitle, on }: { run: Run; now: number; ticketTit
 }
 
 /** The whole sheet as a function of what it is shown; `RunSheet` loads the data and connects the actions. */
-export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, answering, opened, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
+export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide, events, disk, confirmStop, outcome, answering, opened, trust, answerSent = false, cleanup = null, slotPlace = null, stoppedHere = false, on }: RunSheetViewProps) {
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
@@ -360,7 +370,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
       </div>
 
       <RunContinuation key={`continue-${run.id}`} run={run} adopt={on.adoptSession} />
-      {attention && <Attention run={run} label={label} opened={opened} answering={answering} slotPlace={slotPlace} on={on} />}
+      {attention && <Attention run={run} label={label} opened={opened} trust={trust} answering={answering} slotPlace={slotPlace} on={on} />}
       {run.state === "done" && <Found run={run} outcome={outcome} on={on} />}
       {outcome?.change && <Changes change={outcome.change} on={on} />}
 
@@ -400,6 +410,8 @@ export function RunSheet({ id }: { id: string }) {
   const [now, setNow] = useState(() => Date.now());
   const disk = useDisk(backend, id);
   const opened = useRuns((s) => s.terminalOpened.has(id));
+  const trusting = useRuns((s) => s.trusting.has(id));
+  const refused = useRuns((s) => s.trustRefused.get(id) ?? null);
   const sentAt = useRuns((s) => s.answered[id]);
   const browseOrder = useRuns((s) => s.browseOrder);
 
@@ -472,5 +484,5 @@ export function RunSheet({ id }: { id: string }) {
     },
     openChange: (url) => void openOnGithub(url),
   };
-  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={false} drafting={drafting} answering={answering} opened={opened} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
+  return <RunSheetView run={run} now={now} ticketTitle={ticket?.title ?? null} place={place} label={label} wide={wide} onWide={() => setWide((w) => !w)} events={events} disk={disk} confirmStop={confirmStop} outcome={outcome} tickets={tickets} pickBlocker={pickBlocker} waitingBreakdown={false} drafting={drafting} answering={answering} opened={opened} trust={{ trusting, refused }} answerSent={sentAt !== undefined && sentAt === run.lastProgressAt} cleanup={cleanupReason(run, now, { disk: typeof disk === "number" ? disk : null, change: outcome?.change ?? null })} slotPlace={slotPosition(run, slotLine)} stoppedHere={stoppedHere} on={on} />;
 }

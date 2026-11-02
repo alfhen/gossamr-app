@@ -62,14 +62,20 @@ pub async fn ready_with(tune: impl FnOnce(RunService) -> RunService) -> Rig {
 
 /// `ready_with` on a fixture of the caller's, such as one with GitHub routes scripted.
 pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) -> Rig {
+    ready_in(fx, &[], tune).await
+}
+
+/// `ready_on`, with more variables in the environment the scripted `claude` runs in.
+pub async fn ready_in(fx: Fixture, login: &[(&str, String)], tune: impl FnOnce(RunService) -> RunService) -> Rig {
     let clone = fx.home.join("Gossamr/agents/acme/webshop");
     clone_with_origin(&clone, "https://github.com/acme/webshop.git");
     let clone = clone.canonicalize().unwrap();
     let cli = Arc::new(FakeCli::new());
     cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
     let bin = install_fake_git(&fx.dir);
-    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]));
-    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
+    let mut env = RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]);
+    login.iter().for_each(|(key, value)| env.set(key, value.as_str()));
+    let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: Arc::new(env) }));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
     let svc = RunService::new(

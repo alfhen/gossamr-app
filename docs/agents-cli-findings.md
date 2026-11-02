@@ -19,14 +19,32 @@ All of them run with stdin from `/dev/null`, because the CLI otherwise reads std
 
 ## What the real run showed (scratch config, signed out)
 
-- A fresh `CLAUDE_CONFIG_DIR` is not logged in and refuses an untrusted folder: exit 1, stderr `Workspace not trusted. Run `claude` in <path> once and accept the trust prompt, then retry.` Trust is written to the scratch `<config>/.claude.json` as `projects.<path>.hasTrustDialogAccepted`, which the tests do and the app never will.
+- A fresh `CLAUDE_CONFIG_DIR` is not logged in and refuses an untrusted folder: exit 1, stderr `Workspace not trusted. Run `claude` in <path> once and accept the trust prompt, then retry.` Trust is written to the scratch `<config>/.claude.json` as `projects.<path>.hasTrustDialogAccepted`, which the tests do through `runs::trust::trust` and the app does only on a click (see Folder trust).
 
-## Folder trust (Gossamr never writes it)
+## Folder trust (Gossamr writes one key, on a click)
 
-- Claude asks once per folder because a cloned repository's own hooks, MCP servers and settings run with the agent. Gossamr does not write `projects.<path>.hasTrustDialogAccepted` into `.claude.json`, or bypass the prompt in any other way; the person answers it in Terminal.
-- A refused launch is recognised from `Workspace not trusted` on stderr (exit 1) and stored as the run's `failure` `untrustedFolder` with the folder. Retry looks for a session first and launches the same approved run again, so the approved prompt and digest are unchanged.
-- Before approving, the checks read `.claude.json` read-only (`<config dir>/.claude.json`, or `.claude.json` beside a default `~/.claude`) and look for `hasTrustDialogAccepted: true` on the clone or a folder above it. A missing, unreadable or differently shaped file says nothing. A folder it doesn't list gets an amber row, never a red one, because the file's shape is Claude's to change: Start stays available, and the refused launch is the authority.
-- Trust this folder opens Terminal in the failed run's own clone running plain `claude`, from a script named by a digest of the folder. New sessions start only in `~/Gossamr/agents/<owner>/<repo>`, so a run set up in `~/Code` or another folder before that change is not offered this step. Not yet checked against a real signed-in Claude: the shape of `~/.claude.json` as read by the checks, and that trust given to a clone covers worktree sessions started by Gossamr (the scratch test above covers the latter).
+What Claude does, checked on the owner's Mac with Claude Code 2.1.316:
+
+- No command trusts a folder. `claude -p` skips the question. `--bg` does not, and refuses with exit 1 and `Workspace not trusted` on stderr. Gossamr stores that as the run's `failure` `untrustedFolder` with the folder.
+- Claude keeps trust per login and per exact path, as `projects["<absolute path>"].hasTrustDialogAccepted: true` in the login's global config. That file is `~/.claude.json` when `CLAUDE_CONFIG_DIR` is unset, and `<CLAUDE_CONFIG_DIR>/.claude.json` when it is set. Claude's own refusal in other places names the same key.
+- Claude looks trust up by the real path of the folder's repository. A trusted clone covers the worktrees made in it (U5 below). A trusted parent such as `~/Code` does not trust a new folder inside it.
+- `CLAUDE_CONFIG_DIR=~/.claude` set on purpose reads as signed out (step o10). The default login runs with the variable unset.
+- With `CLAUDE_CODE_CUSTOM_OAUTH_URL` set, the file is `.claude-custom-oauth.json`. With `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` set, Claude ignores every stored entry. Neither changes the `configDirectory` that `claude auth status --json` reports.
+- Claude rewrites the file often while sessions run. Each save makes the folder `<file>.lock` (the `proper-lockfile` package, which counts a lock older than 10 s as stale), reads the file again, applies its change, writes a temp file and renames it into place.
+- The file can also hold account details and, for a login by API key, the key. Gossamr never logs it, copies it or keeps a backup.
+
+What Gossamr does (`src-tauri/src/runs/trust.rs`):
+
+- Before a launch, `check()` takes the file from the run's environment and the same `auth status` answer as the launch. A missing or `false` entry, with no folder above it trusted, fails the run at once with `untrustedFolder`, and `claude` is not started. A file it cannot read, name or recognise, or a trusted folder above, launches as before, and Claude's answer decides.
+- The file must agree with `configDirectory`, and `<folder>/.config.json` (a name older releases used) must not exist. Otherwise Gossamr cannot tell which file Claude reads, and it refuses to write.
+- Retry with `trust` is allowed only for a run that failed with `untrustedFolder`, and only for its own `clone_path` in the work folder: its real path, a watched repository, an origin that matches, not a link. The page sends a run id and never a path.
+- The write follows Claude's own steps: take the `<file>.lock` folder (retry every 100 ms for up to 3 s, never remove a lock Gossamr did not make), parse the file as ordered raw values, set only `projects[folder].hasTrustDialogAccepted`, write a temp file with the original's mode, sync it, rename it over the file and remove the lock. Every other key keeps its bytes and its place. One second later the file is read again. A missing entry sends Gossamr round once more, then it refuses.
+- Each refusal has a sentence on the card, and Terminal becomes the first button. If Claude still refuses after a confirmed write, the one-click button goes away for that run.
+- `Purpose::Trust` stays for the Terminal script, which runs plain `claude` in the clone.
+- `serde_json`'s `preserve_order` stays off, because it would change the key order of every `json!` object and with it `RunSpec::digest()`. A test pins the fixture spec's digest.
+
+Not yet checked against a real signed-in Claude: that the written entry is accepted by a running session while Claude holds its own settings in memory. After this change merges, the owner trusts one real clone with each login while a session is open, and records the result here.
+
 - A signed-out session is listed as `state:"blocked"`, `status:"idle"` with a pid, and its `state.json` has `needs:"login required — run /login"` and `tempo:"blocked"`. `output` and `children` are `null`, so a null where a list or object is expected must be tolerated.
 - `state.json` also holds `intent`, `providerEnv`, `cwd`, `linkScanPath` and other internals. The wrapper reads only the whitelisted fields. `updatedAt` is an ISO string in 2.1.286; old fixtures use a number, so timestamps are kept as text.
 - `timeline.jsonl` lines are `{at, state, detail, text}`.

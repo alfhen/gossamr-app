@@ -671,8 +671,8 @@ export class MockBackend implements Backend {
     return this.runs.deleteArchived(id, removeWorktree);
   }
 
-  async runsRetryLaunch(id: string) {
-    return this.runs.retryLaunch(id);
+  async runsRetryLaunch(id: string, options?: { trust?: boolean }) {
+    return this.runs.retryLaunch(id, options);
   }
 
   onRunsChanged(listener: (c: RunsChanged) => void) {

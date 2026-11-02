@@ -112,39 +112,59 @@ export interface FailureActions {
   copied(): void;
 }
 
+/** Where trusting the run's clone stands: under way, or why Gossamr wouldn't. */
+export interface TrustState {
+  trusting: boolean;
+  refused: string | null;
+}
+
 export interface FailureState {
   /** Terminal was opened for this run, or its command copied. */
   opened: boolean;
+  trust?: TrustState;
   on: FailureActions;
 }
 
 const RETRY_WAITS = "Do the step above first, then retry";
 
+const ACT_ICONS = { terminal: "term", install: "ext", trust: "shield" } as const;
+
 export function FailureNext({ run, failure }: { run: Run; failure: FailureState }) {
-  const help = failureHelp(run);
+  const { trusting = false, refused = null } = failure.trust ?? {};
+  const help = failureHelp(run, refused);
   if (!help) return null;
   const ready = retryEnabled(help, failure.opened);
   const next = help.primary && !(help.retryNeedsTerminal && failure.opened);
   const why = `retry-waits-${run.id}`;
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
-      {help.primary && (
-        <Button variant={next ? "primary" : "secondary"} size="sm" onClick={(ev) => (ev.stopPropagation(), failure.on.act(help.primary!.act))}>
-          <Icon name={help.primary.act === "terminal" ? "term" : "ext"} />
-          {help.primary.label}
-        </Button>
-      )}
-      {help.retry && (
-        <Button variant={ready && !next ? "primary" : "secondary"} size="sm" disabled={!ready} aria-describedby={ready ? undefined : why} onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}>
-          <Icon name="retry" />
-          Retry
-        </Button>
-      )}
-      {!ready && (
-        <span id={why} className="text-xs text-ws-ink2">
-          {RETRY_WAITS}
-        </span>
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
+        {[help.primary, help.secondary].map(
+          (step, i) =>
+            step && (
+              <Button key={step.act} variant={i === 0 && next ? "primary" : "secondary"} size="sm" disabled={step.act === "trust" && trusting} onClick={(ev) => (ev.stopPropagation(), failure.on.act(step.act))}>
+                <Icon name={ACT_ICONS[step.act]} />
+                {step.act === "trust" && trusting ? "Trusting…" : step.label}
+              </Button>
+            ),
+        )}
+        {help.retry && (
+          <Button variant={ready && !next ? "primary" : "secondary"} size="sm" disabled={!ready} aria-describedby={ready ? undefined : why} onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}>
+            <Icon name="retry" />
+            Retry
+          </Button>
+        )}
+        {!ready && (
+          <span id={why} className="text-xs text-ws-ink2">
+            {RETRY_WAITS}
+          </span>
+        )}
+      </div>
+      {help.refusal && (
+        <p role="status" className="m-0 text-xs text-ws-blocked">
+          {help.refusal}
+        </p>
       )}
     </div>
   );
