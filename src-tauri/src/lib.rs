@@ -959,7 +959,7 @@ pub fn run() {
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
             let service = runs::service::RunService::new(
                     core.clone(),
-                    Arc::new(runs::toolchain::SystemToolchain::default()),
+                    Arc::new(runs::toolchain::SystemToolchain::new(core.shell())),
                     runs::index::RunIndex::load(&core.data_dir()),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
@@ -990,6 +990,8 @@ pub fn run() {
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
 
+            let checked = core.clone();
+            tauri::async_runtime::spawn(async move { checked.check_providers().await });
             spawn_sync_loop(app.handle().clone(), core);
             Ok(())
         })
