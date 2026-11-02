@@ -4,7 +4,7 @@
 use super::{ConnectionInfo, Core};
 use crate::config::AppConfig;
 use crate::connections::{self, Binding, RowKind};
-use crate::db::is_for;
+use crate::db::{connection_of, is_for};
 use crate::domain::{Actor, ProposalQuery, ProposalState, Run, RunQuery, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals;
@@ -180,6 +180,7 @@ impl Core {
         let target = self.removal_target(instance_id).await?;
         self.refuse_while_posting(&target.connection_id, &target.name).await?;
         if target.kind == ConnectionKind::Jira {
+            self.refuse_while_review_listed_under_is_posting(&target.connection_id, &target.name).await?;
             self.refuse_while_running(&target.connection_id).await?;
         }
         match target.kind {
@@ -278,6 +279,21 @@ impl Core {
             return false;
         }
         finished
+    }
+
+    /// A review is stored under its ticket's Jira connection, so it vanishes from the registry-limited views once that
+    /// connection is removed; posting must finish first.
+    async fn refuse_while_review_listed_under_is_posting(&self, connection_id: &str, name: &str) -> Result<()> {
+        let posting = self
+            .with_app_db(|db| {
+                let applying = ProposalQuery { states: Some(vec![StateKind::Applying]), ..Default::default() };
+                Ok(db.proposals(&applying)?.iter().any(|p| connection_of(p) == connection_id))
+            })
+            .await?;
+        if posting {
+            return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
+        }
+        Ok(())
     }
 
     async fn refuse_while_posting(&self, connection_id: &str, name: &str) -> Result<()> {
@@ -611,6 +627,18 @@ mod tests {
         assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft")), "{refused}");
         assert_eq!(state_of(&fx, &waiting.id).await, ProposalState::Pending);
         assert_eq!(state_of(&fx, &posting.id).await, ProposalState::Applying);
+        assert_eq!(ids(&fx), ["jira", "github"]);
+    }
+
+    #[tokio::test]
+    async fn a_review_being_posted_stops_the_removal_of_the_jira_site_it_is_listed_under() {
+        let fx = adopted().await;
+        let posting = draft_for(&fx, review_on_github(&fx)).await;
+        fx.core.with_app_db(|db| db.begin_posting_review(&posting.id, chrono::Utc::now(), None)).await.unwrap();
+
+        let refused = fx.core.remove_instance("jira").await.unwrap_err();
+
+        assert!(matches!(&refused, Error::Input(m) if m.contains("posting a draft")), "{refused}");
         assert_eq!(ids(&fx), ["jira", "github"]);
     }
 
