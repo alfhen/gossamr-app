@@ -19,6 +19,14 @@ use super::env::RunEnv;
 /// longer rather than fail on the machine's load.
 const GIT_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(30) } else { Duration::from_secs(5) };
 const WORD_LIMIT: usize = 16;
+const CONFIG_VALUE_LIMIT: usize = 200;
+
+/// Who git commits as in a folder. Either part is `None` when git has no setting for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommitIdentity {
+    pub email: Option<String>,
+    pub signing_key: Option<String>,
+}
 
 /// Switches off what a repository's own config could use to run a program, on every call Gossamr makes in a clone.
 pub(super) const PINNED: [&str; 6] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
@@ -103,6 +111,24 @@ impl Git {
     pub async fn default_branch(&self, clone: &Path) -> Option<String> {
         let name = self.out(clone, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).await?;
         Some(name.strip_prefix("origin/").unwrap_or(&name).to_owned()).filter(|b| !b.is_empty())
+    }
+
+    /// The address and signing key git would commit with in `dir`: the local settings first, then the global ones the
+    /// folder's `includeIf` rules choose. Reading them runs no program.
+    pub async fn commit_identity(&self, dir: &Path) -> CommitIdentity {
+        CommitIdentity { email: self.config_value(dir, "user.email").await, signing_key: self.config_value(dir, "user.signingkey").await }
+    }
+
+    /// Whether `~/.gitconfig` has `includeIf "gitdir:…"` rules, which pick settings by the folder a repository is in.
+    /// `dir` is any existing folder.
+    pub async fn picks_settings_by_folder(&self, dir: &Path) -> bool {
+        self.out(dir, &["config", "--global", "--get-regexp", "^includeif\\.gitdir"]).await.is_some_and(|rules| !rules.is_empty())
+    }
+
+    async fn config_value(&self, dir: &Path, key: &str) -> Option<String> {
+        let value = self.out(dir, &["config", "--get", key]).await?;
+        let value: String = value.chars().filter(|c| !c.is_control()).take(CONFIG_VALUE_LIMIT).collect();
+        Some(value).filter(|v| !v.is_empty())
     }
 
     /// The names, never the values, of the settings in the clone's own `.git/config`. They are read NUL-separated and
@@ -224,6 +250,9 @@ case "$*" in
   "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/main ;;
   "fetch --prune --quiet origin +refs/heads/*:refs/remotes/origin/*") [ ! -f "$dir/.fake-fetch-fails" ] || { echo "fatal: unable to access: Could not resolve host" >&2; exit 128; } ;;
   "ls-remote --symref -- "*) printf 'ref: refs/heads/main\tHEAD\nabc\tHEAD\n' ;;
+  "config --get user.email") cat "$dir/.fake-email" 2>/dev/null || exit 1 ;;
+  "config --get user.signingkey") cat "$dir/.fake-signingkey" 2>/dev/null || exit 1 ;;
+  "config --global --get-regexp ^includeif\\.gitdir") cat "$dir/.fake-includeif" 2>/dev/null || exit 1 ;;
   "config --local --list --name-only -z") sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
   "config --local --get-all "*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null; true ;;
   "worktree list --porcelain") cat "$dir/.fake-worktrees" 2>/dev/null ;;
@@ -326,6 +355,76 @@ mod tests {
         let pinned = PINNED.join(" ");
         assert!(log.lines().all(|l| l.starts_with(&format!("{pinned} -C ")) && l.contains(" --no-optional-locks ")), "{log}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn git_in(home: &Path) -> Git {
+        let env = RunEnv::from_pairs([
+            ("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin".to_string()),
+            ("HOME", home.display().to_string()),
+            ("GIT_CONFIG_GLOBAL", home.join(".gitconfig").display().to_string()),
+            ("GIT_CONFIG_NOSYSTEM", "1".into()),
+        ]);
+        Git::new(Arc::new(env))
+    }
+
+    fn init(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        let ok = std::process::Command::new("git").args(["init", "--quiet"]).arg(path).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").status().unwrap().success();
+        assert!(ok);
+    }
+
+    #[tokio::test]
+    async fn the_commit_address_is_read_inside_the_clone_so_a_rule_for_code_does_not_reach_it() {
+        let home = scratch("identity");
+        std::fs::write(home.join("code.gitconfig"), "[user]\n\temail = alf@code.example\n\tsigningkey = CODEKEY\n").unwrap();
+        std::fs::write(
+            home.join(".gitconfig"),
+            format!("[user]\n\temail = alf@global.example\n[includeIf \"gitdir:{}/Code/\"]\n\tpath = {}/code.gitconfig\n", home.display(), home.display()),
+        )
+        .unwrap();
+        let (own, gossamrs) = (home.join("Code/webshop"), home.join("Gossamr/agents/acme/webshop"));
+        init(&own);
+        init(&gossamrs);
+        let git = git_in(&home);
+        let in_code = git.commit_identity(&own).await;
+        assert_eq!((in_code.email.as_deref(), in_code.signing_key.as_deref()), (Some("alf@code.example"), Some("CODEKEY")), "the rule is in effect in ~/Code");
+        let here = git.commit_identity(&gossamrs).await;
+        assert_eq!((here.email.as_deref(), here.signing_key), (Some("alf@global.example"), None));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn a_setting_in_the_clone_itself_decides_the_commit_address() {
+        let home = scratch("identity-local");
+        std::fs::write(home.join(".gitconfig"), "[user]\n\temail = alf@global.example\n").unwrap();
+        let clone = home.join("Gossamr/agents/acme/webshop");
+        init(&clone);
+        std::fs::write(clone.join(".git/config"), format!("{}[user]\n\temail = alf@clone.example\n", std::fs::read_to_string(clone.join(".git/config")).unwrap())).unwrap();
+        assert_eq!(git_in(&home).commit_identity(&clone).await.email.as_deref(), Some("alf@clone.example"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn no_address_in_git_settings_gives_none_and_a_long_value_is_cut() {
+        let home = scratch("identity-none");
+        let clone = home.join("clone");
+        init(&clone);
+        assert_eq!(git_in(&home).commit_identity(&clone).await, CommitIdentity::default());
+        std::fs::write(home.join(".gitconfig"), format!("[user]\n\temail = {}\n", "a".repeat(500))).unwrap();
+        assert_eq!(git_in(&home).commit_identity(&clone).await.email.unwrap().len(), CONFIG_VALUE_LIMIT);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn rules_that_choose_settings_by_folder_are_found_only_in_the_global_config() {
+        let home = scratch("include-if");
+        let git = git_in(&home);
+        assert!(!git.picks_settings_by_folder(&home).await, "no config file");
+        std::fs::write(home.join(".gitconfig"), "[user]\n\temail = a@b.example\n[includeIf \"onbranch:main\"]\n\tpath = x\n").unwrap();
+        assert!(!git.picks_settings_by_folder(&home).await, "only gitdir rules count");
+        std::fs::write(home.join(".gitconfig"), "[includeIf \"gitdir/i:~/Code/acme/\"]\n\tpath = ~/.gitconfig-acme\n").unwrap();
+        assert!(git.picks_settings_by_folder(&home).await);
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[tokio::test]

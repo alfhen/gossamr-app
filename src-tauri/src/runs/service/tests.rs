@@ -1186,6 +1186,50 @@ mod clones {
         assert!(after.in_work_folder);
         assert_eq!(rig.get(&run).await.spec.clone_path, lower.path);
     }
+
+    #[tokio::test]
+    async fn a_launch_records_who_git_commits_as_inside_the_clone() {
+        let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-email"), "alf@acme.example\n").unwrap();
+        std::fs::write(rig.clone.join(".fake-signingkey"), "ABC123\n").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        assert_eq!(run.state, RunState::Launching);
+        let stored = rig.get(&run).await;
+        assert_eq!((stored.commit_email.as_deref(), stored.signing_key.as_deref()), (Some("alf@acme.example"), Some("ABC123")));
+        assert!(git_log(&rig).lines().any(|l| l.contains(&format!("-C {} ", rig.clone.display())) && l.ends_with("config --get user.email")), "{}", git_log(&rig));
+    }
+
+    #[tokio::test]
+    async fn a_clone_where_git_has_no_address_leaves_the_run_without_one() {
+        let rig = ready().await;
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        let stored = rig.get(&run).await;
+        assert_eq!((stored.state, stored.commit_email, stored.signing_key), (RunState::Launching, None, None));
+    }
+
+    #[tokio::test]
+    async fn settings_say_who_git_commits_as_in_the_work_folder_and_whether_rules_pick_it_by_folder() {
+        let rig = ready().await;
+        let none = rig.svc.work_folder_git().await;
+        assert_eq!((none.commit_email, none.include_if), (None, false));
+        std::fs::write(agents_root(&rig.fx.home).join(".fake-email"), "alf@global.example\n").unwrap();
+        std::fs::write(rig.fx.home.join(".fake-includeif"), "includeif.gitdir:~/Code/acme/.path ~/.gitconfig-acme\n").unwrap();
+        let found = rig.svc.work_folder_git().await;
+        assert_eq!((found.commit_email.as_deref(), found.include_if), (Some("alf@global.example"), true));
+        let log = git_log(&rig);
+        assert!(log.contains(&format!("-C {} --no-optional-locks config --get user.email", agents_root(&rig.svc.fresh_home().unwrap()).display())), "{log}");
+        assert!(!log.contains("/Code"), "ask git where the work folder is, never about the person's own clones: {log}");
+    }
+
+    #[tokio::test]
+    async fn revealing_the_work_folder_makes_it_when_it_is_missing_and_takes_no_path() {
+        let rig = ready().await;
+        let root = agents_root(&rig.svc.fresh_home().unwrap());
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(rig.svc.make_work_folder().unwrap(), root);
+        assert!(root.is_dir());
+        assert_eq!(rig.svc.make_work_folder().unwrap(), root, "it is fine when the folder is already there");
+    }
 }
 
 mod waiting {

@@ -415,7 +415,7 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
     endedAt: ended ? new Date(last).toISOString() : null,
     ...seed.over,
   };
-  return { ...run, inWorkFolder: inWork(run.spec.clonePath) };
+  return { ...run, inWorkFolder: inWork(run.spec.clonePath), ...(inWork(run.spec.clonePath) && { commitEmail: COMMIT_EMAIL }) };
 }
 
 /** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
@@ -435,6 +435,8 @@ export interface MockRunsOptions {
   planDescription?: boolean;
   /** Claude refuses every clone until it is trusted: the pre-flight offers Trust this folder, and a started run fails a moment later. */
   untrusted?: boolean;
+  /** The sample's `~/.gitconfig` has `includeIf "gitdir:…"` rules, so Settings warns that they don't reach the work folder. */
+  gitRules?: boolean;
   /** How long after a pushing build finishes its draft pull request turns up on the code host; null waits for `surfacePullRequests`. */
   prSurfaceMs?: number | null;
 }
@@ -446,6 +448,9 @@ export const PR_SURFACE_MS = 1_500;
 const WATCHED = ["acme/storefront", "acme/payments", "acme/ops", "acme/webshop", "acme/gateway"];
 
 const REFUSAL_DELAY_MS = 600;
+
+/** The address the sample's git commits with in the work folder. */
+const COMMIT_EMAIL = "alf@acme.example";
 
 const stepIs = (spec: Pick<RunSpec, "role">, step: Step) => stepOf(spec.role) === step;
 /** The six roles whose results Gossamr scripts; any other role writes an investigator's. */
@@ -494,6 +499,9 @@ export class MockRuns {
 
   private readonly epoch: number;
   private readonly untrustedClones: boolean;
+  private readonly gitRules: boolean;
+  /** How many times the work folder was shown in Finder. */
+  workFolderReveals = 0;
   private followUps = new Map<string, { text: string; detail: string }[]>();
   /** What Pip queued for each working run, until its next question. */
   private queued = new Map<string, string>();
@@ -546,6 +554,7 @@ export class MockRuns {
     this.epoch = o.epoch ?? EPOCH;
     this.limits = { ...this.limits, maxRuns: o.cap ?? 6 };
     this.untrustedClones = !!o.untrusted;
+    this.gitRules = !!o.gitRules;
     this.prSurfaceMs = o.prSurfaceMs === undefined ? PR_SURFACE_MS : o.prSurfaceMs;
     const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
@@ -662,6 +671,7 @@ export class MockRuns {
       digest: mockDigest(spec),
       expectedWorktree,
       inWorkFolder: inWork(spec.clonePath),
+      commitEmail: COMMIT_EMAIL,
       state: "queued",
       shortId: null,
       sessionId: null,
@@ -1277,7 +1287,7 @@ export class MockRuns {
   readonly unpushed = new Set<string>();
 
   settings(): AgentSettings {
-    return this.limits;
+    return { ...this.limits, workFolder: { commitEmail: COMMIT_EMAIL, includeIf: this.gitRules } };
   }
 
   setSettings(settings: AgentSettings): AgentSettings {
@@ -1288,7 +1298,7 @@ export class MockRuns {
       // A settings sheet from before these existed sends none; the defaults fill in, as the backend's serde does.
       notifications: settings.notifications ?? "workstream",
     };
-    return this.limits;
+    return this.settings();
   }
 
   cleanup(id: string): CleanupResult {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { type AgentSettings, type Run } from "../types";
+import { type AgentSettings, type Run, type WorkFolderGit } from "../types";
 import { Box, Btn, Sec, SheetFrame } from "./AgentSheet";
 import { roleLabel } from "../lib/roles";
 import { slotWaiters, stopAllLabel, stopAllText, stoppable } from "./agentsLogic";
@@ -23,13 +23,14 @@ export interface SettingsViewProps {
   settingsSaving?: boolean;
   cleanup: CleanupOffer | null;
   onSettings(next: AgentSettings): void;
+  onRevealWorkFolder(): void;
   onCleanup(): void;
   onStopAll(): void;
   onClose(): void;
 }
 
 /** Agent settings: Stop all, what agents can touch in plain words, and the few switches that exist. */
-export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onCleanup, onStopAll, onClose }: SettingsViewProps) {
+export function AgentsSettingsView({ runs, stopping, keepRunning, settings, settingsSaving = false, cleanup, onSettings, onRevealWorkFolder, onCleanup, onStopAll, onClose }: SettingsViewProps) {
   const [asking, setAsking] = useState(false);
   const active = stoppable(runs);
   const waiting = slotWaiters(runs);
@@ -103,6 +104,10 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
 
+      <Sec title="Where agents work">
+        <WorkFolder git={settings?.workFolder} onReveal={onRevealWorkFolder} />
+      </Sec>
+
       <Sec title="Clean up">
         <Box>
           <p className="m-0 text-ws-ink2">Removes finished runs' worktrees with claude rm, which refuses work that was never pushed.</p>
@@ -132,6 +137,36 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, sett
         </Box>
       </Sec>
     </SheetFrame>
+  );
+}
+
+export const INCLUDE_IF_WARNING = "Your git settings choose an address by folder. Add a rule for ~/Gossamr/agents/<owner>/ to use it in Gossamr's clones too.";
+
+const LINE = "m-0 border-b border-ws-sep py-2.5 first:pt-0";
+
+/** Where agents work, who git commits as there, and the way to see the folder. */
+function WorkFolder({ git, onReveal }: { git: WorkFolderGit | undefined; onReveal(): void }) {
+  return (
+    <div className="grid">
+      <p className={`${LINE} text-ws-ink2`}>
+        Agents work in Gossamr&apos;s own clones in ~/Gossamr/agents, one per repository, each agent in its own worktree and branch. Gossamr clones a repository the first time an agent works on it, and fetches before each agent starts. Your clones in ~/Code and other folders aren&apos;t used or changed, so Claude Code, T3 Code and your own work there stay apart.
+      </p>
+      {git && (
+        <p data-commit-address className={`${LINE} selectable text-ws-ink2 [overflow-wrap:anywhere]`}>
+          {git.commitEmail ? <>Git commits there as {git.commitEmail}.</> : <>Git has no email address set for commits there.</>}
+        </p>
+      )}
+      {git?.includeIf && (
+        <p role="note" data-include-if className={`${LINE} text-ws-warn`}>
+          {INCLUDE_IF_WARNING}
+        </p>
+      )}
+      <div className="pt-2.5">
+        <Btn icon="folder" onClick={onReveal}>
+          Reveal in Finder
+        </Btn>
+      </div>
+    </div>
   );
 }
 
