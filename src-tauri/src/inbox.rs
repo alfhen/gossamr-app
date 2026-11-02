@@ -25,6 +25,7 @@ mod drafts;
 #[cfg(test)]
 mod fan_out;
 mod instances;
+mod models;
 mod probes;
 mod run_outcome;
 mod pip_runs;
