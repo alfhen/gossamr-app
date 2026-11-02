@@ -452,7 +452,8 @@ pub struct EarlierSession {
     pub short_id: ShortId,
     #[serde(default)]
     pub session_id: Option<String>,
-    /// `claude rm` removed it, or found it already gone. One that is not stays listed so a later clean up retries it.
+    /// `claude rm` removed it, or found it already gone, or it was left in the folder of a login that was removed (see
+    /// `Run::sessions_left`). One that is not stays listed so a later clean up retries it.
     #[serde(default)]
     pub removed: bool,
 }

@@ -68,11 +68,15 @@ impl Core {
     pub fn agents_target(&self, stored: Option<&ModelChoice>) -> std::result::Result<(ModelChoice, ProviderInstance), String> {
         let config = AppConfig::load(&self.data_dir);
         let Some(choice) = stored.or(config.models.agents.as_ref()) else { return Err(Reason::Removed.words(Use::Agents, "That instance")) };
-        let found = self.codex_models.found();
-        let instance = checked_words(&config, Use::Agents, choice, &found)?;
-        match model_choice::resolve(&config, Use::Agents, Some(choice), &found, |p| self.agents_standing(p)) {
-            Resolution::Unavailable(reason) => Err(reason.words(Use::Agents, &instance.display_name)),
-            Resolution::Ready { .. } => Ok((choice.clone(), instance)),
+        match model_choice::resolve(&config, Use::Agents, Some(choice), &self.codex_models.found(), |p| self.agents_standing(p)) {
+            Resolution::Unavailable(reason) => {
+                let name = config.providers.iter().find(|p| p.id == choice.instance_id).map_or("That instance", |p| p.display_name.as_str());
+                Err(reason.words(Use::Agents, name))
+            }
+            Resolution::Ready { instance_id, .. } => {
+                let instance = config.providers.iter().find(|p| p.id == instance_id).expect("resolve found it").clone();
+                Ok((choice.clone(), instance))
+            }
         }
     }
 

@@ -10,9 +10,9 @@ use super::failure::Failure;
 use super::fresh::agents_root;
 use super::repo::Git;
 use super::service::{belongs_to, RunService};
-use super::toolchain::ToolchainError;
 use crate::domain::{Run, RunState};
 use crate::error::{Error, Result};
+use crate::inbox::Lookup;
 
 const LOCK_RETRIES: u32 = 6;
 
@@ -94,6 +94,15 @@ impl RunService {
         }
     }
 
+    /// Whether the login the run launched on is gone from the providers. A login that is off or broken, or a list that
+    /// can't be read, is not gone: cleaning up must work while a login is off.
+    async fn instance_removed(&self, run: &Run) -> bool {
+        match &run.runs_on {
+            Some(choice) => matches!(self.core.lookup_provider(&choice.instance_id).await, Lookup::Missing),
+            None => false,
+        }
+    }
+
     /// The run's worktree and branch through git alone, for a run whose instance is gone. Anything git refuses stays, in
     /// git's own words. The worktree must lie in `~/Gossamr/agents`.
     async fn remove_with_git(&self, run: &Run) -> Result<Option<String>> {
@@ -132,19 +141,15 @@ impl RunService {
                 other => format!("This run is {}. Stop it first, then clean it up.", other.as_str()),
             }));
         };
-        let tc = match self.toolchain_of(&run).await {
-            Ok(tc) => Some(tc),
-            Err(ToolchainError::UnknownInstance(_)) => None,
-            Err(e) => return Err(Error::Claude(Failure::from(e).to_string())),
-        };
-        let Some(tc) = tc else {
+        if self.instance_removed(&run).await {
             if worktree_pending {
                 if let Some(message) = self.remove_with_git(&run).await? {
                     return Ok(Cleanup::Refused { message });
                 }
             }
             return self.settle_cleanup(&run, worktree_pending, leftovers, None, true).await;
-        };
+        }
+        let tc = self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
         let live = self.live_sessions(&tc, &run).await;
         for session in &live {
             tc.cli.stop(session).await?;

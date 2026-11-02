@@ -300,3 +300,15 @@ async fn earlier_sessions_of_a_run_on_a_removed_instance_are_left_in_its_folder_
     assert!(after.leftover_sessions().is_empty() && !cleanable(&after));
     assert_eq!(rig.cli.0.lock().unwrap().rms.len(), 0);
 }
+
+#[tokio::test]
+async fn a_finished_run_on_an_instance_that_is_off_is_still_cleaned_up_through_claude() {
+    let (rig, run) = stopped().await;
+    rig.set(&run, |r| r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude".into(), model: "default".into(), effort: None })).await;
+    rig.fx.core.set_instance_enabled("claude", false).await.unwrap();
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let after = rig.get(&run).await;
+    assert!(after.worktree_removed_at.is_some() && !after.sessions_left);
+    assert!(!rig.cli.0.lock().unwrap().rms.is_empty(), "claude removed it");
+    assert!(git_calls(&rig).is_empty());
+}
