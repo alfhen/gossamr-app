@@ -96,4 +96,55 @@ describe("adding a provider instance in the mock", () => {
     await b.connectionRemove("claude_3");
     expect((await b.providerAdd("claude", "Home", "~/.claude-home")).id).toBe("claude_4");
   });
+
+  it("finds the login on the next check once Terminal was opened on the sign-in, and not before", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("claude", "Work", "~/.claude-work");
+    await b.connectionsList();
+    expect((await b.connectionsList(true)).find((c) => c.instanceId === "claude_2")!.status).toMatchObject({ state: "notSignedIn" });
+    await b.connectionOpenTerminal("claude_2");
+    expect((await b.connectionsList()).find((c) => c.instanceId === "claude_2")!.status).toMatchObject({ state: "notSignedIn" });
+    const checked = (await b.connectionsList(true)).find((c) => c.instanceId === "claude_2")!;
+    expect(checked.status).toMatchObject({ state: "ready", message: "Authenticated · alf@acme.com" });
+  });
+
+  it("says Authenticated with ChatGPT for a Codex once it is signed in", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("codex", "Codex", "~/.codex-work");
+    await b.connectionsList();
+    await b.connectionOpenTerminal("codex");
+    const row = (await b.connectionsList(true)).find((c) => c.instanceId === "codex")!;
+    expect(row.status).toMatchObject({ state: "ready", message: "Authenticated · ChatGPT" });
+  });
+
+  it("names the shell key a Claude with its own folder ignores, and none for the usual setup", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("claude", "Work", "~/.claude-work");
+    const rows = await b.connectionsList();
+    expect(rows.find((c) => c.instanceId === "claude_2")!.status?.ignored).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(rows.find((c) => c.instanceId === "claude")!.status?.ignored).toBeUndefined();
+  });
+
+  it("names OPENAI_API_KEY for a Codex with its own home", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("codex", "Codex", "~/.codex-work");
+    const row = (await b.connectionsList()).find((c) => c.instanceId === "codex")!;
+    expect(row.status?.ignored).toEqual(["OPENAI_API_KEY"]);
+  });
+
+  it("keeps the account of a signed-in Claude that is turned off", async () => {
+    const b = new MockBackend();
+    await b.connectionSetEnabled("claude", false);
+    const row = (await b.connectionsList()).find((c) => c.instanceId === "claude")!;
+    expect(row.status).toMatchObject({ state: "off", account: "alf@acme.com" });
+  });
+
+  it("shows the folder of an instance that has one and refuses the usual setup", async () => {
+    const b = new MockBackend();
+    await b.providerAdd("claude", "Work", "~/.claude-work");
+    await b.providerRevealFolder("claude_2");
+    expect(b.revealedFolders).toEqual(["~/.claude-work"]);
+    await expect(b.providerRevealFolder("claude")).rejects.toThrow("no folder of its own");
+    await expect(b.providerRevealFolder("github")).rejects.toThrow("This isn't a provider");
+  });
 });

@@ -21,6 +21,8 @@ import { focusPeekOf } from "./PeekSheet";
 import { useSiteOf } from "./hooks";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
+import { addEntries } from "./connectionsLogic";
+import { useProviderUi } from "./providerUi";
 import { openPull } from "./openPull";
 import { openOnAgents, togglePip, useWorkstreams } from "./workstreamsStore";
 import { contextEntries, focusedSubject } from "./contextActions";
@@ -207,6 +209,7 @@ export function appActions(): CommandActions {
     },
     addGithub: () => useGithubUi.getState().openConnect(),
     addJira: () => useJiraUi.getState().openConnect(),
+    addProvider: (driver) => useProviderUi.getState().openAdd(driver),
     manageRepositories: () => tabs.openSettings("watching"),
     openPull: (ref) => void openPull(ref),
     newTab: () => void tabs.openTab(),
@@ -351,6 +354,7 @@ export function Palette() {
       unreadActivity: unread,
       github,
       jira,
+      providers: addEntries(connections).flatMap((e) => (e.id === "claude" || e.id === "codex" ? [e.id] : [])),
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onAgents: useTabs.getState().route === "agents",
