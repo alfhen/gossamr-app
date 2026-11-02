@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 use super::cli::ShortId;
 use super::failure::Failure;
+use super::provider_env::ProviderEnv;
 use super::service::RunService;
 use super::toolchain::Toolchain;
 use crate::auth::Scope;
@@ -91,6 +92,17 @@ fn quotable(path: &Path) -> Result<&str> {
     Ok(text)
 }
 
+/// The lines that make a script run as an instance with a folder: the other login variables removed and the folder
+/// variable set, so what the shell exports can't pick another login (6.4). Nothing for an instance without a folder,
+/// where Terminal's own environment picks the login.
+fn login_lines(login: Option<&ProviderEnv>) -> Result<String> {
+    let Some(login) = login.and_then(ProviderEnv::terminal_login) else { return Ok(String::new()) };
+    let (name, folder) = login.export;
+    let folder = quotable(Path::new(folder))?;
+    let unset = if login.unset.is_empty() { String::new() } else { format!("unset {}\n", login.unset.join(" ")) };
+    Ok(format!("{unset}export {name}='{folder}'\n"))
+}
+
 /// Writes `<dir>/<name>.command` with the script, private to the user. `name` is made here from a session id or a
 /// digest, never from outside text.
 fn write_script(dir: &Path, name: &str, script: &str) -> Result<PathBuf> {
@@ -107,10 +119,11 @@ fn write_script(dir: &Path, name: &str, script: &str) -> Result<PathBuf> {
 
 /// Writes `<dir>/<short id>.command`: `cd` into the worktree, then `claude attach`. Nothing from a model or a ticket
 /// can be in it: the id is eight hex characters, and both paths are checked.
-pub fn write_attach_file(dir: &Path, claude: &Path, worktree: &Path, id: &ShortId) -> Result<PathBuf> {
+pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, claude: &Path, worktree: &Path, id: &ShortId) -> Result<PathBuf> {
     let id = ShortId::parse(id.as_str()).ok_or_else(|| refuse("that isn't a session id"))?;
     let (claude, worktree) = (quotable(claude)?, quotable(worktree)?);
-    write_script(dir, id.as_str(), &format!("#!/bin/zsh\ncd '{worktree}'\nexec '{claude}' attach {id}\n"))
+    let login = login_lines(login)?;
+    write_script(dir, id.as_str(), &format!("#!/bin/zsh\n{login}cd '{worktree}'\nexec '{claude}' attach {id}\n"))
 }
 
 /// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
@@ -175,11 +188,12 @@ fn checked_clone(clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
 
 /// Writes `<dir>/<trust|signin|auto|bypass>-<digest of the folder>.command`: `cd` into the clone, then `claude`, which is
 /// interactive and, for a refused mode, started in that mode. Both paths are checked, and the name is a digest, so no outside text reaches the script or its name.
-pub fn write_claude_file(dir: &Path, purpose: Purpose, claude: &Path, clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
+pub fn write_claude_file(dir: &Path, login: Option<&ProviderEnv>, purpose: Purpose, claude: &Path, clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let clone = checked_clone(clone, home)?;
     let (claude, clone_text) = (quotable(claude)?, quotable(&clone)?);
+    let login_text = login_lines(login)?;
     let digest: String = Sha256::digest(clone_text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
-    write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\ncd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
+    write_script(dir, &format!("{}-{digest}", purpose.prefix()), &format!("#!/bin/zsh\n{login_text}cd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
 }
 
 /// Writes `<dir>/fix-<digest of the command>.command` running `command`. The command comes from a probe's fixed
@@ -372,7 +386,7 @@ impl RunService {
         let tc = self.toolchain().await?;
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
-        let file = write_attach_file(&dir, &claude, &run.expected_worktree, &id)?;
+        let file = write_attach_file(&dir, tc.login.as_ref(), &claude, &run.expected_worktree, &id)?;
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 
@@ -398,7 +412,7 @@ impl RunService {
         let tc = self.toolchain().await?;
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
-        let file = write_claude_file(&dir, purpose, &claude, folder, self.home.as_deref())?;
+        let file = write_claude_file(&dir, tc.login.as_ref(), purpose, &claude, folder, self.home.as_deref())?;
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 

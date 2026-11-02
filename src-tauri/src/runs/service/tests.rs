@@ -40,7 +40,7 @@ async fn build_with(routes: Vec<(&str, Vec<Reply>)>, tools: Option<ToolchainErro
     cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
     let tools = match tools {
         Some(e) => FixedToolchain(Err(e)),
-        None => FixedToolchain(Ok(Toolchain { cli: cli.clone(), env: fake_env(&fx.dir) })),
+        None => FixedToolchain(Ok(Toolchain::new(cli.clone(), fake_env(&fx.dir)))),
     };
     let changes = Arc::new(Mutex::new(Vec::new()));
     let seen = changes.clone();
@@ -411,11 +411,11 @@ async fn rig_with(f: impl FnOnce(&FakeCli)) -> Rig {
 
 #[tokio::test]
 async fn no_claude_and_no_shell_environment_fail_the_run_and_nothing_starts() {
-    let rig = build(Some(ToolchainError::ClaudeMissing), |s| s).await;
+    let rig = build(Some(ToolchainError::ClaudeMissing { instance: "Claude".into() }), |s| s).await;
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
     let after = rig.get(&run).await;
-    assert_eq!((after.state, after.error.unwrap()), (RunState::Failed, Failure::ClaudeMissing.to_string()));
+    assert_eq!((after.state, after.error.unwrap()), (RunState::Failed, Failure::ClaudeMissing { instance: "Claude".into() }.to_string()));
     assert_eq!(after.failure, Some(RunFailure::ClaudeMissing));
 
     let why = "Couldn't read your shell environment: your shell took too long to start.";
@@ -483,7 +483,7 @@ async fn retry_after_the_folder_is_trusted_launches_a_run_that_never_had_a_sessi
 async fn a_run_failed_before_failures_were_typed_gets_its_kind_from_its_message_when_read() {
     let rig = ready().await;
     let run = rig.queued(1).await;
-    let message = Failure::NeedsTrust { folder: rig.clone.clone() }.to_string();
+    let message = Failure::NeedsTrust { folder: rig.clone.clone(), instance: "Claude".into() }.to_string();
     rig.set(&run, |r| {
         r.state = RunState::Failed;
         r.error = Some(message.clone());
@@ -811,7 +811,7 @@ mod through_the_real_spawner {
             ("FAKE_CLAUDE_SCENARIO", scenario_dir.join("scenario").to_string_lossy().into_owned()),
         ]));
         let cli = Arc::new(SystemCli::new(PathBuf::from(FAKE), env.clone()));
-        let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
+        let tools = FixedToolchain(Ok(Toolchain::new(cli.clone(), env)));
         let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), Arc::new(|_| {})).with_home(fx.home.clone()).with_timing(FAST);
         let rig = Rig { svc: Arc::new(svc), cli: Arc::new(FakeCli::new()), clone: clone.canonicalize().unwrap(), changes: Arc::default(), fx };
         Real { rig, cli, scenario_dir }
