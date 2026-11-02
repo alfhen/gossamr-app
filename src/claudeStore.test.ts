@@ -98,6 +98,43 @@ describe("ask", () => {
   });
 });
 
+describe("a conversation asked with a second-site ticket open", () => {
+  const beta = { connectionId: "beta", externalId: "CA-1", key: "CA-1" };
+  const open = { ...screen, item: beta };
+  // A backend that keeps each turn under the key it was asked with, as Rust does.
+  const keep = () => {
+    const kept: Record<string, StoredTurn[]> = {};
+    vi.spyOn(claude, "ask").mockImplementation(async (req) => {
+      const key = req.conversation ?? "";
+      (kept[key] ??= []).push(stored(req.requestId, { conversation: key, prompt: req.prompt }));
+      return started;
+    });
+    const read: string[] = [];
+    vi.spyOn(claude, "turns").mockImplementation(async (key) => (read.push(key), kept[key] ?? []));
+    return read;
+  };
+  beforeEach(() => forgetConversations());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reads back under the connection-qualified key the ticket's turn was stored under", async () => {
+    const read = keep();
+    await useClaude.getState().ask("CA-1", "here?", null, open);
+    forgetConversations();
+    await useClaude.getState().load("CA-1", "beta");
+    expect(read).toEqual(["beta:CA-1"]);
+    expect(useClaude.getState().byTicket["CA-1"].turns.map((t) => t.prompt)).toEqual(["here?"]);
+  });
+
+  it("gets a General turn back after a reload", async () => {
+    const read = keep();
+    await useClaude.getState().ask("general", "in general", null, open);
+    forgetConversations();
+    await useClaude.getState().load("general", "beta");
+    expect(read).toEqual(["beta:general"]);
+    expect(useClaude.getState().byTicket.general.turns.map((t) => t.prompt)).toEqual(["in general"]);
+  });
+});
+
 const usage = { inputTokens: 120, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 8, costUsd: 0.0008 };
 
 const stored = (requestId: string, over: Partial<StoredTurn> = {}): StoredTurn => ({

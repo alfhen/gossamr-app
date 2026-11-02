@@ -109,12 +109,12 @@ function usePaneEscape(onClose: () => void) {
 }
 
 /** The drafts a conversation shows: a workstream's own and the open ones on its ticket; General shows everyone's. Also loads the conversation's turns. */
-export function useConversationDrafts(conversation: string, workstream: WorkstreamView | null): Proposal[] {
+export function useConversationDrafts(conversation: string, workstream: WorkstreamView | null, connectionId?: string): Proposal[] {
   const proposals = useWorkspace((s) => s.proposals);
   const shown = workstream?.workstream ?? null;
   useEffect(() => {
-    void useClaude.getState().load(conversation);
-  }, [conversation]);
+    void useClaude.getState().load(conversation, connectionId);
+  }, [conversation, connectionId]);
   return useMemo(() => Object.values(proposals).filter((p) => !shown || inWorkstreamPane(p, shown)), [proposals, shown]);
 }
 
@@ -186,8 +186,8 @@ export function PipPane({ onClose }: { onClose(): void }) {
   const [seeing, setSeeing] = useState(false);
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
-  const proposalList = useConversationDrafts(conversation, workstream);
   const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
+  const proposalList = useConversationDrafts(conversation, workstream, context.item?.connectionId);
   const model = usePipModel(conversation);
   const needs = useNeedsYou();
   const runs = useRuns((s) => s.runs);
