@@ -68,6 +68,7 @@ impl Scratch {
             guard: "Do nothing.".into(),
             prompt: "Reply with OK and stop.".into(),
             agent: None,
+            model: None,
         };
         let launched = self.cli.launch(&req).await.expect("launch");
         self.launched.push(launched.short_id.clone());
@@ -246,7 +247,7 @@ async fn real_rm_straight_after_stop_is_retried_until_it_succeeds_and_unpushed_w
 async fn real_prefixed_session_name_is_listed_unchanged_and_the_worktree_keeps_the_slug() {
     let mut s = Scratch::new("prefix").await;
     let title = "Gossamr: CE-7 investigate";
-    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None };
+    let req = LaunchRequest { cwd: s.repo.clone(), name: title.into(), worktree: "ce-7-prefix-0a1b".into(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None, model: None };
     let launched = s.cli.launch(&req).await.expect("launch");
     s.launched.push(launched.short_id.clone());
     assert_eq!(launched.name.as_deref(), Some(title), "stdout: {launched:?}");
@@ -656,7 +657,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World", true).await.expect("clone").path;
     assert_eq!(path, super::fresh::work_path(&home, "octocat/Hello-World").unwrap());
     assert!(path.join(".git").is_dir());
-    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None };
+    let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None, model: None };
 
     let refused = s.cli.launch(&request("fresh-0a1b")).await.unwrap_err();
     assert!(refused.stderr_mentions("Workspace not trusted"), "{refused}");

@@ -521,7 +521,12 @@ CREATE TABLE app_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);";
 // The app database is the main schema with a cache attached, so an unqualified table name finds the app's table first.
 // That is why its key-value table is `app_meta`: a `meta` here would hide every cache's.
 
-const APP_STEPS: &[&str] = &[APP];
+/// The provider instance a run is on, so Remove can tell whether an instance has live runs. Runs from before it ran on the default.
+const RUNS_ON: &str = "
+ALTER TABLE runs ADD COLUMN runs_on TEXT NOT NULL DEFAULT 'claude';
+CREATE INDEX runs_on_state ON runs(runs_on, state);";
+
+const APP_STEPS: &[&str] = &[APP, RUNS_ON];
 
 const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
 
@@ -665,9 +670,26 @@ mod tests {
         let mut app = Connection::open_in_memory().unwrap();
         migrate_app(&mut app).unwrap();
         for table in APP_TABLES {
-            assert_eq!(columns(&app, table), columns(&cache, table), "{table}");
+            let mut expected = columns(&cache, table);
+            if table == &"runs" {
+                expected.push(("runs_on".into(), "TEXT".into(), true));
+            }
+            assert_eq!(columns(&app, table), expected, "{table}");
         }
         assert_eq!(app.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), APP_STEPS.len() as i64);
+    }
+
+    #[test]
+    fn runs_stored_before_the_instance_column_are_on_the_default_instance() {
+        let mut app = Connection::open_in_memory().unwrap();
+        apply(&mut app, &APP_STEPS[..1]).unwrap();
+        app.execute_batch(
+            "INSERT INTO runs (id, start_key, connection_id, role, repo, expected_worktree, state, queued_at, last_progress_at, data) VALUES ('old', 'old', 'c', 'build', 'a/b', '/w', 'done', 't', 't', '{}');",
+        )
+        .unwrap();
+        migrate_app(&mut app).unwrap();
+        let on: String = app.query_row("SELECT runs_on FROM runs WHERE id = 'old'", [], |r| r.get(0)).unwrap();
+        assert_eq!(on, crate::connections::DEFAULT_CLAUDE);
     }
 
     #[test]

@@ -15,6 +15,7 @@ use crate::agent::supervisor::WakeFact;
 use crate::domain::workstream::{open_pip_ask, run_labels, stage, PauseReason, PipAsk, Stage, PIP_ASKED, PIP_ASK_CLEARED, PIP_ASK_LIMIT, WorkstreamBasis, BASIS_ASSIGNEE, BASIS_DESCRIPTION, BASIS_STATUS, BASIS_SUMMARY, WAKES_PER_WORKSTREAM_PER_DAY, WAKE_TURNS_PER_DAY};
 use crate::domain::{has_markers, Actor, Category, ItemRef, Proposal, ProposalQuery, ProposalState, Run, RunQuery, RunState, StateKind, WorkItem, Workstream, WorkstreamEvent};
 use crate::error::{Error, Result};
+use crate::model_choice::ModelChoice;
 use crate::proposals;
 
 /// Pip's notes are kept up to this many bytes, after scrubbing.
@@ -294,6 +295,7 @@ impl Core {
                 created_at: at,
                 closed_at: None,
                 basis,
+                agents_model: None,
             };
             db.insert_workstream(&ws)?;
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, actor, "opened", at))?;
@@ -461,6 +463,24 @@ impl Core {
             }
             db.append_workstream_event(&WorkstreamEvent::new(&ws.id, Actor::Person, "adopted", at).detail(found.words()))?;
             Ok(found)
+        })
+        .await
+    }
+
+    /// Sets what agents queued in an open workstream run on from now on; none goes back to the Settings default. Runs
+    /// already queued keep the choice they were given.
+    pub async fn set_workstream_model(&self, scope: &Scope, id: &str, choice: Option<ModelChoice>) -> Result<Workstream> {
+        if let Some(choice) = &choice {
+            self.check_agents_choice(choice)?;
+        }
+        let connection_id = scope.connection_id.clone();
+        self.with_app_db_atomically_for(scope, |db| {
+            let mut ws = open(db, &connection_id, id)?;
+            if ws.agents_model != choice {
+                ws.agents_model = choice;
+                db.save_workstream(&ws)?;
+            }
+            Ok(ws)
         })
         .await
     }

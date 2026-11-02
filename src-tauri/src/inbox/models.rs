@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use super::instances::not_a_provider;
 use super::Core;
 use crate::config::AppConfig;
-use crate::connections::{self, Driver};
+use crate::connections::{self, Driver, ProviderInstance};
 use crate::error::{Error, Result};
-use crate::model_choice::{self, Found, ModelDefaults, ModelOption, Use};
+use crate::model_choice::{self, Found, ModelChoice, ModelDefaults, ModelOption, Reason, Use};
 use crate::runs::binary::find_binary;
 use crate::runs::codex_models;
 use crate::runs::provider_env::ProviderState;
@@ -44,7 +44,33 @@ impl Seen {
     }
 }
 
+/// The instance `choice` names, or why it can't be used, in the words a person reads.
+fn checked_words(config: &AppConfig, use_: Use, choice: &ModelChoice, found: &Found) -> std::result::Result<ProviderInstance, String> {
+    model_choice::check_choice(config, use_, choice, found).map_err(|reason| {
+        let name = config.providers.iter().find(|p| p.id == choice.instance_id).map_or("That instance", |p| p.display_name.as_str());
+        reason.words(use_, name)
+    })
+}
+
+fn checked(config: &AppConfig, use_: Use, choice: &ModelChoice, found: &Found) -> Result<ProviderInstance> {
+    checked_words(config, use_, choice, found).map_err(Error::Input)
+}
+
 impl Core {
+    /// Refuses a choice for agents that names no instance, a model it doesn't list, or an instance whose driver can't run agents.
+    pub fn check_agents_choice(&self, choice: &ModelChoice) -> Result<()> {
+        checked(&AppConfig::load(&self.data_dir), Use::Agents, choice, &self.codex_models.found()).map(drop)
+    }
+
+    /// The choice a run launches on, `stored` else the Settings default, and its instance; or the words a run waits with
+    /// when the choice can't be used.
+    pub fn agents_target(&self, stored: Option<&ModelChoice>) -> std::result::Result<(ModelChoice, ProviderInstance), String> {
+        let config = AppConfig::load(&self.data_dir);
+        let Some(choice) = stored.or(config.models.agents.as_ref()) else { return Err(Reason::Removed.words(Use::Agents, "That instance")) };
+        let instance = checked_words(&config, Use::Agents, choice, &self.codex_models.found())?;
+        Ok((choice.clone(), instance))
+    }
+
     /// The models an instance offers, in the order a picker shows them. A Codex instance that is on and ready is asked
     /// with `codex debug models`, at most once in ten minutes.
     pub async fn provider_models(&self, instance_id: &str) -> Result<Vec<ModelOption>> {
@@ -94,9 +120,8 @@ impl Core {
             }
             for (use_, choice) in [(Use::Pip, &set.pip), (Use::Agents, &set.agents)] {
                 let Some(choice) = choice else { continue };
-                if let Err(reason) = model_choice::check_choice(config, use_, choice, &found) {
-                    let name = config.providers.iter().find(|p| p.id == choice.instance_id).map_or("That instance", |p| p.display_name.as_str());
-                    refusal = Some(Error::Input(reason.words(use_, name)));
+                if let Err(e) = checked(config, use_, choice, &found) {
+                    refusal = Some(e);
                     return false;
                 }
             }
@@ -111,7 +136,6 @@ impl Core {
 mod tests {
     use super::*;
     use crate::inbox::testing::fixture_with_shell;
-    use crate::model_choice::ModelChoice;
     use crate::runs::env::ShellCapture;
     use std::os::unix::fs::PermissionsExt;
 
@@ -272,7 +296,7 @@ mod tests {
         let fx = crate::inbox::testing::fixture().await;
         second_claude(&fx);
         fx.core.model_defaults(Some(ModelDefaults { pip: Some(pick("claude_2", "opus")), agents: Some(pick("claude", "default")) })).unwrap();
-        fx.core.provider_remove("claude_2").unwrap();
+        fx.core.provider_remove("claude_2").await.unwrap();
         assert_eq!(fx.core.model_defaults(None).unwrap(), ModelDefaults { pip: None, agents: Some(pick("claude", "default")) });
     }
 

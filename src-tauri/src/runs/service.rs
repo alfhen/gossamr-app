@@ -21,6 +21,7 @@ use super::launcher::RunLauncher;
 use super::fresh::is_work_path;
 use super::repo::{origin_matches, CommitIdentity, Git};
 use super::toolchain::{Toolchain, ToolchainSource};
+use self::choice::{Blocked, Target};
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
@@ -333,14 +334,23 @@ impl RunService {
 
     /// Runs the launch for a run that has been checked eligible. Returns with the run `Launching` or `Failed`, and no
     /// longer waiting for a slot either way.
-    async fn spawn(&self, run: &mut Run) -> Result<()> {
-        run.slot_wait_since = None;
-        let tc = match self.tools.get().await {
-            Ok(tc) => tc,
-            Err(e) => return self.fail(run, &e.into()).await,
+    async fn spawn(&self, run: &mut Run) -> Result<bool> {
+        let Target { tc, model } = match self.launch_target(run).await {
+            Ok(target) => target,
+            Err(Blocked::Waits(words)) => {
+                self.wait_for_choice(run, words).await?;
+                return Ok(false);
+            }
+            Err(Blocked::Fails(why)) => {
+                self.fail(run, &why).await?;
+                return Ok(true);
+            }
         };
+        run.slot_wait_since = None;
+        run.wait_reason = None;
         if let Err(why) = self.check(run, &tc).await {
-            return self.fail(run, &why).await;
+            self.fail(run, &why).await?;
+            return Ok(true);
         }
         let now = Utc::now();
         run.state = RunState::Launching;
@@ -365,6 +375,7 @@ impl RunService {
             guard,
             prompt: render_prompt(spec),
             agent,
+            model,
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
         let outcome = tc.cli.launch(&request).await;
@@ -373,13 +384,14 @@ impl RunService {
             Ok(launched) => {
                 run.short_id = Some(launched.short_id);
                 self.remember(run);
-                self.store(run).await
+                self.store(run).await?;
             }
             Err(e) => {
                 let why = Failure::from_cli(e, &run.spec.clone_path, &tc);
-                self.fail(run, &why).await
+                self.fail(run, &why).await?;
             }
         }
+        Ok(true)
     }
 
     /// Starts a queued run, or with `retry` a failed one that never got a session. Returns whether it launched: a queued
@@ -429,8 +441,8 @@ impl RunService {
         if !retry && self.held_for_clone(&mut run).await? {
             return Ok((run, false));
         }
-        self.spawn(&mut run).await?;
-        Ok((run, true))
+        let launched = self.spawn(&mut run).await?;
+        Ok((run, launched))
     }
 
     /// A queued run, or with `retry` a failed one that never got a session.
@@ -489,8 +501,9 @@ impl RunService {
 
     /// Keeps a queued run queued because the cap is full, marked as waiting for a slot from the first time it was.
     async fn wait_for_slot(&self, run: &mut Run) -> Result<()> {
-        if run.slot_wait_since.is_none() {
-            run.slot_wait_since = Some(Utc::now());
+        if run.slot_wait_since.is_none() || run.wait_reason.is_some() {
+            run.slot_wait_since.get_or_insert_with(Utc::now);
+            run.wait_reason = None;
             self.store(run).await?;
         }
         Ok(())
@@ -567,8 +580,7 @@ impl RunService {
             return Ok(false);
         }
         self.record_identity(&mut run, who).await?;
-        self.spawn(&mut run).await?;
-        Ok(true)
+        self.spawn(&mut run).await
     }
 
     /// `prepare` for a run that waits, unless it can't start anyway for want of a slot, or its repository's clone is
@@ -705,6 +717,7 @@ impl RunLauncher for RunService {
     }
 }
 
+mod choice;
 mod fresh;
 
 #[cfg(test)]
