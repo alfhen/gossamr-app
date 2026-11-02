@@ -132,7 +132,7 @@ impl Db {
 
     /// Whether this handle may read or change run `id`: any id when it has no home, else only a run of its connection's.
     fn sees_run(&self, id: &str) -> Result<bool> {
-        if self.home.is_none() {
+        if !self.is_limited() {
             return Ok(true);
         }
         let mut sql = String::from("SELECT 1 FROM runs WHERE id = ?");

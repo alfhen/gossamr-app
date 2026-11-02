@@ -217,16 +217,7 @@ impl RunService {
         let idle = Polled { busy: false };
         let now = clock();
         let Ok(_not_recovering) = self.recovery.try_lock() else { return Polled { busy: true } };
-        let unfinished = [
-            RunState::Queued,
-            RunState::Launching,
-            RunState::Working,
-            RunState::NeedsAnswer,
-            RunState::NeedsPermission,
-            RunState::SystemBlocked,
-            RunState::Unknown,
-        ];
-        let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(unfinished.to_vec()), ..RunQuery::default() }).await else { return idle };
+        let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(RunState::UNFINISHED.to_vec()), ..RunQuery::default() }).await else { return idle };
         let waiting = self.awaiting_answer(now).await;
         let finished = self.recently_finished(now).await;
         if runs.is_empty() && waiting.is_empty() && finished.is_empty() {

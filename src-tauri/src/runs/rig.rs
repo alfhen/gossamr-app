@@ -17,7 +17,9 @@ use super::toolchain::{FixedToolchain, Toolchain};
 use super::tracker::{Attention, RunNotifier};
 use crate::domain::fixtures::run_spec;
 use crate::domain::{Run, RunSpec, RunState};
-use crate::inbox::testing::{fixture_watching, Fixture};
+use crate::auth::Scope;
+use crate::domain::ItemRef;
+use crate::inbox::testing::{fixture_watching, fixture_watching_two_jira, Fixture};
 
 #[derive(Default)]
 pub struct Notices(pub Mutex<Vec<(String, Attention, RunState)>>);
@@ -80,6 +82,23 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
     .with_terminal(opened.clone())
     .with_home(fx.home.canonicalize().unwrap());
     Rig { fx, svc: Arc::new(tune(svc)), cli, clone, notices, opened, changes }
+}
+
+/// Two Jira accounts, the first the primary, and a run on the second one's ticket that is launched and working.
+pub async fn working_on_the_second_account() -> (Rig, Run, Scope) {
+    let (fx, second) = fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
+    fx.core.adopt_instances().await;
+    fx.core.set_instance_enabled("jira", false).await.unwrap();
+    let rig = ready_on(fx, |svc| svc).await;
+    let on_second = ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
+    let queued = rig.fx.core.queue_test_run(rig.spec(1), Some(on_second)).await.unwrap();
+    rig.fx.core.set_instance_enabled("jira", true).await.unwrap();
+    assert_eq!(rig.fx.core.primary().await.unwrap().scope, rig.fx.scope);
+    let launched = rig.svc.start_now(&queued.id).await.unwrap();
+    rig.poll().await;
+    let run = rig.get(&launched).await;
+    assert_eq!((run.connection_id.as_str(), run.state), (second.connection_id.as_str(), RunState::Working));
+    (rig, run, second)
 }
 
 pub fn line(at: &str, state: &str, text: &str) -> TimelineLine {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use super::*;
 use crate::domain::{RefusedMode, RunFailure, RunSpec};
 use crate::runs::index::Entry;
-use crate::runs::rig::{ready, Rig};
+use crate::runs::rig::{ready, working_on_the_second_account, Rig};
 use crate::runs::testing::FakeCli;
 
 fn tmp(tag: &str) -> PathBuf {
@@ -603,4 +603,17 @@ async fn attach_opens_the_terminal_the_person_chose() {
     rig.svc.set_settings(crate::config::AgentSettings { terminal: TerminalChoice::ITerm, ..Default::default() }).unwrap();
     rig.svc.attach(&run.id).await.unwrap();
     assert_eq!(*rig.opened.1.lock().unwrap(), [TerminalChoice::Terminal, TerminalChoice::ITerm]);
+}
+
+#[tokio::test]
+async fn a_run_of_a_connection_that_was_turned_off_can_still_be_seen_and_stopped() {
+    let (rig, run, second) = working_on_the_second_account().await;
+    rig.fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+    let listed = rig.fx.core.runs_list(&RunQuery::default()).await.unwrap();
+    assert_eq!(listed.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), [run.id.as_str()]);
+
+    let stopped = rig.svc.stop(&run.id).await.unwrap();
+    assert_eq!((stopped.state, stopped.connection_id), (RunState::Stopped, second.connection_id));
+    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1);
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
 }

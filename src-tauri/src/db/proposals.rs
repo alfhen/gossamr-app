@@ -11,7 +11,8 @@ use crate::error::{Error, Result};
 /// The error a proposal keeps when Gossamr closed while it was being applied.
 pub const INTERRUPTED_NOTE: &str = "Gossamr closed while this was being applied. Check whether it went through before trying again.";
 
-fn connection_of(p: &Proposal) -> String {
+/// The connection a draft is stored under, and so the one whose tracker or code host applies it.
+pub fn connection_of(p: &Proposal) -> String {
     match &p.intent {
         Intent::Create { container, .. } => container.connection_id.clone(),
         Intent::StartRun { connection_id, .. } | Intent::FollowUp { connection_id, .. } | Intent::RunAnswer { connection_id, .. } => connection_id.clone(),

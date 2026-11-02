@@ -285,9 +285,17 @@ impl Auth {
     }
 
     /// Checks `input` against Jira and, only if it works, keeps it in place of every earlier sign-in.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn connect(&self, input: &TokenSignIn) -> Result<Connection> {
+        self.connect_unless(input, |_| Ok(())).await
+    }
+
+    /// `connect`, but `allow` sees the connection `input` signs in before anything is replaced; an error from it leaves
+    /// every earlier sign-in as it was.
+    pub async fn connect_unless(&self, input: &TokenSignIn, allow: impl FnOnce(&Connection) -> Result<()>) -> Result<Connection> {
         let credentials = self.authenticator.connect(input).await?;
         let connection = credentials.connection();
+        allow(&connection)?;
         let mut replaced: Vec<String> = self.sessions.lock().await.iter().map(|s| token_key(&s.connection_id())).collect();
         match secrets::keys_with_prefix(TOKEN_PREFIX) {
             Ok(keys) => replaced.extend(keys),
