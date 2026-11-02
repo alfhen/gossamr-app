@@ -54,6 +54,20 @@ describe("connection probes", () => {
     expect(s().connections.map((c) => c.kind)).not.toContain("provider");
   });
 
+  it("marks the connections loaded only once they have been read, and not when reading them fails", async () => {
+    const failing = new MockBackend();
+    failing.connectionsList = async () => {
+      throw new Error("settings_rows failed");
+    };
+    await s().init(failing);
+    await flush();
+    expect(s().connections).toEqual([]);
+    expect(s().connectionsLoaded).toBe(false);
+    await s().init(new MockBackend());
+    await flush();
+    expect(s().connectionsLoaded).toBe(true);
+  });
+
   it("asks the backend to probe again only when told to refresh", async () => {
     const list = vi.spyOn(backend, "connectionsList");
     await s().refreshConnections();

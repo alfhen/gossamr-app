@@ -19,6 +19,34 @@ describe("the mock connection actions", () => {
     expect((await b.connectionsList())[0]).toMatchObject({ displayName: "acme.atlassian.net", status: { state: "ready", account: "Alf Henderson" } });
   });
 
+  it("lists a connected Jira as a Jira row, and the sample again once it is removed", async () => {
+    const b = new MockBackend();
+    expect((await b.connectionsList())[0].kind).toBe("mock");
+    await b.jiraConnect({ site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" });
+    expect((await b.connectionsList())[0].kind).toBe("jira");
+    await b.connectionRemove("jira");
+    expect((await b.connectionsList())[0]).toMatchObject({ kind: "mock", displayName: "Sample data" });
+  });
+
+  it("turns a connected Jira off and on without touching GitHub", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await b.jiraConnect({ site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" });
+    const enabled = async (id: string) => (await b.connectionsList()).find((c) => c.instanceId === id)?.enabled;
+    await b.connectionSetEnabled("jira", false);
+    expect(await enabled("jira")).toBe(false);
+    expect(await enabled("github")).toBe(true);
+    await b.connectionSetEnabled("jira", true);
+    expect(await enabled("jira")).toBe(true);
+  });
+
+  it("takes a new token for a connected Jira, and still refuses a row that isn't Jira", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    const input = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+    await b.jiraConnect(input);
+    await expect(b.jiraConnect({ ...input, token: "t2" }, "jira")).resolves.toMatchObject({ site: { name: "acme.atlassian.net" } });
+    await expect(b.jiraConnect(input, "github")).rejects.toThrow("That isn't a Jira connection.");
+  });
+
   it("renames an instance, trimmed, and tells the page", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     let told = 0;

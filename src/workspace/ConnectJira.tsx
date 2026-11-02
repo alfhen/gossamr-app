@@ -1,7 +1,9 @@
+import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { announceSignedOut } from "../accountEvents";
-import type { AuthStatus, TokenSignIn } from "../backend/auth";
+import { auth, type AuthStatus, type TokenSignIn } from "../backend/auth";
+import { MockBackend } from "../backend/mock";
 import type { Backend } from "../backend/types";
 import { useBackend } from "../backend/useBackend";
 import { Button } from "../components/Button";
@@ -14,6 +16,11 @@ import { messageOf, useToasts } from "./toasts";
 const FIELD = "rounded-lg border border-ws-sep2 bg-ws-win px-3 py-1.5 font-normal outline-none placeholder:text-ws-ink3 focus:border-ws-accent";
 
 export type JiraConnectApi = Pick<Backend, "jiraCloudId" | "jiraConnect">;
+
+/** On the desktop, the sample workspace's backend is a mock that takes any token, so a sign-in from it goes to the real app. */
+export function signInApi(backend: Backend): Pick<Backend, "jiraStatus" | "jiraCloudId" | "jiraConnect"> {
+  return isTauri() && backend instanceof MockBackend ? { jiraStatus: auth.status, jiraCloudId: auth.cloudId, jiraConnect: auth.connect } : backend;
+}
 
 /** `found` names the site it was for, so an answer for a site since edited is never used. `failed` is a site that couldn't be reached. */
 export type SiteLookup =
@@ -291,7 +298,8 @@ export function ConnectJiraDialog() {
   const shown = useJiraUi((s) => s.connectOpen);
   const close = useJiraUi((s) => s.closeConnect);
   const instanceId = useJiraUi((s) => s.connectInstanceId);
-  const backend = useBackend();
+  const workspaceBackend = useBackend();
+  const backend = useMemo(() => workspaceBackend && signInApi(workspaceBackend), [workspaceBackend]);
   const [current, setCurrent] = useState<AuthStatus | null>(null);
   const busy = useRef(false);
   const dismiss = () => {
@@ -321,7 +329,7 @@ export function ConnectJiraDialog() {
     busy.current = false;
     close();
     useToasts.getState().push(`Connected to Jira as ${next.me?.name ?? "you"}.`, "info");
-    if (sameAccount(current, next)) {
+    if (keepsWorkspace(current, next)) {
       const ws = useWorkspace.getState();
       void Promise.all([ws.refreshConnections(true), ws.refresh()]);
     } else {
@@ -333,6 +341,7 @@ export function ConnectJiraDialog() {
     <ConnectFrame label="Connect Jira" onClose={dismiss}>
       <div className="grid gap-4">
         <h2 className="font-display m-0 text-lg font-semibold">Connect Jira</h2>
+        {!instanceId && current?.site && <p className="m-0 text-sm text-ws-ink2">You're signed in to {current.site.name}. Signing in to another site or account replaces it.</p>}
         <ConnectJiraForm
           key={current?.site?.name ?? "new"}
           api={backend}
@@ -346,6 +355,9 @@ export function ConnectJiraDialog() {
     </ConnectFrame>
   );
 }
+
+/** The browser build has no sign-in to start over from, so there the mock workspace stays and only re-reads its connections. */
+export const keepsWorkspace = (before: AuthStatus | null, after: AuthStatus) => !isTauri() || sameAccount(before, after);
 
 /** A new token for the account already signed in keeps the workspace as it is; another site or account starts it over. */
 export function sameAccount(before: AuthStatus | null, after: AuthStatus): boolean {
