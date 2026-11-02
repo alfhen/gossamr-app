@@ -1,6 +1,8 @@
 //! Which instance and model a piece of work runs on: the choice, each instance's model list, the Settings defaults, and
 //! the resolver that says whether a choice can run now.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -55,16 +57,42 @@ pub fn valid_model_id(id: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']'))
 }
 
-fn built_in(driver: Driver) -> Vec<ModelOption> {
-    match driver {
-        Driver::Claude => vec![option(DEFAULT_MODEL, "Default"), option("claude-fable-5-1", "Fable"), option("opus", "Opus"), option("sonnet", "Sonnet"), option("haiku", "Haiku")],
-        Driver::Codex => Vec::new(),
+/// What `codex debug models` last listed for each Codex instance, by instance id. Claude has no such command.
+#[derive(Clone, Debug, Default)]
+pub struct Found(HashMap<String, Vec<ModelOption>>);
+
+impl Found {
+    pub fn new(found: HashMap<String, Vec<ModelOption>>) -> Self {
+        Self(found)
+    }
+
+    fn has_read(&self, instance_id: &str) -> bool {
+        self.0.contains_key(instance_id)
     }
 }
 
-/// The instance's list: the driver's own, then the ids added to it. A hand-edited id that breaks the rule is left out.
-pub fn model_list(provider: &ProviderInstance) -> Vec<ModelOption> {
-    let mut list = built_in(provider.driver);
+/// Used when `codex debug models` can't be read. Ids from the catalog of codex-cli 0.165.
+const CODEX_FALLBACK: [(&str, &str); 4] = [("gpt-6.1-sol", "GPT-6.1-Sol"), ("gpt-6-sol", "GPT-6-Sol"), ("gpt-6-luna", "GPT-6-Luna"), ("gpt-5.5", "GPT-5.5")];
+
+/// "Default" passes no `-m` to Codex, so the `config.toml` in the login folder picks the model.
+fn built_in(provider: &ProviderInstance, found: &Found) -> Vec<ModelOption> {
+    match provider.driver {
+        Driver::Claude => vec![option(DEFAULT_MODEL, "Default"), option("claude-fable-5-1", "Fable"), option("opus", "Opus"), option("sonnet", "Sonnet"), option("haiku", "Haiku")],
+        Driver::Codex => {
+            let mut list = vec![option(DEFAULT_MODEL, "Default")];
+            match found.0.get(&provider.id) {
+                Some(listed) => list.extend(listed.iter().cloned()),
+                None => list.extend(CODEX_FALLBACK.map(|(id, label)| option(id, label))),
+            }
+            list
+        }
+    }
+}
+
+/// The instance's list: the driver's own (for Codex, what its CLI lists when that was read), then the ids added to it.
+/// A hand-edited id that breaks the rule is left out.
+pub fn model_list(provider: &ProviderInstance, found: &Found) -> Vec<ModelOption> {
+    let mut list = built_in(provider, found);
     for id in provider.config.custom_models.iter().filter(|id| valid_model_id(id)) {
         if !list.iter().any(|m| m.id.eq_ignore_ascii_case(id)) {
             list.push(option(id, id));
@@ -73,12 +101,13 @@ pub fn model_list(provider: &ProviderInstance) -> Vec<ModelOption> {
     list
 }
 
-/// Adds `model` to the instance's list. An id already listed, in any case, changes nothing.
+/// Adds `model` to the instance's list. An id the driver always lists or the instance already has, in any case, changes
+/// nothing. What the Codex CLI listed is not counted: that list is not kept, and the added id must outlast it.
 pub fn add_custom_model(provider: &mut ProviderInstance, model: &str) -> Result<(), String> {
     if !valid_model_id(model) {
         return Err(format!("A model id uses letters, digits and . _ - [ ], starts with a letter or digit, and is at most {MODEL_ID_LIMIT} characters."));
     }
-    if model_list(provider).iter().any(|m| m.id.eq_ignore_ascii_case(model)) {
+    if model_list(provider, &Found::default()).iter().any(|m| m.id.eq_ignore_ascii_case(model)) {
         return Ok(());
     }
     if provider.config.custom_models.len() >= CUSTOM_MODEL_LIMIT {
@@ -212,13 +241,20 @@ pub enum Resolution {
     Unavailable(Reason),
 }
 
+/// Whether a saved choice may name `model`. Nothing is read from a Codex CLI after a restart until a picker asks, so
+/// until then any well-formed id passes and the CLI says if it does not know the model.
+fn accepts(provider: &ProviderInstance, model: &str, found: &Found) -> bool {
+    let unread_codex = provider.driver == Driver::Codex && !found.has_read(&provider.id);
+    model_list(provider, found).iter().any(|m| m.id == model) || (unread_codex && valid_model_id(model))
+}
+
 /// Whether `choice` names a model the instance lists and, for Pip only, an effort from the fixed list, for a use its driver runs.
-pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice) -> Result<ProviderInstance, Reason> {
+pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice, found: &Found) -> Result<ProviderInstance, Reason> {
     let provider = config.providers.iter().find(|p| p.id == choice.instance_id).ok_or(Reason::Removed)?;
     if !use_.allowed_on(provider.driver) {
         return Err(Reason::CantRun(provider.driver));
     }
-    let listed = model_list(provider).iter().any(|m| m.id == choice.model);
+    let listed = accepts(provider, &choice.model, found);
     let allowed_here = use_ == Use::Agents || choice.model != DEFAULT_MODEL;
     let effort_ok = choice.effort.as_deref().is_none_or(|e| use_ == Use::Pip && EFFORTS.contains(&e));
     if listed && allowed_here && effort_ok {
@@ -230,9 +266,9 @@ pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice) -> Resu
 
 #[cfg_attr(not(test), expect(dead_code, reason = "Pip and the run launcher call the resolver once they run on a chosen instance"))]
 /// `choice`, else the Settings default for `use_`. There is no fallback to another instance.
-pub fn resolve(config: &AppConfig, use_: Use, choice: Option<&ModelChoice>, standing: impl Fn(&ProviderInstance) -> Standing) -> Resolution {
+pub fn resolve(config: &AppConfig, use_: Use, choice: Option<&ModelChoice>, found: &Found, standing: impl Fn(&ProviderInstance) -> Standing) -> Resolution {
     let Some(choice) = choice.or_else(|| config.models.for_use(use_)) else { return Resolution::Unavailable(Reason::Removed) };
-    let provider = match check_choice(config, use_, choice) {
+    let provider = match check_choice(config, use_, choice, found) {
         Ok(provider) => provider,
         Err(reason) => return Resolution::Unavailable(reason),
     };
@@ -275,7 +311,7 @@ mod tests {
     }
 
     fn resolve_with(config: &AppConfig, use_: Use, choice: &ModelChoice, standing: Standing) -> Resolution {
-        resolve(config, use_, Some(choice), |_| standing)
+        resolve(config, use_, Some(choice), &Found::default(), |_| standing)
     }
 
     fn reason(config: &AppConfig, use_: Use, choice: &ModelChoice, standing: Standing) -> Reason {
@@ -288,10 +324,62 @@ mod tests {
     #[test]
     fn the_claude_list_is_default_fable_opus_sonnet_haiku_then_the_instances_own_models() {
         let config = config();
-        let ids = |at: usize| model_list(&config.providers[at]).into_iter().map(|m| m.id).collect::<Vec<_>>();
+        let ids = |at: usize| model_list(&config.providers[at], &Found::default()).into_iter().map(|m| m.id).collect::<Vec<_>>();
         assert_eq!(ids(0), ["default", "claude-fable-5-1", "opus", "sonnet", "haiku"]);
         assert_eq!(ids(1), ["default", "claude-fable-5-1", "opus", "sonnet", "haiku", "claude-opus-5-5[1m]"]);
-        assert_eq!(model_list(&config.providers[0])[1].label, "Fable");
+        assert_eq!(model_list(&config.providers[0], &Found::default())[1].label, "Fable");
+    }
+
+    fn codex(id: &str, custom: &[&str]) -> ProviderInstance {
+        ProviderInstance { id: id.into(), driver: Driver::Codex, display_name: "Codex".into(), config: ProviderConfig { custom_models: custom.iter().map(|m| m.to_string()).collect(), ..Default::default() }, ..default_claude() }
+    }
+
+    fn ids(list: Vec<ModelOption>) -> Vec<String> {
+        list.into_iter().map(|m| m.id).collect()
+    }
+
+    #[test]
+    fn a_codex_list_is_default_then_the_built_in_models_when_nothing_was_read_from_the_cli() {
+        let list = ids(model_list(&codex("codex", &["gpt-next"]), &Found::default()));
+        assert_eq!(list, ["default", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5", "gpt-next"]);
+    }
+
+    #[test]
+    fn what_the_cli_listed_replaces_the_built_in_models_for_that_instance_only() {
+        let found = Found::new(HashMap::from([("codex".to_string(), vec![option("gpt-7", "GPT-7"), option("gpt-6-luna", "GPT-6-Luna")])]));
+        assert_eq!(ids(model_list(&codex("codex", &["GPT-7", "mine"]), &found)), ["default", "gpt-7", "gpt-6-luna", "mine"]);
+        assert_eq!(ids(model_list(&codex("codex_2", &[]), &found)).len(), 5);
+    }
+
+    #[test]
+    fn a_model_the_cli_listed_is_still_saved_when_added_and_claude_ignores_what_codex_found() {
+        let found = Found::new(HashMap::from([("codex".to_string(), vec![option("gpt-7", "GPT-7")]), ("claude".to_string(), vec![option("gpt-7", "GPT-7")])]));
+        let mut provider = codex("codex", &[]);
+        add_custom_model(&mut provider, "GPT-7").unwrap();
+        assert_eq!(provider.config.custom_models, ["GPT-7"]);
+        assert_eq!(ids(model_list(&provider, &found)), ["default", "gpt-7"]);
+        assert_eq!(ids(model_list(&provider, &Found::default())), ["default", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5", "GPT-7"]);
+        assert_eq!(ids(model_list(&default_claude(), &found)), ["default", "claude-fable-5-1", "opus", "sonnet", "haiku"]);
+    }
+
+    #[test]
+    fn a_saved_codex_model_holds_until_the_cli_list_is_read_and_only_then_must_be_on_it() {
+        let provider = codex("codex", &["mine"]);
+        let read = Found::new(HashMap::from([("codex".to_string(), vec![option("gpt-6-luna", "x")])]));
+        let other = Found::new(HashMap::from([("codex_2".to_string(), vec![option("gpt-6-luna", "x")])]));
+        for found in [&Found::default(), &other] {
+            assert!(accepts(&provider, "gpt-7", found));
+            assert!(!accepts(&provider, "--oops", found));
+        }
+        assert!(accepts(&provider, "gpt-6-luna", &read) && accepts(&provider, "mine", &read));
+        assert!(!accepts(&provider, "gpt-7", &read));
+        assert!(!accepts(&default_claude(), "gpt-7", &Found::default()));
+    }
+
+    #[test]
+    fn codex_runs_neither_pip_nor_agents_until_its_runner_is_built() {
+        assert_eq!((Driver::Codex.runs_pip(), Driver::Codex.runs_agents()), (false, false));
+        assert_eq!((Driver::Claude.runs_pip(), Driver::Claude.runs_agents()), (true, true));
     }
 
     #[test]
@@ -329,7 +417,7 @@ mod tests {
     fn a_hand_edited_model_that_breaks_the_id_rule_is_not_in_the_list() {
         let mut provider = default_claude();
         provider.config.custom_models = vec!["--dangerously-skip-permissions".into(), "fine-1".into(), "a b".into()];
-        let ids: Vec<_> = model_list(&provider).into_iter().map(|m| m.id).collect();
+        let ids: Vec<_> = model_list(&provider, &Found::default()).into_iter().map(|m| m.id).collect();
         assert_eq!(&ids[5..], ["fine-1"]);
     }
 
@@ -366,7 +454,7 @@ mod tests {
         config.providers[1].enabled = false;
         let asked = std::cell::Cell::new(0);
         let choice = pick("claude_2", "sonnet");
-        let resolution = resolve(&config, Use::Pip, Some(&choice), |_| {
+        let resolution = resolve(&config, Use::Pip, Some(&choice), &Found::default(), |_| {
             asked.set(asked.get() + 1);
             Standing { shell_readable: false, binary_found: false, signed_in: false }
         });
@@ -396,7 +484,7 @@ mod tests {
         let config = config();
         let standing = |p: &ProviderInstance| Standing { signed_in: p.id == "claude", ..READY };
         let choice = pick("claude_2", "sonnet");
-        assert_eq!(resolve(&config, Use::Pip, Some(&choice), standing), Resolution::Unavailable(Reason::NotSignedIn));
+        assert_eq!(resolve(&config, Use::Pip, Some(&choice), &Found::default(), standing), Resolution::Unavailable(Reason::NotSignedIn));
         assert_eq!(Reason::NotSignedIn.words(Use::Pip, "Claude personal"), "Claude personal isn't signed in. Sign in, then ask again.");
         assert_eq!(Reason::NotSignedIn.words(Use::Agents, "Claude personal"), "Waits until Claude personal is signed in.");
     }
@@ -456,10 +544,10 @@ mod tests {
     #[test]
     fn no_choice_resolves_to_the_settings_default_and_a_cleared_default_is_removed() {
         let mut config = config();
-        assert_eq!(resolve(&config, Use::Pip, None, |_| READY), Resolution::Ready { instance_id: "claude".into(), model: Some("sonnet".into()), effort: Some("medium".into()) });
-        assert_eq!(resolve(&config, Use::Agents, None, |_| READY), Resolution::Ready { instance_id: "claude".into(), model: None, effort: None });
+        assert_eq!(resolve(&config, Use::Pip, None, &Found::default(), |_| READY), Resolution::Ready { instance_id: "claude".into(), model: Some("sonnet".into()), effort: Some("medium".into()) });
+        assert_eq!(resolve(&config, Use::Agents, None, &Found::default(), |_| READY), Resolution::Ready { instance_id: "claude".into(), model: None, effort: None });
         config.models.clear_instance("claude");
-        assert_eq!(resolve(&config, Use::Pip, None, |_| READY), Resolution::Unavailable(Reason::Removed));
+        assert_eq!(resolve(&config, Use::Pip, None, &Found::default(), |_| READY), Resolution::Unavailable(Reason::Removed));
     }
 
     #[test]
@@ -489,7 +577,7 @@ mod tests {
     fn a_default_that_is_unreadable_is_never_resolved_onto_another_login() {
         let mut config = config();
         config.models = ModelDefaults::from_file(Some(&serde_json::json!({ "pip": { "instanceId": "claude_2", "model": 5 } }))).0;
-        assert_eq!(resolve(&config, Use::Pip, None, |_| READY), Resolution::Unavailable(Reason::Removed));
+        assert_eq!(resolve(&config, Use::Pip, None, &Found::default(), |_| READY), Resolution::Unavailable(Reason::Removed));
     }
 
     #[test]

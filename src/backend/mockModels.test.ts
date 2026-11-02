@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelChoice } from "../types";
 import { MockBackend } from "./mock";
+import { MockModels } from "./mockModels";
 
 describe("the mock model lists and defaults", () => {
   it("lists the Claude models and refuses an id that is not a provider", async () => {
@@ -54,5 +55,13 @@ describe("the mock model lists and defaults", () => {
     await b.connectionRemove("claude");
     expect(await b.modelDefaults()).toEqual({ pip: null, agents: null });
     await expect(b.providerModels("claude")).rejects.toThrow("isn't a provider");
+  });
+
+  it("lists a Codex instance's models from the Codex list and keeps each instance's added ids apart", () => {
+    const models = new MockModels((id) => (id === "codex" ? "codex" : id === "claude" ? "claude" : null));
+    expect(models.list("codex").map((m) => m.id)).toEqual(["default", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5"]);
+    expect(models.add("codex", "gpt-next").map((m) => m.id)).toContain("gpt-next");
+    expect(models.add("codex", "GPT-5.5")).toHaveLength(6);
+    expect(models.list("claude").map((m) => m.id)).not.toContain("gpt-next");
   });
 });

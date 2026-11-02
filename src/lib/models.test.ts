@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultModelDefaults, modelList, validModelId } from "./models";
+import { CODEX_MODELS, defaultModelDefaults, modelList, validModelId } from "./models";
 
 describe("the model list", () => {
   it("is Default, Fable, Opus, Sonnet and Haiku, then the instance's own models", () => {
@@ -22,5 +22,10 @@ describe("a model id", () => {
 describe("the default choices", () => {
   it("are Sonnet at medium for Pip and Default for agents, both on the default Claude", () => {
     expect(defaultModelDefaults()).toEqual({ pip: { instanceId: "claude", model: "sonnet", effort: "medium" }, agents: { instanceId: "claude", model: "default" } });
+  });
+
+  it("lists Default and the built-in Codex models for a Codex instance, then its added ids", () => {
+    expect(modelList(["gpt-next", "GPT-5.5"], "codex").map((m) => m.id)).toEqual([...CODEX_MODELS.map((m) => m.id), "gpt-next"]);
+    expect(modelList([], "codex")[0]).toEqual({ id: "default", label: "Default" });
   });
 });
