@@ -62,7 +62,7 @@ export const showsCode = (connections: readonly Pick<ConnectionInfo, "kind" | "e
 export const canSwitch = (c: Pick<ConnectionInfo, "id" | "instanceId" | "kind">) => c.kind === "provider" || (c.kind !== "mock" && c.instanceId !== c.id);
 
 /** The one line a connection's row in the list shows. */
-export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status" | "enabled">, checking: boolean): { text: string; tone: LineTone } {
+export function statusLine(c: Pick<ConnectionInfo, "kind" | "driver" | "account" | "status" | "enabled">, checking: boolean): { text: string; tone: LineTone } {
   if (c.kind === "mock" && !c.status) return { text: "Sample tickets · nothing is sent anywhere", tone: "quiet" };
   if (!c.enabled || c.status?.state === "off") return { text: "Off", tone: "quiet" };
   const s = c.status;
@@ -70,13 +70,14 @@ export function statusLine(c: Pick<ConnectionInfo, "kind" | "account" | "status"
   if (!s) return { text: "Not checked yet", tone: "quiet" };
   switch (s.state) {
     case "ready":
-      return { text: `Authenticated · ${s.account ?? c.account}`, tone: "ok" };
+      // A provider's message already says what the login is: an email, ChatGPT, an API key from the shell.
+      return { text: c.kind === "provider" ? s.message : `Authenticated · ${s.account ?? c.account}`, tone: "ok" };
     case "expiresSoon":
       return { text: s.message, tone: "unsure" };
     case "notSignedIn":
       return { text: "Not signed in", tone: "error" };
     case "notFound":
-      return { text: `Not found · ${c.kind === "github" ? "gh" : c.kind}`, tone: "error" };
+      return { text: `Not found · ${c.kind === "github" ? "gh" : c.kind === "provider" ? (c.driver ?? "provider") : c.kind}`, tone: "error" };
     case "error":
       return { text: "Couldn't check", tone: "unsure" };
     case "off":

@@ -19,8 +19,13 @@ pub fn find_claude() -> Option<PathBuf> {
 /// The CLI of `driver`: where installers put it, then the PATH of the captured shell environment, which holds what
 /// `.zshrc` adds (an npm `codex` under nvm).
 pub fn find_binary(driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    find_in(&installed(driver, &home), driver.binary(), shell.get("PATH"))
+    find_binary_from(dirs::home_dir().as_deref(), driver, shell)
+}
+
+/// `find_binary` with the home folder given, so a test or a caller that already knows it need not ask the system.
+pub fn find_binary_from(home: Option<&Path>, driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
+    let fixed = home.map(|h| installed(driver, h)).unwrap_or_default();
+    find_in(&fixed, driver.binary(), shell.get("PATH"))
 }
 
 fn installed(driver: Driver, home: &Path) -> Vec<PathBuf> {

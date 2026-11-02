@@ -444,7 +444,7 @@ impl Core {
             removed
         })?;
         removed.then_some(()).ok_or_else(not_a_provider)?;
-        self.probes_forget(instance_id);
+        self.provider_probes_forget(instance_id);
         Ok(())
     }
 
@@ -469,24 +469,27 @@ impl Core {
         config
             .providers
             .into_iter()
-            .map(|p| ConnectionInfo {
-                instance_id: p.id.clone(),
-                id: p.id,
-                display_name: p.display_name,
-                enabled: p.enabled,
-                kind: RowKind::Provider,
-                driver: Some(p.driver),
-                config_dir: p.config.config_dir,
-                workspace: String::new(),
-                url: String::new(),
-                account: String::new(),
-                last_sync_at: None,
-                syncing: false,
-                error: None,
-                transient: false,
-                reauth: false,
-                status: None,
-                rechecking: false,
+            .map(|p| {
+                let status = self.provider_snapshot(&p.id);
+                ConnectionInfo {
+                    instance_id: p.id.clone(),
+                    id: p.id,
+                    display_name: p.display_name,
+                    enabled: p.enabled,
+                    kind: RowKind::Provider,
+                    driver: Some(p.driver),
+                    config_dir: p.config.config_dir,
+                    workspace: String::new(),
+                    url: String::new(),
+                    account: String::new(),
+                    last_sync_at: None,
+                    syncing: false,
+                    error: None,
+                    transient: false,
+                    reauth: false,
+                    status,
+                    rechecking: false,
+                }
             })
             .collect()
     }

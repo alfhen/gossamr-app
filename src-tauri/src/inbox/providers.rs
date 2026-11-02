@@ -1,21 +1,37 @@
 //! Core's side of the provider instances: what each one may run as.
 
+use std::sync::Arc;
+
 use super::Core;
 use crate::config::AppConfig;
+use crate::connections::ProviderInstance;
+use crate::runs::env::RunEnv;
 use crate::runs::provider_env::{states, ProviderState};
 use crate::runs::provider_folder::Places;
+
+/// The provider instances as they are now, what each may run as, and the shell environment that was captured for them.
+pub(super) struct Setup {
+    pub providers: Vec<ProviderInstance>,
+    pub states: Vec<(String, ProviderState)>,
+    pub shell: Option<Arc<RunEnv>>,
+}
 
 impl Core {
     /// The state of every provider instance, in order. The folder rules run on the list as it is now, and a failed
     /// capture of the shell makes the instance without a folder unavailable, never the app's own environment.
     pub async fn provider_states(&self) -> Vec<(String, ProviderState)> {
+        self.provider_setup().await.states
+    }
+
+    pub(super) async fn provider_setup(&self) -> Setup {
         let config = AppConfig::load(&self.data_dir);
         if config.providers.is_empty() || config.providers_error.is_some() || config.connections_error.is_some() {
-            return Vec::new();
+            return Setup { providers: Vec::new(), states: Vec::new(), shell: None };
         }
         let shell = self.shell.get().await.inspect_err(|e| eprintln!("{e}")).ok();
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
-        states(&config.providers, &places, shell.as_deref())
+        let states = states(&config.providers, &places, shell.as_deref());
+        Setup { providers: config.providers, states, shell }
     }
 
     /// Runs the folder rules on `config.json` as it is now and logs each instance that fails them.

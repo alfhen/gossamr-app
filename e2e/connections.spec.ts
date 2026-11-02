@@ -74,6 +74,22 @@ test.describe("the Connections list", () => {
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
+  test("shows what the Claude probe found on its row, and Off when it is turned off", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6&providers=1&mockClaudeProbe=notSignedIn");
+    await openSettings(page);
+    await expect(rowOf(page, "Claude")).toContainText("Not signed in");
+    await rowOf(page, "Claude").getByRole("switch", { name: "Claude" }).click();
+    await expect(rowOf(page, "Claude")).toContainText("Off");
+    await rowOf(page, "Claude").getByRole("switch", { name: "Claude" }).click();
+    await expect(rowOf(page, "Claude")).toContainText("Not signed in");
+  });
+
+  test("shows the signed-in Claude as who it is authenticated as", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openSettings(page);
+    await expect(rowOf(page, "Claude")).toContainText("Authenticated · alf@acme.com");
+  });
+
   test("opens the detail of the row you pick, with who drafts post as", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);

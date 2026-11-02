@@ -67,7 +67,7 @@ import { seedDrafts } from "./mockDrafts";
 import { exposeMockClock, type MockOptions, type TicketEdit } from "./mockWatch";
 import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import { isJira } from "../workspace/domains";
-import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
+import { claudeSnapshot, jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus, type GithubProbeState } from "./mockProbes";
 import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
 
@@ -378,6 +378,7 @@ export class MockBackend implements Backend {
     this.jiraToken = options.jiraToken;
     this.jiraAccount = options.jiraToken ? mockJiraStatus("acme.atlassian.net", "alf@acme.com", "2027-10-30") : { site: null, me: null, email: null, expiresOn: null };
     if (options.githubProbe) this.github.setProbe(options.githubProbe);
+    if (options.claudeProbe) this.claudeProbe = options.claudeProbe;
     this.github.holdRecheck = options.githubRecheck === "hold";
     this.github.onProbeChanged = () => this.connectionsListeners.forEach((l) => l());
     this.runs = new MockRuns(this.proposals, options.runs);
@@ -1085,6 +1086,8 @@ export class MockBackend implements Backend {
   private readonly names = new Map<string, string>();
   /** The default Claude provider instance, until it is removed. */
   private claude: { enabled: boolean } | null = { enabled: true };
+  private claudeProbe: GithubProbeState = "ready";
+  private claudeCheckedAt = new Date().toISOString();
   private readonly models = new MockModels((instanceId) => instanceId === "claude" && this.claude !== null);
 
   async providerModels(instanceId: string) {
@@ -1123,6 +1126,7 @@ export class MockBackend implements Backend {
     if (target.kind === "mock") throw new Error("The sample data is built in, so it can't be turned off.");
     if (target.kind === "provider") {
       this.claude = { enabled };
+      this.claudeCheckedAt = new Date().toISOString();
       this.connectionsListeners.forEach((l) => l());
       return;
     }
@@ -1165,12 +1169,15 @@ export class MockBackend implements Backend {
   }
 
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
-    if (refresh) this.github.recheck();
+    if (refresh) {
+      this.github.recheck();
+      this.claudeCheckedAt = new Date().toISOString();
+    }
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;
     const sample: ConnectionInfo = { id: MOCK_CONNECTION, instanceId: "jira", displayName: site ?? "Sample data", enabled: site ? this.jiraEnabled : true, kind: site ? "jira" : "mock", workspace: site ?? "Sample data", url: null, account: PEOPLE.me, lastSyncAt: this.snap.lastSyncAt, syncing: false, error: refused ? "Jira turned down your token. Make a new one to keep syncing" : null, transient: false, reauth: refused, status, rechecking: false };
-    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false }] : [];
+    const claude: ConnectionInfo[] = this.claude ? [{ id: "claude", instanceId: "claude", displayName: "Claude", enabled: this.claude.enabled, kind: "provider", driver: "claude", workspace: "", url: null, account: "", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: claudeSnapshot(this.claude.enabled ? this.claudeProbe : "off", this.claudeCheckedAt), rechecking: false }] : [];
     const all = [sample, ...(this.github.connected ? [this.github.info()] : []), ...claude];
     return all.map((c) => ({ ...c, displayName: this.names.get(c.instanceId) ?? c.displayName }));
   }
