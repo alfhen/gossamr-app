@@ -254,7 +254,7 @@ export class MockCode {
   private linksFor(key: string, includeUndiscovered: boolean): DevLink[] {
     return this.links
       .filter(([k, id]) => k === key && (includeUndiscovered || this.isCached(id)))
-      .map(([k, id, provenance]) => ({ item: { connectionId: "mock", externalId: k, key: k } as ItemRef, change: this.changes.find((c) => c.externalId === id)!, provenance, confidence: CONFIDENCE[provenance] }))
+      .map(([k, id, provenance]) => ({ item: { connectionId: "mock", externalId: k, key: k } as ItemRef, change: this.changes.find((c) => c.externalId === id)!, provenance, confidence: CONFIDENCE[provenance], ambiguous: false }))
       .filter((l) => this.watched(l.change.repo))
       .sort((a, b) => b.confidence - a.confidence || b.change.updatedAt.localeCompare(a.change.updatedAt));
   }
