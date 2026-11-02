@@ -136,7 +136,7 @@ In Rust, `jira_connect` refuses an instance id that is not a Jira instance, and 
 
 Each driver says what it can run (`runs_pip`, `runs_agents`). Pickers list only instances whose driver can run that use, and **+ Add** lists only drivers that can run something. When Codex's runner lands, its flags flip and nothing else in the model changes.
 
-Both binaries are found on the PATH of the captured shell environment (`runs/env.rs`), after the fixed install paths `find_claude` checks today. A login shell (`zsh -lc`) misses tools that `.zshrc` sets up, such as an npm `codex` under nvm, and that `codex` is a node launcher that also needs the shell's PATH to run.
+Both binaries are found on the PATH of the captured shell environment (`runs/env.rs`), after the fixed install paths `find_claude` checks today. `codex` is also found inside an app that bundles it: ChatGPT.app ships one that is on no PATH (c0). Those copies come last, so a `codex` the person put on PATH wins. A login shell (`zsh -lc`) misses tools that `.zshrc` sets up, such as an npm `codex` under nvm, and that `codex` is a node launcher that also needs the shell's PATH to run.
 
 Other T3 drivers, for later:
 
@@ -257,7 +257,7 @@ A timeout or a failure to run is `error` ("Couldn't check"), never `notSignedIn`
 | Driver | Models | Where from |
 |---|---|---|
 | Claude | Default, Fable, Opus, Sonnet, Haiku, then the instance's `customModels` | Built in. Opus, Sonnet and Haiku pass the CLI's aliases (`opus`, `sonnet`, `haiku`), which follow the newest of each. Fable passes `claude-fable-5-1`, the id in T3's manifest. "Default" passes no `--model`, so the folder's own setting applies. |
-| Codex | A built-in list, then `codex debug models` per instance, then `customModels` | Added with the Codex runner (c1). `debug` output isn't a stable contract, so parse it with care and fall back to the built-in list. |
+| Codex | Default, then what `codex debug models` lists for the instance (the built-in list when that fails), then `customModels` | Built in c1. `debug` output isn't a stable contract, so only `slug`, `display_name`, `visibility` and `priority` are read, and anything unexpected falls back to the built-in list. The answer is kept ten minutes, a failure one. "Default" passes no `-m`, so the folder's `config.toml` applies. |
 
 **Add model…** in the picker and in a provider's detail adds an id to `customModels`, so a model released under a new name can be used without a new Gossamr. An id is letters, digits, `.`, `_`, `-`, `[` and `]`, starts with a letter or digit, and is at most 100 characters.
 
