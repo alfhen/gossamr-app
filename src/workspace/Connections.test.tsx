@@ -221,6 +221,15 @@ describe("a provider in the list", () => {
     expect(view({ connections: [jira, gh, claude], selectedId: jira.id })).toContain("Sync now");
   });
 
+  it("never offers a provider a token or a GitHub sign-in, whatever its probe says", () => {
+    for (const status of [jiraSnapshot("notSignedIn", CHECKED), jiraSnapshot("expiresSoon", CHECKED), githubSnapshot("notSignedIn", "ada", CHECKED)]) {
+      const out = view({ connections: [jira, gh, { ...claude, status }], selectedId: "claude" });
+      expect(out).toContain('aria-label="Claude details"');
+      expect(out).not.toContain("Make a new token");
+      expect(out).not.toContain("Sign in again");
+    }
+  });
+
   it("says in the detail pane that no check runs", () => {
     const out = view({ connections: [jira, gh, claude], selectedId: "claude" });
     expect(out).toContain("No check runs for this provider.");

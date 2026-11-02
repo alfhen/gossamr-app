@@ -29,6 +29,16 @@ describe("work and code containers", () => {
     expect(codeWatch([state("claude"), state("github:ada")]).map((w) => w.connectionId)).toEqual(["github:ada"]);
   });
 
+  it("keeps a provider out of the work domain by id, before the list has it", () => {
+    for (const id of ["claude", "claude_2", "codex", "codex_10"]) {
+      expect(isWorkConnection(id)).toBe(false);
+      expect(domainOfConnection([], id)).toBe("model");
+    }
+    expect(isWorkConnection("claudette")).toBe(true);
+    expect(workWatch([state("claude"), state("mock")]).map((w) => w.connectionId)).toEqual(["mock"]);
+    expect(workContainers([container("claude", "x"), container("mock", "CA")]).map((c) => c.key)).toEqual(["CA"]);
+  });
+
   it("tells Jira, the sample included, from GitHub and from a provider", () => {
     expect(["jira", "mock", "github", "provider"].map(isJira)).toEqual([true, true, false, false]);
   });

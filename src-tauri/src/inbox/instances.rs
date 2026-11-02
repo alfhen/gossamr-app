@@ -1073,6 +1073,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn jira_connect_accepts_a_jira_connection_id_while_the_connections_block_is_unreadable() {
+        let fx = adopted().await;
+        let connection_id = fx.core.auth.connection().await.unwrap().id;
+        let dir = fx.core.data_dir();
+        let mut file: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        file["connections"] = serde_json::json!("broken");
+        std::fs::write(dir.join("config.json"), file.to_string()).unwrap();
+        assert!(AppConfig::load(&dir).connections_error.is_some());
+        assert!(fx.core.require_jira(&connection_id).await.is_ok());
+        assert!(matches!(fx.core.require_jira("claude").await, Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
     async fn jira_connect_accepts_the_connection_id_an_instance_is_bound_to() {
         let fx = adopted().await;
         let connection_id = fx.core.auth.connection().await.unwrap().id;
