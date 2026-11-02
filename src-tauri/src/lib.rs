@@ -320,9 +320,28 @@ async fn probe_connections(app: &AppHandle, core: &CoreState, why: Probe) {
 }
 
 /// Opens Terminal on the fix the instance's last probe found. The command comes from that snapshot, never from the page.
-#[tauri::command(async)]
-fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()> {
+/// A provider's is its CLI's sign-in, built from the instance record.
+#[tauri::command]
+async fn connection_open_terminal(core: State<'_, CoreState>, runs: State<'_, RunsState>, instance_id: String) -> Result<()> {
+    if core.is_provider(&instance_id) {
+        return runs.open_provider_signin(&instance_id).await;
+    }
     runs.open_fix(&core.fix_command(&instance_id)?)
+}
+
+/// Adds a provider instance, then asks it how it stands in the background, because its CLI can be slow. The folder rules
+/// run in Rust and a folder that is missing is created.
+#[tauri::command]
+async fn provider_add(app: AppHandle, core: State<'_, CoreState>, driver: connections::Driver, display_name: String, config_dir: Option<String>) -> Result<ConnectionInfo> {
+    let id = core.provider_add(driver, &display_name, config_dir.as_deref()).await?;
+    let row = core.provider_row(&id)?;
+    wire::changed(&app, wire::Topic::Connections, &id);
+    let (app, core) = (app.clone(), core.inner().clone());
+    tauri::async_runtime::spawn(async move {
+        core.probe_provider_now(&id).await;
+        wire::changed(&app, wire::Topic::Connections, &id);
+    });
+    Ok(row)
 }
 
 /// What `gh` says about itself before any connection exists: the first-run screen's GitHub line.
@@ -1054,6 +1073,7 @@ pub fn run() {
             cache_transitions,
             connections_list,
             connection_open_terminal,
+            provider_add,
             first_run_github,
             first_run_open_terminal,
             connection_rename,
