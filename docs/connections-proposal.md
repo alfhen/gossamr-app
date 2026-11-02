@@ -16,7 +16,7 @@ Pip and agents run on a provider instance and a model, chosen as `{instanceId, m
 
 Several Jira accounts work at once. Tickets from all of them appear in the Inbox and the board, each draft posts as the account it was made for, and Pip and agents read and draft through the connection of the ticket they work on.
 
-Claude runs Pip and agents. Codex gets its probe, folder and sign-in early, and its runner is scheduled work (steps c0 to c6). Codex shows in **+ Add** once Gossamr can run agents on it. Section 8 says why and what that takes.
+Claude runs Pip and agents. Pip stays on Claude (owner decision, 2 Nov 2026). Codex gets its probe, folder and sign-in early, and its row shows from r14a with a Beta label. **+ Add** offers Codex, and agents run on it, only after the Codex runner (steps c3 to c6), which moves to a follow-up plan. Agents on Codex get no `--sandbox` flag. Section 8 says why and what that takes.
 
 Agents always work in Gossamr's own clone of a repository, in `~/Gossamr/agents`, never in `~/Code` or another folder the person keeps code in (Section 16). Trusting that clone for a Claude login is one click in Gossamr (Section 17).
 
@@ -60,7 +60,7 @@ What Gossamr does differently:
 ## 4. Decisions
 
 1. **Three kinds, one list.** Providers show in the same Connections list as GitHub and Jira, with the same rename, on/off, remove and Open Terminal. In `config.json` they sit under their own `providers` key (5.1), so older builds keep working.
-2. **Two drivers: Claude and Codex.** Claude runs Pip and agents. Codex's probe, folder and sign-in come early. Its runner is scheduled (c0 to c6), and it shows in **+ Add** once it can run agents. Other T3 drivers wait (Section 6.1). *For the owner to confirm:* the other choice is to show Codex in **+ Add** at once, marked "Can't run anything yet".
+2. **Two drivers: Claude and Codex.** Claude runs Pip and agents. Pip stays on Claude: the owner skipped c2 on 2 Nov 2026. Codex's probe, folder and sign-in come early, and its row shows from r14a with a Beta label. **+ Add** offers Codex, and agents run on it, only after the Codex runner (c3 to c6), which moves to a follow-up plan. Other T3 drivers wait (Section 6.1).
 3. **A config folder is the one new per-instance setting.** It keeps two logins apart. It is a path, not a secret, so it lives in `config.json`. Binary path, launch arguments and environment variables stay out.
 4. **The existing setup is the default instance.** Every install gets a `claude` instance with no folder. It runs what runs today, so nobody has to add anything.
 5. **One environment per instance.** The probe, Pip, agents and every Terminal script of one instance pick the same login (6.3). An instance with its own folder ignores credentials the shell exports.
@@ -70,6 +70,8 @@ What Gossamr does differently:
 9. **Each step leaves `main` working.** `Core::scope()` stays, as the primary, until its last caller moves. A feature the backend doesn't honour yet stays out of the UI. Provider rows stay hidden until runs honour their instance (r14), and the second Jira account stays hidden until every path takes its connection from the work (j26).
 10. **Agents work only in Gossamr's own clones.** Every new agent session runs in `~/Gossamr/agents/<owner>/<repo>`, which Gossamr clones and fetches itself. Gossamr no longer scans `~/Code`, `~/Developer` or `~/src`. Runs already working in those folders keep going until they finish (Section 16).
 11. **Trust is one click, for one clone and one login.** Gossamr writes Claude's trust entry for a clone in its work folder, for the login the run uses, only when the person clicks Trust on that run. Terminal stays as the fallback (Section 17). This changes AGENTS.md rule 4, which today says Gossamr never answers the trust question.
+12. **Codex agents get no `--sandbox` flag.** The person's own Codex config decides (owner decision, 2 Nov 2026). This keeps AGENTS.md rule 4: no restricting flags, and agents push with the person's own credentials. Check C6 in `docs/agents-cli-findings.md` shows the cost. `workspace-write` cannot commit in a worktree: `git add` fails on `index.lock` under the clone's `.git/worktrees/`, and a push is rejected. Only `danger-full-access` commits and pushes. So an agent on Codex can commit only when the person's config allows it.
+13. **Codex is a beta provider.** Its row, its sheet and its picker entries carry a Beta label (owner decision, 2 Nov 2026). Nothing is hidden behind a switch. Codex rows show with Beta from r14a. **+ Add** offers Codex, and agents run on it, only after the Codex runner (c3 to c6), which moves to a follow-up plan.
 
 ## 5. The instance record
 
@@ -132,9 +134,9 @@ In Rust, `jira_connect` refuses an instance id that is not a Jira instance, and 
 | Driver | Binary | Folder variable | Runs Pip | Runs agents | Sign-in command |
 |---|---|---|---|---|---|
 | `claude` | `claude` | `CLAUDE_CONFIG_DIR` | Yes | Yes | `claude auth login` |
-| `codex` | `codex` | `CODEX_HOME` | After c2, if c0 says yes | After c6 | `codex login` |
+| `codex` | `codex` | `CODEX_HOME` | No (Pip stays on Claude) | After c6 | `codex login` |
 
-Each driver says what it can run (`runs_pip`, `runs_agents`). Pickers list only instances whose driver can run that use, and **+ Add** lists only drivers that can run something. When Codex's runner lands, its flags flip and nothing else in the model changes.
+Each driver says what it can run (`runs_pip`, `runs_agents`). Pickers list only instances whose driver can run that use, and **+ Add** lists only drivers that can run something. Codex rows show from r14a, marked Beta, while `runs_agents` is still false. When Codex's runner lands (c3 to c6, in a follow-up plan), its flag flips, **+ Add** offers Codex, and nothing else in the model changes.
 
 Both binaries are found on the PATH of the captured shell environment (`runs/env.rs`), after the fixed install paths `find_claude` checks today. `codex` is also found inside an app that bundles it: ChatGPT.app ships one that is on no PATH (c0). Those copies come last, so a `codex` the person put on PATH wins. A login shell (`zsh -lc`) misses tools that `.zshrc` sets up, such as an npm `codex` under nvm, and that `codex` is a node launcher that also needs the shell's PATH to run.
 
@@ -292,7 +294,7 @@ Resolving a choice gives `Ready { instance, model }` or `Unavailable(reason)`. T
 | Not found | "`claude` isn't installed." | Same |
 | No shell setup | "Gossamr couldn't read your shell setup, so it can't tell which Claude login to use. Check again in Settings." | Same |
 | Removed | "Pick which Claude Pip runs on." | "Claude personal was removed. Pick another." |
-| Can't run this | "Pip can't run on Codex yet." | "Agents can't run on Codex yet." |
+| Can't run this | "Pip runs on Claude only." | "Agents can't run on Codex yet." |
 | Bad model | "Pick a model for Pip." | "Pick a model for this run." |
 
 There is no fallback to another instance.
@@ -348,10 +350,10 @@ Codex can do most of what Pip and agents need, but not the way Claude does it, a
 | Attach while running | `claude attach` to the daemon's session | No attach. `codex resume` while `exec` runs would be a second writer on one thread, so the `exec` must stop first. | n/a |
 | Resume | `--bg --resume <id>` | `codex exec resume <thread id>`, a new process per turn | From source |
 | Message a running agent | stop, then resume with the answer | SIGINT, then `exec resume` with the message | No |
-| Commit and push from the worktree | The person's own setup | `workspace-write` keeps `.git` read-only and the network off. Agents that push need `danger-full-access` in their own worktree, or Gossamr commits for them. | No |
+| Commit and push from the worktree | The person's own setup | Gossamr passes no `--sandbox` flag, so the person's own Codex config decides (2 Nov 2026). `workspace-write` cannot commit in a worktree: `git add` fails on `index.lock` under the clone's `.git/worktrees/`, and a push is rejected. Only `danger-full-access` commits and pushes (C6). | Yes, C6 |
 | Cost | `total_cost_usd` | Tokens only | From source |
 
-Pip on Codex is allowed only if its lockdown matches Claude's (rule 3). If it can't, Codex runs agents only.
+Pip stays on Claude (owner decision, 2 Nov 2026). Check C1 showed that Codex cannot be locked down to MCP tools only, so rule 3 rules it out, and Codex runs agents only. Agents get no `--sandbox` flag, so the person's own Codex config decides (decision 12).
 
 ### 8.2 The steps
 
@@ -359,13 +361,15 @@ They are in the build plan (Section 14) as c0 to c6.
 
 | Step | What | Size |
 |---|---|---|
-| c0 | **Smoke test with a real Codex login**, by the owner. Run each "No" in 8.1 and write what happened in `docs/agents-cli-findings.md`. Decide Pip on Codex yes or no, and the agents' sandbox. | Doc only |
-| c1 | **Codex models and capability flags.** The built-in list and `codex debug models` per instance, cached. | ~250 |
-| c2 | **Codex Pip runner**, only if c0 says yes. A `codex` module beside `claude/` that builds the argv, maps `exec --json` events to `AgentEvent`, and has a test for each lockdown flag. | ~500 |
+| c0 | **Smoke test with a real Codex login**, by the owner. Run each "No" in 8.1 and write what happened in `docs/agents-cli-findings.md`. Decided on 2 Nov 2026: Pip stays on Claude, and agents get no `--sandbox` flag. Merged (#259). | Doc only |
+| c1 | **Codex models and capability flags.** The built-in list and `codex debug models` per instance, cached. Merged (#284). | ~250 |
+| c2 | **Codex Pip runner.** Skipped by owner decision on 2 Nov 2026: Pip stays on Claude. | none |
 | c3 | **A run backend trait** above `ClaudeCli`: launch, observe, stop, resume, final answer, attach and sign-in commands. Claude implements it with what exists. | ~400 |
 | c4 | **Codex launch and supervision.** Gossamr makes the worktree and branch and starts `codex exec --json -C <worktree>` in its own session, with stdout to `events.jsonl` in the run folder, which the tracker reads. It records `{instance, thread id, pid}`, maps events to `RunState`, and after a restart finds the run again by pid and file. | ~600 |
 | c5 | **Codex answer, resume, stop and clean-up.** SIGINT then `exec resume`, SIGKILL after a wait, worktree removal with git. | ~500 |
-| c6 | **Codex final answer, Terminal and UI.** Final answer from `-o <file>`. Attach stops the `exec` first and then opens `codex resume` in Terminal. Failure text. The `runs_agents` flag turned on, which also shows Codex in **+ Add**. | ~400 |
+| c6 | **Codex final answer, Terminal and UI.** Final answer from `-o <file>`. Attach stops the `exec` first and then opens `codex resume` in Terminal. Failure text. The `runs_agents` flag turned on, which also shows Codex in **+ Add**, still with its Beta label. | ~400 |
+
+c3 to c6 move to a follow-up plan (owner decision, 2 Nov 2026). Until they land, Codex rows show with Beta from r14a and **+ Add** does not offer Codex.
 
 ## 9. Several Jira accounts
 
@@ -455,17 +459,19 @@ A button "+ Add" sits in the Connections header, beside refresh. It is primary (
 | Code | GitHub account | Pull requests, branches and checks. | p5 |
 | Tickets | Jira account | Tickets from one Jira site. | p5, and when a Jira exists only from j26 |
 | Models | Claude | A login that Pip and agents can run on. | r14 |
-| Models | Codex | A login that agents can run on. | c6 |
+| Models | Codex | A login that agents can run on. Marked Beta. | c6 |
 
 Each entry opens its sheet in `ConnectFrame`. The palette gets the same entries as "Add GitHub account", "Add Jira account", "Add Claude" and "Add Codex", shown by the same rules. The footer "Connect GitHub" button and `github:connect` go.
 
 "Models" is the group name so the UI never says "AI" (style guide).
 
+**Beta.** A Codex row, its sheet and its picker entries carry a Beta label (decision 13). Nothing about Codex hides behind a switch. From r14a the Codex row shows, but **+ Add** offers Codex only from c6.
+
 Until r14 a constant `providersShown` in `connectionsLogic.ts` keeps provider rows and the Claude entry out of the desktop UI. The mock shows them with `?providers=1`, so the provider sheets and their e2e specs are built and tested before then.
 
 ### 10.2 The list
 
-The list groups rows under Code, Tickets and Models. Sample data stays under Tickets. Arrow keys still walk the whole list. Badges: `CL` and `CX` for providers, and the first two letters of the site for Jira in place of `JI` for all. The side-by-side layout of T3 is not copied; Settings is 720 px wide.
+The list groups rows under Code, Tickets and Models. Sample data stays under Tickets. Arrow keys still walk the whole list. Badges: `CL` and `CX` for providers (a Codex row also carries Beta), and the first two letters of the site for Jira in place of `JI` for all. The side-by-side layout of T3 is not copied; Settings is 720 px wide.
 
 Under Models, below the provider rows, are "Pip uses" and "New agents use", each with a model picker (10.5).
 
@@ -483,7 +489,7 @@ Under Models, below the provider rows, are "Pip uses" and "New agents use", each
 - The sheet then shows the sign-in step: "Sign in as this Claude. Run this in Terminal, then check again." with the command, Copy, Open Terminal, "I've run it, check again" and Done.
 - "Gossamr runs each agent on the login you pick. It never switches between logins by itself."
 
-**Add Codex.** The same with "Codex home" (default `~/.codex-<name>`) and "Add Codex". Its sign-in command is `codex login`.
+**Add Codex.** Titled "Add Codex", with a Beta label. The same as Add Claude with "Codex home" (default `~/.codex-<name>`) and "Add Codex". Its sign-in command is `codex login`.
 
 The row appears at once as "Not signed in" and turns to "Authenticated · alf@acme.com" (Claude) or "Authenticated · ChatGPT" (Codex) after the probe.
 
@@ -492,13 +498,13 @@ The row appears at once as "Not signed in" and turns to "Authenticated · alf@ac
 In order: Status (with the fix), Name (Rename), Account (Claude: email and plan; Codex: ChatGPT or API key; then Remove), Config folder (the path, and a quiet "Reveal in Finder"), Models (the list, and Add model…), and a line on use:
 
 - Claude: "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."
-- Codex: "New agents run on Codex when you pick it."
+- Codex (Beta label beside its name): "New agents run on Codex when you pick it."
 
 When the shell exports a login variable that the instance ignores, a line says so (6.3). Sync and Watching are hidden. The off line is "Off. Pip and new agents can't use it." The signed-out banner covers a provider only when a Settings default or a queued run uses it, and it uses the provider's own words, never Jira's.
 
 ### 10.5 Model pickers
 
-One `ModelPicker` in `src/components/`: a popover list grouped by instance name, with an instance that can't run greyed and its reason, then "Add model…" for the selected instance, and a last entry "Add or manage…" that opens Settings › Connections. No search; there are few models.
+One `ModelPicker` in `src/components/`: a popover list grouped by instance name, with an instance that can't run greyed and its reason, a Codex entry carrying its Beta label, then "Add model…" for the selected instance, and a last entry "Add or manage…" that opens Settings › Connections. No search; there are few models.
 
 | Where | What it sets | Step |
 |---|---|---|
@@ -529,7 +535,7 @@ Settings › Safety's second promise becomes "Agents run with the Claude Code se
 |---|---|
 | 1. Nothing writes without you | Unchanged. Each draft posts as its own Jira account. |
 | 2. Secrets in the Keychain | One Jira token per connection, in the Keychain. Gossamr stores no Claude or Codex login; they stay in each CLI's own store. The wording adds that. |
-| 3. Pip stays locked down | Unchanged on every Claude instance. Pip runs on Codex only if its lockdown matches (c0, c2). |
+| 3. Pip stays locked down | Unchanged on every Claude instance. Pip runs on Claude only (c2 skipped, 2 Nov 2026). |
 | 4. Agents use your own setup | Now "the setup in the config folder of the login they run on". Agents work in Gossamr's own clones (t1). Gossamr answers the trust question only when you click Trust on a run, for that run's clone in `~/Gossamr/agents` and that run's login (t2 changes the text; d28 keeps it). |
 | 5. Ticket text is data | Unchanged. The site name in the brief is Gossamr's, not the ticket's. |
 | 6. No shortcuts while typing | The "+ Add" menu and pickers follow it. |
@@ -557,45 +563,47 @@ Each step is one pull request from `main`, under about 600 changed lines of non-
 
 | Id | Step | UI | Depends on | Size |
 |---|---|---|---|---|
-| p1 | Provider instances in `config.json` | | none | ~400 |
-| p2 | One environment per provider instance | | p1 | ~350 |
-| p3 | Provider probes | | p2 | ~450 |
-| p4 | Add a provider instance, folder rules, sign-in script | | p3 | ~450 |
-| p5 | "+ Add" menu and grouped list | UI | p1 | ~350 |
-| p6 | Add Claude and Codex sheets, provider detail | UI | p4, p5 | ~450 |
-| r7 | `ModelChoice`, model lists and Settings defaults | | p1 | ~400 |
-| r8 | Pip runs on a chosen instance and model | | r7, p2 | ~500 |
-| r9 | Model picker in Pip's drawer | UI | r8 | ~400 |
+| p1 | Provider instances in `config.json` (#262) | | none | ~400 |
+| p2 | One environment per provider instance (#264) | | p1 | ~350 |
+| p3 | Provider probes (#282) | | p2 | ~450 |
+| p4 | Add a provider instance, folder rules, sign-in script (#288) | | p3 | ~450 |
+| p5 | "+ Add" menu and grouped list (#263) | UI | p1 | ~350 |
+| p6 | Add Claude and Codex sheets, provider detail (#292) | UI | p4, p5 | ~450 |
+| r7 | `ModelChoice`, model lists and Settings defaults (#265) | | p1 | ~400 |
+| r8 | Pip runs on a chosen instance and model (#285) | | r7, p2 | ~500 |
+| r9 | Model picker in Pip's drawer (#290) | UI | r8 | ~400 |
 | o10 | Two signed-in Claude folders at once | owner | none | doc |
-| r11 | A toolchain per instance | | p2 | ~450 |
+| r11 | A toolchain per instance (#283) | | p2 | ~450 |
 | r12 | Runs record and launch with an instance and model | | r7, r11 | ~500 |
 | r13 | Runs tracked per instance | | r12, o10 | ~550 |
 | r14 | Run and Settings pickers, provider rows shown | UI | r9, r13, p6 | ~550 |
-| j15 | Multi-Jira groundwork | | none | ~100 |
-| j16 | `Auth` holds several Jira sessions | | none | ~450 |
-| j17 | `Core` per Jira connection | | j15, j16 | ~550 |
-| j18 | Reads fan out; `jira_connect` adds or replaces | | j17 | ~550 |
-| j19 | Drafts and runs follow their connection | | j17 | ~450 |
-| j20 | Workstreams and the run supervisor per connection | | j19 | ~400 |
-| j21 | Run service and agent tools per connection | | j19 | ~300 |
-| j22 | Pip works in one Jira connection per turn | | r8, j18, j20 | ~450 |
-| j23 | PR links and key collisions | | j18 | ~350 |
-| j24 | A mock with several Jira accounts | | j18 | ~500 |
-| j25 | Look-ups by `ItemRef` and a key chooser | UI | j24 | ~500 |
+| j15 | Multi-Jira groundwork (#261) | | none | ~100 |
+| j16 | `Auth` holds several Jira sessions (#260) | | none | ~450 |
+| j17 | `Core` per Jira connection (#268) | | j15, j16 | ~550 |
+| j18 | Reads fan out; `jira_connect` adds or replaces (#274) | | j17 | ~550 |
+| j19 | Drafts and runs follow their connection (#273) | | j17 | ~450 |
+| j20 | Workstreams and the run supervisor per connection (#275) | | j19 | ~400 |
+| j21 | Run service and agent tools per connection (#276) | | j19 | ~300 |
+| j22 | Pip works in one Jira connection per turn (open until #291 lands) | | r8, j18, j20 | ~450 |
+| j23 | PR links and key collisions (#280) | | j18 | ~350 |
+| j24 | A mock with several Jira accounts (#281) | | j18 | ~500 |
+| j25 | Look-ups by `ItemRef` and a key chooser (#287) | UI | j24 | ~500 |
 | j26 | Add Jira accounts | UI | p5, j19, j20, j21, j22, j23, j25 | ~450 |
 | j27 | Site chips, Account filter, Rail labels, multi-site e2e | UI | j26 | ~450 |
 | d28 | Rules, README and findings | | r14, j27 | docs |
-| c0 | Codex smoke test | owner | none | doc |
-| c1 | Codex models and capability flags | | r7, c0 | ~250 |
-| c2 | Codex Pip runner, only if c0 says yes | | c1, r8 | ~500 |
-| c3 | A run backend trait | | r13 | ~400 |
-| c4 | Codex launch and supervision | | c1, c3 | ~600 |
-| c5 | Codex answer, resume, stop and clean-up | | c4 | ~500 |
-| c6 | Codex final answer, Terminal and UI | UI | c5, r14 | ~400 |
-| t1 | Agents work only in Gossamr's own clones | UI | none | ~600 |
-| t2 | One-click trust for a clone | UI | t1 | ~500 |
+| c0 | Codex smoke test (#259) | owner | none | doc |
+| c1 | Codex models and capability flags (#284) | | r7, c0 | ~250 |
+| c2 | Codex Pip runner (skipped, 2 Nov 2026) | | c1, r8 | none |
+| c3 | A run backend trait (follow-up plan) | | r13 | ~400 |
+| c4 | Codex launch and supervision (follow-up plan) | | c1, c3 | ~600 |
+| c5 | Codex answer, resume, stop and clean-up (follow-up plan) | | c4 | ~500 |
+| c6 | Codex final answer, Terminal and UI (follow-up plan) | UI | c5, r14 | ~400 |
+| t1 | Agents work only in Gossamr's own clones (#272) | UI | none | ~600 |
+| t2 | One-click trust for a clone (#286) | UI | t1 | ~500 |
 
-Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) and the owner checks (o10, c0). After p1, routing (r7) and the "+ Add" menu (p5) can start. Within the tracks, p5 and p2, r9 and r11, j18 and j19, and j20, j21, j23 and j24 can be built in parallel. The Codex steps follow the rest; c2 is skipped if c0 says Pip can't be locked down on Codex. t1 can start at any time beside the other tracks, and t2 follows it. Neither waits for r11 to r13 (17.4).
+A PR number marks a merged step.
+
+Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) and the owner check (o10). After p1, routing (r7) and the "+ Add" menu (p5) can start. Within the tracks, p5 and p2, r9 and r11, j18 and j19, and j20, j21, j23 and j24 can be built in parallel. c2 is skipped (2 Nov 2026), and c3 to c6 move to a follow-up plan. t1 can start at any time beside the other tracks, and t2 follows it. Neither waits for r11 to r13 (17.4).
 
 ### Step details
 
@@ -655,7 +663,7 @@ Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) an
 
 **d28. Rules, README and findings.** AGENTS.md rules 2 and 4 (Section 12) and its layout table. Rule 4 keeps the work-folder and trust sentences t1 and t2 put there. The README's Connections section: adding a Claude and a second Jira. `docs/agents-cli-findings.md`: one daemon per config folder, with o10's result. Mark this plan's steps done here.
 
-**c0 to c6.** As in 8.2. c0 and o10 are the only steps waiting on the owner. c6 adds Codex to the README.
+**c0 to c6.** As in 8.2. c0 (#259) and c1 (#284) are merged. c2 is skipped by owner decision on 2 Nov 2026. c3 to c6 move to a follow-up plan, and c6 adds Codex to the README. o10 is the only step waiting on the owner.
 
 **t1. Agents work only in Gossamr's own clones.** Section 16. *Rust.* `fresh::work_path(home, repo)` (16.2), used by `plan`, `resolve_clone`, `check()`, `prepare` and later `trust`. `finder.rs` `plan` returns `work_path` always: the base from the clone's `origin/HEAD` when it exists, else from `git ls-remote --symref` (and `gh repo view` on a sign-in failure); the worktree name from `existing_names`, or with no names taken when there is no clone yet. `resolve_clone` accepts a missing path only when it equals `work_path` for the run's repository, and any existing path must be inside the work folder. `RunService::prepare(run)` on every path to `spawn`: `start`, and `launch_waiting` before `start_waiting` for each run that may start; outside the launch lock; the repository's async lock (in place of the `cloning` set) and its file lock under `~/Gossamr/agents/.locks`; then `ensure_clone`, which clones into a temp folder and renames it into place, removes only its own temp folder, and fetches (`--prune`, 30 s, at most once per two minutes per repository) only when the clone's local config passes the allow list in 16.8; Gossamr's git calls in the clone pin `core.hooksPath`, `core.fsmonitor` and `protocol.ext.allow`. A failure in `prepare` is written only if the run, loaded again under the launch lock, is still in the state it was. `check()` leaves a run Queued while its repository's lock is held, and refuses a new session outside the work folder. `RunFailure` gains `OutsideWorkFolder { path }` and `CloneOccupied { path }` (a stored `noClone` still reads); `Run.inWorkFolder` is worked out when a run is read. After `prepare`, the run stores `git config user.email` and `user.signingkey` from inside the clone (16.4). A new command `runs_reveal_work_folder`, and the work folder's commit address and an `includeIf` flag on `agent_settings`. Delete `find_clones`, `default_roots`, `CloneCache`, `RunService.roots` (and the `roots` parameter of `RunService::new`), the commands `runs_clones`, `runs_pick_clone` and `runs_clone_fresh`, `pickedClones` in `AppConfig`, and `control.rs` `trust_folder`. Drop "or clone into ~/Code yourself" from the occupied words. *Mirror* the removed and new commands, the new failure types and `inWorkFolder` and the commit address in `types.ts`, `jira.ts` and the mock. *Front end:* `CloneActions` becomes the one button "Ask Pip to start it again" for `outsideWorkFolder`; `failureHelp.ts` picks Retry for `noClone`, Ask Pip for `outsideWorkFolder`, "move it, then Retry" for `cloneOccupied`, and the 16.3 words in place of any Terminal trust step when `inWorkFolder` is false; `RunWhere` labels and text for both kinds of run; the run card's "Cloning acme/webshop…" and "Commits as …"; the "Where agents work" section in Settings › Agents (16.6). The mock's sample clones move to `/Users/sample/Gossamr/agents/…`, with one sample run left in `~/Code` for the legacy text. *Docs:* README "Pip and agents" with the `includeIf` advice, AGENTS.md rule 4's sentence about where agents work, and a line in `docs/agents-cli-findings.md`. *Test rig:* the shared rig's clone moves to `fx.home/Gossamr/agents/acme/webshop`, `RunService::new` loses `roots` at every call site (`lib.rs`, `rig.rs`, `service/tests.rs`, `tracker/tests.rs`, `control/tests.rs`, `real_tests.rs`), the ignored real tests get `with_home(scratch)` and clones under the scratch work folder (never run by builders), `domain::fixtures::run_spec` moves to a work-folder path, and one rig helper makes a deliberately legacy run with a clone at `fx.home/Code/webshop`. *Tests:* `plan` returns the work-folder path when `~/Code` holds a clone of the repository; `work_path` with a linked `~/Gossamr` and with a repository named in mixed case gives one real path that `check()` accepts after the clone is made; a queued run and a Retry set up in `~/Code` fail with `OutsideWorkFolder`, while a working run there is still tracked, answered, messaged and stopped; two runs on a new repository clone once, the second waiting; a workstream run plus a `launch_waiting` call during a slow clone gives exactly one launch, after the clone ends; two `RunService`s sharing one `HOME` clone once and neither deletes the other's folder; a failed fetch is noted and the launch goes on; a local `credential.helper` or `url.*.insteadOf` in the clone skips the fetch, and the fake git records no fetch; a clone made by the `gh repo clone` fallback (SSH origin, `upstream` remote) is fetched; the fetch isn't repeated within two minutes; a failed clone fails the run with `NoClone`, leaves no temp folder, and Retry clones again; `resolve_clone` refuses any other missing path; the occupied path gives `CloneOccupied` and is left in place; the commit address comes from the clone's own folder. Update the e2e specs that name `~/Code` clones (`agent-steps`, `needs-you`). Notes: touches `runs/service.rs` with r12 and j21, `finder.rs` with r13 and `control.rs` with r11; whichever lands second merges `main` first. It waits for no step. If it passes 600 lines, the commit address (16.4) and Reveal in Finder move to a follow-up pull request before t2.
 
@@ -663,7 +671,7 @@ Three tracks can start at once: providers (p1 onwards), multi-Jira (j15, j16) an
 
 ## 15. Risks and open questions
 
-- **Codex waits for its runner.** Codex shows in **+ Add** only from c6, and c0 needs the owner's Codex login. Decision 2 says what to confirm.
+- **Codex waits for its runner.** Codex rows show with Beta from r14a. **+ Add** offers Codex, and agents run on it, only after the Codex runner (c3 to c6), which moves to a follow-up plan. Decisions 2, 12 and 13 record the owner's choices of 2 Nov 2026.
 - **Two daemons at once.** Claude keeps a daemon per folder, and Gossamr's real tests already run one in a scratch folder beside the person's own. Two signed-in folders side by side haven't been watched. o10 checks it before r13, the one step built on it.
 - **The shell environment can't be read.** Pip and runs on the default instance are then refused until it can (6.3). Agents already need it today; Pip did not.
 - **`--effort` with `--bg`** is unchecked, so agents don't pass it.
