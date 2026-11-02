@@ -38,7 +38,6 @@ use domain::{
     Comment, Container, DevLink, Event, FeedPage, FeedQuery, Filter, Footprint, Identity, Intent, ItemRef, Proposal, ProposalQuery, PullRequestDetail, Run, RunEvent, RunQuery, Stray,
     WatchChange, WorkItem, Workstream, WorkstreamEvent,
 };
-use runs::service::CloneChoice;
 use sync::Trigger;
 use wire::Topic;
 
@@ -150,10 +149,9 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     tauri::async_runtime::spawn(async move {
         loop {
             let polled = service.poll().await;
-            // The poll has let go of the launch lock by now, which each start takes again.
-            if let Err(e) = service.launch_waiting().await {
-                eprintln!("couldn't start the runs waiting for a slot: {e}");
-            }
+            // On its own task, so a clone or fetch for a waiting run never holds up the next poll. The poll has let go
+            // of the launch lock by now, which each start takes again.
+            use_freed_slot(&service);
             let focused = app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false);
             let wait = if polled.busy && focused { runs::tracker::POLL_BUSY } else { runs::tracker::POLL_IDLE };
             tokio::select! {
@@ -165,8 +163,8 @@ fn spawn_run_tracker(app: AppHandle, service: RunsState) {
     });
 }
 
-/// After a stop has freed a slot, starts what waits for one on its own task: the stop has let go of the launch lock by
-/// now, and each start takes it again.
+/// Starts what waits for a slot on its own task, after a stop or a poll: they have let go of the launch lock by now,
+/// and each start takes it again.
 fn use_freed_slot(service: &RunsState) {
     let service = service.clone();
     tauri::async_runtime::spawn(async move {
@@ -665,24 +663,6 @@ async fn workstreams_events(core: State<'_, CoreState>, id: String) -> Result<Ve
     core.workstream_events(&core.scope().await?, &id).await
 }
 
-/// Local clones of a watched repository.
-#[tauri::command]
-async fn runs_clones(runs: State<'_, RunsState>, repo: String) -> Result<CloneChoice> {
-    runs.clones(&repo).await
-}
-
-/// Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>`. Only for the person's own button press, after the
-/// folder and the command were shown.
-#[tauri::command]
-async fn runs_clone_fresh(runs: State<'_, RunsState>, repo: String) -> Result<runs::repo::LocalClone> {
-    runs.clone_fresh(&repo).await
-}
-
-#[tauri::command]
-async fn runs_pick_clone(runs: State<'_, RunsState>, repo: String, path: std::path::PathBuf) -> Result<()> {
-    runs.pick_clone(&repo, &path).await
-}
-
 /// Stops a run that is working or waiting on the person. Its conversation and worktree are kept.
 #[tauri::command]
 async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
@@ -981,7 +961,6 @@ pub fn run() {
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::default()),
                     runs::index::RunIndex::load(&core.data_dir()),
-                    runs::service::RunService::default_roots(),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
                 .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
@@ -1067,9 +1046,6 @@ pub fn run() {
             runs_worktree_info,
             runs_delete,
             runs_start,
-            runs_clones,
-            runs_clone_fresh,
-            runs_pick_clone,
             runs_stop,
             runs_answer,
             runs_adopt_session,

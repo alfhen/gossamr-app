@@ -1,14 +1,15 @@
 //! What Pip's agent tools ask of the run service: where a run would go, and to start, message and stop one.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use super::cli::CliError;
 use super::failure::Failure;
+use super::fresh::{remote_default_branch, work_path};
 use super::launcher::RunLauncher;
 use super::message::Delivery;
+use super::repo::{existing_names, new_name, origin_matches};
 use super::service::RunService;
 use crate::agent::AgentDriver;
 use crate::domain::{Actor, ClonePlan, Run};
@@ -17,16 +18,20 @@ use crate::error::Result;
 #[async_trait]
 impl AgentDriver for RunService {
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String> {
-        let choice = self.clones(repo).await.map_err(|e| e.to_string())?;
-        // The person's pick is listed first. Without one, the first by path.
-        let clone = match &choice.picked {
-            Some(_) => choice.clones.first(),
-            None => choice.clones.iter().min_by(|a, b| a.path.cmp(&b.path)),
-        }
-        .ok_or_else(|| format!("There is no local clone of {repo} in ~/Code, ~/Developer or ~/src. Ask the person to clone it there."))?;
-        let path: PathBuf = clone.path.clone();
-        let name = self.suggest_name(&path, key, title).await.map_err(|e| e.to_string())?;
-        Ok(ClonePlan { path, base: clone.default_branch.clone().unwrap_or_else(|| clone.branch.clone()), name })
+        self.core.require_watched_repo(repo).map_err(|e| e.to_string())?;
+        let home = self.fresh_home().ok_or("Gossamr can't find your home folder.")?;
+        let path = work_path(&home, repo).map_err(|e| e.to_string())?;
+        let git = self.git().await.map_err(|e| e.to_string())?;
+        let cloned = path.join(".git").exists() && git.origin(&path).await.is_some_and(|url| origin_matches(&url, repo));
+        let (base, taken) = match cloned.then_some(&path) {
+            Some(clone) => (git.default_branch(clone).await, existing_names(&git, clone).await),
+            None => (None, Default::default()),
+        };
+        let base = match base {
+            Some(base) => base,
+            None => remote_default_branch(&git, repo).await.map_err(|e| e.to_string())?,
+        };
+        Ok(ClonePlan { path, base, name: new_name(key, title, &taken) })
     }
 
     async fn unready(&self) -> Option<String> {
@@ -78,37 +83,47 @@ impl AgentDriver for RunService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::rig::ready;
+    use crate::runs::fresh::agents_root;
     use crate::runs::repo::testing::clone_with_origin;
+    use crate::runs::rig::{legacy_clone, ready};
 
     #[tokio::test]
-    async fn the_plan_is_the_clone_its_default_branch_and_a_new_worktree_name() {
+    async fn the_plan_is_the_work_folder_clone_its_default_branch_and_a_new_worktree_name() {
         let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-branches"), "worktree-ca-1-fix-the-cart-0001\n").unwrap();
         let plan = rig.svc.plan("acme/webshop", "CA-1", "Fix the cart").await.unwrap();
         assert_eq!(plan.path, rig.clone);
-        assert!(plan.name.starts_with("ca-1-fix-the-cart-"), "{}", plan.name);
-        assert!(!plan.base.is_empty());
+        assert!(plan.name.starts_with("ca-1-fix-the-cart-") && plan.name != "ca-1-fix-the-cart-0001", "{}", plan.name);
+        assert_eq!(plan.base, "main");
     }
 
     #[tokio::test]
-    async fn without_a_pick_the_first_clone_by_path_is_used_and_a_pick_wins() {
-        let rig = ready().await;
-        let other = rig.fx.home.join("a-webshop");
-        clone_with_origin(&other, "https://github.com/acme/webshop.git");
-        let other = other.canonicalize().unwrap();
-        let first = rig.svc.plan("acme/webshop", "CA-1", "x").await.unwrap().path;
-        assert_eq!(first, other.min(rig.clone.clone()));
-        rig.svc.pick_clone("acme/webshop", &rig.clone).await.unwrap();
-        assert_eq!(rig.svc.plan("acme/webshop", "CA-1", "x").await.unwrap().path, rig.clone);
-    }
-
-    #[tokio::test]
-    async fn no_clone_and_an_unwatched_repository_come_back_as_words_for_pip() {
+    async fn a_clone_in_code_is_ignored_even_when_it_is_the_only_one() {
         let rig = ready().await;
         std::fs::remove_dir_all(&rig.clone).unwrap();
-        let none = rig.svc.plan("acme/webshop", "CA-1", "x").await.unwrap_err();
-        assert!(none.contains("no local clone of acme/webshop"), "{none}");
+        let legacy = legacy_clone(&rig.fx);
+        let plan = rig.svc.plan("acme/webshop", "CA-1", "x").await.unwrap();
+        assert_ne!(plan.path, legacy);
+        assert_eq!(plan.path, agents_root(&rig.fx.home).join("acme/webshop"));
+        assert_eq!(plan.base, "main", "the base comes from the remote when there is no clone yet");
+        let log = std::fs::read_to_string(rig.fx.dir.join("git.log")).unwrap_or_default();
+        assert!(!log.contains(&legacy.display().to_string()), "git never looked in ~/Code: {log}");
+    }
+
+    #[tokio::test]
+    async fn a_repository_with_no_clone_yet_plans_the_path_and_makes_nothing() {
+        let rig = ready().await;
+        std::fs::remove_dir_all(&rig.clone).unwrap();
+        let plan = rig.svc.plan("Acme/WebShop", "CA-1", "x").await.unwrap();
+        assert_eq!(plan.path, rig.clone);
+        assert!(!plan.path.exists());
+    }
+
+    #[tokio::test]
+    async fn an_unwatched_repository_comes_back_as_words_for_pip() {
+        let rig = ready().await;
         let unwatched = rig.svc.plan("acme/other", "CA-1", "x").await.unwrap_err();
         assert!(unwatched.contains("isn't a repository you watch"), "{unwatched}");
+        clone_with_origin(&rig.fx.home.join("Code/other"), "https://github.com/acme/other.git");
     }
 }

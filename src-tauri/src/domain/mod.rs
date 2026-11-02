@@ -74,7 +74,7 @@ pub(crate) mod fixtures {
         RunSpec {
             role: Role::parse("investigate").unwrap(),
             repo: "acme/webshop".into(),
-            clone_path: "/Users/me/Code/webshop".into(),
+            clone_path: "/Users/me/Gossamr/agents/acme/webshop".into(),
             base: "main".into(),
             name: "eng-1-fix-cart-3f9a".into(),
             brief: "Find out why the cart total is wrong.".into(),
