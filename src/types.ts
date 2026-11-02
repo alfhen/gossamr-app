@@ -1104,6 +1104,8 @@ export interface DevLink {
   provenance: LinkSource;
   /** 0.95 branch, 0.9 title, 0.85 commit message, 0.6 description. */
   confidence: number;
+  /** Another site has an item with the same key, so the change may belong to that one instead. */
+  ambiguous: boolean;
 }
 
 /** A pull request with the files it changes, for review draft hunks. Mirrors `codehost::PullDiff`. */
