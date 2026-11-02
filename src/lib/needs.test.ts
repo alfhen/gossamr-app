@@ -314,10 +314,10 @@ describe("needs: failures persist until they are dealt with", () => {
     expect(needs(input({ workstreams: [ws], runs: [{ ...failed, state: "queued" }] }))).toEqual([]);
   });
 
-  it("keeps a folder to trust as a failure, offering the step in Terminal and Dismiss", () => {
+  it("keeps a clone to trust as a failure, offering to review it and Dismiss", () => {
     const trust = run("r1", "build", "failed", { shortId: null, failure: { type: "untrustedFolder", path: "/Users/sample/Gossamr/agents/acme/storefront" } });
     const [n] = needs(input({ workstreams: [ws], runs: [trust] }));
-    expect(n).toMatchObject({ kind: "failure", title: "R1 needs its folder trusted", primary: { id: "open", label: "Trust this folder in Terminal" }, secondary: [{ id: "dismiss", label: "Dismiss" }] });
+    expect(n).toMatchObject({ kind: "failure", title: "R1 needs its clone trusted", primary: { id: "open", label: "Review and trust" }, secondary: [{ id: "dismiss", label: "Dismiss" }] });
   });
 
   it("offers Retry for a launch that failed with no step to take, and Dismiss", () => {
@@ -359,7 +359,7 @@ describe("needs: a failure is a need only while it is the latest of its kind on 
   it("collapses several plan runs that failed for the same untrusted folder into one need, on the latest run", () => {
     const list = only([failedAt("r1", 90, trust), failedAt("r2", 60, trust), failedAt("r3", 30, trust)]);
     expect(list.map((n) => [n.kind, n.runId])).toEqual([["failure", "r3"]]);
-    expect(list[0].title).toBe("R3 needs its folder trusted");
+    expect(list[0].title).toBe("R3 needs its clone trusted");
   });
 
   it("drops a failure once a newer run of the same kind on the ticket is running or finished", () => {

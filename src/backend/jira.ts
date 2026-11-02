@@ -347,8 +347,8 @@ export class JiraBackend implements Backend {
     return invoke<DeleteResult>("runs_delete", { id, removeWorktree });
   }
 
-  runsRetryLaunch(id: string) {
-    return invoke<Run>("runs_start", { id, retry: true });
+  runsRetryLaunch(id: string, options?: { trust?: boolean }) {
+    return invoke<Run>("runs_start", { id, retry: true, ...(options?.trust && { trust: true }) });
   }
 
   onRunsChanged(listener: (change: RunsChanged) => void) {

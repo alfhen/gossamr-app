@@ -3,7 +3,7 @@ import type { Run } from "../types";
 export const INSTALL_COMMAND = "curl -fsSL https://claude.ai/install.sh | bash";
 export const INSTALL_URL = "https://code.claude.com/docs/en/setup";
 
-export type FailureAct = "terminal" | "install";
+export type FailureAct = "terminal" | "install" | "trust";
 
 export interface FailureHelp {
   kind: "untrustedFolder" | "notSignedIn" | "modeRefused" | "claudeMissing" | "noClone" | "outsideWorkFolder" | "cloneOccupied" | "capReached";
@@ -12,6 +12,10 @@ export interface FailureHelp {
   /** The sheet's explanation. */
   detail: string;
   primary: { label: string; act: FailureAct } | null;
+  /** The button after the primary one: Terminal, when the primary one is Trust. */
+  secondary?: { label: string; act: FailureAct } | null;
+  /** Why Gossamr didn't trust the clone, in the words it gave, when the person tried. */
+  refusal?: string | null;
   /** The exact text for someone who would rather use their own terminal. */
   command: { text: string; note: string | null } | null;
   /** Retry waits for the person to have used Terminal (or copied the command) when there is something to do there first. */
@@ -30,6 +34,42 @@ const OUTSIDE_WORK_FOLDER = {
   retry: false,
 } as const satisfies FailureHelp;
 
+/** What the card says when Claude still refuses after the trust was saved. */
+export const STILL_UNTRUSTED = "Claude still doesn't trust it. Its settings may have changed in a new version. Trust it in Terminal.";
+
+const TRUST_DETAIL =
+  "Trusting a folder lets the repository's own Claude settings run with the agent: the hooks, MCP servers and permission rules in its .claude folder and .mcp.json. They run on your Mac as you. Trust it only if you'd run this repository's code yourself. Gossamr trusts this one folder, for Claude only, and then starts the agent.";
+
+function untrusted(run: Run, path: string, refusal: string | null): FailureHelp {
+  const command = { text: `cd ${shellQuote(path)} && claude`, note: null };
+  if (run.inWorkFolder !== true) {
+    return {
+      kind: "untrustedFolder",
+      summary: "Claude asks you once per folder before it will work there.",
+      detail: `Claude hasn't been trusted in ${path} yet, so it won't start an agent there. Terminal opens in that folder with Claude: accept its trust question, then close it and retry. Claude asks because a cloned repository's own hooks, tools and settings run with the agent.`,
+      primary: { label: "Trust this folder in Terminal", act: "terminal" },
+      command,
+      retryNeedsTerminal: true,
+      retry: true,
+    };
+  }
+  const trust = { label: "Trust this clone for Claude", act: "trust" } as const;
+  const [primary, secondary] = refusal
+    ? [{ label: "Trust in Terminal", act: "terminal" } as const, refusal === STILL_UNTRUSTED ? null : trust]
+    : [trust, { label: "Trust in Terminal instead", act: "terminal" } as const];
+  return {
+    kind: "untrustedFolder",
+    summary: `Claude hasn't trusted Gossamr's clone of ${run.spec.repo} yet.`,
+    detail: TRUST_DETAIL,
+    primary,
+    secondary,
+    refusal,
+    command,
+    retryNeedsTerminal: true,
+    retry: true,
+  };
+}
+
 /** `path` as one shell word, so the copied command works for a folder with spaces or quotes in its name. */
 export function shellQuote(path: string): string {
   return `'${path.replace(/'/g, "'\\''")}'`;
@@ -43,22 +83,14 @@ function occupiedDetail(error: string | null | undefined): string {
 }
 
 /** What to offer for a failed run that never got a session. Null for anything else. */
-export function failureHelp(run: Run): FailureHelp | null {
+export function failureHelp(run: Run, refusal: string | null = null): FailureHelp | null {
   if (run.state !== "failed" || run.shortId) return null;
   const failure = run.failure;
   // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
   if (run.inWorkFolder === false) return { ...OUTSIDE_WORK_FOLDER };
   switch (failure?.type) {
     case "untrustedFolder":
-      return {
-        kind: "untrustedFolder",
-        summary: "Claude asks you once per folder before it will work there.",
-        detail: `Claude hasn't been trusted in ${failure.path} yet, so it won't start an agent there. Terminal opens in that folder with Claude: accept its trust question, then close it and retry. Claude asks because a cloned repository's own hooks, tools and settings run with the agent. Gossamr doesn't change Claude's settings for you.`,
-        primary: { label: "Trust this folder in Terminal", act: "terminal" },
-        command: { text: `cd ${shellQuote(failure.path)} && claude`, note: null },
-        retryNeedsTerminal: true,
-        retry: true,
-      };
+      return untrusted(run, failure.path, refusal);
     case "notSignedIn":
       return {
         kind: "notSignedIn",
