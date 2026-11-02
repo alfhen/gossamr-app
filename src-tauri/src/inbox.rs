@@ -49,6 +49,7 @@ pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
 pub use run_outcome::{RunOutcome, SUMMARY_ONLY};
 pub use probes::Probe;
+pub use providers::Lookup;
 pub use watch::{CatalogPage, WatchState};
 
 

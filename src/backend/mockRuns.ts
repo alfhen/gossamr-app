@@ -280,7 +280,7 @@ const REPO_PROJECTS: Record<string, string> = { "acme/storefront": "CA", "acme/p
 
 const FAILED_TEXT = {
   notSignedIn: "Claude isn't signed in. Run `claude` in Terminal and sign in, then retry.",
-  claudeMissing: "Claude Code isn't installed, or Gossamr can't find it.",
+  claudeMissing: "Claude Code isn't installed, or Gossamr can't find it for Claude.",
   noClone: "Cloning failed: fatal: unable to access 'https://github.com/acme/storefront.git/': Could not resolve host: github.com",
   outsideWorkFolder: `This agent was set up in ~/Code/storefront, before Gossamr kept its own clones. Ask Pip to start it again, and it will use Gossamr's clone.`,
   cloneOccupied: "~/Gossamr/agents/acme/payments already exists and isn't a clone of acme/payments. Move it away, then retry.",

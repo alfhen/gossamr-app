@@ -385,11 +385,11 @@ impl RunService {
 
     /// `jobs/<id>` lives under the config directory `claude auth status` reports, never a hard-coded `~/.claude`.
     pub(super) async fn claude_config_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
-        if let Some(known) = self.config_dir.lock().expect("config dir lock poisoned").clone() {
-            return Some(known);
+        if let Some(known) = self.config_dir.lock().expect("config dir lock poisoned").get(&tc.instance_id) {
+            return Some(known.clone());
         }
         let found = tc.cli.auth_status().await.ok()?.config_directory?;
-        *self.config_dir.lock().expect("config dir lock poisoned") = Some(found.clone());
+        self.config_dir.lock().expect("config dir lock poisoned").insert(tc.instance_id.clone(), found.clone());
         Some(found)
     }
 
