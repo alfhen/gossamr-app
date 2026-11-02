@@ -22,7 +22,25 @@ enum Listing {
     Unreadable(String),
 }
 
+/// The provider instances as they are now, what each may run as, and the shell environment that was captured for them.
+pub(super) struct Setup {
+    pub providers: Vec<ProviderInstance>,
+    pub states: Vec<(String, ProviderState)>,
+    pub shell: Option<Arc<RunEnv>>,
+}
+
 impl Core {
+    pub(super) async fn provider_setup(&self) -> Setup {
+        match self.listing().await {
+            Listing::Rows { rows, shell } => {
+                let shell = shell.inspect_err(|why| eprintln!("{why}")).ok();
+                let states = rows.iter().map(|(p, state)| (p.id.clone(), state.clone())).collect();
+                Setup { providers: rows.into_iter().map(|(p, _)| p).collect(), states, shell }
+            }
+            Listing::Empty | Listing::Unreadable(_) => Setup { providers: Vec::new(), states: Vec::new(), shell: None },
+        }
+    }
+
     /// The state of every provider instance, in order. The folder rules run on the list as it is now, and a failed
     /// capture of the shell makes the instance without a folder unavailable, never the app's own environment.
     pub async fn provider_states(&self) -> Vec<(String, ProviderState)> {
