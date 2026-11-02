@@ -9,7 +9,7 @@ import { sheetKey } from "./runSheetLogic";
 import { useRuns } from "./runsStore";
 import { bulkCleanup, cleanable, cleanupReport } from "./cleanupLogic";
 import { messageOf, useToasts } from "./toasts";
-import type { AgentSettings } from "../types";
+import type { AgentSettings, WorkFolderGit } from "../types";
 import { isTypingTarget } from "../lib/keys";
 
 const typing = (t: EventTarget | null) => isTypingTarget(t) || (t instanceof HTMLElement && !!t.closest("[data-esc-local]"));
@@ -34,6 +34,14 @@ function Settings() {
       live = false;
     };
   }, [backend]);
+  const [workFolder, setWorkFolder] = useState<WorkFolderGit | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    backend?.runsWorkFolderGit().then((g) => live && setWorkFolder(g), () => live && setWorkFolder(null));
+    return () => {
+      live = false;
+    };
+  }, [backend]);
   const saving = useRef(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const save = (next: AgentSettings) => {
@@ -47,6 +55,10 @@ function Settings() {
         saving.current = false;
         setSettingsSaving(false);
       });
+  };
+
+  const reveal = () => {
+    backend?.runsRevealWorkFolder().catch((e) => useToasts.getState().push(`Couldn't show the folder. ${messageOf(e)}`));
   };
 
   const finished = useMemo(() => runs.filter(cleanable), [runs]);
@@ -73,7 +85,7 @@ function Settings() {
     setReport(cleanupReport(removed, refused));
   };
   const cleanup = offer ? { count: offer.runs.length, reason: offer.reason, report, busy: cleaning } : report ? { count: 0, reason: "", report, busy: false } : null;
-  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
+  return <AgentsSettingsView runs={runs} stopping={stopping} keepRunning={keepRunning ?? (stoppable(runs).length || null)} settings={settings} workFolder={workFolder} settingsSaving={settingsSaving} cleanup={cleanup} onSettings={save} onRevealWorkFolder={reveal} onCleanup={() => void cleanAll()} onStopAll={() => void useRuns.getState().stopAll()} onClose={() => useRuns.getState().closeSheet()} />;
 }
 
 /** Whichever sheet the Agents feature has open over the screen, and the keys that go with it. */

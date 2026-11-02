@@ -20,6 +20,7 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  WorkFolderGit,
   ModelDefaults,
   ModelOption,
   CleanupResult,
@@ -266,12 +267,20 @@ export class JiraBackend implements Backend {
     return revealItemInDir(path);
   }
 
+  runsRevealWorkFolder() {
+    return invoke<void>("runs_reveal_work_folder");
+  }
+
   runsDisk(id: string) {
     return invoke<number>("runs_disk", { id });
   }
 
   runsSettings() {
     return invoke<AgentSettings>("agent_settings", { settings: null });
+  }
+
+  runsWorkFolderGit() {
+    return invoke<WorkFolderGit | null>("agent_work_folder_git");
   }
 
   providerModels(instanceId: string) {
