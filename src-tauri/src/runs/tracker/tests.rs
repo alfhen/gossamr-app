@@ -1158,3 +1158,19 @@ async fn a_working_run_in_code_is_still_tracked_messaged_answered_and_stopped() 
     assert_eq!(rig.svc.stop_as(&run.id, crate::domain::Actor::Person).await.unwrap().state, RunState::Stopped);
     assert!(rig.get(&run).await.failure.is_none());
 }
+
+#[tokio::test]
+async fn the_claude_and_projects_folders_are_remembered_for_each_instance_apart() {
+    let rig = ready().await;
+    let first = rig.svc.tools.get().await.unwrap();
+    let other_cli = Arc::new(FakeCli::new());
+    other_cli.with(|s| s.config_dir = rig.fx.dir.join("other-config"));
+    let second = Toolchain { instance_id: "claude_2".into(), ..Toolchain::new(other_cli, first.env.clone()) };
+
+    let (config, other_config) = (rig.fx.dir.join("claude-config"), rig.fx.dir.join("other-config"));
+    assert_eq!(rig.svc.claude_config_dir(&first).await, Some(config.clone()));
+    assert_eq!(rig.svc.claude_config_dir(&second).await, Some(other_config.clone()));
+    assert_eq!(rig.svc.claude_config_dir(&first).await, Some(config.clone()), "asking for the second didn't replace the first");
+    assert_eq!(rig.svc.claude_projects_dir(&first).await, Some(config.join("projects")));
+    assert_eq!(rig.svc.claude_projects_dir(&second).await, Some(other_config.join("projects")));
+}

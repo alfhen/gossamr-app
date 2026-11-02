@@ -28,6 +28,7 @@ mod fan_out;
 mod instances;
 mod models;
 mod probes;
+mod provider_probes;
 mod providers;
 mod run_outcome;
 mod pip_runs;
@@ -48,6 +49,7 @@ pub use code::{CodeRef, CodeService};
 pub use drafts::Edit;
 pub use run_outcome::{RunOutcome, SUMMARY_ONLY};
 pub use probes::Probe;
+pub use providers::Lookup;
 pub use watch::{CatalogPage, WatchState};
 
 
@@ -199,6 +201,7 @@ pub struct Core {
     db: Mutex<Open>,
     jira_sync: Mutex<HashMap<String, JiraSync>>,
     probes: probes::Probes,
+    provider_probes: provider_probes::ProviderProbes,
     /// The person's shell environment, which provider instances without a folder take their login from.
     shell: Arc<ShellCapture>,
     /// What `codex debug models` last said, per Codex instance.
@@ -240,6 +243,7 @@ impl Core {
             db: Mutex::new(Open::default()),
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
+            provider_probes: Default::default(),
             shell: Arc::default(),
             codex_models: Default::default(),
             schedules: Mutex::new(HashMap::new()),

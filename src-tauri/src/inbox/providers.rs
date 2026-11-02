@@ -1,21 +1,89 @@
 //! Core's side of the provider instances: what each one may run as.
 
+use std::sync::Arc;
+
 use super::Core;
 use crate::config::AppConfig;
+use crate::connections::ProviderInstance;
+use crate::runs::env::RunEnv;
 use crate::runs::provider_env::{states, ProviderState};
 use crate::runs::provider_folder::Places;
 
+pub enum Lookup {
+    Found { instance: ProviderInstance, state: ProviderState, shell: std::result::Result<Arc<RunEnv>, String> },
+    Missing,
+    /// `config.json` can't be read, so the list is locked; the text says why.
+    Unreadable(String),
+}
+
+enum Listing {
+    Empty,
+    Rows { rows: Vec<(ProviderInstance, ProviderState)>, shell: std::result::Result<Arc<RunEnv>, String> },
+    Unreadable(String),
+}
+
+/// The provider instances as they are now, what each may run as, and the shell environment that was captured for them.
+pub(super) struct Setup {
+    pub providers: Vec<ProviderInstance>,
+    pub states: Vec<(String, ProviderState)>,
+    pub shell: Option<Arc<RunEnv>>,
+}
+
 impl Core {
+    pub(super) async fn provider_setup(&self) -> Setup {
+        match self.listing().await {
+            Listing::Rows { rows, shell } => {
+                let shell = shell.inspect_err(|why| eprintln!("{why}")).ok();
+                let states = rows.iter().map(|(p, state)| (p.id.clone(), state.clone())).collect();
+                Setup { providers: rows.into_iter().map(|(p, _)| p).collect(), states, shell }
+            }
+            Listing::Empty | Listing::Unreadable(_) => Setup { providers: Vec::new(), states: Vec::new(), shell: None },
+        }
+    }
+
     /// The state of every provider instance, in order. The folder rules run on the list as it is now, and a failed
     /// capture of the shell makes the instance without a folder unavailable, never the app's own environment.
     pub async fn provider_states(&self) -> Vec<(String, ProviderState)> {
-        let config = AppConfig::load(&self.data_dir);
-        if config.providers.is_empty() || config.providers_error.is_some() || config.connections_error.is_some() {
-            return Vec::new();
+        self.providers_with_state().await.into_iter().map(|(p, state)| (p.id, state)).collect()
+    }
+
+    /// One provider instance with its state and the shell it was judged against, from a single capture of the shell.
+    /// An unreadable list is told apart from an id that isn't in it.
+    pub async fn lookup_provider(&self, id: &str) -> Lookup {
+        match self.listing().await {
+            Listing::Unreadable(why) => Lookup::Unreadable(why),
+            Listing::Empty => Lookup::Missing,
+            Listing::Rows { rows, shell } => match rows.into_iter().find(|(p, _)| p.id == id) {
+                Some((instance, state)) => Lookup::Found { instance, state, shell },
+                None => Lookup::Missing,
+            },
         }
-        let shell = self.shell.get().await.inspect_err(|e| eprintln!("{e}")).ok();
+    }
+
+    async fn providers_with_state(&self) -> Vec<(ProviderInstance, ProviderState)> {
+        match self.listing().await {
+            Listing::Rows { rows, shell } => {
+                if let Err(why) = shell {
+                    eprintln!("{why}");
+                }
+                rows
+            }
+            Listing::Empty | Listing::Unreadable(_) => Vec::new(),
+        }
+    }
+
+    async fn listing(&self) -> Listing {
+        let config = AppConfig::load(&self.data_dir);
+        if let Some(why) = config.providers_error.or(config.connections_error) {
+            return Listing::Unreadable(why);
+        }
+        if config.providers.is_empty() {
+            return Listing::Empty;
+        }
+        let shell = self.shell.get().await.map_err(|e| e.to_string());
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
-        states(&config.providers, &places, shell.as_deref())
+        let states = states(&config.providers, &places, shell.as_ref().ok().map(|s| s.as_ref()));
+        Listing::Rows { rows: config.providers.into_iter().zip(states).map(|(p, (_, state))| (p, state)).collect(), shell }
     }
 
     /// Runs the folder rules on `config.json` as it is now and logs each instance that fails them.

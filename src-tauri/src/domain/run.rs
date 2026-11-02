@@ -425,13 +425,13 @@ impl RunFailure {
     /// The kind of a failure recorded before `Run::failure` existed, from the text stored then. Only the messages with
     /// fixed wording are recognised; anything else reads as `Other`.
     pub fn from_message(message: &str) -> Self {
-        let trusted = message.strip_prefix("Claude doesn't trust ").and_then(|rest| rest.split_once(" yet. Open Terminal"));
+        let trusted = message.split_once(" doesn't trust ").and_then(|(_, rest)| rest.split_once(" yet. Open Terminal"));
         if let Some((path, _)) = trusted {
             return RunFailure::UntrustedFolder { path: PathBuf::from(path) };
         }
         if let Some(mode) = RefusedMode::reads(message) {
             RunFailure::ModeRefused { mode }
-        } else if message.starts_with("Claude isn't signed in.") {
+        } else if message.contains(" isn't signed in. Run `claude` in Terminal") || message.contains(" isn't signed in. Sign in with Gossamr's Open Terminal button") {
             RunFailure::NotSignedIn
         } else if message.starts_with("Claude Code isn't installed") {
             RunFailure::ClaudeMissing
