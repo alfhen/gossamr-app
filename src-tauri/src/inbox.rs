@@ -422,6 +422,7 @@ impl Core {
         found.filter(|_| self.registry.connection(connection_id).is_some()).map(|s| s.scope).ok_or(Error::SiteChanged)
     }
 
+    #[cfg(test)]
     async fn with_db<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
         let (scope, _, _) = self.identity().await?;
         self.with_db_for(&scope, f).await
