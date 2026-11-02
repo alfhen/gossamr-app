@@ -169,7 +169,7 @@ mod tests {
         ];
         for (why, kind) in own {
             let text = why.to_string();
-            assert!(text.contains("Claude personal") && text.contains("Open Terminal button") || text.contains("trust button"), "{text}");
+            assert!(text.contains("Claude personal") && (text.contains("Open Terminal button") || text.contains("trust button")),"{text}");
             assert!(!text.contains("run `claude`") && !text.contains("Run `claude`"), "plain claude would use the shell's login: {text}");
             assert_eq!(RunFailure::from_message(&text), kind, "{text}");
         }
