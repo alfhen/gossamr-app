@@ -72,7 +72,7 @@ impl Core {
         let found = self.codex_models.found();
         AppConfig::update_if(&self.data_dir, |config| {
             let Some(provider) = connections::provider_mut(config, instance_id) else { return false };
-            outcome = Some(model_choice::add_custom_model(provider, model, &found).map(|()| model_choice::model_list(provider, &found)));
+            outcome = Some(model_choice::add_custom_model(provider, model).map(|()| model_choice::model_list(provider, &found)));
             matches!(outcome, Some(Ok(_)))
         })?;
         match outcome {
@@ -162,6 +162,20 @@ mod tests {
         assert_eq!(first[1].label, "GPT-7");
         assert_eq!(fx.core.provider_models("codex").await.unwrap(), first);
         assert_eq!(runs(&dir), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_model_added_while_the_cli_lists_it_is_saved_and_stays_after_the_list_is_lost() {
+        let (fx, dir) = with_codex("added", false).await;
+        let listed = fx.core.provider_models("codex").await.unwrap();
+        assert!(ids(&listed).contains(&"gpt-7"));
+        let after = fx.core.provider_add_model("codex", "gpt-7").unwrap();
+        assert_eq!(ids(&after), ["default", "gpt-7", "gpt-6-luna"]);
+        let saved = AppConfig::load(&fx.core.data_dir());
+        assert_eq!(saved.providers.iter().find(|p| p.id == "codex").unwrap().config.custom_models, ["gpt-7"]);
+        let provider = saved.providers.iter().find(|p| p.id == "codex").unwrap();
+        assert!(ids(&model_choice::model_list(provider, &Found::default())).contains(&"gpt-7"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

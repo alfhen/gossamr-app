@@ -65,6 +65,10 @@ impl Found {
     pub fn new(found: HashMap<String, Vec<ModelOption>>) -> Self {
         Self(found)
     }
+
+    fn has_read(&self, instance_id: &str) -> bool {
+        self.0.contains_key(instance_id)
+    }
 }
 
 /// Used when `codex debug models` can't be read. Ids from the catalog of codex-cli 0.165.
@@ -97,12 +101,13 @@ pub fn model_list(provider: &ProviderInstance, found: &Found) -> Vec<ModelOption
     list
 }
 
-/// Adds `model` to the instance's list. An id already listed, in any case, changes nothing.
-pub fn add_custom_model(provider: &mut ProviderInstance, model: &str, found: &Found) -> Result<(), String> {
+/// Adds `model` to the instance's list. An id the driver always lists or the instance already has, in any case, changes
+/// nothing. What the Codex CLI listed is not counted: that list is not kept, and the added id must outlast it.
+pub fn add_custom_model(provider: &mut ProviderInstance, model: &str) -> Result<(), String> {
     if !valid_model_id(model) {
         return Err(format!("A model id uses letters, digits and . _ - [ ], starts with a letter or digit, and is at most {MODEL_ID_LIMIT} characters."));
     }
-    if model_list(provider, found).iter().any(|m| m.id.eq_ignore_ascii_case(model)) {
+    if model_list(provider, &Found::default()).iter().any(|m| m.id.eq_ignore_ascii_case(model)) {
         return Ok(());
     }
     if provider.config.custom_models.len() >= CUSTOM_MODEL_LIMIT {
@@ -236,13 +241,20 @@ pub enum Resolution {
     Unavailable(Reason),
 }
 
+/// Whether a saved choice may name `model`. Nothing is read from a Codex CLI after a restart until a picker asks, so
+/// until then any well-formed id passes and the CLI says if it does not know the model.
+fn accepts(provider: &ProviderInstance, model: &str, found: &Found) -> bool {
+    let unread_codex = provider.driver == Driver::Codex && !found.has_read(&provider.id);
+    model_list(provider, found).iter().any(|m| m.id == model) || (unread_codex && valid_model_id(model))
+}
+
 /// Whether `choice` names a model the instance lists and, for Pip only, an effort from the fixed list, for a use its driver runs.
 pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice, found: &Found) -> Result<ProviderInstance, Reason> {
     let provider = config.providers.iter().find(|p| p.id == choice.instance_id).ok_or(Reason::Removed)?;
     if !use_.allowed_on(provider.driver) {
         return Err(Reason::CantRun(provider.driver));
     }
-    let listed = model_list(provider, found).iter().any(|m| m.id == choice.model);
+    let listed = accepts(provider, &choice.model, found);
     let allowed_here = use_ == Use::Agents || choice.model != DEFAULT_MODEL;
     let effort_ok = choice.effort.as_deref().is_none_or(|e| use_ == Use::Pip && EFFORTS.contains(&e));
     if listed && allowed_here && effort_ok {
@@ -340,12 +352,28 @@ mod tests {
     }
 
     #[test]
-    fn a_model_the_cli_listed_cannot_be_added_again_and_claude_ignores_what_codex_found() {
+    fn a_model_the_cli_listed_is_still_saved_when_added_and_claude_ignores_what_codex_found() {
         let found = Found::new(HashMap::from([("codex".to_string(), vec![option("gpt-7", "GPT-7")]), ("claude".to_string(), vec![option("gpt-7", "GPT-7")])]));
         let mut provider = codex("codex", &[]);
-        add_custom_model(&mut provider, "GPT-7", &found).unwrap();
-        assert!(provider.config.custom_models.is_empty());
+        add_custom_model(&mut provider, "GPT-7").unwrap();
+        assert_eq!(provider.config.custom_models, ["GPT-7"]);
+        assert_eq!(ids(model_list(&provider, &found)), ["default", "gpt-7"]);
+        assert_eq!(ids(model_list(&provider, &Found::default())), ["default", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.5", "GPT-7"]);
         assert_eq!(ids(model_list(&default_claude(), &found)), ["default", "claude-fable-5-1", "opus", "sonnet", "haiku"]);
+    }
+
+    #[test]
+    fn a_saved_codex_model_holds_until_the_cli_list_is_read_and_only_then_must_be_on_it() {
+        let provider = codex("codex", &["mine"]);
+        let read = Found::new(HashMap::from([("codex".to_string(), vec![option("gpt-6-luna", "x")])]));
+        let other = Found::new(HashMap::from([("codex_2".to_string(), vec![option("gpt-6-luna", "x")])]));
+        for found in [&Found::default(), &other] {
+            assert!(accepts(&provider, "gpt-7", found));
+            assert!(!accepts(&provider, "--oops", found));
+        }
+        assert!(accepts(&provider, "gpt-6-luna", &read) && accepts(&provider, "mine", &read));
+        assert!(!accepts(&provider, "gpt-7", &read));
+        assert!(!accepts(&default_claude(), "gpt-7", &Found::default()));
     }
 
     #[test]
@@ -367,22 +395,22 @@ mod tests {
     #[test]
     fn adding_a_model_keeps_it_on_the_instance_and_adding_it_twice_changes_nothing() {
         let mut config = config();
-        add_custom_model(&mut config.providers[0], "claude-sonnet-5-0", &Found::default()).unwrap();
-        add_custom_model(&mut config.providers[0], "claude-sonnet-5-0", &Found::default()).unwrap();
-        add_custom_model(&mut config.providers[0], "OPUS", &Found::default()).unwrap();
+        add_custom_model(&mut config.providers[0], "claude-sonnet-5-0").unwrap();
+        add_custom_model(&mut config.providers[0], "claude-sonnet-5-0").unwrap();
+        add_custom_model(&mut config.providers[0], "OPUS").unwrap();
         assert_eq!(config.providers[0].config.custom_models, ["claude-sonnet-5-0"]);
         assert_eq!(config.providers[1].config.custom_models, ["claude-opus-5-5[1m]"]);
-        assert!(add_custom_model(&mut config.providers[0], "--model", &Found::default()).is_err());
-        assert!(add_custom_model(&mut config.providers[0], "x y", &Found::default()).is_err());
+        assert!(add_custom_model(&mut config.providers[0], "--model").is_err());
+        assert!(add_custom_model(&mut config.providers[0], "x y").is_err());
     }
 
     #[test]
     fn the_list_of_added_models_has_a_limit() {
         let mut provider = default_claude();
         for n in 0..CUSTOM_MODEL_LIMIT {
-            add_custom_model(&mut provider, &format!("m{n}"), &Found::default()).unwrap();
+            add_custom_model(&mut provider, &format!("m{n}")).unwrap();
         }
-        assert!(add_custom_model(&mut provider, "one-more", &Found::default()).is_err());
+        assert!(add_custom_model(&mut provider, "one-more").is_err());
     }
 
     #[test]
