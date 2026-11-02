@@ -393,7 +393,7 @@ async fn connection_set_enabled(app: AppHandle, core: State<'_, CoreState>, inst
 #[tauri::command]
 async fn connection_remove(app: AppHandle, core: State<'_, CoreState>, instance_id: String) -> Result<()> {
     if core.is_provider(&instance_id) {
-        core.provider_remove(&instance_id)?;
+        core.provider_remove(&instance_id).await?;
         wire::changed(&app, wire::Topic::Connections, &instance_id);
         return Ok(());
     }
@@ -675,6 +675,15 @@ async fn workstreams_set_state(app: AppHandle, core: State<'_, CoreState>, agent
     Ok(ws)
 }
 
+/// Sets what agents queued in the workstream run on from now on; `None` goes back to the Settings default.
+#[tauri::command]
+async fn workstreams_set_model(app: AppHandle, core: State<'_, CoreState>, id: String, choice: Option<model_choice::ModelChoice>) -> Result<Workstream> {
+    let scope = core.workstream_scope(&id).await?;
+    let ws = core.set_workstream_model(&scope, &id, choice).await?;
+    workstreams_changed(&app, &ws.connection_id);
+    Ok(ws)
+}
+
 /// The person dismisses a question Pip asked in the workstream.
 #[tauri::command]
 async fn workstreams_dismiss_ask(app: AppHandle, core: State<'_, CoreState>, id: String) -> Result<bool> {
@@ -741,6 +750,12 @@ async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: Str
 #[tauri::command]
 async fn runs_stop_all(runs: State<'_, RunsState>) -> Result<runs::control::StopAll> {
     runs.stop_all().await
+}
+
+/// Changes the instance and model a run that is still queued will launch on.
+#[tauri::command]
+async fn runs_set_model(runs: State<'_, RunsState>, id: String, choice: model_choice::ModelChoice) -> Result<Run> {
+    runs.set_model(&id, choice).await
 }
 
 /// The person stops a workstream: pauses it, then stops each of its runs that can be stopped.
@@ -1104,6 +1119,7 @@ pub fn run() {
             runs_delete,
             runs_start,
             runs_stop,
+            runs_set_model,
             runs_answer,
             runs_adopt_session,
             runs_stop_all,
@@ -1119,6 +1135,7 @@ pub fn run() {
             workstreams_open,
             workstreams_list,
             workstreams_set_state,
+            workstreams_set_model,
             workstreams_dismiss_ask,
             workstreams_adopt,
             workstreams_events,

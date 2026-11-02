@@ -5,7 +5,7 @@ import { adoptableOf, adoptWords, NOTHING_TO_ADOPT } from "../lib/workstreamAdop
 import { byQueue, runLabels, stage } from "../lib/workstreamStage";
 import { readStored, writeStored } from "../workspace/storage";
 import { BASIS_FIELDS } from "../types";
-import type { Adoptable, BasisField, ItemRef, PauseReason, PipQuestion, Proposal, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
+import type { Adoptable, BasisField, ItemRef, ModelChoice, PauseReason, PipQuestion, Proposal, Run, WorkItem, Workstream, WorkstreamActor, WorkstreamBasis, WorkstreamEvent, WorkstreamUndo, WorkstreamView, WorkstreamsChanged } from "../types";
 
 const CONNECTION = "mock";
 /** Where the sample backend keeps its workstreams and their audit, so both survive a reload. */
@@ -258,6 +258,18 @@ export class MockWorkstreams {
     this.save();
     this.changed();
     return ws;
+  }
+
+  /** Sets what agents queued here run on from now on; `null` goes back to the Settings default. An open workstream only. */
+  setModel(id: string, choice: ModelChoice | null): Workstream {
+    const ws = this.owned(id);
+    if (ws.closedAt !== null) throw new Error(`workstream ${id} is closed`);
+    const { agentsModel: _, ...rest } = ws;
+    const next = choice ? { ...rest, agentsModel: structuredClone(choice) } : rest;
+    this.put(next);
+    this.save();
+    this.changed();
+    return next;
   }
 
   /** The open workstream on the ticket `key`, if there is one. */

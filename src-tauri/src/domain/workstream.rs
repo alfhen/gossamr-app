@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{PersonRef, Run, RunState};
+use crate::model_choice::ModelChoice;
 
 /// Why a workstream is paused. A workstream stored with any other reason reads as paused by the person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +78,9 @@ pub struct Workstream {
     /// The ticket as it was when the workstream opened, to notice it changing; none for a ticketless one.
     #[serde(default)]
     pub basis: Option<WorkstreamBasis>,
+    /// What agents queued in this workstream run on; none means the Settings default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents_model: Option<ModelChoice>,
 }
 
 /// What a ticket looked like when its workstream opened: its status, assignee and digests of its summary and

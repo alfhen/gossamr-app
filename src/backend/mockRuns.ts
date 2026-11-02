@@ -1,5 +1,5 @@
 import { type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
-import type { ClearFilter, ClearPreview, DeleteResult, WorktreeInfo } from "../types";
+import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
 import { reportView, resolveResult, scriptedFinish, type MockReportRow, type Resolved, type ScriptedFinish } from "./mockRunResult";
@@ -600,7 +600,8 @@ export class MockRuns {
           (!query.states || query.states.includes(r.state)) &&
           (!query.item || r.item?.externalId === query.item.externalId) &&
           (!query.connectionId || r.connectionId === query.connectionId) &&
-          (!query.workstream || r.spec.workstream === query.workstream),
+          (!query.workstream || r.spec.workstream === query.workstream) &&
+          (!query.runsOn || (r.runsOn?.instanceId ?? "claude") === query.runsOn),
       )
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   }
@@ -693,8 +694,28 @@ export class MockRuns {
       createdBy: "pip",
       origin: { type: "chat", requestId: by?.requestId ?? "req-test", workstream: spec.workstream ?? null },
     };
+    const runsOn = this.choiceFor(spec.workstream ?? null);
+    if (runsOn) run.runsOn = structuredClone(runsOn);
     this.runs = [run, ...this.runs];
     return run;
+  }
+
+  /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
+  choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
+
+  /** Changes what a run launches on, only while it is queued. */
+  setModel(id: string, choice: ModelChoice): Run {
+    const run = this.get(id);
+    if (!run) throw new Error("that run no longer exists");
+    if (run.state !== "queued") throw new Error(`This run is ${run.state}, so what it runs on can't change.`);
+    const next = this.update(id, { runsOn: structuredClone(choice), waitReason: null });
+    this.changed();
+    return next;
+  }
+
+  /** Runs on `instanceId` that are past the queue and not over, which hold the instance in place. A run with no choice is on the default instance. */
+  liveOn(instanceId: string): number {
+    return this.runs.filter((r) => (r.runsOn?.instanceId ?? "claude") === instanceId && (RUNNING.includes(r.state) || r.state === "unknown")).length;
   }
 
   private resolved(run: Run) {

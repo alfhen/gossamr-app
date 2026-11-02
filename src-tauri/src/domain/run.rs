@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::{ContainerRef, CreatedBy, ItemRef, Origin};
 use crate::error::{Error, Result};
+use crate::model_choice::ModelChoice;
 use crate::runs::cli::ShortId;
 
 /// Passed as `--append-system-prompt`. Raise the version whenever the text changes, so a digest taken under the old
@@ -543,6 +544,13 @@ pub struct Run {
     /// person starts it.
     #[serde(default, rename = "autoStart", skip_serializing_if = "Option::is_none")]
     pub unapproved_auto_start: Option<serde_json::Value>,
+    /// The instance and model the run launches on, from its workstream's choice or the Settings default when it was
+    /// queued. Frozen when it launches. A run stored before this existed has none and takes the Settings default then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs_on: Option<ModelChoice>,
+    /// Why a queued run isn't launching though a slot is free: its instance or model can't run it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_reason: Option<String>,
     /// Who started it: the person, by approving a draft, or Pip, directly.
     #[serde(default)]
     pub created_by: CreatedBy,
@@ -560,6 +568,11 @@ pub struct Run {
 }
 
 impl Run {
+    /// The provider instance the run is on: its choice, else the default instance.
+    pub fn instance_id(&self) -> &str {
+        self.runs_on.as_ref().map_or(crate::connections::DEFAULT_CLAUDE, |c| c.instance_id.as_str())
+    }
+
     /// Earlier sessions `claude rm` has not yet removed.
     pub fn leftover_sessions(&self) -> Vec<ShortId> {
         self.earlier_sessions.iter().filter(|e| !e.removed).map(|e| e.short_id.clone()).collect()
@@ -616,6 +629,8 @@ impl Run {
             possible_continuations: Vec::new(),
             slot_wait_since: None,
             unapproved_auto_start: None,
+            runs_on: None,
+            wait_reason: None,
             created_by: CreatedBy::User,
             origin: None,
             commit_email: None,
@@ -656,6 +671,9 @@ pub struct RunQuery {
     /// Runs linked to this workstream.
     #[serde(default)]
     pub workstream: Option<String>,
+    /// Runs on this provider instance. A run with no stored choice counts as the default instance's.
+    #[serde(default)]
+    pub runs_on: Option<String>,
 }
 
 #[cfg(test)]
