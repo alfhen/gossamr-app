@@ -188,6 +188,16 @@ impl AppConfig {
         self.unreadable_models = None;
     }
 
+    /// Drops the unreadable stored defaults that name `instance_id`, so a removed instance is not written back.
+    pub fn forget_unreadable_models(&mut self, instance_id: &str) {
+        if let Some(Value::Object(kept)) = &mut self.unreadable_models {
+            kept.retain(|_, raw| raw.get("instanceId").and_then(Value::as_str) != Some(instance_id));
+            if kept.is_empty() {
+                self.unreadable_models = None;
+            }
+        }
+    }
+
     fn locked(problem: String) -> Self {
         Self { connections_error: Some(problem), file_unreadable: true, ..Self::default() }
     }
@@ -691,6 +701,15 @@ mod tests {
         assert!(saved_value(&dir).get("providers").is_none());
         std::fs::write(dir.join(FILE), r#"{"version":1,"connections":[],"retiredIds":[]}"#).unwrap();
         assert_eq!(providers_in(&dir), ["claude"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn removing_an_instance_forgets_the_unreadable_default_that_named_it() {
+        let pip = r#"{"instanceId":"claude_2","model":5}"#;
+        let dir = models_scratch("models-forget", &format!(r#"{{"models":{{"pip":{pip},"agents":null}}}}"#));
+        AppConfig::update(&dir, |c| c.forget_unreadable_models("claude_2")).unwrap();
+        assert!(saved_value(&dir)["models"].get("pip").is_none_or(|v| v.is_null()));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

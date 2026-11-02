@@ -35,7 +35,7 @@ impl Core {
         let Some(set) = set else { return Ok(AppConfig::load(&self.data_dir).models) };
         let mut refusal = None;
         AppConfig::update_if(&self.data_dir, |config| {
-            if !connections::providers_live(config) {
+            if config.providers_error.is_some() {
                 refusal = Some(not_a_provider());
                 return false;
             }
@@ -125,5 +125,15 @@ mod tests {
         fx.core.model_defaults(Some(ModelDefaults { pip: Some(pick("claude_2", "opus")), agents: Some(pick("claude", "default")) })).unwrap();
         fx.core.provider_remove("claude_2").unwrap();
         assert_eq!(fx.core.model_defaults(None).unwrap(), ModelDefaults { pip: None, agents: Some(pick("claude", "default")) });
+    }
+
+    #[tokio::test]
+    async fn the_defaults_save_while_only_the_connections_list_is_unreadable() {
+        let fx = crate::inbox::testing::fixture().await;
+        let providers = serde_json::json!([{ "id": "claude", "driver": "claude", "displayName": "Claude", "enabled": true, "environment": {}, "config": {} }]);
+        std::fs::write(fx.core.data_dir().join("config.json"), serde_json::json!({ "version": 2, "connections": [], "providers": providers }).to_string()).unwrap();
+        let chosen = ModelDefaults { pip: Some(pick("claude", "opus")), agents: None };
+        assert_eq!(fx.core.model_defaults(Some(chosen.clone())).unwrap(), chosen);
+        assert_eq!(fx.core.model_defaults(None).unwrap(), chosen);
     }
 }

@@ -232,6 +232,7 @@ pub fn remove_provider(config: &mut AppConfig, id: &str) -> bool {
     let gone = config.providers.remove(at);
     config.retired_ids.push(gone.id);
     config.models.clear_instance(id);
+    config.forget_unreadable_models(id);
     true
 }
 
