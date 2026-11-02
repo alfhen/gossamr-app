@@ -638,6 +638,12 @@ impl Core {
         self.with_db(|db| db.set_unread(id, unread)).await
     }
 
+    /// The scope of the registered, signed-in connection `connection_id`.
+    pub(crate) async fn scope_of(&self, connection_id: &str) -> Result<Scope> {
+        let signed_in = self.auth.accounts().await.into_iter().find(|s| s.connection.id == connection_id && self.registry.connection(connection_id).is_some());
+        signed_in.map(|s| s.scope).ok_or(Error::SiteChanged)
+    }
+
     /// The signed-in scope, for work that starts now.
     pub async fn scope(&self) -> Result<Scope> {
         let (scope, _, _) = self.identity().await?;
@@ -1522,6 +1528,8 @@ pub(crate) mod testing {
         pub core: Arc<Core>,
         pub scope: Scope,
         pub tracker: Arc<Recorder>,
+        /// The tracker of the second account in `fixture_with_two_jira`; nothing reaches it in the other fixtures.
+        pub second_tracker: Arc<Recorder>,
         pub dir: PathBuf,
         /// Where clones for runs may live.
         pub home: PathBuf,
@@ -1618,6 +1626,23 @@ pub(crate) mod testing {
 
     /// `fixture_watching` with more GitHub routes scripted: replies come in order and the last repeats.
     pub async fn fixture_watching_with(repos: &[&str], extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>) -> Fixture {
+        watching_signed_in_to(repos, extra, None, vec![credentials("site", "Acme", "me", "Me")]).await
+    }
+
+    /// `fixture_with_two_jira` that also has a GitHub connection watching `repos`.
+    pub async fn fixture_watching_two_jira(repos: &[&str], extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>) -> (Fixture, Scope) {
+        let second = credentials("beta", "Beta", "bo", "Bo");
+        let scope = second.scope();
+        let fx = watching_signed_in_to(repos, extra, Some(Arc::new(Echo)), vec![credentials("site", "Acme", "me", "Me"), second]).await;
+        (fx, scope)
+    }
+
+    async fn watching_signed_in_to(
+        repos: &[&str],
+        extra: Vec<(&str, Vec<crate::codehost::github::testserver::Reply>)>,
+        authenticator: Option<Arc<dyn crate::auth::Authenticator>>,
+        sessions: Vec<Credentials>,
+    ) -> Fixture {
         use crate::auth::GithubAuth;
         use crate::codehost::github::testserver::{serve, Reply};
         use crate::codehost::github::GithubHost;
@@ -1642,7 +1667,7 @@ pub(crate) mod testing {
             auth,
             Box::new(move |s, credentials, db| Arc::new(GithubHost::new(factory_http.clone(), &base, credentials, &Connection::github_id(&s.login), &s.login, db))),
         );
-        let mut fx = fixture_with(Some(code)).await;
+        let mut fx = fixture_signed_in_to(Some(code), authenticator, sessions).await;
         fx.github = Some(server.seen.clone());
         fx.github_routes = Some(server.routes.clone());
         fx.core.github_connect(None).await.unwrap();
@@ -1697,7 +1722,9 @@ pub(crate) mod testing {
         let http = reqwest::Client::new();
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
-        let registry = Registry::new(move |_| shared.clone());
+        let second_tracker = Arc::new(Recorder::default());
+        let (second_id, second_shared) = (sessions.get(1).map(|c| c.connection().id), second_tracker.clone());
+        let registry = Registry::new(move |c| if Some(&c.id) == second_id.as_ref() { second_shared.clone() } else { shared.clone() });
         let home = dir.join("home");
         std::fs::create_dir_all(&home).unwrap();
         let home = home.canonicalize().unwrap();
@@ -1712,7 +1739,7 @@ pub(crate) mod testing {
             core.registry.register(connection);
         }
 
-        let fx = Fixture { core, scope, tracker, dir, home, github: None, github_routes: None };
+        let fx = Fixture { core, scope, tracker, second_tracker, dir, home, github: None, github_routes: None };
         fx.add_item(1).await;
         let connection = fx.core.connection(&fx.scope).unwrap();
         let item = fx.core.cache_item(&connection.item("CA-1")).await.unwrap().unwrap();

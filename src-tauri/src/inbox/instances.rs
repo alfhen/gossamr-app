@@ -5,7 +5,7 @@ use super::{ConnectionInfo, Core};
 use crate::config::AppConfig;
 use crate::connections::{self, Binding, RowKind};
 use crate::db::is_for;
-use crate::domain::{Actor, ProposalQuery, ProposalState, StateKind};
+use crate::domain::{Actor, ProposalQuery, ProposalState, RunQuery, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::secrets;
@@ -179,6 +179,9 @@ impl Core {
         let _gate = self.draft_gate.lock().await;
         let target = self.removal_target(instance_id).await?;
         self.refuse_while_posting(&target.connection_id, &target.name).await?;
+        if target.kind == ConnectionKind::Jira {
+            self.refuse_while_running(&target.connection_id).await?;
+        }
         match target.kind {
             ConnectionKind::Github => self.forget_github(&target).await?,
             ConnectionKind::Jira => self.forget_jira(&target.connection_id).await?,
@@ -283,6 +286,17 @@ impl Core {
             return Err(Error::Input(format!("Gossamr is posting a draft for {name} right now. Try again in a moment.")));
         }
         Ok(())
+    }
+
+    /// Agents that are running or waiting to start keep their tickets' site, so it stays until they are stopped.
+    async fn refuse_while_running(&self, connection_id: &str) -> Result<()> {
+        let live = vec![RunState::Queued, RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked];
+        let query = RunQuery { states: Some(live), connection_id: Some(connection_id.into()), ..Default::default() };
+        match self.with_app_db(|db| db.runs(&query)).await?.len() {
+            0 => Ok(()),
+            1 => Err(Error::Input("Stop its running agent first.".into())),
+            n => Err(Error::Input(format!("Stop its {n} running agents first."))),
+        }
     }
 
     /// Closes the pending drafts for the removed connection. Says whether a closed draft was in a workstream.
@@ -1010,5 +1024,19 @@ mod tests {
         assert!(fx.core.settings_rows().await.unwrap().iter().all(|c| c.kind != RowKind::Provider));
         assert!(matches!(fx.core.provider_set_enabled("claude", false), Err(Error::Input(_))));
         assert!(matches!(fx.core.rename_instance("claude", "Other"), Err(Error::Input(_))));
+    }
+
+    #[tokio::test]
+    async fn a_jira_connection_with_a_live_run_is_not_removed_until_the_run_is_stopped() {
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+        let refused = core.remove_instance("jira_2").await.unwrap_err();
+        assert_eq!(refused.to_string(), "Stop its running agent first.");
+        assert!(core.auth.accounts().await.iter().any(|s| s.connection.id == second.connection_id), "the account is still signed in");
+
+        rig.svc.stop(&run.id).await.unwrap();
+        let removed = core.remove_instance("jira_2").await.unwrap();
+        assert_eq!(removed.connection_id, second.connection_id);
     }
 }
