@@ -14,8 +14,6 @@ import type {
   ProposalEdit,
   ProposalQuery,
   ProposalsChanged,
-  CloneChoice,
-  LocalClone,
   Run,
   RunEvent,
   RunQuery,
@@ -251,18 +249,6 @@ export class JiraBackend implements Backend {
 
   runsSignIn(id: string) {
     return invoke<void>("runs_open_terminal", { id, purpose: { type: "signIn" } });
-  }
-
-  runsClones(repo: string) {
-    return invoke<CloneChoice>("runs_clones", { repo });
-  }
-
-  runsCloneFresh(repo: string) {
-    return invoke<LocalClone>("runs_clone_fresh", { repo });
-  }
-
-  runsPickClone(repo: string, path: string) {
-    return invoke<void>("runs_pick_clone", { repo, path });
   }
 
   runsOutcome(id: string) {

@@ -62,13 +62,13 @@ pub async fn ready_with(tune: impl FnOnce(RunService) -> RunService) -> Rig {
 
 /// `ready_with` on a fixture of the caller's, such as one with GitHub routes scripted.
 pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) -> Rig {
-    let clone = fx.home.join("webshop");
+    let clone = fx.home.join("Gossamr/agents/acme/webshop");
     clone_with_origin(&clone, "https://github.com/acme/webshop.git");
     let clone = clone.canonicalize().unwrap();
     let cli = Arc::new(FakeCli::new());
     cli.with(|s| s.config_dir = fx.dir.join("claude-config"));
     let bin = install_fake_git(&fx.dir);
-    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display()))]));
+    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]));
     let tools = FixedToolchain(Ok(Toolchain { cli: cli.clone(), env }));
     let (notices, opened, changes) = (Arc::new(Notices::default()), Arc::new(Opened::default()), Arc::new(Mutex::new(Vec::new())));
     let seen = changes.clone();
@@ -76,7 +76,6 @@ pub async fn ready_on(fx: Fixture, tune: impl FnOnce(RunService) -> RunService) 
         fx.core.clone(),
         Arc::new(tools),
         RunIndex::load(&fx.dir.join("index")),
-        vec![fx.home.clone()],
         Arc::new(move |id| seen.lock().unwrap().push(id.to_string())),
     )
     .with_notifier(notices.clone())
@@ -196,6 +195,37 @@ impl Rig {
 
     pub async fn poll(&self) {
         self.svc.poll_at(Utc::now()).await;
+    }
+}
+
+/// A run set up before agents moved to the work folder: its clone is the person's own, in `~/Code`.
+pub fn legacy_clone(fx: &Fixture) -> PathBuf {
+    let clone = fx.home.join("Code/webshop");
+    clone_with_origin(&clone, "https://github.com/acme/webshop.git");
+    clone.canonicalize().unwrap()
+}
+
+impl Rig {
+    /// Queued with the clone of a run an earlier release set up.
+    pub async fn queued_legacy(&self, n: u32) -> Run {
+        let legacy = legacy_clone(&self.fx);
+        let run = self.queued(n).await;
+        self.set(&run, |r| {
+            r.spec.clone_path = legacy.clone();
+            r.expected_worktree = r.spec.worktree();
+        })
+        .await
+    }
+
+    /// `launched`, then moved to a clone in `~/Code` as if an earlier release had set it up.
+    pub async fn launched_legacy(&self, n: u32) -> Run {
+        let legacy = legacy_clone(&self.fx);
+        let run = self.launched(n).await;
+        self.set(&run, |r| {
+            r.spec.clone_path = legacy.clone();
+            r.expected_worktree = r.spec.worktree();
+        })
+        .await
     }
 }
 

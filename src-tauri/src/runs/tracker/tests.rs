@@ -915,7 +915,7 @@ fn asking(entry: &mut AgentEntry) {
 
 /// A second start of the app: same accounts and listing, none of the first one's memory.
 fn restarted(rig: &Rig) -> RunService {
-    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), vec![], Arc::new(|_| {})).with_settings(rig.svc.settings())
+    RunService::new(rig.fx.core.clone(), rig.svc.tools.clone(), RunIndex::load(&rig.fx.dir.join("index")), Arc::new(|_| {})).with_home(rig.fx.home.clone()).with_settings(rig.svc.settings())
 }
 
 #[tokio::test]
@@ -1105,4 +1105,23 @@ async fn a_need_in_the_second_account_notifies_and_is_kept_in_that_accounts_cach
     };
     assert_eq!(kept(second).await.len(), 1);
     assert!(kept(rig.fx.scope.clone()).await.is_empty(), "the first account's cache does not hold the second's");
+}
+
+#[tokio::test]
+async fn a_working_run_in_code_is_still_tracked_messaged_answered_and_stopped() {
+    let rig = ready().await;
+    let run = rig.launched_legacy(1).await;
+    assert!(!rig.get(&run).await.in_work_folder);
+    rig.session(&run, working);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    rig.session(&run, asking);
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    assert_eq!(rig.svc.answer(&run.id, "Use staging.").await.unwrap().state, RunState::Working);
+    let (_, how) = rig.svc.message_agent(&run.id, "How is it going?", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(how, crate::runs::message::Delivery::Queued);
+    assert_eq!(rig.svc.stop_as(&run.id, crate::domain::Actor::Person).await.unwrap().state, RunState::Stopped);
+    assert!(rig.get(&run).await.failure.is_none());
 }

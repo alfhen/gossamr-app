@@ -526,6 +526,8 @@ export type RunFailure =
   | { type: "claudeMissing" }
   | { type: "modeRefused"; mode: "auto" | "bypass" }
   | { type: "noClone" }
+  | { type: "outsideWorkFolder"; path: string }
+  | { type: "cloneOccupied"; path: string }
   | { type: "capReached" }
   | { type: "other" };
 
@@ -539,6 +541,8 @@ export interface Run {
   /** What the person read when approving. */
   digest: string;
   expectedWorktree: string;
+  /** Whether its clone is in Gossamr's work folder, `~/Gossamr/agents`. False for a run an earlier release set up in the person's own clone. Read as true when absent. */
+  inWorkFolder?: boolean;
   state: RunState;
   shortId: string | null;
   sessionId: string | null;
@@ -671,34 +675,6 @@ export interface RunEvent {
   text: string;
   /** Longer text behind the line, shown on request. */
   detail: string | null;
-}
-
-/** A local clone of a repository, as found on this Mac. */
-export interface LocalClone {
-  path: string;
-  branch: string;
-  dirty: boolean;
-  /** What `origin/HEAD` points at, when the clone knows. */
-  defaultBranch: string | null;
-}
-
-/** What cloning into `~/Gossamr/agents` would do, shown before the person chooses it. */
-export interface FreshCopy {
-  path: string;
-  /** The command Gossamr runs, as a shell would read it. */
-  command: string;
-  /** `gh` is on the shell's PATH, so a sign-in failure falls back to `gh repo clone`. */
-  ghFallback: boolean;
-  /** Something that isn't a clone of this repository is already at `path`. */
-  occupied: boolean;
-}
-
-export interface CloneChoice {
-  clones: LocalClone[];
-  /** The clone the person chose when several matched; listed first. */
-  picked: string | null;
-  /** Offered only when there is no clone to choose. */
-  fresh: FreshCopy | null;
 }
 
 /** Which runs to list. Every field that is set must match. */

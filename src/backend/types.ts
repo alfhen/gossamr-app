@@ -5,8 +5,6 @@ import type {
   AssignedElsewhere,
   CacheChanged,
   CatalogPage,
-  CloneChoice,
-  LocalClone,
   Intent,
   ItemRef,
   Person,
@@ -166,11 +164,6 @@ export interface Backend {
   runsAcceptMode(id: string, mode: "auto" | "bypass"): Promise<void>;
   /** Opens Terminal in the run's clone running `claude`, so the person can sign in. Rejects unless the run failed because Claude isn't signed in. */
   runsSignIn(id: string): Promise<void>;
-  /** Local clones of a watched repository, the one the person chose first. */
-  runsClones(repo: string): Promise<CloneChoice>;
-  runsPickClone(repo: string, path: string): Promise<void>;
-  /** Clones a watched repository into `~/Gossamr/agents/<owner>/<repo>` (or fetches into the copy already there). Only after the person chose it, having seen `CloneChoice.fresh`. */
-  runsCloneFresh(repo: string): Promise<LocalClone>;
   runsEvents(id: string): Promise<RunEvent[]>;
   /** The part of the result meant for Jira, the tickets it names, and the pull request or branch the run produced. */
   runsOutcome(id: string): Promise<RunOutcome>;

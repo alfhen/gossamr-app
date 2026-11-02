@@ -389,7 +389,12 @@ pub enum RunFailure {
     ModeRefused { mode: RefusedMode },
     NotSignedIn,
     ClaudeMissing,
+    /// The clone is gone, or a clone could not be made.
     NoClone,
+    /// A run set up in a folder Gossamr didn't make, which can't start a new session.
+    OutsideWorkFolder { path: PathBuf },
+    /// Something that isn't a clone of the repository is where Gossamr's clone goes.
+    CloneOccupied { path: PathBuf },
     CapReached,
     Other,
 }
@@ -544,6 +549,9 @@ pub struct Run {
     /// The Pip turn that started it, when Pip did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// Whether its clone is in Gossamr's work folder. Worked out whenever a run is read, never taken from what is stored.
+    #[serde(default, skip_deserializing)]
+    pub in_work_folder: bool,
 }
 
 impl Run {
@@ -605,6 +613,7 @@ impl Run {
             unapproved_auto_start: None,
             created_by: CreatedBy::User,
             origin: None,
+            in_work_folder: false,
         }
     }
 
@@ -893,7 +902,7 @@ mod tests {
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(keys, ["base", "brief", "clonePath", "name", "pr", "prSha", "repo", "report", "role", "ticket", "ticketBlock", "workstream"]);
-        assert_eq!((json["role"].as_str(), json["brief"].as_str(), json["clonePath"].as_str()), (Some("investigate"), Some("Find out why the cart total is wrong."), Some("/Users/me/Code/webshop")));
+        assert_eq!((json["role"].as_str(), json["brief"].as_str(), json["clonePath"].as_str()), (Some("investigate"), Some("Find out why the cart total is wrong."), Some("/Users/me/Gossamr/agents/acme/webshop")));
         let run = queued(spec());
         assert_eq!(serde_json::from_value::<Run>(serde_json::to_value(&run).unwrap()).unwrap(), run);
         assert!(serde_json::from_str::<ShortId>("\"../etc\"").is_err());
@@ -990,7 +999,7 @@ mod tests {
     fn a_queued_run_expects_its_worktree_under_the_clone() {
         let s = spec();
         let run = queued(s.clone());
-        assert_eq!(run.expected_worktree, PathBuf::from("/Users/me/Code/webshop/.claude/worktrees/eng-1-fix-cart-3f9a"));
+        assert_eq!(run.expected_worktree, PathBuf::from("/Users/me/Gossamr/agents/acme/webshop/.claude/worktrees/eng-1-fix-cart-3f9a"));
         assert_eq!((run.state, run.digest), (RunState::Queued, s.digest()));
     }
 
