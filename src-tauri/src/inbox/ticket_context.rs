@@ -81,7 +81,7 @@ fn facts(db: &Db, work: &WorkItem, links: &[DevLink]) -> TicketFacts {
                 format!("{} {}", relation(l.kind, outward), with_title(other))
             })
             .collect(),
-        code: links.iter().map(|l| change_line(&l.change)).collect(),
+        code: links.iter().map(change_line).collect(),
         description: work.body.without_plan_section().plain_text(),
         plan: work.body.plan_section().map(|d| d.to_markdown()),
         comments: cached.as_ref().map(|t| t.comments.iter().map(|c| SnapComment { author: c.author.name.clone(), at: parse_time(&c.created), text: c.body.clone() }).collect()),
@@ -98,7 +98,16 @@ fn relation(kind: LinkKind, outward: bool) -> &'static str {
     }
 }
 
-fn change_line(c: &CodeChange) -> String {
+fn change_line(link: &DevLink) -> String {
+    let line = change_text(&link.change);
+    if link.ambiguous {
+        format!("{line} (may belong to the same key on another site)")
+    } else {
+        line
+    }
+}
+
+fn change_text(c: &CodeChange) -> String {
     let state = match c.state {
         CodeChangeState::Draft => "draft",
         CodeChangeState::Open => "open",

@@ -16,19 +16,14 @@ pub struct KnownKeys {
 impl KnownKeys {
     /// `projects` are `(project key, connection id)` pairs. Two sites can both have a project `TAF`.
     pub fn new<'a>(projects: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
-        let mut known = Self::default();
+        let mut connections: HashMap<String, Vec<String>> = HashMap::new();
         for (prefix, connection) in projects {
-            known.add_project(prefix, connection);
+            let on = connections.entry(prefix.trim().to_ascii_uppercase()).or_default();
+            if !on.iter().any(|c| c == connection) {
+                on.push(connection.to_string());
+            }
         }
-        known
-    }
-
-    fn add_project(&mut self, prefix: &str, connection: &str) {
-        let connections = self.connections.entry(prefix.trim().to_ascii_uppercase()).or_default();
-        if !connections.iter().any(|c| c == connection) {
-            connections.push(connection.to_string());
-        }
-        self.matcher = KeyMatcher::new(self.connections.keys());
+        Self { matcher: KeyMatcher::new(connections.keys()), connections, cached: HashSet::new() }
     }
 
     #[cfg(test)]
@@ -46,14 +41,6 @@ impl KnownKeys {
     pub fn with_cached(mut self, connection: &str, keys: impl IntoIterator<Item = String>) -> Self {
         self.cached.extend(keys.into_iter().map(|k| (connection.to_string(), k.to_ascii_uppercase())));
         self
-    }
-
-    /// Makes sure `item`'s own connection is among those a link to its key may name.
-    pub fn with_item(mut self, item: &ItemRef) -> Self {
-        if let Some(prefix) = KeyMatcher::prefix_of(&item.key) {
-            self.add_project(prefix, &item.connection_id);
-        }
-        self.with_cached(&item.connection_id, [item.key.clone()])
     }
 
     /// The work items `key` may name: the connections whose cache has it, or all that have its project when none does.
@@ -225,12 +212,5 @@ pub(crate) mod tests {
     #[test]
     fn a_project_only_one_site_has_never_links_ambiguously() {
         assert_eq!(link_connections(&shared(), "ca-5-fix"), [("jira:acme:me".to_string(), false)]);
-    }
-
-    #[test]
-    fn the_item_being_looked_at_joins_the_sites_a_key_may_name() {
-        let item = ItemRef { connection_id: "jira:gamma:me".into(), external_id: "TAF-12".into(), key: "TAF-12".into() };
-        let known = shared().with_cached("jira:beta:me", ["TAF-12".to_string()]).with_item(&item);
-        assert_eq!(link_connections(&known, "taf-12-fix"), [("jira:beta:me".to_string(), true), ("jira:gamma:me".to_string(), true)]);
     }
 }

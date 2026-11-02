@@ -159,10 +159,13 @@ impl Db {
         Ok(out)
     }
 
-    /// What links are stored, to tell whether a rebuild changed any: `(item id, code id, provenance)`, sorted.
-    pub fn link_signature(&self, connection_id: &str) -> Result<Vec<(String, String, String)>> {
-        let mut stmt = self.conn.prepare("SELECT item_id, code_id, provenance FROM item_links WHERE connection_id = ?1 ORDER BY item_id, code_id")?;
-        let rows = stmt.query_map(params![connection_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    /// What links are stored, to tell whether a rebuild changed any: `(item connection, item id, code id, provenance)`,
+    /// sorted. A key two sites share has the same item id on each, so the connection is part of it.
+    pub fn link_signature(&self, connection_id: &str) -> Result<Vec<(String, String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT item_connection_id, item_id, code_id, provenance FROM item_links WHERE connection_id = ?1 ORDER BY item_connection_id, item_id, code_id",
+        )?;
+        let rows = stmt.query_map(params![connection_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -309,6 +312,22 @@ mod tests {
         let flags = |links: &[DevLink]| links.iter().map(|l| (l.change.number.unwrap(), l.ambiguous)).collect::<Vec<_>>();
         assert_eq!(flags(&one), [(2, false), (1, true)]);
         assert_eq!(flags(&two), [(1, true)]);
+    }
+
+    #[test]
+    fn a_link_that_moves_to_the_same_key_on_another_connection_changes_the_signature() {
+        let db = Db::in_memory().unwrap();
+        let a = change(1, "acme/webshop", "2026-09-20T00:00:00Z");
+        db.upsert_code_changes(std::slice::from_ref(&a), "t").unwrap();
+        let on = |connection: &str| {
+            let mut l = link("CA-1", &a, LinkSource::Branch);
+            l.item.connection_id = connection.into();
+            l
+        };
+        db.replace_item_links("github:ann", &[on("jira:one:me")], "t").unwrap();
+        let before = db.link_signature("github:ann").unwrap();
+        db.replace_item_links("github:ann", &[on("jira:two:me")], "t").unwrap();
+        assert_ne!(db.link_signature("github:ann").unwrap(), before);
     }
 
     #[test]

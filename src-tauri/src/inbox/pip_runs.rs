@@ -49,7 +49,7 @@ impl Core {
     }
 
     /// The repository an agent on `key` would work in, and the ticket's title: the one repository its linked pull
-    /// requests and branches are in, or with no links the only repository that is watched. When that isn't a single
+    /// requests and branches are in (a link that may belong to the same key on another site doesn't count), or with no links the only repository that is watched. When that isn't a single
     /// answer, Pip's `repo` settles it when it names a watched repository.
     pub async fn pip_run_target(&self, scope: &Scope, key: &str, repo: Option<&str>) -> Result<(String, String)> {
         let item = Self::item(scope, key);
@@ -61,7 +61,7 @@ impl Core {
             return Ok((self.watched_repo_named(named)?, work.title));
         }
         let mut repos: Vec<String> = Vec::new();
-        for link in self.dev_links(&item)?.iter().filter(|l| matches!(l.change.kind, CodeChangeKind::PullRequest | CodeChangeKind::Branch)) {
+        for link in self.dev_links(&item)?.iter().filter(|l| !l.ambiguous && matches!(l.change.kind, CodeChangeKind::PullRequest | CodeChangeKind::Branch)) {
             if !repos.iter().any(|r| r.eq_ignore_ascii_case(&link.change.repo)) {
                 repos.push(link.change.repo.clone());
             }

@@ -15,6 +15,7 @@ use crate::auth::{CredentialSource, GithubAuth, GithubSession};
 use crate::codehost::diff::{commentable, relative_path};
 use crate::codehost::events::{derive, from_notice, recent};
 use crate::codehost::github::{GithubHost, API_BASE};
+use crate::codehost::keys::KeyMatcher;
 use crate::codehost::links::{discover, KnownKeys};
 use crate::codehost::{CodeHost, PullList};
 use crate::db::{stamp, Db};
@@ -449,8 +450,10 @@ impl Core {
 
     /// The project keys of every Jira connection that is on, which are what a key in a branch or title may name. With
     /// every connection off the primary's stay: turning Jira off must not erase the links already found. For a project
-    /// that two connections have, each one's cached items in watched projects say which of them a key can be.
-    async fn known_keys(&self) -> KnownKeys {
+    /// that two connections have, each one's cached items in watched projects say which of them a key can be. `viewed`
+    /// is an item the person is looking at; its project counts for its connection when that connection is among those
+    /// read, whatever the connection's own list of projects says.
+    async fn known_keys(&self, viewed: Option<&ItemRef>) -> KnownKeys {
         let on = self.on_accounts().await.unwrap_or_default();
         let accounts = if on.is_empty() { self.primary().await.into_iter().collect() } else { on };
         let mut projects: Vec<(String, String)> = Vec::new();
@@ -458,6 +461,11 @@ impl Core {
             let connection = account.connection.id.clone();
             let keys = self.with_db_for(&account.scope, |db| db.project_keys(&connection)).await.unwrap_or_default();
             projects.extend(keys.into_iter().map(|k| (k, connection.clone())));
+        }
+        if let Some(item) = viewed.filter(|i| accounts.iter().any(|a| a.connection.id == i.connection_id)) {
+            if let Some(prefix) = KeyMatcher::prefix_of(&item.key) {
+                projects.push((prefix.to_string(), item.connection_id.clone()));
+            }
         }
         let mut known = KnownKeys::new(projects.iter().map(|(k, c)| (k.as_str(), c.as_str())));
         let shared: Vec<(String, Vec<String>)> = known.shared_prefixes().into_iter().map(|(p, c)| (p.to_string(), c.to_vec())).collect();
@@ -611,7 +619,7 @@ impl Core {
         if stop.is_none() {
             changed |= self.sync_notifications(host.as_ref(), id, &repos).await.unwrap_or(false);
         }
-        let links_changed = self.rediscover(id, &self.known_keys().await)?;
+        let links_changed = self.rediscover(id, &self.known_keys(None).await)?;
         self.with_code_db(id, |db| {
             db.prune_code_changes(id, &repos, &stamp(started - Duration::days(UNWATCH_GRACE_DAYS)))?;
             db.set_meta(LAST_SYNC, &stamp(started))
@@ -756,7 +764,7 @@ impl Core {
     /// the connections whose links changed.
     pub async fn dev_links_live(&self, item: &ItemRef) -> Result<(Vec<DevLink>, Vec<String>)> {
         let mut changed = Vec::new();
-        let known = self.known_keys().await.with_item(item);
+        let known = self.known_keys(Some(item)).await;
         let off = self.off_names();
         for id in self.code.connection_ids() {
             let repos = self.watched_repos_in(&off, &id)?;
@@ -2679,10 +2687,14 @@ mod review_tests {
         assert!(of_item.iter().any(|d| d.id == p.id), "{of_item:?}");
     }
 
+    fn no_search_results() -> Vec<(String, Vec<Reply>)> {
+        vec![("/search/issues".into(), vec![Reply::ok("{\"items\":[]}")]), ("/search/commits".into(), vec![Reply::ok("{\"items\":[]}")])]
+    }
+
     async fn two_sites_with_project_ca() -> (super::tests::Linked, Scope) {
         use super::tests::linked_on;
         use crate::domain::{ContainerRef, ContainerSummary};
-        let (lx, second) = linked_on(vec![], Some("repo"), true).await;
+        let (lx, second) = linked_on(no_search_results(), Some("repo"), true).await;
         let second = second.unwrap();
         lx.fx.core.adopt_instances().await;
         let entry = ContainerSummary {
@@ -2748,6 +2760,78 @@ mod review_tests {
     }
 
     #[tokio::test]
+    async fn a_link_that_moves_to_the_same_key_on_the_other_site_is_reported_as_changed() {
+        let (lx, second) = two_sites_with_project_ca().await;
+        lx.fx.add_item_in(&second, "CA-208").await;
+        lx.sync().await;
+        assert_eq!(lx.fx.core.dev_links(&second_site_item(&second, "CA-208")).unwrap().len(), 1);
+
+        lx.fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        let synced = lx.sync().await;
+        assert!(synced.links_changed);
+        assert_eq!(lx.fx.core.dev_links(&lx.fx.item("CA-208")).unwrap().len(), 1);
+        assert!(lx.fx.core.dev_links(&second_site_item(&second, "CA-208")).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn looking_at_an_item_of_a_site_that_is_off_links_nothing_to_it_and_leaves_the_other_sites_link_unambiguous() {
+        let (lx, second) = two_sites_with_project_ca().await;
+        lx.fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+        lx.sync().await;
+
+        let (links, _) = lx.fx.core.dev_links_live(&second_site_item(&second, "CA-208")).await.unwrap();
+        assert!(links.is_empty());
+        let first = lx.fx.core.dev_links(&lx.fx.item("CA-208")).unwrap();
+        assert_eq!((first.len(), first[0].ambiguous), (1, false));
+    }
+
+    #[tokio::test]
+    async fn looking_at_an_item_whose_site_has_no_such_project_listed_keeps_the_link_to_the_site_that_has_it_cached() {
+        use super::tests::linked_on;
+        let (lx, second) = linked_on(no_search_results(), Some("repo"), true).await;
+        let second = second.unwrap();
+        lx.fx.core.adopt_instances().await;
+        lx.fx.add_item_in(&lx.fx.scope, "CA-208").await;
+        lx.sync().await;
+        assert!(lx.fx.core.dev_links(&second_site_item(&second, "CA-208")).unwrap().is_empty());
+
+        lx.fx.core.dev_links_live(&second_site_item(&second, "CA-208")).await.unwrap();
+        let first = lx.fx.core.dev_links(&lx.fx.item("CA-208")).unwrap();
+        assert_eq!((first.len(), first[0].ambiguous), (1, false), "the first site has it cached, so it keeps the link");
+        assert!(lx.fx.core.dev_links(&second_site_item(&second, "CA-208")).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_agent_run_is_not_pointed_at_the_repository_of_a_link_that_may_belong_to_another_site() {
+        let (lx, second) = two_sites_with_project_ca().await;
+        lx.fx.add_item_in(&second, "CA-208").await;
+        lx.fx.add_item_in(&lx.fx.scope, "CA-208").await;
+        lx.sync().await;
+        assert!(lx.fx.core.dev_links(&second_site_item(&second, "CA-208")).unwrap()[0].ambiguous);
+
+        let answer = lx.fx.core.pip_run_target(&second, "CA-208", None).await;
+        assert!(answer.is_err(), "{answer:?}: both repositories are watched and the only link is ambiguous");
+    }
+
+    #[tokio::test]
+    async fn the_ticket_text_an_agent_reads_says_when_a_linked_pull_request_may_belong_to_another_site() {
+        let (lx, second) = two_sites_with_project_ca().await;
+        lx.fx.add_item_in(&second, "CA-208").await;
+        lx.fx.add_item_in(&lx.fx.scope, "CA-208").await;
+        lx.sync().await;
+
+        let item = second_site_item(&second, "CA-208");
+        let links = lx.fx.core.dev_links(&item).unwrap();
+        let text = lx
+            .fx
+            .core
+            .with_db_for(&second, |db| Ok(crate::inbox::ticket_context::snapshot(db, &db.item(&item)?.unwrap(), &links)))
+            .await
+            .unwrap();
+        assert!(text.contains("may belong to the same key on another site"), "{text}");
+    }
+
+    #[tokio::test]
     async fn project_keys_are_those_of_every_connection_that_is_on_and_survive_turning_all_off() {
         use crate::domain::{ContainerRef, ContainerSummary};
         let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
@@ -2762,15 +2846,15 @@ mod review_tests {
             item_hint: None,
         };
         fx.core.with_db_for(&second, |db| db.catalog_upsert(&second.connection_id, &[entry], "2026-09-29T12:00:00Z")).await.unwrap();
-        assert!(!fx.core.known_keys().await.items("BETA-1").is_empty(), "a second connection that is on adds its keys");
-        assert!(!fx.core.known_keys().await.items("CA-1").is_empty());
+        assert!(!fx.core.known_keys(None).await.items("BETA-1").is_empty(), "a second connection that is on adds its keys");
+        assert!(!fx.core.known_keys(None).await.items("CA-1").is_empty());
 
         fx.core.set_instance_enabled("jira", false).await.unwrap();
         assert_eq!(fx.core.primary().await.unwrap().scope, second, "the first is off, so the second is primary");
-        assert!(!fx.core.known_keys().await.items("BETA-1").is_empty());
-        assert!(fx.core.known_keys().await.items("CA-1").is_empty(), "a connection that is off adds no keys");
+        assert!(!fx.core.known_keys(None).await.items("BETA-1").is_empty());
+        assert!(fx.core.known_keys(None).await.items("CA-1").is_empty(), "a connection that is off adds no keys");
 
         fx.core.set_instance_enabled("jira_2", false).await.unwrap();
-        assert!(!fx.core.known_keys().await.items("CA-1").is_empty(), "keys stay when every connection is off");
+        assert!(!fx.core.known_keys(None).await.items("CA-1").is_empty(), "keys stay when every connection is off");
     }
 }
