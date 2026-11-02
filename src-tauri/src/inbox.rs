@@ -284,8 +284,22 @@ impl Core {
     /// Signs in with an API token and registers the resulting connection. Replaces every earlier sign-in.
     pub async fn connect_jira(&self, input: &TokenSignIn) -> Result<AuthStatus> {
         let _alone = self.sign_in.lock().await;
-        let previous: Vec<Connection> = self.auth.accounts().await.into_iter().map(|s| s.connection).collect();
-        let connection = self.auth.connect(input).await?;
+        let _gate = self.draft_gate.lock().await;
+        let signed_in = self.auth.accounts().await;
+        let previous: Vec<Connection> = signed_in.iter().map(|s| s.connection.clone()).collect();
+        let mut running = Vec::new();
+        for account in &signed_in {
+            if self.registry.connection(&account.connection.id).is_some() && !self.live_runs(&account.connection.id).await?.is_empty() {
+                running.push((account.connection.id.clone(), account.site.name.clone()));
+            }
+        }
+        let connection = self
+            .auth
+            .connect_unless(input, |new| match running.iter().find(|(id, _)| *id != new.id) {
+                Some((_, site)) => Err(Error::Input(format!("Signing in here would remove {site}, which has a running agent. Stop it first."))),
+                None => Ok(()),
+            })
+            .await?;
         if let Some(now) = self.auth.accounts().await.into_iter().find(|s| s.connection.id == connection.id) {
             let binding = Binding::jira(&connection.id, &now.site.name, &now.site.url).with_email(input.email.trim());
             self.rebind_instance(previous.iter().map(|c| c.id.clone()).collect(), binding);
@@ -1603,6 +1617,11 @@ pub(crate) mod testing {
             self.core.with_db_for(&self.scope, |db| db.insert_run(run)).await.unwrap();
         }
 
+        /// Takes `connection_id` out of the registry while its token stays in the vault, as a launch that registered only the bound sessions leaves it.
+        pub fn unregister(&self, connection_id: &str) {
+            self.core.registry.remove(connection_id);
+        }
+
         /// Stores `ws` as it is, whatever its connection.
         pub async fn insert_workstream(&self, ws: &crate::domain::Workstream) {
             self.core.with_db_for(&self.scope, |db| db.insert_workstream(ws)).await.unwrap();
@@ -1693,7 +1712,7 @@ pub(crate) mod testing {
         (fx, scope)
     }
 
-    /// Answers `whoami` as the account the token belongs to, and scripts nothing else.
+    /// Answers `whoami` as the account the token belongs to, and signs in as the site and email it is given.
     struct Echo;
 
     #[async_trait::async_trait]
@@ -1701,8 +1720,10 @@ pub(crate) mod testing {
         async fn find_cloud_id(&self, _: &str) -> Result<Option<String>> {
             Ok(None)
         }
-        async fn connect(&self, _: &TokenSignIn) -> Result<Credentials> {
-            Err(Error::Auth("this fixture signs in nowhere".into()))
+        async fn connect(&self, input: &TokenSignIn) -> Result<Credentials> {
+            let site = Site { cloud_id: input.site.clone(), name: input.site.clone(), url: format!("https://{}.example", input.site) };
+            let me = Account { account_id: input.email.clone(), name: input.email.clone(), avatar_url: None };
+            Ok(Credentials { email: input.email.clone(), token: input.token.clone(), expires_on: "2999-01-01".into(), site, me })
         }
         async fn whoami(&self, token: &crate::auth::AccessToken) -> Result<Account> {
             Ok(Account { account_id: token.scope.account_id.clone(), name: token.scope.account_id.clone(), avatar_url: None })

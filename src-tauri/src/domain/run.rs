@@ -345,6 +345,17 @@ pub enum RunState {
 }
 
 impl RunState {
+    /// Runs in these states are not over: they are polled, and a connection with one stays registered.
+    pub const UNFINISHED: [RunState; 7] = [
+        RunState::Queued,
+        RunState::Launching,
+        RunState::Working,
+        RunState::NeedsAnswer,
+        RunState::NeedsPermission,
+        RunState::SystemBlocked,
+        RunState::Unknown,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             RunState::Queued => "queued",

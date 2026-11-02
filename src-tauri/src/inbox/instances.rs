@@ -5,7 +5,7 @@ use super::{ConnectionInfo, Core};
 use crate::config::AppConfig;
 use crate::connections::{self, Binding, RowKind};
 use crate::db::is_for;
-use crate::domain::{Actor, ProposalQuery, ProposalState, RunQuery, RunState, StateKind};
+use crate::domain::{Actor, ProposalQuery, ProposalState, Run, RunQuery, RunState, StateKind};
 use crate::error::{Error, Result};
 use crate::proposals;
 use crate::secrets;
@@ -288,15 +288,21 @@ impl Core {
         Ok(())
     }
 
-    /// Agents that are running or waiting to start keep their tickets' site, so it stays until they are stopped.
+    /// Agents that are running or waiting to start keep their tickets' site, so it stays until they are stopped. Runs
+    /// of a connection that has left the registry are invisible to the run service, so nothing could stop them.
     async fn refuse_while_running(&self, connection_id: &str) -> Result<()> {
-        let live = vec![RunState::Queued, RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked];
-        let query = RunQuery { states: Some(live), connection_id: Some(connection_id.into()), ..Default::default() };
-        match self.with_app_db(|db| db.runs(&query)).await?.len() {
+        let runs = self.live_runs(connection_id).await?;
+        match runs.len() {
             0 => Ok(()),
+            _ if runs.iter().all(|r| r.state == RunState::Unknown) => Err(Error::Input("Gossamr can't find its agent's session right now. Try again once it settles.".into())),
             1 => Err(Error::Input("Stop its running agent first.".into())),
             n => Err(Error::Input(format!("Stop its {n} running agents first."))),
         }
+    }
+
+    pub(super) async fn live_runs(&self, connection_id: &str) -> Result<Vec<Run>> {
+        let query = RunQuery { states: Some(RunState::UNFINISHED.to_vec()), connection_id: Some(connection_id.into()), ..Default::default() };
+        self.with_app_db(|db| db.runs(&query)).await
     }
 
     /// Closes the pending drafts for the removed connection. Says whether a closed draft was in a workstream.
@@ -1038,5 +1044,67 @@ mod tests {
         rig.svc.stop(&run.id).await.unwrap();
         let removed = core.remove_instance("jira_2").await.unwrap();
         assert_eq!(removed.connection_id, second.connection_id);
+    }
+
+    #[tokio::test]
+    async fn a_jira_connection_whose_run_has_lost_its_session_is_not_removed() {
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+        core.adopt_instances().await;
+        rig.set(&run, |r| r.state = RunState::Unknown).await;
+
+        let refused = core.remove_instance("jira_2").await.unwrap_err();
+
+        assert_eq!(refused.to_string(), "Gossamr can't find its agent's session right now. Try again once it settles.");
+        assert!(core.runs_list(&RunQuery::default()).await.unwrap().iter().any(|r| r.id == run.id), "the run is still in reach");
+        assert!(core.auth.accounts().await.iter().any(|s| s.connection.id == second.connection_id));
+    }
+
+    fn sign_in_as(site: &str, email: &str) -> crate::auth::TokenSignIn {
+        crate::auth::TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: "t".into(), expires_on: "2999-01-01".into() }
+    }
+
+    #[tokio::test]
+    async fn signing_in_on_another_site_is_refused_while_an_agent_works_on_the_account_it_would_replace() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let (rig, run, second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+
+        let refused = core.connect_jira(&sign_in_as("gamma", "gus")).await.err().expect("refused");
+
+        assert!(refused.to_string().contains("has a running agent"), "{refused}");
+        let signed_in: Vec<String> = core.auth.accounts().await.into_iter().map(|s| s.connection.id).collect();
+        assert!(signed_in.contains(&second.connection_id) && signed_in.len() == 2, "{signed_in:?}");
+        assert!(core.run(&run.id).await.unwrap().is_some(), "the run is still in reach");
+        rig.svc.stop(&run.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signing_in_again_as_the_account_with_the_agent_is_allowed() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let (rig, run, _second) = crate::runs::rig::working_on_the_second_account().await;
+        let core = &rig.fx.core;
+
+        core.connect_jira(&sign_in_as("beta", "bo")).await.unwrap();
+
+        assert!(core.run(&run.id).await.unwrap().is_some(), "the run is still in reach");
+        rig.svc.stop(&run.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_run_cannot_be_queued_while_its_connection_is_being_removed() {
+        let (rig, run, _second) = crate::runs::rig::working_on_the_second_account().await;
+        rig.svc.stop(&run.id).await.unwrap();
+        let removing = rig.fx.core.draft_gate.lock().await;
+        let (core, spec, item) = (rig.fx.core.clone(), rig.spec(2), rig.fx.item("CA-1"));
+        let queuing = tokio::spawn(async move { core.queue_test_run(spec, Some(item)).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert!(!queuing.is_finished(), "the run was queued while a removal held the gate");
+        drop(removing);
+        queuing.await.unwrap().unwrap();
     }
 }

@@ -322,6 +322,11 @@ impl Core {
         self.with_proposals(|db| db.run(id)).await
     }
 
+    /// `run`, whether or not its connection is registered, so a run that is out of reach is not taken for a missing one.
+    pub async fn run_in_store(&self, id: &str) -> Result<Option<Run>> {
+        self.with_app_db(|db| db.run(id)).await
+    }
+
     /// Archives the listed runs that are over; returns the ids that were archived.
     pub async fn archive_runs(&self, ids: &[String], at: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>> {
         self.with_proposals(|db| db.archive_runs(ids, at)).await
@@ -520,7 +525,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_hand_made_draft_is_refused_for_a_connection_that_is_off_and_listed_again_once_it_is_on() {
+    async fn a_hand_made_draft_is_refused_for_a_connection_that_is_off_and_its_waiting_draft_is_still_listed() {
         let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
         fx.core.adopt_instances().await;
         let kept = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-1"), to: "10001".into() }, None).await.unwrap();
@@ -528,7 +533,33 @@ mod tests {
 
         let err = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-2"), to: "10001".into() }, None).await.unwrap_err();
         assert!(err.to_string().contains("is off"), "{err}");
-        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap(), vec![kept], "its waiting draft is still listed, for the page to show as held");
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap(), vec![kept.clone()], "its waiting draft is still listed, for the page to show as held");
+
+        fx.core.set_instance_enabled("jira_2", true).await.unwrap();
+        let again = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-2"), to: "10001".into() }, None).await.unwrap();
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().len(), 2, "{kept:?} {again:?}");
+    }
+
+    #[tokio::test]
+    async fn rechecking_a_draft_of_the_second_site_judges_it_as_the_second_sites_account() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let connection = fx.core.connection(&second).unwrap();
+        let mut item = crate::tracker::item_from_ticket(&connection, &crate::tracker::testing::sample_ticket()).unwrap();
+        item.item = connection.item("BETA-1");
+        item.comment_count = 1;
+        item.last_commenter = None;
+        fx.core.with_db_for(&second, |db| db.upsert_items(std::slice::from_ref(&item), "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        let comment = Intent::Comment { item: on_second(&second, "BETA-1"), body: Doc::paragraph("on it") };
+        let draft = fx.core.draft_as_user(comment, None).await.unwrap();
+        assert_eq!(fx.core.reconcile_proposals(&second).await.unwrap(), 0);
+
+        item.comment_count = 2;
+        item.last_commenter = Some(crate::domain::PersonRef { connection_id: second.connection_id.clone(), account_id: second.account_id.clone() });
+        fx.core.with_db_for(&second, |db| db.upsert_items(std::slice::from_ref(&item), "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
+
+        assert_eq!(fx.core.reconcile_proposals(&second).await.unwrap(), 1);
+        let now = fx.core.proposal(&draft.id).await.unwrap().unwrap();
+        assert!(matches!(&now.state, ProposalState::Retired(why) if why.contains("already commented")), "{:?}", now.state);
     }
 
     #[tokio::test]
