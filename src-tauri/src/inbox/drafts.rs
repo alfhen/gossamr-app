@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::{identity_of, Core};
 use crate::auth::Scope;
-use crate::db::Db;
+use crate::db::{connection_of, Db};
 use crate::domain::{
     Actor, Basis, CodeChange, CodeChangeState, ContainerRef, CreatedBy, Doc, Intent, ItemKind, Origin, Proposal, ProposalQuery, ProposalState, Run, ReviewComment, RunEvent, RunQuery, RunSpec,
 };
@@ -152,24 +152,33 @@ impl Core {
     }
 
     /// A draft the person made themselves, such as dropping a card on a board column. Nothing is written until it is
-    /// approved. Only an existing item of the signed-in connection can be the target, or a project of it for a new item.
+    /// approved. Only an existing item of a connection that is on can be the target, or a project of it for a new item.
     pub async fn draft_as_user(&self, intent: Intent, label: Option<String>) -> Result<Proposal> {
-        let scope = self.scope().await?;
-        let connection_id = scope.connection_id.clone();
         let drafted_in = match &intent {
             Intent::Create { container, .. } => &container.connection_id,
             other => &other.target().ok_or_else(|| Error::Proposal("a draft made by hand has to be about an existing item".into()))?.connection_id,
         };
-        if *drafted_in != connection_id {
-            return Err(Error::Proposal("that item belongs to another connection".into()));
-        }
+        let scope = self.scope_of(drafted_in).await.map_err(|_| Error::Proposal("that item belongs to another connection".into()))?;
+        self.refuse_hidden(&scope.connection_id)?;
         let draft = Draft { origin: Origin::Board, created_by: CreatedBy::User, intent, label, basis: None };
         self.propose(&scope, draft).await
     }
 
+    /// Runs `f` against the drafts and runs of every registered connection, with no one connection signed in.
     pub(super) async fn with_proposals<T>(&self, f: impl FnOnce(&Db) -> Result<T>) -> Result<T> {
-        let scope = self.scope().await?;
-        self.with_app_db_for(&scope, f).await
+        let mut open = self.db.lock().expect("db lock poisoned");
+        self.open_app(&mut open)?.among(self.registry.ids(), f)
+    }
+
+    /// The connection draft `id` belongs to, when it exists.
+    pub async fn draft_connection(&self, id: &str) -> Option<String> {
+        self.with_proposals(|db| db.proposal(id)).await.ok().flatten().map(|p| connection_of(&p))
+    }
+
+    /// The scope of the draft's own connection, which must be registered and signed in.
+    async fn scope_of_draft(&self, id: &str) -> Result<Scope> {
+        let draft = self.with_proposals(|db| db.proposal(id)).await?.ok_or_else(|| Error::Proposal("that draft no longer exists".into()))?;
+        self.scope_of(&connection_of(&draft)).await
     }
 
     pub async fn proposals(&self, query: &ProposalQuery) -> Result<Vec<Proposal>> {
@@ -313,6 +322,11 @@ impl Core {
         self.with_proposals(|db| db.run(id)).await
     }
 
+    /// `run`, whether or not its connection is registered, so a run that is out of reach is not taken for a missing one.
+    pub async fn run_in_store(&self, id: &str) -> Result<Option<Run>> {
+        self.with_app_db(|db| db.run(id)).await
+    }
+
     /// Archives the listed runs that are over; returns the ids that were archived.
     pub async fn archive_runs(&self, ids: &[String], at: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>> {
         self.with_proposals(|db| db.archive_runs(ids, at)).await
@@ -375,7 +389,7 @@ impl Core {
     /// attempt returns the proposal to pending with `error` set and the subtasks it did create remembered, so
     /// approving again never repeats them.
     pub async fn approve_proposal(&self, id: &str) -> Result<Proposal> {
-        let scope = self.scope().await?;
+        let scope = self.scope_of_draft(id).await?;
         let tracker = self.tracker(&scope)?;
         let claimed = {
             let _gate = self.draft_gate.lock().await;
@@ -414,7 +428,7 @@ impl Core {
 
     /// Re-judges pending drafts against the cache. Returns how many were revised or retired.
     pub async fn reconcile_proposals(&self, scope: &Scope) -> Result<usize> {
-        let (_, _, me) = self.identity().await?;
+        let (_, _, me) = self.identity_for(scope).await?;
         let connection_id = scope.connection_id.clone();
         let identity = identity_of(&connection_id, &me);
         self.with_db_for(scope, |db| proposals::reconcile_pending(db, &identity, Utc::now())).await
@@ -473,6 +487,90 @@ mod tests {
 
         let app = crate::db::Db::open_with_app(&fx.dir.join("inbox-site-me.sqlite"), &fx.dir.join("app.sqlite")).unwrap();
         assert_eq!(app.proposal(&theirs.id).unwrap().unwrap().state, ProposalState::Pending, "and the other account's draft is untouched");
+    }
+
+    fn on_second(second: &Scope, key: &str) -> crate::domain::ItemRef {
+        crate::domain::ItemRef { connection_id: second.connection_id.clone(), external_id: key.into(), key: key.into() }
+    }
+
+    #[tokio::test]
+    async fn a_draft_made_on_site_b_posts_to_site_b_and_one_made_on_site_a_posts_to_site_a() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let on_b = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-1"), to: "10001".into() }, None).await.unwrap();
+        let on_a = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+        let mut listed: Vec<_> = fx.core.proposals(&ProposalQuery::default()).await.unwrap().into_iter().map(|p| p.id).collect();
+        listed.sort();
+        let mut both = vec![on_a.id.clone(), on_b.id.clone()];
+        both.sort();
+        assert_eq!(listed, both, "the first account is the primary, and the second one's drafts are listed with its own");
+
+        assert_eq!(fx.core.approve_proposal(&on_b.id).await.unwrap().state, ProposalState::Applied);
+        assert_eq!((fx.second_tracker.intents().len(), fx.tracker.intents().len()), (1, 0), "site B's draft reached site B only");
+
+        assert_eq!(fx.core.approve_proposal(&on_a.id).await.unwrap().state, ProposalState::Applied);
+        assert_eq!((fx.second_tracker.intents().len(), fx.tracker.intents().len()), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn a_draft_of_the_second_site_can_be_edited_skipped_and_taken_back_while_the_first_is_the_primary() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let comment = Intent::Comment { item: on_second(&second, "BETA-1"), body: Doc::paragraph("first") };
+        let draft = fx.core.draft_as_user(comment, None).await.unwrap();
+
+        let edited = fx.core.edit_proposal(&draft.id, &Edit::Comment { body: "second".into(), mentions: vec![], quote: None }).await.unwrap();
+        assert_ne!(edited.intent, draft.intent);
+        assert_eq!(fx.core.skip_proposal(&draft.id).await.unwrap().state, ProposalState::Skipped);
+        assert_eq!(fx.core.unskip_proposal(&draft.id).await.unwrap().state, ProposalState::Pending);
+        assert_eq!(fx.core.reconcile_proposals(&second).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_hand_made_draft_is_refused_for_a_connection_that_is_off_and_its_waiting_draft_is_still_listed() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        fx.core.adopt_instances().await;
+        let kept = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-1"), to: "10001".into() }, None).await.unwrap();
+        fx.core.set_instance_enabled("jira_2", false).await.unwrap();
+
+        let err = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-2"), to: "10001".into() }, None).await.unwrap_err();
+        assert!(err.to_string().contains("is off"), "{err}");
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap(), vec![kept.clone()], "its waiting draft is still listed, for the page to show as held");
+
+        fx.core.set_instance_enabled("jira_2", true).await.unwrap();
+        let again = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-2"), to: "10001".into() }, None).await.unwrap();
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap().len(), 2, "{kept:?} {again:?}");
+    }
+
+    #[tokio::test]
+    async fn rechecking_a_draft_of_the_second_site_judges_it_as_the_second_sites_account() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let connection = fx.core.connection(&second).unwrap();
+        let mut item = crate::tracker::item_from_ticket(&connection, &crate::tracker::testing::sample_ticket()).unwrap();
+        item.item = connection.item("BETA-1");
+        item.comment_count = 1;
+        item.last_commenter = None;
+        fx.core.with_db_for(&second, |db| db.upsert_items(std::slice::from_ref(&item), "2026-09-29T12:00:00Z").map(|_| ())).await.unwrap();
+        let comment = Intent::Comment { item: on_second(&second, "BETA-1"), body: Doc::paragraph("on it") };
+        let draft = fx.core.draft_as_user(comment, None).await.unwrap();
+        assert_eq!(fx.core.reconcile_proposals(&second).await.unwrap(), 0);
+
+        item.comment_count = 2;
+        item.last_commenter = Some(crate::domain::PersonRef { connection_id: second.connection_id.clone(), account_id: second.account_id.clone() });
+        fx.core.with_db_for(&second, |db| db.upsert_items(std::slice::from_ref(&item), "2026-09-29T13:00:00Z").map(|_| ())).await.unwrap();
+
+        assert_eq!(fx.core.reconcile_proposals(&second).await.unwrap(), 1);
+        let now = fx.core.proposal(&draft.id).await.unwrap().unwrap();
+        assert!(matches!(&now.state, ProposalState::Retired(why) if why.contains("already commented")), "{:?}", now.state);
+    }
+
+    #[tokio::test]
+    async fn drafts_of_a_connection_that_is_no_longer_registered_are_left_out() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let gone = fx.core.draft_as_user(Intent::Transition { item: on_second(&second, "BETA-1"), to: "10001".into() }, None).await.unwrap();
+        let kept = fx.core.draft_as_user(Intent::Transition { item: fx.item("CA-1"), to: "10001".into() }, None).await.unwrap();
+        fx.core.registry.remove(&second.connection_id);
+        assert_eq!(fx.core.proposals(&ProposalQuery::default()).await.unwrap(), vec![kept]);
+        assert!(fx.core.proposal(&gone.id).await.unwrap().is_none());
+        assert!(fx.core.approve_proposal(&gone.id).await.unwrap_err().to_string().contains("no longer exists"));
     }
 
     #[tokio::test]
