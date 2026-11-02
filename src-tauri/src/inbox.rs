@@ -654,7 +654,7 @@ impl Core {
         for account in self.on_accounts().await? {
             found.extend(self.search_cached_with(&account.scope, filter, include_unwatched).await?);
         }
-        found.sort_by(|a, b| b.updated.cmp(&a.updated));
+        found.sort_by_key(|i| std::cmp::Reverse(i.updated));
         Ok(found.into_iter().map(without_extra).collect())
     }
 
