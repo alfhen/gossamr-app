@@ -1428,7 +1428,7 @@ export class MockBackend implements Backend {
       this.connectionsListeners.forEach((l) => l());
       return status;
     }
-    if (instanceId === undefined && this.jiraAccount.site) {
+    if (instanceId === undefined && this.jiraAccount.site && !this.jiraToken) {
       const added = this.addAccount(status, false);
       this.connectionsListeners.forEach((l) => l());
       this.cacheListeners.forEach((l) => l({ connectionId: added.connector.connectionId }));

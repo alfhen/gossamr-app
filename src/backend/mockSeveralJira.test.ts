@@ -177,6 +177,14 @@ describe("signing in to another Jira account on the sample backend", () => {
   });
 });
 
+describe("signing in from the sample row shown for a sample token", () => {
+  it("replaces the sample row instead of adding a second account", async () => {
+    const b = new MockBackend({ jiraToken: "refused", githubRepos: 6 });
+    await b.jiraConnect(input);
+    expect((await b.connectionsList()).map((c) => c.instanceId)).toEqual(["jira", "github", "claude"]);
+  });
+});
+
 describe("a sync error on one Jira account", () => {
   it("shows on its row only, and clears when its token is renewed", async () => {
     const b = new MockBackend({ jira: 2, jiraToken: "expiring", githubRepos: 6 });
@@ -253,7 +261,8 @@ describe("drafts and writes on the second site", () => {
     const draft = await b.proposalsCreate(newItem("mock2", "OPS"));
     const done = await b.proposalsApprove(draft.id);
     expect(done.state).toMatchObject({ type: "applied" });
-    expect((await b.cacheItem(beta("OPS-1")))?.title).toBe("Renew the staging certificates");
+    const created = (await b.cacheSearch({ type: "and", filters: [] }, { includeUnwatched: true })).filter((i) => i.title === "A task");
+    expect(created.map((i) => i.item.connectionId)).toEqual(["mock2"]);
     await expect(b.proposalsCreate(newItem("mock9", "OPS"))).rejects.toThrow("another connection");
   });
 
