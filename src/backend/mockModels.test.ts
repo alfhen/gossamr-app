@@ -51,7 +51,7 @@ describe("the mock model lists and defaults", () => {
   });
 
   it("clears the defaults that named a removed instance", async () => {
-    const b = new MockBackend();
+    const b = new MockBackend({ runs: { seed: "empty" } });
     await b.connectionRemove("claude");
     expect(await b.modelDefaults()).toEqual({ pip: null, agents: null });
     await expect(b.providerModels("claude")).rejects.toThrow("isn't a provider");

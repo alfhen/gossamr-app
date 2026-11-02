@@ -211,6 +211,7 @@ mod tests {
             created_at: now() + Duration::minutes(mins),
             closed_at: None,
             basis: None,
+            agents_model: None,
         }
     }
 

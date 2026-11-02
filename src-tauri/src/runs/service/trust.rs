@@ -7,7 +7,6 @@ use crate::domain::RunFailure;
 use crate::runs::control::quotable;
 use crate::runs::fresh::work_path;
 use crate::runs::provider_folder::expand;
-use crate::runs::toolchain::ToolchainError;
 use crate::runs::trust::{self, Refusal};
 
 /// The login's name on the card until instances have names of their own.
@@ -18,12 +17,6 @@ fn refused(why: Refusal) -> Error {
 }
 
 impl RunService {
-    /// The toolchain `run` launches with, and the one the trust pre-flight and the trust write take their login from, so
-    /// a run is never checked against one login and launched on another.
-    pub(super) async fn toolchain_of(&self, _run: &Run) -> std::result::Result<Toolchain, ToolchainError> {
-        self.tools.get().await
-    }
-
     /// Whether `run`'s stored clone is Gossamr's own clone of its repository, the only folder Gossamr trusts.
     async fn is_own_clone(&self, run: &Run, tc: &Toolchain) -> bool {
         let (spec, Some(home)) = (&run.spec, self.fresh_home()) else { return false };

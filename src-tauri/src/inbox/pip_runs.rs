@@ -7,6 +7,7 @@ use chrono::Utc;
 use super::ticket_context::snapshot;
 use super::Core;
 use crate::auth::Scope;
+use crate::config::AppConfig;
 use crate::domain::{Actor, ClonePlan, CodeChangeKind, ItemRef, LegacySpec, Role, Run, RunEvent, RunQuery, RunSpec, WorkstreamEvent};
 use crate::error::{Error, Result};
 use crate::proposals;
@@ -150,11 +151,14 @@ impl Core {
         let role = spec.role.clone();
         let id = proposals::new_id()?;
         let run = Run::started_by_pip(id, connection_id.clone(), item.clone(), spec, start.request_id, Utc::now());
+        let default_choice = AppConfig::load(&self.data_dir).models.agents;
         let _removal = self.draft_gate.lock().await;
         self.with_app_db_atomically_for(scope, |db| {
+            let mut run = run;
             if let Some(ws) = workstream.as_deref() {
                 super::workstreams::require_startable(db, &connection_id, ws, item.as_ref())?;
             }
+            run.runs_on = workstream.as_deref().map(|ws| db.workstream(ws)).transpose()?.flatten().and_then(|ws| ws.agents_model).or(default_choice);
             let (run, fresh) = db.insert_started_run(&run, start.key)?;
             if let (true, Some(ws)) = (fresh, workstream.as_deref()) {
                 let how = if start.wake { "wake turn" } else { "conversation" };

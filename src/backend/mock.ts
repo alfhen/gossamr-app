@@ -31,6 +31,7 @@ import type {
   RunQuery,
   RunsChanged,
   AgentSettings,
+  ModelChoice,
   ModelDefaults,
   Snapshot,
   Status,
@@ -422,6 +423,7 @@ export class MockBackend implements Backend {
       (ref) => this.connectorFor(ref.connectionId)?.item(ref)?.title ?? null,
     );
     this.runs.workstreams = this.workstreams;
+    this.runs.choiceFor = (workstream) => (workstream ? this.workstreams.get(workstream)?.workstream.agentsModel : null) ?? this.models.get().agents;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
     this.proposals.hasConnection = (id) => this.connectorFor(id) !== undefined;
     this.proposals.runRole = (id) => this.runs.get(id)?.spec.role ?? null;
@@ -518,6 +520,11 @@ export class MockBackend implements Backend {
     return this.workstreams.open(item, title ?? null);
   }
 
+  async workstreamsSetModel(id: string, choice: ModelChoice | null) {
+    if (choice) this.models.checkAgents(choice);
+    return this.workstreams.setModel(id, choice);
+  }
+
   async workstreamsList(includeClosed = false) {
     return this.workstreams.list(includeClosed);
   }
@@ -598,6 +605,11 @@ export class MockBackend implements Backend {
 
   async runsStop(id: string) {
     return this.runs.stop(id);
+  }
+
+  async runsSetModel(id: string, choice: ModelChoice) {
+    this.models.checkAgents(choice);
+    return this.runs.setModel(id, choice);
   }
 
   async runsAnswer(id: string, text: string) {
@@ -1277,6 +1289,8 @@ export class MockBackend implements Backend {
       return;
     }
     if (target.kind === "provider") {
+      const live = this.runs.liveOn(instanceId);
+      if (live > 0) throw new Error(live === 1 ? "Stop its running agent first." : `Stop its ${live} running agents first.`);
       this.providers.remove(instanceId);
       this.models.forget(instanceId);
       this.names.delete(instanceId);
