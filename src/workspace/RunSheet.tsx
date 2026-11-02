@@ -10,7 +10,7 @@ import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSh
 import { StateChip, useSlotQueue, type TrustState } from "./AgentParts";
 import { agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
-import { openTicketByKey } from "./jump";
+import { openTicket } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { CloneActions } from "./CloneActions";
 import { failureAction } from "./failureActions";
@@ -475,7 +475,7 @@ export function RunSheet({ id }: { id: string }) {
     openTicket: () => {
       if (!run.item) return;
       store.closeSheet();
-      void openTicketByKey(run.item.key);
+      void openTicket(run.item);
     },
     reveal: (path) => void backend?.revealPath(path).catch(() => {}),
     askPip: () => {

@@ -130,7 +130,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
   );
 }
 
-export function ConnectFrame({ children, onClose, label = "Connect GitHub" }: { children: ReactNode; onClose(): void; label?: string }) {
+export function ConnectFrame({ children, onClose, label = "Connect GitHub", takesEscape = false }: { children: ReactNode; onClose(): void; label?: string; takesEscape?: boolean }) {
   const sheet = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const at = document.activeElement;
@@ -138,7 +138,16 @@ export function ConnectFrame({ children, onClose, label = "Connect GitHub" }: { 
   }, []);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/30 pt-[10vh]" onMouseDown={(ev) => ev.target === ev.currentTarget && onClose()}>
-      <div ref={sheet} tabIndex={-1} role="dialog" aria-modal="true" aria-label={label} className="ws-pop ws-sheet mb-8 w-[min(520px,92vw)] p-5 text-ws-ink outline-none">
+      <div
+        ref={sheet}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        data-esc-local={takesEscape ? "" : undefined}
+        onKeyDown={takesEscape ? (ev) => ev.key === "Escape" && (ev.preventDefault(), ev.stopPropagation(), onClose()) : undefined}
+        className="ws-pop ws-sheet mb-8 w-[min(520px,92vw)] p-5 text-ws-ink outline-none"
+      >
         {children}
       </div>
     </div>

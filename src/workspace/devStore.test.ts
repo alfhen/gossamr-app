@@ -26,6 +26,16 @@ describe("the development index", () => {
     expect(byChange.get("pr:acme/webshop#208")).toEqual(ref("CA-208"));
   });
 
+  it("does not say which ticket opens a pull request that an ambiguous link names", async () => {
+    const backend = await connected();
+    const real = backend.devLinks.bind(backend);
+    vi.spyOn(backend, "devLinks").mockImplementation(async (item) => (await real(item)).map((l) => ({ ...l, ambiguous: true })));
+    useDev.getState().ensure([ref("CA-208")]);
+    await settle();
+    expect(useDev.getState().index.get("mock:CA-208")).toMatchObject({ prs: 1 });
+    expect(useDev.getState().byChange.has("pr:acme/webshop#208")).toBe(false);
+  });
+
   it("never has more than four reads in flight and reads each item once", async () => {
     const backend = await connected();
     let flying = 0;

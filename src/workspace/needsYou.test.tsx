@@ -80,7 +80,7 @@ const input = (over: Partial<NeedsInput> = {}): NeedsInput => ({
   ],
   proposals: [draft("c1", comment("CA-401"), 30, "ws-1"), draft("c2", transition("CA-401"), 25, "ws-1"), draft("c3", comment("CA-401", "Another"), 24, "ws-1"), draft("g1", comment("CA-500"), 10)],
   dismissed: new Set(),
-  titleOf: (key) => (key === "CA-500" ? "Loose ticket" : null),
+  titleOf: (ref) => (ref.key === "CA-500" ? "Loose ticket" : null),
   ...over,
 });
 
