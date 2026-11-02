@@ -97,6 +97,15 @@ fn locate(typed: &str, places: &Places) -> Result<Located, String> {
     Ok(Located::of(real))
 }
 
+/// A problem from `problems` as the sentence the person reads: a folder's problem says it is the folder.
+pub fn describe(problem: &str, has_folder: bool) -> String {
+    if has_folder {
+        format!("This folder can't be used: {problem}")
+    } else {
+        problem.to_string()
+    }
+}
+
 const DRIVERS: [Driver; 2] = [Driver::Claude, Driver::Codex];
 
 /// The folders the CLI uses when it is not told one, which only the instance without a folder may have. Without the

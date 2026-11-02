@@ -88,6 +88,8 @@ export interface Backend {
   connectionsList(refresh?: boolean): Promise<ConnectionInfo[]>;
   /** Opens Terminal on the fix the last probe of instance `instanceId` found. The command is the one Gossamr holds for it, never a string from the page. */
   connectionOpenTerminal(instanceId: string): Promise<void>;
+  /** Adds a provider instance after Rust checks the folder, makes the folder when it is missing, and asks the new instance how it stands in the background. Returns its row. */
+  providerAdd(driver: "claude" | "codex", displayName: string, configDir?: string): Promise<ConnectionInfo>;
   /** Saves the name Settings shows for instance `instanceId`. */
   connectionRename(instanceId: string, displayName: string): Promise<void>;
   /** Turns instance `instanceId` on or off, then probes it. Its cache, token and drafts stay. Turning off refuses while one of its drafts is being posted. */

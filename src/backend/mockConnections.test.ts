@@ -12,11 +12,15 @@ describe("the mock connection actions", () => {
     expect(b.terminals).toHaveLength(1);
   });
 
-  it("refuses to open Terminal for a provider, as the real backend does", async () => {
+  it("opens Terminal on a provider's sign-in only while its last check found it signed out", async () => {
     const b = new MockBackend({ claudeProbe: "notSignedIn" });
-    expect((await b.connectionsList()).find((c) => c.instanceId === "claude")?.status?.fix).toBe("claude auth login");
-    await expect(b.connectionOpenTerminal("claude")).rejects.toThrow("nothing to run");
-    expect(b.terminals).toEqual([]);
+    await b.connectionOpenTerminal("claude");
+    expect(b.terminals).toEqual(["claude auth login"]);
+    const ready = new MockBackend();
+    await expect(ready.connectionOpenTerminal("claude")).rejects.toThrow("only when the last check found you signed out");
+    await ready.connectionSetEnabled("claude", false);
+    await expect(ready.connectionOpenTerminal("claude")).rejects.toThrow("turned off");
+    expect(ready.terminals).toEqual([]);
   });
 
   it("lists the Jira site it was connected to in place of the sample name", async () => {

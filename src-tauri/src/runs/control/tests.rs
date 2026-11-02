@@ -622,15 +622,19 @@ async fn a_run_of_a_connection_that_was_turned_off_can_still_be_seen_and_stopped
 }
 
 fn folder_login() -> crate::runs::provider_env::ProviderEnv {
-    use crate::connections::{Driver, ProviderConfig, ProviderInstance};
+    login_in(crate::connections::Driver::Claude, "/Users/me/.claude-work")
+}
+
+fn login_in(driver: crate::connections::Driver, folder: &str) -> crate::runs::provider_env::ProviderEnv {
+    use crate::connections::{ProviderConfig, ProviderInstance};
     use crate::runs::provider_env::{states, ProviderState};
     use crate::runs::provider_folder::Places;
     let instance = ProviderInstance {
         id: "claude_2".into(),
-        driver: Driver::Claude,
+        driver,
         display_name: "Claude personal".into(),
         enabled: true,
-        config: ProviderConfig { config_dir: Some("/Users/me/.claude-work".into()), ..Default::default() },
+        config: ProviderConfig { config_dir: Some(folder.into()), ..Default::default() },
         extra: Default::default(),
     };
     let places = Places { home: Some(Path::new("/Users/me")), data_dir: Path::new("/Users/me/data") };
@@ -720,4 +724,93 @@ fn a_failed_call_as_an_instance_with_a_folder_says_so_and_one_without_does_not()
     assert!(matches!(Failure::from_cli(untrusted(), folder, &plain), Failure::NeedsTrust { own_folder: false, .. }));
     assert!(matches!(Failure::from_cli(untrusted(), folder, &personal), Failure::NeedsTrust { own_folder: true, .. }));
     assert!(personal.has_own_folder() && !plain.has_own_folder());
+}
+
+#[test]
+fn the_sign_in_script_of_an_instance_with_a_folder_removes_the_other_logins_sets_the_folder_and_runs_the_drivers_login() {
+    use crate::connections::Driver;
+    let dir = tmp("signin-folder");
+    let claude = write_provider_signin(&dir, Driver::Claude, Path::new("/opt/fake/bin/claude"), Some(&folder_login())).unwrap();
+    let text = std::fs::read_to_string(&claude).unwrap();
+    let lines: Vec<_> = text.lines().collect();
+    assert_eq!(lines[0], "#!/bin/zsh");
+    assert_eq!(lines[1], format!("unset {}", Driver::Claude.login_variables()[1..].join(" ")));
+    assert_eq!(lines[2..], ["export CLAUDE_CONFIG_DIR='/Users/me/.claude-work'", "exec '/opt/fake/bin/claude' auth login"]);
+
+    let codex = write_provider_signin(&dir, Driver::Codex, Path::new("/opt/fake/bin/codex"), Some(&login_in(Driver::Codex, "/Users/me/.codex-work"))).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(codex).unwrap(),
+        "#!/bin/zsh\nunset CODEX_API_KEY OPENAI_API_KEY OPENAI_BASE_URL\nexport CODEX_HOME='/Users/me/.codex-work'\nexec '/opt/fake/bin/codex' login\n"
+    );
+    let name = claude.file_name().unwrap().to_str().unwrap().to_owned();
+    assert!(name.starts_with("provider-signin-") && name.ends_with(".command") && name.len() == "provider-signin-.command".len() + 16, "{name}");
+    assert_eq!(std::fs::metadata(&claude).unwrap().permissions().mode() & 0o777, 0o700);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn the_sign_in_script_of_an_instance_without_a_folder_is_only_the_exec_line() {
+    use crate::connections::Driver;
+    let dir = tmp("signin-plain");
+    for (driver, binary, line) in [(Driver::Claude, "/opt/fake/bin/claude", "exec '/opt/fake/bin/claude' auth login"), (Driver::Codex, "/opt/fake/bin/codex", "exec '/opt/fake/bin/codex' login")] {
+        let file = write_provider_signin(&dir, driver, Path::new(binary), None).unwrap();
+        assert_eq!(std::fs::read_to_string(file).unwrap(), format!("#!/bin/zsh\n{line}\n"));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_sign_in_script_is_refused_for_a_binary_path_that_could_break_out_of_its_quotes() {
+    use crate::connections::Driver;
+    let dir = tmp("signin-hostile");
+    for binary in ["/opt/it's/claude", "/opt/a\nb/claude", "relative/claude"] {
+        assert!(write_provider_signin(&dir, Driver::Claude, Path::new(binary), None).is_err(), "{binary:?}");
+    }
+    assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "no file was written");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn zsh_runs_the_sign_in_script_with_the_folder_set_and_the_shells_keys_gone() {
+    use crate::connections::Driver;
+    let (dir, home) = (tmp("signin-zsh"), home("signin-zsh"));
+    let bin = home.join("fake claude");
+    std::fs::write(&bin, "#!/bin/zsh\nprint -rn -- \"$CLAUDE_CONFIG_DIR|${ANTHROPIC_API_KEY-unset}|$*\" > \"$GOSSAMR_OUT\"\n").unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let out = home.join("out.txt");
+    let run = |login: Option<&crate::runs::provider_env::ProviderEnv>| {
+        let file = write_provider_signin(&dir, Driver::Claude, &bin, login).unwrap();
+        let status = std::process::Command::new("/bin/zsh").arg(&file).env("GOSSAMR_OUT", &out).env("ANTHROPIC_API_KEY", "sk-shell").env("CLAUDE_CONFIG_DIR", "/shell/folder").status().unwrap();
+        assert!(status.success());
+        std::fs::read_to_string(&out).unwrap()
+    };
+    assert_eq!(run(Some(&folder_login())), "/Users/me/.claude-work|unset|auth login");
+    assert_eq!(run(None), "/shell/folder|sk-shell|auth login", "without a folder Terminal's own environment picks the login");
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[tokio::test]
+async fn opening_a_providers_sign_in_writes_its_script_and_opens_it_in_terminal() {
+    use crate::config::AppConfig;
+    use crate::runs::env::ShellCapture;
+    let dir = tmp("signin-open");
+    std::fs::create_dir_all(&dir).unwrap();
+    let shell = dir.join("fakeshell");
+    std::fs::write(&shell, "#!/bin/sh\nprintf '\\0GOSSAMR_ENV_BEGIN\\0PATH=/usr/bin:/bin\\0'\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let rig = crate::runs::rig::ready_on(crate::inbox::testing::fixture_with_shell(ShellCapture::with_shell(&shell.display().to_string())).await, |s| s).await;
+    let claude = rig.fx.home.join(".local/bin/claude");
+    std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+    std::fs::write(&claude, "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo '2.1.316 (Claude Code)'; exit 0; }\necho '{\"loggedIn\":false}'\n").unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    AppConfig::update(&rig.fx.core.data_dir(), |config| config.providers = vec![crate::connections::default_claude()]).unwrap();
+
+    assert!(rig.svc.open_provider_signin("claude").await.is_err(), "not checked yet");
+    rig.fx.core.probe_providers(crate::inbox::Probe::Launch).await;
+    rig.svc.open_provider_signin("claude").await.unwrap();
+    let file = rig.opened.0.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(std::fs::read_to_string(file).unwrap(), format!("#!/bin/zsh\nexec '{}' auth login\n", claude.display()));
+    assert!(rig.svc.open_provider_signin("github").await.is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -89,7 +89,7 @@ fn unreadable_providers_row(problem: String) -> ConnectionInfo {
     }
 }
 
-fn clean_name(name: &str) -> Result<String> {
+pub(super) fn clean_name(name: &str) -> Result<String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(Error::Input("Give the connection a name.".into()));

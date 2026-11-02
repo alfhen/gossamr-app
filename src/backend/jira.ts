@@ -116,6 +116,10 @@ export class JiraBackend implements Backend {
     return invoke<void>("connection_open_terminal", { instanceId });
   }
 
+  providerAdd(driver: "claude" | "codex", displayName: string, configDir?: string) {
+    return invoke<ConnectionInfo>("provider_add", { driver, displayName, configDir });
+  }
+
   connectionRename(instanceId: string, displayName: string) {
     return invoke<void>("connection_rename", { instanceId, displayName });
   }
