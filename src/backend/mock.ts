@@ -474,6 +474,7 @@ export class MockBackend implements Backend {
       tickets: { edit: (item, change) => this.editTicket(item, change) },
       jira: { fail: (instanceId, problem) => this.failJira(instanceId, problem) },
       terminals: this.terminals,
+      revealedFolders: this.revealedFolders,
       github: { probe: (state) => this.github.setProbe(state), refuseToken: () => this.github.refuseToken(), writes: this.github.writes, movePullHead: (repo, number) => this.movePullHead(repo, number), tried: () => this.github.tried, loseNextAnswer: (kept) => this.github.loseNextAnswer(kept), finishRecheck: () => this.github.finishRecheck() },
     });
     // Drafts Pip made in a conversation live as long as the conversation does, as both live in the app's database.
@@ -1194,6 +1195,7 @@ export class MockBackend implements Backend {
 
   /** The commands Terminal was opened on, oldest first. */
   readonly terminals: string[] = [];
+  readonly revealedFolders: string[] = [];
   private readonly names = new Map<string, string>();
   /** The provider instances: the default Claude, until it is removed, and the ones added. */
   private readonly providers = new MockProviders();
@@ -1222,6 +1224,10 @@ export class MockBackend implements Backend {
     const added = this.providers.add(driver, displayName, configDir);
     this.connectionsListeners.forEach((l) => l());
     return this.providers.rows().find((r) => r.instanceId === added.id)!;
+  }
+
+  async providerRevealFolder(instanceId: string) {
+    this.revealedFolders.push(this.providers.folderToShow(instanceId));
   }
 
   async connectionOpenTerminal(instanceId: string) {

@@ -910,6 +910,8 @@ export interface ProbeSnapshot {
   detail: string | null;
   /** The command that fixes it. */
   fix: string | null;
+  /** Login variables the shell sets that this provider's own folder overrides. Names only. */
+  ignored?: string[];
   checkedAt: string;
 }
 

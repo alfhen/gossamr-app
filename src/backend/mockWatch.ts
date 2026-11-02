@@ -127,6 +127,8 @@ export interface MockHandle {
   workFolderReveals(): number;
   /** The commands Terminal was opened on from a connection's detail, oldest first. */
   connectionTerminals(): string[];
+  /** The provider folders Reveal in Finder was pressed for, oldest first. */
+  providerReveals(): string[];
   /** Every write the sample tracker made, oldest first, with the draft the person approved for it. */
   /** What was written to Jira, oldest first: the draft, the kind of write, its ticket and, for a comment, its text as posted. */
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
@@ -189,6 +191,7 @@ export interface MockClockParts {
   tickets?: { edit(item: string | ItemRef, change: TicketEdit): void };
   jira?: { fail(instanceId: string, problem: "refused" | "offline" | null): void };
   terminals?: readonly string[];
+  revealedFolders?: readonly string[];
   github?: { probe(state: GithubProbeState): void; refuseToken(): void; finishRecheck(): void; writes: readonly GithubWrite[]; movePullHead(repo: string, number: number): boolean; tried(): number; loseNextAnswer(kept: boolean): void };
 }
 
@@ -200,13 +203,13 @@ declare global {
 /**
  * The scripted runs never move by themselves, so in a dev browser (never a build, never a test outside a browser) the sample
  * backend puts its clock on `globalThis.__gossamrMock`: `__gossamrMock.advanceRuns()` steps every unfinished run along and
- * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `askPermission(id, needs)` has a run ask permission, `attached()` lists the runs Terminal was opened on, `workFolderReveals()` counts the times the work folder was shown in Finder, `reviewDrafts()` lists the GitHub review drafts, `launches()` lists every
+ * `advanceRuns(id)` one run; `workstreamEvents()` reads the workstreams' audit, `runs()` lists the runs, `askPermission(id, needs)` has a run ask permission, `attached()` lists the runs Terminal was opened on, `workFolderReveals()` counts the times the work folder was shown in Finder, `providerReveals()` lists the provider folders shown there, `reviewDrafts()` lists the GitHub review drafts, `launches()` lists every
  * launch with the guard the mock launcher passed Claude Code, and `surfacePullRequests()` shows the
  * draft pull requests finished builds opened without waiting, `githubWrites()` lists the reviews posted to the sample GitHub,
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`, and `refuseGithubToken()` has GitHub turn down the stored token. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, github, terminals, draftReview }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, github, terminals, revealedFolders, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -226,6 +229,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     attached: () => [...runs.attached],
     workFolderReveals: () => runs.workFolderReveals,
     connectionTerminals: () => [...(terminals ?? [])],
+    providerReveals: () => [...(revealedFolders ?? [])],
     jiraWrites: () => (proposals?.writes ?? []).map((w) => ({ proposalId: w.proposalId, type: w.intent.type, key: writtenKey(w.intent), ...(w.intent.type === "comment" ? { text: docText(w.intent.body) } : {}) })),
     draftReview,
     reviewDrafts: () =>

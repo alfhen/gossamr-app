@@ -5,6 +5,7 @@ import { agoText } from "./watchLogic";
 export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
 
 export const OFF_DETAIL = "Off. Gossamr doesn't sync it and drafts for it wait. You and Pip don't see its items. What's cached is kept.";
+export const PROVIDER_OFF_DETAIL = "Off. Pip and new agents can't use it.";
 
 /** Provider rows stay out of Settings until runs honour their instance. The sample backend shows them with `?providers=1`. */
 export const providersShown = false;
@@ -12,6 +13,9 @@ export const providersShown = false;
 const providersAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("providers") === "1";
 
 const providersOn = () => providersShown || providersAsked();
+
+/** Codex stays out of + Add until it can run agents. The sample backend offers it with `?codex=1` so its sheet can be tried. */
+const codexAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("codex") === "1";
 
 /** The rows Settings and the rest of the page work with. */
 export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersOn()): T[] =>
@@ -44,11 +48,11 @@ export interface AddEntry {
 }
 
 /** What + Add and the palette offer. Jira only while there is no Jira connection, and only once the connections have loaded: an unread list would offer it over a sign-in that exists. The Models entries only once provider rows are shown and the driver can run something. */
-export function addEntries(connections: readonly Pick<ConnectionInfo, "kind">[], providers = providersOn(), loaded = true): AddEntry[] {
+export function addEntries(connections: readonly Pick<ConnectionInfo, "kind">[], providers = providersOn(), loaded = true, codex = codexAsked()): AddEntry[] {
   const entries: AddEntry[] = [{ id: "github", group: "Code", label: "GitHub account", line: "Pull requests, branches and checks." }];
   if (loaded && !connections.some((c) => c.kind === "jira")) entries.push({ id: "jira", group: "Tickets", label: "Jira account", line: "Tickets from one Jira site." });
   if (providers && DRIVER_CAPABILITIES.claude.runsAgents) entries.push({ id: "claude", group: "Models", label: "Claude", line: "A login that Pip and agents can run on." });
-  if (providers && DRIVER_CAPABILITIES.codex.runsAgents) entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login that agents can run on." });
+  if (providers && (DRIVER_CAPABILITIES.codex.runsAgents || codex)) entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login that agents can run on." });
   return entries;
 }
 
@@ -117,7 +121,7 @@ export function removalWarning(c: Pick<ConnectionInfo, "kind" | "displayName" | 
   if (c.kind === "github") {
     return `Remove ${c.displayName}? Gossamr deletes the pull requests and branches it cached for ${c.workspace} and closes the drafts that post as ${c.workspace}. Your gh login and GitHub stay as they are.`;
   }
-  if (c.kind === "provider") return `Remove ${c.displayName}? Its folder and the login in it stay on disk.`;
+  if (c.kind === "provider") return `Remove ${c.displayName}? Gossamr stops offering it. Runs and Pip conversations that used it keep their history, and your login and folder stay as they are. Settings and workstreams set to it need a new choice.`;
   return `Remove ${c.displayName}? Gossamr deletes the tickets it cached, forgets your token and closes the drafts for it. Jira stays as it is.`;
 }
 
