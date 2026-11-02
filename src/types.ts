@@ -577,6 +577,8 @@ export interface Run {
   endedAt: string | null;
   /** Set once `claude rm` has taken the worktree away; the run stays for its result. */
   worktreeRemovedAt?: string | null;
+  /** The worktree was removed with git because the run's instance was removed: its sessions stay in that login's folder. */
+  sessionsLeft?: boolean;
   /** Set when the person archived the run: it is out of Agents and Needs you, and kept until deleted. */
   archivedAt?: string | null;
   continuedAt?: string | null;

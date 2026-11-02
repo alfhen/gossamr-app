@@ -330,3 +330,56 @@ async fn a_new_choice_whose_instance_is_off_keeps_the_reason_the_launcher_set() 
     let after = svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
     assert_eq!((after.state, after.wait_reason.as_deref()), (RunState::Queued, Some("Waits for Claude, which is off.")));
 }
+
+fn say(rig: &Rig, state: crate::probe::State) {
+    rig.fx.core.note_provider_answer("claude", crate::probe::Snapshot::new(state, "probed"));
+}
+
+fn call_the_default_claude_personal(rig: &Rig) {
+    AppConfig::update(&rig.fx.core.data_dir(), |config| {
+        if config.providers.is_empty() {
+            config.providers.push(connections::default_claude());
+        }
+        config.providers[0].display_name = "Claude personal".into();
+    })
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_run_waits_until_its_instance_is_signed_in_and_starts_by_itself_once_the_probe_sees_it() {
+    let rig = ready().await;
+    call_the_default_claude_personal(&rig);
+    say(&rig, crate::probe::State::NotSignedIn);
+    let run = rig.queued(1).await;
+
+    let waiting = rig.svc.start_now(&run.id).await.unwrap();
+    assert_eq!((waiting.state, waiting.wait_reason.as_deref()), (RunState::Queued, Some("Waits until Claude personal is signed in.")));
+    assert_eq!((waiting.failure, waiting.error, waiting.slot_wait_since), (None, None, None), "a login is not a failure");
+    assert_eq!(rig.cli.launches(), 0);
+    assert!(rig.svc.launch_waiting().await.unwrap().is_empty(), "still signed out");
+
+    say(&rig, crate::probe::State::Ready);
+    assert_eq!(rig.svc.launch_waiting().await.unwrap(), vec![run.id.clone()]);
+    let started = rig.get(&run).await;
+    assert_eq!((started.state, started.wait_reason), (RunState::Launching, None));
+    assert_eq!(rig.cli.launches(), 1);
+}
+
+#[tokio::test]
+async fn a_signed_out_answer_taken_for_another_folder_does_not_hold_a_run() {
+    let rig = ready().await;
+    let set_folder = |folder: &str| {
+        AppConfig::update(&rig.fx.core.data_dir(), |config| {
+            if config.providers.is_empty() {
+                config.providers.push(connections::default_claude());
+            }
+            config.providers[0].config.config_dir = Some(folder.into());
+        })
+        .unwrap();
+    };
+    set_folder("~/.claude-first");
+    say(&rig, crate::probe::State::NotSignedIn);
+    set_folder("~/.claude-second");
+    let run = rig.queued(1).await;
+    assert_eq!(rig.svc.start_now(&run.id).await.unwrap().state, RunState::Launching);
+}

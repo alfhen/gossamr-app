@@ -209,3 +209,94 @@ async fn an_earlier_session_claude_keeps_is_remembered_and_retried_after_the_wor
     assert!(!cleanable(&done));
     assert!(rig.svc.cleanup(&run.id).await.is_err(), "nothing left, so it is refused as before");
 }
+
+async fn finished_on_a_removed_instance() -> (Rig, Run) {
+    let (rig, run) = stopped().await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    std::fs::write(rig.clone.join(".fake-branches"), format!("worktree-{}\n", run.spec.name)).unwrap();
+    let run = rig
+        .set(&run, |r| {
+            r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+            r.branch = Some(format!("worktree-{}", r.spec.name));
+        })
+        .await;
+    (rig, run)
+}
+
+fn git_calls(rig: &Rig) -> Vec<String> {
+    let log = std::fs::read_to_string(rig.fx.dir.join("git.log")).unwrap_or_default();
+    log.lines().filter(|l| l.contains("worktree remove") || l.contains("worktree prune") || l.contains(" branch ")).map(str::to_owned).collect()
+}
+
+#[tokio::test]
+async fn a_finished_run_whose_instance_was_removed_is_cleaned_up_with_git_alone() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    let asked = |rig: &Rig| {
+        let cli = rig.cli.0.lock().unwrap();
+        (cli.rms.len(), cli.stops.len(), cli.listings)
+    };
+    let before = asked(&rig);
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    assert_eq!(asked(&rig), before, "claude is never asked");
+    let after = rig.get(&run).await;
+    assert!(after.worktree_removed_at.is_some() && after.sessions_left);
+    assert_eq!(after.state, RunState::Stopped);
+    assert!(!run.expected_worktree.exists());
+    let calls = git_calls(&rig);
+    assert!(calls.iter().any(|c| c.contains(&format!("worktree remove -- {}", run.expected_worktree.display()))), "{calls:?}");
+    assert!(calls.iter().any(|c| c.ends_with(&format!("branch -d -- {}", run.branch.as_ref().unwrap()))), "{calls:?}");
+    assert!(calls.iter().all(|c| !c.contains("--force") && !c.contains(" -D") && !c.contains(" -f")), "git is never forced: {calls:?}");
+    assert!(!cleanable(&after));
+}
+
+#[tokio::test]
+async fn a_run_cleaned_up_through_claude_does_not_say_its_session_was_left() {
+    let (rig, run) = stopped().await;
+    rig.svc.cleanup(&run.id).await.unwrap();
+    assert!(!rig.get(&run).await.sessions_left);
+}
+
+#[tokio::test]
+async fn git_keeps_a_worktree_with_uncommitted_work_and_says_so_without_forcing() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    std::fs::write(rig.clone.join(".fake-worktree-dirty"), "").unwrap();
+    let Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("expected a refusal") };
+    assert!(message.contains("untracked files"), "{message}");
+    assert!(run.expected_worktree.exists());
+    assert_eq!(rig.get(&run).await.worktree_removed_at, None);
+    assert!(git_calls(&rig).iter().all(|c| !c.contains(" branch -d")), "the branch is left while its worktree is");
+}
+
+#[tokio::test]
+async fn git_keeps_a_branch_with_unpushed_commits_and_the_run_can_be_cleaned_up_again() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    std::fs::write(rig.clone.join(".fake-branch-unmerged"), "").unwrap();
+    let Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("expected a refusal") };
+    assert!(message.contains("not fully merged"), "{message}");
+    assert_eq!(rig.get(&run).await.worktree_removed_at, None);
+    std::fs::remove_file(rig.clone.join(".fake-branch-unmerged")).unwrap();
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    assert!(git_calls(&rig).iter().any(|c| c.contains("worktree prune")), "a worktree folder that is gone is only forgotten");
+}
+
+#[tokio::test]
+async fn git_does_not_touch_a_worktree_outside_the_work_folder() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    let elsewhere = rig.fx.home.join("Code/webshop/.claude/worktrees/x");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    rig.set(&run, |r| r.expected_worktree = elsewhere.clone()).await;
+    assert!(rig.svc.cleanup(&run.id).await.unwrap_err().to_string().contains("isn't in ~/Gossamr/agents"));
+    assert!(elsewhere.exists() && git_calls(&rig).is_empty());
+}
+
+#[tokio::test]
+async fn earlier_sessions_of_a_run_on_a_removed_instance_are_left_in_its_folder_and_not_offered_again() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    let run = rig
+        .set(&run, |r| r.earlier_sessions.push(crate::domain::EarlierSession { short_id: ShortId::parse("e1e1e1e1").unwrap(), session_id: None, removed: false }))
+        .await;
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    let after = rig.get(&run).await;
+    assert!(after.leftover_sessions().is_empty() && !cleanable(&after));
+    assert_eq!(rig.cli.0.lock().unwrap().rms.len(), 0);
+}

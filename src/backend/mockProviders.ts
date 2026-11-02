@@ -87,6 +87,12 @@ export class MockProviders {
     if (this.items[0]) this.items[0].probe = probe;
   }
 
+  /** The name of `id` when it is on and its last check found it signed out, which holds a queued run back. */
+  signedOutName(id: string): string | null {
+    const found = this.items.find((p) => p.id === id);
+    return found?.enabled && found.probe === "notSignedIn" ? found.displayName : null;
+  }
+
   driverOf(id: string): Driver | null {
     return this.items.find((p) => p.id === id)?.driver ?? null;
   }

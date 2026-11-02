@@ -517,6 +517,9 @@ pub struct Run {
     /// Set when `claude rm` took the worktree away; the run is kept for its result.
     #[serde(default)]
     pub worktree_removed_at: Option<DateTime<Utc>>,
+    /// Set when the worktree was removed with git because the run's instance is gone: its sessions stay in that login's folder.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sessions_left: bool,
     /// Set when the person archived the run: it leaves the Agents view and Needs you but stays here until deleted.
     #[serde(default)]
     pub archived_at: Option<DateTime<Utc>>,
@@ -621,6 +624,7 @@ impl Run {
             last_progress_at: at,
             ended_at: None,
             worktree_removed_at: None,
+            sessions_left: false,
             archived_at: None,
             continued_at: None,
             created_item: None,

@@ -1,6 +1,6 @@
 //! Reading Gossamr's clones, and names for new worktrees.
 //!
-//! Git is only read here. Every call runs with the settings that could run a program switched off, the captured shell
+//! Git is read here, and writes only to remove a finished run's worktree and branch. Every call runs with the settings that could run a program switched off, the captured shell
 //! environment and a time limit, because a clone's own config can be changed by the agents working in it.
 
 use std::collections::HashSet;
@@ -109,6 +109,26 @@ impl Git {
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
         Err(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("it exited without a message").to_owned())
+    }
+
+    /// Removes a linked worktree the way `git worktree remove` does without `--force`: git refuses one with changes
+    /// that were never committed, or that is locked. A worktree folder that is already gone is only forgotten.
+    pub async fn remove_worktree(&self, clone: &Path, worktree: &Path) -> Result<(), String> {
+        if worktree.symlink_metadata().is_err() {
+            return self.out_or_why(clone, &["worktree", "prune"]).await.map(drop);
+        }
+        let path = worktree.to_string_lossy();
+        self.out_or_why(clone, &["worktree", "remove", "--", &path]).await.map(drop)
+    }
+
+    /// `git branch -d`, never `-D`: git keeps a branch with commits that are neither merged nor on its upstream.
+    /// A branch that isn't there counts as removed.
+    pub async fn delete_branch(&self, clone: &Path, branch: &str) -> Result<(), String> {
+        let exists = self.out_or_why(clone, &["branch", "--list", "--format=%(refname:short)", "--", branch]).await?;
+        if exists.trim().is_empty() {
+            return Ok(());
+        }
+        self.out_or_why(clone, &["branch", "-d", "--", branch]).await.map(drop)
     }
 
     /// What `origin/HEAD` points at in the clone, when it knows.
@@ -295,6 +315,10 @@ case "$*" in
   "config --local --get-all "*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null; true ;;
   "worktree list --porcelain") cat "$dir/.fake-worktrees" 2>/dev/null ;;
   "branch --list worktree-* --format=%(refname:short)") cat "$dir/.fake-branches" 2>/dev/null ;;
+  "worktree prune") ;;
+  "worktree remove -- "*) [ ! -f "$dir/.fake-worktree-dirty" ] || { echo "fatal: '$4' contains modified or untracked files, use --force to delete it" >&2; exit 128; }; rm -rf "$4" ;;
+  "branch --list --format=%(refname:short) -- "*) cat "$dir/.fake-branches" 2>/dev/null | grep -Fx -- "$5"; true ;;
+  "branch -d -- "*) [ ! -f "$dir/.fake-branch-unmerged" ] || { echo "error: the branch '$4' is not fully merged." >&2; exit 1; } ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;
 esac
 "#;

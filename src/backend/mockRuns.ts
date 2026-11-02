@@ -700,6 +700,12 @@ export class MockRuns {
     return run;
   }
 
+  /** The name of the instance a run is on while it is signed out; set by the mock backend. */
+  signedOutName: (instanceId: string) => string | null = () => null;
+
+  /** Whether a provider instance still exists. Set by the mock backend. */
+  instanceExists: (instanceId: string) => boolean = () => true;
+
   /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
   choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
 
@@ -837,6 +843,12 @@ export class MockRuns {
     if (current && current.state !== run.state) return current;
     const to = NEXT[run.state];
     if (!to) return run;
+    if (run.state === "queued") {
+      const signedOut = this.signedOutName(run.runsOn?.instanceId ?? "claude");
+      const words = signedOut ? `Waits until ${signedOut} is signed in.` : null;
+      if (words) return run.waitReason === words ? run : this.update(run.id, { waitReason: words });
+      if (run.waitReason) run = this.update(run.id, { waitReason: null });
+    }
     // Over the cap a queued run stays queued, waiting for a slot from the first time it found none.
     if (run.state === "queued" && this.full(run.id)) return run.slotWaitSince ? run : this.update(run.id, { slotWaitSince: this.now() });
     const at = this.now();
@@ -1345,7 +1357,8 @@ export class MockRuns {
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
     const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
-    this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}) });
+    const left = !this.instanceExists(run.runsOn?.instanceId ?? "claude");
+    this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}), ...(left ? { sessionsLeft: true } : {}) });
     this.changed();
     return { type: "removed" };
   }
