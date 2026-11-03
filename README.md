@@ -31,7 +31,7 @@ To add a login, open Settings › Connections, choose **+ Add**, then **Claude**
 
 Claude logins appear under Models in Settings, each with its models. Two pickers there set the defaults: **Pip uses** and **New agents use**, each a login and a model. Pip's drawer has its own picker for one conversation. A login that is on and signed in can run agents, and each run stays on its own login.
 
-Codex is in + Add with a **Beta** label. It shows under Models with its models, and it cannot run Pip or agents yet. Pip always runs on Claude.
+Codex is in + Add with a **Beta** label. It shows under Models with its models. It cannot run agents yet, and Pip always runs on Claude.
 
 ## Connecting GitHub
 
