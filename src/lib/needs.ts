@@ -1,6 +1,7 @@
 import { type ConnectionInfo, type Intent, type ItemRef, type Proposal, type Run, type WorkstreamView } from "../types";
 import { permissionRequest } from "../workspace/agentsLogic";
 import { failureHelp } from "../workspace/failureHelp";
+import { DEFAULT_INSTANCE, instanceOf } from "../workspace/providerLogic";
 import { docText } from "./docs";
 import { heldNote, inWorkstreamPane, targetOf, workstreamOf } from "./proposals";
 import { maskSecrets } from "./riskyText";
@@ -425,7 +426,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         batchable: false,
       });
     } else if (run.state === "failed" && !dismissed.has(run.id) && latest.has(run.id)) {
-      const help = failureHelp(run);
+      const help = failureHelp(run, null, instanceOf(connections, run.runsOn?.instanceId ?? DEFAULT_INSTANCE));
       const trust = help?.kind === "untrustedFolder";
       out.push({
         ...base,

@@ -360,6 +360,15 @@ describe("the run sheet", () => {
       expect(useToasts.getState().toasts[0].text).toMatch(/^It failed again: /);
     });
 
+    it("names Codex in the toast when a Codex run is still not signed in after a retry", async () => {
+      const run = await failing("notSignedIn");
+      await s().fix(run.id, "terminal");
+      useWorkspace.setState({ connections: [{ kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo] });
+      vi.spyOn(backend, "runsRetryLaunch").mockResolvedValueOnce({ ...run, state: "failed", runsOn: { instanceId: "codex" }, failure: { type: "notSignedIn" } } as typeof run);
+      await s().retryLaunch(run.id);
+      expect(useToasts.getState().toasts[0].text).toContain("Codex isn't signed in.");
+    });
+
     it("counts copying the command as taking the step, since that is how someone uses their own terminal", async () => {
       const run = await failing("untrustedFolder");
       s().noteCopied(run.id);

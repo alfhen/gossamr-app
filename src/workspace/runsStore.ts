@@ -363,7 +363,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     try {
       const before = get().runs.find((r) => r.id === id);
       const after = await backend.runsRetryLaunch(id, trust ? { trust: true } : undefined);
-      const help = after.state === "failed" ? failureHelp(after) : null;
+      const help = after.state === "failed" ? failureHelp(after, null, instanceOf(useWorkspace.getState().connections, after.runsOn?.instanceId ?? DEFAULT_INSTANCE)) : null;
       const again = !!help?.retryNeedsTerminal && help.kind === before?.failure?.type;
       if (trust) refuse(again ? STILL_UNTRUSTED : null);
       if (!again && get().terminalOpened.has(id)) {
