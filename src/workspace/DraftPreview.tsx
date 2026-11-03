@@ -17,6 +17,7 @@ import { focusPeekDraft } from "./peekDrafts";
 import { plainMarkdown } from "../lib/markdown";
 import { maskSecrets } from "../lib/riskyText";
 import { useTabs } from "./tabsStore";
+import { useRuns } from "./runsStore";
 import { KeyHint } from "./KeyHint";
 import { RetiredDraft } from "./RetiredDraft";
 import { Button } from "../components/Button";
@@ -322,6 +323,7 @@ export function draftDecisions(id: string, seen?: Proposal): { approve(): void; 
  * yet shows that draft.
  */
 export function openLiveDraft(p: Proposal, { inline = false }: { inline?: boolean } = {}) {
+  useRuns.getState().closeSheet();
   const target = targetOf(p.intent);
   if (target && inline && useWorkspace.getState().items[itemKey(target)]) {
     useTabs.getState().select(itemKey(target));
