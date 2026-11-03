@@ -49,6 +49,11 @@ impl RunService {
         self.toolchain_of(run).await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
     }
 
+    /// Whether acting on `run` waits only because its instance's login is off.
+    pub(in crate::runs) async fn login_is_off(&self, run: &Run) -> bool {
+        matches!(self.toolchain_of(run).await, Err(ToolchainError::Unusable { reason: Reason::Off, .. }))
+    }
+
     /// `observing_toolchain_of` for a caller that reports to the person.
     pub(in crate::runs) async fn observing_toolchain(&self, run: &Run) -> Result<Toolchain> {
         self.observing_toolchain_of(run).await.map_err(|e| Error::Claude(Failure::from(e).to_string()))

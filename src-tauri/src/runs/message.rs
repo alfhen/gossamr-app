@@ -8,8 +8,6 @@ use chrono::Utc;
 use super::answer::checked;
 use super::cli::{is_uuid, AgentEntry};
 use super::service::{belongs_to, RunService};
-use super::toolchain::ToolchainError;
-use crate::model_choice::Reason;
 use crate::domain::{Actor, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
@@ -54,10 +52,6 @@ impl RunService {
         view.paused_reason.is_some().then(|| format!("The workstream “{}” is paused; only the person resumes it.", view.title))
     }
 
-    pub(super) async fn login_is_off(&self, run: &Run) -> bool {
-        matches!(self.toolchain_of(run).await, Err(ToolchainError::Unusable { reason: Reason::Off, .. }))
-    }
-
     /// Sends `text` to run `run_id` as `by`. Refused for a run that hasn't started, failed, waits at a permission prompt
     /// or for a sign-in, or has a session open in Terminal.
     pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
@@ -72,7 +66,7 @@ impl RunService {
         match run.state {
             _ if asking => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
             RunState::NeedsAnswer | RunState::Done if waits_for_login => {
-                self.core.queue_run_message(run_id, text).await?;
+                self.core.queue_run_message(run_id, text, by).await?;
                 self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
                 Ok((run, Delivery::Queued))
             }
@@ -83,7 +77,7 @@ impl RunService {
             RunState::SystemBlocked => Err(refuse("Claude needs the person to sign in, in Terminal.")),
             RunState::NeedsAnswer => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
             RunState::Working => {
-                self.core.queue_run_message(run_id, text).await?;
+                self.core.queue_run_message(run_id, text, by).await?;
                 self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
                 Ok((run, Delivery::Queued))
             }
@@ -192,13 +186,13 @@ impl RunService {
     pub(super) async fn deliver_queued(&self) {
         let Ok(waiting) = self.core.runs_with_messages().await else { return };
         for id in waiting {
-            let Ok(Some(_)) = self.core.run_message(&id).await else { continue };
+            let Ok(Some(by)) = self.core.run_message_author(&id).await else { continue };
             let Ok(run) = self.load(&id).await else {
                 let _ = self.core.take_run_message(&id).await;
                 continue;
             };
             let ready = match run.state {
-                RunState::Done | RunState::NeedsAnswer => self.workstream_hold(&run).await.is_none() && !self.login_is_off(&run).await,
+                RunState::Done | RunState::NeedsAnswer => (by != Actor::Pip || self.workstream_hold(&run).await.is_none()) && !self.login_is_off(&run).await,
                 RunState::Failed => true,
                 RunState::Stopped => run.unsent_answer.is_none(),
                 _ => false,
@@ -206,10 +200,10 @@ impl RunService {
             if !ready {
                 continue;
             }
-            let Ok(Some(text)) = self.core.take_run_message(&id).await else { continue };
+            let Ok(Some((text, by))) = self.core.take_run_message(&id).await else { continue };
             let sent = match run.state {
-                RunState::Done => self.resume_with(&id, &text, Actor::Pip).await.map(drop),
-                RunState::NeedsAnswer => self.answer_as(&id, &text, Actor::Pip).await.map(drop),
+                RunState::Done => self.resume_with(&id, &text, by).await.map(drop),
+                RunState::NeedsAnswer => self.answer_as(&id, &text, by).await.map(drop),
                 _ => Err(refuse(format!("the run is {}", run.state.as_str()))),
             };
             let Err(e) = sent else {
@@ -221,12 +215,12 @@ impl RunService {
                 continue;
             }
             if self.worth_retrying(&id, &e) {
-                if let Err(e) = self.core.restore_run_message(&id, &text).await {
+                if let Err(e) = self.core.restore_run_message(&id, &text, by).await {
                     eprintln!("couldn't keep the message waiting for run {id}: {e}");
                 }
             } else {
                 self.delivery_failures.lock().expect("delivery failures lock poisoned").remove(&id);
-                self.note_by(&run, Actor::Pip, "agent_message_dropped", Some(e.to_string())).await;
+                self.note_by(&run, by, "agent_message_dropped", Some(e.to_string())).await;
             }
         }
     }
@@ -235,12 +229,13 @@ impl RunService {
 /// When a queued message reaches its run at its next `ask`: it is the result of that call, so the run never waits.
 /// The question is kept on the run's steps, as nobody else sees it.
 pub async fn take_for_ask(core: &crate::inbox::Core, run: &Run, question: &str) -> Option<String> {
-    let text = core.take_run_message(&run.id).await.ok().flatten()?;
-    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: "Pip answered".into(), detail: Some(format!("It asked: {question}")) };
+    let (text, by) = core.take_run_message(&run.id).await.ok().flatten()?;
+    let said = if by == Actor::Pip { "Pip answered" } else { "You answered" };
+    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: said.into(), detail: Some(format!("It asked: {question}")) };
     if let Err(e) = core.append_run_events(&run.id, &[event]).await {
         eprintln!("couldn't record the answer: {e}");
     }
-    if let Err(e) = core.record_run_action_by(run, Actor::Pip, "run_answered", Some(text.chars().count().to_string())).await {
+    if let Err(e) = core.record_run_action_by(run, by, "run_answered", Some(text.chars().count().to_string())).await {
         eprintln!("couldn't record the answer to run {} in its workstream: {e}", run.id);
     }
     if let Err(e) = core.report_stale(&run.id).await {

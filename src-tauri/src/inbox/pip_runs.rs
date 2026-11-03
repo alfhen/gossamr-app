@@ -169,22 +169,27 @@ impl Core {
         .await
     }
 
-    /// Keeps Pip's `text` for the run until its next `ask` call or the end of its turn. A message already waiting is replaced.
-    pub async fn queue_run_message(&self, run_id: &str, text: &str) -> Result<()> {
+    /// Keeps `text`, written by `by`, for the run until its next `ask` call or the end of its turn. A message already waiting is replaced.
+    pub async fn queue_run_message(&self, run_id: &str, text: &str, by: Actor) -> Result<()> {
         let at = Utc::now();
-        self.with_proposals(|db| db.put_run_message(run_id, text, at)).await
+        self.with_proposals(|db| db.put_run_message(run_id, text, by, at)).await
     }
 
-    pub async fn restore_run_message(&self, run_id: &str, text: &str) -> Result<()> {
+    pub async fn restore_run_message(&self, run_id: &str, text: &str, by: Actor) -> Result<()> {
         let at = Utc::now();
-        self.with_proposals(|db| db.restore_run_message(run_id, text, at)).await
+        self.with_proposals(|db| db.restore_run_message(run_id, text, by, at)).await
     }
 
-    /// The message waiting for the run, removed as it is taken.
-    pub async fn take_run_message(&self, run_id: &str) -> Result<Option<String>> {
+    /// The message waiting for the run and who wrote it, removed as it is taken.
+    pub async fn take_run_message(&self, run_id: &str) -> Result<Option<(String, Actor)>> {
         self.with_proposals(|db| db.take_run_message(run_id)).await
     }
 
+    pub async fn run_message_author(&self, run_id: &str) -> Result<Option<Actor>> {
+        self.with_proposals(|db| db.run_message_author(run_id)).await
+    }
+
+    #[cfg(test)]
     pub async fn run_message(&self, run_id: &str) -> Result<Option<String>> {
         self.with_proposals(|db| db.run_message(run_id)).await
     }

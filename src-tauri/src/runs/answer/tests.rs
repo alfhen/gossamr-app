@@ -250,3 +250,31 @@ async fn an_answer_to_a_run_on_a_login_that_is_off_is_kept_and_sent_once_the_log
     assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
 }
+
+#[tokio::test]
+async fn a_persons_answer_kept_while_the_login_is_off_is_sent_and_recorded_as_theirs_even_in_a_paused_workstream() {
+    use crate::domain::workstream::PauseReason;
+    let rig = ready().await;
+    let (svc, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
+    let run = crate::runs::rig::start_on_second_login(&rig, &svc, &second).await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    let run = rig.set(&run, |r| r.spec.workstream = Some(ws.clone())).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("blocked".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
+    svc.answer(&run.id, "Use staging.").await.unwrap();
+    rig.fx.core.pause_workstream(&rig.fx.scope, &ws, PauseReason::Person, Actor::Person).await.unwrap();
+
+    login.set_off(None);
+    svc.deliver_queued().await;
+
+    assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
+    let events = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "answered" && e.text == "You answered"), "{events:?}");
+    let audit = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "run_answered" && e.actor == Actor::Person));
+    assert!(!audit.iter().any(|e| e.action == "run_answered" && e.actor == Actor::Pip));
+}

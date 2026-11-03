@@ -87,7 +87,7 @@ impl RunService {
             if again {
                 return Err(refuse("Its Claude login is off, so the answer isn't sent. It is kept on the run; send it again once the login is on."));
             }
-            self.core.queue_run_message(run_id, text).await?;
+            self.core.queue_run_message(run_id, text, by).await?;
             self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
             return Ok(run);
         }

@@ -7,7 +7,7 @@ use rusqlite::types::Value as Sql;
 use rusqlite::{params, params_from_iter, ErrorCode, OptionalExtension};
 
 use super::{stamp, Db};
-use crate::domain::{Run, RunEvent, RunQuery, RunState};
+use crate::domain::{Actor, Run, RunEvent, RunQuery, RunState};
 use crate::error::{Error, Result};
 use crate::model_choice::ModelChoice;
 
@@ -88,31 +88,36 @@ impl Db {
         self.run_where("start_key = ?", start_key)
     }
 
-    /// Keeps `text` for the run's next `ask` call or the end of its turn, replacing one already waiting.
-    pub fn put_run_message(&self, run_id: &str, text: &str, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
+    /// Keeps `text`, written by `by`, for the run's next `ask` call or the end of its turn, replacing one already waiting.
+    pub fn put_run_message(&self, run_id: &str, text: &str, by: Actor, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO run_messages (run_id, text, queued_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(run_id) DO UPDATE SET text = excluded.text, queued_at = excluded.queued_at",
-            params![run_id, text, stamp(at)],
+            "INSERT INTO run_messages (run_id, text, author, queued_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(run_id) DO UPDATE SET text = excluded.text, author = excluded.author, queued_at = excluded.queued_at",
+            params![run_id, text, by.as_str(), stamp(at)],
         )?;
         Ok(())
     }
 
     /// Puts back a message that was taken but not delivered, unless a newer one is waiting.
-    pub fn restore_run_message(&self, run_id: &str, text: &str, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
-        self.conn.execute("INSERT OR IGNORE INTO run_messages (run_id, text, queued_at) VALUES (?1, ?2, ?3)", params![run_id, text, stamp(at)])?;
+    pub fn restore_run_message(&self, run_id: &str, text: &str, by: Actor, at: chrono::DateTime<chrono::Utc>) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO run_messages (run_id, text, author, queued_at) VALUES (?1, ?2, ?3, ?4)", params![run_id, text, by.as_str(), stamp(at)])?;
         Ok(())
     }
 
     /// The message waiting for the run, if any, and removes it.
-    pub fn take_run_message(&self, run_id: &str) -> Result<Option<String>> {
+    pub fn take_run_message(&self, run_id: &str) -> Result<Option<(String, Actor)>> {
         self.atomically(|db| {
-            let text: Option<String> = db.conn.query_row("SELECT text FROM run_messages WHERE run_id = ?1", params![run_id], |r| r.get(0)).optional()?;
-            if text.is_some() {
+            let row = db.conn.query_row("SELECT text, author FROM run_messages WHERE run_id = ?1", params![run_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).optional()?;
+            if row.is_some() {
                 db.conn.execute("DELETE FROM run_messages WHERE run_id = ?1", params![run_id])?;
             }
-            Ok(text)
+            Ok(row.map(|(text, author)| (text, Actor::parse(&author).unwrap_or(Actor::Pip))))
         })
+    }
+
+    pub fn run_message_author(&self, run_id: &str) -> Result<Option<Actor>> {
+        let author: Option<String> = self.conn.query_row("SELECT author FROM run_messages WHERE run_id = ?1", params![run_id], |r| r.get(0)).optional()?;
+        Ok(author.map(|a| Actor::parse(&a).unwrap_or(Actor::Pip)))
     }
 
     pub fn run_message(&self, run_id: &str) -> Result<Option<String>> {
@@ -597,12 +602,12 @@ mod tests {
     fn a_message_for_a_run_waits_until_taken_and_a_newer_one_replaces_it() {
         let db = Db::in_memory().unwrap();
         assert_eq!(db.take_run_message("r1").unwrap(), None);
-        db.put_run_message("r1", "First.", now()).unwrap();
-        db.put_run_message("r1", "Second.", now()).unwrap();
-        db.put_run_message("r2", "Other.", now() + Duration::seconds(1)).unwrap();
+        db.put_run_message("r1", "First.", Actor::Pip, now()).unwrap();
+        db.put_run_message("r1", "Second.", Actor::Pip, now()).unwrap();
+        db.put_run_message("r2", "Other.", Actor::Pip, now() + Duration::seconds(1)).unwrap();
         assert_eq!(db.run_message("r1").unwrap().as_deref(), Some("Second."));
         assert_eq!(db.run_messages_waiting().unwrap(), ["r1", "r2"]);
-        assert_eq!(db.take_run_message("r1").unwrap().as_deref(), Some("Second."));
+        assert_eq!(db.take_run_message("r1").unwrap(), Some(("Second.".to_owned(), Actor::Pip)));
         assert_eq!(db.take_run_message("r1").unwrap(), None, "taken once");
         assert_eq!(db.run_messages_waiting().unwrap(), ["r2"]);
     }
@@ -611,7 +616,7 @@ mod tests {
     fn deleting_an_archived_run_takes_its_waiting_message_too() {
         let db = Db::in_memory().unwrap();
         stored(&db, "a", RunState::Done);
-        db.put_run_message("a", "Never sent.", now()).unwrap();
+        db.put_run_message("a", "Never sent.", Actor::Pip, now()).unwrap();
         db.archive_runs(&["a".into()], now()).unwrap();
         assert!(db.delete_archived_run("a").unwrap());
         assert!(db.run_message("a").unwrap().is_none());

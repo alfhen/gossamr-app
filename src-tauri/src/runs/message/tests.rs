@@ -292,8 +292,8 @@ async fn a_queued_message_whose_wake_fails_is_kept_for_a_few_tries_then_dropped_
     assert_eq!(rig.get(&run).await.state, RunState::Done);
     assert!(pip_lines(&rig, &ws).await.iter().any(|(action, _)| action == "agent_message_dropped"));
 
-    rig.fx.core.queue_run_message(&run.id, "Newer.").await.unwrap();
-    rig.fx.core.restore_run_message(&run.id, "Older.").await.unwrap();
+    rig.fx.core.queue_run_message(&run.id, "Newer.", Actor::Pip).await.unwrap();
+    rig.fx.core.restore_run_message(&run.id, "Older.", Actor::Pip).await.unwrap();
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Newer."));
 }
 
@@ -367,4 +367,26 @@ async fn a_message_to_a_stopped_run_on_a_login_that_is_off_is_refused_in_words_t
     assert!(why.contains("login is off") && !why.contains("Waits"), "{why}");
     assert!(second.0.lock().unwrap().calls.is_empty());
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_persons_queued_answer_taken_at_the_agents_next_ask_is_recorded_as_theirs() {
+    let (rig, run, ws) = working().await;
+    rig.fx.core.queue_run_message(&run.id, "Use staging.", Actor::Person).await.unwrap();
+    assert_eq!(take_for_ask(&rig.fx.core, &run, "Which database?").await.as_deref(), Some("Use staging."));
+    let events = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert_eq!(events.last().map(|e| e.text.as_str()), Some("You answered"));
+    let audit = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "run_answered" && e.actor == Actor::Person));
+}
+
+#[tokio::test]
+async fn a_persons_queued_message_for_a_failed_run_is_dropped_as_the_persons() {
+    let (rig, run, ws) = working().await;
+    rig.fx.core.queue_run_message(&run.id, "Carry on.", Actor::Person).await.unwrap();
+    rig.set(&run, |r| r.state = RunState::Failed).await;
+    rig.svc.deliver_queued().await;
+    let audit = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "agent_message_dropped" && e.actor == Actor::Person));
+    assert!(!audit.iter().any(|e| e.action == "agent_message_dropped" && e.actor == Actor::Pip));
 }
