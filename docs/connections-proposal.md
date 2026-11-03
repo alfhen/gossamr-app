@@ -468,7 +468,7 @@ Each entry opens its sheet in `ConnectFrame`. The palette gets the same entries 
 
 **Beta.** A Codex row, its sheet and its picker entries carry a Beta label (decision 13). Nothing about Codex hides behind a switch. From r14a the Codex row shows and **+ Add** offers Codex, marked as unable to run anything yet.
 
-Until r14 a constant `providersShown` in `connectionsLogic.ts` keeps provider rows and the Claude entry out of the desktop UI. The mock shows them with `?providers=1`, so the provider sheets and their e2e specs are built and tested before then.
+Provider rows and the Claude and Codex entries show from r14a.
 
 ### 10.2 The list
 
@@ -514,7 +514,7 @@ One `ModelPicker` in `src/components/`: a popover list grouped by instance name,
 | Workstream sheet: "New agents use" | Agents queued in that workstream | r14 |
 | Run sheet and run card: "Runs on Claude work · Opus" with Change while queued | That run | r14 |
 
-Settings › Safety's second promise becomes "Agents run with the Claude Code settings in their login's config folder, so they can push branches and use your own tools." (`Settings.tsx:11`).
+Settings › Safety's second promise becomes "Agents run on <instance name> with its own Claude Code settings, so they can push branches and use your own tools." (`agentsPromise` in `Settings.tsx`). Until the defaults are read, the original wording stays.
 
 ## 11. Security
 

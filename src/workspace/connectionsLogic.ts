@@ -1,4 +1,5 @@
 import type { ConnectionInfo, ModelChoice, ModelDefaults } from "../types";
+import { DRIVERS } from "../lib/models";
 import { stepKey } from "./peekLogic";
 import { agoText } from "./watchLogic";
 
@@ -42,8 +43,8 @@ export function addEntries(providers = providersShown): AddEntry[] {
     { id: "jira", group: "Tickets", label: "Jira account", line: "Tickets from one Jira site." },
   ];
   if (providers) {
-    entries.push({ id: "claude", group: "Models", label: "Claude", line: "A login that Pip and agents can run on." });
-    entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login for Codex. It can't run Pip or agents yet.", beta: true });
+    entries.push({ id: "claude", group: "Models", label: DRIVERS.claude.label, line: "A login that Pip and agents can run on.", beta: DRIVERS.claude.beta });
+    entries.push({ id: "codex", group: "Models", label: DRIVERS.codex.label, line: "A login for Codex. It can't run Pip or agents yet.", beta: DRIVERS.codex.beta });
   }
   return entries;
 }

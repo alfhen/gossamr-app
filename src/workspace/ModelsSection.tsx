@@ -4,7 +4,7 @@ import { pipModels } from "../lib/modelPicker";
 import type { ModelDefaults } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { defaultsWith } from "./connectionsLogic";
-import { useModelOptions } from "./PipModelPicker";
+import { useModelOptions } from "./useModelOptions";
 
 /** The Settings defaults: the Claude and model Pip and new agents use when nothing narrower says. */
 export function ModelsSection({ onDefaults }: { onDefaults(defaults: ModelDefaults | null): void }) {

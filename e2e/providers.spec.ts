@@ -196,6 +196,8 @@ test.describe("the model defaults in Settings", () => {
     const agents = page.getByRole("menu", { name: "New agents use" }).getByRole("group", { name: "Codex side" });
     await expect(agents).toContainText("Agents can't run on Codex yet");
     await expect(agents).toContainText("Beta");
+    const name = await agents.getByText("Codex side", { exact: true }).evaluate((el) => el.scrollWidth <= el.clientWidth);
+    expect(name).toBe(true);
     await expect(agents.getByRole("menuitemradio")).toHaveCount(0);
     await page.keyboard.press("Escape");
 

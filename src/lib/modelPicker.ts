@@ -1,5 +1,5 @@
 import type { ConnectionInfo, ModelChoice, ModelOption } from "../types";
-import { DEFAULT_MODEL } from "./models";
+import { DEFAULT_MODEL, DRIVERS, type Driver } from "./models";
 
 /** What a picker chooses for: Pip's turns or the agents that runs start. */
 export type PickerPurpose = "pip" | "agents";
@@ -8,7 +8,7 @@ export type PickerPurpose = "pip" | "agents";
 export interface PickerInstance {
   id: string;
   name: string;
-  driver: "claude" | "codex";
+  driver: Driver;
   unavailable: string | null;
 }
 
@@ -18,7 +18,7 @@ export interface PickerInstance {
  * config folder that breaks the folder rules; the launch refuses both.
  */
 export function unavailableReason(c: Pick<ConnectionInfo, "enabled" | "driver" | "status">, purpose: PickerPurpose = "pip"): string | null {
-  if (c.driver === "codex") return purpose === "pip" ? "Pip can't run on Codex yet" : "Agents can't run on Codex yet";
+  if (c.driver && !(purpose === "pip" ? DRIVERS[c.driver].runsPip : DRIVERS[c.driver].runsAgents)) return `${purpose === "pip" ? "Pip" : "Agents"} can't run on ${DRIVERS[c.driver].label} yet`;
   if (!c.enabled) return "Off";
   switch (c.status?.state) {
     case "notSignedIn":

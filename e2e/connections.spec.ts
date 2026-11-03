@@ -52,7 +52,7 @@ test.describe("the Connections list", () => {
   });
 
   test("lists the default Claude after the others, and turns it off and on from its row", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     const rows = page.getByRole("list", { name: "Connections" }).getByRole("listitem");
     await expect(rows).toHaveCount(3);
@@ -68,7 +68,7 @@ test.describe("the Connections list", () => {
   });
 
   test("shows what the Claude probe found on its row, and Off when it is turned off", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1&mockClaudeProbe=notSignedIn");
+    await openApp(page, "runs=empty&mockRepos=6&mockClaudeProbe=notSignedIn");
     await openSettings(page);
     await expect(rowOf(page, "Claude")).toContainText("Not signed in");
     await rowOf(page, "Claude").getByRole("switch", { name: "Claude" }).click();
@@ -78,7 +78,7 @@ test.describe("the Connections list", () => {
   });
 
   test("shows the signed-in Claude as who it is authenticated as", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await expect(rowOf(page, "Claude")).toContainText("Authenticated · alf@acme.com");
   });

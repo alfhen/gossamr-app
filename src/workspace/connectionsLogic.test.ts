@@ -175,7 +175,7 @@ describe("the + Add entries", () => {
 
   it("offers Codex with a Beta label without any page switch", () => {
     expect(addEntries().find((e) => e.id === "codex")?.beta).toBe(true);
-    expect(addEntries().find((e) => e.id === "claude")?.beta).toBeUndefined();
+    expect(addEntries().find((e) => e.id === "claude")?.beta).toBe(false);
   });
 
   it("puts each entry under its group", () => {

@@ -3,8 +3,7 @@ import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import type { ModelDefaults } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { providersShown, syncLine } from "./connectionsLogic";
-import { ModelsSection } from "./ModelsSection";
+import { syncLine } from "./connectionsLogic";
 import { ConnectionsSection } from "./Connections";
 import { WatchingSection } from "./WatchSettings";
 import { useEscBack } from "./escBack";
@@ -61,18 +60,12 @@ export function Settings() {
           </ul>
         </Section>
 
-        {providersShown && (
-          <Section title="Models" id="settings-models">
-            <ModelsSection onDefaults={setDefaults} />
-          </Section>
-        )}
-
         <Section title="Theme">
           <Segmented kind="radio" label="Theme" value={theme} onChange={setTheme} options={THEMES.map((t) => ({ value: t, label: THEME_LABEL[t] }))} />
         </Section>
 
         <Section title="Connections" id="settings-connections">
-          <ConnectionsSection now={now} />
+          <ConnectionsSection now={now} onDefaults={setDefaults} />
         </Section>
 
         <Section title="Watching" id="settings-watching">

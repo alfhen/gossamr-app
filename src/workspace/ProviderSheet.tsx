@@ -4,7 +4,7 @@ import { Beta } from "../components/Beta";
 import { Button } from "../components/Button";
 import { Segmented } from "../components/Segmented";
 import { nameProblem, NAME_LIMIT } from "../lib/connectionName";
-import type { Driver } from "../lib/models";
+import { DRIVERS, type Driver } from "../lib/models";
 import type { ConnectionInfo } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { ConnectFrame } from "./ConnectGithub";
@@ -51,7 +51,7 @@ export function ProviderFormView({ driver, values, usualOffered, busy, error, on
       <div>
         <h2 className="font-display m-0 flex items-center gap-2 text-lg font-semibold">
           Add {label}
-          {driver === "codex" && <Beta />}
+          {DRIVERS[driver].beta && <Beta />}
         </h2>
         <p className="mt-1 mb-0 text-ws-ink2">Each {label} has its own {driver === "claude" ? "config folder" : "home folder"}, so its login, settings and history stay apart.</p>
       </div>

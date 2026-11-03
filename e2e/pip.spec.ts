@@ -170,7 +170,7 @@ test.describe("Pip's model picker", () => {
   });
 
   test("another Claude starts Pip fresh, says so until Pip has run there, and one with a problem is greyed", async ({ page }) => {
-    await openApp(page, `${INSTANT_PIP}&providers=1`);
+    await openApp(page, `${INSTANT_PIP}`);
     await showPip(page);
     await addClaude(page, "Claude work", "~/.claude-work", "ready");
     await addClaude(page, "Claude broken", "~/.claude-broken", "error");
@@ -190,7 +190,7 @@ test.describe("Pip's model picker", () => {
   });
 
   test("Add or manage… opens Settings", async ({ page }) => {
-    await openApp(page, `${INSTANT_PIP}&providers=1`);
+    await openApp(page, `${INSTANT_PIP}`);
     await showPip(page);
     await trigger(page).click();
     await menu(page).getByRole("menuitem", { name: "Add or manage…" }).click();
