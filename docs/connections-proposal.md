@@ -16,7 +16,7 @@ Pip and agents run on a provider instance and a model, chosen as `{instanceId, m
 
 Several Jira accounts work at once. Tickets from all of them appear in the Inbox and the board, each draft posts as the account it was made for, and Pip and agents read and draft through the connection of the ticket they work on.
 
-Claude runs Pip and agents. Pip stays on Claude (owner decision, 2 Nov 2026). Codex gets its probe, folder and sign-in early, and its row shows from r14a with a Beta label, and **+ Add** offers it from r14a. It can't run Pip or agents until the Codex runner (steps c3 to c6), which moves to a follow-up plan. Agents on Codex get no `--sandbox` flag. Section 8 says why and what that takes.
+Claude runs Pip and agents. Pip stays on Claude (owner decision, 2 Nov 2026). Codex gets its probe, folder and sign-in early, and its row shows from r14a with a Beta label, and **+ Add** offers it from r14a. With c6 it runs agents, never Pip. Agents on Codex get no `--sandbox` flag. Section 8 says why and what that takes.
 
 Agents always work in Gossamr's own clone of a repository, in `~/Gossamr/agents`, never in `~/Code` or another folder the person keeps code in (Section 16). Trusting that clone for a Claude login is one click in Gossamr (Section 17).
 
@@ -60,7 +60,7 @@ What Gossamr does differently:
 ## 4. Decisions
 
 1. **Three kinds, one list.** Providers show in the same Connections list as GitHub and Jira, with the same rename, on/off, remove and Open Terminal. In `config.json` they sit under their own `providers` key (5.1), so older builds keep working.
-2. **Two drivers: Claude and Codex.** Claude runs Pip and agents. Pip stays on Claude: the owner skipped c2 on 2 Nov 2026. Codex's probe, folder and sign-in come early, and its row shows from r14a with a Beta label, and **+ Add** offers it from r14a. It can't run Pip or agents until the Codex runner (c3 to c6), which moves to a follow-up plan. Other T3 drivers wait (Section 6.1).
+2. **Two drivers: Claude and Codex.** Claude runs Pip and agents. Pip stays on Claude: the owner skipped c2 on 2 Nov 2026. Codex's probe, folder and sign-in come early, and its row shows from r14a with a Beta label, and **+ Add** offers it from r14a. With c6 it runs agents, never Pip. Other T3 drivers wait (Section 6.1).
 3. **A config folder is the one new per-instance setting.** It keeps two logins apart. It is a path, not a secret, so it lives in `config.json`. Binary path, launch arguments and environment variables stay out.
 4. **The existing setup is the default instance.** Every install gets a `claude` instance with no folder. It runs what runs today, so nobody has to add anything.
 5. **One environment per instance.** The probe, Pip, agents and every Terminal script of one instance pick the same login (6.3). An instance with its own folder ignores credentials the shell exports.
@@ -134,9 +134,9 @@ In Rust, `jira_connect` refuses an instance id that is not a Jira instance, and 
 | Driver | Binary | Folder variable | Runs Pip | Runs agents | Sign-in command |
 |---|---|---|---|---|---|
 | `claude` | `claude` | `CLAUDE_CONFIG_DIR` | Yes | Yes | `claude auth login` |
-| `codex` | `codex` | `CODEX_HOME` | No (Pip stays on Claude) | After c6 | `codex login` |
+| `codex` | `codex` | `CODEX_HOME` | No (Pip stays on Claude) | Yes (agents only) | `codex login` |
 
-Each driver says what it can run (`runs_pip`, `runs_agents`). Pickers list an instance whose driver can't run that use greyed, with the reason. **+ Add** offers every driver. Codex shows from r14a, marked Beta, while `runs_agents` is still false, and its picker entries say "Agents can't run on Codex yet" and "Pip can't run on Codex yet". When Codex's runner lands (c3 to c6, in a follow-up plan), its flag flips and the pickers allow it. Nothing else in the model changes.
+Each driver says what it can run (`runs_pip`, `runs_agents`). Pickers list an instance whose driver can't run that use greyed, with the reason. **+ Add** offers every driver. Codex shows from r14a, marked Beta. With c6 its `runs_agents` flag is true, so the agents picker allows it, and the Pip picker greys it with "Pip runs on Claude only." Nothing else in the model changes.
 
 Both binaries are found on the PATH of the captured shell environment (`runs/env.rs`), after the fixed install paths `find_claude` checks today. `codex` is also found inside an app that bundles it: ChatGPT.app ships one that is on no PATH (c0). Those copies come last, so a `codex` the person put on PATH wins. A login shell (`zsh -lc`) misses tools that `.zshrc` sets up, such as an npm `codex` under nvm, and that `codex` is a node launcher that also needs the shell's PATH to run.
 
@@ -294,7 +294,7 @@ Resolving a choice gives `Ready { instance, model }` or `Unavailable(reason)`. T
 | Not found | "`claude` isn't installed." | Same |
 | No shell setup | "Gossamr couldn't read your shell setup, so it can't tell which Claude login to use. Check again in Settings." | Same |
 | Removed | "Pick which Claude Pip runs on." | "Claude personal was removed. Pick another." |
-| Can't run this | "Pip runs on Claude only." | "Agents can't run on Codex yet." |
+| Can't run this | "Pip runs on Claude only." | Not reached: every driver runs agents. |
 | Bad model | "Pick a model for Pip." | "Pick a model for this run." |
 
 There is no fallback to another instance.
@@ -459,7 +459,7 @@ A button "+ Add" sits in the Connections header, beside refresh. It is primary (
 | Code | GitHub account | Pull requests, branches and checks. | p5 |
 | Tickets | Jira account | Tickets from one Jira site. | p5, and when a Jira exists only from j26 |
 | Models | Claude | A login that Pip and agents can run on. | r14 |
-| Models | Codex | A login for Codex. It can't run Pip or agents yet. Marked Beta. | r14a |
+| Models | Codex | A login that agents can run on. Pip stays on Claude. Marked Beta. | c6 |
 
 Each entry opens its sheet in `ConnectFrame`. The palette gets the same entries as "Add GitHub account", "Add Jira account", "Add Claude" and "Add Codex", shown by the same rules. The footer "Connect GitHub" button and `github:connect` go.
 
@@ -498,7 +498,7 @@ The row appears at once as "Not signed in" and turns to "Authenticated · alf@ac
 In order: Status (with the fix), Name (Rename), Account (Claude: email and plan; Codex: ChatGPT or API key; then Remove), Config folder (the path, and a quiet "Reveal in Finder"), Models (the list, and Add model…), and a line on use:
 
 - Claude: "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."
-- Codex (Beta label beside its name): "Codex is in beta. Pip and agents can't run on it yet." From c6 this line says what Codex runs.
+- Codex (Beta label beside its name): "Codex is in beta. Agents run on Codex with its own Codex settings: only danger-full-access lets them commit and push. Pip runs on Claude."
 
 When the shell exports a login variable that the instance ignores, a line says so (6.3). Sync and Watching are hidden. The off line is "Off. Pip and new agents can't use it." The signed-out banner covers a provider only when a Settings default or a queued run uses it, and it uses the provider's own words, never Jira's.
 
@@ -513,7 +513,7 @@ One `ModelPicker` in `src/components/`: a popover list grouped by instance name,
 | Workstream sheet: "New agents use" | Agents queued in that workstream | r14 |
 | Run sheet and run card: "Runs on Claude work · Opus" with Change while queued | That run | r14 |
 
-Settings › Safety's second promise becomes "Agents run on <instance name> with its own Claude Code settings, so they can push branches and use your own tools." (`agentsPromise` in `Settings.tsx`). Until the defaults are read, the original wording stays.
+Settings › Safety's second promise becomes "Agents run on <instance name> with its own Claude Code settings, so they can push branches and use your own tools." (`agentsPromise` in `Settings.tsx`). Until the defaults are read, the original wording stays. For a Codex instance it reads "Agents run on <instance name> with its own Codex settings. Only danger-full-access lets them commit and push."
 
 ## 11. Security
 

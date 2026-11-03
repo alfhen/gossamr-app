@@ -225,7 +225,7 @@ impl Reason {
             Self::NoShellSetup => "Gossamr couldn't read your shell setup, so it can't tell which Claude login to use. Check again in Settings.".into(),
             Self::Removed if pip => "Pick which Claude Pip runs on.".into(),
             Self::Removed => format!("{name} was removed. Pick another."),
-            Self::CantRun(_) if pip => format!("Pip can't run on {name} yet."),
+            Self::CantRun(_) if pip => "Pip runs on Claude only.".into(),
             Self::CantRun(_) => format!("Agents can't run on {name} yet."),
             Self::BadModel if pip => "Pick a model for Pip.".into(),
             Self::BadModel => "Pick a model for this run.".into(),
@@ -383,8 +383,8 @@ mod tests {
     }
 
     #[test]
-    fn codex_runs_neither_pip_nor_agents_until_its_runner_is_built() {
-        assert_eq!((Driver::Codex.runs_pip(), Driver::Codex.runs_agents()), (false, false));
+    fn codex_runs_agents_and_never_pip() {
+        assert_eq!((Driver::Codex.runs_pip(), Driver::Codex.runs_agents()), (false, true));
         assert_eq!((Driver::Claude.runs_pip(), Driver::Claude.runs_agents()), (true, true));
     }
 
@@ -454,10 +454,8 @@ mod tests {
     fn a_driver_that_cannot_run_the_use_is_cant_run() {
         let mut config = config();
         config.providers.push(ProviderInstance { id: "codex".into(), driver: Driver::Codex, ..default_claude() });
-        for use_ in [Use::Pip, Use::Agents] {
-            assert_eq!(reason(&config, use_, &pick("codex", "gpt-5"), READY), Reason::CantRun(Driver::Codex));
-        }
-        assert_eq!(Reason::CantRun(Driver::Codex).words(Use::Pip, "Codex"), "Pip can't run on Codex yet.");
+        assert_eq!(reason(&config, Use::Pip, &pick("codex", "gpt-5"), READY), Reason::CantRun(Driver::Codex));
+        assert_eq!(Reason::CantRun(Driver::Codex).words(Use::Pip, "Codex"), "Pip runs on Claude only.");
         assert_eq!(Reason::CantRun(Driver::Codex).words(Use::Agents, "Codex"), "Agents can't run on Codex yet.");
     }
 

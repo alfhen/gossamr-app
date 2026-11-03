@@ -24,14 +24,14 @@ describe("unavailableReason", () => {
     expect(unavailableReason(row({ status: null }))).toBeNull();
   });
 
-  it("says Pip can't run on Codex yet", () => {
-    expect(unavailableReason(row({ driver: "codex" }))).toBe("Pip can't run on Codex yet");
+  it("says Pip runs on Claude only for a Codex row", () => {
+    expect(unavailableReason(row({ driver: "codex" }))).toBe("Pip runs on Claude only.");
   });
 
-  it("says agents can't run on Codex yet when the picker is for agents", () => {
-    expect(unavailableReason(row({ driver: "codex" }), "agents")).toBe("Agents can't run on Codex yet");
-    expect(pickerInstances([row({ driver: "codex", instanceId: "codex_2" })], "agents")[0]?.unavailable).toBe("Agents can't run on Codex yet");
-    expect(unavailableReason(row({}), "agents")).toBeNull();
+  it("lets agents run on Codex when the picker is for agents", () => {
+    expect(unavailableReason(row({ driver: "codex" }), "agents")).toBeNull();
+    expect(pickerInstances([row({ driver: "codex", instanceId: "codex_2" })], "agents")[0]?.unavailable).toBeNull();
+    expect(pickerInstances([row({ driver: "codex", instanceId: "codex_2" })], "pip")[0]?.unavailable).toBe("Pip runs on Claude only.");
   });
 });
 

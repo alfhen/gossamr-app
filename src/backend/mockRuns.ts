@@ -492,6 +492,8 @@ export class MockRuns {
   private tick = 0;
   /** Run ids passed to `attach`, for tests. */
   readonly attached: string[] = [];
+  /** What Terminal was opened on for each run in `attached`: `codex resume` for a Codex run. */
+  readonly attachCommands: string[] = [];
   /**
    * Waking a stopped session fails, as when `claude` exits or starts a copy: for a test to see what the person is left
    * with after a Deny or their own fix round whose wake didn't go through.
@@ -702,7 +704,7 @@ export class MockRuns {
   }
 
   /** The logins runs launch on; set by the mock backend. */
-  providers: Pick<MockProviders, "signedOutName" | "has"> = { signedOutName: () => null, has: () => true };
+  providers: Pick<MockProviders, "signedOutName" | "has" | "driverOf"> = { signedOutName: () => null, has: () => true, driverOf: () => "claude" };
 
   /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
   choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
@@ -1101,6 +1103,7 @@ export class MockRuns {
     const run = this.get(id);
     if (!run?.shortId) throw new Error("that run has no session to attach to yet");
     this.attached.push(id);
+    this.attachCommands.push(this.providers.driverOf(run.runsOn?.instanceId ?? "claude") === "codex" ? "codex resume" : "claude attach");
   }
 
   private failed(id: string, want: RunFailure["type"], refusal: string): Run {

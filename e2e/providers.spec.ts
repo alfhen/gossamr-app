@@ -134,7 +134,7 @@ test.describe("adding Claude and Codex", () => {
     await sheet.getByRole("button", { name: "I've run it, check again" }).click();
     await sheet.getByRole("button", { name: "Done" }).click();
     await expect(rowOf(page, "Codex side")).toContainText("Beta");
-    await expect(page.getByRole("region", { name: "Codex side details" })).toContainText("Pip and agents can't run on it yet.");
+    await expect(page.getByRole("region", { name: "Codex side details" })).toContainText("Agents run on Codex side with its own Codex settings: only danger-full-access lets them commit and push. Pip runs on Claude.");
   });
 });
 
@@ -184,26 +184,28 @@ test.describe("the model defaults in Settings", () => {
     await expect(agentsPicker(page)).toHaveAccessibleName("New agents use Claude · Default");
   });
 
-  test("greys a Codex in both pickers with the reason", async ({ page }) => {
+  test("offers a Codex to the agents picker and greys it in Pip's with the reason", async ({ page }) => {
     await openApp(page, QUERY);
     await openSettings(page);
     const sheet = await openAddSheet(page, "Codex");
     await sheet.getByLabel("Name").fill("Codex side");
     await sheet.getByRole("button", { name: "Add Codex" }).click();
+    await sheet.getByRole("button", { name: "Open Terminal" }).click();
+    await sheet.getByRole("button", { name: "I've run it, check again" }).click();
     await sheet.getByRole("button", { name: "Done" }).click();
 
     await agentsPicker(page).click();
     const agents = page.getByRole("menu", { name: "New agents use" }).getByRole("group", { name: "Codex side" });
-    await expect(agents).toContainText("Agents can't run on Codex yet");
     await expect(agents).toContainText("Beta");
+    await expect(agents).not.toContainText("can't run");
     const name = await agents.getByText("Codex side", { exact: true }).evaluate((el) => el.scrollWidth <= el.clientWidth);
     expect(name).toBe(true);
-    await expect(agents.getByRole("menuitemradio")).toHaveCount(0);
+    await expect(agents.getByRole("menuitemradio").first()).toBeVisible();
     await page.keyboard.press("Escape");
 
     await pipPicker(page).click();
     const pip = page.getByRole("menu", { name: "Pip uses" }).getByRole("group", { name: "Codex side" });
-    await expect(pip).toContainText("Pip can't run on Codex yet");
+    await expect(pip).toContainText("Pip runs on Claude only.");
     await expect(pip.getByRole("menuitemradio")).toHaveCount(0);
   });
 

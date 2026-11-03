@@ -55,7 +55,7 @@ impl Driver {
     }
 
     pub fn runs_agents(self) -> bool {
-        matches!(self, Self::Claude)
+        matches!(self, Self::Claude | Self::Codex)
     }
 
     pub fn label(self) -> &'static str {

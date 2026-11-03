@@ -190,6 +190,15 @@ describe("mock runs", () => {
     const working = (await backend.runsList({ states: ["working"] }))[0];
     await backend.runsAttach(working.id);
     expect(backend.runs.attached).toEqual([working.id]);
+    expect(backend.runs.attachCommands).toEqual(["claude attach"]);
+  });
+
+  it("opens a run on a Codex instance in Terminal with codex resume", async () => {
+    const backend = new MockBackend();
+    backend.runs.providers = { signedOutName: () => null, has: () => true, driverOf: () => "codex" };
+    const working = (await backend.runsList({ states: ["working"] }))[0];
+    await backend.runsAttach(working.id);
+    expect(backend.runs.attachCommands).toEqual(["codex resume"]);
   });
 
   it("has one failed launch of each kind, and the busy set's failed run is an untrusted folder", async () => {
