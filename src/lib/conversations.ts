@@ -37,5 +37,13 @@ export const conversationRead = (raw: string, primary: string): string => {
   return id.startsWith(WORKSTREAM_PREFIX) || splitConversation(id).connectionId ? id : conversationIn(id, primary);
 };
 
+/**
+ * The page's key for General while a ticket on `connectionId` is open: the bare name on the primary's connection, which
+ * Rust reads as the primary's, else the connection-qualified id Rust stores it under. With no primary known, a known
+ * connection qualifies.
+ */
+export const generalOn = (connectionId: string | null | undefined, primary: string | null | undefined): string =>
+  connectionId && connectionId !== primary ? conversationIn(GENERAL_CONVERSATION, connectionId) : GENERAL_CONVERSATION;
+
 /** Whether a conversation is one of the Pip pane's (General or a workstream's), not a ticket's drawer. */
 export const isPaneConversation = (id: string) => splitConversation(id).name === GENERAL_CONVERSATION || workstreamOfConversation(id) !== null;

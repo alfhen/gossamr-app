@@ -8,7 +8,7 @@ import { useDev } from "./devStore";
 import { useLookup, useSiteOf } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
-import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
+import { Composer, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { popoverOpen } from "./Popover";
 import { currentContext, useScreen } from "./pipHooks";
@@ -20,9 +20,10 @@ import { describeRun } from "./pipRuns";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
 import { useWorkspace } from "../workspaceStore";
+import { generalOn } from "../lib/conversations";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
-import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
+import { conversationTitle, primaryOf, usePaneWorkstream } from "./workstreamsStore";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { HeaderStatus } from "./StatusPill";
 import { composerFooter } from "./workViewLogic";
@@ -109,12 +110,12 @@ function usePaneEscape(onClose: () => void) {
 }
 
 /** The drafts a conversation shows: a workstream's own and the open ones on its ticket; General shows everyone's. Also loads the conversation's turns. */
-export function useConversationDrafts(conversation: string, workstream: WorkstreamView | null, connectionId?: string): Proposal[] {
+export function useConversationDrafts(conversation: string, workstream: WorkstreamView | null): Proposal[] {
   const proposals = useWorkspace((s) => s.proposals);
   const shown = workstream?.workstream ?? null;
   useEffect(() => {
-    void useClaude.getState().load(conversation, connectionId);
-  }, [conversation, connectionId]);
+    void useClaude.getState().load(conversation);
+  }, [conversation]);
   return useMemo(() => Object.values(proposals).filter((p) => !shown || inWorkstreamPane(p, shown)), [proposals, shown]);
 }
 
@@ -180,14 +181,14 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
 export function PipPane({ onClose }: { onClose(): void }) {
   // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
   const workstream = usePaneWorkstream();
-  const workstreamId = workstream?.workstream.id ?? null;
-  const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
+  const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
+  const primary = useWorkspace((s) => primaryOf(s.connections));
+  const conversation = workstream ? workstreamConversation(workstream.workstream.id) : generalOn(context.item?.connectionId, primary);
   const running = useAnswering(conversation);
   const [seeing, setSeeing] = useState(false);
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
-  const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
-  const proposalList = useConversationDrafts(conversation, workstream, context.item?.connectionId);
+  const proposalList = useConversationDrafts(conversation, workstream);
   const model = usePipModel(conversation);
   const needs = useNeedsYou();
   const runs = useRuns((s) => s.runs);

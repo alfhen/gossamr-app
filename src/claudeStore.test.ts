@@ -62,21 +62,6 @@ describe("ask", () => {
     expect(sent.every((r) => !("cwd" in (r as object)))).toBe(true);
   });
 
-  it("names the open ticket's connection in the conversation it sends", async () => {
-    const sent: AskRequest[] = [];
-    const original = claude.ask;
-    claude.ask = async (req) => (sent.push(req), started);
-    try {
-      const beta = { connectionId: "beta", externalId: "CA-1", key: "CA-1" };
-      await useClaude.getState().ask("CA-1", "here?", null, { ...screen, item: beta });
-      await useClaude.getState().ask("ws:w1", "there?", null, { ...screen, item: beta });
-      await useClaude.getState().ask("CA-1", "no item", null, screen);
-    } finally {
-      claude.ask = original;
-    }
-    expect(sent.map((r) => r.conversation)).toEqual(["beta:CA-1", "ws:w1", "CA-1"]);
-  });
-
   it("sends images with the request and keeps only what's needed to show them in the turn", async () => {
     const sent: AskRequest[] = [];
     const { claude } = await import("./backend/claude");
@@ -98,59 +83,62 @@ describe("ask", () => {
   });
 });
 
-describe("a conversation asked with a second-site ticket open", () => {
-  const beta = { connectionId: "beta", externalId: "CA-1", key: "CA-1" };
-  const open = { ...screen, item: beta };
+describe("General on two connections", () => {
+  const model = (m: string) => ({ instanceId: "claude", model: m, effort: "medium" });
   // A backend that keeps each turn under the key it was asked with, as Rust does.
   const keep = () => {
     const kept: Record<string, StoredTurn[]> = {};
     vi.spyOn(claude, "ask").mockImplementation(async (req) => {
       const key = req.conversation ?? "";
-      (kept[key] ??= []).push(stored(req.requestId, { conversation: key, prompt: req.prompt }));
+      (kept[key] ??= []).push(stored(req.requestId, { conversation: key, prompt: req.prompt, model: req.model, sessionId: req.sessionId }));
       return started;
     });
-    const read: string[] = [];
-    vi.spyOn(claude, "turns").mockImplementation(async (key) => (read.push(key), kept[key] ?? []));
-    return read;
+    vi.spyOn(claude, "turns").mockImplementation(async (key) => kept[key] ?? []);
   };
   beforeEach(() => forgetConversations());
   afterEach(() => vi.restoreAllMocks());
 
-  it("reads back under the connection-qualified key the ticket's turn was stored under", async () => {
-    const read = keep();
-    await useClaude.getState().ask("CA-1", "here?", null, open);
-    forgetConversations();
-    await useClaude.getState().load("CA-1", "beta");
-    expect(read).toEqual(["beta:CA-1"]);
-    expect(useClaude.getState().byTicket["CA-1"].turns.map((t) => t.prompt)).toEqual(["here?"]);
-  });
-
-  it("gets a General turn back after a reload", async () => {
-    const read = keep();
-    await useClaude.getState().ask("general", "in general", null, open);
-    forgetConversations();
-    await useClaude.getState().load("general", "beta");
-    expect(read).toEqual(["beta:general"]);
-    expect(useClaude.getState().byTicket.general.turns.map((t) => t.prompt)).toEqual(["in general"]);
-  });
-
-  it("reads the model a started turn runs on from the key it was stored under", async () => {
+  it("sends the conversation as the page names it", async () => {
     keep();
-    await useClaude.getState().ask("general", "in general", null, open);
-    const id = useClaude.getState().byTicket.general.turns[0].requestId;
-    const model = { instanceId: "claude", model: "opus", effort: "medium" };
-    vi.spyOn(claude, "turns").mockImplementation(async (key) => (key === "beta:general" ? [stored(id, { conversation: key, model })] : []));
-    onClaudeEvent(id, { type: "started", sessionId: "s1" });
-    await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns[0].model).toEqual(model));
+    const sent = vi.mocked(claude.ask);
+    await useClaude.getState().ask("beta:general", "here?", null, screen);
+    await useClaude.getState().ask("general", "primary", null, screen);
+    expect(sent.mock.calls.map(([r]) => r.conversation)).toEqual(["beta:general", "general"]);
   });
 
-  it("replaces a restored turn's answer with the one stored under the connection-qualified key when it ends", async () => {
+  it("keeps each connection's turns, session and model choice in its own entry after a reload", async () => {
+    keep();
+    const { ask, choose } = useClaude.getState();
+    choose("general", model("opus"));
+    choose("beta:general", model("haiku"));
+    await ask("general", "A1", "s-a", screen);
+    await ask("beta:general", "B1", "s-b", screen);
+    forgetConversations();
+    await useClaude.getState().load("general");
+    await useClaude.getState().load("beta:general");
+    const { byTicket, choices } = useClaude.getState();
+    expect(byTicket.general.turns.map((t) => t.prompt)).toEqual(["A1"]);
+    expect(byTicket["beta:general"].turns.map((t) => t.prompt)).toEqual(["B1"]);
+    expect([byTicket.general.sessionId, byTicket["beta:general"].sessionId]).toEqual(["s-a", "s-b"]);
+    expect(choices).toEqual({ general: model("opus"), "beta:general": model("haiku") });
+  });
+
+  it("reads the model a started turn runs on from its own conversation", async () => {
+    keep();
+    await useClaude.getState().ask("beta:general", "B1", null, screen);
+    const id = useClaude.getState().byTicket["beta:general"].turns[0].requestId;
+    vi.spyOn(claude, "turns").mockImplementation(async (key) => (key === "beta:general" ? [stored(id, { conversation: key, model: model("haiku") })] : []));
+    onClaudeEvent(id, { type: "started", sessionId: "s1" });
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["beta:general"].turns[0].model).toEqual(model("haiku")));
+  });
+
+  it("replaces a restored turn's answer with the one stored under its own key when it ends", async () => {
     const running = stored("r1", { conversation: "beta:general", text: "Half", status: "running" });
     const turns = vi.spyOn(claude, "turns").mockImplementation(async (key) => (key === "beta:general" ? [running] : []));
-    await useClaude.getState().load("general", "beta");
+    await useClaude.getState().load("beta:general");
     turns.mockImplementation(async (key) => (key === "beta:general" ? [{ ...running, text: "Half of the answer.", status: "done" }] : []));
     onClaudeEvent("r1", { type: "done", sessionId: null, ok: true, message: null });
-    await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns[0]).toMatchObject({ status: "done", text: "Half of the answer." }));
+    await vi.waitFor(() => expect(useClaude.getState().byTicket["beta:general"].turns[0]).toMatchObject({ status: "done", text: "Half of the answer." }));
   });
 });
 

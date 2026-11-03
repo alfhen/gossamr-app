@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { claude, type ClaudeEvent, type EventMeta, type StoredTurn, type TurnUsage } from "./backend/claude";
-import { conversationIn } from "./lib/conversations";
 import type { PipImage, ShownImage } from "./lib/pipImages";
 import type { ModelChoice, ScreenContext } from "./types";
 import { useWorkstreams } from "./workspace/workstreamsStore";
@@ -56,11 +55,8 @@ interface ClaudeState {
   cancel(ticketKey: string): void;
   /** Takes a queued turn out of the queue before it runs. */
   remove(requestId: string): void;
-  /**
-   * Brings back the stored turns of a conversation, after a reload or a restart, without touching turns already shown.
-   * `connectionId` is the open ticket's connection, as `ask` sends it, so a turn is read from the key it was stored under.
-   */
-  load(ticketKey: string, connectionId?: string): Promise<void>;
+  /** Brings back the stored turns of a conversation, after a reload or a restart, without touching turns already shown. */
+  load(ticketKey: string): Promise<void>;
 }
 
 /** The prompt as the assistant gets it: what was typed, then the text it is about. */
@@ -71,9 +67,6 @@ const empty: Conversation = { turns: [], sessionId: null };
 let seq = 0;
 /** Turns the backend has started, so an `ask` that returns after its turn left the queue can't mark it queued again. */
 const begun = new Set<string>();
-/** The key each turn is stored under, which differs from the page's name for the conversation once a ticket's connection qualifies it. */
-const storedUnder = new Map<string, string>();
-const storedKey = (requestId: string, page: string) => storedUnder.get(requestId) ?? page;
 /** Bumped whenever the conversations are dropped, so a load that started before cannot bring them back. */
 let generation = 0;
 /** How many loads are waiting for the backend; while any is, events for turns the store lacks are held for it. */
@@ -176,8 +169,6 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
 
   async ask(ticketKey, prompt, sessionId, context, extra = {}) {
     const requestId = newRequestId();
-    const wire = context.item?.connectionId ? conversationIn(ticketKey, context.item.connectionId) : ticketKey;
-    storedUnder.set(requestId, wire);
     const conv = get().byTicket[ticketKey] ?? empty;
     const { images = [], ...shown } = extra;
     const model = get().choices[ticketKey] ?? get().fallback ?? undefined;
@@ -200,7 +191,7 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
         sessionId,
         context,
         ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
-        conversation: wire,
+        conversation: ticketKey,
         ...(model ? { model } : {}),
         meta: {
           ...(shown.quote ? { quote: shown.quote } : {}),
@@ -233,13 +224,11 @@ export const useClaude = create<ClaudeState>()((set, get) => ({
       .catch((err) => updateByRequest(requestId, (c) => applyEvent(c, requestId, { type: "done", sessionId: null, ok: false, message: String(err) })));
   },
 
-  async load(ticketKey, connectionId) {
+  async load(ticketKey) {
     const mine = generation;
     loading++;
     try {
-      const wire = connectionId ? conversationIn(ticketKey, connectionId) : ticketKey;
-      const stored = await claude.turns(wire).catch(() => [] as StoredTurn[]);
-      for (const t of stored) storedUnder.set(t.requestId, wire);
+      const stored = await claude.turns(ticketKey).catch(() => [] as StoredTurn[]);
       // Another account's turns must not land in a store that was cleared while they loaded.
       if (!stored.length || mine !== generation) return;
       const ranOn = [...stored].reverse().find((t) => t.model)?.model;
@@ -269,7 +258,6 @@ export function forgetConversations() {
   generation++;
   held.clear();
   restoredLive.clear();
-  storedUnder.clear();
   for (const conversation of Object.values(useClaude.getState().byTicket)) {
     conversation.turns.forEach((t) => t.images?.forEach((i) => URL.revokeObjectURL(i.url)));
   }
@@ -296,7 +284,7 @@ function settle(requestId: string) {
   if (!key) return;
   const mine = generation;
   void claude
-    .turns(storedKey(requestId, key))
+    .turns(key)
     .catch(() => [] as StoredTurn[])
     .then((stored) => {
       const end = stored.find((t) => t.requestId === requestId);
@@ -313,7 +301,7 @@ function readTurnModel(requestId: string) {
   if (!conversation) return;
   const mine = generation;
   void claude
-    .turns(storedKey(requestId, conversation))
+    .turns(conversation)
     .catch(() => [] as StoredTurn[])
     .then((stored) => {
       const model = stored.find((t) => t.requestId === requestId)?.model;
