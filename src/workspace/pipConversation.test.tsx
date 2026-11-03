@@ -145,8 +145,9 @@ describe("PipConversation", () => {
     expect(folded).toContain("max-h-[3lh]");
     expect(folded).toContain("overflow-hidden");
     expect(folded).not.toContain("line-clamp");
+    expect(folded).toContain("mask-image");
     const shortTag = html.match(/<div id="wake-text-wake-s"[^>]*>/)?.[0] ?? "";
-    expect(shortTag).not.toMatch(/data-clamped|max-h-|overflow-hidden|line-clamp/);
+    expect(shortTag).not.toMatch(/data-clamped|max-h-|overflow-hidden|line-clamp|mask-image/);
     expect(html.match(/>Show more</g)).toHaveLength(1);
     expect(html).toContain('aria-controls="wake-text-wake-l"');
     // Its cards follow the folded text.

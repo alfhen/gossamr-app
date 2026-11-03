@@ -141,7 +141,7 @@ function WakeText({ id, text }: { id: string; text: string }) {
   const panel = `wake-text-${id}`;
   return (
     <div className="grid gap-0.5">
-      <div id={panel} data-wake-text data-clamped={long && !open ? "true" : undefined} className={`ws-legacy text-ws-ink2 ${long && !open ? "max-h-[3lh] overflow-hidden" : ""}`}>
+      <div id={panel} data-wake-text data-clamped={long && !open ? "true" : undefined} className={`ws-legacy text-ws-ink2 ${long && !open ? "max-h-[3lh] overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}>
         <Markdown text={text} />
       </div>
       {long && (
