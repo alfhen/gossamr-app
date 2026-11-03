@@ -24,6 +24,8 @@ interface PipState {
   applied: Record<string, PipFiltered & { undone: boolean }>;
   /** Set while the context is pinned to this snapshot instead of following the screen. */
   pinned: ScreenContext | null;
+  /** The Jira connection picked in the drawer, for a conversation with no ticket. */
+  drawerConnection: string | null;
   /** Text the person selected in the peek sheet to ask about. */
   quote: string | null;
   /** A prompt waiting to land in the pane's input, in place of what is there or, with `append`, after it. */
@@ -36,6 +38,7 @@ interface PipState {
   undoApplied(requestId: string): void;
   redoApplied(requestId: string): void;
   setPinned(context: ScreenContext | null): void;
+  setDrawerConnection(connectionId: string | null): void;
   askAbout(text: string): void;
   clearQuote(): void;
   /** Opens the pane with `text` in the input, unsent. */
@@ -57,6 +60,7 @@ export const usePip = create<PipState>((set, get) => ({
   filtered: null,
   applied: {},
   pinned: null,
+  drawerConnection: null,
   quote: null,
   prefill: null,
   asking: null,
@@ -95,6 +99,7 @@ export const usePip = create<PipState>((set, get) => ({
   },
 
   setPinned: (pinned) => set({ pinned }),
+  setDrawerConnection: (drawerConnection) => set({ drawerConnection }),
   askAbout(text) {
     set({ quote: text });
     showPip();
@@ -126,5 +131,5 @@ export function appliedState(a: { tabId: string; filter: WorkFilter; before: Wor
 
 /** Forgets what belonged to the previous account: filters Pip put on tabs and any pinned context. */
 export function resetPip() {
-  usePip.setState({ filtered: null, applied: {}, pinned: null, quote: null });
+  usePip.setState({ filtered: null, applied: {}, pinned: null, drawerConnection: null, quote: null });
 }

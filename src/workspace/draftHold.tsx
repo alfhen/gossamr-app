@@ -1,6 +1,7 @@
 import { connectionOf, heldNote, madeText } from "../lib/proposals";
 import type { ConnectionInfo, Proposal } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { siteNamer } from "./keyLookup";
 
 /** Who approving an open draft posts as: "Posts as alfhen-acme via GitHub". Null for the sample, which sends nothing. */
 export function postsAs(p: Proposal, connections: readonly ConnectionInfo[]): string | null {
@@ -14,6 +15,13 @@ export const heldNow = (p: Proposal): string | null => heldNote(p, useWorkspace.
 
 export function useHeldNote(p: Proposal): string | null {
   return useWorkspace((s) => heldNote(p, s.connections));
+}
+
+/** The Jira account a draft belongs to, once more than one is on. */
+export function useDraftSite(p: Proposal): string | null {
+  const connections = useWorkspace((s) => s.connections);
+  const c = connectionOf(p, connections);
+  return c ? siteNamer(connections)({ connectionId: c.id, externalId: "", key: "" }) : null;
 }
 
 /** Under a draft's text: that it waits, with how old it is, if its connection is off or being checked again, and otherwise the account it posts as. */

@@ -24,8 +24,9 @@ describe("PipPane", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    usePip.setState({ pinned: null });
+    usePip.setState({ pinned: null, drawerConnection: null });
     usePip.getInitialState().pinned = null;
+    usePip.getInitialState().drawerConnection = null;
     useWorkspace.getInitialState().connections = [];
   });
 
@@ -46,5 +47,30 @@ describe("PipPane", () => {
   it("reads the primary's General under the bare name", () => {
     const turns = openOn("alpha");
     expect(turns.mock.calls.map(([key]) => key)).toEqual(["general"]);
+  });
+
+  const openNoTicket = (picked: string | null) => {
+    const turns = vi.spyOn(claude, "turns").mockResolvedValue([]);
+    usePip.setState({ drawerConnection: picked, pinned: null });
+    usePip.getInitialState().drawerConnection = picked;
+    renderToStaticMarkup(<PipPane onClose={() => {}} />);
+    return turns;
+  };
+
+  it("reads General under the connection picked in the drawer when no ticket is open, and under no other key", () => {
+    const turns = openNoTicket("beta");
+    expect(turns.mock.calls.map(([key]) => key)).toEqual(["beta:general"]);
+  });
+
+  it("reads General under the bare name when the drawer picked the primary", () => {
+    const turns = openNoTicket("alpha");
+    expect(turns.mock.calls.map(([key]) => key)).toEqual(["general"]);
+  });
+
+  it("shows the drawer's connection control only with no ticket open", () => {
+    openNoTicket(null);
+    expect(renderToStaticMarkup(<PipPane onClose={() => {}} />)).toContain('aria-label="Pip works in"');
+    openOn("beta");
+    expect(renderToStaticMarkup(<PipPane onClose={() => {}} />)).not.toContain('aria-label="Pip works in"');
   });
 });

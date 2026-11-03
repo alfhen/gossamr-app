@@ -138,6 +138,8 @@ export function compileFilter(f: WorkFilter, all: readonly WorkItem[], ctx: Filt
         const keys = new Set(f.items.map(itemKey));
         return (i) => keys.has(itemKey(i.item));
       }
+      case "connection":
+        return (i) => i.item.connectionId === f.connectionId;
       case "code":
         return (i) => codeFilterMatches(f.check, ctx.code?.get(itemKey(i.item)));
       case "and": {
@@ -164,6 +166,21 @@ export const usesCode = (f: WorkFilter): boolean => filterChips(f).some((c) => c
 /** The filter without its client-only parts, which is all the backend can read. */
 export const withoutCode = (f: WorkFilter): WorkFilter => and(...filterChips(f).filter((c) => c.type !== "code"));
 
+/** The filter without the parts only the page can read: linked code and the account. */
+export const forBackend = (f: WorkFilter): WorkFilter => and(...filterChips(f).filter((c) => c.type !== "code" && c.type !== "connection"));
+
+/** The Jira connection a filter narrows to, if it does. */
+export function accountOf(f: WorkFilter): string | null {
+  const chip = filterChips(f).find((c) => c.type === "connection");
+  return chip?.type === "connection" ? chip.connectionId : null;
+}
+
+/** Replaces any account in the filter, or drops it when `connectionId` is null. */
+export function withAccount(f: WorkFilter, connectionId: string | null): WorkFilter {
+  const rest = filterChips(f).filter((c) => c.type !== "connection");
+  return and(...rest, ...(connectionId ? [{ type: "connection" as const, connectionId }] : []));
+}
+
 export const ALL: WorkFilter = { type: "and", filters: [] };
 
 export function and(...filters: WorkFilter[]): WorkFilter {
@@ -179,6 +196,8 @@ export interface QueryLookup {
   people: readonly { ref: PersonRef; name: string }[];
   me: readonly PersonRef[];
   items?: readonly WorkItem[];
+  /** The Jira connections by name, for an Account chip. */
+  accounts?: readonly { id: string; displayName: string }[];
 }
 
 const CATEGORIES: Record<string, WorkCategory> = {
@@ -311,7 +330,7 @@ export const YOUR_TURN_WHY = "Your turn: an unread update, an unanswered mention
 const CATEGORY_LABEL: Record<WorkCategory, string> = { todo: "to do", active: "in progress", done: "done" };
 
 /** A short label for a chip. */
-export function describeFilter(f: WorkFilter, lookup: Pick<QueryLookup, "containers" | "people" | "items">): string {
+export function describeFilter(f: WorkFilter, lookup: Pick<QueryLookup, "containers" | "people" | "items" | "accounts">): string {
   switch (f.type) {
     case "needsMe":
       return YOUR_TURN;
@@ -341,6 +360,8 @@ export function describeFilter(f: WorkFilter, lookup: Pick<QueryLookup, "contain
       return `“${f.text}”`;
     case "items":
       return `${f.items.length} picked`;
+    case "connection":
+      return `Account: ${lookup.accounts?.find((a) => a.id === f.connectionId)?.displayName ?? f.connectionId}`;
     case "code":
       return CODE_FILTER_LABEL[f.check];
     case "and":

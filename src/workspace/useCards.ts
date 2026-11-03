@@ -6,6 +6,7 @@ import { draftCounts, knownMoves, nameOf, workflowOfItem, useWorkspace } from ".
 import { approvableTransitions, blockedKeys, bulkMoves, bulkTargets, draftStatus, movesAreOpaque, pendingMoves, targetsFor, witherOf } from "./boardLogic";
 import { useCanvasOrder } from "./browse";
 import { useDev, VISIBLE_LIMIT } from "./devStore";
+import { useSiteOf } from "./hooks";
 import { useAttention } from "./CanvasBits";
 import type { ItemCardProps } from "./ItemCard";
 import { useTabs } from "./tabsStore";
@@ -91,6 +92,8 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
       else say(what === "approve" ? "Approved." : "Skipped the draft.");
     });
 
+  const siteOf = useSiteOf();
+
   const cardProps = (item: WorkItem): ItemCardProps => {
     const key = itemKey(item.item);
     const wf = workflowOf(item);
@@ -98,6 +101,7 @@ export function useCards(items: readonly WorkItem[], order: readonly string[]) {
     const to = p && (draftStatus(p, wf)?.name ?? p.label ?? (p.intent.type === "transition" ? p.intent.to : ""));
     return {
       item,
+      site: siteOf(item.item),
       assignee: nameOf({ names }, item.assignee),
       now,
       wither: witherOf(item, now),

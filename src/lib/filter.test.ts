@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef, WorkContainer, WorkFilter, WorkItem } from "../types";
 import fixtures from "./filter.fixtures.json";
 import {
+  accountOf,
   ALL,
   and,
   describeFilter,
   filterChips,
+  forBackend,
   itemKey,
   matchesFilter,
   parseQuery,
@@ -13,6 +15,7 @@ import {
   selectItems,
   type FilterContext,
   type QueryLookup,
+  withAccount,
 } from "./filter";
 
 const items = fixtures.items as unknown as WorkItem[];
@@ -202,5 +205,36 @@ describe("chips", () => {
     expect(d({ type: "category", category: "active" })).toBe("Status: in progress");
     expect(d(parseQuery("mine blocked", lookup))).toBe("Assigned to me, Blocked");
     expect(d(ALL)).toBe("Everything");
+  });
+});
+
+describe("the Account filter", () => {
+  const at = (connectionId: string, externalId: string) => ({ ...items[0], item: { connectionId, externalId, key: externalId } }) as WorkItem;
+  const both = [at("mock", "CA-1"), at("mock2", "CA-1"), at("mock2", "OPS-1")];
+  const account = (connectionId: string): WorkFilter => ({ type: "connection", connectionId });
+
+  it("keeps only the tickets of one account, including a key the other account shares", () => {
+    expect(selectItems(account("mock2"), both, ctx).map((i) => itemKey(i.item))).toEqual(["mock2:CA-1", "mock2:OPS-1"]);
+    expect(selectItems(account("mock"), both, ctx).map((i) => itemKey(i.item))).toEqual(["mock:CA-1"]);
+  });
+
+  it("combines with the other chips", () => {
+    expect(selectItems(and(account("mock2"), { type: "text", text: "OPS" }), both, ctx).map((i) => itemKey(i.item))).toEqual(["mock2:OPS-1"]);
+  });
+
+  it("names the account by its connection's name", () => {
+    const lookup = { containers: [], people: [], accounts: [{ id: "mock2", displayName: "beta.atlassian.net" }] };
+    expect(describeFilter(account("mock2"), lookup)).toBe("Account: beta.atlassian.net");
+  });
+
+  it("is set, read and replaced as one chip, beside the others", () => {
+    const f = withAccount(and({ type: "mine" }), "mock");
+    expect(accountOf(f)).toBe("mock");
+    expect(filterChips(withAccount(f, "mock2"))).toEqual([{ type: "mine" }, account("mock2")]);
+    expect(filterChips(withAccount(f, null))).toEqual([{ type: "mine" }]);
+  });
+
+  it("is left out of the filter the backend gets, which cannot read it", () => {
+    expect(forBackend(and({ type: "mine" }, account("mock"), { type: "code", check: "has" }))).toEqual({ type: "mine" });
   });
 });

@@ -9,7 +9,7 @@ import type { Person, Proposal, WorkContainer, WorkItemKind } from "../types";
 import { allContainers, useWorkspace } from "../workspaceStore";
 import { createdItemKey, draftAfter, draftItem, draftKey, editFor, fieldsOf, ITEM_KINDS, placeOf, waitingCreates, type DraftFields, type DraftPlace } from "./draftTicket";
 import { askPip } from "./askPip";
-import { DraftAccount, useHeldNote } from "./draftHold";
+import { DraftAccount, useDraftSite, useHeldNote } from "./draftHold";
 import { openTicket } from "./jump";
 import { pipAsks } from "./runSheetLogic";
 import { FromRun } from "./RunProvenance";
@@ -234,9 +234,11 @@ export function DraftPeekView({ proposal: p, fields, containers, people, working
   };
 
   const item = useMemo(() => draftItem(p), [p]);
+  const site = useDraftSite(p);
   return (
     <PeekView
       item={item}
+      site={site}
       draft={slots}
       assignee=""
       now={new Date(p.updatedAt)}
