@@ -134,6 +134,11 @@ impl CodexBackend {
             return Err(failure(format!("the run folder: {e}")));
         }
         made.folder = Some(&folder);
+        // A launch whose answer is lost is found again by this id (`find`).
+        if let Err(e) = create_private(&folder.join("short-id")).and_then(|mut f| f.write_all(req.fresh_id.as_str().as_bytes())) {
+            made.undo().await;
+            return Err(failure(format!("the run folder: {e}")));
+        }
 
         let process = match self.spawn(req, &worktree, &folder) {
             Ok(process) => process,

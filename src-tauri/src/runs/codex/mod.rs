@@ -1,6 +1,8 @@
 //! The backend that runs agents as `codex exec` processes Gossamr starts and keeps track of itself.
 
+mod events;
 mod launch;
+mod observe;
 pub mod process;
 
 use std::path::{Path, PathBuf};
@@ -99,16 +101,16 @@ impl RunBackend for CodexBackend {
         Folders::default()
     }
 
-    async fn observe(&self, _watched: &[Watched], _dirs: &Folders, _now: DateTime<Utc>) -> BackendResult<Observations> {
-        Err(Self::not_built("be watched"))
+    async fn observe(&self, watched: &[Watched], _dirs: &Folders, now: DateTime<Utc>) -> BackendResult<Observations> {
+        Ok(self.look(watched, now).await)
     }
 
-    async fn find(&self, _run: &Run, _dirs: &Folders) -> BackendResult<Option<Session>> {
-        Ok(None)
+    async fn find(&self, run: &Run, _dirs: &Folders) -> BackendResult<Option<Session>> {
+        Ok(self.find_run(run))
     }
 
-    async fn final_answer(&self, _run: &Run, _dirs: &Folders) -> Option<String> {
-        None
+    async fn final_answer(&self, run: &Run, _dirs: &Folders) -> Option<String> {
+        self.answer_of(run)
     }
 
     async fn signed_in(&self) -> BackendResult<bool> {
