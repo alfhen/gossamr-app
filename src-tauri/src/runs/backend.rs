@@ -128,6 +128,10 @@ pub struct LaunchRequest {
     pub model: Option<String>,
     /// A short id nothing else uses. A backend whose program names its own sessions ignores it.
     pub fresh_id: ShortId,
+    /// The run this launch is for, and the branch its worktree starts from. A backend that makes its own worktree and
+    /// run folder needs them; Claude makes both itself.
+    pub run_id: String,
+    pub base: String,
 }
 
 /// An error from a backend's program, worded with that program's name.

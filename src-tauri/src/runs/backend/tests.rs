@@ -28,6 +28,8 @@ fn request(tools: Option<ToolsOffer>) -> LaunchRequest {
         tools,
         model: None,
         fresh_id: ShortId::parse("0a1b2c3d").unwrap(),
+        run_id: "run-1".into(),
+        base: "main".into(),
     }
 }
 

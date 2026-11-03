@@ -6,6 +6,7 @@ use chrono::Utc;
 
 use super::agent_config::AgentChannel;
 use super::backend::ToolsOffer;
+use super::codex;
 use super::report::{new_token, token_hash};
 use super::service::RunService;
 use crate::domain::{Run, RunState, REPORT_TOOL_VERSION};
@@ -45,6 +46,7 @@ impl RunService {
             channel.remove_config(run_id);
             self.legacy_channel().remove_config(run_id);
         }
+        self.remove_run_folder(run_id);
         self.core.asks().forget(run_id);
         if let Err(e) = self.core.report_forget(run_id).await {
             eprintln!("couldn't drop the tool tokens of run {run_id}: {e}");
@@ -56,30 +58,49 @@ impl RunService {
         AgentChannel::new(0, self.core.data_dir().join("report"))
     }
 
-    /// Removes config files that no run can use any more: the run is gone, failed, has no worktree, or ended long enough
-    /// ago that its session is no longer watched. Safe to call at any time.
-    pub async fn sweep_agent_files(&self) {
-        let Some(channel) = &self.agents else { return };
-        self.sweep_configs(channel).await;
-        self.sweep_configs(&self.legacy_channel()).await;
+    fn runs_root(&self) -> std::path::PathBuf {
+        codex::runs_root(&self.core.data_dir())
     }
 
-    async fn sweep_configs(&self, channel: &AgentChannel) {
-        let now = Utc::now();
-        for id in channel.configured() {
-            let keep = match self.core.run_in_store(&id).await {
-                Ok(Some(run)) => match run.state {
-                    RunState::Failed => false,
-                    RunState::Done | RunState::Stopped => run.worktree_removed_at.is_none() && run.ended_at.is_none_or(|at| now - at <= KEEP_FINISHED),
-                    _ => run.worktree_removed_at.is_none(),
-                },
-                Ok(None) => false,
-                // The store couldn't be read: leave it for a later sweep.
-                Err(_) => true,
-            };
-            if !keep {
-                channel.remove_config(&id);
+    fn remove_run_folder(&self, run_id: &str) {
+        if let Some(folder) = codex::run_folder(&self.runs_root(), run_id) {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+    }
+
+    /// Removes config files and run folders that no run can use any more: the run is gone, failed, has no worktree, or
+    /// ended long enough ago that its session is no longer watched. Safe to call at any time.
+    pub async fn sweep_agent_files(&self) {
+        if let Some(channel) = &self.agents {
+            for id in channel.configured() {
+                if !self.keeps_files(&id).await {
+                    channel.remove_config(&id);
+                }
             }
+            let legacy = self.legacy_channel();
+            for id in legacy.configured() {
+                if !self.keeps_files(&id).await {
+                    legacy.remove_config(&id);
+                }
+            }
+        }
+        for id in codex::run_folders(&self.runs_root()) {
+            if !self.keeps_files(&id).await {
+                self.remove_run_folder(&id);
+            }
+        }
+    }
+
+    async fn keeps_files(&self, run_id: &str) -> bool {
+        match self.core.run_in_store(run_id).await {
+            Ok(Some(run)) => match run.state {
+                RunState::Failed => false,
+                RunState::Done | RunState::Stopped => run.worktree_removed_at.is_none() && run.ended_at.is_none_or(|at| Utc::now() - at <= KEEP_FINISHED),
+                _ => run.worktree_removed_at.is_none(),
+            },
+            Ok(None) => false,
+            // The store couldn't be read: leave it for a later sweep.
+            Err(_) => true,
         }
     }
 }

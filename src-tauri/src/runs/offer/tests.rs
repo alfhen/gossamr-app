@@ -286,3 +286,28 @@ async fn a_finished_run_carried_on_in_terminal_no_longer_stands_behind_its_earli
     assert!(rig.fx.core.report_stored(&run.id).await.unwrap().unwrap().stale);
     let _ = std::fs::remove_dir_all(&d);
 }
+
+fn run_folder_of(rig: &Rig, id: &str) -> PathBuf {
+    let folder = crate::runs::codex::run_folder(&crate::runs::codex::runs_root(&rig.fx.core.data_dir()), id).unwrap();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("final.txt"), "an answer").unwrap();
+    folder
+}
+
+#[tokio::test]
+async fn the_run_folder_goes_with_the_worktree_and_with_the_sweep() {
+    let d = dir("run-folder");
+    let rig = ready_with(reporting(&d)).await;
+    let live = rig.launched_reporting(1, "investigate").await;
+    let cleaned = rig.launched_reporting(2, "investigate").await;
+    let failed = rig.launched_reporting(3, "investigate").await;
+    rig.set(&failed, |r| r.state = RunState::Failed).await;
+    let folders: Vec<PathBuf> = [live.id.as_str(), cleaned.id.as_str(), failed.id.as_str(), "run-with-no-row"].iter().map(|id| run_folder_of(&rig, id)).collect();
+
+    rig.svc.sweep_agent_files().await;
+    assert_eq!(folders.iter().map(|f| f.exists()).collect::<Vec<_>>(), [true, true, false, false], "only an open run keeps its folder");
+
+    rig.svc.forget_tools(&cleaned.id).await;
+    assert_eq!(folders.iter().map(|f| f.exists()).collect::<Vec<_>>(), [true, false, false, false], "forgetting a run removes its folder");
+    let _ = std::fs::remove_dir_all(&d);
+}

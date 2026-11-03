@@ -370,6 +370,8 @@ impl RunService {
             tools,
             model,
             fresh_id,
+            run_id: run.id.clone(),
+            base: spec.base.clone(),
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
         let outcome = tc.backend.launch(&request).await;
