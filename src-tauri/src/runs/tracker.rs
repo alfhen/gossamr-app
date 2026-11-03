@@ -231,7 +231,7 @@ impl RunService {
             waiting_by_instance.entry(run.instance_id()).or_default().push(run.clone());
         }
         for group in waiting_by_instance.into_values() {
-            if let Ok(tc) = self.toolchain_of(&group[0]).await {
+            if let Ok(tc) = self.observing_toolchain_of(&group[0]).await {
                 self.collect_answers(&tc, &group).await;
             }
         }
@@ -244,12 +244,12 @@ impl RunService {
         }
         let mut changed = HashSet::new();
         for group in by_instance.into_values() {
-            let Ok(tc) = self.toolchain_of(group[0]).await else { continue };
+            let Ok(tc) = self.observing_toolchain_of(group[0]).await else { continue };
             let Ok(entries) = tc.cli.agents(true).await else { continue };
             let config_dir = self.claude_config_dir(&tc).await;
             let resting: Vec<Run> = group.iter().filter(|r| finished.iter().any(|f| f.id == r.id)).map(|r| (*r).clone()).collect();
-            busy |= resting.iter().any(|r| entries.iter().any(|e| belongs_to(e, r) && revived(e, r, now)));
-            for id in self.adopt_continuations(&entries, &resting, now).await {
+            busy |= resting.iter().any(|r| entries.iter().any(|e| belongs_to(e, &tc.instance_id, r) && revived(e, r, now)));
+            for id in self.adopt_continuations(&tc.instance_id, &entries, &resting, now).await {
                 changed.insert(id);
             }
             for listed in group {
@@ -430,7 +430,7 @@ impl RunService {
         if before.state == RunState::Failed || before.worktree_removed_at.is_some() {
             return Ok(None);
         }
-        let entry = entries.iter().find(|e| belongs_to(e, &before));
+        let entry = entries.iter().find(|e| belongs_to(e, &tc.instance_id, &before));
         let finished = matches!(before.state, RunState::Done | RunState::Stopped);
         if finished && !entry.is_some_and(|e| revived(e, &before, now)) {
             return Ok(None);

@@ -97,9 +97,12 @@ pub struct RunService {
 
 pub(super) use super::fresh::real;
 
-/// Whether `entry` is the session of `run`. Interactive sessions never are. `entry` must come from the listing of the
-/// run's own login (`toolchain_of(run)`); short ids can repeat across logins.
-pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
+/// Whether `entry`, listed by the login `listed_on`, is the session of `run`. Interactive sessions never are, and short
+/// ids can repeat across logins, so a run only matches the listing of its own.
+pub(super) fn belongs_to(entry: &AgentEntry, listed_on: &str, run: &Run) -> bool {
+    if run.instance_id() != listed_on {
+        return false;
+    }
     let Some(id) = entry.id.as_deref().and_then(ShortId::parse) else { return false };
     if entry.kind.as_deref() == Some("interactive") {
         return false;
@@ -326,12 +329,12 @@ impl RunService {
     /// listed at the clone root, so this keeps looking until the worktree has had time to appear.
     async fn find_session(&self, run: &Run) -> std::result::Result<Option<AgentEntry>, Failure> {
         // A login that can't run now has no session to find; the launch that follows waits or fails for it.
-        let Ok(tc) = self.toolchain_of(run).await else { return Ok(None) };
+        let Ok(tc) = self.observing_toolchain_of(run).await else { return Ok(None) };
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         loop {
             let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc))?;
-            if let Some(found) = entries.into_iter().find(|e| belongs_to(e, run)) {
+            if let Some(found) = entries.into_iter().find(|e| belongs_to(e, &tc.instance_id, run)) {
                 return Ok(Some(found));
             }
             if Instant::now() >= deadline {
@@ -662,7 +665,7 @@ impl RunService {
                 by_instance.entry(run.instance_id().to_owned()).or_default().push(run);
             }
             for (_, group) in by_instance {
-                let tc = match self.toolchain_of(&group[0]).await {
+                let tc = match self.observing_toolchain_of(&group[0]).await {
                     Ok(tc) => tc,
                     Err(e) => {
                         let why: Failure = e.into();
@@ -677,7 +680,7 @@ impl RunService {
                     continue;
                 };
                 for mut run in group {
-                    match entries.iter().find(|e| belongs_to(e, &run)) {
+                    match entries.iter().find(|e| belongs_to(e, &tc.instance_id, &run)) {
                         Some(found) => {
                             let _ = self.adopt(&mut run, found).await;
                         }

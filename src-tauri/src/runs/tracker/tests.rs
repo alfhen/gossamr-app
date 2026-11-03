@@ -1225,3 +1225,21 @@ async fn a_run_on_the_second_login_is_tracked_while_the_default_login_has_no_too
     svc.poll_at(Utc::now()).await;
     assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
 }
+
+#[tokio::test]
+async fn a_run_on_a_login_that_is_turned_off_is_still_followed() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| on_second_login(r, "abc12345")).await;
+    let (svc, second) = crate::runs::rig::with_login_off(&rig.fx, &rig.cli, "claude_2");
+    second.with(|s| {
+        let mut asking = FakeCli::session("abc12345", &run.expected_worktree);
+        asking.state = Some("blocked".into());
+        asking.status = Some("idle".into());
+        asking.needs = Some("Which one?".into());
+        s.sessions.push(asking);
+    });
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+}

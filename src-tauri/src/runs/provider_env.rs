@@ -146,6 +146,13 @@ pub fn states(providers: &[ProviderInstance], places: &Places, shell: Option<&Ru
         .collect()
 }
 
+/// Like `states`, but for watching runs that already exist: an instance that is off or has a bad folder still gets its
+/// login, and only a missing shell setup stops it.
+pub fn observing_states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
+    let home = places.home.unwrap_or(Path::new(""));
+    providers.iter().map(|p| (p.id.clone(), ProviderEnv::resolve(p, shell, home).map_or_else(ProviderState::Unavailable, ProviderState::Ready))).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

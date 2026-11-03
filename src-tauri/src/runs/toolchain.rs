@@ -61,6 +61,12 @@ pub trait ToolchainSource: Send + Sync {
 
     /// The toolchain of one provider instance. Until runs name an instance only tests call it.
     async fn for_instance(&self, id: &str) -> Result<Toolchain, ToolchainError>;
+
+    /// The toolchain for looking at runs already on an instance: it works whether the instance is on or off. Only a
+    /// missing instance, an unreadable list, no environment or no binary refuse it.
+    async fn observe_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
+        self.for_instance(id).await
+    }
 }
 
 type Finder = fn(Driver, &RunEnv) -> Option<PathBuf>;
@@ -111,7 +117,18 @@ impl ToolchainSource for SystemToolchain {
     }
 
     async fn for_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
-        let (instance, state, shell) = match self.core.lookup_provider(id).await {
+        self.open(id, false).await
+    }
+
+    async fn observe_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
+        self.open(id, true).await
+    }
+}
+
+impl SystemToolchain {
+    async fn open(&self, id: &str, observing: bool) -> Result<Toolchain, ToolchainError> {
+        let found = if observing { self.core.lookup_provider_for_observing(id).await } else { self.core.lookup_provider(id).await };
+        let (instance, state, shell) = match found {
             Lookup::Found { instance, state, shell } => (instance, state, shell),
             Lookup::Missing => return Err(ToolchainError::UnknownInstance(id.into())),
             Lookup::Unreadable(why) => return Err(ToolchainError::ConfigUnreadable(why)),

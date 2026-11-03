@@ -25,6 +25,14 @@ impl RunService {
         }
     }
 
+    /// The toolchain for looking at a run that already exists: an instance turned off keeps its runs tracked.
+    pub(in crate::runs) async fn observing_toolchain_of(&self, run: &Run) -> std::result::Result<Toolchain, ToolchainError> {
+        match &run.runs_on {
+            Some(choice) => self.tools.observe_instance(&choice.instance_id).await,
+            None => self.tools.get().await,
+        }
+    }
+
     /// Settles what `run` launches on and freezes it on the run. A run with no choice takes the Settings default.
     pub(super) async fn launch_target(&self, run: &mut Run) -> std::result::Result<Target, Blocked> {
         let (choice, instance) = self.core.agents_target(run.runs_on.as_ref()).map_err(Blocked::Waits)?;

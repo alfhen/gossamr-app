@@ -66,7 +66,7 @@ impl RunService {
         let ours = run.session_ids();
         entries
             .iter()
-            .filter(|e| e.pid.is_some() && (belongs_to(e, run) || e.id.as_deref().and_then(ShortId::parse).is_some_and(|id| ours.contains(&id))))
+            .filter(|e| e.pid.is_some() && (belongs_to(e, &tc.instance_id, run) || e.id.as_deref().and_then(ShortId::parse).is_some_and(|id| ours.contains(&id))))
             .filter_map(|e| e.id.as_deref().and_then(ShortId::parse))
             .collect()
     }

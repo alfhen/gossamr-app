@@ -109,11 +109,11 @@ fn taking_over_keeps_the_old_session_as_an_alias_and_hands_the_state_to_the_list
 fn an_earlier_session_still_listed_is_no_longer_the_runs_own() {
     let mut run = stopped_run();
     let old = listed(&run, "2afa0a22", &run.expected_worktree, ms(Span::hours(-2)));
-    assert!(belongs_to(&old, &run));
+    assert!(belongs_to(&old, "claude", &run));
     run.earlier_sessions = vec![EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: None, removed: false }];
     run.short_id = ShortId::parse("bbb748a7");
-    assert!(!belongs_to(&old, &run), "not by id and not by the worktree it shares");
-    assert!(belongs_to(&listed(&run, "bbb748a7", &run.expected_worktree, 0), &run));
+    assert!(!belongs_to(&old, "claude", &run), "not by id and not by the worktree it shares");
+    assert!(belongs_to(&listed(&run, "bbb748a7", &run.expected_worktree, 0), "claude", &run));
 }
 
 async fn stopped() -> (Rig, Run) {
