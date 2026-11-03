@@ -152,6 +152,12 @@ impl Core {
     }
 
     #[cfg(test)]
+    pub(crate) fn note_provider_answer(&self, instance_id: &str, snapshot: Snapshot) {
+        let folder = crate::config::AppConfig::load(&self.data_dir).providers.iter().find(|p| p.id == instance_id).and_then(|p| p.config.config_dir.clone());
+        self.provider_probes.answers.lock().unwrap().insert(instance_id.into(), Answer { snapshot, folder, at: Instant::now() });
+    }
+
+    #[cfg(test)]
     pub(super) fn age_provider_answers(&self, by: Duration) {
         for answer in self.provider_probes.answers.lock().unwrap().values_mut() {
             answer.at -= by;

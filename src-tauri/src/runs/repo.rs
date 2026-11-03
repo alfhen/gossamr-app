@@ -1,6 +1,6 @@
 //! Reading Gossamr's clones, and names for new worktrees.
 //!
-//! Git is only read here. Every call runs with the settings that could run a program switched off, the captured shell
+//! Git is read here, and writes only to remove a finished run's worktree and branch. Every call runs with the settings that could run a program switched off, the captured shell
 //! environment and a time limit, because a clone's own config can be changed by the agents working in it.
 
 use std::collections::HashSet;
@@ -20,6 +20,8 @@ use super::limits::{OwnerAddress, WorkFolderGit};
 /// suite runs hundreds of tests at once on a loaded CI runner, where a plain `git remote get-url` has taken longer, so tests wait
 /// longer rather than fail on the machine's load.
 const GIT_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(30) } else { Duration::from_secs(5) };
+/// `git worktree remove` and `git branch -d` write. Killing one partway leaves a half-deleted worktree that git then refuses to remove.
+const GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const WORD_LIMIT: usize = 16;
 const CONFIG_VALUE_LIMIT: usize = 200;
 /// How many owners' folders Settings reads an address in.
@@ -54,13 +56,17 @@ impl Git {
 
     /// Like `out`, but says why it failed: git couldn't start, ran past the limit, or exited with this last stderr line.
     async fn out_or_why(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
+        self.out_or_why_within(dir, args, GIT_TIMEOUT).await
+    }
+
+    async fn out_or_why_within(&self, dir: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
         let mut cmd = Command::new(&self.program);
         cmd.args(PINNED).arg("-C").arg(dir).arg("--no-optional-locks").args(args);
         self.env.apply(cmd.as_std_mut());
         let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| format!("{} didn't start: {e}", self.program.display()))?;
-        let out = tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output())
+        let out = tokio::time::timeout(limit, child.wait_with_output())
             .await
-            .map_err(|_| format!("git took longer than {} seconds", GIT_TIMEOUT.as_secs()))?
+            .map_err(|_| format!("git took longer than {} seconds", limit.as_secs()))?
             .map_err(|e| format!("git couldn't be waited for: {e}"))?;
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned());
@@ -109,6 +115,45 @@ impl Git {
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
         Err(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("it exited without a message").to_owned())
+    }
+
+    /// Removes a linked worktree the way `git worktree remove` does without `--force`: git refuses one with changes
+    /// that were never committed, or that is locked. A worktree folder that is already gone is only forgotten.
+    pub async fn remove_worktree(&self, clone: &Path, worktree: &Path) -> Result<(), String> {
+        if worktree.symlink_metadata().is_err() {
+            return self.out_or_why(clone, &["worktree", "prune"]).await.map(drop);
+        }
+        let path = worktree.to_string_lossy();
+        self.out_or_why_within(clone, &["worktree", "remove", "--", &path], GIT_WRITE_TIMEOUT).await.map(drop)
+    }
+
+    async fn branch_exists(&self, clone: &Path, branch: &str) -> Result<bool, String> {
+        let found = self.out_or_why(clone, &["branch", "--list", "--format=%(refname:short)", "--", branch]).await?;
+        Ok(!found.trim().is_empty())
+    }
+
+    /// Whether `git branch -d` would take the branch, asked before the worktree goes so a refusal leaves both in place.
+    /// Like `-d`, a branch counts as merged when it is in its upstream, or in HEAD when it has none.
+    pub async fn check_branch_deletable(&self, clone: &Path, branch: &str) -> Result<(), String> {
+        if !self.branch_exists(clone, branch).await? {
+            return Ok(());
+        }
+        let local = format!("refs/heads/{branch}");
+        let upstream = format!("{local}@{{upstream}}");
+        let into = if self.out(clone, &["rev-parse", "--verify", "--quiet", &upstream]).await.is_some() { upstream } else { "HEAD".to_owned() };
+        match self.out_or_why(clone, &["merge-base", "--is-ancestor", &local, &into]).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err(format!("git: the branch '{branch}' is not fully merged")),
+        }
+    }
+
+    /// `git branch -d`, never `-D`: git keeps a branch with commits that are neither merged nor on its upstream.
+    /// A branch that isn't there counts as removed.
+    pub async fn delete_branch(&self, clone: &Path, branch: &str) -> Result<(), String> {
+        if !self.branch_exists(clone, branch).await? {
+            return Ok(());
+        }
+        self.out_or_why_within(clone, &["branch", "-d", "--", branch], GIT_WRITE_TIMEOUT).await.map(drop)
     }
 
     /// What `origin/HEAD` points at in the clone, when it knows.
@@ -295,6 +340,12 @@ case "$*" in
   "config --local --get-all "*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null; true ;;
   "worktree list --porcelain") cat "$dir/.fake-worktrees" 2>/dev/null ;;
   "branch --list worktree-* --format=%(refname:short)") cat "$dir/.fake-branches" 2>/dev/null ;;
+  "worktree prune") ;;
+  "worktree remove -- "*) [ ! -f "$dir/.fake-worktree-dirty" ] || { echo "fatal: '$4' contains modified or untracked files, use --force to delete it" >&2; exit 128; }; rm -rf "$4" ;;
+  "branch --list --format=%(refname:short) -- "*) cat "$dir/.fake-branches" 2>/dev/null | grep -Fx -- "$5"; true ;;
+  "rev-parse --verify --quiet "*) exit 1 ;;
+  "merge-base --is-ancestor "*) [ ! -f "$dir/.fake-branch-unmerged" ] || exit 1 ;;
+  "branch -d -- "*) [ ! -f "$dir/.fake-branch-unmerged" ] || { echo "error: the branch '$4' is not fully merged." >&2; exit 1; } ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;
 esac
 "#;

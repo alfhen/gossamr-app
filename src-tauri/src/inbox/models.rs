@@ -9,7 +9,8 @@ use super::Core;
 use crate::config::AppConfig;
 use crate::connections::{self, Driver, ProviderInstance};
 use crate::error::{Error, Result};
-use crate::model_choice::{self, Found, ModelChoice, ModelDefaults, ModelOption, Reason, Use};
+use crate::model_choice::{self, Found, ModelChoice, ModelDefaults, ModelOption, Reason, Resolution, Standing, Use};
+use crate::probe::State;
 use crate::runs::binary::find_binary;
 use crate::runs::codex_models;
 use crate::runs::provider_env::ProviderState;
@@ -67,8 +68,23 @@ impl Core {
     pub fn agents_target(&self, stored: Option<&ModelChoice>) -> std::result::Result<(ModelChoice, ProviderInstance), String> {
         let config = AppConfig::load(&self.data_dir);
         let Some(choice) = stored.or(config.models.agents.as_ref()) else { return Err(Reason::Removed.words(Use::Agents, "That instance")) };
-        let instance = checked_words(&config, Use::Agents, choice, &self.codex_models.found())?;
-        Ok((choice.clone(), instance))
+        match model_choice::resolve(&config, Use::Agents, Some(choice), &self.codex_models.found(), |p| self.agents_standing(p)) {
+            Resolution::Unavailable(reason) => {
+                let name = config.providers.iter().find(|p| p.id == choice.instance_id).map_or("That instance", |p| p.display_name.as_str());
+                Err(reason.words(Use::Agents, name))
+            }
+            Resolution::Ready { instance_id, .. } => {
+                let instance = config.providers.iter().find(|p| p.id == instance_id).expect("resolve found it").clone();
+                Ok((choice.clone(), instance))
+            }
+        }
+    }
+
+    /// What the last probe says about the instance's login. An instance not asked yet counts as signed in, so the CLI's
+    /// own answer at launch decides. A missing shell setup or `claude` is left to the toolchain, which has the words for it.
+    fn agents_standing(&self, instance: &ProviderInstance) -> Standing {
+        let signed_in = self.provider_snapshot_for(instance).is_none_or(|answer| answer.state != State::NotSignedIn);
+        Standing { shell_readable: true, binary_found: true, signed_in }
     }
 
     /// The models an instance offers, in the order a picker shows them. A Codex instance that is on and ready is asked

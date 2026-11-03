@@ -5,7 +5,7 @@ import { leftoverSessions } from "./cleanupLogic";
 import { useRuns } from "./runsStore";
 
 export interface RunCleanupViewProps {
-  run: Pick<Run, "worktreeRemovedAt" | "earlierSessions">;
+  run: Pick<Run, "worktreeRemovedAt" | "earlierSessions" | "sessionsLeft">;
   reason: string | null;
   asking: boolean;
   busy: boolean;
@@ -22,6 +22,7 @@ export function RunCleanupView({ run, reason, asking, busy, refused, onAsk, onCa
     return (
       <Sec title="Clean up">
         <p className="m-0 text-ws-ink2">The worktree and its branch were removed. The result above is kept.</p>
+        {run.sessionsLeft && <p className="m-0 text-ws-ink2">The session was left in that login&apos;s folder.</p>}
         {left > 0 && (
           <Box>
             <p className="m-0 text-ws-ink">

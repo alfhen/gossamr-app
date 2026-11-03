@@ -84,6 +84,12 @@ describe("the clean up section of the run sheet", () => {
     const gone = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z" }, reason: null });
     expect(gone).toContain("The worktree and its branch were removed");
     expect(gone).not.toContain("Clean up</button>");
+    expect(gone).not.toContain("left in that login");
+  });
+
+  it("says the session was left in that login's folder when git removed the worktree of a removed instance", () => {
+    const html = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z", sessionsLeft: true }, reason: null });
+    expect(html).toContain("The session was left in that login&#x27;s folder.");
   });
 });
 

@@ -423,6 +423,7 @@ export class MockBackend implements Backend {
       (ref) => this.connectorFor(ref.connectionId)?.item(ref)?.title ?? null,
     );
     this.runs.workstreams = this.workstreams;
+    this.runs.providers = this.providers;
     this.runs.choiceFor = (workstream) => (workstream ? this.workstreams.get(workstream)?.workstream.agentsModel : null) ?? this.models.get().agents;
     // A draft made, approved or skipped in a workstream goes in its audit, by whoever did it.
     this.proposals.hasConnection = (id) => this.connectorFor(id) !== undefined;

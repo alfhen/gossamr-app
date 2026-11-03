@@ -1,13 +1,18 @@
-//! Removing the worktree of a finished run with `claude rm`, which refuses work that was never pushed.
+//! Removing the worktree of a finished run with `claude rm`, which refuses work that was never pushed. A run whose
+//! instance was removed has no `claude` to ask, so git removes the worktree and branch, just as unwilling to lose work.
 
 use chrono::Utc;
 use serde::Serialize;
 
+use super::archive::contained;
 use super::cli::{CliError, ShortId};
 use super::failure::Failure;
+use super::fresh::{agents_root, is_work_path, real};
+use super::repo::Git;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Run, RunState};
 use crate::error::{Error, Result};
+use crate::inbox::Lookup;
 
 const LOCK_RETRIES: u32 = 6;
 
@@ -89,9 +94,47 @@ impl RunService {
         }
     }
 
+    /// Whether the login the run launched on is gone from the providers. A login that is off or broken, or a list that
+    /// can't be read, is not gone: cleaning up must work while a login is off.
+    async fn instance_removed(&self, run: &Run) -> bool {
+        match &run.runs_on {
+            Some(choice) => matches!(self.core.lookup_provider(&choice.instance_id).await, Lookup::Missing),
+            None => false,
+        }
+    }
+
+    /// The run's worktree and branch through git alone, for a run whose instance is gone. Anything git refuses stays, in
+    /// git's own words. The clone and the worktree must lie in `~/Gossamr/agents`.
+    async fn remove_with_git(&self, run: &Run) -> Result<Option<String>> {
+        let home = self.home.as_ref().ok_or_else(|| refuse("Gossamr doesn't know your home folder."))?;
+        let clone = &run.spec.clone_path;
+        let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, &run.spec.repo, clone);
+        if !in_work_folder {
+            return Err(refuse("Its clone isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."));
+        }
+        let worktree = if run.expected_worktree.symlink_metadata().is_ok() {
+            contained(&agents_root(home), &run.expected_worktree).ok_or_else(|| refuse("Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."))?
+        } else {
+            let missing = real(&run.expected_worktree);
+            if !missing.starts_with(real(&agents_root(home))) {
+                return Err(refuse("Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."));
+            }
+            missing
+        };
+        let git: Git = self.git().await?;
+        let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
+        if let Err(message) = git.check_branch_deletable(clone, &branch).await {
+            return Ok(Some(message));
+        }
+        if let Err(message) = git.remove_worktree(clone, &worktree).await {
+            return Ok(Some(message));
+        }
+        Ok(git.delete_branch(clone, &branch).await.err())
+    }
+
     /// Removes the run's worktree and branch, and the earlier sessions it left behind. Never forces: unpushed work stays,
     /// and Claude says so. An earlier session that couldn't be removed is remembered, and cleaning up again retries just
-    /// that one.
+    /// that one. A run whose instance was removed is cleaned up with git alone and its sessions stay in that login's folder.
     pub async fn cleanup(&self, run_id: &str) -> Result<Cleanup> {
         if !self.cleaning.lock().expect("cleaning lock poisoned").insert(run_id.to_owned()) {
             return Err(refuse("This run is already being cleaned up."));
@@ -109,6 +152,14 @@ impl RunService {
                 other => format!("This run is {}. Stop it first, then clean it up.", other.as_str()),
             }));
         };
+        if self.instance_removed(&run).await {
+            if worktree_pending {
+                if let Some(message) = self.remove_with_git(&run).await? {
+                    return Ok(Cleanup::Refused { message });
+                }
+            }
+            return self.settle_cleanup(&run, worktree_pending, leftovers, None, true).await;
+        }
         let tc = self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
         let live = self.live_sessions(&tc, &run).await;
         for session in &live {
@@ -134,12 +185,19 @@ impl RunService {
                 return Ok(Cleanup::Refused { message });
             }
         }
+        self.settle_cleanup(&run, worktree_pending, gone, kept, false).await
+    }
+
+    /// Records what was removed. `gone` are the earlier sessions that no longer exist or, with `left`, will never be
+    /// reached because their login's folder is out of Gossamr's hands.
+    async fn settle_cleanup(&self, run: &Run, worktree_pending: bool, gone: Vec<ShortId>, kept: Option<String>, left: bool) -> Result<Cleanup> {
         let _turn = self.launching.lock().await;
-        let mut run = self.load(run_id).await?;
+        let mut run = self.load(&run.id).await?;
         if worktree_pending {
             run.worktree_removed_at = Some(Utc::now());
         }
-        for earlier in run.earlier_sessions.iter_mut().filter(|e| gone.contains(&e.short_id)) {
+        run.sessions_left |= left;
+        for earlier in run.earlier_sessions.iter_mut().filter(|e| left || gone.contains(&e.short_id)) {
             earlier.removed = true;
         }
         run.last_detail = Some(match &kept {

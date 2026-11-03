@@ -311,6 +311,10 @@ async fn probe_connections(app: &AppHandle, core: &CoreState, why: Probe) {
         let (app, core) = (app.clone(), core.clone());
         tauri::async_runtime::spawn(async move {
             core.probe_providers_each(why, |instance_id| wire::changed(&app, wire::Topic::Connections, instance_id)).await;
+            // A run waiting for a login to be signed in starts as soon as the probe sees it.
+            if let Some(runs) = app.try_state::<RunsState>() {
+                use_freed_slot(&runs);
+            }
         })
     };
     drop(providers);
