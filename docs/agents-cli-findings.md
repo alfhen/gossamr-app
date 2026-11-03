@@ -17,6 +17,16 @@ The kind-specific briefs, structured reports, heading parsing and automatic draf
 
 All of them run with stdin from `/dev/null`, because the CLI otherwise reads stdin as a prompt.
 
+## One daemon per config folder
+
+Each `CLAUDE_CONFIG_DIR` has its own background daemon, Keychain login and agent list. Checked with two signed-in folders on Claude Code 2.1.316 (step o10, below):
+
+- `claude agents --json --all` lists only the agents of its own folder. `claude stop <id>` in the wrong folder finds no job and changes nothing in the other.
+- Removing one folder's last agent leaves the other folder's daemon and agents running.
+- Short ids differ between folders in the check, but Gossamr keys a run by instance and short id anyway.
+- The default login runs with `CLAUDE_CONFIG_DIR` unset. Setting it to `~/.claude` reads as signed out.
+- A resume that passes flags starts a copy of the session. Gossamr resumes without flags, so a run keeps the model it started with.
+
 ## What the real run showed (scratch config, signed out)
 
 - A fresh `CLAUDE_CONFIG_DIR` is not logged in and refuses an untrusted folder: exit 1, stderr `Workspace not trusted. Run `claude` in <path> once and accept the trust prompt, then retry.` Trust is written to the scratch `<config>/.claude.json` as `projects.<path>.hasTrustDialogAccepted`, which the tests do through `runs::trust::trust` and the app does only on a click (see Folder trust).

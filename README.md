@@ -23,6 +23,14 @@ The token is kept in the macOS Keychain under `dk.alfhen.gossamr`. When it expir
 
 To add another Jira account, open Settings › Connections, choose **+ Add**, then **Jira account**. The sheet has the same fields plus a **Name**, shown in lists and on drafts; leave it empty to use the site. The first account stays signed in, and the Inbox and Board show tickets from both. An account that is already connected is refused: use **Make a new token** on its row. Removing one account leaves the others. Removing the last one returns you to Setup.
 
+## Connecting Claude
+
+Pip and agents run on a Claude login. To add a second one, such as a work and a personal account, open Settings › Connections, choose **+ Add**, then **Claude**. Give it a name and a config folder of its own, or choose **My usual setup** to use the login Claude already has on this Mac. Each login keeps its own settings, history and agents, and Gossamr never switches between them for you. Each agent run belongs to one login and is tracked there until it ends.
+
+Gossamr does not sign in to Claude for you. A new login shows the command to run in a terminal, and Settings shows the login as signed in once Gossamr sees it.
+
+Codex is not offered in **+ Add** yet. It cannot run agents until its runner is built.
+
 ## Connecting GitHub
 
 Gossamr signs in through `gh`. It never asks for a GitHub token and never stores one: each time it needs a token, it asks `gh` for the one it holds for that account. A token an earlier version saved stays in the Keychain until that account is connected through `gh`; **Remove** deletes it at once.
