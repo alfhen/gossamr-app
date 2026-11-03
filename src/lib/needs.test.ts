@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
-import type { Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
+import type { ConnectionInfo, Intent, ItemRef, PauseReason, Proposal, ProposalState, Run, RunState, WorkstreamStage, WorkstreamView } from "../types";
 import { docFromText } from "./docs";
 import { BATCHABLE, GROUP_RANK, chipLabel, byRank, higherPriority, needAfter, needGroups, needs, needsIn, leftOutLabel, repeatedComments, safeToBatch, titleFromTicketBlock, type Need, type NeedKind, type NeedsInput } from "./needs";
 
@@ -312,6 +312,14 @@ describe("needs: failures persist until they are dealt with", () => {
 
   it("lets one go once the run is retried, which is no longer failed", () => {
     expect(needs(input({ workstreams: [ws], runs: [{ ...failed, state: "queued" }] }))).toEqual([]);
+  });
+
+  it("names Codex, not Claude, in the failure of a Codex run that is not signed in", () => {
+    const codex = { kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo;
+    const r = run("r1", "build", "failed", { shortId: null, runsOn: { instanceId: "codex" }, failure: { type: "notSignedIn" } } as Partial<Run>);
+    const [n] = needs(input({ workstreams: [ws], runs: [r], connections: [codex] }));
+    expect(n.why).toContain("Codex isn't signed in.");
+    expect(n.why).not.toContain("Claude");
   });
 
   it("keeps a clone to trust as a failure, offering to review it and Dismiss", () => {

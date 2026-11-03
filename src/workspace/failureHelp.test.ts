@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run } from "../types";
-import { STILL_UNTRUSTED, failureHelp, retryEnabled, shellQuote } from "./failureHelp";
+import { CODEX_INSTALL_URL, INSTALL_URL, STILL_UNTRUSTED, installUrl, failureHelp, retryEnabled, shellQuote } from "./failureHelp";
 
 const runs = () => new MockBackend({ runs: { seed: "failures" } }).runs.list();
 const of = (type: string) => runs().find((r) => r.failure?.type === type)!;
@@ -36,15 +36,31 @@ describe("failure help", () => {
   });
 
   it("names the login a run was on and gives the sign-in command for its folder", () => {
-    const help = failureHelp(of("notSignedIn"), null, { name: "Claude work", signIn: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login" })!;
+    const help = failureHelp(of("notSignedIn"), null, { name: "Claude work", driver: "claude", signIn: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login" })!;
     expect(help.summary).toBe("Claude work isn't signed in.");
     expect(help.detail).toContain("Terminal opens with Claude work");
     expect(help.command).toEqual({ text: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login", note: null });
   });
 
   it("keeps the plain Claude command for the usual login", () => {
-    const help = failureHelp(of("notSignedIn"), null, { name: "Claude", signIn: null })!;
+    const help = failureHelp(of("notSignedIn"), null, { name: "Claude", driver: "claude", signIn: null })!;
     expect([help.summary, help.command]).toEqual(["Claude isn't signed in.", { text: "claude", note: "Then type /login." }]);
+  });
+
+  it("gives a Codex run Codex's words, its sign-in command and no curl", () => {
+    const codex = { name: "Codex", driver: "codex" as const, signIn: "CODEX_HOME=~/.codex-work codex login" };
+    const out = failureHelp(of("notSignedIn"), null, codex)!;
+    expect(out.summary).toBe("Codex isn't signed in.");
+    expect(out.detail).not.toContain("/login");
+    expect(out.command).toEqual({ text: "CODEX_HOME=~/.codex-work codex login", note: null });
+    expect(failureHelp(of("notSignedIn"), null, { ...codex, signIn: null })!.command?.text).toBe("codex login");
+    const missing = failureHelp(of("claudeMissing"), null, { ...codex, name: "Codex work" })!;
+    expect(missing.summary).toBe("Codex isn't installed, or Gossamr can't find it for Codex work.");
+    expect(missing.detail).toBe("Agents on Codex work are Codex sessions, so Gossamr needs the codex command. Install it, or the ChatGPT app, then retry.");
+    expect(missing.command).toBeNull();
+    expect(missing.primary?.act).toBe("install");
+    expect(installUrl(codex)).toBe(CODEX_INSTALL_URL);
+    expect(installUrl({ driver: "claude" })).toBe(INSTALL_URL);
   });
 
   it("sends every failed run set up outside the work folder to Pip, whatever it failed on", () => {
@@ -55,7 +71,7 @@ describe("failure help", () => {
   });
 
   it("names the login in the trust offer and the missing-command line", () => {
-    const work = { name: "Claude work", signIn: null };
+    const work = { name: "Claude work", driver: "claude" as const, signIn: null };
     const trust = failureHelp(of("untrustedFolder"), null, work)!;
     expect(trust.summary).toBe("Claude work hasn't trusted Gossamr's clone of acme/storefront yet.");
     expect(trust.primary).toEqual({ label: "Trust this clone for Claude work", act: "trust" });

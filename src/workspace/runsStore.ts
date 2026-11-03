@@ -4,12 +4,13 @@ import { labelsByRun } from "../lib/workstreamStage";
 import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, ModelChoice, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
-import { INSTALL_URL, STILL_UNTRUSTED, failureHelp, type FailureAct } from "./failureHelp";
+import { STILL_UNTRUSTED, failureHelp, installUrl, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
+import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
 import { offerUndo } from "./undo";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -168,7 +169,7 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
       continue;
     }
     if (run.state !== "failed") continue;
-    const reason = failureHelp(run)?.summary ?? run.error ?? "no reason was given";
+    const reason = failureHelp(run, null, instanceOf(useWorkspace.getState().connections, run.runsOn?.instanceId ?? DEFAULT_INSTANCE))?.summary ?? run.error ?? "no reason was given";
     const where = run.item?.key ? ` on ${run.item.key}` : "";
     useToasts.getState().push(`The agent${where} didn't start. ${reason}`, "error", { label: "Fix it", run: () => get().openRun(id) });
   }
@@ -362,7 +363,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     try {
       const before = get().runs.find((r) => r.id === id);
       const after = await backend.runsRetryLaunch(id, trust ? { trust: true } : undefined);
-      const help = after.state === "failed" ? failureHelp(after) : null;
+      const help = after.state === "failed" ? failureHelp(after, null, instanceOf(useWorkspace.getState().connections, after.runsOn?.instanceId ?? DEFAULT_INSTANCE)) : null;
       const again = !!help?.retryNeedsTerminal && help.kind === before?.failure?.type;
       if (trust) refuse(again ? STILL_UNTRUSTED : null);
       if (!again && get().terminalOpened.has(id)) {
@@ -390,11 +391,18 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend } = get();
     if (!backend) return;
     try {
-      if (act === "install") return await backend.openUrl(INSTALL_URL);
+      if (act === "install") {
+        const on = get().runs.find((r) => r.id === id)?.runsOn?.instanceId ?? DEFAULT_INSTANCE;
+        return await backend.openUrl(installUrl(instanceOf(useWorkspace.getState().connections, on)));
+      }
       if (act === "trust") return await get().retryLaunch(id, { trust: true });
-      const failure = get().runs.find((r) => r.id === id)?.failure;
+      const run = get().runs.find((r) => r.id === id);
+      const failure = run?.failure;
+      const instanceId = run?.runsOn?.instanceId ?? DEFAULT_INSTANCE;
       if (failure?.type === "modeRefused") await backend.runsAcceptMode(id, failure.mode);
-      else await (failure?.type === "notSignedIn" ? backend.runsSignIn(id) : backend.runsTrustFolder(id));
+      else if (failure?.type === "notSignedIn")
+        await (instanceOf(useWorkspace.getState().connections, instanceId)?.driver === "codex" ? backend.connectionOpenTerminal(instanceId) : backend.runsSignIn(id));
+      else await backend.runsTrustFolder(id);
       get().noteCopied(id);
     } catch (e) {
       useToasts.getState().push(`Couldn't open ${act === "install" ? "the install page" : "Terminal"}: ${messageOf(e)}`);

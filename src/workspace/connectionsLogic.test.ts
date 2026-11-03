@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
-import type { ConnectionInfo, ModelDefaults } from "../types";
-import { actingAs, addEntries, canSwitch, defaultsWith, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, removesLastJira, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
+import type { ConnectionInfo, ModelDefaults, Run } from "../types";
+import { actingAs, addEntries, canSwitch, defaultsWith, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersNeedingSignIn, providersShown, removalWarning, removesLastJira, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
@@ -230,5 +230,21 @@ describe("the row for a providers list that can't be read", () => {
   it("has no switch", () => {
     expect(canSwitch(unreadable)).toBe(false);
     expect(canSwitch(claude())).toBe(true);
+  });
+});
+
+describe("the logins the sign-in banner names", () => {
+  const codex = (over: Partial<ConnectionInfo> = {}): ConnectionInfo =>
+    claude({ id: "codex_2", instanceId: "codex_2", displayName: "Codex work", driver: "codex", configDir: "~/.codex-work", status: { state: "notSignedIn" } as ConnectionInfo["status"], ...over });
+
+  it("counts a signed-out Codex that the New agents use default names, with its codex login command", () => {
+    const defaults: ModelDefaults = { pip: null, agents: { instanceId: "codex_2", model: "default" } };
+    expect(providersNeedingSignIn([codex()], [], defaults)).toEqual([{ id: "codex_2", kind: "provider", displayName: "Codex work", instanceId: "codex_2", signIn: "CODEX_HOME=~/.codex-work codex login" }]);
+  });
+
+  it("counts a signed-out Codex that a queued run waits on, and stays quiet when nothing uses it", () => {
+    const queued = { state: "queued", runsOn: { instanceId: "codex_2", model: "default" } } as Run;
+    expect(providersNeedingSignIn([codex()], [queued], null).map((l) => l.instanceId)).toEqual(["codex_2"]);
+    expect(providersNeedingSignIn([codex()], [], null)).toEqual([]);
   });
 });

@@ -6,7 +6,7 @@ import { instanceOf, runsOnText } from "./runInstance";
 import { providersNeedingSignIn } from "./connectionsLogic";
 
 const run = (state: Run["state"], over: Partial<Run> = {}) => ({ id: "r1", state, shortId: state === "queued" ? null : "1000a000", runsOn: { instanceId: "claude_2", model: "sonnet" }, ...over }) as Run;
-const work = { name: "Claude work", signIn: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login" };
+const work = { name: "Claude work", driver: "claude" as const, signIn: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login" };
 
 describe("what a run runs on", () => {
   it("says Runs on for a queued run and Ran on once it has started", () => {
@@ -30,7 +30,7 @@ describe("what a run runs on", () => {
       { kind: "provider", instanceId: "claude_2", displayName: "Claude work", driver: "claude", configDir: "~/.claude-work" },
     ] as ConnectionInfo[];
     expect(instanceOf(rows, "claude_2")).toEqual(work);
-    expect(instanceOf(rows, "claude")).toEqual({ name: "Claude", signIn: null });
+    expect(instanceOf(rows, "claude")).toEqual({ name: "Claude", driver: "claude", signIn: null });
     expect(instanceOf(rows, "gone").name).toBe("gone");
   });
 

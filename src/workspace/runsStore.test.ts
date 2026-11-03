@@ -3,6 +3,8 @@ import { MockBackend } from "../backend/mock";
 import type { Backend } from "../backend/types";
 import { itemRef } from "../backend/mockConnector";
 import { NO_FILTERS, agentGroups } from "./agentsLogic";
+import { useWorkspace } from "../workspaceStore";
+import type { ConnectionInfo, Run } from "../types";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -358,6 +360,15 @@ describe("the run sheet", () => {
       expect(useToasts.getState().toasts[0].text).toMatch(/^It failed again: /);
     });
 
+    it("names Codex in the toast when a Codex run is still not signed in after a retry", async () => {
+      const run = await failing("notSignedIn");
+      await s().fix(run.id, "terminal");
+      useWorkspace.setState({ connections: [{ kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo] });
+      vi.spyOn(backend, "runsRetryLaunch").mockResolvedValueOnce({ ...run, state: "failed", runsOn: { instanceId: "codex" }, failure: { type: "notSignedIn" } } as typeof run);
+      await s().retryLaunch(run.id);
+      expect(useToasts.getState().toasts[0].text).toContain("Codex isn't signed in.");
+    });
+
     it("counts copying the command as taking the step, since that is how someone uses their own terminal", async () => {
       const run = await failing("untrustedFolder");
       s().noteCopied(run.id);
@@ -369,6 +380,29 @@ describe("the run sheet", () => {
       const open = vi.spyOn(backend, "openUrl");
       await s().fix(run.id, "install");
       expect(open).toHaveBeenCalledWith("https://code.claude.com/docs/en/setup");
+    });
+
+    it("opens Codex's install page for a missing Codex", async () => {
+      const run = await failing("claudeMissing");
+      s().runs = s().runs.map((r) => (r.id === run.id ? { ...r, runsOn: { instanceId: "codex", model: "default" } } : r));
+      useWorkspace.setState({ connections: [{ kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo] });
+      const open = vi.spyOn(backend, "openUrl");
+      await s().fix(run.id, "install");
+      expect(open).toHaveBeenCalledWith("https://developers.openai.com/codex/cli");
+      useWorkspace.setState({ connections: [] });
+    });
+
+    it("opens the instance's own sign-in, not the run's folder, for a Codex run that is not signed in", async () => {
+      const run = await failing("untrustedFolder");
+      s().runs = s().runs.map((r) => (r.id === run.id ? { ...r, failure: { type: "notSignedIn" }, runsOn: { instanceId: "codex", model: "default" } } as Run : r));
+      useWorkspace.setState({ connections: [{ kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo] });
+      const login = vi.spyOn(backend, "connectionOpenTerminal").mockResolvedValue();
+      const signIn = vi.spyOn(backend, "runsSignIn");
+      await s().fix(run.id, "terminal");
+      expect(login).toHaveBeenCalledWith("codex");
+      expect(signIn).not.toHaveBeenCalled();
+      expect(s().terminalOpened.has(run.id)).toBe(true);
+      useWorkspace.setState({ connections: [] });
     });
 
     it("keeps every failure, a folder to trust among them, waiting on the person until it is dismissed", async () => {
