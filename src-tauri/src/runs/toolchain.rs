@@ -34,7 +34,7 @@ impl Toolchain {
     /// names the right login. `files` is where the backend keeps each run's MCP file.
     pub fn for_login(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>, id: &str, name: &str, login: Option<ProviderEnv>, files: PathBuf) -> Self {
         let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
-        let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), files, name.into(), own_folder));
+        let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), files, id.into(), name.into(), own_folder));
         Self { cli, backend, env, instance_id: id.into(), instance_name: name.into(), login }
     }
 

@@ -3,9 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
-use super::cli::ShortId;
+use super::cli::{AgentEntry, ShortId, TimelineLine};
 use super::failure::Failure;
+use super::state::Observed;
 use crate::domain::Run;
 use crate::error::Error;
 
@@ -86,6 +88,58 @@ impl From<BackendError> for Error {
     }
 }
 
+/// The folders a backend keeps a login's session files in. Both are none for a backend that has no such files.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Folders {
+    pub config_dir: Option<PathBuf>,
+    pub projects_dir: Option<PathBuf>,
+}
+
+impl Folders {
+    pub fn is_empty(&self) -> bool {
+        self.config_dir.is_none() && self.projects_dir.is_none()
+    }
+}
+
+/// A run to look at, with what the last looks counted.
+#[derive(Debug, Clone)]
+pub struct Watched {
+    pub run: Run,
+    /// Consecutive looks a working session had no process.
+    pub misses: u32,
+    /// Consecutive looks a working session was idle after a finished turn.
+    pub idle: u32,
+    /// The question of an `ask` call the run is held in, if any.
+    pub ask: Option<String>,
+}
+
+/// What a backend saw of one run. Words are raw: the service redacts and caps them before it stores them.
+#[derive(Debug, Clone)]
+pub struct Observation {
+    pub run_id: String,
+    pub seen: Observed,
+    /// The run's session when the backend lists one.
+    pub session: Option<Session>,
+    pub tokens: Option<u64>,
+    pub detail: Option<String>,
+    pub branch: Option<String>,
+    pub progress_at: Option<DateTime<Utc>>,
+    pub suggested_reply: Option<String>,
+    pub timeline: Vec<TimelineLine>,
+    /// The final answer, read only for a run seen done.
+    pub answer: Option<String>,
+    /// A run at rest whose session is working or asking again.
+    pub revived: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Observations {
+    /// One for each watched run that has anything to apply; a run at rest that has not been revived has none.
+    pub runs: Vec<Observation>,
+    /// Every session the backend lists, for finding the continuation of a run at rest. Empty when it lists none.
+    pub sessions: Vec<AgentEntry>,
+}
+
 #[async_trait]
 pub trait RunBackend: Send + Sync {
     /// Whether a session can start in `clone`: everything that depends on the program and the login, checked before
@@ -96,7 +150,19 @@ pub trait RunBackend: Send + Sync {
     fn binary(&self) -> Option<PathBuf> {
         None
     }
+    /// Where this login keeps its session files. Asked once per instance.
+    async fn folders(&self) -> Folders;
+    /// One look at `watched`, all runs of one instance, at the time `now`.
+    async fn observe(&self, watched: &[Watched], dirs: &Folders, now: DateTime<Utc>) -> BackendResult<Observations>;
+    /// The session a run has, if the backend knows one.
+    async fn find(&self, run: &Run, dirs: &Folders) -> BackendResult<Option<Session>>;
+    /// The last message of a run's session, read now.
+    async fn final_answer(&self, run: &Run, dirs: &Folders) -> Option<String>;
+    /// Every session the backend can list. A backend with no listing gives none.
+    async fn listed_sessions(&self) -> BackendResult<Vec<AgentEntry>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

@@ -5,17 +5,18 @@
 //! taken from them is redacted and capped before it is stored. Sessions that match no run are ignored.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Timelike, Utc};
 
 use super::notices::{stuck_runs, Key, Need, Outgoing, Settings as NoticeSettings, Waiting, GENERAL};
-use super::cli::{AgentEntry, JobInfo, ShortId};
+use super::backend::{Observation, Watched};
+use super::cli::TimelineLine;
 use super::redact::redact;
-use super::service::{belongs_to, RunService};
-use super::state::{self, map_state, parse_at, progress_at};
+use super::service::RunService;
+use super::state::{self, parse_at};
 use super::toolchain::Toolchain;
 use crate::db::connection_of;
 use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState, StateKind};
@@ -25,9 +26,6 @@ pub const POLL_BUSY: Duration = Duration::from_secs(4);
 pub const POLL_IDLE: Duration = Duration::from_secs(30);
 /// A finished run is watched this long after it ended, in case its session is still open and the person carries on.
 const WATCH_FINISHED: chrono::Duration = chrono::Duration::hours(6);
-/// A stopped run's session is listed as stopped within seconds, but until then it can still look alive; it is not
-/// taken for a session that carried on before this long has passed.
-const STOPPED_SETTLE: chrono::Duration = chrono::Duration::seconds(60);
 /// Focusing the window this soon after a notification opens the run it was about.
 pub const OPEN_WINDOW: Duration = Duration::from_secs(30);
 
@@ -70,30 +68,7 @@ impl RunNotifier for NoNotices {
     fn notify(&self, _run: &Run, _why: Attention) {}
 }
 
-/// A session whose process is alive and that is not at rest, the only kind a finished run can be taken up by again.
-fn is_active(entry: &AgentEntry) -> bool {
-    entry.pid.is_some() && matches!(entry.state.as_deref(), Some("working" | "blocked")) && entry.status.as_deref() != Some("idle")
-}
-
-/// Whether the session listed for a run at rest has started working or asking again. A finished run only counts a
-/// session that is not at its prompt; a stopped one also counts a session waiting on a question, which Claude lists as
-/// idle. Gossamr's own answer in flight (`unsent_answer`) and a stop that is still settling don't count.
-pub(super) fn revived(entry: &AgentEntry, run: &Run, now: DateTime<Utc>) -> bool {
-    match run.state {
-        RunState::Done => is_active(entry),
-        RunState::Stopped => {
-            let settled = run.ended_at.is_some_and(|at| now - at >= STOPPED_SETTLE);
-            let alive = entry.pid.is_some()
-                && match entry.state.as_deref() {
-                    Some("blocked") => true,
-                    Some("working") => entry.status.as_deref() != Some("idle"),
-                    _ => false,
-                };
-            settled && alive && run.unsent_answer.is_none()
-        }
-        _ => false,
-    }
-}
+pub(super) use super::backend::claude::revived;
 
 fn topic(run: &Run) -> &str {
     run.item.as_ref().map_or_else(|| run.spec.repo.as_str(), |i| i.key.as_str())
@@ -157,9 +132,9 @@ pub(super) fn cleaned_answer(s: &str) -> Option<String> {
 }
 
 /// The timeline as events, in order. Redacted and cut here, so a line compares equal to the event stored from it.
-fn events_of(run: &Run, job: &JobInfo) -> Vec<RunEvent> {
+fn events_of(run: &Run, timeline: &[TimelineLine]) -> Vec<RunEvent> {
     let mut at = run.launched_at.unwrap_or(run.queued_at);
-    job.timeline
+    timeline
         .iter()
         .filter_map(|line| {
             // A line without a time keeps the last line's, so the same timeline always gives the same events.
@@ -245,20 +220,26 @@ impl RunService {
         let mut changed = HashSet::new();
         for group in by_instance.into_values() {
             let Ok(tc) = self.observing_toolchain_of(group[0]).await else { continue };
-            let Ok(entries) = tc.cli.agents(true).await else { continue };
-            let config_dir = self.claude_config_dir(&tc).await;
+            let dirs = self.folders_of(&tc).await;
+            let mut watched = self.watched(&group).await;
+            let Ok(mut seen) = tc.backend.observe(&watched, &dirs, now).await else { continue };
             let resting: Vec<Run> = group.iter().filter(|r| finished.iter().any(|f| f.id == r.id)).map(|r| (*r).clone()).collect();
-            busy |= resting.iter().any(|r| entries.iter().any(|e| belongs_to(e, &tc.instance_id, r) && revived(e, r, now)));
-            for id in self.adopt_continuations(&tc.instance_id, &entries, &resting, now).await {
-                changed.insert(id);
+            busy |= resting.iter().any(|r| seen.runs.iter().any(|o| o.run_id == r.id && o.revived));
+            let adopted = self.adopt_continuations(&tc.instance_id, &seen.sessions, &resting, now).await;
+            if !adopted.is_empty() {
+                // A run taken over by a continuation is looked at again as its new session.
+                watched = self.watched(&group).await;
+                seen.runs = tc.backend.observe(&watched, &dirs, now).await.map(|again| again.runs).unwrap_or_default();
             }
-            for listed in group {
-                match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
+            changed.extend(adopted);
+            for w in watched {
+                let Some(obs) = seen.runs.iter().find(|o| o.run_id == w.run.id) else { continue };
+                match self.track(w.run, obs, now).await {
                     Ok(Some(connection_id)) => {
                         changed.insert(connection_id);
                     }
                     Ok(None) => {}
-                    Err(e) => eprintln!("couldn't track run {}: {e}", listed.id),
+                    Err(e) => eprintln!("couldn't track run {}: {e}", obs.run_id),
                 }
             }
         }
@@ -398,51 +379,52 @@ impl RunService {
         done.into_iter().filter(|r| r.short_id.is_some() && r.worktree_removed_at.is_none() && r.ended_at.is_some_and(|at| now - at <= WATCH_FINISHED)).collect()
     }
 
-    /// `jobs/<id>` lives under the config directory `claude auth status` reports, never a hard-coded `~/.claude`.
-    pub(super) async fn claude_config_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
-        if let Some(known) = self.config_dir.lock().expect("config dir lock poisoned").get(&tc.instance_id) {
-            return Some(known.clone());
-        }
-        let found = tc.cli.auth_status().await.ok()?.config_directory?;
-        self.config_dir.lock().expect("config dir lock poisoned").insert(tc.instance_id.clone(), found.clone());
-        Some(found)
-    }
-
-    /// A run whose agent waits in its `ask` call reads as asking, with that question, whatever the session is listed as
-    /// doing: it is working as far as Claude can tell. A run that ended while it waited has nobody left to answer.
-    fn with_pending_ask(&self, run_id: &str, mut seen: state::Observed) -> state::Observed {
-        let asks = self.core.asks();
-        match (asks.question(run_id), seen.state) {
-            (Some(question), RunState::Working) => {
-                seen.state = RunState::NeedsAnswer;
-                seen.text = Some(question);
-                seen.idle_polls = 0;
+    /// The runs of `group` as they are now, with what earlier looks counted. A failed run and one whose worktree is gone
+    /// are left out.
+    async fn watched(&self, group: &[&Run]) -> Vec<Watched> {
+        let mut out = Vec::new();
+        for listed in group {
+            let run = match self.core.run(&listed.id).await {
+                Ok(Some(run)) => run,
+                Ok(None) => continue,
+                Err(e) => {
+                    eprintln!("couldn't track run {}: {e}", listed.id);
+                    continue;
+                }
+            };
+            if run.state == RunState::Failed || run.worktree_removed_at.is_some() {
+                continue;
             }
-            (Some(_), RunState::Done | RunState::Failed | RunState::Stopped) => asks.cancel(run_id),
-            _ => {}
+            let misses = self.misses.lock().expect("misses lock poisoned").get(&run.id).copied().unwrap_or(0);
+            let idle = self.idle_polls.lock().expect("idle polls lock poisoned").get(&run.id).copied().unwrap_or(0);
+            let ask = self.core.asks().question(&run.id);
+            out.push(Watched { run, misses, idle, ask });
         }
-        seen
+        out
     }
 
-    /// Applies one run's observation. Returns its connection when anything about it changed.
-    async fn track(&self, tc: &Toolchain, config_dir: Option<&Path>, entries: &[AgentEntry], run_id: &str, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
-        let Some(before) = self.core.run(run_id).await? else { return Ok(None) };
-        if before.state == RunState::Failed || before.worktree_removed_at.is_some() {
-            return Ok(None);
+    /// `jobs/<id>` lives under the config directory the login's backend reports, never a hard-coded `~/.claude`.
+    pub(super) async fn claude_config_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
+        self.folders_of(tc).await.config_dir
+    }
+
+    /// A run whose agent waits in its `ask` call reads as asking, whatever backend watches it. A run that ended while
+    /// it waited has nobody left to answer.
+    fn with_pending_ask(&self, run_id: &str, seen: state::Observed) -> state::Observed {
+        let asks = self.core.asks();
+        let question = asks.question(run_id);
+        if question.is_some() && matches!(seen.state, RunState::Done | RunState::Failed | RunState::Stopped) {
+            asks.cancel(run_id);
         }
-        let entry = entries.iter().find(|e| belongs_to(e, &tc.instance_id, &before));
+        state::with_ask(seen, question.as_deref())
+    }
+
+    /// Applies one run's observation to `before`, the run as it is now. Returns its connection when anything about it
+    /// changed.
+    async fn track(&self, before: Run, obs: &Observation, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
+        let run_id = before.id.as_str();
         let finished = matches!(before.state, RunState::Done | RunState::Stopped);
-        if finished && !entry.is_some_and(|e| revived(e, &before, now)) {
-            return Ok(None);
-        }
-        let short = before.short_id.clone().or_else(|| entry.and_then(|e| e.id.as_deref().and_then(ShortId::parse)));
-        let job = match (entry, config_dir, &short) {
-            (Some(_), Some(dir), Some(id)) => tc.cli.job(dir, id).await.ok().flatten(),
-            _ => None,
-        };
-        let misses = self.misses.lock().expect("misses lock poisoned").get(run_id).copied().unwrap_or(0);
-        let idle = self.idle_polls.lock().expect("idle polls lock poisoned").get(run_id).copied().unwrap_or(0);
-        let seen = self.with_pending_ask(run_id, map_state(entry, job.as_ref(), &before, now, misses, idle));
+        let seen = self.with_pending_ask(run_id, obs.seen.clone());
         for (counts, n) in [(&self.misses, seen.pid_misses), (&self.idle_polls, seen.idle_polls)] {
             let mut all = counts.lock().expect("run counts lock poisoned");
             if n > 0 {
@@ -458,16 +440,14 @@ impl RunService {
         }
 
         let mut run = before.clone();
-        if let Some(entry) = entry {
-            run.short_id = run.short_id.take().or(short);
-            run.session_id = run.session_id.take().or_else(|| entry.session_id.clone());
+        if let Some(session) = &obs.session {
+            run.short_id = run.short_id.take().or_else(|| Some(session.short_id.clone()));
+            run.session_id = run.session_id.take().or_else(|| session.session_id.clone());
         }
-        if let Some(job) = &job {
-            run.last_progress_at = progress_at(&before, job, now);
-            run.tokens = job.tokens.or(run.tokens);
-            run.last_detail = job.detail.as_deref().and_then(|d| cleaned(d, DETAIL_KEPT)).or(run.last_detail.take());
-            run.branch = job.worktree_branch.clone().or(run.branch.take());
-        }
+        run.last_progress_at = obs.progress_at.unwrap_or(run.last_progress_at);
+        run.tokens = obs.tokens.or(run.tokens);
+        run.last_detail = obs.detail.as_deref().and_then(|d| cleaned(d, DETAIL_KEPT)).or(run.last_detail.take());
+        run.branch = obs.branch.clone().or(run.branch.take());
         // An Unknown run restarts its unlisted clock when the reason changes, so a listed odd state doesn't count.
         let reason_changed = seen.state == RunState::Unknown && seen.error != before.error;
         if seen.state != before.state || reason_changed {
@@ -485,12 +465,12 @@ impl RunService {
         };
         run.asking = seen.state == RunState::NeedsAnswer && self.core.asks().question(run_id).is_some();
         run.suggested_reply = match seen.state {
-            RunState::NeedsAnswer => job.as_ref().and_then(|j| j.suggested_reply.as_deref()).and_then(|r| cleaned(r, REPLY_KEPT)),
+            RunState::NeedsAnswer => obs.suggested_reply.as_deref().and_then(|r| cleaned(r, REPLY_KEPT)),
             _ => None,
         };
         if seen.state == RunState::Done {
             run.summary = seen.result.as_deref().and_then(|r| cleaned(r, SUMMARY_KEPT));
-            let answer = self.read_answer(tc, &run, entry, job.as_ref()).await.and_then(|a| cleaned_answer(&a));
+            let answer = obs.answer.as_deref().and_then(cleaned_answer);
             run.result_complete = answer.is_some();
             run.result = answer.or_else(|| run.summary.clone());
         }
@@ -501,9 +481,9 @@ impl RunService {
         }
 
         let mut touched = false;
-        if let Some(job) = &job {
+        if !obs.timeline.is_empty() {
             let stored = self.core.run_events(run_id).await?;
-            let fresh = unseen(events_of(&run, job), stored.last());
+            let fresh = unseen(events_of(&run, &obs.timeline), stored.last());
             if !fresh.is_empty() {
                 touched = self.core.append_run_events(run_id, &fresh).await? > 0;
             }

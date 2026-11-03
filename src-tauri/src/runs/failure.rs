@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use super::backend::BackendError;
 use super::cli::CliError;
 use super::fresh::{tilde, CloneError};
 use super::toolchain::ToolchainError;
@@ -95,6 +96,15 @@ impl From<&Failure> for RunFailure {
 }
 
 impl Failure {
+    /// What a failed look at the program's sessions means.
+    pub fn from_backend(e: BackendError, instance: &str) -> Self {
+        match e {
+            BackendError::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
+            BackendError::Failed { stderr, .. } => Failure::CommandFailed(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message").to_owned()),
+            other => Failure::CommandFailed(other.to_string()),
+        }
+    }
+
     /// What a failed `claude` call means. `folder` is where the launch ran; `instance` and `own_folder` are the login it ran as.
     pub fn from_cli(e: CliError, folder: &std::path::Path, instance: &str, own_folder: bool) -> Self {
         if e.stderr_mentions("Workspace not trusted") {

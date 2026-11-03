@@ -1,4 +1,5 @@
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Mutex;
 
 use super::*;
@@ -6,7 +7,7 @@ use crate::domain::fixtures::run_spec;
 use crate::domain::{RunFailure, RunSpec};
 use crate::codehost::github::testserver::{pull_reply, Reply};
 use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
-use crate::runs::cli::{ClaudeCli, LaunchRequest, SystemCli};
+use crate::runs::cli::{AgentEntry, ClaudeCli, LaunchRequest, SystemCli};
 use crate::runs::env::RunEnv;
 use crate::runs::repo::testing::{clone_with_origin, install_fake_git};
 use crate::runs::testing::{FakeCli, Outcome};
@@ -1431,4 +1432,36 @@ async fn recovery_adopts_a_launching_run_on_a_login_that_is_turned_off() {
     svc.recover().await;
     let adopted = rig.get(&run).await;
     assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str)), (RunState::Launching, Some("0c0ffee1")));
+}
+
+#[tokio::test]
+async fn recovery_adopts_the_session_a_backend_finds_and_fails_the_rest() {
+    use crate::runs::backend::tests::Recorder;
+    use crate::runs::backend::Session;
+    use crate::runs::rig::backed_by;
+    let backend = Arc::new(Recorder::default());
+    let rig = build(None, backed_by(backend.clone())).await;
+    let rig_ref = &rig;
+    let launching = |n: u32| async move {
+        let run = rig_ref.queued(n).await;
+        rig_ref.set(&run, |r| {
+            r.state = RunState::Launching;
+            r.launched_at = Some(Utc::now());
+        })
+        .await
+    };
+    let first = launching(1).await;
+    *backend.found.lock().unwrap() = Some(Session { short_id: ShortId::parse("0c0ffee1").unwrap(), session_id: Some("thread-9".into()), process: None });
+    rig.svc.recover().await;
+    let adopted = rig.get(&first).await;
+    assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str), adopted.session_id.as_deref()), (RunState::Launching, Some("0c0ffee1"), Some("thread-9")));
+    assert_eq!(rig.live(), vec![first.id.clone()]);
+
+    *backend.found.lock().unwrap() = None;
+    let second = launching(2).await;
+    rig.svc.recover().await;
+    let failed = rig.get(&second).await;
+    assert_eq!((failed.state, failed.short_id), (RunState::Failed, None));
+    assert!(backend.searched.lock().unwrap().contains(&second.id));
+    assert_eq!(rig.cli.0.lock().unwrap().listings, 0, "claude was never asked");
 }
