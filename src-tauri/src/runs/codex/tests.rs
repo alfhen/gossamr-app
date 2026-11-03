@@ -1280,7 +1280,7 @@ mod control {
 
     #[tokio::test]
     async fn cleaning_up_a_codex_run_removes_its_worktree_branch_folder_and_saved_session() {
-        let s = Svc::new("cleanup", 21, "").await.finished().await;
+        let s = Svc::new("cleanup", 26, "").await.finished().await;
         assert_eq!(s.get().await.state, RunState::Done);
         assert!(s.codex.worktree().is_dir() && s.folder().is_dir());
 
@@ -1296,7 +1296,7 @@ mod control {
 
     #[tokio::test]
     async fn unpushed_codex_work_keeps_its_worktree_in_git_s_words() {
-        let s = Svc::new("unpushed", 22, "").await.finished().await;
+        let s = Svc::new("unpushed", 27, "").await.finished().await;
         std::fs::write(s.codex.worktree().join("change"), "work").unwrap();
         git(&s.codex.worktree(), &["add", "change"]);
         git(&s.codex.worktree(), &["commit", "-q", "-m", "work"]);
