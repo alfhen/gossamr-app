@@ -133,6 +133,25 @@ describe("a conversation asked with a second-site ticket open", () => {
     expect(read).toEqual(["beta:general"]);
     expect(useClaude.getState().byTicket.general.turns.map((t) => t.prompt)).toEqual(["in general"]);
   });
+
+  it("reads the model a started turn runs on from the key it was stored under", async () => {
+    keep();
+    await useClaude.getState().ask("general", "in general", null, open);
+    const id = useClaude.getState().byTicket.general.turns[0].requestId;
+    const model = { instanceId: "claude", model: "opus", effort: "medium" };
+    vi.spyOn(claude, "turns").mockImplementation(async (key) => (key === "beta:general" ? [stored(id, { conversation: key, model })] : []));
+    onClaudeEvent(id, { type: "started", sessionId: "s1" });
+    await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns[0].model).toEqual(model));
+  });
+
+  it("replaces a restored turn's answer with the one stored under the connection-qualified key when it ends", async () => {
+    const running = stored("r1", { conversation: "beta:general", text: "Half", status: "running" });
+    const turns = vi.spyOn(claude, "turns").mockImplementation(async (key) => (key === "beta:general" ? [running] : []));
+    await useClaude.getState().load("general", "beta");
+    turns.mockImplementation(async (key) => (key === "beta:general" ? [{ ...running, text: "Half of the answer.", status: "done" }] : []));
+    onClaudeEvent("r1", { type: "done", sessionId: null, ok: true, message: null });
+    await vi.waitFor(() => expect(useClaude.getState().byTicket.general.turns[0]).toMatchObject({ status: "done", text: "Half of the answer." }));
+  });
 });
 
 const usage = { inputTokens: 120, outputTokens: 30, cacheCreationTokens: 0, cacheReadTokens: 8, costUsd: 0.0008 };
