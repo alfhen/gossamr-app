@@ -46,6 +46,19 @@ describe("the mock GitHub connection", () => {
     expect((await new MockBackend({ githubRepos: 6 }).connectionsList())[0].status).toBeNull();
   });
 
+  it("reports a fresh check on an account that was just connected", async () => {
+    vi.useFakeTimers();
+    try {
+      const b = new MockBackend();
+      vi.advanceTimersByTime(10 * 60_000);
+      await b.githubConnect();
+      const status = (await b.connectionsList()).find((c) => c.kind === "github")!.status!;
+      expect(Date.now() - Date.parse(status.checkedAt)).toBeLessThan(1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("tells the page when the probe finds something new, and asking again moves the checked time", async () => {
     const b = new MockBackend({ githubRepos: 6 });
     const heard = vi.fn();
