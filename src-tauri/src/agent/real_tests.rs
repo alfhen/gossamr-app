@@ -31,6 +31,7 @@ async fn real_pip_turn_calls_start_agent_for_an_investigation_in_its_workstream(
         conversation: format!("{}{}", super::WORKSTREAM_PREFIX, ws.id),
         meta: None,
         model: None,
+        connection_id: None,
         event: None,
     };
     svc.ask(ask, Arc::new(move |u| seen.lock().unwrap().push(u.event))).await.expect("the turn starts");

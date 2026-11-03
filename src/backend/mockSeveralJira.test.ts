@@ -4,6 +4,9 @@ import type { ItemRef, ScreenContext } from "../types";
 import type { Intent } from "../types";
 import { MockBackend } from "./mock";
 import { scriptPip } from "./mockPip";
+import { mockPipTurns } from "./mockPipTurns";
+import { mockQueueAsk, mockQueueCancel } from "./mockPipQueue";
+import type { AskRequest } from "./claude";
 
 const ref = (connectionId: string, key: string): ItemRef => ({ connectionId, externalId: key, key });
 const acme = (key: string) => ref("mock", key);
@@ -225,14 +228,60 @@ describe("the scripted Pip and a key that two sites have", () => {
     expect(s.rewrite?.item).toEqual(beta("CA-402"));
   });
 
-  it("starts an agent on the key in the selection's site when no ticket is open", () => {
+  it("does not let a selection pick the site: a typed key falls to the first site", () => {
     const s = scriptPip("start an agent to investigate CA-402", context(null, [beta("OPS-3")]));
-    expect(s.start?.item).toEqual(beta("CA-402"));
+    expect(s.start?.item).toEqual(acme("CA-402"));
+    const moved = scriptPip("move CA-402 to Working", context(null, [beta("CA-402")]));
+    expect(moved.draft?.intent).toMatchObject({ item: acme("CA-402") });
   });
 
   it("falls back to the first site when nothing says which", () => {
     const s = scriptPip("move CA-402 to Copy", context(null));
     expect(s.draft?.intent).toMatchObject({ item: acme("CA-402") });
+  });
+
+  it("takes a typed key from the site picked in the drawer when no ticket is open, and the open ticket's site before it", () => {
+    const picked = scriptPip("move CA-402 to Working", context(null), [], [], 0, [], null, null, "mock2");
+    expect(picked.draft?.intent).toMatchObject({ item: beta("CA-402") });
+    const open = scriptPip("move CA-402 to Copy", context(acme("CA-401")), [], [], 0, [], null, null, "mock2");
+    expect(open.draft?.intent).toMatchObject({ item: acme("CA-402") });
+  });
+
+  it("refuses a question that names a connection which is off or gone, and records nothing", async () => {
+    const b = new MockBackend({ jira: 2, githubRepos: 6 });
+    await b.connectionSetEnabled("jira_2", false);
+    const asked = (id: string, connectionId: string, item: ItemRef | null = null) =>
+      mockQueueAsk({ requestId: id, prompt: "Hi", sessionId: null, context: context(item), conversation: "general", connectionId }, b, 1);
+    expect(() => asked("q1", "mock2")).toThrow("off or gone");
+    expect(() => asked("q2", "mock9")).toThrow("off or gone");
+    expect(() => asked("q3", "mock", beta("OPS-1"))).toThrow("off or gone");
+    expect(mockPipTurns.turns("general")).toEqual([]);
+    expect(asked("q4", "mock")).toEqual({ queued: false, ahead: 0 });
+    mockQueueCancel("q4");
+  });
+
+  it("keeps a conversation per site: a bare name is the first site's, and a turn is kept under the site it ran on, the open ticket's before the one the conversation names", () => {
+    mockPipTurns.clear();
+    const b = new MockBackend({ jira: 2, githubRepos: 6 });
+    const ask = (id: string, over: Partial<AskRequest>) => mockQueueAsk({ requestId: id, prompt: "Hi", sessionId: null, context: context(null), conversation: "general", ...over }, b, 1);
+    ask("a", {});
+    ask("b", { connectionId: "mock2" });
+    ask("c", { context: context(beta("OPS-1")), conversation: "general" });
+    ask("d", { conversation: "mock2:general", context: context(acme("CA-401")) });
+    const ids = (conversation: string) => mockPipTurns.turns(conversation).map((t) => t.requestId);
+    expect(ids("general")).toEqual(["a", "d"]);
+    expect(ids("mock:general")).toEqual(["a", "d"]);
+    expect(ids("mock2:general")).toEqual(["b", "c"]);
+    expect(mockPipTurns.conversationOf("d")).toBe("mock:general");
+    for (const id of ["a", "b", "c", "d"]) mockQueueCancel(id);
+  });
+
+  it("keeps a typed-key turn on the site the drawer picked in its conversation id, which a resumed turn is asked again with", () => {
+    mockPipTurns.clear();
+    const b = new MockBackend({ jira: 2, githubRepos: 6 });
+    mockQueueAsk({ requestId: "r", prompt: "move CA-402 to Working", sessionId: null, context: context(null), conversation: "general", connectionId: "mock2" }, b, 1);
+    expect(mockPipTurns.conversationOf("r")).toBe("mock2:general");
+    mockQueueCancel("r");
   });
 });
 

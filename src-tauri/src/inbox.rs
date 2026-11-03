@@ -33,6 +33,7 @@ mod provider_probes;
 mod providers;
 mod run_outcome;
 mod pip_model;
+mod pip_scope;
 mod pip_runs;
 mod pip_turns;
 mod report;
@@ -918,11 +919,11 @@ impl Core {
     pub async fn remember_claude_session(&self, scope: &Scope, key: Option<&str>, session_id: &str, instance_id: &str) -> Result<()> {
         self.with_app_db_for(scope, |db| {
             if let Some(key) = key {
-                db.set_app_meta(&format!("claude:{key}"), &serde_json::json!({ "id": session_id, "instance": instance_id }).to_string())?;
+                db.set_app_meta(&format!("claude:{}:{key}", scope.connection_id), &serde_json::json!({ "id": session_id, "instance": instance_id }).to_string())?;
             }
             let mut own = OwnSession::list(db.app_meta(PIP_SESSIONS)?);
             own.retain(|s| s.id() != session_id);
-            own.insert(0, OwnSession::On { id: session_id.to_string(), instance: instance_id.to_string() });
+            own.insert(0, OwnSession::On { id: session_id.to_string(), instance: instance_id.to_string(), connection: Some(scope.connection_id.clone()) });
             own.truncate(OWN_SESSIONS_KEPT);
             db.set_app_meta(PIP_SESSIONS, &serde_json::to_string(&own)?)
         })
@@ -931,23 +932,30 @@ impl Core {
 
     /// Whether Pip started `session_id` on `instance_id` in its sandbox folder, which is the only place it can be resumed
     /// from: one of the last sessions it started, or the session of an open workstream, which stays resumable however long
-    /// it runs. A Claude session lives in the login folder that wrote it, so another instance never resumes it.
-    pub async fn is_pip_session(&self, session_id: &str, instance_id: &str) -> Result<bool> {
+    /// it runs. A Claude session lives in the login folder that wrote it, so another instance never resumes it, and it
+    /// remembers the tickets it read, so a turn on another Jira connection never resumes it either.
+    pub async fn is_pip_session(&self, session_id: &str, instance_id: &str, connection_id: &str) -> Result<bool> {
         self.with_app_db(|db| {
             let own = OwnSession::list(db.app_meta(PIP_SESSIONS)?);
-            Ok(own.iter().any(|s| s.id() == session_id && s.instance() == Some(instance_id)) || db.is_open_workstream_session(session_id, instance_id)?)
+            let started_here = own.iter().any(|s| s.id() == session_id && s.instance() == Some(instance_id) && s.connection() == Some(connection_id));
+            Ok(started_here || db.is_open_workstream_session(session_id, instance_id, connection_id)?)
         })
         .await
     }
 }
 
 /// A session Pip started. A list entry from before instances is a bare id and resumes on no instance: the default's login
-/// folder may not be the one that wrote it.
+/// folder may not be the one that wrote it. One from before Jira connections had a say has no connection and resumes on none.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum OwnSession {
     Legacy(String),
-    On { id: String, instance: String },
+    On {
+        id: String,
+        instance: String,
+        #[serde(default)]
+        connection: Option<String>,
+    },
 }
 
 impl OwnSession {
@@ -965,6 +973,13 @@ impl OwnSession {
         match self {
             Self::Legacy(_) => None,
             Self::On { instance, .. } => Some(instance),
+        }
+    }
+
+    fn connection(&self) -> Option<&str> {
+        match self {
+            Self::Legacy(_) => None,
+            Self::On { connection, .. } => connection.as_deref(),
         }
     }
 }
@@ -996,24 +1011,26 @@ mod tests {
             .with_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"old-1","cwd":"/Users/me/code/app"}"#))
             .await
             .unwrap();
-        assert!(!fx.core.is_pip_session("old-1", "claude").await.unwrap());
+        assert!(!fx.core.is_pip_session("old-1", "claude", &fx.scope.connection_id).await.unwrap());
 
         fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "new-1", "claude").await.unwrap();
         fx.core.remember_claude_session(&fx.scope, None, "ws-1", "claude").await.unwrap();
-        assert!(fx.core.is_pip_session("new-1", "claude").await.unwrap() && fx.core.is_pip_session("ws-1", "claude").await.unwrap());
-        assert!(!fx.core.is_pip_session("old-1", "claude").await.unwrap());
+        assert!(fx.core.is_pip_session("new-1", "claude", &fx.scope.connection_id).await.unwrap() && fx.core.is_pip_session("ws-1", "claude", &fx.scope.connection_id).await.unwrap());
+        assert!(!fx.core.is_pip_session("new-1", "claude", "jira:beta:bo").await.unwrap(), "a session read one site's tickets, so another site's turn doesn't resume it");
+        assert!(!fx.core.is_pip_session("old-1", "claude", &fx.scope.connection_id).await.unwrap());
     }
 
     #[tokio::test]
     async fn a_session_resumes_only_on_the_instance_that_started_it_and_an_old_entry_resumes_on_none() {
         let fx = super::testing::fixture().await;
-        fx.core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["legacy-1"]"#)).await.unwrap();
+        fx.core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"["legacy-1",{"id":"no-connection","instance":"claude_2"}]"#)).await.unwrap();
         fx.core.remember_claude_session(&fx.scope, Some("CA-1"), "work-1", "claude_2").await.unwrap();
-        assert!(!fx.core.is_pip_session("legacy-1", "claude").await.unwrap());
-        assert!(!fx.core.is_pip_session("legacy-1", "claude_2").await.unwrap());
-        assert!(fx.core.is_pip_session("work-1", "claude_2").await.unwrap());
-        assert!(!fx.core.is_pip_session("work-1", "claude").await.unwrap());
-        let kept = fx.core.with_app_db(|db| db.app_meta("claude:CA-1")).await.unwrap().unwrap();
+        assert!(!fx.core.is_pip_session("legacy-1", "claude", &fx.scope.connection_id).await.unwrap());
+        assert!(!fx.core.is_pip_session("legacy-1", "claude_2", &fx.scope.connection_id).await.unwrap());
+        assert!(!fx.core.is_pip_session("no-connection", "claude_2", &fx.scope.connection_id).await.unwrap());
+        assert!(fx.core.is_pip_session("work-1", "claude_2", &fx.scope.connection_id).await.unwrap());
+        assert!(!fx.core.is_pip_session("work-1", "claude", &fx.scope.connection_id).await.unwrap());
+        let kept = fx.core.with_app_db(|db| db.app_meta("claude:jira:site:me:CA-1")).await.unwrap().unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&kept).unwrap(), serde_json::json!({ "id": "work-1", "instance": "claude_2" }));
     }
 
@@ -1027,12 +1044,12 @@ mod tests {
         for n in 0..60 {
             fx.core.remember_claude_session(&fx.scope, None, &format!("other-{n}"), "claude").await.unwrap();
         }
-        assert!(fx.core.is_pip_session("ws-session", "claude").await.unwrap(), "pinned by its workstream");
-        assert!(!fx.core.is_pip_session("loose-session", "claude").await.unwrap(), "the list itself still keeps only the last 50");
-        assert!(fx.core.is_pip_session("other-59", "claude").await.unwrap() && !fx.core.is_pip_session("other-0", "claude").await.unwrap());
+        assert!(fx.core.is_pip_session("ws-session", "claude", &fx.scope.connection_id).await.unwrap(), "pinned by its workstream");
+        assert!(!fx.core.is_pip_session("loose-session", "claude", &fx.scope.connection_id).await.unwrap(), "the list itself still keeps only the last 50");
+        assert!(fx.core.is_pip_session("other-59", "claude", &fx.scope.connection_id).await.unwrap() && !fx.core.is_pip_session("other-0", "claude", &fx.scope.connection_id).await.unwrap());
 
         fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
-        assert!(!fx.core.is_pip_session("ws-session", "claude").await.unwrap(), "closing the workstream lets it go");
+        assert!(!fx.core.is_pip_session("ws-session", "claude", &fx.scope.connection_id).await.unwrap(), "closing the workstream lets it go");
     }
 
     #[tokio::test]
@@ -1042,8 +1059,8 @@ mod tests {
         let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), dir.clone());
 
         core.with_app_db(|db| db.set_app_meta("claude:CA-1", r#"{"id":"s-1"}"#)).await.unwrap();
-        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"[{"id":"s-1","instance":"claude"}]"#)).await.unwrap();
-        assert!(core.is_pip_session("s-1", "claude").await.unwrap());
+        core.with_app_db(|db| db.set_app_meta(PIP_SESSIONS, r#"[{"id":"s-1","instance":"claude","connection":"jira:site:me"}]"#)).await.unwrap();
+        assert!(core.is_pip_session("s-1", "claude", "jira:site:me").await.unwrap());
         assert!(core.pip_turns("general").await.unwrap().is_empty());
         assert!(core.with_db(|_| Ok(())).await.is_err(), "a cache still needs the sign-in");
 
@@ -1077,7 +1094,7 @@ mod tests {
 
         let finished = fx.core.pip_turn_finish(&fx.scope, "q1", "A's answer", true, None, None, None).await;
         assert!(matches!(finished, Err(Error::SiteChanged)), "{finished:?}");
-        assert_eq!(fx.core.pip_turns("general").await.unwrap()[0].status, "failed", "the turn the old account had open is settled");
+        assert_eq!(fx.core.pip_turns("jira:site:me:general").await.unwrap()[0].status, "failed", "the turn the old account had open is settled");
         let other = Scope { connection_id: "jira:site:else".into(), account_id: "else".into() };
         let begun = fx.core.pip_turn_begin(&other, "general", "q2", "Hi", &crate::agent::TurnMeta::default(), "running").await;
         assert!(begun.is_ok(), "{begun:?}");
@@ -1341,7 +1358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pips_conversations_are_still_there_after_removing_jira_and_connecting_another_site() {
+    async fn pips_conversations_are_kept_after_removing_jira_and_each_site_has_its_own() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
@@ -1356,10 +1373,11 @@ mod tests {
         fx.core.connect_jira(&token_for_site("beta", "b", "fast"), None).await.unwrap();
         let (scope, _, _) = fx.core.auth.identity().await.unwrap();
         assert_eq!(scope.connection_id, "jira:beta:b");
-        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1);
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 0, "the first site's talk is not the second's");
+        assert_eq!(fx.core.pip_turns("jira:site:me:general").await.unwrap().len(), 1, "but it is kept");
         assert_eq!(fx.core.pip_turns("ws:w1").await.unwrap().len(), 1);
         fx.core.pip_turn_begin(&scope, "general", "q3", "In the second site", &meta, "done").await.unwrap();
-        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 2);
+        assert_eq!(fx.core.pip_turns("general").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

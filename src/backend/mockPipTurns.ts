@@ -1,4 +1,5 @@
-import { conversationId } from "../lib/conversations";
+import { conversationRead } from "../lib/conversations";
+import { MOCK_CONNECTION } from "./mockConnector";
 import { readStored, writeStored } from "../workspace/storage";
 import type { ModelChoice, ScreenContext } from "../types";
 import type { StoredTurn, TurnMeta, TurnUsage } from "./claude";
@@ -94,10 +95,11 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
   // A turn cut off by a reload starts over, so what it had said is dropped; one that can't be asked again is failed.
   const cutOff = (t: MockTurn): MockTurn =>
     !restart && t.ask ? { ...t, status: "queued", text: "", steps: [] } : { ...t, status: "failed", error: t.status === "queued" ? NEVER_RAN : INTERRUPTED, ask: undefined };
-  // Turns kept under General's old name are General's, as the app's schema moves them once.
+  // Turns kept under General's old name are General's, and those kept with no connection are the primary's, as the app moves them once.
   const adopt = (t: MockTurn): MockTurn => {
     const kept: MockTurn = t.kind === "wake" ? t : { ...t, kind: "user" };
-    return conversationId(t.conversation) === t.conversation ? kept : { ...kept, conversation: conversationId(t.conversation) };
+    const key = conversationRead(t.conversation, MOCK_CONNECTION);
+    return key === t.conversation ? kept : { ...kept, conversation: key };
   };
   all = (Array.isArray(stored) ? stored.filter(isTurn) : []).filter((t) => t.createdAt >= horizon).map((t) => adopt(going(t) ? cutOff(t) : t));
   let resumable = all.filter((t) => going(t) && t.ask).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -106,7 +108,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
   return {
     /** The turns of `conversation`, oldest first, with what a running one has said so far. */
     turns(conversation: string): StoredTurn[] {
-      const wanted = conversationId(conversation);
+      const wanted = conversationRead(conversation, MOCK_CONNECTION);
       return all
         .filter((t) => t.conversation === wanted)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -142,7 +144,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
         ...all,
         {
           requestId,
-          conversation: conversationId(conversation),
+          conversation: conversationRead(conversation, MOCK_CONNECTION),
           prompt,
           ...(meta.quote ? { quote: meta.quote } : {}),
           ...(meta.looking ? { looking: meta.looking } : {}),
@@ -170,7 +172,7 @@ export function openMockPipTurns(now: number = Date.now(), restart: boolean = fr
 
     /** The choice the latest turn of `conversation` that kept one ran with. */
     lastModel(conversation: string): ModelChoice | null {
-      const wanted = conversationId(conversation);
+      const wanted = conversationRead(conversation, MOCK_CONNECTION);
       const kept = all.filter((t) => t.conversation === wanted && t.model).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       return kept[kept.length - 1]?.model ?? null;
     },

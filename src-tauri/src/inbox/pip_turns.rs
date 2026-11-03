@@ -2,23 +2,59 @@
 //! once that connection is no longer registered, so a turn that ends after a sign-out lands nowhere.
 
 use super::{now_millis, Core};
-use crate::agent::{conversation_id, TurnMeta, TurnUsage};
+use crate::agent::{conversation_id, conversation_in, split_conversation, TurnMeta, TurnUsage, WORKSTREAM_PREFIX};
 use crate::auth::Scope;
 use crate::db::PipTurn;
 use crate::error::Result;
 
+/// Set once the conversations kept before they carried a connection were given the primary's.
+const CONVERSATIONS_SCOPED: &str = "pip_conversations_scoped";
+
 impl Core {
-    /// Records a question in `conversation`; the legacy `workspace` is kept as `general`.
+    /// Gives the conversations kept without a connection (`general`, a ticket's key) to the primary, once. Nothing is
+    /// done while no connection is registered.
+    async fn scope_old_conversations(&self) {
+        let Ok(primary) = self.scope().await else { return };
+        let done = self
+            .with_app_db(|db| {
+                if db.app_meta(CONVERSATIONS_SCOPED)?.is_some() {
+                    return Ok(());
+                }
+                db.scope_bare_pip_conversations(&primary.connection_id)?;
+                db.set_app_meta(CONVERSATIONS_SCOPED, "1")
+            })
+            .await;
+        if let Err(e) = done {
+            eprintln!("Pip's old conversations were not scoped: {e}");
+        }
+    }
+
+    /// The key the page's `conversation` is read under: the connection it names, else the primary's. Where no connection
+    /// is registered a bare name stays bare.
+    pub async fn pip_conversation(&self, conversation: &str) -> String {
+        let conversation = conversation_id(conversation);
+        if conversation.starts_with(WORKSTREAM_PREFIX) || split_conversation(&conversation).0.is_some() {
+            return conversation;
+        }
+        self.scope_old_conversations().await;
+        match self.scope().await {
+            Ok(primary) => conversation_in(&conversation, &primary.connection_id),
+            Err(_) => conversation,
+        }
+    }
+
+    /// Records a question in `conversation` under the connection of `scope`; the legacy `workspace` is kept as `general`.
     pub async fn pip_turn_begin(&self, scope: &Scope, conversation: &str, request_id: &str, prompt: &str, meta: &TurnMeta, status: &str) -> Result<()> {
         let at = now_millis();
-        let conversation = conversation_id(conversation);
+        self.scope_old_conversations().await;
+        let conversation = conversation_in(conversation, &scope.connection_id);
         self.with_app_db_for(scope, |db| db.begin_pip_turn(&conversation, request_id, prompt, meta, status, &at).map(|_| ())).await
     }
 
     /// Records a wake turn in `conversation`: its event lines in place of a question, and the `(run, key)` facts they tell of.
     pub async fn pip_wake_begin(&self, scope: &Scope, conversation: &str, request_id: &str, lines: &str, facts: &[(String, String)], status: &str) -> Result<()> {
         let at = now_millis();
-        let conversation = conversation_id(conversation);
+        let conversation = conversation_in(conversation, &scope.connection_id);
         self.with_app_db_for(scope, |db| db.begin_pip_wake(&conversation, request_id, lines, facts, status, &at).map(|_| ())).await
     }
 
@@ -54,10 +90,13 @@ impl Core {
         self.with_app_db_for(scope, |db| db.finish_pip_turn(request_id, text, ok, error, session, usage)).await
     }
 
-    /// The turns in `conversation`, oldest first, signed in or not. Asked for `workspace`, it gives `general`'s, which is
-    /// where those turns now are.
+    /// The turns in `conversation`, oldest first. A name with no connection is the primary's, or the name on any
+    /// connection while none is registered; asked for `workspace`, it gives `general`'s, which is where those turns now are.
     pub async fn pip_turns(&self, conversation: &str) -> Result<Vec<PipTurn>> {
-        let conversation = conversation_id(conversation);
+        let conversation = self.pip_conversation(conversation).await;
+        if !conversation.starts_with(WORKSTREAM_PREFIX) && split_conversation(&conversation).0.is_none() {
+            return self.with_app_db(|db| db.pip_turns_named(&conversation)).await;
+        }
         self.with_app_db(|db| db.pip_turns(&conversation)).await
     }
 }
@@ -85,10 +124,34 @@ mod tests {
         fx.core.pip_turn_begin(&fx.scope, "workspace", "q2", "From an old page", &TurnMeta::default(), "done").await.unwrap();
         fx.core.pip_turn_begin(&fx.scope, "ws:w1", "q3", "In a workstream", &TurnMeta::default(), "done").await.unwrap();
         let ids = |turns: Vec<crate::db::PipTurn>| turns.into_iter().map(|t| (t.conversation, t.request_id)).collect::<Vec<_>>();
-        let general = vec![("general".to_string(), "q1".to_string()), ("general".into(), "q2".into())];
+        let primary = format!("{}:general", fx.scope.connection_id);
+        let general = vec![(primary.clone(), "q1".to_string()), (primary, "q2".into())];
         assert_eq!(ids(fx.core.pip_turns("workspace").await.unwrap()), general);
         assert_eq!(ids(fx.core.pip_turns("general").await.unwrap()), general);
         assert_eq!(ids(fx.core.pip_turns("ws:w1").await.unwrap()), [("ws:w1".to_string(), "q3".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn conversations_kept_before_connections_became_the_primarys_once() {
+        let fx = crate::inbox::testing::fixture().await;
+        fx.core
+            .with_app_db(|db| {
+                for (conversation, id) in [("general", "old-g"), ("CA-1", "old-t"), ("ws:w1", "old-w")] {
+                    db.begin_pip_turn(conversation, id, "Hi", &TurnMeta::default(), "done", "2026-10-01T10:00:00Z")?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let id = |c: &str| format!("{}:{c}", fx.scope.connection_id);
+        let ids = |turns: Vec<crate::db::PipTurn>| turns.into_iter().map(|t| t.request_id).collect::<Vec<_>>();
+        assert_eq!(ids(fx.core.pip_turns("general").await.unwrap()), ["old-g"]);
+        assert_eq!(ids(fx.core.pip_turns(&id("general")).await.unwrap()), ["old-g"]);
+        assert_eq!(ids(fx.core.pip_turns("CA-1").await.unwrap()), ["old-t"]);
+        assert_eq!(ids(fx.core.pip_turns("ws:w1").await.unwrap()), ["old-w"], "a workstream's conversation keeps its id");
+
+        fx.core.pip_turn_begin(&fx.scope, "general", "new", "Hi", &TurnMeta::default(), "done").await.unwrap();
+        assert_eq!(ids(fx.core.pip_turns("general").await.unwrap()), ["old-g", "new"], "the old turns are not moved a second time");
     }
 
     #[tokio::test]

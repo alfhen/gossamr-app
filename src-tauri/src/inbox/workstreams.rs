@@ -1216,13 +1216,13 @@ mod tests {
         fx.core.set_workstream_session(&fx.scope, &ws.id, "s-1", "claude").await.unwrap();
         let view = fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap();
         assert_eq!(view.workstream.pip_session.as_deref(), Some("s-1"));
-        assert!(fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1", "claude")).await.unwrap());
+        assert!(fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1", "claude", &fx.scope.connection_id)).await.unwrap());
         assert_eq!(actions(&fx.core.workstream_events(&fx.scope, &ws.id).await.unwrap()), [(Actor::Person, "opened")], "nothing is audited");
 
         fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
         fx.core.set_workstream_session(&fx.scope, &ws.id, "s-2", "claude").await.unwrap();
         assert_eq!(fx.core.workstream(&fx.scope, &ws.id).await.unwrap().unwrap().workstream.pip_session.as_deref(), Some("s-1"));
-        assert!(!fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1", "claude")).await.unwrap(), "a closed one pins nothing");
+        assert!(!fx.core.with_db_for(&fx.scope, |db| db.is_open_workstream_session("s-1", "claude", &fx.scope.connection_id)).await.unwrap(), "a closed one pins nothing");
         assert!(fx.core.set_workstream_session(&fx.scope, "nope", "s-3", "claude").await.is_err());
     }
 
