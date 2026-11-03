@@ -1,5 +1,6 @@
 //! The backend that runs agents as `codex exec` processes Gossamr starts and keeps track of itself.
 
+mod control;
 mod events;
 mod launch;
 mod observe;
@@ -34,6 +35,9 @@ const LAUNCH_WAIT: Duration = Duration::from_secs(60);
 
 const PROGRAM: &str = "codex";
 
+/// How long a stop waits for Codex to end on SIGINT before it kills the whole group.
+const STOP_WAIT: Duration = Duration::from_secs(10);
+
 /// Where every Codex run's folder is kept.
 pub fn runs_root(data_dir: &Path) -> PathBuf {
     config_dir(data_dir).join("runs")
@@ -55,6 +59,14 @@ pub(super) fn events_file(folder: &Path, turn: u32) -> PathBuf {
 
 pub(super) fn process_file(folder: &Path, turn: u32) -> PathBuf {
     folder.join(format!("process-{turn}.json"))
+}
+
+pub(super) fn exit_file(folder: &Path, turn: u32) -> PathBuf {
+    folder.join(format!("exit-{turn}"))
+}
+
+pub(super) fn stderr_file(folder: &Path, turn: u32) -> PathBuf {
+    folder.join(format!("stderr-{turn}.log"))
 }
 
 pub(super) fn asked_file(folder: &Path, turn: u32) -> PathBuf {
@@ -98,21 +110,31 @@ pub struct CodexBackend {
     instance: String,
     own_folder: bool,
     launch_wait: Duration,
+    stop_wait: Duration,
+    /// The person's home, which the work folder `~/Gossamr/agents` is under.
+    home: Option<PathBuf>,
 }
 
 impl CodexBackend {
     pub fn new(binary: PathBuf, login_env: Arc<RunEnv>, git_env: Arc<RunEnv>, runs_root: PathBuf, instance: String, own_folder: bool) -> Self {
-        Self { binary, login_env, git_env, runs_root, instance, own_folder, launch_wait: LAUNCH_WAIT }
+        Self { binary, login_env, git_env, runs_root, instance, own_folder, launch_wait: LAUNCH_WAIT, stop_wait: STOP_WAIT, home: None }
+    }
+
+    pub fn with_home(mut self, home: Option<PathBuf>) -> Self {
+        self.home = home;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_stop_wait(mut self, wait: Duration) -> Self {
+        self.stop_wait = wait;
+        self
     }
 
     #[cfg(test)]
     pub fn with_launch_wait(mut self, wait: Duration) -> Self {
         self.launch_wait = wait;
         self
-    }
-
-    fn not_built(what: &str) -> BackendError {
-        BackendError::Other(format!("Codex agents can't {what} yet."))
     }
 }
 
@@ -169,28 +191,40 @@ impl RunBackend for CodexBackend {
         Ok(None)
     }
 
-    async fn ready_for_answer(&self, _session: &Session, _run: &Run) -> BackendResult<bool> {
-        Ok(false)
+    async fn ready_for_answer(&self, _session: &Session, run: &Run) -> BackendResult<bool> {
+        Ok(self.turn_is_over(run))
     }
 
-    async fn open_elsewhere(&self, _session: &Session, _run: &Run) -> BackendResult<bool> {
-        Ok(false)
+    async fn open_elsewhere(&self, session: &Session, run: &Run) -> BackendResult<bool> {
+        Ok(self.thread_open_elsewhere(session, run).await)
     }
 
-    async fn stop(&self, _session: &Session) -> BackendResult<()> {
-        Err(Self::not_built("be stopped"))
+    async fn stop(&self, session: &Session) -> BackendResult<()> {
+        self.stop_session(session).await
     }
 
-    async fn resume(&self, _session: &Session, _req: &ResumeRequest, _waits: &Waits) -> BackendResult<Resumed> {
-        Err(Self::not_built("be resumed"))
+    fn stop_budget(&self) -> Duration {
+        self.stop_wait + control::KILL_SETTLE + Duration::from_secs(1)
     }
 
-    async fn remove(&self, _run: &Run, _leftovers: &[super::cli::ShortId], _waits: &Waits) -> BackendResult<RemoveOutcome> {
-        Err(Self::not_built("be cleaned up"))
+    fn ask_ended(&self, run: &Run) {
+        self.forget_ask(run);
     }
 
-    async fn prepare_attach(&self, _session: &Session) -> BackendResult<bool> {
-        Err(Self::not_built("be opened in Terminal"))
+    async fn resume(&self, session: &Session, req: &ResumeRequest, waits: &Waits) -> BackendResult<Resumed> {
+        self.resume_session(session, req, waits).await
+    }
+
+    fn resumes_with_tools(&self) -> bool {
+        true
+    }
+
+    async fn remove(&self, run: &Run, leftovers: &[super::cli::ShortId], waits: &Waits) -> BackendResult<RemoveOutcome> {
+        self.remove_run(run, leftovers, waits).await
+    }
+
+    async fn prepare_attach(&self, session: &Session) -> BackendResult<bool> {
+        self.hand_to_terminal(session).await
     }
 
     fn attach_words(&self, session: &Session) -> Vec<String> {
@@ -201,8 +235,8 @@ impl RunBackend for CodexBackend {
         None
     }
 
-    fn scratch_dir(&self, _session: &Session, _dirs: &Folders) -> BackendResult<PathBuf> {
-        Err(Self::not_built("keep scratch files"))
+    fn scratch_dir(&self, session: &Session, _dirs: &Folders) -> BackendResult<PathBuf> {
+        self.run_folder_of(session)
     }
 
     #[cfg(test)]

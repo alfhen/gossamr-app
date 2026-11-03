@@ -23,7 +23,6 @@ use crate::domain::workstream::PauseReason;
 use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
-const STOP_LIMIT: Duration = Duration::from_secs(5);
 const DISK_LIMIT: Duration = Duration::from_secs(3);
 const ATTACH_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
 const ATTACH_DIR: &str = "attach";
@@ -349,7 +348,7 @@ impl RunService {
                 tally.failed += 1;
                 continue;
             };
-            match tokio::time::timeout(STOP_LIMIT, tc.backend.stop(&session)).await {
+            match tokio::time::timeout(tc.backend.stop_budget(), tc.backend.stop(&session)).await {
                 Ok(Ok(())) => {
                     match &mine {
                         Some(run) => self.end_ask_on(tc.backend.as_ref(), run),
@@ -390,8 +389,12 @@ impl RunService {
         let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.observing_toolchain(&run).await?;
         let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
-        if tc.backend.prepare_attach(&session).await? {
-            self.leave_to_terminal(run_id, tc.backend.as_ref()).await?;
+        {
+            // Held from the stop to the stored Stopped, as `stop_as` does, so the tracker never sees the half-stopped turn.
+            let _turn = self.launching.lock().await;
+            if tc.backend.prepare_attach(&session).await? {
+                self.leave_to_terminal(run_id, tc.backend.as_ref()).await?;
+            }
         }
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_attach_file(&dir, tc.login.as_ref(), &program, &run.expected_worktree, &tc.backend.attach_words(&session))?;
@@ -399,8 +402,8 @@ impl RunService {
     }
 
     /// Hands the run to the terminal that is about to open it: its held question is cancelled and it reads as stopped.
+    /// Called with the launch lock held.
     async fn leave_to_terminal(&self, run_id: &str, backend: &dyn RunBackend) -> Result<()> {
-        let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
         self.end_ask_on(backend, &run);
         Self::stopped(&mut run);

@@ -445,6 +445,8 @@ Codex hands its environment to the commands the agent runs. `shell_environment_p
 
 Each run has `<data dir>/agents/runs/<run id>/`, mode 0700, with files 0600 made by `create_new`: `events-<n>.jsonl` (stdout of turn n), `stderr-<n>.log`, `final.txt` (`-o`), `exit-<n>` (the exit code, written by the task that waits on the child) and `process-<n>.json` (`{pid, started}`, written right after the spawn, before the thread is named). Tests: `a_codex_launch_makes_the_worktree_and_run_folder_and_records_the_thread_and_a_live_process`, `a_codex_launch_writes_process_1_json_before_thread_started`.
 
+Other files: `short-id` (the 8-hex id Gossamr minted, written at launch; every later action finds the folder by it), `asked-<n>` (the question of a held `ask` in turn n, removed when it is answered or the run stops), `terminal` (the run was handed to Terminal) and `terminal-seen` (a `codex` process on the thread was seen after that). A resume or an answer starts the next turn in the same folder. When the sweep has removed the folder of a run that ended more than 6 hours ago, a resume makes it again with the run's id, its same `short-id` and the model the run froze, and an attach opens `codex resume` without it. Tests: `a_message_to_a_finished_codex_run_whose_folder_was_swept_makes_the_folder_again_and_reads_working`, `a_resume_after_the_folder_was_swept_keeps_the_model_the_run_was_started_on`, `attach_to_a_codex_run_whose_folder_was_swept_still_opens_codex_resume`, `after_attach_a_codex_run_stays_stopped_until_terminal_runs_then_reads_done_carried_on_in_terminal`.
+
 A pid alone is not trusted. `started` is the process start time in seconds (`proc_pidinfo(PROC_PIDTBSDINFO)` on macOS), and `runs/codex/process.rs` sends a signal only when the pid still answers and started when the run says. Tests: `a_reused_pid_is_not_the_run_s_process`, `a_process_start_time_does_not_change_while_it_runs`.
 
 ### Events read
@@ -453,7 +455,15 @@ A launch waits up to 60 seconds for the first `thread.started` line in `events-1
 
 ### Stopping
 
-c0 check C5: SIGINT to a running `codex exec` ended it within 6 seconds with its events intact, and left no `turn.completed`. In the ChatGPT.app copy the pid is the real binary, not a node launcher (C4). A copy installed through npm may run as a `node` launcher; that is not checked. X08 stops with SIGINT, then SIGKILL to the process group after `stop_wait`, and sends nothing to a pid that is no longer the run's.
+c0 check C5: SIGINT to a running `codex exec` ended it within 6 seconds with its events intact, and left no `turn.completed`. In the ChatGPT.app copy the pid is the real binary, not a node launcher (C4). A copy installed through npm may run as a `node` launcher; that is not checked. X08 stops with SIGINT, then SIGKILL to the process group after `stop_wait`, and sends nothing to a pid that is no longer the run's. Stop all allows a Codex stop `stop_wait` plus the kill settle time plus a second (`stop_budget`), so a codex that ignores SIGINT is killed and the run reads Stopped. Test: `stop_all_kills_a_codex_run_that_ignores_sigint_and_stores_it_stopped`.
+
+### Answering, messaging, attaching and cleaning up
+
+An answer or a message resumes the thread: `codex exec resume <thread uuid> --json -o final.txt` with the launch's `-m` and `-c` keys, a fresh token in `GOSSAMR_MCP_TOKEN`, and the reminder plus the text after `--`. `exec resume` takes no `-C`, so the process runs in the worktree. It writes `events-<n+1>.jsonl` and `process-<n+1>.json`, and only once the new process has started does it remove `asked-<n>`, `terminal` and `terminal-seen`. A resume that fails to start removes the files of its own turn and keeps `asked-<n>`, so the run still shows its question. Tests: `an_answer_to_a_codex_run_resumes_the_same_thread_with_a_new_process_and_the_reminder`, `a_failed_codex_resume_keeps_the_asked_file_and_removes_its_own_turn_files`.
+
+Attach stops the `exec`, writes `terminal` and opens `codex resume <thread uuid>` in Terminal. The script holds no token, so that session has no Gossamr tools. While a `codex` process with the thread id in its arguments is alive, a message or an answer is refused. Test: `attach_stops_the_codex_turn_then_opens_codex_resume_with_no_token_in_the_script`.
+
+Clean-up stops a live process, removes the worktree and branch with git (unpushed work stays, and a clone outside `~/Gossamr/agents` is refused), then runs `codex delete --force <thread uuid>`. A launch that fails after making its branch deletes it with `git update-ref -d <ref> <tip>`, so a branch that has moved on since is kept. Tests: `cleaning_up_a_codex_run_removes_its_worktree_branch_folder_and_saved_session`, `unpushed_codex_work_keeps_its_worktree_in_git_s_words`.
 
 ### The sandbox
 

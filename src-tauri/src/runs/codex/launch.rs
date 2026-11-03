@@ -9,9 +9,10 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use super::process::{signal_group, started_of};
-use super::{create_private, events, events_file, process_file, run_folder, CodexBackend, CODEX_GUARD, FINAL_FILE, PROGRAM, SHORT_ID_FILE, TOKEN_VARIABLE};
-use crate::domain::{worktree_in, RunProcess, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER};
-use crate::runs::backend::{LaunchRequest, Session};
+use super::{create_private, events, events_file, exit_file, process_file, run_folder, stderr_file, CodexBackend, CODEX_GUARD, FINAL_FILE, PROGRAM, SHORT_ID_FILE, TOKEN_VARIABLE};
+use crate::domain::{worktree_in, RunProcess, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, GUARD};
+use crate::runs::backend::{LaunchRequest, Session, ToolsOffer};
+use crate::runs::cli::ShortId;
 use crate::runs::failure::Failure;
 use crate::runs::redact::redact;
 use crate::runs::repo::Git;
@@ -37,15 +38,12 @@ pub(super) fn toml_string(text: &str) -> String {
     out
 }
 
-/// The arguments of the first turn. No sandbox or approval flag: the person's own Codex settings decide what the agent can do.
-fn exec_args(req: &LaunchRequest, worktree: &Path, final_answer: &Path) -> Vec<OsString> {
-    let mut args: Vec<OsString> = vec!["exec".into(), "--json".into(), "-C".into(), worktree.into(), "-o".into(), final_answer.into()];
-    if let Some(model) = &req.model {
-        args.extend(["-m".into(), model.into()]);
-    }
+/// The `-c` settings every turn gets: Gossamr's tools when offered, and the guard.
+fn settings(tools: Option<&ToolsOffer>, guard: &str) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
     let mut config = |setting: String| args.extend(["-c".into(), setting.into()]);
-    let mut guard = req.guard.clone();
-    if let Some(offer) = &req.tools {
+    let mut guard = guard.to_owned();
+    if let Some(offer) = tools {
         config(format!("mcp_servers.{AGENT_SERVER}.url={}", toml_string(&offer.url)));
         config(format!("mcp_servers.{AGENT_SERVER}.bearer_token_env_var={}", toml_string(TOKEN_VARIABLE)));
         config(format!("mcp_servers.{AGENT_SERVER}.default_tools_approval_mode=\"approve\""));
@@ -54,11 +52,36 @@ fn exec_args(req: &LaunchRequest, worktree: &Path, final_answer: &Path) -> Vec<O
         guard = format!("{guard} {AGENT_GUARD}");
     }
     config(format!("developer_instructions={}", toml_string(&format!("{guard} {CODEX_GUARD}"))));
+    args
+}
+
+/// The arguments of the first turn. No sandbox or approval flag: the person's own Codex settings decide what the agent can do.
+fn exec_args(req: &LaunchRequest, worktree: &Path, final_answer: &Path) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["exec".into(), "--json".into(), "-C".into(), worktree.into(), "-o".into(), final_answer.into()];
+    if let Some(model) = &req.model {
+        args.extend(["-m".into(), model.into()]);
+    }
+    args.extend(settings(req.tools.as_ref(), &req.guard));
     args.extend(["--".into(), req.prompt.clone().into()]);
     args
 }
 
-fn make_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
+/// The arguments of a turn that carries on in `thread`. `exec resume` takes no `-C`; the caller sets the working folder.
+pub(super) fn resume_args(thread: &str, final_answer: &Path, model: Option<&str>, tools: Option<&ToolsOffer>, message: &str) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["exec".into(), "resume".into(), thread.into(), "--json".into(), "-o".into(), final_answer.into()];
+    if let Some(model) = model {
+        args.extend(["-m".into(), model.into()]);
+    }
+    args.extend(settings(tools, GUARD));
+    args.extend(["--".into(), message.into()]);
+    args
+}
+
+pub(super) fn write_short_id(folder: &Path, id: &ShortId) -> std::io::Result<()> {
+    create_private(&folder.join(SHORT_ID_FILE)).and_then(|mut f| f.write_all(id.as_str().as_bytes()))
+}
+
+pub(super) fn make_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
     let private = |dir: &Path| match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         other => other,
@@ -121,7 +144,7 @@ impl CodexBackend {
         }
         made.folder = Some(&folder);
         // A launch whose answer is lost is found again by this id (`find`).
-        if let Err(e) = create_private(&folder.join(SHORT_ID_FILE)).and_then(|mut f| f.write_all(req.fresh_id.as_str().as_bytes())) {
+        if let Err(e) = write_short_id(&folder, &req.fresh_id) {
             made.undo().await;
             return Err(failure(format!("the run folder: {e}")));
         }
@@ -135,7 +158,7 @@ impl CodexBackend {
         };
         made.process = Some(process.clone());
 
-        match self.wait_for_thread(&folder).await {
+        match self.wait_for_thread(&folder, 1).await {
             Ok(thread) => Ok(Session { short_id: req.fresh_id.clone(), session_id: Some(thread), process: Some(process) }),
             Err(why) => {
                 // The words are read before the folder goes.
@@ -146,15 +169,19 @@ impl CodexBackend {
         }
     }
 
-    /// Starts `codex exec` for turn 1 in its own session, with its output in the run folder, and records the process
-    /// before anything waits on it so a quit leaves it findable.
     fn spawn(&self, req: &LaunchRequest, worktree: &Path, folder: &Path) -> Result<RunProcess, String> {
-        let events = create_private(&events_file(folder, 1)).map_err(|e| format!("the events file: {e}"))?;
-        let stderr = create_private(&folder.join("stderr-1.log")).map_err(|e| format!("the error file: {e}"))?;
+        self.start_turn(folder, 1, exec_args(req, worktree, &folder.join(FINAL_FILE)), worktree, req.tools.as_ref())
+    }
+
+    /// Starts `codex` for turn `turn` in its own session, with its output in the run folder, and records the process
+    /// before anything waits on it so a quit leaves it findable.
+    pub(super) fn start_turn(&self, folder: &Path, turn: u32, args: Vec<OsString>, cwd: &Path, tools: Option<&ToolsOffer>) -> Result<RunProcess, String> {
+        let events = create_private(&events_file(folder, turn)).map_err(|e| format!("the events file: {e}"))?;
+        let stderr = create_private(&stderr_file(folder, turn)).map_err(|e| format!("the error file: {e}"))?;
         let mut command = std::process::Command::new(&self.binary);
-        command.args(exec_args(req, worktree, &folder.join(FINAL_FILE))).current_dir(worktree).stdin(Stdio::null()).stdout(events).stderr(stderr);
+        command.args(args).current_dir(cwd).stdin(Stdio::null()).stdout(events).stderr(stderr);
         self.login_env.apply(&mut command);
-        match &req.tools {
+        match tools {
             Some(offer) => command.env(TOKEN_VARIABLE, &offer.token),
             None => command.env_remove(TOKEN_VARIABLE),
         };
@@ -170,7 +197,7 @@ impl CodexBackend {
         // A child that is already gone has no start time; the exit file then says so.
         let process = RunProcess { pid, started: started_of(pid).unwrap_or(0) };
 
-        let exit = folder.join("exit-1");
+        let exit = exit_file(folder, turn);
         tokio::spawn(async move {
             let code = match child.wait().await {
                 Ok(status) => status.code().or_else(|| status.signal().map(|n| 128 + n)).unwrap_or(-1),
@@ -182,7 +209,7 @@ impl CodexBackend {
         });
 
         let record = serde_json::json!({ "pid": process.pid, "started": process.started });
-        let written = create_private(&process_file(folder, 1)).and_then(|mut f| f.write_all(record.to_string().as_bytes()));
+        let written = create_private(&process_file(folder, turn)).and_then(|mut f| f.write_all(record.to_string().as_bytes()));
         if let Err(e) = written {
             let _ = signal_group(&process, libc::SIGKILL);
             return Err(format!("the process file: {e}"));
@@ -190,8 +217,8 @@ impl CodexBackend {
         Ok(process)
     }
 
-    async fn wait_for_thread(&self, folder: &Path) -> Result<String, String> {
-        let (events, exit, stderr) = (events_file(folder, 1), folder.join("exit-1"), folder.join("stderr-1.log"));
+    pub(super) async fn wait_for_thread(&self, folder: &Path, turn: u32) -> Result<String, String> {
+        let (events, exit, stderr) = (events_file(folder, turn), exit_file(folder, turn), stderr_file(folder, turn));
         let deadline = Instant::now() + self.launch_wait;
         loop {
             if let Some(thread) = events::read(&events).thread {

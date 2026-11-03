@@ -13,8 +13,10 @@ use std::time::Duration;
 use tokio::process::Command;
 
 use super::env::RunEnv;
-use super::fresh::{agents_root, newest_clone_per_owner};
+use super::archive::contained;
+use super::fresh::{agents_root, is_work_path, newest_clone_per_owner, real};
 use super::limits::{OwnerAddress, WorkFolderGit};
+use crate::domain::Run;
 
 /// How long one git command may take. The app runs them one repository at a time, where 5 seconds is generous; the test
 /// suite runs hundreds of tests at once on a loaded CI runner, where a plain `git remote get-url` has taken longer, so tests wait
@@ -159,8 +161,11 @@ impl Git {
         if !self.is_untouched_worktree(clone, worktree, branch, start).await {
             return;
         }
+        let local = format!("refs/heads/{branch}");
+        let Some(tip) = self.out(clone, &["rev-parse", "--verify", "--quiet", &local]).await else { return };
         if self.remove_worktree(clone, worktree).await.is_ok() {
-            let _ = self.out_or_why_within(clone, &["branch", "-D", "--", branch], GIT_WRITE_TIMEOUT).await;
+            // Given the tip, git deletes the branch only while it is still the one this launch made.
+            let _ = self.out_or_why_within(clone, &["update-ref", "-d", &local, &tip], GIT_WRITE_TIMEOUT).await;
         }
     }
 
@@ -268,6 +273,35 @@ fn find_in_path(env: &RunEnv, program: &str) -> Option<PathBuf> {
     path.split(':')
         .map(|dir| Path::new(dir).join(program))
         .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+}
+
+/// Removes a run's worktree and branch through git alone. Anything git refuses stays, in git's own words, as `Ok(Some)`.
+/// The clone and the worktree must lie in `~/Gossamr/agents`; otherwise the refusal is the `Err`.
+pub async fn remove_with_git(git: &Git, home: Option<&Path>, run: &Run) -> Result<Option<String>, String> {
+    let home = home.ok_or("Gossamr doesn't know your home folder.")?;
+    let clone = &run.spec.clone_path;
+    let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, &run.spec.repo, clone);
+    if !in_work_folder {
+        return Err("Its clone isn't in ~/Gossamr/agents, so Gossamr leaves it where it is.".into());
+    }
+    let outside = || "Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is.".to_owned();
+    let worktree = if run.expected_worktree.symlink_metadata().is_ok() {
+        contained(&agents_root(home), &run.expected_worktree).ok_or_else(outside)?
+    } else {
+        let missing = real(&run.expected_worktree);
+        if !missing.starts_with(real(&agents_root(home))) {
+            return Err(outside());
+        }
+        missing
+    };
+    let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
+    if let Err(message) = git.check_branch_deletable(clone, &branch).await {
+        return Ok(Some(message));
+    }
+    if let Err(message) = git.remove_worktree(clone, &worktree).await {
+        return Ok(Some(message));
+    }
+    Ok(git.delete_branch(clone, &branch).await.err())
 }
 
 /// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`.

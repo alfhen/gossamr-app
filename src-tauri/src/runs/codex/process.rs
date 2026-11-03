@@ -42,22 +42,67 @@ pub fn alive(process: &RunProcess) -> bool {
 
 /// Sends `signal` to the process alone. Returns false, and sends nothing, when the pid is no longer the run's.
 pub fn signal(process: &RunProcess, signal: libc::c_int) -> std::io::Result<bool> {
-    send(process, process.pid as libc::pid_t, signal)
+    if !alive(process) {
+        return Ok(false);
+    }
+    deliver(process.pid as libc::pid_t, signal).map(|()| true)
 }
 
 /// Sends `signal` to the process group the run's process leads, when the process is still the run's.
 pub fn signal_group(process: &RunProcess, signal: libc::c_int) -> std::io::Result<bool> {
-    // The process was started with `setsid`, so its pid is its group's id.
-    send(process, -(process.pid as libc::pid_t), signal)
-}
-
-fn send(process: &RunProcess, target: libc::pid_t, signal: libc::c_int) -> std::io::Result<bool> {
     if !alive(process) {
         return Ok(false);
     }
-    // SAFETY: the target was derived from a pid that was checked just above to be the run's own process.
+    // The process was started with `setsid`, so its pid is its group's id.
+    deliver(-(process.pid as libc::pid_t), signal).map(|()| true)
+}
+
+/// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
+/// group. Only for a stop that found the leader alive and the run's own at its start, so the group id is still the run's.
+pub fn kill_group(process: &RunProcess) -> std::io::Result<()> {
+    match deliver(-(process.pid as libc::pid_t), libc::SIGKILL) {
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        other => other,
+    }
+}
+
+fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(result) = seam::intercept(target, signal) {
+        return result;
+    }
+    // SAFETY: every caller derives the target from a process it checked to be the run's own.
     match unsafe { libc::kill(target, signal) } {
-        0 => Ok(true),
+        0 => Ok(()),
         _ => Err(std::io::Error::last_os_error()),
+    }
+}
+
+/// Lets a test see which signals were sent to a pid and make them fail. State is per thread: each test runs on its
+/// own thread, and a pid freed by one test can be reused by another.
+#[cfg(test)]
+pub mod seam {
+    use std::cell::RefCell;
+    use std::collections::HashSet;
+
+    thread_local! {
+        static SENT: RefCell<Vec<(libc::pid_t, libc::c_int)>> = const { RefCell::new(Vec::new()) };
+        static FAILING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+    }
+
+    pub(super) fn intercept(target: libc::pid_t, signal: libc::c_int) -> Option<std::io::Result<()>> {
+        SENT.with(|sent| sent.borrow_mut().push((target, signal)));
+        let fails = signal != libc::SIGKILL && FAILING.with(|set| set.borrow().contains(&target.abs()));
+        fails.then(|| Err(std::io::Error::from_raw_os_error(libc::EPERM)))
+    }
+
+    /// Every signal that was aimed at `pid` or its group.
+    pub fn sent_to(pid: u32) -> Vec<libc::c_int> {
+        SENT.with(|sent| sent.borrow().iter().filter(|(target, _)| target.unsigned_abs() == pid).map(|(_, signal)| *signal).collect())
+    }
+
+    /// Makes every signal but SIGKILL to `pid` fail, so a test can still end the process.
+    pub fn fail_signals_to(pid: u32) {
+        FAILING.with(|set| set.borrow_mut().insert(pid as libc::pid_t));
     }
 }
