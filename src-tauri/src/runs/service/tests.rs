@@ -220,7 +220,7 @@ async fn two_launches_never_overlap_in_the_cli() {
 async fn the_cap_counts_runs_of_other_accounts_through_the_index() {
     let rig = build(None, |s| s.with_cap(2)).await;
     for n in 0..2 {
-        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false };
+        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into() };
         rig.svc.index.record(other).unwrap();
     }
     let run = rig.queued(1).await;
@@ -1364,4 +1364,26 @@ mod waiting {
         rig.finish(&busy).await;
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&old.id));
     }
+}
+
+#[tokio::test]
+async fn recovery_finds_a_launching_run_on_the_second_login_in_that_logins_listing() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig
+        .set(&run, |r| {
+            r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+            r.state = RunState::Launching;
+            r.launched_at = Some(Utc::now());
+        })
+        .await;
+    let (svc, second) = crate::runs::rig::with_second_login(&rig.fx, &rig.cli);
+    let svc = svc.with_timing(FAST);
+    second.with(|s| s.sessions.push(FakeCli::session("0c0ffee1", &run.expected_worktree)));
+    assert!(rig.cli.0.lock().unwrap().sessions.is_empty());
+
+    svc.recover().await;
+    let adopted = rig.get(&run).await;
+    assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str)), (RunState::Launching, Some("0c0ffee1")));
+    assert_eq!(svc.index.live().iter().map(|e| e.instance_id.as_str()).collect::<Vec<_>>(), ["claude_2"]);
 }

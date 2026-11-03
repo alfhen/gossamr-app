@@ -128,6 +128,7 @@ fn entry_of(run: &Run) -> Entry {
         expected_worktree: run.expected_worktree.clone(),
         short_id: run.short_id.clone(),
         terminal: false,
+        instance_id: run.instance_id().to_owned(),
     }
 }
 
@@ -323,7 +324,8 @@ impl RunService {
     /// The run's session, if `claude agents` lists one. After a launch whose answer was lost the session may still be
     /// listed at the clone root, so this keeps looking until the worktree has had time to appear.
     async fn find_session(&self, run: &Run) -> std::result::Result<Option<AgentEntry>, Failure> {
-        let tc = self.tools.get().await?;
+        // A login that can't run now has no session to find; the launch that follows waits or fails for it.
+        let Ok(tc) = self.toolchain_of(run).await else { return Ok(None) };
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         loop {
@@ -654,26 +656,34 @@ impl RunService {
         let deadline = Instant::now() + self.timing.recover_window;
         let mut why = Failure::Interrupted;
         while !waiting.is_empty() {
-            match self.tools.get().await {
-                Err(e) => {
-                    why = e.into();
-                    break;
-                }
-                Ok(tc) => {
-                    if let Ok(entries) = tc.cli.agents(true).await {
-                        let mut unmatched = Vec::new();
-                        for mut run in waiting {
-                            match entries.iter().find(|e| belongs_to(e, &run)) {
-                                Some(found) => {
-                                    let _ = self.adopt(&mut run, found).await;
-                                }
-                                None => unmatched.push(run),
-                            }
+            let mut unmatched = Vec::new();
+            let mut by_instance: std::collections::BTreeMap<String, Vec<Run>> = Default::default();
+            for run in waiting {
+                by_instance.entry(run.instance_id().to_owned()).or_default().push(run);
+            }
+            for (_, group) in by_instance {
+                let tc = match self.toolchain_of(&group[0]).await {
+                    Ok(tc) => tc,
+                    Err(e) => {
+                        why = e.into();
+                        unmatched.extend(group);
+                        continue;
+                    }
+                };
+                let Ok(entries) = tc.cli.agents(true).await else {
+                    unmatched.extend(group);
+                    continue;
+                };
+                for mut run in group {
+                    match entries.iter().find(|e| belongs_to(e, &run)) {
+                        Some(found) => {
+                            let _ = self.adopt(&mut run, found).await;
                         }
-                        waiting = unmatched;
+                        None => unmatched.push(run),
                     }
                 }
             }
+            waiting = unmatched;
             if waiting.is_empty() || Instant::now() >= deadline {
                 break;
             }

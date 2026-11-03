@@ -240,3 +240,37 @@ pub fn reporting(dir: &Path) -> impl FnOnce(RunService) -> RunService {
     let channel = Arc::new(super::agent_config::AgentChannel::new(4242, dir.join("agents")));
     move |svc| svc.with_agent_channel(channel)
 }
+
+/// The default Claude and a second login, each with its own scripted `claude`.
+pub struct TwoLogins {
+    pub default: Toolchain,
+    pub second: Toolchain,
+}
+
+#[async_trait::async_trait]
+impl super::toolchain::ToolchainSource for TwoLogins {
+    async fn get(&self) -> Result<Toolchain, super::toolchain::ToolchainError> {
+        Ok(self.default.clone())
+    }
+
+    async fn for_instance(&self, id: &str) -> Result<Toolchain, super::toolchain::ToolchainError> {
+        match id {
+            "claude" => Ok(self.default.clone()),
+            "claude_2" => Ok(self.second.clone()),
+            other => Err(super::toolchain::ToolchainError::UnknownInstance(other.into())),
+        }
+    }
+}
+
+/// A service over `fx`'s data that also knows a second login, `claude_2`, run by its own scripted `claude`.
+pub fn with_second_login(fx: &Fixture, default_cli: &Arc<FakeCli>) -> (RunService, Arc<FakeCli>) {
+    let second_cli = Arc::new(FakeCli::new());
+    second_cli.with(|s| s.config_dir = fx.dir.join("claude-config-2"));
+    let env = Arc::new(RunEnv::from_pairs([("PATH", "/usr/bin:/bin".to_owned())]));
+    let mut second = Toolchain::new(second_cli.clone(), env.clone());
+    second.instance_id = "claude_2".into();
+    second.instance_name = "Claude personal".into();
+    let tools = TwoLogins { default: Toolchain::new(default_cli.clone(), env), second };
+    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index-two")), Arc::new(|_| {})).with_home(fx.home.canonicalize().unwrap());
+    (svc, second_cli)
+}
