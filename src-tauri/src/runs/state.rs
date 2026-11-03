@@ -77,8 +77,6 @@ fn finished_and_idle(run: &Run, job: Option<&JobInfo>) -> bool {
     run.state == RunState::Done || job.is_some_and(turn_finished)
 }
 
-/// First match wins. `prior_misses` and `prior_idle` are `pid_misses` and `idle_polls` from the previous poll of this
-/// run.
 /// A run whose agent waits in its `ask` call reads as asking, with that question, whatever the session is listed as
 /// doing: it is working as far as the backend can tell.
 pub fn with_ask(mut seen: Observed, ask: Option<&str>) -> Observed {
@@ -90,6 +88,8 @@ pub fn with_ask(mut seen: Observed, ask: Option<&str>) -> Observed {
     seen
 }
 
+/// First match wins. `prior_misses` and `prior_idle` are `pid_misses` and `idle_polls` from the previous poll of this
+/// run.
 pub fn map_state(entry: Option<&AgentEntry>, job: Option<&JobInfo>, run: &Run, now: DateTime<Utc>, prior_misses: u32, prior_idle: u32) -> Observed {
     let Some(entry) = entry else {
         return match run.state {

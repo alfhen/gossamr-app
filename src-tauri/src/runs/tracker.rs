@@ -408,12 +408,15 @@ impl RunService {
         self.folders_of(tc).await.config_dir
     }
 
-    /// A run that ended while its agent waited in an `ask` call has nobody left to answer it.
-    fn drop_ask_of_ended(&self, run_id: &str, state: RunState) {
+    /// A run whose agent waits in its `ask` call reads as asking, whatever backend watches it. A run that ended while
+    /// it waited has nobody left to answer.
+    fn with_pending_ask(&self, run_id: &str, seen: state::Observed) -> state::Observed {
         let asks = self.core.asks();
-        if matches!(state, RunState::Done | RunState::Failed | RunState::Stopped) && asks.question(run_id).is_some() {
+        let question = asks.question(run_id);
+        if question.is_some() && matches!(seen.state, RunState::Done | RunState::Failed | RunState::Stopped) {
             asks.cancel(run_id);
         }
+        state::with_ask(seen, question.as_deref())
     }
 
     /// Applies one run's observation to `before`, the run as it is now. Returns its connection when anything about it
@@ -421,8 +424,7 @@ impl RunService {
     async fn track(&self, before: Run, obs: &Observation, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
         let run_id = before.id.as_str();
         let finished = matches!(before.state, RunState::Done | RunState::Stopped);
-        let seen = obs.seen.clone();
-        self.drop_ask_of_ended(run_id, seen.state);
+        let seen = self.with_pending_ask(run_id, obs.seen.clone());
         for (counts, n) in [(&self.misses, seen.pid_misses), (&self.idle_polls, seen.idle_polls)] {
             let mut all = counts.lock().expect("run counts lock poisoned");
             if n > 0 {

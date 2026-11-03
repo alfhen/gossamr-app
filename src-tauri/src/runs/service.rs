@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::backend::{self, BackendError, Folders};
+use super::backend::{self, Folders};
 use super::cli::ShortId;
 use super::redact::redact;
 use super::failure::Failure;
@@ -99,15 +99,6 @@ pub struct RunService {
 pub(super) use super::fresh::real;
 
 pub(super) use super::backend::claude::belongs_to;
-
-/// A failed look for a run's session, worded as `Failure::from_cli` words the same failure of `claude`.
-fn listing_failure(e: BackendError, instance: &str) -> Failure {
-    match e {
-        BackendError::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
-        BackendError::Failed { stderr, .. } => Failure::CommandFailed(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message").to_owned()),
-        other => Failure::CommandFailed(other.to_string()),
-    }
-}
 
 /// How a session is titled in Claude's own lists. Only the title carries the prefix: the worktree folder and branch
 /// take `spec.name`, and the spec (and so its digest) is left as approved.
@@ -315,7 +306,7 @@ impl RunService {
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         let dirs = self.folders_of(&tc).await;
         loop {
-            if let Some(found) = tc.backend.find(run, &dirs).await.map_err(|e| listing_failure(e, &tc.instance_name))? {
+            if let Some(found) = tc.backend.find(run, &dirs).await.map_err(|e| Failure::from_backend(e, &tc.instance_name))? {
                 return Ok(Some(found));
             }
             if Instant::now() >= deadline {

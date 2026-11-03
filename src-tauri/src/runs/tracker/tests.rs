@@ -1296,4 +1296,6 @@ async fn a_held_ask_is_handed_to_the_backend_with_the_run_it_belongs_to() {
     let looked = backend.looked_at.lock().unwrap().clone();
     let watched = &looked[0];
     assert_eq!((watched.len(), watched[0].run.id.as_str(), watched[0].ask.as_deref()), (1, run.id.as_str(), Some("Which database?")));
+    let held = rig.get(&run).await;
+    assert_eq!((held.state, held.needs.as_deref()), (RunState::NeedsAnswer, Some("Which database?")));
 }

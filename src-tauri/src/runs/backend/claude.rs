@@ -15,7 +15,7 @@ use crate::runs::env::RunEnv;
 use crate::runs::failure::Failure;
 use crate::runs::fresh::real;
 use crate::runs::final_answer::{answer_folders, timeline_answer};
-use crate::runs::state::{progress_at, map_state, with_ask};
+use crate::runs::state::{map_state, progress_at};
 
 /// A stopped run's session is listed as stopped within seconds, but until then it can still look alive; it is not
 /// taken for a session that carried on before this long has passed.
@@ -188,7 +188,7 @@ impl RunBackend for ClaudeBackend {
                 (Some(_), Some(dir), Some(id)) => self.cli.job(dir, id).await.ok().flatten(),
                 _ => None,
             };
-            let seen = with_ask(map_state(entry, job.as_ref(), run, now, w.misses, w.idle), w.ask.as_deref());
+            let seen = map_state(entry, job.as_ref(), run, now, w.misses, w.idle);
             let answer = match seen.state {
                 RunState::Done if !finished => self.read_answer(run, entry, job.as_ref(), dirs).await,
                 _ => None,
