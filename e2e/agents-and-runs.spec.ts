@@ -200,6 +200,22 @@ test.describe("what a queued run runs on", () => {
     await expect(runSheet(page).locator("[data-runs-on]")).toHaveText("Ran on Claude · Haiku");
   });
 
+  test("Escape on the sheet's Change menu closes the menu and leaves the sheet open", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    await page.locator(`main article[data-run-id="${id}"]`).click();
+    await expect(runSheet(page)).toBeVisible();
+    await runSheet(page).getByRole("button", { name: "Runs on Claude · Default" }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Haiku" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menuitemradio", { name: "Haiku" })).toHaveCount(0);
+    await expect(runSheet(page)).toBeVisible();
+  });
+
   test("is held back by a signed-out Claude, and the banner and the card name it and its sign-in command", async ({ page }) => {
     await page.goto("/?runs=empty&mockRepos=14&mockClaudeProbe=notSignedIn");
     await page.getByRole("button", { name: "Start watching" }).click();

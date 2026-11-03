@@ -3,6 +3,7 @@ import { useBackend } from "../backend/useBackend";
 import { agentId } from "./AgentCard";
 import { AgentsSettingsView } from "./AgentsSettings";
 import { pickerOpen } from "./AgentSheet";
+import { popoverOpen } from "./Popover";
 import { RunSheet } from "./RunSheet";
 import { stoppable } from "./agentsLogic";
 import { sheetKey } from "./runSheetLogic";
@@ -107,7 +108,7 @@ export function AgentSheets() {
     if (!runSheetOpen) return;
     const onKey = (ev: KeyboardEvent) => {
       const store = useRuns.getState();
-      const action = sheetKey(ev.key, { typing: typing(ev.target), modifier: ev.metaKey || ev.ctrlKey || ev.altKey, pickerOpen: pickerOpen(), browsing: store.sheet?.type === "run" });
+      const action = sheetKey(ev.key, { typing: typing(ev.target), modifier: ev.metaKey || ev.ctrlKey || ev.altKey, pickerOpen: pickerOpen() || popoverOpen(), browsing: store.sheet?.type === "run" });
       if (!action) return;
       ev.preventDefault();
       if (action === "close") store.closeSheet();
