@@ -91,6 +91,11 @@ describe("the clean up section of the run sheet", () => {
     const html = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z", sessionsLeft: true }, reason: null, login: "Claude work" });
     expect(html).toContain("The session was left in Claude work&#x27;s folder.");
   });
+
+  it("says that login's folder when the login the session was left in is removed", () => {
+    const html = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z", sessionsLeft: true }, reason: null, login: null });
+    expect(html).toContain("The session was left in that login&#x27;s folder.");
+  });
 });
 
 describe("cleaning up through the store", () => {

@@ -2,16 +2,18 @@ import { useState } from "react";
 import type { Run } from "../types";
 import { Box, Btn, Sec } from "./AgentSheet";
 import { leftoverSessions } from "./cleanupLogic";
+import { DEFAULT_INSTANCE } from "./providerLogic";
 import { useRunInstance } from "./runInstance";
 import { useRuns } from "./runsStore";
+import { useWorkspace } from "../workspaceStore";
 
 export interface RunCleanupViewProps {
   run: Pick<Run, "worktreeRemovedAt" | "earlierSessions" | "sessionsLeft">;
   reason: string | null;
   asking: boolean;
   busy: boolean;
-  /** The name of the login the run was on. */
-  login: string;
+  /** The name of the login the run was on; null once that login is removed. */
+  login: string | null;
   /** Its own words when it refused. */
   refused: string | null;
   onAsk(): void;
@@ -25,7 +27,7 @@ export function RunCleanupView({ run, reason, login, asking, busy, refused, onAs
     return (
       <Sec title="Clean up">
         <p className="m-0 text-ws-ink2">The worktree and its branch were removed. The result above is kept.</p>
-        {run.sessionsLeft && <p className="m-0 text-ws-ink2">The session was left in {login}&apos;s folder.</p>}
+        {run.sessionsLeft && <p className="m-0 text-ws-ink2">{`The session was left in ${login ?? "that login"}'s folder.`}</p>}
         {left > 0 && (
           <Box>
             <p className="m-0 text-ws-ink">
@@ -33,7 +35,7 @@ export function RunCleanupView({ run, reason, login, asking, busy, refused, onAs
             </p>
             {refused && (
               <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-                {login} kept it: {refused}
+                {login ?? "The login"} kept it: {refused}
               </p>
             )}
             <div>
@@ -54,7 +56,7 @@ export function RunCleanupView({ run, reason, login, asking, busy, refused, onAs
         <p className="m-0 text-sm text-ws-ink2">Removes this agent&apos;s worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here.</p>
         {refused && (
           <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-            {login} kept it: {refused}
+            {login ?? "The login"} kept it: {refused}
           </p>
         )}
         {asking ? (
@@ -90,6 +92,9 @@ export function RunCleanup({ run, reason }: { run: Run; reason: string | null })
     setAsking(false);
     setRefused(result?.type === "refused" ? result.message : null);
   };
-  const login = useRunInstance(run).name;
+  const instance = useRunInstance(run);
+  const instanceId = run.runsOn?.instanceId ?? DEFAULT_INSTANCE;
+  const known = useWorkspace((s) => s.connections.some((c) => c.kind === "provider" && c.instanceId === instanceId));
+  const login = known ? instance.name : null;
   return <RunCleanupView run={run} reason={reason} login={login} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
 }
