@@ -9,6 +9,7 @@ import { useBackend } from "../backend/useBackend";
 import { Button } from "../components/Button";
 import { CREATE_TOKEN_URL, EXPIRY_WARNING_DAYS, JIRA_SCOPES, TOKEN_PAGE_URL, defaultExpiry } from "../lib/jiraToken";
 import { useWorkspace } from "../workspaceStore";
+import { useTabs } from "./tabsStore";
 import { ConnectFrame } from "./ConnectGithub";
 import { useJiraUi } from "./jiraUi";
 import { messageOf, useToasts } from "./toasts";
@@ -36,14 +37,15 @@ export interface JiraFormValues {
   email: string;
   token: string;
   expiresOn: string;
+  name: string;
 }
 
 /** What to send, or null while a field is empty. A cloud id the site gave for this site wins over one typed. */
 export function signInFrom(values: JiraFormValues, lookup: SiteLookup): TokenSignIn | null {
-  const { site, email, token, expiresOn } = values;
+  const { site, email, token, expiresOn, name } = values;
   if (![site, email, token, expiresOn].every((v) => v.trim())) return null;
   const cloudId = lookup.state === "found" && lookup.site === site.trim() ? lookup.cloudId : values.cloudId.trim();
-  return { site: site.trim(), email: email.trim(), token: token.trim(), expiresOn, ...(cloudId ? { cloudId } : {}) };
+  return { site: site.trim(), email: email.trim(), token: token.trim(), expiresOn, ...(cloudId ? { cloudId } : {}), ...(name.trim() ? { name: name.trim() } : {}) };
 }
 
 export interface ConnectJiraViewProps {
@@ -53,6 +55,9 @@ export interface ConnectJiraViewProps {
   error: string | null;
   scopesShown: boolean;
   copied: boolean;
+  /** Asks for a name, which only a new account takes. */
+  named?: boolean;
+  submitLabel?: string;
   onChange(patch: Partial<JiraFormValues>): void;
   onLookup(): void;
   onCreateToken(): void;
@@ -75,6 +80,13 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
       }}
       className="grid gap-4"
     >
+      {p.named && (
+        <label className="grid gap-1 text-sm font-semibold">
+          Name
+          <input value={values.name} disabled={p.busy} onChange={(ev) => p.onChange({ name: ev.target.value })} placeholder="Client work" autoComplete="off" spellCheck={false} className={FIELD} />
+          <span className="text-sm font-normal text-ws-ink3">Shown in Settings. Leave it empty to use the site.</span>
+        </label>
+      )}
       <div className="grid gap-1">
         <label className="grid gap-1 text-sm font-semibold">
           Your Jira site
@@ -163,7 +175,7 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
           </Button>
         )}
         <Button variant="primary" type="submit" disabled={!ready || p.busy}>
-          {p.busy ? "Connecting…" : "Connect Jira"}
+          {p.busy ? "Connecting…" : (p.submitLabel ?? "Connect Jira")}
         </Button>
       </div>
     </form>
@@ -183,6 +195,7 @@ export function ConnectJiraForm({
   api,
   initial,
   instanceId,
+  named,
   onConnected,
   onCancel,
   onBusy,
@@ -190,11 +203,12 @@ export function ConnectJiraForm({
   api: JiraConnectApi;
   initial?: Partial<JiraFormValues>;
   instanceId?: string;
+  named?: boolean;
   onConnected(status: AuthStatus): void;
   onCancel?(): void;
   onBusy?(busy: boolean): void;
 }) {
-  const [values, setValues] = useState<JiraFormValues>({ site: "", cloudId: "", email: "", token: "", expiresOn: defaultExpiry(), ...initial });
+  const [values, setValues] = useState<JiraFormValues>({ site: "", cloudId: "", email: "", token: "", expiresOn: defaultExpiry(), name: "", ...initial });
   const [lookup, setLookup] = useState<SiteLookup>({ state: "idle" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -281,6 +295,8 @@ export function ConnectJiraForm({
       error={error}
       scopesShown={scopesShown}
       copied={copied}
+      named={named}
+      submitLabel={named ? "Add account" : undefined}
       onChange={change}
       onLookup={() => void lookUp()}
       onCreateToken={() => void open(CREATE_TOKEN_URL)}
@@ -293,7 +309,7 @@ export function ConnectJiraForm({
   );
 }
 
-/** The sheet that replaces the token, from Settings or the banner that says Jira turned the old one down. */
+/** The sheet that adds a Jira account (from + Add), or replaces a row's token (from Settings or the banner that says Jira turned the old one down). */
 export function ConnectJiraDialog() {
   const shown = useJiraUi((s) => s.connectOpen);
   const close = useJiraUi((s) => s.closeConnect);
@@ -325,9 +341,18 @@ export function ConnectJiraDialog() {
   }, [shown, close]);
   if (!shown || !backend) return null;
 
+  const title = instanceId ? "Connect Jira" : "Add Jira account";
+
   const connected = (next: AuthStatus) => {
     busy.current = false;
     close();
+    if (!instanceId) {
+      useToasts.getState().push(`Added ${next.site?.name ?? "the account"}.`, "info");
+      const ws = useWorkspace.getState();
+      void Promise.all([ws.refreshConnections(true), ws.refresh()]);
+      useTabs.getState().openSettings("watching");
+      return;
+    }
     useToasts.getState().push(`Connected to Jira as ${next.me?.name ?? "you"}.`, "info");
     if (keepsWorkspace(current, next)) {
       const ws = useWorkspace.getState();
@@ -338,15 +363,15 @@ export function ConnectJiraDialog() {
   };
 
   return (
-    <ConnectFrame label="Connect Jira" onClose={dismiss}>
+    <ConnectFrame label={title} onClose={dismiss}>
       <div className="grid gap-4">
-        <h2 className="font-display m-0 text-lg font-semibold">Connect Jira</h2>
-        {!instanceId && current?.site && <p className="m-0 text-sm text-ws-ink2">You're signed in to {current.site.name}. Signing in to another site or account replaces it.</p>}
+        <h2 className="font-display m-0 text-lg font-semibold">{title}</h2>
         <ConnectJiraForm
-          key={current?.site?.name ?? "new"}
+          key={instanceId ? (current?.site?.name ?? "new") : "add"}
           api={backend}
           instanceId={instanceId}
-          initial={{ site: current?.site?.name ?? "", email: current?.email ?? "" }}
+          named={!instanceId}
+          initial={instanceId ? { site: current?.site?.name ?? "", email: current?.email ?? "" } : undefined}
           onConnected={connected}
           onCancel={close}
           onBusy={(now) => (busy.current = now)}

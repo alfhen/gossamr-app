@@ -76,8 +76,8 @@ export interface CommandContext {
   unreadActivity: number;
   /** A GitHub account is connected. */
   github?: boolean;
-  /** A Jira account is connected. */
-  jira?: boolean;
+  /** Whether + Add offers a Jira account; true when unset. */
+  addJira?: boolean;
   /** The model providers + Add offers, so the palette offers the same. */
   providers?: readonly Driver[];
   /** How many things need the person (Needs you's one count), for the hint beside "Show what needs me". */
@@ -139,7 +139,7 @@ export function buildCommands(containers: readonly WorkContainer[], savedViews: 
       : []),
     { id: "filter:clear", group: "Filters", icon: "⏷", label: "Clear filters", keywords: "reset remove", run: a.clearFilters },
     { id: "connection:add-github", group: "Connections", icon: "＋", label: "Add GitHub account", keywords: "connect sign in pull requests code", run: a.addGithub },
-    ...(ctx.jira ? [] : [{ id: "connection:add-jira", group: "Connections" as const, icon: "＋", label: "Add Jira account", keywords: "connect sign in token tickets", run: a.addJira }]),
+    ...(ctx.addJira === false ? [] : [{ id: "connection:add-jira", group: "Connections" as const, icon: "＋", label: "Add Jira account", keywords: "connect sign in token tickets", run: a.addJira }]),
     ...(ctx.providers ?? []).map((d): Command => ({ id: `connection:add-${d}`, group: "Connections", icon: "＋", label: `Add ${DRIVER_NAME[d]}`, keywords: "connect sign in login model provider", run: () => a.addProvider(d) })),
     ...(ctx.github ? [{ id: "github:repos", group: "GitHub" as const, icon: "⚙", label: "Manage repositories", keywords: "github watch unwatch repos code", run: a.manageRepositories }] : []),
     ...THEMES.map((t): Command => ({ id: `theme:${t}`, group: "Theme", icon: "◐", label: `Theme: ${THEME_LABEL[t]}`, keywords: "appearance colours", run: () => a.setTheme(t) })),

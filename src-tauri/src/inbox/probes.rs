@@ -265,7 +265,7 @@ mod tests {
         let fx = fixture_with_authenticator(None, Some(Arc::new(Accepting))).await;
         fx.core.adopt_instances().await;
         let on = chrono::Local::now().date_naive() + chrono::Days::new(5);
-        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "tok".into(), expires_on: on.to_string() };
+        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "tok".into(), expires_on: on.to_string(), name: None };
         fx.core.connect_jira(&input, Some("jira")).await.unwrap();
 
         fx.core.probe_connections(Probe::Launch).await;

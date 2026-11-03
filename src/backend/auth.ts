@@ -29,6 +29,8 @@ export interface TokenSignIn {
   email: string;
   token: string;
   expiresOn: string;
+  /** What Settings calls a new connection; the site's name when empty. */
+  name?: string;
 }
 
 export const auth = {

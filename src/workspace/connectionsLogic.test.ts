@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
 import type { ConnectionInfo } from "../types";
-import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
+import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, removesLastJira, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
@@ -159,40 +159,37 @@ describe("removalWarning", () => {
 });
 
 describe("the + Add entries", () => {
-  const ids = (cs: ConnectionInfo[], providers: boolean) => addEntries(cs, providers).map((e) => e.id);
+  const ids = (providers: boolean) => addEntries(providers).map((e) => e.id);
 
-  it("offers GitHub and Jira when nothing is connected", () => {
-    expect(ids([], false)).toEqual(["github", "jira"]);
-  });
-
-  it("keeps offering another GitHub account", () => {
-    expect(ids([base], false)).toEqual(["github", "jira"]);
-  });
-
-  it("stops offering Jira once a Jira connection exists, even one that is off", () => {
-    expect(ids([jira()], false)).toEqual(["github"]);
-    expect(ids([jira({ enabled: false })], false)).toEqual(["github"]);
-  });
-
-  it("still offers Jira next to the sample data", () => {
-    expect(ids([{ ...base, kind: "mock" }], false)).toEqual(["github", "jira"]);
+  it("always offers a GitHub account and a Jira account, whatever is connected", () => {
+    expect(ids(false)).toEqual(["github", "jira"]);
   });
 
   it("offers Claude only when provider rows are shown, and never Codex while it cannot run agents", () => {
-    expect(ids([], false)).not.toContain("claude");
-    expect(ids([], true)).toEqual(["github", "jira", "claude"]);
+    expect(ids(false)).not.toContain("claude");
+    expect(ids(true)).toEqual(["github", "jira", "claude"]);
   });
 
   it("offers Codex too when the sample page asks for it", () => {
-    expect(addEntries([], true, true, true).map((e) => e.id)).toEqual(["github", "jira", "claude", "codex"]);
-  });
-
-  it("holds Jira back until the connections have loaded, so an unread list never offers it over a sign-in", () => {
-    expect(addEntries([], false, false).map((e) => e.id)).toEqual(["github"]);
+    expect(addEntries(true, true).map((e) => e.id)).toEqual(["github", "jira", "claude", "codex"]);
   });
 
   it("puts each entry under its group", () => {
-    expect(addEntries([], true).map((e) => [e.id, e.group])).toEqual([["github", "Code"], ["jira", "Tickets"], ["claude", "Models"]]);
+    expect(addEntries(true).map((e) => [e.id, e.group])).toEqual([["github", "Code"], ["jira", "Tickets"], ["claude", "Models"]]);
+  });
+});
+
+describe("removing a Jira connection", () => {
+  const second = jira({ id: "jira:b:u", instanceId: "jira_2" });
+
+  it("goes back to Setup only when it was the last Jira", () => {
+    expect(removesLastJira([jira()], jira())).toBe(true);
+    expect(removesLastJira([jira(), second], jira())).toBe(false);
+    expect(removesLastJira([jira(), second], second)).toBe(false);
+  });
+
+  it("never goes back to Setup for a GitHub connection", () => {
+    expect(removesLastJira([base], base)).toBe(false);
   });
 });
 

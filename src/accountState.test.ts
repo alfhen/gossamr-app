@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAccountState } from "./accountState";
+import { accountKey, isSignedInToJira, resetAccountState } from "./accountState";
+import type { AuthStatus } from "./backend/auth";
 import { MockBackend } from "./backend/mock";
 import { useClaude } from "./claudeStore";
 import { usePip } from "./workspace/pipStore";
@@ -53,6 +54,31 @@ describe("per-account state", () => {
     resetAccountState("jira:site:someone-else");
     expect(usePip.getState().filtered).toBeNull();
     expect(useTabs.getState().tabs).toHaveLength(1);
+  });
+});
+
+describe("the account key with several Jira accounts", () => {
+  const signedIn = (site: string, accountId: string): AuthStatus => ({
+    site: { cloudId: site, name: `${site}.atlassian.net`, url: `https://${site}.atlassian.net` },
+    me: { accountId, name: accountId, avatarUrl: null },
+    email: `${accountId}@${site}.example`,
+    expiresOn: "2027-10-30",
+  });
+  const none: AuthStatus = { site: null, me: null, email: null, expiresOn: null };
+
+  it("is the same whichever Jira account the status names, so a second account keeps the tabs", () => {
+    stubStorage();
+    resetAccountState(accountKey(signedIn("acme", "ann")));
+    useTabs.getState().openTab({ title: "Mine" });
+    resetAccountState(accountKey(signedIn("beta", "bo")));
+    expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
+  });
+
+  it("chooses the desktop backend for any signed-in status and the sample for none", () => {
+    expect(isSignedInToJira(signedIn("beta", "bo"))).toBe(true);
+    expect(isSignedInToJira(none)).toBe(false);
+    expect(isSignedInToJira(null)).toBe(false);
+    expect(accountKey(none)).not.toBe(accountKey(signedIn("acme", "ann")));
   });
 });
 

@@ -317,7 +317,6 @@ export function Palette() {
   const proposals = useWorkspace((s) => s.proposals);
   const siteOf = useSiteOf();
   const github = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
-  const jira = useWorkspace((s) => !s.connectionsLoaded || s.connections.some((c) => c.kind === "jira"));
   const unread = useActivity((s) => s.unread);
   const needingMe = useNeedsYou().length;
   const savedViews = useTabs((s) => s.savedViews);
@@ -348,13 +347,14 @@ export function Palette() {
     }
     const actions = { ...appActions(), newTicket: () => go({ type: "project" }) };
     const ticket = peekedTicket();
+    const addable = addEntries();
     const ctx: CommandContext = {
       project: projectOf(tab.filter) ?? null,
       view: tab.view,
       unreadActivity: unread,
       github,
-      jira,
-      providers: addEntries(connections).flatMap((e) => (e.id === "claude" || e.id === "codex" ? [e.id] : [])),
+      addJira: addable.some((e) => e.id === "jira"),
+      providers: addable.flatMap((e) => (e.id === "claude" || e.id === "codex" ? [e.id] : [])),
       needsYou: needingMe,
       ticket: ticket ? { key: ticket.item.key, workstream: !!useWorkstreams.getState().forItem(ticket.item.key, ticket.item.connectionId) } : null,
       onAgents: useTabs.getState().route === "agents",
@@ -376,7 +376,7 @@ export function Palette() {
       ...watchCommands(unwatched.map((e) => ({ ref: e.ref, key: e.key, name: e.name })), actions),
     ];
     return withAskPip(found, query, actions.askPip);
-  }, [containers, items, watch, connections, proposals, github, jira, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject, siteOf]);
+  }, [containers, items, watch, connections, proposals, github, unread, needingMe, savedViews, tab.filter, tab.view, query, step, unwatched, selected, workstreams, subject, siteOf]);
 
   // A new ticket's project and title are steps back to the search.
   const prompting = step.type === "project" || step.type === "title";

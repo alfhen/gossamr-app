@@ -1,3 +1,4 @@
+import type { AuthStatus } from "./backend/auth";
 import { forgetConversations } from "./claudeStore";
 import { useWorkView } from "./workspace/workViewStore";
 import { resetPip } from "./workspace/pipStore";
@@ -7,6 +8,12 @@ import { useToasts } from "./workspace/toasts";
 import { useWorkspace } from "./workspaceStore";
 
 const KEY = "gossamr-account";
+
+/** The desktop backend runs whenever a Jira account is signed in, however many there are. */
+export const isSignedInToJira = (status: AuthStatus | null) => !!(status?.site && status.me);
+
+/** One key for every Jira sign-in, so adding or removing an account keeps the tabs and saved views. */
+export const accountKey = (status: AuthStatus | null) => (isSignedInToJira(status) ? "jira" : "mock");
 
 const lastAccount = (): string | null => {
   const raw = readStored(KEY) as { id?: unknown } | null;

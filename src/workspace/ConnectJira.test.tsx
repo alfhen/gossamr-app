@@ -6,7 +6,7 @@ import { JiraBackend } from "../backend/jira";
 import { auth } from "../backend/auth";
 import { ConnectJiraView, keepsWorkspace, sameAccount, signInApi, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
 
-const VALUES: JiraFormValues = { site: " acme.atlassian.net ", cloudId: "", email: " ann@acme.com ", token: " tok ", expiresOn: "2027-10-30" };
+const VALUES: JiraFormValues = { site: " acme.atlassian.net ", cloudId: "", email: " ann@acme.com ", token: " tok ", expiresOn: "2027-10-30", name: "" };
 const IDLE: SiteLookup = { state: "idle" };
 
 const view = (over: Partial<ConnectJiraViewProps> = {}) =>
@@ -32,6 +32,11 @@ const view = (over: Partial<ConnectJiraViewProps> = {}) =>
 describe("what the Connect Jira sheet sends", () => {
   it("trims every field and leaves out the cloud id until there is one", () => {
     expect(signInFrom(VALUES, IDLE)).toEqual({ site: "acme.atlassian.net", email: "ann@acme.com", token: "tok", expiresOn: "2027-10-30" });
+  });
+
+  it("sends the name the person typed, trimmed, and none when it is empty", () => {
+    expect(signInFrom({ ...VALUES, name: "  Client work " }, IDLE)?.name).toBe("Client work");
+    expect(signInFrom({ ...VALUES, name: "   " }, IDLE)).not.toHaveProperty("name");
   });
 
   it("sends the cloud id the site gave, or else the one typed", () => {
@@ -91,6 +96,15 @@ describe("the Connect Jira sheet", () => {
     expect(view()).not.toContain('role="alert"');
     expect(view()).not.toContain("Cancel");
     expect(view({ onCancel: vi.fn() })).toContain("Cancel");
+  });
+});
+
+describe("the Add Jira account form", () => {
+  it("asks for a name and says Add account, where renewing a token does not", () => {
+    const adding = view({ named: true, submitLabel: "Add account" });
+    expect(adding).toContain("Name");
+    expect(adding).toContain("Add account");
+    expect(view()).not.toContain("Leave it empty to use the site");
   });
 });
 

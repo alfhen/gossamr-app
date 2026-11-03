@@ -1473,8 +1473,11 @@ export class MockBackend implements Backend {
       this.connectionsListeners.forEach((l) => l());
       return status;
     }
+    const name = input.name?.trim();
+    if (name && name.length > 60) throw new Error("Use 60 characters or fewer.");
     if (instanceId === undefined && this.jiraAccount.site && !this.jiraToken) {
       const added = this.addAccount(status, false);
+      if (name) this.names.set(added.instanceId, name);
       this.connectionsListeners.forEach((l) => l());
       this.cacheListeners.forEach((l) => l({ connectionId: added.connector.connectionId }));
       return status;
@@ -1484,6 +1487,7 @@ export class MockBackend implements Backend {
     if (changed) this.retireDraftsOf(this.primary.connectionId, `${was.name} was replaced by another account.`, was.name);
     this.jiraAccount = status;
     this.jiraToken = undefined;
+    if (name && instanceId === undefined) this.names.set("jira", name);
     if (changed) {
       this.primary = new MockConnector(Date.now(), (c) => this.cacheListeners.forEach((l) => l(c)), this.options);
       this.watchOn(this.primary);

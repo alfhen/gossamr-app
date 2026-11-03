@@ -398,7 +398,6 @@ export function ConnectionsView(p: ConnectionsViewProps) {
 
 export function ConnectionsSection({ now }: { now: Date }) {
   const connections = useWorkspace((s) => s.connections);
-  const loaded = useWorkspace((s) => s.connectionsLoaded);
   const watch = useWorkspace((s) => s.watch);
   const selectedId = useConnectionsUi((s) => s.selected);
   const [checking, setChecking] = useState(false);
@@ -495,7 +494,7 @@ export function ConnectionsSection({ now }: { now: Date }) {
       }}
       onToggle={(c, on) => void toggle(c, on)}
       onConnectGithub={() => useGithubUi.getState().openConnect()}
-      addable={addEntries(connections, undefined, loaded)}
+      addable={addEntries()}
       onAdd={(id) => {
         if (id === "github") useGithubUi.getState().openConnect();
         else if (id === "jira") useJiraUi.getState().openConnect();
