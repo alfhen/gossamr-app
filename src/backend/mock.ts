@@ -1474,7 +1474,10 @@ export class MockBackend implements Backend {
       return status;
     }
     const name = input.name?.trim();
-    if (name && name.length > 60) throw new Error("Use 60 characters or fewer.");
+    if (name) {
+      const problem = nameProblem(name);
+      if (problem) throw new Error(problem);
+    }
     if (instanceId === undefined && this.jiraAccount.site && !this.jiraToken) {
       const added = this.addAccount(status, false);
       if (name) this.names.set(added.instanceId, name);

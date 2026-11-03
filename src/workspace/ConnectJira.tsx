@@ -7,6 +7,7 @@ import { auth, type AuthStatus, type TokenSignIn } from "../backend/auth";
 import { MockBackend } from "../backend/mock";
 import type { Backend } from "../backend/types";
 import { useBackend } from "../backend/useBackend";
+import { nameProblem, NAME_LIMIT } from "../lib/connectionName";
 import { Button } from "../components/Button";
 import { CREATE_TOKEN_URL, EXPIRY_WARNING_DAYS, JIRA_SCOPES, TOKEN_PAGE_URL, defaultExpiry } from "../lib/jiraToken";
 import { useWorkspace } from "../workspaceStore";
@@ -71,7 +72,8 @@ export interface ConnectJiraViewProps {
 
 export function ConnectJiraView(p: ConnectJiraViewProps) {
   const { values, lookup } = p;
-  const ready = signInFrom(values, lookup) !== null;
+  const nameIssue = p.named && values.name.trim() ? nameProblem(values.name) : null;
+  const ready = signInFrom(values, lookup) !== null && nameIssue === null;
   return (
     <form
       aria-label="Connect Jira"
@@ -159,7 +161,12 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
       {p.named && (
         <label className="grid gap-1 text-sm font-semibold">
           Name
-          <input value={values.name} disabled={p.busy} onChange={(ev) => p.onChange({ name: ev.target.value })} placeholder="Client work" autoComplete="off" spellCheck={false} className={FIELD} />
+          <input value={values.name} disabled={p.busy} maxLength={NAME_LIMIT * 2} onChange={(ev) => p.onChange({ name: ev.target.value })} placeholder="Client work" autoComplete="off" spellCheck={false} className={FIELD} />
+          {nameIssue && (
+            <span role="status" className="text-sm font-normal text-ws-blocked">
+              {nameIssue}
+            </span>
+          )}
           <span className="text-sm font-normal text-ws-ink3">Shown in lists and on drafts. You can change it later. Leave it empty to use the site.</span>
         </label>
       )}
