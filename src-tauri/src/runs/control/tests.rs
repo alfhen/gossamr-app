@@ -671,7 +671,9 @@ struct AsFolderInstance(Arc<dyn crate::runs::toolchain::ToolchainSource>);
 #[async_trait::async_trait]
 impl crate::runs::toolchain::ToolchainSource for AsFolderInstance {
     async fn get(&self) -> std::result::Result<Toolchain, crate::runs::toolchain::ToolchainError> {
-        Ok(Toolchain { login: Some(folder_login()), ..self.0.get().await? })
+        let tc = self.0.get().await?;
+        let (id, name) = (tc.instance_id.clone(), tc.instance_name.clone());
+        Ok(tc.into_instance(&id, &name, Some(folder_login())))
     }
 
     async fn for_instance(&self, _: &str) -> std::result::Result<Toolchain, crate::runs::toolchain::ToolchainError> {
@@ -719,7 +721,7 @@ fn the_same_clone_opened_as_two_instances_gets_two_files_so_one_cannot_replace_t
 #[test]
 fn a_failed_call_as_an_instance_with_a_folder_says_so_and_one_without_does_not() {
     let plain = Toolchain::new(Arc::new(FakeCli::new()), Arc::new(crate::runs::env::RunEnv::from_pairs([("PATH", "/bin")])));
-    let personal = Toolchain { login: Some(folder_login()), instance_name: "Claude personal".into(), ..plain.clone() };
+    let personal = plain.clone().into_instance("claude", "Claude personal", Some(folder_login()));
     let folder = Path::new("/Users/me/Code/webshop");
     let untrusted = || crate::runs::cli::CliError::Failed { code: Some(1), stderr: "Workspace not trusted".into() };
     assert!(matches!(Failure::from_cli(untrusted(), folder, &plain.instance_name, plain.has_own_folder()), Failure::NeedsTrust { own_folder: false, .. }));

@@ -69,6 +69,35 @@ async fn the_claude_backend_writes_a_private_mcp_file_from_the_offer_and_passes_
     let _ = std::fs::remove_dir_all(files.parent().unwrap());
 }
 
+#[test]
+fn a_second_mcp_file_for_a_run_replaces_the_first_and_a_bad_run_id_writes_nothing() {
+    let files = dir("replace").join("agents");
+    let (first, second) = (offer("run-1"), offer("run-1"));
+    let launch = claude::write_mcp_file(&files, &first).unwrap();
+    claude::write_mcp_file(&files, &second).unwrap();
+    let text = std::fs::read_to_string(&launch.config).unwrap();
+    assert!(text.contains(&second.token) && !text.contains(&first.token));
+    assert!(!format!("{launch:?}").contains(&second.token[4..]), "the launch prints a path, never the token");
+    for bad in ["", "../x", "a/b", "a b", "..", &"a".repeat(65)] {
+        assert!(claude::write_mcp_file(&files, &offer(bad)).is_err(), "{bad:?}");
+    }
+    assert_eq!(std::fs::read_dir(&files).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(files.parent().unwrap());
+}
+
+#[tokio::test]
+async fn the_claude_backend_adds_the_tools_guard_only_once_its_file_is_written() {
+    let files = dir("guard").join("agents");
+    let cli = Arc::new(FakeCli::new());
+    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "Claude".into(), false);
+    backend.launch(&request(Some(offer("run-1")))).await.unwrap();
+    backend.launch(&request(Some(offer("../bad")))).await.unwrap();
+    let launches = cli.0.lock().unwrap().launches.clone();
+    assert_eq!(launches[0].guard, format!("Guard. {}", crate::domain::AGENT_GUARD));
+    assert!(launches[1].agent.is_none() && launches[1].guard == "Guard.");
+    let _ = std::fs::remove_dir_all(files.parent().unwrap());
+}
+
 #[tokio::test]
 async fn the_claude_backend_launches_without_tools_when_none_are_offered() {
     let files = dir("none").join("agents");

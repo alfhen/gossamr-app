@@ -27,7 +27,7 @@ pub(super) use self::choice::waiting_words;
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Actor, Role, Run, RunEvent, RunQuery, RunState, GUARD, AGENT_GUARD};
+use crate::domain::{render_prompt, Actor, Role, Run, RunEvent, RunQuery, RunState, GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -366,10 +366,6 @@ impl RunService {
 
         let tools = self.offer_tools(run).await;
         let spec = &run.spec;
-        let mut guard = GUARD.to_string();
-        if tools.is_some() {
-            guard = format!("{guard} {AGENT_GUARD}");
-        }
         let fresh_id = match self.fresh_short_id().await {
             Ok(id) => id,
             Err(why) => {
@@ -381,7 +377,7 @@ impl RunService {
             cwd: spec.clone_path.clone(),
             name: title_of(run),
             worktree: spec.name.clone(),
-            guard,
+            guard: GUARD.to_string(),
             prompt: render_prompt(spec),
             tools,
             model,

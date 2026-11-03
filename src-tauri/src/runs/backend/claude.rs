@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::{BackendError, LaunchRequest, RunBackend, Session};
-use crate::domain::AGENT_GUARD;
-use crate::runs::agent_config::AgentChannel;
+use super::{BackendError, LaunchRequest, RunBackend, Session, ToolsOffer};
+use crate::domain::{AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER};
+use crate::runs::agent_config::{config_path, AgentLaunch};
 use crate::runs::cli::{self, ClaudeCli, CliError};
 use crate::runs::env::RunEnv;
 use crate::runs::failure::Failure;
@@ -45,6 +45,25 @@ impl ClaudeBackend {
     }
 }
 
+/// Writes the run's MCP config in `files` where only this user can read it. A second call for the same run replaces
+/// the file, and every token minted for the run stays valid on the server.
+pub fn write_mcp_file(files: &Path, offer: &ToolsOffer) -> std::io::Result<AgentLaunch> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let path = config_path(files, &offer.run_id).ok_or_else(|| std::io::Error::other("not a run id"))?;
+    std::fs::create_dir_all(files)?;
+    std::fs::set_permissions(files, std::fs::Permissions::from_mode(0o700))?;
+    let config = serde_json::json!({ "mcpServers": { AGENT_SERVER: { "type": "http", "url": offer.url, "headers": { "Authorization": format!("Bearer {}", offer.token) }, "timeout": AGENT_CALL_TIMEOUT_MS } } });
+    let temp = path.with_extension("json.tmp");
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temp)?;
+    file.write_all(config.to_string().as_bytes())?;
+    file.sync_all()?;
+    std::fs::rename(&temp, &path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })?;
+    Ok(AgentLaunch { config: path })
+}
+
 #[async_trait]
 impl RunBackend for ClaudeBackend {
     async fn preflight(&self, clone: &Path) -> std::result::Result<(), Failure> {
@@ -65,13 +84,13 @@ impl RunBackend for ClaudeBackend {
 
     async fn launch(&self, req: &LaunchRequest) -> std::result::Result<Session, Failure> {
         let mut guard = req.guard.clone();
-        let agent = req.tools.as_ref().and_then(|offer| match AgentChannel::new(0, self.files.clone()).write_offer(offer) {
-            Ok(launch) => Some(launch),
+        let agent = req.tools.as_ref().and_then(|offer| match write_mcp_file(&self.files, offer) {
+            Ok(launch) => {
+                guard = format!("{guard} {AGENT_GUARD}");
+                Some(launch)
+            }
             Err(e) => {
                 eprintln!("couldn't offer Gossamr's tools to run {}: {e}", offer.run_id);
-                if let Some(without) = guard.strip_suffix(&format!(" {AGENT_GUARD}")) {
-                    guard = without.to_owned();
-                }
                 None
             }
         });

@@ -162,7 +162,7 @@ async fn the_sweep_keeps_what_a_live_or_recently_finished_run_may_still_need_and
     let old = rig.launched_reporting(3, "investigate").await;
     let failed = rig.launched_reporting(4, "investigate").await;
     let channel = rig.svc.agents.clone().unwrap();
-    channel.write_config("run-with-no-row", "gsr_0").unwrap();
+    crate::runs::rig::write_config(&channel, "run-with-no-row", "gsr_0").unwrap();
     let now = chrono::Utc::now();
     rig.set(&recent, |r| (r.state, r.ended_at) = (RunState::Done, Some(now))).await;
     rig.set(&old, |r| (r.state, r.ended_at) = (RunState::Done, Some(now - chrono::Duration::hours(7)))).await;
@@ -201,7 +201,7 @@ async fn the_config_files_of_the_earlier_report_server_follow_the_same_sweep() {
     rig.set(&failed, |r| r.state = RunState::Failed).await;
     let legacy = crate::runs::agent_config::AgentChannel::new(0, rig.fx.core.data_dir().join("report"));
     for run in [&live, &failed] {
-        legacy.write_config(&run.id, "gsr_0").unwrap();
+        crate::runs::rig::write_config(&legacy, &run.id, "gsr_0").unwrap();
     }
     rig.svc.sweep_agent_files().await;
     assert_eq!(legacy.configured(), std::slice::from_ref(&live.id), "an open run keeps the file its saved options name");
