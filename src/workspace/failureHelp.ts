@@ -101,7 +101,7 @@ export function failureHelp(run: Run, refusal: string | null = null, instance: R
         return {
           kind: "notSignedIn",
           summary: `${name} isn't signed in.`,
-          detail: `Terminal opens with ${name}'s sign-in in this run's folder. Run codex login, finish signing in, then close it and retry.`,
+          detail: `Terminal opens with ${name}'s sign-in. Finish signing in, then close it and retry.`,
           primary: { label: "Open Terminal to sign in", act: "terminal" },
           command: { text: instance.signIn ?? "codex login", note: null },
           retryNeedsTerminal: true,

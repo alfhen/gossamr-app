@@ -169,7 +169,7 @@ function announceFailedLaunches(get: () => RunsState, set: (patch: Partial<RunsS
       continue;
     }
     if (run.state !== "failed") continue;
-    const reason = failureHelp(run)?.summary ?? run.error ?? "no reason was given";
+    const reason = failureHelp(run, null, instanceOf(useWorkspace.getState().connections, run.runsOn?.instanceId ?? DEFAULT_INSTANCE))?.summary ?? run.error ?? "no reason was given";
     const where = run.item?.key ? ` on ${run.item.key}` : "";
     useToasts.getState().push(`The agent${where} didn't start. ${reason}`, "error", { label: "Fix it", run: () => get().openRun(id) });
   }
@@ -396,9 +396,13 @@ export const useRuns = create<RunsState>((set, get) => ({
         return await backend.openUrl(installUrl(instanceOf(useWorkspace.getState().connections, on)));
       }
       if (act === "trust") return await get().retryLaunch(id, { trust: true });
-      const failure = get().runs.find((r) => r.id === id)?.failure;
+      const run = get().runs.find((r) => r.id === id);
+      const failure = run?.failure;
+      const instanceId = run?.runsOn?.instanceId ?? DEFAULT_INSTANCE;
       if (failure?.type === "modeRefused") await backend.runsAcceptMode(id, failure.mode);
-      else await (failure?.type === "notSignedIn" ? backend.runsSignIn(id) : backend.runsTrustFolder(id));
+      else if (failure?.type === "notSignedIn")
+        await (instanceOf(useWorkspace.getState().connections, instanceId)?.driver === "codex" ? backend.connectionOpenTerminal(instanceId) : backend.runsSignIn(id));
+      else await backend.runsTrustFolder(id);
       get().noteCopied(id);
     } catch (e) {
       useToasts.getState().push(`Couldn't open ${act === "install" ? "the install page" : "Terminal"}: ${messageOf(e)}`);

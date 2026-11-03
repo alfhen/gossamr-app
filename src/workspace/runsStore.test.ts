@@ -4,7 +4,7 @@ import type { Backend } from "../backend/types";
 import { itemRef } from "../backend/mockConnector";
 import { NO_FILTERS, agentGroups } from "./agentsLogic";
 import { useWorkspace } from "../workspaceStore";
-import type { ConnectionInfo } from "../types";
+import type { ConnectionInfo, Run } from "../types";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -380,6 +380,19 @@ describe("the run sheet", () => {
       const open = vi.spyOn(backend, "openUrl");
       await s().fix(run.id, "install");
       expect(open).toHaveBeenCalledWith("https://developers.openai.com/codex/cli");
+      useWorkspace.setState({ connections: [] });
+    });
+
+    it("opens the instance's own sign-in, not the run's folder, for a Codex run that is not signed in", async () => {
+      const run = await failing("untrustedFolder");
+      s().runs = s().runs.map((r) => (r.id === run.id ? { ...r, failure: { type: "notSignedIn" }, runsOn: { instanceId: "codex", model: "default" } } as Run : r));
+      useWorkspace.setState({ connections: [{ kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo] });
+      const login = vi.spyOn(backend, "connectionOpenTerminal").mockResolvedValue();
+      const signIn = vi.spyOn(backend, "runsSignIn");
+      await s().fix(run.id, "terminal");
+      expect(login).toHaveBeenCalledWith("codex");
+      expect(signIn).not.toHaveBeenCalled();
+      expect(s().terminalOpened.has(run.id)).toBe(true);
       useWorkspace.setState({ connections: [] });
     });
 
