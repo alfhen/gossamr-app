@@ -104,7 +104,7 @@ impl RunService {
         let all = self.core.runs_list(&RunQuery::default()).await.ok()?;
         let mut taken = self.index.short_ids_on(instance);
         taken.extend(all.iter().filter(|r| r.instance_id() == instance).flat_map(Run::session_ids));
-        let launch_pending = all.iter().any(|r| r.short_id.is_none() && matches!(r.state, RunState::Queued | RunState::Launching));
+        let launch_pending = all.iter().any(|r| r.instance_id() == instance && r.short_id.is_none() && matches!(r.state, RunState::Queued | RunState::Launching));
         Some((taken, launch_pending))
     }
 

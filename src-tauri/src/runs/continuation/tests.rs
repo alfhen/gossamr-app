@@ -321,3 +321,15 @@ async fn a_pending_answer_can_still_be_sent_again_once_the_poller_has_left_the_r
     let sent = rig.svc.answer(&run.id, "Use staging.").await.unwrap();
     assert_eq!((sent.state, sent.unsent_answer), (RunState::Working, None), "the saved answer is still offered and goes to the run's own session");
 }
+
+#[tokio::test]
+async fn a_launch_waiting_on_another_login_does_not_unsettle_this_logins_adoption() {
+    let (rig, run) = stopped().await;
+    let other = rig.queued(2).await;
+    rig.set(&other, |r| {
+        r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None })
+    })
+    .await;
+    let (_, launch_pending) = rig.svc.taken_ids(run.instance_id()).await.unwrap();
+    assert!(!launch_pending);
+}
