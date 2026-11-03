@@ -322,14 +322,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_instance_that_is_off_or_has_a_bad_folder_or_cannot_run_agents_is_unusable_and_says_which() {
+    async fn an_instance_that_is_off_or_has_a_bad_folder_is_unusable_and_says_which() {
         let (fx, tools) = rig("unusable").await;
         add(&fx, "off", Driver::Claude, Some("~/.claude-off"), false);
         add(&fx, "bad", Driver::Claude, Some("/tmp/outside-home"), true);
-        add(&fx, "codex", Driver::Codex, Some("~/.codex-work"), true);
         assert_eq!(tools.for_instance("off").await.err(), Some(ToolchainError::Unusable { reason: Reason::Off, name: "off name".into() }));
         assert!(matches!(tools.for_instance("bad").await.err(), Some(ToolchainError::BadFolder { name, problem }) if name == "bad name" && problem.starts_with("This folder can't be used: ")));
-        assert_eq!(tools.for_instance("codex").await.err(), Some(ToolchainError::Unusable { reason: Reason::CantRun(Driver::Codex), name: "codex name".into() }));
     }
 
     #[tokio::test]
@@ -395,13 +393,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn build_gives_a_codex_instance_the_codex_backend_while_for_instance_still_refuses_it() {
+    async fn for_instance_gives_a_codex_instance_the_codex_backend() {
         let (fx, tools) = rig("codex").await;
         add(&fx, "codex", Driver::Codex, Some("~/.codex-work"), true);
-        let env = fx.core.shell().get().await.unwrap();
-        let tc = tools.build("codex", "codex name", Driver::Codex, None, Ok(env)).await.unwrap();
+        let tc = tools.for_instance("codex").await.unwrap();
         assert!(tc.backend.as_any().and_then(|any| any.downcast_ref::<CodexBackend>()).is_some());
-        assert_eq!((tc.driver, tc.instance_id.as_str()), (Driver::Codex, "codex"));
-        assert_eq!(tools.for_instance("codex").await.err(), Some(ToolchainError::Unusable { reason: Reason::CantRun(Driver::Codex), name: "codex name".into() }));
+        assert_eq!((tc.driver, tc.instance_id.as_str(), tc.instance_name.as_str()), (Driver::Codex, "codex", "codex name"));
+        assert!(tc.login.is_some());
     }
 }

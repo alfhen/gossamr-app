@@ -91,7 +91,7 @@ describe("answering from the sheet", () => {
 
   it("says the answer was sent until the run reports progress", () => {
     const working = run("working", { endedAt: null });
-    expect(sheet(working, { answerSent: true })).toMatch(/role="status" data-answer-sent[^>]*>[\s\S]*Answer sent. Claude is picking it back up./);
+    expect(sheet(working, { answerSent: true })).toMatch(/role="status" data-answer-sent[^>]*>[\s\S]*Answer sent. The agent is picking it back up./);
     expect(sheet(working)).not.toContain("data-answer-sent");
   });
 });

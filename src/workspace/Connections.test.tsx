@@ -4,6 +4,7 @@ import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockPro
 import type { ConnectionInfo } from "../types";
 import { badgeText, ConnectionsView, type ConnectionsViewProps } from "./Connections";
 import { addEntries } from "./connectionsLogic";
+import { usedForLine } from "./providerLogic";
 import { useJiraUi } from "./jiraUi";
 import { SignInBannerView, fixSignIn } from "./SignInBanner";
 
@@ -239,12 +240,17 @@ describe("a provider in the list", () => {
     expect(at).toEqual([...at].sort((a, b) => a - b));
   });
 
-  it("says Codex is in beta and can't run anything yet, and shows no Reveal in Finder for a usual setup", () => {
+  it("says Codex is in beta and runs agents, and shows no Reveal in Finder for a usual setup", () => {
     const out = view({ connections: [jira, gh, { ...claude, id: "codex", instanceId: "codex", displayName: "Codex", driver: "codex", status: claudeSnapshot("ready", CHECKED) }], selectedId: "codex" });
-    expect(out).toContain("Codex is in beta. Pip and agents can&#x27;t run on it yet.");
+    expect(out).toContain("Codex is in beta. Agents run on Codex with its own Codex settings: only danger-full-access lets them commit and push. Pip runs on Claude.");
     expect(out).toContain(">Beta<");
     expect(out).toContain("Your usual setup");
     expect(out).not.toContain("Reveal in Finder");
+  });
+
+  it("still says Pip runs on Claude for a Codex without the Beta label", () => {
+    expect(usedForLine({ driver: "codex", displayName: "Codex" })).toContain("Pip runs on Claude.");
+    expect(usedForLine({ driver: "claude", displayName: "Claude" })).not.toContain("beta");
   });
 
   it("names the shell variables a folder ignores", () => {

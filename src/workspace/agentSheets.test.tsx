@@ -107,7 +107,7 @@ describe("the run sheet, by state", () => {
 
     it("shows the question, an empty answer box with Send answer off, the reminder, and Open in Terminal beside it", () => {
       const html = sheet(asking());
-      expect(html).toContain("Claude is asking you");
+      expect(html).toContain("The agent is asking you");
       expect(html).toContain("Should the refund path keep the old rounding?");
       expect(box(html)).toContain('aria-label="Your answer"');
       expect(box(html)).not.toMatch(/>[^<]+<\/textarea>/);
@@ -122,7 +122,7 @@ describe("the run sheet, by state", () => {
 
     it("says the answer goes straight to an agent waiting in its ask call, without the stop and wake wording", () => {
       const html = sheet(asking({ asking: true }));
-      expect(html).toContain("Claude is asking you");
+      expect(html).toContain("The agent is asking you");
       expect(html).toContain("Your answer goes straight to the agent, which is waiting for it.");
       expect(html).not.toContain("stops the agent");
     });
@@ -158,7 +158,7 @@ describe("the run sheet, by state", () => {
   it("says Claude needs a sign-in, with no question to answer", () => {
     const html = sheet(run("systemBlocked"));
     expect(html).toContain("Claude needs you to sign in");
-    expect(html).not.toContain("Claude is asking you");
+    expect(html).not.toContain("The agent is asking you");
     expect(buttons(html)).toContain("Open in Terminal");
   });
 

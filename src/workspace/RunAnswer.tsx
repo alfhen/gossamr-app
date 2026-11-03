@@ -39,7 +39,7 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
   return (
     <Box tone="needs" label="Question from the agent">
       <BoxTitle icon="hand" tone="needs">
-        {again ? "Your answer didn't get through" : "Claude is asking you"}
+        {again ? "Your answer didn't get through" : "The agent is asking you"}
       </BoxTitle>
       {again ? (
         <p className="selectable m-0 text-ws-ink2 [overflow-wrap:anywhere]">{run.error?.trim() || "The agent was stopped before it could be woken."}</p>

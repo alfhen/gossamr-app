@@ -2,8 +2,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import type { Run, RunState } from "../types";
-import { BIG_BYTES, bulkCleanup, cleanable, cleanupReason, cleanupReport } from "./cleanupLogic";
-import { RunCleanupView } from "./RunCleanup";
+import { BIG_BYTES, bulkCleanup, cleanable, cleanupReason, cleanupReport, removerOf } from "./cleanupLogic";
+import type { ConnectionInfo } from "../types";
+import { RunCleanup, RunCleanupView } from "./RunCleanup";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 
@@ -62,6 +63,29 @@ describe("the clean up section of the run sheet", () => {
     expect(asking).toContain("Remove the worktree?");
     expect(asking).toContain("Yes, remove it");
     expect(asking).not.toContain(">Clean up</button>");
+  });
+
+  it("names the removing tool of a Codex run and never claude rm", () => {
+    const html = view({ remover: "git", login: "Codex" });
+    expect(html).toContain("with git");
+    expect(html).not.toContain("claude rm");
+  });
+
+  it("names git and never claude rm for a run whose login is removed", () => {
+    const html = view({ remover: "git", login: null });
+    expect(html).toContain("with git");
+    expect(html).not.toContain("claude rm");
+  });
+
+  it("uses neutral words, and never claude rm or git, while the login is unknown", () => {
+    const html = view({ remover: "unknown", login: null, refused: "worktree has 2 unpushed commits" });
+    expect(html).not.toContain("claude rm");
+    expect(html).not.toContain("with git");
+    expect(html).toContain("The login kept it: worktree has 2 unpushed commits");
+  });
+
+  it("names git in a refusal when git removes the worktree", () => {
+    expect(view({ remover: "git", login: "Codex", refused: "not merged" })).toContain("Git kept it: not merged");
   });
 
   it("shows Claude's refusal as it was said", () => {
@@ -158,5 +182,44 @@ describe("the mock settings", () => {
     const saved = await backend.runsSetSettings({ maxRuns: 40, terminal: "iTerm" });
     expect(saved).toEqual({ maxRuns: 6, terminal: "iTerm", notifications: "workstream" });
     expect(await backend.runsSettings()).toEqual(saved);
+  });
+});
+
+describe("what removes a run's worktree", () => {
+  const login = (instanceId: string, driver: "claude" | "codex", displayName: string) => ({ kind: "provider", id: instanceId, instanceId, driver, displayName }) as ConnectionInfo;
+  const on = (instanceId: string) => ({ runsOn: { instanceId, model: "m" } });
+
+  it("is the login's own tool while that login is listed", () => {
+    expect(removerOf(on("c1"), [login("c1", "claude", "Claude work")], true)).toEqual({ remover: "claude", login: "Claude work" });
+    expect(removerOf(on("x1"), [login("x1", "codex", "Codex")], true)).toEqual({ remover: "git", login: "Codex" });
+  });
+
+  it("is git once the logins have loaded and none has the run's id", () => {
+    expect(removerOf(on("x1"), [login("claude", "claude", "Claude")], true)).toEqual({ remover: "git", login: null });
+  });
+
+  it("is unknown while the logins have not loaded", () => {
+    expect(removerOf(on("c1"), [], false)).toEqual({ remover: "unknown", login: null });
+  });
+
+  it("is unknown when the providers list can't be read, as one row without a driver or as none", () => {
+    const unreadable = { kind: "provider", id: "providers", instanceId: "providers", driver: null, displayName: "Models", error: "config.json can't be read" } as unknown as ConnectionInfo;
+    expect(removerOf(on("x1"), [unreadable], true)).toEqual({ remover: "unknown", login: null });
+    expect(removerOf(on("x1"), [], true)).toEqual({ remover: "unknown", login: null });
+  });
+
+  it("stays Claude for a run that records no login, even when the list is empty", () => {
+    expect(removerOf({}, [], true)).toEqual({ remover: "claude", login: "Claude" });
+    expect(removerOf({}, [], false)).toEqual({ remover: "claude", login: "Claude" });
+  });
+});
+
+describe("the clean-up panel before the logins have loaded", () => {
+  it("names no tool for a Codex run", () => {
+    const codexRun = run("done", { runsOn: { instanceId: "codex", model: "m" } });
+    const html = renderToStaticMarkup(<RunCleanup run={codexRun} reason="Its pull request is merged." />);
+    expect(html).toContain("Gossamr never forces it");
+    expect(html).not.toContain("with git");
+    expect(html).not.toContain("claude rm");
   });
 });

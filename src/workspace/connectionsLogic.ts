@@ -37,7 +37,7 @@ export interface AddEntry {
   beta?: boolean;
 }
 
-/** What + Add and the palette offer. Codex is offered with a Beta label although it cannot run Pip or agents yet. */
+/** What + Add and the palette offer. Codex is offered with a Beta label; it runs agents and never Pip. */
 export function addEntries(providers = providersShown): AddEntry[] {
   const entries: AddEntry[] = [
     { id: "github", group: "Code", label: "GitHub account", line: "Pull requests, branches and checks." },
@@ -45,7 +45,7 @@ export function addEntries(providers = providersShown): AddEntry[] {
   ];
   if (providers) {
     entries.push({ id: "claude", group: "Models", label: DRIVERS.claude.label, line: "A login that Pip and agents can run on.", beta: DRIVERS.claude.beta });
-    entries.push({ id: "codex", group: "Models", label: DRIVERS.codex.label, line: "A login for Codex. It can't run Pip or agents yet.", beta: DRIVERS.codex.beta });
+    entries.push({ id: "codex", group: "Models", label: DRIVERS.codex.label, line: "A login that agents can run on. Pip stays on Claude.", beta: DRIVERS.codex.beta });
   }
   return entries;
 }

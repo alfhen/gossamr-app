@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
 import type { ModelDefaults } from "../types";
+import type { Driver } from "../lib/models";
 import { useWorkspace } from "../workspaceStore";
 import { syncLine } from "./connectionsLogic";
 import { ConnectionsSection } from "./Connections";
@@ -12,9 +13,13 @@ import { Segmented } from "../components/Segmented";
 /** The two facts the app states about what it does, and only here. */
 export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."] as const;
 
-/** The agents promise, naming the Claude new agents run on once it is known. */
-export const agentsPromise = (instanceName: string | null) =>
-  instanceName ? `Agents run on ${instanceName} with its own Claude Code settings, so they can push branches and use your own tools.` : PROMISES[1];
+/** The agents promise, naming the login new agents run on once it is known. */
+export const agentsPromise = (instanceName: string | null, driver: Driver = "claude") =>
+  !instanceName
+    ? PROMISES[1]
+    : driver === "codex"
+      ? `Agents run on ${instanceName} with its own Codex settings. Only danger-full-access lets them commit and push.`
+      : `Agents run on ${instanceName} with its own Claude Code settings, so they can push branches and use your own tools.`;
 
 function useNow() {
   const [now, setNow] = useState(() => new Date());
@@ -41,7 +46,7 @@ export function Settings() {
   const now = useNow();
   const connections = useWorkspace((s) => s.connections);
   const [defaults, setDefaults] = useState<ModelDefaults | null>(null);
-  const agentsOn = connections.find((c) => c.kind === "provider" && c.instanceId === defaults?.agents?.instanceId)?.displayName ?? null;
+  const agentsOn = connections.find((c) => c.kind === "provider" && c.instanceId === defaults?.agents?.instanceId);
   const section = useTabs((s) => s.settingsSection);
   useEffect(() => {
     if (!section) return;
@@ -56,7 +61,7 @@ export function Settings() {
         <Section title="Safety">
           <ul data-promises className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
             <li>{PROMISES[0]}</li>
-            <li>{agentsPromise(agentsOn)}</li>
+            <li>{agentsPromise(agentsOn?.displayName ?? null, agentsOn?.driver)}</li>
           </ul>
         </Section>
 

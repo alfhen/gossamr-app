@@ -492,6 +492,8 @@ export class MockRuns {
   private tick = 0;
   /** Run ids passed to `attach`, for tests. */
   readonly attached: string[] = [];
+  /** What Terminal was opened on for each run in `attached`: `codex resume` for a Codex run. */
+  readonly attachCommands: string[] = [];
   /**
    * Waking a stopped session fails, as when `claude` exits or starts a copy: for a test to see what the person is left
    * with after a Deny or their own fix round whose wake didn't go through.
@@ -702,7 +704,7 @@ export class MockRuns {
   }
 
   /** The logins runs launch on; set by the mock backend. */
-  providers: Pick<MockProviders, "signedOutName" | "has"> = { signedOutName: () => null, has: () => true };
+  providers: Pick<MockProviders, "signedOutName" | "has" | "driverOf"> = { signedOutName: () => null, has: () => true, driverOf: () => "claude" };
 
   /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
   choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
@@ -1100,7 +1102,15 @@ export class MockRuns {
   attach(id: string) {
     const run = this.get(id);
     if (!run?.shortId) throw new Error("that run has no session to attach to yet");
+    if (run.runsOn && !this.providers.has(run.runsOn.instanceId)) throw new Error("That Claude was removed. Pick another.");
     this.attached.push(id);
+    if (this.providers.driverOf(run.runsOn?.instanceId ?? "claude") !== "codex") {
+      this.attachCommands.push("claude attach");
+      return;
+    }
+    this.attachCommands.push("codex resume");
+    this.update(id, { state: "stopped", needs: null, suggestedReply: null, endedAt: this.now(), lastDetail: "Opened in Terminal" });
+    this.changed();
   }
 
   private failed(id: string, want: RunFailure["type"], refusal: string): Run {
@@ -1355,7 +1365,7 @@ export class MockRuns {
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
     const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
-    const left = !this.providers.has(run.runsOn?.instanceId ?? "claude");
+    const left = !!run.runsOn && !this.providers.has(run.runsOn.instanceId);
     this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}), ...(left ? { sessionsLeft: true } : {}) });
     this.changed();
     return { type: "removed" };

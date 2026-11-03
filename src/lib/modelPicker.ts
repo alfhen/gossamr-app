@@ -18,7 +18,7 @@ export interface PickerInstance {
  * config folder that breaks the folder rules; the launch refuses both.
  */
 export function unavailableReason(c: Pick<ConnectionInfo, "enabled" | "driver" | "status">, purpose: PickerPurpose = "pip"): string | null {
-  if (c.driver && !(purpose === "pip" ? DRIVERS[c.driver].runsPip : DRIVERS[c.driver].runsAgents)) return `${purpose === "pip" ? "Pip" : "Agents"} can't run on ${DRIVERS[c.driver].label} yet`;
+  if (c.driver && !(purpose === "pip" ? DRIVERS[c.driver].runsPip : DRIVERS[c.driver].runsAgents)) return purpose === "pip" ? "Pip runs on Claude only." : `Agents can't run on ${DRIVERS[c.driver].label} yet`;
   if (!c.enabled) return "Off";
   switch (c.status?.state) {
     case "notSignedIn":
