@@ -17,10 +17,18 @@ pub(super) enum Blocked {
 }
 
 impl RunService {
-    /// The one way a run's launch and checks get a toolchain: its instance's, never the default's unless that is its instance.
+    /// For acting on a run (launch, message, answer, trust): its instance's toolchain, never the default's unless that is its instance. `observing_toolchain_of` is for looking at an existing run.
     pub(in crate::runs) async fn toolchain_of(&self, run: &Run) -> std::result::Result<Toolchain, ToolchainError> {
         match &run.runs_on {
             Some(choice) => self.tools.for_instance(&choice.instance_id).await,
+            None => self.tools.get().await,
+        }
+    }
+
+    /// The toolchain for looking at a run that already exists: an instance turned off keeps its runs tracked.
+    pub(in crate::runs) async fn observing_toolchain_of(&self, run: &Run) -> std::result::Result<Toolchain, ToolchainError> {
+        match &run.runs_on {
+            Some(choice) => self.tools.observe_instance(&choice.instance_id).await,
             None => self.tools.get().await,
         }
     }

@@ -105,7 +105,7 @@ impl RunService {
             Some("done") => e.pid.is_some(),
             _ => true,
         };
-        if listed.iter().find(|e| belongs_to(e, &run)).is_some_and(attached) {
+        if listed.iter().find(|e| belongs_to(e, &tc.instance_id, &run)).is_some_and(attached) {
             return Err(refuse(IN_TERMINAL));
         }
         if let Some(why) = self.another_pass(&mut run, text).await? {

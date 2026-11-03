@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::probe::State;
 use crate::runs::binary::find_binary_from;
 use crate::runs::env::RunEnv;
-use crate::runs::provider_env::{states, ProviderEnv, ProviderState};
+use crate::runs::provider_env::{observing_states, states,ProviderEnv, ProviderState};
 use crate::runs::provider_folder::{self, Places};
 
 const NO_SHELL_SETUP: &str = "Couldn't read your shell setup. Try again in a moment.";
@@ -47,7 +47,7 @@ pub(super) struct Setup {
 
 impl Core {
     pub(super) async fn provider_setup(&self) -> Setup {
-        match self.listing().await {
+        match self.listing(false).await {
             Listing::Rows { rows, shell } => {
                 let shell = shell.inspect_err(|why| eprintln!("{why}")).ok();
                 let states = rows.iter().map(|(p, state)| (p.id.clone(), state.clone())).collect();
@@ -66,7 +66,17 @@ impl Core {
     /// One provider instance with its state and the shell it was judged against, from a single capture of the shell.
     /// An unreadable list is told apart from an id that isn't in it.
     pub async fn lookup_provider(&self, id: &str) -> Lookup {
-        match self.listing().await {
+        self.lookup(id, false).await
+    }
+
+    /// Like `lookup_provider`, but an instance that is off still gets its login, so the runs on it can be watched. A
+    /// bad folder is still an error.
+    pub async fn lookup_provider_for_observing(&self, id: &str) -> Lookup {
+        self.lookup(id, true).await
+    }
+
+    async fn lookup(&self, id: &str, observing: bool) -> Lookup {
+        match self.listing(observing).await {
             Listing::Unreadable(why) => Lookup::Unreadable(why),
             Listing::Empty => Lookup::Missing,
             Listing::Rows { rows, shell } => match rows.into_iter().find(|(p, _)| p.id == id) {
@@ -77,7 +87,7 @@ impl Core {
     }
 
     async fn providers_with_state(&self) -> Vec<(ProviderInstance, ProviderState)> {
-        match self.listing().await {
+        match self.listing(false).await {
             Listing::Rows { rows, shell } => {
                 if let Err(why) = shell {
                     eprintln!("{why}");
@@ -88,7 +98,7 @@ impl Core {
         }
     }
 
-    async fn listing(&self) -> Listing {
+    async fn listing(&self, observing: bool) -> Listing {
         let config = AppConfig::load(&self.data_dir);
         if let Some(why) = config.providers_error.or(config.connections_error) {
             return Listing::Unreadable(why);
@@ -98,7 +108,8 @@ impl Core {
         }
         let shell = self.shell.get().await.map_err(|e| e.to_string());
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
-        let states = states(&config.providers, &places, shell.as_ref().ok().map(|s| s.as_ref()));
+        let shell_env = shell.as_ref().ok().map(|s| s.as_ref());
+        let states = if observing { observing_states(&config.providers, &places, shell_env) } else { states(&config.providers, &places, shell_env) };
         Listing::Rows { rows: config.providers.into_iter().zip(states).map(|(p, (_, state))| (p, state)).collect(), shell }
     }
 

@@ -1174,3 +1174,83 @@ async fn the_claude_and_projects_folders_are_remembered_for_each_instance_apart(
     assert_eq!(rig.svc.claude_projects_dir(&first).await, Some(config.join("projects")));
     assert_eq!(rig.svc.claude_projects_dir(&second).await, Some(other_config.join("projects")));
 }
+
+fn on_second_login(run: &mut Run, short: &str) {
+    run.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+    run.state = RunState::Working;
+    run.short_id = ShortId::parse(short);
+}
+
+#[tokio::test]
+async fn a_run_follows_only_its_own_logins_listing_when_another_login_lists_the_same_short_id() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| on_second_login(r, "abc12345")).await;
+    let (svc, second) = crate::runs::rig::with_second_login(&rig.fx, &rig.cli);
+    rig.cli.with(|s| {
+        let mut elsewhere = FakeCli::session("abc12345", Path::new("/somewhere/else"));
+        elsewhere.state = Some("done".into());
+        elsewhere.status = Some("idle".into());
+        elsewhere.pid = None;
+        s.sessions.push(elsewhere);
+    });
+    second.with(|s| {
+        let mut asking = FakeCli::session("abc12345", &run.expected_worktree);
+        asking.state = Some("blocked".into());
+        asking.status = Some("idle".into());
+        asking.needs = Some("Which one?".into());
+        s.sessions.push(asking);
+    });
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer, "the run follows the second login's blocked session");
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer, "the default login's finished session is not this run's");
+}
+
+#[tokio::test]
+async fn a_run_on_the_second_login_is_tracked_while_the_default_login_has_no_toolchain() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| on_second_login(r, "abc12345")).await;
+    let (svc, second) = crate::runs::rig::with_second_login_where(&rig.fx, &rig.cli, Some("claude"));
+    second.with(|s| {
+        let mut asking = FakeCli::session("abc12345", &run.expected_worktree);
+        asking.state = Some("blocked".into());
+        asking.status = Some("idle".into());
+        asking.needs = Some("Which one?".into());
+        s.sessions.push(asking);
+    });
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+}
+
+#[tokio::test]
+async fn a_run_on_a_login_that_is_turned_off_is_still_followed() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| on_second_login(r, "abc12345")).await;
+    let (svc, second) = crate::runs::rig::with_login_off(&rig.fx, &rig.cli, "claude_2");
+    second.with(|s| {
+        let mut asking = FakeCli::session("abc12345", &run.expected_worktree);
+        asking.state = Some("blocked".into());
+        asking.status = Some("idle".into());
+        asking.needs = Some("Which one?".into());
+        s.sessions.push(asking);
+    });
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
+}
+
+#[tokio::test]
+async fn a_queued_run_on_a_login_that_is_turned_off_does_not_start_its_cli() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    rig.set(&run, |r| r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None })).await;
+    let (svc, second) = crate::runs::rig::with_login_off(&rig.fx, &rig.cli, "claude_2");
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(second.0.lock().unwrap().listings, 0);
+}

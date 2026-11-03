@@ -109,11 +109,11 @@ fn taking_over_keeps_the_old_session_as_an_alias_and_hands_the_state_to_the_list
 fn an_earlier_session_still_listed_is_no_longer_the_runs_own() {
     let mut run = stopped_run();
     let old = listed(&run, "2afa0a22", &run.expected_worktree, ms(Span::hours(-2)));
-    assert!(belongs_to(&old, &run));
+    assert!(belongs_to(&old, "claude", &run));
     run.earlier_sessions = vec![EarlierSession { short_id: ShortId::parse("2afa0a22").unwrap(), session_id: None, removed: false }];
     run.short_id = ShortId::parse("bbb748a7");
-    assert!(!belongs_to(&old, &run), "not by id and not by the worktree it shares");
-    assert!(belongs_to(&listed(&run, "bbb748a7", &run.expected_worktree, 0), &run));
+    assert!(!belongs_to(&old, "claude", &run), "not by id and not by the worktree it shares");
+    assert!(belongs_to(&listed(&run, "bbb748a7", &run.expected_worktree, 0), "claude", &run));
 }
 
 async fn stopped() -> (Rig, Run) {
@@ -320,4 +320,16 @@ async fn a_pending_answer_can_still_be_sent_again_once_the_poller_has_left_the_r
     assert_eq!(rig.get(&run).await.state, RunState::Stopped);
     let sent = rig.svc.answer(&run.id, "Use staging.").await.unwrap();
     assert_eq!((sent.state, sent.unsent_answer), (RunState::Working, None), "the saved answer is still offered and goes to the run's own session");
+}
+
+#[tokio::test]
+async fn a_launch_waiting_on_another_login_does_not_unsettle_this_logins_adoption() {
+    let (rig, run) = stopped().await;
+    let other = rig.queued(2).await;
+    rig.set(&other, |r| {
+        r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None })
+    })
+    .await;
+    let (_, launch_pending) = rig.svc.taken_ids(run.instance_id()).await.unwrap();
+    assert!(!launch_pending);
 }

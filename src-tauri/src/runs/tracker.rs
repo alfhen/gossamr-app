@@ -226,25 +226,40 @@ impl RunService {
         }
         // A run waiting for a slot counts: the next look should be soon, so it starts promptly once one frees.
         let mut busy = runs.iter().any(|r| r.state != RunState::Queued || r.slot_wait_since.is_some()) || !waiting.is_empty();
-        let Ok(tc) = self.tools.get().await else { return Polled { busy } };
-        self.collect_answers(&tc, &waiting).await;
-        let config_dir = self.claude_config_dir(&tc).await;
+        let mut waiting_by_instance: BTreeMap<&str, Vec<Run>> = BTreeMap::new();
+        for run in &waiting {
+            waiting_by_instance.entry(run.instance_id()).or_default().push(run.clone());
+        }
+        for group in waiting_by_instance.into_values() {
+            if let Ok(tc) = self.observing_toolchain_of(&group[0]).await {
+                self.collect_answers(&tc, &group).await;
+            }
+        }
 
         let turn = self.launching.lock().await;
         let now = clock();
-        let Ok(entries) = tc.cli.agents(true).await else { return Polled { busy } };
-        busy |= finished.iter().any(|r| entries.iter().any(|e| belongs_to(e, r) && revived(e, r, now)));
-        let mut changed = HashSet::new();
-        for id in self.adopt_continuations(&entries, &finished, now).await {
-            changed.insert(id);
+        let mut by_instance: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
+        for run in runs.iter().filter(|r| r.state != RunState::Queued || r.short_id.is_some()).chain(&finished) {
+            by_instance.entry(run.instance_id()).or_default().push(run);
         }
-        for listed in runs.iter().chain(&finished) {
-            match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
-                Ok(Some(connection_id)) => {
-                    changed.insert(connection_id);
+        let mut changed = HashSet::new();
+        for group in by_instance.into_values() {
+            let Ok(tc) = self.observing_toolchain_of(group[0]).await else { continue };
+            let Ok(entries) = tc.cli.agents(true).await else { continue };
+            let config_dir = self.claude_config_dir(&tc).await;
+            let resting: Vec<Run> = group.iter().filter(|r| finished.iter().any(|f| f.id == r.id)).map(|r| (*r).clone()).collect();
+            busy |= resting.iter().any(|r| entries.iter().any(|e| belongs_to(e, &tc.instance_id, r) && revived(e, r, now)));
+            for id in self.adopt_continuations(&tc.instance_id, &entries, &resting, now).await {
+                changed.insert(id);
+            }
+            for listed in group {
+                match self.track(&tc, config_dir.as_deref(), &entries, &listed.id, now).await {
+                    Ok(Some(connection_id)) => {
+                        changed.insert(connection_id);
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("couldn't track run {}: {e}", listed.id),
                 }
-                Ok(None) => {}
-                Err(e) => eprintln!("couldn't track run {}: {e}", listed.id),
             }
         }
         drop(turn);
@@ -415,7 +430,7 @@ impl RunService {
         if before.state == RunState::Failed || before.worktree_removed_at.is_some() {
             return Ok(None);
         }
-        let entry = entries.iter().find(|e| belongs_to(e, &before));
+        let entry = entries.iter().find(|e| belongs_to(e, &tc.instance_id, &before));
         let finished = matches!(before.state, RunState::Done | RunState::Stopped);
         if finished && !entry.is_some_and(|e| revived(e, &before, now)) {
             return Ok(None);

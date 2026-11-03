@@ -99,23 +99,23 @@ fn refuse(message: impl Into<String>) -> Error {
 }
 
 impl RunService {
-    /// Every session id any run of this account has or had, and any the run index knows.
-    async fn taken_ids(&self) -> Option<(HashSet<ShortId>, bool)> {
+    /// Every session id any run of this account on `instance` has or had, and any the run index knows for it.
+    async fn taken_ids(&self, instance: &str) -> Option<(HashSet<ShortId>, bool)> {
         let all = self.core.runs_list(&RunQuery::default()).await.ok()?;
-        let mut taken = self.index.short_ids();
-        taken.extend(all.iter().flat_map(Run::session_ids));
-        let launch_pending = all.iter().any(|r| r.short_id.is_none() && matches!(r.state, RunState::Queued | RunState::Launching));
+        let mut taken = self.index.short_ids_on(instance);
+        taken.extend(all.iter().filter(|r| r.instance_id() == instance).flat_map(Run::session_ids));
+        let launch_pending = all.iter().any(|r| r.instance_id() == instance && r.short_id.is_none() && matches!(r.state, RunState::Queued | RunState::Launching));
         Some((taken, launch_pending))
     }
 
     /// For runs at rest: takes over the one session that is certainly their continuation, and records the ones that
     /// might be on the run for the person to decide. Called with the launch lock held. Returns the connections that changed.
-    pub(super) async fn adopt_continuations(&self, entries: &[AgentEntry], resting: &[Run], now: DateTime<Utc>) -> Vec<String> {
+    pub(super) async fn adopt_continuations(&self, instance: &str, entries: &[AgentEntry], resting: &[Run], now: DateTime<Utc>) -> Vec<String> {
         let mut changed = Vec::new();
         if resting.is_empty() {
             return changed;
         }
-        let Some((mut taken, launch_pending)) = self.taken_ids().await else { return changed };
+        let Some((mut taken, launch_pending)) = self.taken_ids(instance).await else { return changed };
         for listed in resting {
             let Ok(Some(mut run)) = self.core.run(&listed.id).await else { continue };
             if !at_rest(&run) || run.worktree_removed_at.is_some() || carried_on(entries, &run, now) {
@@ -153,12 +153,15 @@ impl RunService {
             return Err(refuse(format!("This run is {}, so it has no other session to carry on in.", run.state.as_str())));
         }
         let tc = self.toolchain().await?;
+        if run.instance_id() != tc.instance_id {
+            return Err(refuse("This run is on another login, which can't be looked at from here yet."));
+        }
         let entries = tc.cli.agents(true).await?;
         let now = Utc::now();
         if carried_on(&entries, &run, now) {
             return Err(refuse("This run's own session is working again, so it stays with that one."));
         }
-        let (taken, _) = self.taken_ids().await.ok_or_else(|| refuse("Couldn't read the runs to compare."))?;
+        let (taken, _) = self.taken_ids(&tc.instance_id).await.ok_or_else(|| refuse("Couldn't read the runs to compare."))?;
         let chosen = candidates(&run, &entries, &taken).into_iter().find(|c| c.short_id == id);
         let chosen = chosen.ok_or_else(|| refuse("That session doesn't look like this run's any more. Look again in a moment."))?;
         take_over(&mut run, &chosen, now);

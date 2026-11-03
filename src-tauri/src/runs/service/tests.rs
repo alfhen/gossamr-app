@@ -220,7 +220,7 @@ async fn two_launches_never_overlap_in_the_cli() {
 async fn the_cap_counts_runs_of_other_accounts_through_the_index() {
     let rig = build(None, |s| s.with_cap(2)).await;
     for n in 0..2 {
-        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false };
+        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into() };
         rig.svc.index.record(other).unwrap();
     }
     let run = rig.queued(1).await;
@@ -736,20 +736,21 @@ fn a_session_belongs_to_a_run_by_worktree_path_or_short_id_and_never_by_name_or_
 
     let mut run = Run::queued("r".into(), "p".into(), "c".into(), None, RunSpec { clone_path: link.join("clone"), name: "w".into(), ..run_spec() }, Utc::now());
     let listed = |id: &str, cwd: &Path| FakeCli::session(id, cwd);
-    assert!(belongs_to(&listed("0a0a0a0a", &real_dir), &run), "the listed path is the real one, the expected one goes through a link");
-    assert!(belongs_to(&listed("0a0a0a0a", &link.join("clone/.claude/worktrees/w")), &run));
-    assert!(!belongs_to(&listed("0a0a0a0a", &base.join("real/clone")), &run), "the clone root is not the worktree");
-    assert!(!belongs_to(&listed("0a0a0a0a", &base.join("real/clone/.claude/worktrees/other")), &run));
+    assert!(belongs_to(&listed("0a0a0a0a", &real_dir), "claude", &run), "the listed path is the real one, the expected one goes through a link");
+    assert!(belongs_to(&listed("0a0a0a0a", &link.join("clone/.claude/worktrees/w")), "claude", &run));
+    assert!(!belongs_to(&listed("0a0a0a0a", &base.join("real/clone")), "claude", &run), "the clone root is not the worktree");
+    assert!(!belongs_to(&listed("0a0a0a0a", &base.join("real/clone/.claude/worktrees/other")), "claude", &run));
     let mut named = listed("0a0a0a0a", &base);
     named.name = Some("anything".into());
-    assert!(!belongs_to(&named, &run));
+    assert!(!belongs_to(&named, "claude", &run));
     let interactive = AgentEntry { kind: Some("interactive".into()), ..listed("0a0a0a0a", &real_dir) };
-    assert!(!belongs_to(&interactive, &run));
-    assert!(!belongs_to(&AgentEntry { id: None, ..listed("0a0a0a0a", &real_dir) }, &run));
-    assert!(!belongs_to(&AgentEntry { id: Some("../../x".into()), ..listed("0a0a0a0a", &real_dir) }, &run));
+    assert!(!belongs_to(&interactive, "claude", &run));
+    assert!(!belongs_to(&AgentEntry { id: None, ..listed("0a0a0a0a", &real_dir) }, "claude", &run));
+    assert!(!belongs_to(&AgentEntry { id: Some("../../x".into()), ..listed("0a0a0a0a", &real_dir) }, "claude", &run));
 
     run.short_id = ShortId::parse("0b0b0b0b");
-    assert!(belongs_to(&listed("0b0b0b0b", &base), &run));
+    assert!(belongs_to(&listed("0b0b0b0b", &base), "claude", &run));
+    assert!(!belongs_to(&listed("0b0b0b0b", &base), "claude_2", &run), "a listing from another login never matches");
     let _ = std::fs::remove_dir_all(base);
 }
 
@@ -853,7 +854,7 @@ mod through_the_real_spawner {
         let short = run.short_id.clone().unwrap();
         assert!(real.scenario_dir.join("config/jobs").join(short.as_str()).join("state.json").is_file());
         let listed = real.cli.agents(true).await.unwrap();
-        let mine = listed.iter().find(|e| belongs_to(e, &run)).expect("matched by worktree path");
+        let mine = listed.iter().find(|e| belongs_to(e, "claude", &run)).expect("matched by worktree path");
         assert_eq!(mine.id.as_deref(), Some(short.as_str()));
         assert_eq!(real.rig.svc.index.live().len(), 1);
 
@@ -1364,4 +1365,70 @@ mod waiting {
         rig.finish(&busy).await;
         assert_eq!(rig.svc.launch_waiting().await.unwrap(), std::slice::from_ref(&old.id));
     }
+}
+
+#[tokio::test]
+async fn recovery_finds_a_launching_run_on_the_second_login_in_that_logins_listing() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig
+        .set(&run, |r| {
+            r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+            r.state = RunState::Launching;
+            r.launched_at = Some(Utc::now());
+        })
+        .await;
+    let (svc, second) = crate::runs::rig::with_second_login(&rig.fx, &rig.cli);
+    let svc = svc.with_timing(FAST);
+    second.with(|s| s.sessions.push(FakeCli::session("0c0ffee1", &run.expected_worktree)));
+    assert!(rig.cli.0.lock().unwrap().sessions.is_empty());
+
+    svc.recover().await;
+    let adopted = rig.get(&run).await;
+    assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str)), (RunState::Launching, Some("0c0ffee1")));
+    assert_eq!(svc.index.live().iter().map(|e| e.instance_id.as_str()).collect::<Vec<_>>(), ["claude_2"]);
+}
+
+#[tokio::test]
+async fn recovery_fails_runs_of_a_login_without_a_toolchain_at_once_and_the_other_logins_unmatched_run_as_interrupted() {
+    let rig = ready().await;
+    let launching = |r: &mut Run, instance: &str| {
+        r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: instance.into(), model: "default".into(), effort: None });
+        r.state = RunState::Launching;
+        r.launched_at = Some(Utc::now());
+    };
+    let first = rig.queued(1).await;
+    let first = rig.set(&first, |r| launching(r, "claude")).await;
+    let second = rig.queued(2).await;
+    let second = rig.set(&second, |r| launching(r, "claude_2")).await;
+    let (svc, _) = crate::runs::rig::with_second_login_where(&rig.fx, &rig.cli, Some("claude_2"));
+    let svc = svc.with_timing(FAST);
+
+    let started = std::time::Instant::now();
+    svc.recover().await;
+    assert!(started.elapsed() >= FAST.recover_window, "the default login's run is still looked for");
+    let (gone, lost) = (rig.get(&second).await, rig.get(&first).await);
+    assert_eq!(gone.state, RunState::Failed);
+    assert_ne!(gone.error, lost.error, "each run gets its own login's reason");
+    assert_eq!((lost.state, lost.error.as_deref()), (RunState::Failed, Some("Launch was interrupted")));
+}
+
+#[tokio::test]
+async fn recovery_adopts_a_launching_run_on_a_login_that_is_turned_off() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig
+        .set(&run, |r| {
+            r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+            r.state = RunState::Launching;
+            r.launched_at = Some(Utc::now());
+        })
+        .await;
+    let (svc, second) = crate::runs::rig::with_login_off(&rig.fx, &rig.cli, "claude_2");
+    let svc = svc.with_timing(FAST);
+    second.with(|s| s.sessions.push(FakeCli::session("0c0ffee1", &run.expected_worktree)));
+
+    svc.recover().await;
+    let adopted = rig.get(&run).await;
+    assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str)), (RunState::Launching, Some("0c0ffee1")));
 }

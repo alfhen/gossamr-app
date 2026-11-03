@@ -97,8 +97,12 @@ pub struct RunService {
 
 pub(super) use super::fresh::real;
 
-/// Whether `entry` is the session of `run`. Interactive sessions never are.
-pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
+/// Whether `entry`, listed by the login `listed_on`, is the session of `run`. Interactive sessions never are, and short
+/// ids can repeat across logins, so a run only matches the listing of its own.
+pub(super) fn belongs_to(entry: &AgentEntry, listed_on: &str, run: &Run) -> bool {
+    if run.instance_id() != listed_on {
+        return false;
+    }
     let Some(id) = entry.id.as_deref().and_then(ShortId::parse) else { return false };
     if entry.kind.as_deref() == Some("interactive") {
         return false;
@@ -128,6 +132,7 @@ fn entry_of(run: &Run) -> Entry {
         expected_worktree: run.expected_worktree.clone(),
         short_id: run.short_id.clone(),
         terminal: false,
+        instance_id: run.instance_id().to_owned(),
     }
 }
 
@@ -323,12 +328,13 @@ impl RunService {
     /// The run's session, if `claude agents` lists one. After a launch whose answer was lost the session may still be
     /// listed at the clone root, so this keeps looking until the worktree has had time to appear.
     async fn find_session(&self, run: &Run) -> std::result::Result<Option<AgentEntry>, Failure> {
-        let tc = self.tools.get().await?;
+        // A login that can't run now has no session to find; the launch that follows waits or fails for it.
+        let Ok(tc) = self.observing_toolchain_of(run).await else { return Ok(None) };
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         loop {
             let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc))?;
-            if let Some(found) = entries.into_iter().find(|e| belongs_to(e, run)) {
+            if let Some(found) = entries.into_iter().find(|e| belongs_to(e, &tc.instance_id, run)) {
                 return Ok(Some(found));
             }
             if Instant::now() >= deadline {
@@ -652,35 +658,44 @@ impl RunService {
         let in_flight = self.in_flight.lock().expect("in-flight lock poisoned").clone();
         let mut waiting: Vec<Run> = runs.into_iter().filter(|r| r.state == RunState::Launching && !in_flight.contains(&r.id)).collect();
         let deadline = Instant::now() + self.timing.recover_window;
-        let mut why = Failure::Interrupted;
         while !waiting.is_empty() {
-            match self.tools.get().await {
-                Err(e) => {
-                    why = e.into();
-                    break;
-                }
-                Ok(tc) => {
-                    if let Ok(entries) = tc.cli.agents(true).await {
-                        let mut unmatched = Vec::new();
-                        for mut run in waiting {
-                            match entries.iter().find(|e| belongs_to(e, &run)) {
-                                Some(found) => {
-                                    let _ = self.adopt(&mut run, found).await;
-                                }
-                                None => unmatched.push(run),
-                            }
+            let mut unmatched = Vec::new();
+            let mut by_instance: std::collections::BTreeMap<String, Vec<Run>> = Default::default();
+            for run in waiting {
+                by_instance.entry(run.instance_id().to_owned()).or_default().push(run);
+            }
+            for (_, group) in by_instance {
+                let tc = match self.observing_toolchain_of(&group[0]).await {
+                    Ok(tc) => tc,
+                    Err(e) => {
+                        let why: Failure = e.into();
+                        for mut run in group {
+                            let _ = self.fail(&mut run, &why).await;
                         }
-                        waiting = unmatched;
+                        continue;
+                    }
+                };
+                let Ok(entries) = tc.cli.agents(true).await else {
+                    unmatched.extend(group);
+                    continue;
+                };
+                for mut run in group {
+                    match entries.iter().find(|e| belongs_to(e, &tc.instance_id, &run)) {
+                        Some(found) => {
+                            let _ = self.adopt(&mut run, found).await;
+                        }
+                        None => unmatched.push(run),
                     }
                 }
             }
+            waiting = unmatched;
             if waiting.is_empty() || Instant::now() >= deadline {
                 break;
             }
             tokio::time::sleep(self.timing.poll).await;
         }
         for mut run in waiting {
-            let _ = self.fail(&mut run, &why).await;
+            let _ = self.fail(&mut run, &Failure::Interrupted).await;
         }
         self.sweep_agent_files().await;
     }

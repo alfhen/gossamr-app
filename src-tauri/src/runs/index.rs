@@ -23,6 +23,13 @@ pub struct Entry {
     pub short_id: Option<ShortId>,
     #[serde(default)]
     pub terminal: bool,
+    /// The Claude login the run belongs to. An entry written before runs named one reads as the default.
+    #[serde(default = "default_instance")]
+    pub instance_id: String,
+}
+
+fn default_instance() -> String {
+    crate::connections::DEFAULT_CLAUDE.to_owned()
 }
 
 /// An entry as written to the file. Releases from before the move to the app database fail to parse an entry without
@@ -86,9 +93,9 @@ impl RunIndex {
         Ok(())
     }
 
-    /// Every session id of any run in the index, finished ones included.
-    pub fn short_ids(&self) -> std::collections::HashSet<ShortId> {
-        self.entries.lock().expect("run index poisoned").iter().filter_map(|e| e.short_id.clone()).collect()
+    /// Every session id of any run on `instance` in the index, finished ones included.
+    pub fn short_ids_on(&self, instance: &str) -> std::collections::HashSet<ShortId> {
+        self.entries.lock().expect("run index poisoned").iter().filter(|e| e.instance_id == instance).filter_map(|e| e.short_id.clone()).collect()
     }
 
     pub fn contains(&self, run_id: &str) -> bool {
@@ -124,6 +131,7 @@ mod tests {
             expected_worktree: format!("/c/.claude/worktrees/{run_id}").into(),
             short_id: short.and_then(ShortId::parse),
             terminal: false,
+            instance_id: "claude".into(),
         }
     }
 
@@ -175,7 +183,7 @@ mod tests {
         let d = dir("old-entries");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("run-index.json"), r#"[{"dbFile":"inbox-a.sqlite","runId":"r","expectedWorktree":"/x"}]"#).unwrap();
-        assert_eq!(RunIndex::load(&d).live(), vec![Entry { run_id: "r".into(), expected_worktree: "/x".into(), short_id: None, terminal: false }]);
+        assert_eq!(RunIndex::load(&d).live(), vec![Entry { run_id: "r".into(), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into() }]);
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -201,6 +209,16 @@ mod tests {
         )
         .unwrap();
         assert!(RunIndex::load(&d).live().is_empty());
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn an_entry_without_an_instance_reads_as_the_default_claude_and_one_with_it_keeps_it() {
+        let d = dir("instance");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("run-index.json"), r#"[{"runId":"a","expectedWorktree":"/x"},{"runId":"b","expectedWorktree":"/y","instanceId":"claude_2"}]"#).unwrap();
+        let index = RunIndex::load(&d);
+        assert_eq!(index.live().iter().map(|e| e.instance_id.as_str()).collect::<Vec<_>>(), ["claude", "claude_2"]);
         let _ = std::fs::remove_dir_all(d);
     }
 }

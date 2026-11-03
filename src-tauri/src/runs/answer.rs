@@ -87,7 +87,7 @@ impl RunService {
 
         if !again {
             let listed = tc.cli.agents(true).await?;
-            let asking = listed.iter().find(|e| belongs_to(e, &run)).is_some_and(|e| e.state.as_deref() == Some("blocked") && e.waiting_for.is_none());
+            let asking = listed.iter().find(|e| belongs_to(e, &tc.instance_id, &run)).is_some_and(|e| e.state.as_deref() == Some("blocked") && e.waiting_for.is_none());
             if !asking {
                 return Err(refuse("It isn't waiting for an answer any more. Look again in a moment."));
             }
