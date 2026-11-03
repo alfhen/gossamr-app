@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectionInfo, WatchState, WorkContainer } from "../types";
 import { allContainers } from "../workspaceStore";
-import { codeWatch, domainOfConnection, domainOfKind, githubConnections, isJira, isWorkConnection, primaryConnection, workConnections, workContainers, workWatch } from "./domains";
+import { codeWatch, domainOfConnection, domainOfKind, githubConnections, isJira, isWorkConnection, primaryConnection, primaryConnectionInfo, workConnections, workContainers, workWatch } from "./domains";
 import { railSplit } from "./watchLogic";
 
 const container = (connectionId: string, key: string): WorkContainer => ({ ref: { connectionId, externalId: key }, key, name: key, workflow: null }) as unknown as WorkContainer;
@@ -73,6 +73,10 @@ describe("the primary connection", () => {
   it("is the first one that is on when there are several", () => {
     expect(primaryConnection([conn("jira:a", "jira", false), conn("jira:b", "jira")])).toBe("jira:b");
     expect(primaryConnection([conn("jira:a", "jira", false), conn("jira:b", "jira", false)])).toBe("jira:a");
+  });
+
+  it("gives the row of the primary, not the first row, when the first Jira is off", () => {
+    expect(primaryConnectionInfo([conn("jira:a", "jira", false), conn("jira:b", "jira")])?.id).toBe("jira:b");
   });
 
   it("is none without a Jira connection", () => {

@@ -1249,7 +1249,7 @@ mod tests {
     }
 
     fn sign_in_as(site: &str, email: &str) -> crate::auth::TokenSignIn {
-        crate::auth::TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: "t".into(), expires_on: "2999-01-01".into() }
+        crate::auth::TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: "t".into(), expires_on: "2999-01-01".into(), name: None }
     }
 
     #[tokio::test]

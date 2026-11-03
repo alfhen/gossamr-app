@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { containerRef } from "../backend/mockConnector";
-import { namesCommand, askToPlanCommands, buildCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions } from "./commands";
+import { namesCommand, askToPlanCommands, buildCommands, workstreamCommands, keyCommand, newTicketIntent, projectChoices, pullCommand, rankCommands, searchOrder, ticketCommands, unwatchCommands, watchCommands, withAskPip, type CommandActions, type CommandContext } from "./commands";
 import { containerKey } from "../lib/filter";
 import { BUILT_IN_VIEWS } from "./filters";
 import type { WorkItem } from "../types";
@@ -265,12 +265,12 @@ describe("GitHub commands", () => {
     expect(labels(true)).toEqual(expect.arrayContaining(["Filter: Has PR", "Filter: No PR", "Filter: PR open", "Filter: PR merged", "Filter: Checks failing"]));
   });
 
-  it("always offers Add GitHub account, and Add Jira account only while no Jira is connected", () => {
-    const ids = (jira: boolean) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, jira }).map((c) => c.id);
-    expect(ids(false)).toEqual(expect.arrayContaining(["connection:add-github", "connection:add-jira"]));
-    expect(ids(true)).toContain("connection:add-github");
-    expect(ids(true)).not.toContain("connection:add-jira");
-    expect(ids(false)).not.toContain("github:connect");
+  it("offers Add Jira account again once a Jira connection exists, because + Add does", () => {
+    const ids = (ctx: Partial<CommandContext>) => buildCommands([], [], noop, { project: null, view: null, unreadActivity: 0, github: true, ...ctx }).map((c) => c.id);
+    expect(ids({})).toEqual(expect.arrayContaining(["connection:add-github", "connection:add-jira"]));
+    expect(ids({ addJira: true })).toContain("connection:add-jira");
+    expect(ids({ addJira: false })).not.toContain("connection:add-jira");
+    expect(ids({})).not.toContain("github:connect");
   });
 
   it("offers Add Claude and Add Codex only for the providers + Add offers, and opens that driver's sheet", () => {

@@ -163,13 +163,15 @@ pub struct Binding {
     pub kind: ConnectionKind,
     pub connection_id: String,
     pub name: String,
+    /// What the person called a new Jira account; it replaces the default name from the site and email.
+    pub chosen_name: Option<String>,
     pub config: InstanceConfig,
 }
 
 impl Binding {
     pub fn jira(connection_id: &str, site_name: &str, site_url: &str) -> Self {
         let host = site_url.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
-        Self { kind: ConnectionKind::Jira, connection_id: connection_id.into(), name: site_name.into(), config: InstanceConfig { site: Some(host.into()), ..Default::default() } }
+        Self { kind: ConnectionKind::Jira, connection_id: connection_id.into(), name: site_name.into(), chosen_name: None, config: InstanceConfig { site: Some(host.into()), ..Default::default() } }
     }
 
     pub fn with_email(mut self, email: &str) -> Self {
@@ -177,9 +179,14 @@ impl Binding {
         self
     }
 
+    pub fn named(mut self, name: &str) -> Self {
+        self.chosen_name = Some(name.into());
+        self
+    }
+
     pub fn github(login: &str) -> Self {
         let config = InstanceConfig { host: Some("github.com".into()), login: Some(login.into()), ..Default::default() };
-        Self { kind: ConnectionKind::Github, connection_id: crate::tracker::Connection::github_id(login), name: login.into(), config }
+        Self { kind: ConnectionKind::Github, connection_id: crate::tracker::Connection::github_id(login), name: login.into(), chosen_name: None, config }
     }
 }
 
@@ -224,9 +231,10 @@ pub fn bind(config: &mut AppConfig, binding: Binding) -> Result<(), AlreadyBound
                 return Err(AlreadyBound);
             }
             let repeat = config.connections.iter().any(|i| i.kind == ConnectionKind::Jira && i.config.site == binding.config.site);
-            let display_name = match binding.config.email.as_deref().filter(|_| repeat) {
-                Some(email) => format!("{} ({email})", binding.name),
-                None => binding.name.clone(),
+            let display_name = match (&binding.chosen_name, binding.config.email.as_deref().filter(|_| repeat)) {
+                (Some(chosen), _) => chosen.clone(),
+                (None, Some(email)) => format!("{} ({email})", binding.name),
+                (None, None) => binding.name.clone(),
             };
             push_instance(config, binding, display_name);
         }
@@ -399,6 +407,16 @@ mod tests {
 
     fn acme(connection_id: &str, email: &str) -> Binding {
         Binding::jira(connection_id, "Acme", "https://acme.atlassian.net").with_email(email)
+    }
+
+    #[test]
+    fn a_chosen_name_replaces_the_site_and_email_default_for_a_repeat_site() {
+        let mut config = AppConfig::default();
+        adopt(&mut config, true, vec![acme("jira:c1:a1", "a@acme.com")], Vec::new());
+        bind(&mut config, acme("jira:c1:a2", "b@acme.com").named("Client work")).unwrap();
+        assert_eq!(config.connections[1].display_name, "Client work");
+        bind(&mut config, acme("jira:c1:a3", "c@acme.com")).unwrap();
+        assert_eq!(config.connections[2].display_name, "Acme (c@acme.com)");
     }
 
     #[test]

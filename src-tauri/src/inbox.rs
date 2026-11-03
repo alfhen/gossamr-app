@@ -313,6 +313,7 @@ impl Core {
     /// is left with no sign-in for it (see `orphaned_instance`), which it takes back. With one it takes over that
     /// instance, and when it is another account than the instance had, the old one is disconnected completely.
     pub async fn connect_jira(&self, input: &TokenSignIn, instance_id: Option<&str>) -> Result<AuthStatus> {
+        let name = input.name.as_deref().filter(|n| !n.trim().is_empty()).map(instances::clean_name).transpose()?;
         let _alone = self.sign_in.lock().await;
         let credentials = self.auth.verify(input).await?;
         let connection = credentials.connection();
@@ -322,7 +323,10 @@ impl Core {
         };
         let instance_id = instance_id.or(orphan.as_deref());
         self.refuse_taken_account(&connection.id, instance_id)?;
-        let binding = Binding::jira(&connection.id, &credentials.site.name, &credentials.site.url).with_email(input.email.trim());
+        let mut binding = Binding::jira(&connection.id, &credentials.site.name, &credentials.site.url).with_email(input.email.trim());
+        if let (Some(name), None) = (&name, instance_id) {
+            binding = binding.named(name);
+        }
         match instance_id {
             None => {
                 self.auth.add(credentials).await?;
@@ -1131,7 +1135,7 @@ mod tests {
     }
 
     fn token_for_site(site: &str, email: &str, token: &str) -> TokenSignIn {
-        TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: token.into(), expires_on: "2999-01-01".into() }
+        TokenSignIn { site: site.into(), cloud_id: None, email: email.into(), token: token.into(), expires_on: "2999-01-01".into(), name: None }
     }
 
     #[tokio::test]
@@ -1176,6 +1180,42 @@ mod tests {
         assert_eq!(bound, [("jira", "jira:site:me"), ("jira_2", "jira:site:a"), ("jira_3", "jira:beta:b")]);
         let rows = fx.core.connections().await.unwrap();
         assert_eq!(rows.iter().filter(|r| r.kind == RowKind::Jira).count(), 3, "one row per Jira");
+    }
+
+    #[tokio::test]
+    async fn a_second_jira_connect_with_another_account_and_a_name_keeps_the_first_and_stores_the_name() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        fx.core.connect_jira(&token_for("a", "fast"), None).await.unwrap();
+
+        let named = TokenSignIn { name: Some("  Client work ".into()), ..token_for_site("beta", "b", "fast") };
+        fx.core.connect_jira(&named, None).await.unwrap();
+
+        let signed_in: Vec<String> = fx.core.auth.connections().await.into_iter().map(|c| c.id).collect();
+        assert_eq!(signed_in, ["jira:site:me", "jira:site:a", "jira:beta:b"], "the first accounts stay signed in");
+        let config = AppConfig::load(&fx.core.data_dir());
+        let names: Vec<_> = config.connections.iter().map(|i| i.display_name.as_str()).collect();
+        assert_eq!(names[2], "Client work");
+        assert_ne!(names[1], "Client work");
+    }
+
+    #[tokio::test]
+    async fn a_jira_connect_with_a_name_that_cannot_be_kept_is_refused_before_the_token_is() {
+        let vault = crate::secrets::fake::Fake::default();
+        let _vault = crate::secrets::fake::install(&vault);
+        let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
+        let fx = super::testing::fixture_with_authenticator(None, Some(gated)).await;
+        fx.core.adopt_instances().await;
+        let before = fx.core.auth.connections().await.len();
+
+        let bad = TokenSignIn { name: Some("two\nlines".into()), ..token_for("a", "fast") };
+        assert!(fx.core.connect_jira(&bad, None).await.is_err());
+
+        assert_eq!(fx.core.auth.connections().await.len(), before);
+        assert!(crate::secrets::keys_with_prefix("jira-token:").unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1319,7 +1359,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_in_as_another_account_takes_over_a_lone_instance_whose_account_has_no_sign_in() {
+    async fn signing_in_as_another_account_takes_over_a_lone_instance_whose_account_has_no_sign_in_and_keeps_its_name() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
@@ -1333,7 +1373,8 @@ mod tests {
         })
         .unwrap();
 
-        fx.core.connect_jira(&token_for("b", "fast"), None).await.unwrap();
+        let named = TokenSignIn { name: Some("Typed name".into()), ..token_for("b", "fast") };
+        fx.core.connect_jira(&named, None).await.unwrap();
 
         let config = AppConfig::load(&fx.core.data_dir());
         let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };

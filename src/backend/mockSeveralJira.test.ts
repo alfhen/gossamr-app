@@ -402,3 +402,22 @@ describe("replacing the login behind a Jira row", () => {
     expect((await b.cacheItem(beta("CA-402")))?.title).toBe("Quote template for the pilot");
   });
 });
+
+describe("adding a Jira account by name", () => {
+  const first = { site: "acme", email: "alf@acme.com", token: "t", expiresOn: "2027-10-30" };
+
+  it("keeps the first account and lists the second under the name given", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await b.jiraConnect(first);
+    await b.jiraConnect({ site: "beta", email: "alf@beta.example", token: "t", expiresOn: "2027-10-30", name: " Client work " });
+    const rows = (await b.connectionsList()).filter((c) => c.kind === "jira");
+    expect(rows.map((c) => c.displayName)).toEqual(["acme.atlassian.net", "Client work"]);
+  });
+
+  it("refuses an account that is already connected", async () => {
+    const b = new MockBackend({ githubRepos: 6 });
+    await b.jiraConnect(first);
+    await expect(b.jiraConnect({ ...first, token: "other" })).rejects.toThrow("You already have this account");
+    expect((await b.connectionsList()).filter((c) => c.kind === "jira")).toHaveLength(1);
+  });
+});

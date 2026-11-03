@@ -320,11 +320,13 @@ test.describe("the Connections list", () => {
     await expect(add).toBeFocused();
   });
 
-  test("opens the Connect Jira sheet from + Add", async ({ page }) => {
+  test("opens the Add Jira account sheet from + Add", async ({ page }) => {
     await openApp(page, "runs=empty");
     await openSettings(page);
     await addAccount(page, "Jira");
-    await expect(page.getByRole("dialog", { name: "Connect Jira" })).toBeVisible();
+    const sheet = page.getByRole("dialog", { name: "Add Jira account" });
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByLabel("Name")).toBeVisible();
   });
 
   test("offers Add GitHub account and Add Jira account in the palette", async ({ page }) => {
@@ -450,6 +452,59 @@ test.describe("the banner for a signed-out connection", () => {
   test("stays away when gh couldn't answer, because that is not a sign-out", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6&mockGithubProbe=error");
     await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+});
+
+test.describe("adding a Jira account beside the first", () => {
+  const fill = async (page: Page, site: string, email: string, name?: string) => {
+    const sheet = page.getByRole("dialog", { name: "Add Jira account" });
+    await sheet.getByLabel("Your Jira site").fill(site);
+    if (name) await sheet.getByLabel("Name").fill(name);
+    await sheet.getByLabel("Your Atlassian email").fill(email);
+    await sheet.getByLabel("API token").fill("token");
+    await sheet.getByRole("button", { name: "Add account" }).click();
+    return sheet;
+  };
+
+  test("keeps the first account, shows the second under its name and opens Watching", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await openSettings(page);
+    await addAccount(page, "Jira");
+    await expect(await fill(page, "acme.atlassian.net", "alf@acme.com")).toHaveCount(0);
+    await addAccount(page, "Jira");
+    const watching = page.locator("#settings-watching").getByRole("heading", { name: "Watching", level: 2 });
+    await page.locator("#settings-connections").scrollIntoViewIfNeeded();
+    await page.getByRole("heading", { name: "Settings", level: 1 }).scrollIntoViewIfNeeded();
+    await expect(watching).not.toBeInViewport();
+    await expect(await fill(page, "beta.atlassian.net", "alf@beta.example", "Client work")).toHaveCount(0);
+
+    await expect(rowOf(page, "acme.atlassian.net")).toBeVisible();
+    await expect(rowOf(page, "Client work")).toBeVisible();
+    await expect(watching).toBeInViewport();
+    await expect(page.locator("#settings-watching").getByText("beta.atlassian.net")).toBeVisible();
+  });
+
+  test("refuses an account that is already connected and keeps the sheet open", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await openSettings(page);
+    await addAccount(page, "Jira");
+    await fill(page, "acme.atlassian.net", "alf@acme.com");
+    await addAccount(page, "Jira");
+    const sheet = await fill(page, "acme.atlassian.net", "alf@acme.com");
+    await expect(sheet.getByRole("alert")).toContainText("You already have this account");
+    await expect(rowOf(page, "acme.atlassian.net")).toHaveCount(1);
+  });
+
+  test("offers Add Jira account in + Add and the palette while a Jira is connected", async ({ page }) => {
+    await openApp(page, "runs=empty&jira=2");
+    await openSettings(page);
+    await page.getByRole("button", { name: "+ Add" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Jira account/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("ControlOrMeta+k");
+    const palette = page.getByRole("dialog", { name: "Command palette" });
+    await palette.getByRole("combobox").fill("add jira");
+    await expect(palette.getByRole("option", { name: /Add Jira account/ })).toBeVisible();
   });
 });
 

@@ -38,7 +38,7 @@ const view = (over: Partial<ConnectionsViewProps> = {}) =>
       onRemove={vi.fn()}
       onToggle={vi.fn()}
       onConnectGithub={vi.fn()}
-      addable={addEntries([])}
+      addable={addEntries()}
       onAdd={vi.fn()}
       {...over}
     />,

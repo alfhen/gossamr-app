@@ -202,6 +202,7 @@ mod tests {
             email: " ann@acme.com ".into(),
             token: " secret-token\n".into(),
             expires_on: (chrono::Local::now().date_naive() + chrono::Days::new(365)).to_string(),
+            name: None,
         }
     }
 
