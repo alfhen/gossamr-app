@@ -338,6 +338,11 @@ impl Core {
         self.with_app_db(|db| db.run(id)).await
     }
 
+    /// Whether a run of any connection has this short id. Reads the whole table on purpose: the id is unique across it.
+    pub async fn short_id_in_use(&self, id: &crate::runs::cli::ShortId) -> Result<bool> {
+        self.with_app_db(|db| db.short_id_in_use(id.as_str())).await
+    }
+
     /// Archives the listed runs that are over; returns the ids that were archived.
     pub async fn archive_runs(&self, ids: &[String], at: chrono::DateTime<chrono::Utc>) -> Result<Vec<String>> {
         self.with_proposals(|db| db.archive_runs(ids, at)).await

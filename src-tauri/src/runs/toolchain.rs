@@ -6,6 +6,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::binary::find_binary;
+use super::agent_config::config_dir;
+use super::backend::claude::ClaudeBackend;
+use super::backend::RunBackend;
 use super::cli::{ClaudeCli, SystemCli};
 use super::env::RunEnv;
 use super::provider_env::{ProviderEnv, ProviderState, Unavailable};
@@ -17,6 +20,7 @@ use crate::model_choice::Reason;
 #[derive(Clone)]
 pub struct Toolchain {
     pub cli: Arc<dyn ClaudeCli>,
+    pub backend: Arc<dyn RunBackend>,
     /// The captured shell environment, without any instance's login: `git` and `gh` run in it.
     pub env: Arc<RunEnv>,
     pub instance_id: String,
@@ -26,15 +30,42 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
-    /// The default instance, with the login the shell has.
+    /// A toolchain whose backend knows the instance's name and whether it has a folder of its own, so a failure
+    /// names the right login. `files` is where the backend keeps each run's MCP file.
+    pub fn for_login(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>, id: &str, name: &str, login: Option<ProviderEnv>, files: PathBuf) -> Self {
+        let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
+        let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), files, name.into(), own_folder));
+        Self { cli, backend, env, instance_id: id.into(), instance_name: name.into(), login }
+    }
+
+    /// The default instance, with the login the shell has, writing MCP files in a folder of its own.
+    #[cfg(test)]
     pub fn new(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>) -> Self {
-        Self { cli, env, instance_id: connections::DEFAULT_CLAUDE.into(), instance_name: "Claude".into(), login: None }
+        Self::for_login(cli, env, connections::DEFAULT_CLAUDE, "Claude", None, scratch_files())
+    }
+
+    /// This toolchain as another instance, with the backend that instance's name and login give.
+    #[cfg(test)]
+    pub fn into_instance(self, id: &str, name: &str, login: Option<ProviderEnv>) -> Self {
+        Self::for_login(self.cli, self.env, id, name, login, scratch_files())
+    }
+
+    /// This toolchain with its backend keeping MCP files in `files`.
+    #[cfg(test)]
+    pub fn with_files(self, files: PathBuf) -> Self {
+        Self::for_login(self.cli, self.env, &self.instance_id, &self.instance_name, self.login, files)
     }
 
     /// Whether the instance has a folder of its own, which a plain `claude` in the person's Terminal doesn't use.
     pub fn has_own_folder(&self) -> bool {
         self.login.as_ref().is_some_and(ProviderEnv::uses_own_folder)
     }
+}
+
+#[cfg(test)]
+fn scratch_files() -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    std::env::temp_dir().join(format!("gossamr-agents-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,7 +129,8 @@ impl SystemToolchain {
             return Err(ToolchainError::ClaudeMissing { instance: name.into() });
         };
         let run_env = login.as_ref().map_or_else(|| env.clone(), |login| Arc::new(login.over(&env)));
-        Ok(Toolchain { cli: Arc::new(SystemCli::new(binary, run_env)), env, instance_id: id.into(), instance_name: name.into(), login })
+        let cli = Arc::new(SystemCli::new(binary, run_env));
+        Ok(Toolchain::for_login(cli, env, id, name, login, config_dir(&self.core.data_dir())))
     }
 }
 
@@ -172,6 +204,7 @@ mod tests {
     use crate::connections::{ProviderConfig, ProviderInstance};
     use crate::inbox::testing::{fixture_with_shell, Fixture};
     use crate::runs::env::ShellCapture;
+    use crate::runs::failure::Failure;
     use std::os::unix::fs::PermissionsExt;
 
     /// A `claude` that prints the login variables it was started with.
@@ -227,6 +260,20 @@ mod tests {
             assert_eq!(tc.cli.version().await.unwrap(), "/shell/folder|sk-shell");
             assert_eq!((tc.instance_id.as_str(), tc.instance_name.as_str()), ("claude", "Claude"));
         }
+    }
+
+    #[tokio::test]
+    async fn a_signed_out_instance_with_a_folder_fails_preflight_in_its_own_name_with_its_own_folder_help() {
+        let dir = std::env::temp_dir().join(format!("gossamr-toolchain-signedout-{}", std::process::id()));
+        let claude = fake_claude(&dir);
+        std::fs::write(&claude, "#!/bin/sh\necho '{\"loggedIn\":false}'\n").unwrap();
+        let fx = fixture_with_shell(shell_printing(&dir, &claude)).await;
+        let tools = SystemToolchain::new(fx.core.clone()).with_finder(the_fake);
+        add(&fx, "claude_2", Driver::Claude, Some("~/.claude-work"), true);
+        let own = tools.for_instance("claude_2").await.unwrap();
+        assert_eq!(own.backend.preflight(&dir).await.err(), Some(Failure::NotSignedIn { instance: "claude_2 name".into(), own_folder: true }));
+        let default = tools.for_instance(connections::DEFAULT_CLAUDE).await.unwrap();
+        assert_eq!(default.backend.preflight(&dir).await.err(), Some(Failure::NotSignedIn { instance: "Claude".into(), own_folder: false }));
     }
 
     #[tokio::test]

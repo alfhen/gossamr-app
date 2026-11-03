@@ -13,20 +13,21 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::cli::{AgentEntry, LaunchRequest, ShortId};
+use super::backend;
+use super::cli::{AgentEntry, ShortId};
 use super::redact::redact;
 use super::failure::Failure;
 use super::index::{Entry, RunIndex};
 use super::launcher::RunLauncher;
 use super::fresh::is_work_path;
-use super::repo::{origin_matches, CommitIdentity, Git};
+use super::repo::{origin_matches, random_hex, CommitIdentity, Git};
 use super::toolchain::{Toolchain, ToolchainSource};
 use self::choice::{Blocked, Target};
 pub(super) use self::choice::waiting_words;
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};
-use crate::domain::{render_prompt, Actor, Role, Run, RunEvent, RunQuery, RunState, GUARD, AGENT_GUARD};
+use crate::domain::{render_prompt, Actor, Role, Run, RunEvent, RunQuery, RunState, GUARD};
 use crate::error::{Error, Result};
 use crate::inbox::Core;
 
@@ -311,19 +312,7 @@ impl RunService {
             Ok(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
             Err(why) => return Err(Failure::NoClone(format!("Git couldn't read the origin of {} ({why})", clone.display()))),
         }
-        let auth = tc.cli.auth_status().await.map_err(|e| Failure::from_cli(e, clone, tc))?;
-        if !auth.logged_in {
-            return Err(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
-        }
-        if let Ok(file) = super::trust::config_file(&tc.env, &auth) {
-            if super::trust::trusted(&file, clone) == Some(false) && !super::trust::trusted_above(&file, clone) {
-                return Err(Failure::NeedsTrust { folder: clone.clone(), instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() });
-            }
-        }
-        if !tc.cli.supports_bg().await.map_err(|e| Failure::from_cli(e, clone, tc))? {
-            return Err(Failure::TooOld);
-        }
-        Ok(())
+        tc.backend.preflight(clone).await
     }
 
     /// The run's session, if `claude agents` lists one. After a launch whose answer was lost the session may still be
@@ -334,7 +323,7 @@ impl RunService {
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         loop {
-            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc))?;
+            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc.instance_name, tc.has_own_folder()))?;
             if let Some(found) = entries.into_iter().find(|e| belongs_to(e, &tc.instance_id, run)) {
                 return Ok(Some(found));
             }
@@ -375,36 +364,55 @@ impl RunService {
         self.store(run).await?;
         self.remember(run);
 
-        let agent = self.offer_tools(run).await;
+        let tools = self.offer_tools(run).await;
         let spec = &run.spec;
-        let mut guard = GUARD.to_string();
-        if agent.is_some() {
-            guard = format!("{guard} {AGENT_GUARD}");
-        }
-        let request = LaunchRequest {
+        let fresh_id = match self.fresh_short_id().await {
+            Ok(id) => id,
+            Err(why) => {
+                self.fail(run, &why).await?;
+                return Ok(true);
+            }
+        };
+        let request = backend::LaunchRequest {
             cwd: spec.clone_path.clone(),
             name: title_of(run),
             worktree: spec.name.clone(),
-            guard,
+            guard: GUARD.to_string(),
             prompt: render_prompt(spec),
-            agent,
+            tools,
             model,
+            fresh_id,
         };
         self.in_flight.lock().expect("in-flight lock poisoned").insert(run.id.clone());
-        let outcome = tc.cli.launch(&request).await;
+        let outcome = tc.backend.launch(&request).await;
         self.in_flight.lock().expect("in-flight lock poisoned").remove(&run.id);
         match outcome {
-            Ok(launched) => {
-                run.short_id = Some(launched.short_id);
+            Ok(session) => {
+                run.short_id = Some(session.short_id);
+                if session.session_id.is_some() {
+                    run.session_id = session.session_id;
+                }
                 self.remember(run);
                 self.store(run).await?;
             }
-            Err(e) => {
-                let why = Failure::from_cli(e, &run.spec.clone_path, &tc);
-                self.fail(run, &why).await?;
-            }
+            Err(why) => self.fail(run, &why).await?,
         }
         Ok(true)
+    }
+
+    /// A short id that no run, of any account or login, has or had.
+    async fn fresh_short_id(&self) -> std::result::Result<ShortId, Failure> {
+        loop {
+            let id = ShortId::parse(&random_hex(8)).expect("eight hex digits");
+            if self.index.has_short_id(&id) {
+                continue;
+            }
+            match self.core.short_id_in_use(&id).await {
+                Ok(false) => return Ok(id),
+                Ok(true) => {}
+                Err(e) => return Err(Failure::Invalid(format!("Gossamr couldn't check the run ids: {e}"))),
+            }
+        }
     }
 
     /// Starts a queued run, or with `retry` a failed one that never got a session. Returns whether it launched: a queued
