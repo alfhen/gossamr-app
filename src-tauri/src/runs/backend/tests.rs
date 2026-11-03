@@ -143,6 +143,9 @@ pub(in crate::runs) struct Recorder {
     pub process: Mutex<Option<RunProcess>>,
     /// The process of each session it was asked to stop.
     pub stopped: Mutex<Vec<Option<RunProcess>>>,
+    /// How long a stop takes, and the budget the backend reports for it. A zero budget is the default one.
+    pub stop_takes: Mutex<std::time::Duration>,
+    pub budget: Mutex<std::time::Duration>,
 }
 
 impl Recorder {
@@ -230,7 +233,16 @@ impl RunBackend for Recorder {
     async fn stop(&self, session: &Session) -> BackendResult<()> {
         self.did(format!("stop:{}", session.short_id));
         self.stopped.lock().unwrap().push(session.process.clone());
+        let takes = *self.stop_takes.lock().unwrap();
+        tokio::time::sleep(takes).await;
         Ok(())
+    }
+
+    fn stop_budget(&self) -> std::time::Duration {
+        match *self.budget.lock().unwrap() {
+            zero if zero.is_zero() => crate::runs::backend::STOP_BUDGET,
+            budget => budget,
+        }
     }
 
     fn ask_ended(&self, run: &Run) {
@@ -539,4 +551,42 @@ async fn after_a_resume_the_index_holds_the_new_process_and_stop_all_stops_that_
 
     rig.svc.stop_all().await.unwrap();
     assert_eq!(*backend.stopped.lock().unwrap(), vec![Some(process(200))]);
+}
+
+#[tokio::test]
+async fn stop_all_gives_up_on_a_stop_that_outlasts_the_budget_its_backend_reports() {
+    let backend = Arc::new(Recorder::default());
+    *backend.budget.lock().unwrap() = std::time::Duration::from_millis(50);
+    *backend.stop_takes.lock().unwrap() = std::time::Duration::from_millis(600);
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let launched = rig.launched(1).await;
+    let run = rig
+        .set(&launched, |r| {
+            r.session_id = Some(SESSION.into());
+            r.state = RunState::Working;
+        })
+        .await;
+
+    let tally = rig.svc.stop_all().await.unwrap();
+    assert_eq!((tally.stopped, tally.failed), (0, 1));
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+}
+
+#[tokio::test]
+async fn stop_all_waits_as_long_as_the_budget_its_backend_reports() {
+    let backend = Arc::new(Recorder::default());
+    *backend.budget.lock().unwrap() = std::time::Duration::from_secs(10);
+    *backend.stop_takes.lock().unwrap() = std::time::Duration::from_millis(300);
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let launched = rig.launched(1).await;
+    let run = rig
+        .set(&launched, |r| {
+            r.session_id = Some(SESSION.into());
+            r.state = RunState::Working;
+        })
+        .await;
+
+    let tally = rig.svc.stop_all().await.unwrap();
+    assert_eq!((tally.stopped, tally.failed), (1, 0));
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
 }

@@ -78,28 +78,31 @@ fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
     }
 }
 
-/// Lets a test see which signals were sent to a pid and make them fail.
+/// Lets a test see which signals were sent to a pid and make them fail. State is per thread: each test runs on its
+/// own thread, and a pid freed by one test can be reused by another.
 #[cfg(test)]
 pub mod seam {
+    use std::cell::RefCell;
     use std::collections::HashSet;
-    use std::sync::Mutex;
 
-    static SENT: Mutex<Vec<(libc::pid_t, libc::c_int)>> = Mutex::new(Vec::new());
-    static FAILING: Mutex<Option<HashSet<libc::pid_t>>> = Mutex::new(None);
+    thread_local! {
+        static SENT: RefCell<Vec<(libc::pid_t, libc::c_int)>> = const { RefCell::new(Vec::new()) };
+        static FAILING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+    }
 
     pub(super) fn intercept(target: libc::pid_t, signal: libc::c_int) -> Option<std::io::Result<()>> {
-        SENT.lock().unwrap().push((target, signal));
-        let fails = signal != libc::SIGKILL && FAILING.lock().unwrap().as_ref().is_some_and(|set| set.contains(&target.abs()));
+        SENT.with(|sent| sent.borrow_mut().push((target, signal)));
+        let fails = signal != libc::SIGKILL && FAILING.with(|set| set.borrow().contains(&target.abs()));
         fails.then(|| Err(std::io::Error::from_raw_os_error(libc::EPERM)))
     }
 
     /// Every signal that was aimed at `pid` or its group.
     pub fn sent_to(pid: u32) -> Vec<libc::c_int> {
-        SENT.lock().unwrap().iter().filter(|(target, _)| target.unsigned_abs() == pid).map(|(_, signal)| *signal).collect()
+        SENT.with(|sent| sent.borrow().iter().filter(|(target, _)| target.unsigned_abs() == pid).map(|(_, signal)| *signal).collect())
     }
 
     /// Makes every signal but SIGKILL to `pid` fail, so a test can still end the process.
     pub fn fail_signals_to(pid: u32) {
-        FAILING.lock().unwrap().get_or_insert_with(HashSet::new).insert(pid as libc::pid_t);
+        FAILING.with(|set| set.borrow_mut().insert(pid as libc::pid_t));
     }
 }
