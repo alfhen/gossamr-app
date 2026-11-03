@@ -229,7 +229,7 @@ async fn an_answer_to_a_run_on_the_second_login_stops_and_wakes_it_through_that_
 }
 
 #[tokio::test]
-async fn an_answer_to_a_run_on_a_login_that_is_off_is_kept_and_sent_once_the_login_is_back_on() {
+async fn a_persons_answer_to_a_run_on_a_login_that_is_off_is_refused_and_nothing_is_kept() {
     let rig = ready().await;
     let (svc, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
     let run = crate::runs::rig::start_on_second_login(&rig, &svc, &second).await;
@@ -240,19 +240,18 @@ async fn an_answer_to_a_run_on_a_login_that_is_off_is_kept_and_sent_once_the_log
     });
     rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
 
-    let kept = svc.answer(&run.id, "Use staging.").await.unwrap();
-    assert_eq!(kept.state, RunState::NeedsAnswer);
-    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Use staging."));
+    let err = svc.answer(&run.id, "Use staging.").await.unwrap_err();
+    assert!(err.to_string().contains("stays in the box"), "{err}");
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
     assert!(second.0.lock().unwrap().calls.is_empty() && rig.cli.0.lock().unwrap().calls.is_empty());
 
     login.set_off(None);
-    svc.deliver_queued().await;
+    svc.answer(&run.id, "Use staging.").await.unwrap();
     assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
-    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
 }
 
 #[tokio::test]
-async fn a_persons_answer_kept_while_the_login_is_off_is_sent_and_recorded_as_theirs_even_in_a_paused_workstream() {
+async fn a_persons_message_kept_while_the_login_is_off_is_sent_and_recorded_as_theirs_even_in_a_paused_workstream() {
     use crate::domain::workstream::PauseReason;
     let rig = ready().await;
     let (svc, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
@@ -265,7 +264,7 @@ async fn a_persons_answer_kept_while_the_login_is_off_is_sent_and_recorded_as_th
         s.sessions[0].pid = None;
     });
     rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
-    svc.answer(&run.id, "Use staging.").await.unwrap();
+    svc.message_agent(&run.id, "Use staging.", Actor::Person).await.unwrap();
     rig.fx.core.pause_workstream(&rig.fx.scope, &ws, PauseReason::Person, Actor::Person).await.unwrap();
 
     login.set_off(None);
@@ -277,4 +276,26 @@ async fn a_persons_answer_kept_while_the_login_is_off_is_sent_and_recorded_as_th
     let audit = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
     assert!(audit.iter().any(|e| e.action == "run_answered" && e.actor == Actor::Person));
     assert!(!audit.iter().any(|e| e.action == "run_answered" && e.actor == Actor::Pip));
+}
+
+#[tokio::test]
+async fn a_persons_message_waiting_for_the_login_is_not_replaced_by_pips() {
+    let rig = ready().await;
+    let (svc, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
+    let run = crate::runs::rig::start_on_second_login(&rig, &svc, &second).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("blocked".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
+    svc.message_agent(&run.id, "Use staging.", Actor::Person).await.unwrap();
+
+    assert!(svc.message_agent(&run.id, "Use production.", Actor::Pip).await.is_err());
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Use staging."));
+
+    login.set_off(None);
+    svc.deliver_queued().await;
+    assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
 }

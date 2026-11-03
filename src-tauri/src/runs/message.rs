@@ -57,6 +57,9 @@ impl RunService {
     pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
         let text = checked(text)?;
         let run = self.load(run_id).await?;
+        if by == Actor::Pip && self.core.run_message_author(run_id).await? == Some(Actor::Person) {
+            return Err(refuse("The person's message is waiting to be sent to it; message it once that is sent."));
+        }
         let asking = !at_rest(run.state) && self.core.asks().question(run_id).is_some();
         let wakes = asking || matches!(run.state, RunState::NeedsAnswer | RunState::Done | RunState::Stopped);
         if let Some(why) = self.workstream_hold(&run).await.filter(|_| by == Actor::Pip && wakes) {
