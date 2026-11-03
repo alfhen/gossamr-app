@@ -113,7 +113,7 @@ export function AgentsSettingsView({ runs, stopping, keepRunning, settings, work
 
       <Sec title="Clean up">
         <Box>
-          <p className="m-0 text-ws-ink2">Removes finished runs' worktrees with claude rm, which refuses work that was never pushed.</p>
+          <p className="m-0 text-ws-ink2">Removes finished runs' worktrees with claude rm or, for Codex runs, git. Both refuse work that was never pushed or merged.</p>
           {cleanup ? (
             <div className="flex flex-wrap items-center gap-2">
               <Btn icon="folder" disabled={cleanup.busy} onClick={onCleanup}>

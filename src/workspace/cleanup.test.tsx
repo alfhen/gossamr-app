@@ -64,6 +64,12 @@ describe("the clean up section of the run sheet", () => {
     expect(asking).not.toContain(">Clean up</button>");
   });
 
+  it("names the removing tool of a Codex run and never claude rm", () => {
+    const html = view({ driver: "codex", login: "Codex" });
+    expect(html).toContain("with git");
+    expect(html).not.toContain("claude rm");
+  });
+
   it("shows Claude's refusal as it was said", () => {
     expect(view({ refused: "worktree has 2 unpushed commits" })).toContain("Claude kept it: worktree has 2 unpushed commits");
   });

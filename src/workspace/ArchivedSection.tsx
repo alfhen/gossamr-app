@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { sizeText } from "../lib/archiveRuns";
+import type { Driver } from "../lib/models";
 import type { Run, WorktreeInfo } from "../types";
 import { Btn } from "./AgentSheet";
 import { ageText, runTitle } from "./agentsLogic";
+import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
 import { useRuns } from "./runsStore";
 import { useWorkspace } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
@@ -14,8 +16,11 @@ export interface DeleteAsk {
   info: WorktreeInfo | null;
   removeWorktree: boolean;
   busy: boolean;
-  /** Claude's own words when it would not remove the worktree. */
+  /** The login's own words when it would not remove the worktree. */
   refused: string | null;
+  /** What removes the worktree, and who is named when it refuses. Claude when left out. */
+  driver?: Driver;
+  login?: string;
 }
 
 export interface ArchivedSectionViewProps {
@@ -47,7 +52,9 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
           <span>
             Also remove its worktree folder{info.bytes !== null ? ` (${sizeText(info.bytes)})` : ""}
             <span className="selectable block font-mono text-xs text-ws-ink3 [overflow-wrap:anywhere]">{info.path}</span>
-            <span className="block text-xs text-ws-ink3">Removed with claude rm, which refuses work that was never pushed. Only folders in ~/Gossamr/agents are ever removed.</span>
+            <span className="block text-xs text-ws-ink3">
+              {ask.driver === "codex" ? "Removed with git, which refuses changes and branches that aren't merged." : "Removed with claude rm, which refuses work that was never pushed."} Only folders in ~/Gossamr/agents are ever removed.
+            </span>
           </span>
         </label>
       ) : (
@@ -55,7 +62,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
       )}
       {ask.refused && (
         <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-          Claude kept it: {ask.refused}. Nothing was deleted.
+          {ask.login ?? "Claude"} kept it: {ask.refused}. Nothing was deleted.
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -117,7 +124,9 @@ export function ArchivedSection({ runs, now }: { runs: readonly Run[]; now: numb
   if (runs.length === 0) return null;
 
   const ask = async (id: string) => {
-    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null });
+    const run = runs.find((r) => r.id === id);
+    const instance = instanceOf(useWorkspace.getState().connections, run?.runsOn?.instanceId ?? DEFAULT_INSTANCE);
+    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null, driver: instance.driver, login: instance.name });
     try {
       const info = await useRuns.getState().backend?.runsWorktreeInfo(id);
       setAsking((a) => (a?.id === id && info ? { ...a, info } : a));
