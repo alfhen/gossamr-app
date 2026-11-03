@@ -29,7 +29,7 @@ Pip and agents run on a Claude login. You can keep more than one, such as a work
 
 Gossamr does not sign in to Claude for you. Sign in with the `claude` command in a terminal, using the config folder of that login.
 
-Pip always runs on Claude. Codex is in beta and cannot run agents yet.
+Pip always runs on Claude. Codex shows in Settings and in **+ Add** with its models and a **Beta** label. It cannot run agents yet.
 
 ## Connecting GitHub
 
