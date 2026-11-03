@@ -198,6 +198,7 @@ async fn a_resume_that_starts_a_copy_of_a_build_stops_the_copy_and_keeps_the_run
     assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
     let copies: Vec<_> = after.earlier_sessions.iter().map(|e| (e.short_id.as_str(), e.removed)).collect();
     assert!(matches!(copies.as_slice(), [(copy, false)] if copy.starts_with('c')), "the copy is remembered so it is never taken for another run's session: {copies:?}");
+    assert!(rig.svc.index.live().iter().all(|e| e.run_id != run.id), "a stopped run is not live in the index");
 }
 
 #[tokio::test]

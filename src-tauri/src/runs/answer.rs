@@ -208,7 +208,6 @@ impl RunService {
             }
             Ok(Resumed::Copy { session, note }) => {
                 run.process = None;
-                self.remember(run);
                 run.earlier_sessions.push(EarlierSession { short_id: session.short_id, session_id: None, removed: false });
                 Some(note)
             }
