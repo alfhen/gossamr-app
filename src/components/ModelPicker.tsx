@@ -3,6 +3,7 @@ import { MODEL_ID_LIMIT, validModelId } from "../lib/models";
 import { choiceLabel, listedId, type PickerInstance } from "../lib/modelPicker";
 import { usePopover } from "../workspace/Popover";
 import type { ModelChoice, ModelOption } from "../types";
+import { Beta } from "./Beta";
 import { Button } from "./Button";
 
 export interface ModelPickerProps {
@@ -144,6 +145,7 @@ export function ModelMenu({ name = "Runs on", instances, models, value, onPick, 
           <div key={instance.id} role="group" aria-label={instance.name}>
             <div className={`flex items-baseline gap-2 px-2 pt-1.5 pb-1 font-semibold ${instance.unavailable ? "text-ws-ink3" : "text-ws-ink"}`}>
               <span className="truncate">{instance.name}</span>
+              {instance.driver === "codex" && <Beta />}
               {instance.unavailable && <span className="ml-auto shrink-0 font-normal text-ws-ink2">{instance.unavailable}</span>}
             </div>
             {!instance.unavailable &&

@@ -1,4 +1,4 @@
-import type { ConnectionInfo } from "../types";
+import type { ConnectionInfo, ModelChoice, ModelDefaults } from "../types";
 import { stepKey } from "./peekLogic";
 import { agoText } from "./watchLogic";
 
@@ -7,20 +7,11 @@ export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
 export const OFF_DETAIL = "Off. Gossamr doesn't sync it and drafts for it wait. You and Pip don't see its items. What's cached is kept.";
 export const PROVIDER_OFF_DETAIL = "Off. Pip and new agents can't use it.";
 
-/** Provider rows stay out of Settings until runs honour their instance. The sample backend shows them with `?providers=1`. */
-export const providersShown = false;
-
-const providersAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("providers") === "1";
-
-const providersOn = () => providersShown || providersAsked();
-
-/** Whether Settings lists provider rows, so a link to them leads somewhere. */
-export const providersVisible = providersOn;
-/** Codex stays out of + Add until it can run agents. The sample backend offers it with `?codex=1` so its sheet can be tried. */
-const codexAsked = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("codex") === "1";
+/** Whether Settings lists provider rows. */
+export const providersShown = true;
 
 /** The rows Settings and the rest of the page work with. */
-export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersOn()): T[] =>
+export const shownConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[], shown = providersShown): T[] =>
   shown ? [...connections] : connections.filter((c) => c.kind !== "provider");
 
 export type ConnectionGroup = "Code" | "Tickets" | "Models";
@@ -34,12 +25,6 @@ export function groupedConnections<T extends Pick<ConnectionInfo, "kind">>(conne
   return ADD_GROUPS.map((group) => ({ group, rows: connections.filter((c) => groupOf(c.kind) === group) })).filter((g) => g.rows.length > 0);
 }
 
-/** What each driver can run. Codex's agent runner is not built yet, so it stays out of + Add until `runsAgents` turns true. */
-export const DRIVER_CAPABILITIES = {
-  claude: { runsPip: true, runsAgents: true },
-  codex: { runsPip: false, runsAgents: false },
-} as const;
-
 export type AddEntryId = "github" | "jira" | "claude" | "codex";
 
 export interface AddEntry {
@@ -47,17 +32,27 @@ export interface AddEntry {
   group: ConnectionGroup;
   label: string;
   line: string;
+  beta?: boolean;
 }
 
-/** What + Add and the palette offer: both account kinds always. The Models entries only once provider rows are shown and the driver can run something. */
-export function addEntries(providers = providersOn(), codex = codexAsked()): AddEntry[] {
+/** What + Add and the palette offer. Codex is offered with a Beta label although it cannot run Pip or agents yet. */
+export function addEntries(providers = providersShown): AddEntry[] {
   const entries: AddEntry[] = [
     { id: "github", group: "Code", label: "GitHub account", line: "Pull requests, branches and checks." },
     { id: "jira", group: "Tickets", label: "Jira account", line: "Tickets from one Jira site." },
   ];
-  if (providers && DRIVER_CAPABILITIES.claude.runsAgents) entries.push({ id: "claude", group: "Models", label: "Claude", line: "A login that Pip and agents can run on." });
-  if (providers && (DRIVER_CAPABILITIES.codex.runsAgents || codex)) entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login that agents can run on." });
+  if (providers) {
+    entries.push({ id: "claude", group: "Models", label: "Claude", line: "A login that Pip and agents can run on." });
+    entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login for Codex. It can't run Pip or agents yet.", beta: true });
+  }
   return entries;
+}
+
+/** The defaults with one of the two replaced. Agents never carry an effort, which only Pip's turns take. */
+export function defaultsWith(defaults: ModelDefaults, which: "pip" | "agents", choice: ModelChoice): ModelDefaults {
+  if (which === "pip") return { ...defaults, pip: choice };
+  const { effort: _effort, ...agents } = choice;
+  return { ...defaults, agents };
 }
 
 /** Whether removing `c` leaves no other Jira connection, so the app has nothing to show and goes back to Setup. */

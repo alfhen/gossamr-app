@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Beta } from "../components/Beta";
 import { Button } from "../components/Button";
 import { Switch } from "../components/Switch";
 import { nameProblem, NAME_LIMIT } from "../lib/connectionName";
@@ -13,6 +14,7 @@ import { isJira } from "./domains";
 import { useGithubUi } from "./githubUi";
 import { useJiraUi } from "./jiraUi";
 import { accountLine, hasLogin, ignoredLine, revealProviderFolder, signOutCommand, usedForLine } from "./providerLogic";
+import { ProviderModels } from "./ProviderModels";
 import { useProviderUi } from "./providerUi";
 import { keyInitials } from "./projects";
 import { useTabs } from "./tabsStore";
@@ -105,7 +107,10 @@ function Row({ c, selected, checking, pending, onSelect, onToggle }: RowProps) {
           {badgeText(c)}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-semibold">{c.displayName}</span>
+          <span className="flex items-center gap-1.5">
+            <span className="truncate font-semibold">{c.displayName}</span>
+            {c.driver === "codex" && <Beta />}
+          </span>
           <StatusLine line={line} />
         </span>
       </button>
@@ -276,6 +281,9 @@ function ProviderFields({ c, onReveal }: { c: ConnectionInfo; onReveal(): void }
           </div>
         )}
       </Field>
+      <Field label="Models">
+        <ProviderModels instanceId={c.instanceId} />
+      </Field>
       <p className="m-0 border-b border-ws-sep py-2.5 text-sm text-ws-ink2 last:border-b-0">{usedForLine(c)}</p>
     </>
   );
@@ -287,7 +295,10 @@ function Detail({ c, p }: { c: ConnectionInfo; p: ConnectionsViewProps }) {
   const sample = c.kind === "mock" || isUnreadableProviders(c);
   return (
     <section aria-label={`${c.displayName} details`} className="pt-3">
-      <h3 className="font-display m-0 mb-1 text-base font-semibold">{c.displayName}</h3>
+      <h3 className="font-display m-0 mb-1 flex items-center gap-2 text-base font-semibold">
+        {c.displayName}
+        {c.driver === "codex" && <Beta />}
+      </h3>
       <Field label="Status">
         <StatusField c={c} p={p} />
       </Field>

@@ -60,7 +60,7 @@ export function ignoredLine(c: Pick<ConnectionInfo, "displayName" | "status">): 
 
 /** What a provider's detail says it is used for. */
 export function usedForLine(c: Pick<ConnectionInfo, "driver" | "displayName">): string {
-  return c.driver === "codex" ? `New agents run on ${c.displayName} when you pick it.` : `Pip and new agents run on ${c.displayName} when you pick it. Agents already running keep going if you turn it off.`;
+  return c.driver === "codex" ? `${c.displayName} is in beta. Pip and agents can't run on it yet.` : `Pip and new agents run on ${c.displayName} when you pick it. Agents already running keep going if you turn it off.`;
 }
 
 /** Shows an instance's folder in Finder; a refusal or a failure goes to `report`. */

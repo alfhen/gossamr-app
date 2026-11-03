@@ -1,7 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { THEME_LABEL, THEMES, usePrefs } from "./prefs";
 import { useTabs } from "./tabsStore";
-import { syncLine } from "./connectionsLogic";
+import type { ModelDefaults } from "../types";
+import { useWorkspace } from "../workspaceStore";
+import { providersShown, syncLine } from "./connectionsLogic";
+import { ModelsSection } from "./ModelsSection";
 import { ConnectionsSection } from "./Connections";
 import { WatchingSection } from "./WatchSettings";
 import { useEscBack } from "./escBack";
@@ -9,6 +12,10 @@ import { Segmented } from "../components/Segmented";
 
 /** The two facts the app states about what it does, and only here. */
 export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."] as const;
+
+/** The agents promise, naming the Claude new agents run on once it is known. */
+export const agentsPromise = (instanceName: string | null) =>
+  instanceName ? `Agents run on ${instanceName} with its own Claude Code settings, so they can push branches and use your own tools.` : PROMISES[1];
 
 function useNow() {
   const [now, setNow] = useState(() => new Date());
@@ -33,6 +40,9 @@ export function Settings() {
   const setTheme = usePrefs((s) => s.setTheme);
   useEscBack();
   const now = useNow();
+  const connections = useWorkspace((s) => s.connections);
+  const [defaults, setDefaults] = useState<ModelDefaults | null>(null);
+  const agentsOn = connections.find((c) => c.kind === "provider" && c.instanceId === defaults?.agents?.instanceId)?.displayName ?? null;
   const section = useTabs((s) => s.settingsSection);
   useEffect(() => {
     if (!section) return;
@@ -46,11 +56,16 @@ export function Settings() {
       <div className="max-w-[720px]">
         <Section title="Safety">
           <ul data-promises className="m-0 grid list-none gap-1.5 p-0 text-ws-ink2">
-            {PROMISES.map((t) => (
-              <li key={t}>{t}</li>
-            ))}
+            <li>{PROMISES[0]}</li>
+            <li>{agentsPromise(agentsOn)}</li>
           </ul>
         </Section>
+
+        {providersShown && (
+          <Section title="Models" id="settings-models">
+            <ModelsSection onDefaults={setDefaults} />
+          </Section>
+        )}
 
         <Section title="Theme">
           <Segmented kind="radio" label="Theme" value={theme} onChange={setTheme} options={THEMES.map((t) => ({ value: t, label: THEME_LABEL[t] }))} />

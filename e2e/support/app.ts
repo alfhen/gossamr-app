@@ -115,7 +115,7 @@ type Script = { planRecommended?: boolean; ready?: boolean; questions?: string[]
 /** One launch as the mock launcher made it (`MockLaunch` in src/backend/mockRuns.ts). */
 export type MockLaunch = { runId: string; role: string; guard: string; at: string };
 interface Handle {
-  runs(): { id: string; role: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string }[];
+  runs(): { id: string; role: string; state: string; prSha: string | null; passes: number; key: string | null; shortId: string | null; digest: string; name: string; runsOn: { instanceId: string; model: string } | null }[];
   launches(): MockLaunch[];
   workstreamEvents(): { workstreamId: string; actor: string; action: string; runId: string | null; detail?: string | null }[];
   scriptNext(kind: string, script: Script): void;

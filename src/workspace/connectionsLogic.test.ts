@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { claudeSnapshot, githubSnapshot, jiraSnapshot } from "../backend/mockProbes";
-import type { ConnectionInfo } from "../types";
-import { actingAs, addEntries, canSwitch, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, removesLastJira, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
+import type { ConnectionInfo, ModelDefaults } from "../types";
+import { actingAs, addEntries, canSwitch, defaultsWith, groupedConnections, hasRealConnection, isSignedOut, isUnreadableProviders, oldestCheck, providersShown, removalWarning, removesLastJira, rowAfter, shownConnections, showsCode, statusLine } from "./connectionsLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 const base: ConnectionInfo = { id: "github:ada", instanceId: "github", displayName: "GitHub", enabled: true, kind: "github", workspace: "ada", url: null, account: "Ada Example", lastSyncAt: null, syncing: false, error: null, transient: false, reauth: false, status: null, rechecking: false };
@@ -89,23 +89,11 @@ describe("a provider row", () => {
     expect(canSwitch({ ...base, id: "github:ada", instanceId: "github:ada" })).toBe(false);
   });
 
-  it("is hidden until providers are shown", () => {
+  it("is shown in the list", () => {
     const rows = [jira(), claude(), github("ready")];
-    expect(providersShown).toBe(false);
-    expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira", "github"]);
-    expect(shownConnections(rows, true).map((c) => c.kind)).toEqual(["jira", "provider", "github"]);
-  });
-
-  it("is shown when the sample backend is opened with ?providers=1", () => {
-    const rows = [jira(), claude()];
-    try {
-      vi.stubGlobal("location", { search: "?providers=1" });
-      expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira", "provider"]);
-      vi.stubGlobal("location", { search: "?providers=0" });
-      expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira"]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    expect(providersShown).toBe(true);
+    expect(shownConnections(rows).map((c) => c.kind)).toEqual(["jira", "provider", "github"]);
+    expect(shownConnections(rows, false).map((c) => c.kind)).toEqual(["jira", "github"]);
   });
 });
 
@@ -158,6 +146,20 @@ describe("removalWarning", () => {
   });
 });
 
+describe("the defaults a model picker writes", () => {
+  const before: ModelDefaults = { pip: { instanceId: "claude", model: "sonnet", effort: "medium" }, agents: { instanceId: "claude", model: "default" } };
+
+  it("changes only Pip's default when Pip's picker is used", () => {
+    const next = defaultsWith(before, "pip", { instanceId: "claude_2", model: "opus", effort: "medium" });
+    expect(next).toEqual({ pip: { instanceId: "claude_2", model: "opus", effort: "medium" }, agents: before.agents });
+  });
+
+  it("changes only the agents' default when New agents use is used, and drops any effort", () => {
+    const next = defaultsWith(before, "agents", { instanceId: "claude_2", model: "opus", effort: "high" });
+    expect(next).toEqual({ pip: before.pip, agents: { instanceId: "claude_2", model: "opus" } });
+  });
+});
+
 describe("the + Add entries", () => {
   const ids = (providers: boolean) => addEntries(providers).map((e) => e.id);
 
@@ -165,17 +167,19 @@ describe("the + Add entries", () => {
     expect(ids(false)).toEqual(["github", "jira"]);
   });
 
-  it("offers Claude only when provider rows are shown, and never Codex while it cannot run agents", () => {
+  it("offers Claude and Codex when provider rows are shown", () => {
     expect(ids(false)).not.toContain("claude");
-    expect(ids(true)).toEqual(["github", "jira", "claude"]);
+    expect(ids(false)).not.toContain("codex");
+    expect(ids(true)).toEqual(["github", "jira", "claude", "codex"]);
   });
 
-  it("offers Codex too when the sample page asks for it", () => {
-    expect(addEntries(true, true).map((e) => e.id)).toEqual(["github", "jira", "claude", "codex"]);
+  it("offers Codex with a Beta label without any page switch", () => {
+    expect(addEntries().find((e) => e.id === "codex")?.beta).toBe(true);
+    expect(addEntries().find((e) => e.id === "claude")?.beta).toBeUndefined();
   });
 
   it("puts each entry under its group", () => {
-    expect(addEntries(true).map((e) => [e.id, e.group])).toEqual([["github", "Code"], ["jira", "Tickets"], ["claude", "Models"]]);
+    expect(addEntries(true).map((e) => [e.id, e.group])).toEqual([["github", "Code"], ["jira", "Tickets"], ["claude", "Models"], ["codex", "Models"]]);
   });
 });
 
