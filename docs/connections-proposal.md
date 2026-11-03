@@ -347,9 +347,9 @@ Codex can do most of what Pip and agents need, but not the way Claude does it, a
 | MCP token kept out of argv | `${GOSSAMR_MCP_TOKEN}` in the header | `bearer_token_env_var = "GOSSAMR_MCP_TOKEN"` | From source |
 | Background agent | `claude --bg --worktree`, a daemon, `claude agents`, `stop`, `rm`, job folders | None. `exec` handles one turn and exits. Gossamr would make the worktree, spawn the process, keep its state and stop it. | n/a |
 | Survives Gossamr quitting | The daemon owns the run; `recover()` adopts it again after a restart | A process Gossamr spawns. It needs its own session (`setsid`), its events written to a file in the run folder, and its pid recorded so a restart can find it. | No |
-| Attach while running | `claude attach` to the daemon's session | No attach. `codex resume` while `exec` runs would be a second writer on one thread, so the `exec` must stop first. | n/a |
-| Resume | `--bg --resume <id>` | `codex exec resume <thread id>`, a new process per turn | From source |
-| Message a running agent | stop, then resume with the answer | SIGINT, then `exec resume` with the message | No |
+| Attach while running | `claude attach` to the daemon's session | No attach. `codex resume` while `exec` runs would be a second writer on one thread, so the `exec` must stop first. Built by `docs/plan-codex-runner.md` (X08). | n/a |
+| Resume | `--bg --resume <id>` | `codex exec resume <thread id>`, a new process per turn. Built by `docs/plan-codex-runner.md` (X08). | From source |
+| Message a running agent | stop, then resume with the answer | SIGINT, then `exec resume` with the message. Built by `docs/plan-codex-runner.md` (X08). | Yes, C5 |
 | Commit and push from the worktree | The person's own setup | Gossamr passes no `--sandbox` flag, so the person's own Codex config decides (2 Nov 2026). `workspace-write` cannot commit in a worktree: `git add` fails on `index.lock` under the clone's `.git/worktrees/`, and a push is rejected. Only `danger-full-access` commits and pushes (C6). | Yes, C6 |
 | Cost | `total_cost_usd` | Tokens only | From source |
 
@@ -369,7 +369,7 @@ They are in the build plan (Section 14) as c0 to c6.
 | c5 | **Codex answer, resume, stop and clean-up.** SIGINT then `exec resume`, SIGKILL after a wait, worktree removal with git. | ~500 |
 | c6 | **Codex final answer, Terminal and UI.** Final answer from `-o <file>`. Attach stops the `exec` first and then opens `codex resume` in Terminal. Failure text. The `runs_agents` flag turned on, which lets the pickers choose Codex, still with its Beta label. | ~400 |
 
-c3 to c6 move to a follow-up plan (owner decision, 2 Nov 2026). Until they land, Codex rows show with Beta and **+ Add** offers Codex, both from r14a, and the pickers grey Codex.
+c3 to c6 move to a follow-up plan, `docs/plan-codex-runner.md` (owner decision, 2 Nov 2026), which builds them as X01 to X10. Until they land, Codex rows show with Beta and **+ Add** offers Codex, both from r14a, and the pickers grey Codex.
 
 ## 9. Several Jira accounts
 
