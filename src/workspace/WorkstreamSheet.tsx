@@ -17,6 +17,7 @@ import { NO_WORKSTREAM_ID, useWorkView, type WorkViewFocus } from "./workViewSto
 import { WorkstreamNeeds } from "./NeedsPane";
 import { useNeedsYou } from "./useNeeds";
 import { focusPip, useWorkstreams } from "./workstreamsStore";
+import { AgentsModelRow } from "./WorkstreamControls";
 import { useWorkspace } from "../workspaceStore";
 
 export const WORKSTREAM_SHEET_ID = "workstream-sheet";
@@ -88,6 +89,7 @@ function Body({ view }: { view: WorkstreamView }) {
           Ask Pip about this
         </Btn>
       </div>
+      <AgentsModelRow key={`model:${ws.id}`} view={view} />
       <WorkstreamNeeds key={`needs:${ws.id}`} needs={needs} workstreamId={ws.id} />
       <StepRail key={ws.id} view={view} />
     </>

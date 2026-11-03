@@ -52,3 +52,6 @@ export function defaultModelDefaults(): ModelDefaults {
     agents: { instanceId: "claude", model: DEFAULT_MODEL },
   };
 }
+
+/** The label the built-in lists give a model id, for a place that has no instance's list at hand. */
+export const staticModels: readonly ModelOption[] = [...CLAUDE_MODELS, ...CODEX_MODELS];

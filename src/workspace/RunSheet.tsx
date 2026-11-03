@@ -7,7 +7,8 @@ import { useWorkspace } from "../workspaceStore";
 import { roleLabel } from "../lib/roles";
 import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSheet";
-import { StateChip, useSlotQueue, type TrustState } from "./AgentParts";
+import { RunsOnLine, SignInCommand, StateChip, useSlotQueue, type TrustState } from "./AgentParts";
+import { useRunInstance } from "./runInstance";
 import { agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { openTicket } from "./jump";
@@ -117,12 +118,14 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
 
 /** A run blocked on Claude's sign-in: what to do, and the way into Terminal to do it. The run sheet and the Needs you decision show the same box. */
 export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
+  const instance = useRunInstance(run);
   return (
     <Box tone="needs" label="Sign-in needed">
       <BoxTitle icon="lock" tone="needs">
-        Claude needs you to sign in
+        {instance.name} needs you to sign in
       </BoxTitle>
-      <p className="m-0 text-sm text-ws-ink2">Sign in in Terminal. The run carries on once Claude is signed in again.</p>
+      <p className="m-0 text-sm text-ws-ink2">Sign in in Terminal. The run carries on once {instance.name} is signed in again.</p>
+      {instance.signIn && <SignInCommand command={instance.signIn} />}
       <div>
         <Btn tone="primary" icon="term" disabled={!run.shortId} title={run.shortId ? undefined : "There is no session to open yet"} onClick={onAttach}>
           Open in Terminal
@@ -189,7 +192,7 @@ export function waitingText(run: Run, place: number | null = null): string {
 
 function FailureBox({ run, opened, trust, on }: { run: Run; opened: boolean; trust?: TrustState; on: RunSheetActions }) {
   const { trusting = false, refused = null } = trust ?? {};
-  const help = failureHelp(run, refused);
+  const help = failureHelp(run, refused, useRunInstance(run));
   const message = run.error?.trim() || "No reason was recorded.";
   const ready = help ? retryEnabled(help, opened) : true;
   const stepDone = !!help?.primary && help.retryNeedsTerminal && opened;
@@ -323,6 +326,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         </div>
         <h2 className="font-display m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
+        <RunsOnLine run={run} />
         {answerSent && <AnswerSent />}
       </div>
 

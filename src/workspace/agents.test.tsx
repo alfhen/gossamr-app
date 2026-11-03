@@ -15,6 +15,8 @@ vi.mock("./useStateView", async () => {
   const logic = await import("./agentsLogic");
   return { useStateView: (run: Parameters<typeof logic.stateView>[0], now: number) => logic.stateView(run, now) };
 });
+// FailureNext is called as a plain function below, so the hook that names the run's login is stood in for too.
+vi.mock("./runInstance", async (importOriginal) => ({ ...(await importOriginal<typeof import("./runInstance")>()), useRunInstance: () => ({ name: "Claude", signIn: null }) }));
 import { LAUNCHER_GUTTER } from "./PipExtras";
 import { PERMISSION_NOTE } from "./PermissionAsk";
 import { useActivity } from "./activityStore";

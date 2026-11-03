@@ -17,6 +17,7 @@ import { useWorkView } from "./workViewStore";
 import { RunAnswer } from "./RunAnswer";
 import { SignInBox } from "./RunSheet";
 import { useRuns } from "./runsStore";
+import { useRunInstance } from "./runInstance";
 import { BatchConfirm, PlanApproval, confirmBatch, planResultFor } from "./StepRail";
 import { batchLabel, EDITED_ASIDE, editedPending, freezeBatch, type BatchSnapshot } from "./workViewLogic";
 import { speakQuietToasts, useToasts } from "./toasts";
@@ -271,7 +272,7 @@ function FailureBody({ run }: { run: Run }) {
   const opened = useRuns((s) => s.terminalOpened.has(run.id));
   const trusting = useRuns((s) => s.trusting.has(run.id));
   const refused = useRuns((s) => s.trustRefused.get(run.id) ?? null);
-  const help = failureHelp(run, refused);
+  const help = failureHelp(run, refused, useRunInstance(run));
   const store = useRuns.getState();
   return (
     <Box tone="failed" label="Failure">

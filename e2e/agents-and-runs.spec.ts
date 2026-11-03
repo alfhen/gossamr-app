@@ -155,6 +155,82 @@ test.describe("a queued run", () => {
   });
 });
 
+test.describe("what a queued run runs on", () => {
+  test("changes from the keyboard, with the whole word Change showing", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    const card = page.locator(`main article[data-run-id="${id}"]`);
+    const change = card.getByRole("button", { name: "Runs on Claude · Default" });
+    await expect(change).toHaveText("Change");
+    const box = await change.evaluate((el) => ({ clipped: el.scrollWidth > el.clientWidth, inner: (el.firstElementChild as HTMLElement).scrollWidth > (el.firstElementChild as HTMLElement).clientWidth }));
+    expect(box).toEqual({ clipped: false, inner: false });
+
+    await change.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitemradio", { name: "Default" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(card.locator("[data-runs-on]")).not.toContainText("Default");
+    await expect(page.getByRole("dialog", { name: "Agent run" })).toHaveCount(0);
+  });
+
+  test("changes from the card, and the run starts on the new choice", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    const card = page.locator(`main article[data-run-id="${id}"]`);
+    await expect(card.locator("[data-runs-on]")).toContainText("Runs on Claude · Default");
+
+    await card.getByRole("button", { name: "Runs on Claude · Default" }).click();
+    await page.getByRole("menuitemradio", { name: "Haiku" }).click();
+    await expect(card.locator("[data-runs-on]")).toContainText("Runs on Claude · Haiku");
+    await expect(page.getByRole("dialog", { name: "Agent run" })).toHaveCount(0);
+
+    await advanceRuns(page, 2, id);
+    await expect(card.locator("[data-runs-on]")).toHaveText("Ran on Claude · Haiku");
+    await expect(card.getByRole("button", { name: "Change" })).toHaveCount(0);
+    await card.click();
+    await expect(runSheet(page).locator("[data-runs-on]")).toHaveText("Ran on Claude · Haiku");
+  });
+
+  test("Escape on the sheet's Change menu closes the menu and leaves the sheet open", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    await page.locator(`main article[data-run-id="${id}"]`).click();
+    await expect(runSheet(page)).toBeVisible();
+    await runSheet(page).getByRole("button", { name: "Runs on Claude · Default" }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Haiku" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menuitemradio", { name: "Haiku" })).toHaveCount(0);
+    await expect(runSheet(page)).toBeVisible();
+  });
+
+  test("is held back by a signed-out Claude, and the banner and the card name it and its sign-in command", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14&mockClaudeProbe=notSignedIn");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    await expect(page.locator("[data-login-banner]")).toContainText("Claude is signed out, so agents on it wait. Sign in with claude auth login.");
+    await advanceRuns(page, 1, id);
+    const card = page.locator(`main article[data-run-id="${id}"]`);
+    await expect(card).toContainText("Waits until Claude is signed in.");
+    expect((await mockRuns(page)).find((r) => r.id === id)?.state).toBe("queued");
+  });
+});
+
 test.describe("a free role", () => {
   test("shows on the run's card and sheet as the role Pip gave it", async ({ page }) => {
     await page.goto("/?runs=empty&mockRepos=14");

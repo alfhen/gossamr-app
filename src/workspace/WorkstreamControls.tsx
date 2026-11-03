@@ -3,7 +3,8 @@ import { inWorkstreamPane } from "../lib/proposals";
 import { nextStep, type NextStep } from "../lib/nextStep";
 import { adoptOfferText } from "../lib/workstreamAdopt";
 import { pausedBanner } from "../lib/workstreamPause";
-import type { WorkstreamView } from "../types";
+import { ModelPicker } from "../components/ModelPicker";
+import type { ModelChoice, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { Btn } from "./AgentSheet";
 import { paneHas, useDecisionShown } from "./decisionShown";
@@ -13,6 +14,7 @@ import { usePopover } from "./Popover";
 import { useRuns } from "./runsStore";
 import { useNeedsYou } from "./useNeeds";
 import { useWorkstreams } from "./workstreamsStore";
+import { useModelOptions } from "./useModelOptions";
 
 /** The person's controls on one workstream, each a user-only backend command; Pip has a tool for none of them. */
 export interface ControlActions {
@@ -279,4 +281,39 @@ export function WorkstreamControls({ view }: { view: WorkstreamView }) {
   const next = useMemo(() => nextStep(view, runs, needs), [view, runs, needs]);
   const openDrafts = useMemo(() => Object.values(proposals).filter((p) => p.state.type === "pending" && inWorkstreamPane(p, view.workstream)).length, [proposals, view.workstream]);
   return <WorkstreamControlsView view={view} actions={actions} confirmingStop={confirmingStop} onConfirmStop={setConfirmingStop} confirmingClose={confirmingClose} onConfirmClose={(on) => useWorkstreams.getState().askClose(on ? id : null)} openDrafts={openDrafts} next={next} />;
+}
+
+/** "New agents use": the Claude and model agents queued in this workstream run on. It follows the Settings default until the person picks one here. */
+export function AgentsModelRow({ view }: { view: WorkstreamView }) {
+  const { instances, models, defaults, backend, read } = useModelOptions("agents");
+  const id = view.workstream.id;
+  const own = view.workstream.agentsModel ?? null;
+  const value = own ?? defaults?.agents ?? null;
+  if (!backend || !value) return null;
+  const set = (choice: ModelChoice | null) => void useWorkstreams.getState().setAgentsModel(id, choice);
+  return (
+    <div data-agents-model className="flex flex-wrap items-center gap-x-2 text-sm">
+      <span className="font-semibold text-ws-ink2">New agents use</span>
+      <ModelPicker
+        instances={instances}
+        models={models}
+        value={value}
+        onChange={set}
+        onAddModel={async (instanceId, model) => {
+          const listed = await backend.providerAddModel(instanceId, model);
+          await read();
+          return listed;
+        }}
+        name="New agents in this workstream use"
+        title="Choose the Claude and model for agents queued in this workstream"
+      />
+      {own ? (
+        <Btn tone="ghost" data-agents-model-default onClick={() => set(null)}>
+          Use the default
+        </Btn>
+      ) : (
+        <span className="text-ws-ink3">the default in Settings</span>
+      )}
+    </div>
+  );
 }

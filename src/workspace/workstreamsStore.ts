@@ -3,7 +3,7 @@ import type { Backend } from "../backend/types";
 import { generalOn, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { ofItem, runWorkstream } from "../lib/workstreamStage";
 import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt";
-import type { ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
+import type { ItemRef, ModelChoice, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { drawerConnectionOf, primaryConnection } from "./domains";
 import { currentContext, useScreen } from "./pipHooks";
@@ -57,6 +57,8 @@ interface WorkstreamsState {
   stop(id: string): Promise<boolean>;
   /** Dismisses the question Pip asked in workstream `id`, so it leaves Needs you. False when it couldn't. */
   dismissAsk(id: string): Promise<boolean>;
+  /** Sets the Claude and model agents queued in workstream `id` run on; null goes back to the Settings default. False when it couldn't. */
+  setAgentsModel(id: string, choice: ModelChoice | null): Promise<boolean>;
 }
 
 let stop: (() => void) | null = null;
@@ -269,6 +271,8 @@ export const useWorkstreams = create<WorkstreamsState>()((set, get) => {
     async dismissAsk(id) {
       return (await act("Couldn't dismiss the question", (b) => b.workstreamsDismissAsk(id))).ok;
     },
+
+    setAgentsModel: (id, choice) => ok("Couldn't change what new agents use", (b) => b.workstreamsSetModel(id, choice)),
 
     async stop(id) {
       const done = await act("Couldn't stop the workstream", (b) => b.workstreamsStop(id));

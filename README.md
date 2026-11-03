@@ -79,9 +79,11 @@ Agents work only in Gossamr's own clones, in `~/Gossamr/agents/<owner>/<repo>`, 
 
 Git picks your commit address and signing key per folder when `~/.gitconfig` has `includeIf "gitdir:~/Code/acme/"` rules, so a rule for `~/Code` does not reach `~/Gossamr/agents`. Add one for `~/Gossamr/agents/<owner>/` if you want the same address there. Gossamr never edits `~/.gitconfig`. Each run says who it commits as ("Commits as alf@acme.com · gh is signed in as alfhen"), and Settings > Agents > Where agents work shows the address git uses inside each owner's clones and warns while such rules don't reach them.
 
+A run's card and sheet say which login and model it uses: "Runs on <login> · <model>" while it is queued, with **Change** to pick another, and "Ran on" once it has started. A workstream's sheet has **New agents use**, which sets the login and model for agents queued there. It follows the Settings default until you pick one.
+
 Claude asks once per folder whether to trust it, because a cloned repository's own hooks, MCP servers and settings run with the agent. If Gossamr's clone isn't trusted yet, the run says so and shows what trusting allows. **Trust this clone for Claude** saves that one folder as trusted in the settings file of the login the run uses, then starts the agent. Gossamr does this only when you click, for that one clone, and it changes nothing else in the file. If it can't do this safely, the card says why and **Trust in Terminal** opens Terminal there with `claude`: accept the question, close Terminal, and Retry the run.
 
-A queued run on a Claude login that is signed out waits, with "Waits until <name> is signed in", and starts once Gossamr sees that login signed in. If you remove a Claude login, its finished runs can still be cleaned up. Gossamr then removes the worktree and branch with git alone, never forcing, so unpushed work stays. The run's Claude session is left behind in that login's folder, and the clean-up sheet says so.
+A queued run on a Claude login that is signed out waits, with "Waits until <name> is signed in", and starts once Gossamr sees that login signed in. Failure help and the signed-out banner name that login and its sign-in command. If you remove a Claude login, its finished runs can still be cleaned up. Gossamr then removes the worktree and branch with git alone, never forcing, so unpushed work stays. The run's Claude session is left behind in that login's folder, and the clean-up sheet says so.
 
 ## Development
 

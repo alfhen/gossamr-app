@@ -2,18 +2,50 @@ import { useMemo } from "react";
 import { Button } from "../components/Button";
 import type { ConnectionInfo } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { isSignedOut } from "./connectionsLogic";
+import { isSignedOut, providersNeedingSignIn, type WaitingLogin } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { isJira } from "./domains";
 import { useJiraUi } from "./jiraUi";
+import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
+import { useModelOptions } from "./useModelOptions";
 
 type Lost = Pick<ConnectionInfo, "id" | "kind" | "displayName" | "instanceId">;
 
 export function SignInBanner() {
   const connections = useWorkspace((s) => s.connections);
+  const runs = useRuns((s) => s.runs);
   const lost = useMemo(() => connections.filter(isSignedOut), [connections]);
-  return <SignInBannerView lost={lost} onFix={fixSignIn} />;
+  const { defaults } = useModelOptions("agents");
+  const waiting = useMemo(() => providersNeedingSignIn(connections, runs, defaults), [connections, runs, defaults]);
+  return (
+    <>
+      <SignInBannerView lost={lost} onFix={fixSignIn} />
+      {waiting.map((w) => (
+        <LoginBannerView key={w.id} login={w} onFix={() => showConnection(w)} />
+      ))}
+    </>
+  );
+}
+
+/** Names the signed-out login and the command that signs it in; runs on it carry on once it is. */
+export function LoginBannerView({ login, onFix }: { login: WaitingLogin; onFix(): void }) {
+  return (
+    <div role="alert" data-login-banner className="mx-4 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-ws-blocked/40 py-1.5 text-sm">
+      <span className="min-w-0 flex-1 text-ws-ink2">
+        {login.displayName} is signed out, so agents on it wait.
+        {login.signIn && (
+          <>
+            {" "}
+            Sign in with <code className="selectable font-mono">{login.signIn}</code>.
+          </>
+        )}
+      </span>
+      <Button size="sm" onClick={onFix}>
+        Open connections
+      </Button>
+    </div>
+  );
 }
 
 /** Jira's token sheet opens on the row that lost its sign-in, so a new token renews that row instead of adding an account. */

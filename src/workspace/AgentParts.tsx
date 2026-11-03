@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
-import type { Run } from "../types";
+import type { ReactNode } from "react";
+import { ModelPicker } from "../components/ModelPicker";
+import type { ModelChoice, Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { useDecisionShown } from "./decisionShown";
 import { CloneActions } from "./CloneActions";
@@ -13,6 +15,8 @@ import { useStateView } from "./useStateView";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, type Tone } from "./agentsLogic";
 import { Button } from "../components/Button";
 import { CommitsAs } from "./CommitsAs";
+import { runsOnText, useRunInstance, type RunInstance } from "./runInstance";
+import { useModelOptions } from "./useModelOptions";
 
 export const TONE: Record<Tone, { text: string; soft: string; color: string }> = {
   pip: { text: "text-ws-accent", soft: "bg-(--prominent)/12", color: "var(--prominent)" },
@@ -131,7 +135,7 @@ const ACT_ICONS = { terminal: "term", install: "ext", trust: "shield" } as const
 
 export function FailureNext({ run, failure }: { run: Run; failure: FailureState }) {
   const { trusting = false, refused = null } = failure.trust ?? {};
-  const help = failureHelp(run, refused);
+  const help = failureHelp(run, refused, useRunInstance(run));
   if (!help) return null;
   const ready = retryEnabled(help, failure.opened);
   const next = help.primary && !(help.retryNeedsTerminal && failure.opened);
@@ -184,6 +188,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
   const runs = useSlotQueue();
   const quiet = quietMinutes(run, now);
   const shown = useDecisionShown();
+  const instance = useRunInstance(run);
   switch (run.state) {
     case "needsPermission":
       // Asked once: the open workstream's Needs you holds the buttons, so the card does not repeat them (nor take the keyboard when they are pressed).
@@ -205,7 +210,8 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
     case "systemBlocked":
       return (
         <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
-          <p className="m-0 font-semibold text-ws-ink">Claude needs you to sign in</p>
+          <p className="m-0 font-semibold text-ws-ink">{instance.name} needs you to sign in</p>
+          {instance.signIn && <SignInCommand command={instance.signIn} />}
           <div className="flex flex-wrap items-center gap-2">
             <OpenInTerminal run={run} onOpen={onAttach} />
           </div>
@@ -221,7 +227,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
         </div>
       );
     case "failed": {
-      const help = failureHelp(run, failure.trust?.refused ?? null);
+      const help = failureHelp(run, failure.trust?.refused ?? null, instance);
       const offersTrust = [help?.primary, help?.secondary].some((step) => step?.act === "trust");
       return (
         <div className="grid gap-2">
@@ -254,6 +260,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
           <p data-slot-wait={run.slotWaitSince ? "" : undefined} className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>
             {progressText(run, runs)}
           </p>
+          <RunsOnLine run={run} />
           <CommitsAs run={run} />
           {quiet !== null && (
             <div className="flex flex-wrap items-center gap-2">
@@ -268,11 +275,11 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
 
 /** `rowText` as an element, placing a run waiting for a slot in line among every run (`useSlotQueue`). */
 export function RowText({ run, now }: { run: Run; now: number }) {
-  return <>{rowText(run, now, useSlotQueue())}</>;
+  return <>{rowText(run, now, useSlotQueue(), useRunInstance(run))}</>;
 }
 
 /** The single line a list row shows after the state chip; `runs` places a run waiting for a slot in line. */
-export function rowText(run: Run, now: number, runs?: readonly Run[]): string {
+export function rowText(run: Run, now: number, runs?: readonly Run[], instance: RunInstance | null = null): string {
   const quiet = quietMinutes(run, now);
   switch (run.state) {
     case "needsPermission":
@@ -284,7 +291,7 @@ export function rowText(run: Run, now: number, runs?: readonly Run[]): string {
     case "unknown":
       return "Open in Terminal to look";
     case "failed":
-      return failureHelp(run)?.summary ?? (run.error?.trim() || "It didn't start");
+      return failureHelp(run, null, instance)?.summary ?? (run.error?.trim() || "It didn't start");
     case "done":
       return createdFrom(run) ?? resultHeadline(run.summary ?? run.result) ?? "Finished";
     case "stopped":
@@ -292,4 +299,54 @@ export function rowText(run: Run, now: number, runs?: readonly Run[]): string {
     default:
       return quiet !== null ? `${quietText(quiet)}. ${progressText(run, runs)}` : progressText(run, runs);
   }
+}
+
+/** The command that signs a run's login in, for someone who would rather use their own terminal. */
+export function SignInCommand({ command }: { command: string }) {
+  return (
+    <p className="m-0 text-sm text-ws-ink2">
+      Or run <code className="selectable font-mono [overflow-wrap:anywhere]">{command}</code>.
+    </p>
+  );
+}
+
+/** Where a run runs, with Change while it is queued. The picker stops its clicks and keys so they don't open the card. */
+export function RunsOnView({ text, picker }: { text: string; picker?: ReactNode }) {
+  return (
+    <div data-runs-on className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-ws-ink3">
+      <span className="selectable min-w-0 [overflow-wrap:anywhere]">{text}</span>
+      {picker && (
+        <span className="shrink-0" onClick={(ev) => ev.stopPropagation()} onKeyDown={ownKey}>
+          {picker}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export function RunsOnLine({ run }: { run: Run }) {
+  const text = runsOnText(run, useRunInstance(run));
+  if (!text) return null;
+  return <RunsOnView text={text} picker={run.state === "queued" ? <ChangeRunsOn run={run} /> : undefined} />;
+}
+
+function ChangeRunsOn({ run }: { run: Run }) {
+  const { instances, models, backend, read } = useModelOptions("agents");
+  if (!backend || !run.runsOn) return null;
+  return (
+    <ModelPicker
+      instances={instances}
+      models={models}
+      value={run.runsOn}
+      onChange={(choice: ModelChoice) => void useRuns.getState().setModel(run.id, choice)}
+      onAddModel={async (instanceId, model) => {
+        const listed = await backend.providerAddModel(instanceId, model);
+        await read();
+        return listed;
+      }}
+      name="Runs on"
+      action="Change"
+      title="Choose the Claude and model for this run"
+    />
+  );
 }
