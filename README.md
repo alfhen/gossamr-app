@@ -25,11 +25,11 @@ To add another Jira account, open Settings › Connections, choose **+ Add**, th
 
 ## Connecting Claude
 
-Pip and agents run on a Claude login. To add a second one, such as a work and a personal account, open Settings › Connections, choose **+ Add**, then **Claude**. Give it a name and a config folder of its own, or choose **My usual setup** to use the login Claude already has on this Mac. Each login keeps its own settings, history and agents, and Gossamr never switches between them for you. Each agent run belongs to one login and is tracked there until it ends.
+Pip and agents run on a Claude login. You can keep more than one, such as a work and a personal account, each with a config folder of its own. Each login keeps its own settings, history and agents, and Gossamr never switches between them for you. Each agent run belongs to one login and is tracked there until it ends.
 
-Gossamr does not sign in to Claude for you. A new login shows the command to run in a terminal, and Settings shows the login as signed in once Gossamr sees it.
+Gossamr does not sign in to Claude for you. Sign in with the `claude` command in a terminal, using the config folder of that login.
 
-Codex is not offered in **+ Add** yet. It cannot run agents until its runner is built.
+Codex is in beta. It is marked Beta, and it cannot run Pip or agents yet.
 
 ## Connecting GitHub
 
