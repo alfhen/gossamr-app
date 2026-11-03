@@ -71,3 +71,18 @@ export async function revealProviderFolder(backend: Pick<Backend, "providerRevea
     report("Couldn't show the folder", e);
   }
 }
+
+/** The login a run is on, as the run's cards and its failure help name it. `signIn` is the command for a login in its own folder. */
+export interface RunInstance {
+  name: string;
+  signIn: string | null;
+}
+
+export const DEFAULT_INSTANCE = "claude";
+
+/** The provider row `instanceId` names, or its id alone when the row is gone. The probe's own fix is the sign-in command when it has one. */
+export function instanceOf(connections: readonly Pick<ConnectionInfo, "kind" | "instanceId" | "displayName" | "driver" | "configDir" | "status">[], instanceId: string): RunInstance {
+  const row = connections.find((c) => c.kind === "provider" && c.instanceId === instanceId);
+  if (!row) return { name: instanceId === DEFAULT_INSTANCE ? "Claude" : instanceId, signIn: null };
+  return { name: row.displayName, signIn: row.status?.fix ?? (row.driver && row.configDir ? signInCommand(row.driver, row.configDir) : null) };
+}

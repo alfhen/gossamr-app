@@ -1,6 +1,7 @@
-import type { ConnectionInfo, ModelChoice, ModelDefaults } from "../types";
+import type { ConnectionInfo, ModelChoice, ModelDefaults, Run } from "../types";
 import { DRIVERS } from "../lib/models";
 import { stepKey } from "./peekLogic";
+import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
 import { agoText } from "./watchLogic";
 
 export type LineTone = "ok" | "quiet" | "unsure" | "error" | "busy";
@@ -141,4 +142,22 @@ export function syncLine(c: Pick<ConnectionInfo, "syncing" | "lastSyncAt" | "err
   const last = c.lastSyncAt ? `Last synced ${agoText(c.lastSyncAt, now)}` : "Not synced yet";
   if (c.error && c.transient) return { text: `${last}. Network trouble, trying again soon: ${c.error}`, tone: "busy" };
   return c.error ? { text: `${last}. Couldn't sync: ${c.error}`, tone: "error" } : { text: last, tone: "ok" };
+}
+
+export interface WaitingLogin extends Pick<ConnectionInfo, "id" | "kind" | "displayName" | "instanceId"> {
+  signIn: string | null;
+}
+
+const waitsOnLogin = (run: Run) => run.state === "queued" || run.state === "systemBlocked" || (run.state === "failed" && !run.shortId && run.failure?.type === "notSignedIn");
+
+/**
+ * The Claude logins that are signed out while something needs them: a run that waits for it or stopped on it, or a Settings
+ * default (Pip, new agents). A signed-out login nothing uses stays quiet in Settings.
+ */
+export function providersNeedingSignIn(connections: readonly ConnectionInfo[], runs: readonly Run[], defaults: ModelDefaults | null): WaitingLogin[] {
+  const used = new Set<string>([defaults?.pip?.instanceId, defaults?.agents?.instanceId].filter((id): id is string => !!id));
+  for (const r of runs) if (waitsOnLogin(r)) used.add(r.runsOn?.instanceId ?? DEFAULT_INSTANCE);
+  return connections
+    .filter((c) => c.kind === "provider" && c.driver === "claude" && c.enabled && c.status?.state === "notSignedIn" && used.has(c.instanceId))
+    .map((c) => ({ id: c.id, kind: c.kind, displayName: c.displayName, instanceId: c.instanceId, signIn: instanceOf(connections, c.instanceId).signIn }));
 }

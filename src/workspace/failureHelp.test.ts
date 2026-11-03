@@ -54,6 +54,15 @@ describe("failure help", () => {
     }
   });
 
+  it("names the login in the trust offer and the missing-command line", () => {
+    const work = { name: "Claude work", signIn: null };
+    const trust = failureHelp(of("untrustedFolder"), null, work)!;
+    expect(trust.summary).toBe("Claude work hasn't trusted Gossamr's clone of acme/storefront yet.");
+    expect(trust.primary).toEqual({ label: "Trust this clone for Claude work", act: "trust" });
+    expect(trust.detail).toContain("for Claude work only");
+    expect(failureHelp(of("claudeMissing"), null, work)!.summary).toContain("Claude work");
+  });
+
   it("says a folder in the way is never removed without repeating that it should be moved", () => {
     const occupied = { ...of("noClone"), failure: { type: "cloneOccupied", path: "/x" } } as Run;
     const said = (error: string | null) => failureHelp({ ...occupied, error })?.detail ?? "";

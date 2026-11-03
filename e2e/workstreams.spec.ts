@@ -571,6 +571,22 @@ test.describe("Close and Pause", () => {
 });
 
 test.describe("New agents use, per workstream", () => {
+  test("picks a model from the keyboard", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await startWorkstream(page, "CA-401");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const row = workstreamSheet(page).locator("[data-agents-model]");
+    const trigger = row.getByRole("button", { name: /^New agents in this workstream use/ });
+    await expect(trigger).toContainText("Claude · Default");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitemradio", { name: "Default" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(trigger).not.toContainText("Default");
+  });
+
   test("changes what an agent queued in the workstream runs on, and goes back to the Settings default", async ({ page }) => {
     await openApp(page, "runs=empty");
     await startWorkstream(page, "CA-401");

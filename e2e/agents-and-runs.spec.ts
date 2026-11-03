@@ -156,6 +156,28 @@ test.describe("a queued run", () => {
 });
 
 test.describe("what a queued run runs on", () => {
+  test("changes from the keyboard, with the whole word Change showing", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    const card = page.locator(`main article[data-run-id="${id}"]`);
+    const change = card.getByRole("button", { name: "Runs on Claude · Default" });
+    await expect(change).toHaveText("Change");
+    const box = await change.evaluate((el) => ({ clipped: el.scrollWidth > el.clientWidth, inner: (el.firstElementChild as HTMLElement).scrollWidth > (el.firstElementChild as HTMLElement).clientWidth }));
+    expect(box).toEqual({ clipped: false, inner: false });
+
+    await change.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menuitemradio", { name: "Default" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(card.locator("[data-runs-on]")).not.toContainText("Default");
+    await expect(page.getByRole("dialog", { name: "Agent run" })).toHaveCount(0);
+  });
+
   test("changes from the card, and the run starts on the new choice", async ({ page }) => {
     await page.goto("/?runs=empty&mockRepos=14");
     await page.getByRole("button", { name: "Start watching" }).click();

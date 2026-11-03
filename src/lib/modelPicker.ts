@@ -47,12 +47,13 @@ export const pipModels = (models: readonly ModelOption[]): ModelOption[] => mode
 /** The id `models` lists for what was typed, which the backend matches in any letter case, or null when it lists none. */
 export const listedId = (models: readonly ModelOption[], typed: string): string | null => models.find((m) => m.id.toLowerCase() === typed.toLowerCase())?.id ?? null;
 
-/** "Claude work · Sonnet": the instance's name and the model's label, or the id when the list doesn't have it. */
+/** "Claude work · Sonnet": the instance's name and the model's label in `list`, or the id when the list doesn't have it. */
+export const instanceModelLabel = (name: string, model: string, list: readonly ModelOption[] | undefined): string => `${name} · ${list?.find((m) => m.id === model)?.label ?? model}`;
+
 export function choiceLabel(choice: ModelChoice | null, instances: readonly PickerInstance[], models: Readonly<Record<string, readonly ModelOption[]>>): string | null {
   const instance = instances.find((i) => i.id === choice?.instanceId);
   if (!choice || !instance) return null;
-  const model = models[instance.id]?.find((m) => m.id === choice.model);
-  return `${instance.name} · ${model?.label ?? choice.model}`;
+  return instanceModelLabel(instance.name, choice.model, models[instance.id]);
 }
 
 /** Shown once the person picks a model on another instance than the one Pip last ran on in this conversation. */

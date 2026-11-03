@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { labelsByRun } from "../lib/workstreamStage";
-import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, Run } from "../types";
+import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, ModelChoice, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { INSTALL_URL, STILL_UNTRUSTED, failureHelp, type FailureAct } from "./failureHelp";
@@ -91,6 +91,8 @@ interface RunsState {
   browse(delta: 1 | -1): void;
   stop(id: string): Promise<void>;
   startNow(id: string): Promise<void>;
+  /** Changes what a queued run runs on. */
+  setModel(id: string, choice: ModelChoice): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
   answer(id: string, text: string): Promise<boolean>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
@@ -288,6 +290,17 @@ export const useRuns = create<RunsState>((set, get) => ({
       await backend.runsStop(id);
     } catch (e) {
       useToasts.getState().push(`Couldn't stop it: ${messageOf(e)}`);
+    }
+    void get().reload();
+  },
+
+  async setModel(id, choice) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsSetModel(id, choice);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't change what it runs on: ${messageOf(e)}`);
     }
     void get().reload();
   },

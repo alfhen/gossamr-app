@@ -1,14 +1,14 @@
 import { useMemo } from "react";
 import { Button } from "../components/Button";
-import type { ConnectionInfo, Run } from "../types";
+import type { ConnectionInfo } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { isSignedOut } from "./connectionsLogic";
+import { isSignedOut, providersNeedingSignIn, type WaitingLogin } from "./connectionsLogic";
 import { useConnectionsUi } from "./connectionsUi";
 import { isJira } from "./domains";
 import { useJiraUi } from "./jiraUi";
-import { instanceOf } from "./runInstance";
 import { useRuns } from "./runsStore";
 import { useTabs } from "./tabsStore";
+import { useModelOptions } from "./useModelOptions";
 
 type Lost = Pick<ConnectionInfo, "id" | "kind" | "displayName" | "instanceId">;
 
@@ -16,7 +16,8 @@ export function SignInBanner() {
   const connections = useWorkspace((s) => s.connections);
   const runs = useRuns((s) => s.runs);
   const lost = useMemo(() => connections.filter(isSignedOut), [connections]);
-  const waiting = useMemo(() => loginsWithWaitingRuns(connections, runs), [connections, runs]);
+  const { defaults } = useModelOptions("agents");
+  const waiting = useMemo(() => providersNeedingSignIn(connections, runs, defaults), [connections, runs, defaults]);
   return (
     <>
       <SignInBannerView lost={lost} onFix={fixSignIn} />
@@ -25,20 +26,6 @@ export function SignInBanner() {
       ))}
     </>
   );
-}
-
-export interface WaitingLogin extends Lost {
-  signIn: string | null;
-}
-
-const waitsOnLogin = (run: Run) => run.state === "queued" || run.state === "systemBlocked" || (run.state === "failed" && !run.shortId && run.failure?.type === "notSignedIn");
-
-/** The Claude logins that are signed out while a run needs them: a run that waits for it, or stopped on it. A signed-out login nothing needs stays quiet in Settings. */
-export function loginsWithWaitingRuns(connections: readonly ConnectionInfo[], runs: readonly Run[]): WaitingLogin[] {
-  return connections
-    .filter((c) => c.kind === "provider" && c.driver === "claude" && c.enabled && c.status?.state === "notSignedIn")
-    .filter((c) => runs.some((r) => waitsOnLogin(r) && (r.runsOn?.instanceId ?? "claude") === c.instanceId))
-    .map((c) => ({ id: c.id, kind: c.kind, displayName: c.displayName, instanceId: c.instanceId, signIn: c.status?.fix ?? instanceOf(connections, c.instanceId).signIn }));
 }
 
 /** Names the signed-out login and the command that signs it in; runs on it carry on once it is. */

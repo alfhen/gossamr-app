@@ -38,30 +38,30 @@ const OUTSIDE_WORK_FOLDER = {
 /** What the card says when Claude still refuses after the trust was saved. */
 export const STILL_UNTRUSTED = "Claude still doesn't trust it. Its settings may have changed in a new version. Trust it in Terminal.";
 
-const TRUST_DETAIL =
-  "Trusting a folder lets the repository's own Claude settings run with the agent: the hooks, MCP servers and permission rules in its .claude folder and .mcp.json. They run on your Mac as you. Trust it only if you'd run this repository's code yourself. Gossamr trusts this one folder, for Claude only, and then starts the agent.";
+const trustDetail = (name: string) =>
+  `Trusting a folder lets the repository's own Claude settings run with the agent: the hooks, MCP servers and permission rules in its .claude folder and .mcp.json. They run on your Mac as you. Trust it only if you'd run this repository's code yourself. Gossamr trusts this one folder, for ${name} only, and then starts the agent.`;
 
-function untrusted(run: Run, path: string, refusal: string | null): FailureHelp {
+function untrusted(run: Run, path: string, refusal: string | null, name: string): FailureHelp {
   const command = { text: `cd ${shellQuote(path)} && claude`, note: null };
   if (run.inWorkFolder !== true) {
     return {
       kind: "untrustedFolder",
-      summary: "Claude asks you once per folder before it will work there.",
-      detail: `Claude hasn't been trusted in ${path} yet, so it won't start an agent there. Terminal opens in that folder with Claude: accept its trust question, then close it and retry. Claude asks because a cloned repository's own hooks, tools and settings run with the agent.`,
+      summary: `${name} asks you once per folder before it will work there.`,
+      detail: `${name} hasn't been trusted in ${path} yet, so it won't start an agent there. Terminal opens in that folder with Claude: accept its trust question, then close it and retry. Claude asks because a cloned repository's own hooks, tools and settings run with the agent.`,
       primary: { label: "Trust this folder in Terminal", act: "terminal" },
       command,
       retryNeedsTerminal: true,
       retry: true,
     };
   }
-  const trust = { label: "Trust this clone for Claude", act: "trust" } as const;
+  const trust = { label: `Trust this clone for ${name}`, act: "trust" } as const;
   const [primary, secondary] = refusal
     ? [{ label: "Trust in Terminal", act: "terminal" } as const, refusal === STILL_UNTRUSTED ? null : trust]
     : [trust, { label: "Trust in Terminal instead", act: "terminal" } as const];
   return {
     kind: "untrustedFolder",
-    summary: `Claude hasn't trusted Gossamr's clone of ${run.spec.repo} yet.`,
-    detail: TRUST_DETAIL,
+    summary: `${name} hasn't trusted Gossamr's clone of ${run.spec.repo} yet.`,
+    detail: trustDetail(name),
     primary,
     secondary,
     refusal,
@@ -89,11 +89,11 @@ export function failureHelp(run: Run, refusal: string | null = null, instance: R
   const failure = run.failure;
   // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
   if (run.inWorkFolder === false) return { ...OUTSIDE_WORK_FOLDER };
+  const name = instance?.name ?? "Claude";
   switch (failure?.type) {
     case "untrustedFolder":
-      return untrusted(run, failure.path, refusal);
+      return untrusted(run, failure.path, refusal, name);
     case "notSignedIn": {
-      const name = instance?.name ?? "Claude";
       return {
         kind: "notSignedIn",
         summary: `${name} isn't signed in.`,
@@ -119,7 +119,7 @@ export function failureHelp(run: Run, refusal: string | null = null, instance: R
     case "claudeMissing":
       return {
         kind: "claudeMissing",
-        summary: "Claude Code isn't installed, or Gossamr can't find it.",
+        summary: name !== "Claude" ? `Claude Code isn't installed for ${name}, or Gossamr can't find it.` :"Claude Code isn't installed, or Gossamr can't find it.",
         detail: "Agents are Claude Code sessions, so Gossamr needs the claude command. Install it, then retry.",
         primary: { label: "Open the install page", act: "install" },
         command: { text: INSTALL_COMMAND, note: null },

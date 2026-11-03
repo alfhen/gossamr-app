@@ -52,7 +52,7 @@ describe("when cleaning up is offered", () => {
 
 describe("the clean up section of the run sheet", () => {
   const view = (over: Partial<Parameters<typeof RunCleanupView>[0]> = {}) =>
-    renderToStaticMarkup(<RunCleanupView run={{ worktreeRemovedAt: null }} reason="Its pull request is merged." asking={false} busy={false} refused={null} onAsk={vi.fn()} onCancel={vi.fn()} onConfirm={vi.fn()} {...over} />);
+    renderToStaticMarkup(<RunCleanupView run={{ worktreeRemovedAt: null }} login="Claude" reason="Its pull request is merged." asking={false} busy={false} refused={null} onAsk={vi.fn()} onCancel={vi.fn()} onConfirm={vi.fn()} {...over} />);
 
   it("says why, explains claude rm and asks before removing", () => {
     expect(view()).toContain("Its pull request is merged.");
@@ -87,9 +87,9 @@ describe("the clean up section of the run sheet", () => {
     expect(gone).not.toContain("left in that login");
   });
 
-  it("says the session was left in that login's folder when git removed the worktree of a removed instance", () => {
-    const html = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z", sessionsLeft: true }, reason: null });
-    expect(html).toContain("The session was left in that login&#x27;s folder.");
+  it("names the login whose folder the session was left in when git removed the worktree of a removed instance", () => {
+    const html = view({ run: { worktreeRemovedAt: "2026-09-30T00:00:00Z", sessionsLeft: true }, reason: null, login: "Claude work" });
+    expect(html).toContain("The session was left in Claude work&#x27;s folder.");
   });
 });
 

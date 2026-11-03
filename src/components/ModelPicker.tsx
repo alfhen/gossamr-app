@@ -92,9 +92,9 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
   };
 
   return (
-    <div ref={root} className="relative flex min-w-0" data-model-picker>
-      <Button variant="quiet" size="sm" data-popover-trigger aria-haspopup="menu" aria-expanded={open} aria-label={`${name} ${label}`} title={title} className="max-w-full -ml-1.5 !px-1.5 text-xs" onClick={() => setOpen(!open)}>
-        <span className="truncate">{action ?? label}</span>
+    <div ref={root} className={`relative flex ${action ? "shrink-0" : "min-w-0"}`} data-model-picker>
+      <Button variant="quiet" size="sm" data-popover-trigger aria-haspopup="menu" aria-expanded={open} aria-label={`${name} ${label}`} title={title} className={`-ml-1.5 !px-1.5 text-xs ${action ? "shrink-0" : "max-w-full"}`} onClick={() => setOpen(!open)}>
+        <span className={action ? "whitespace-nowrap" : "truncate"}>{action ?? label}</span>
         {!action && (
           <span aria-hidden className="text-ws-ink3">
             ▾

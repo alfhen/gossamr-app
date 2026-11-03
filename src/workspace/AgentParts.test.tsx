@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ConnectionInfo, Run } from "../types";
 import { RunsOnView, rowText } from "./AgentParts";
 import { instanceOf, runsOnText } from "./runInstance";
-import { loginsWithWaitingRuns } from "./SignInBanner";
+import { providersNeedingSignIn } from "./connectionsLogic";
 
 const run = (state: Run["state"], over: Partial<Run> = {}) => ({ id: "r1", state, shortId: state === "queued" ? null : "1000a000", runsOn: { instanceId: "claude_2", model: "sonnet" }, ...over }) as Run;
 const work = { name: "Claude work", signIn: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login" };
@@ -52,12 +52,18 @@ describe("the signed-out login banner", () => {
     ({ id: "claude_2", instanceId: "claude_2", displayName: "Claude work", kind: "provider", driver: "claude", enabled: true, status: { state: "notSignedIn", fix: work.signIn }, ...over }) as ConnectionInfo;
 
   it("names a signed-out Claude that a queued run waits on, with its command", () => {
-    expect(loginsWithWaitingRuns([row({})], [run("queued")])).toEqual([{ id: "claude_2", kind: "provider", displayName: "Claude work", instanceId: "claude_2", signIn: work.signIn }]);
+    expect(providersNeedingSignIn([row({})], [run("queued")], null)).toEqual([{ id: "claude_2", kind: "provider", displayName: "Claude work", instanceId: "claude_2", signIn: work.signIn }]);
   });
 
   it("stays quiet when no run needs the login, the run is on another login, or the login is signed in", () => {
-    expect(loginsWithWaitingRuns([row({})], [run("working")])).toEqual([]);
-    expect(loginsWithWaitingRuns([row({})], [run("queued", { runsOn: { instanceId: "claude", model: "sonnet" } })])).toEqual([]);
-    expect(loginsWithWaitingRuns([row({ status: { state: "ready" } as ConnectionInfo["status"] })], [run("queued")])).toEqual([]);
+    expect(providersNeedingSignIn([row({})], [run("working")], null)).toEqual([]);
+    expect(providersNeedingSignIn([row({})], [run("queued", { runsOn: { instanceId: "claude", model: "sonnet" } })], null)).toEqual([]);
+    expect(providersNeedingSignIn([row({ status: { state: "ready" } as ConnectionInfo["status"] })], [run("queued")], null)).toEqual([]);
+  });
+
+  it("names a signed-out login that a Settings default uses, with no run waiting", () => {
+    const defaults = { pip: { instanceId: "claude_2", model: "sonnet" }, agents: null };
+    expect(providersNeedingSignIn([row({})], [], defaults).map((l) => l.instanceId)).toEqual(["claude_2"]);
+    expect(providersNeedingSignIn([row({})], [], { pip: null, agents: { instanceId: "claude_2", model: "sonnet" } }).map((l) => l.instanceId)).toEqual(["claude_2"]);
   });
 });

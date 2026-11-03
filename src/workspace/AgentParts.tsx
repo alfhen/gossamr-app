@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ModelPicker } from "../components/ModelPicker";
 import type { ModelChoice, Run } from "../types";
-import { useWorkspace } from "../workspaceStore";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { useDecisionShown } from "./decisionShown";
 import { CloneActions } from "./CloneActions";
@@ -211,7 +210,8 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
     case "systemBlocked":
       return (
         <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
-          <p className="m-0 font-semibold text-ws-ink">Claude needs you to sign in</p>
+          <p className="m-0 font-semibold text-ws-ink">{instance.name} needs you to sign in</p>
+          {instance.signIn && <SignInCommand command={instance.signIn} />}
           <div className="flex flex-wrap items-center gap-2">
             <OpenInTerminal run={run} onOpen={onAttach} />
           </div>
@@ -301,13 +301,22 @@ export function rowText(run: Run, now: number, runs?: readonly Run[], instance: 
   }
 }
 
+/** The command that signs a run's login in, for someone who would rather use their own terminal. */
+export function SignInCommand({ command }: { command: string }) {
+  return (
+    <p className="m-0 text-sm text-ws-ink2">
+      Or run <code className="selectable font-mono [overflow-wrap:anywhere]">{command}</code>.
+    </p>
+  );
+}
+
 /** Where a run runs, with Change while it is queued. The picker stops its clicks and keys so they don't open the card. */
 export function RunsOnView({ text, picker }: { text: string; picker?: ReactNode }) {
   return (
     <div data-runs-on className="m-0 flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-ws-ink3">
       <span className="selectable min-w-0 [overflow-wrap:anywhere]">{text}</span>
       {picker && (
-        <span onClick={(ev) => ev.stopPropagation()} onKeyDown={ownKey}>
+        <span className="shrink-0" onClick={(ev) => ev.stopPropagation()} onKeyDown={ownKey}>
           {picker}
         </span>
       )}
@@ -324,19 +333,12 @@ export function RunsOnLine({ run }: { run: Run }) {
 function ChangeRunsOn({ run }: { run: Run }) {
   const { instances, models, backend, read } = useModelOptions("agents");
   if (!backend || !run.runsOn) return null;
-  const change = async (choice: ModelChoice) => {
-    try {
-      await backend.runsSetModel(run.id, choice);
-    } catch (e) {
-      useWorkspace.getState().report("Couldn't change what the run runs on", e);
-    }
-  };
   return (
     <ModelPicker
       instances={instances}
       models={models}
       value={run.runsOn}
-      onChange={(choice) => void change(choice)}
+      onChange={(choice: ModelChoice) => void useRuns.getState().setModel(run.id, choice)}
       onAddModel={async (instanceId, model) => {
         const listed = await backend.providerAddModel(instanceId, model);
         await read();

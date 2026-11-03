@@ -78,7 +78,7 @@ describe("the sample backend and the store follow the same rules", () => {
     await settle();
     expect(done().earlierSessions).toEqual([expect.objectContaining({ shortId: offered.shortId, removed: true })]);
     expect(cleanable(done())).toBe(false);
-    const view = renderToStaticMarkup(<RunCleanupView run={done()} reason={null} asking={false} busy={false} refused={null} onAsk={() => {}} onCancel={() => {}} onConfirm={() => {}} />);
+    const view = renderToStaticMarkup(<RunCleanupView run={done()} login="Claude" reason={null} asking={false} busy={false} refused={null} onAsk={() => {}} onCancel={() => {}} onConfirm={() => {}} />);
     expect(view).toContain("The worktree and its branch were removed");
     expect(view).not.toContain("Try removing again");
   });

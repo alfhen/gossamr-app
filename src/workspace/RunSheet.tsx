@@ -7,7 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { roleLabel } from "../lib/roles";
 import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSheet";
-import { RunsOnLine, StateChip, useSlotQueue, type TrustState } from "./AgentParts";
+import { RunsOnLine, SignInCommand, StateChip, useSlotQueue, type TrustState } from "./AgentParts";
 import { useRunInstance } from "./runInstance";
 import { agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
@@ -118,12 +118,14 @@ function OpenInTerminal({ run, on, filled = true }: { run: Run; on: RunSheetActi
 
 /** A run blocked on Claude's sign-in: what to do, and the way into Terminal to do it. The run sheet and the Needs you decision show the same box. */
 export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
+  const instance = useRunInstance(run);
   return (
     <Box tone="needs" label="Sign-in needed">
       <BoxTitle icon="lock" tone="needs">
-        Claude needs you to sign in
+        {instance.name} needs you to sign in
       </BoxTitle>
-      <p className="m-0 text-sm text-ws-ink2">Sign in in Terminal. The run carries on once Claude is signed in again.</p>
+      <p className="m-0 text-sm text-ws-ink2">Sign in in Terminal. The run carries on once {instance.name} is signed in again.</p>
+      {instance.signIn && <SignInCommand command={instance.signIn} />}
       <div>
         <Btn tone="primary" icon="term" disabled={!run.shortId} title={run.shortId ? undefined : "There is no session to open yet"} onClick={onAttach}>
           Open in Terminal

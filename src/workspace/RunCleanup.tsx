@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Run } from "../types";
 import { Box, Btn, Sec } from "./AgentSheet";
 import { leftoverSessions } from "./cleanupLogic";
+import { useRunInstance } from "./runInstance";
 import { useRuns } from "./runsStore";
 
 export interface RunCleanupViewProps {
@@ -9,20 +10,22 @@ export interface RunCleanupViewProps {
   reason: string | null;
   asking: boolean;
   busy: boolean;
-  /** Claude's own words when it refused. */
+  /** The name of the login the run was on. */
+  login: string;
+  /** Its own words when it refused. */
   refused: string | null;
   onAsk(): void;
   onCancel(): void;
   onConfirm(): void;
 }
 
-export function RunCleanupView({ run, reason, asking, busy, refused, onAsk, onCancel, onConfirm }: RunCleanupViewProps) {
+export function RunCleanupView({ run, reason, login, asking, busy, refused, onAsk, onCancel, onConfirm }: RunCleanupViewProps) {
   if (run.worktreeRemovedAt) {
     const left = leftoverSessions(run);
     return (
       <Sec title="Clean up">
         <p className="m-0 text-ws-ink2">The worktree and its branch were removed. The result above is kept.</p>
-        {run.sessionsLeft && <p className="m-0 text-ws-ink2">The session was left in that login&apos;s folder.</p>}
+        {run.sessionsLeft && <p className="m-0 text-ws-ink2">The session was left in {login}&apos;s folder.</p>}
         {left > 0 && (
           <Box>
             <p className="m-0 text-ws-ink">
@@ -30,7 +33,7 @@ export function RunCleanupView({ run, reason, asking, busy, refused, onAsk, onCa
             </p>
             {refused && (
               <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-                Claude kept it: {refused}
+                {login} kept it: {refused}
               </p>
             )}
             <div>
@@ -51,7 +54,7 @@ export function RunCleanupView({ run, reason, asking, busy, refused, onAsk, onCa
         <p className="m-0 text-sm text-ws-ink2">Removes this agent&apos;s worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here.</p>
         {refused && (
           <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-            Claude kept it: {refused}
+            {login} kept it: {refused}
           </p>
         )}
         {asking ? (
@@ -87,5 +90,6 @@ export function RunCleanup({ run, reason }: { run: Run; reason: string | null })
     setAsking(false);
     setRefused(result?.type === "refused" ? result.message : null);
   };
-  return <RunCleanupView run={run} reason={reason} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
+  const login = useRunInstance(run).name;
+  return <RunCleanupView run={run} reason={reason} login={login} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
 }
