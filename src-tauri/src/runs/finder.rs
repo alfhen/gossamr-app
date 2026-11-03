@@ -9,12 +9,13 @@ use super::failure::Failure;
 use super::fresh::{remote_default_branch, work_path};
 use super::launcher::RunLauncher;
 use super::message::Delivery;
-use super::toolchain::ToolchainError;
+use super::service::waiting_words;
 use super::repo::{existing_names, new_name, origin_matches};
 use super::service::RunService;
 use crate::agent::AgentDriver;
 use crate::domain::{Actor, ClonePlan, Run};
 use crate::error::Result;
+use crate::model_choice::ModelChoice;
 
 #[async_trait]
 impl AgentDriver for RunService {
@@ -35,12 +36,11 @@ impl AgentDriver for RunService {
         Ok(ClonePlan { path, base, name: new_name(key, title, &taken) })
     }
 
-    async fn unready(&self) -> Option<String> {
-        let (choice, _) = self.core.agents_target(None).ok()?;
+    async fn unready(&self, workstream_choice: Option<&ModelChoice>) -> Option<String> {
+        let (choice, instance) = self.core.agents_target(workstream_choice).ok()?;
         let tc = match self.tools.for_instance(&choice.instance_id).await {
             Ok(tc) => tc,
-            // The run waits for its login instead.
-            Err(ToolchainError::Unusable { .. } | ToolchainError::BadFolder { .. } | ToolchainError::UnknownInstance(_)) => return None,
+            Err(e) if waiting_words(&e, &instance.display_name).is_some() => return None,
             Err(e) => return Some(Failure::from(e).to_string()),
         };
         match tc.cli.auth_status().await {
@@ -129,5 +129,36 @@ mod tests {
         let unwatched = rig.svc.plan("acme/other", "CA-1", "x").await.unwrap_err();
         assert!(unwatched.contains("isn't a repository you watch"), "{unwatched}");
         clone_with_origin(&rig.fx.home.join("Code/other"), "https://github.com/acme/other.git");
+    }
+
+    fn second_claude(rig: &crate::runs::rig::Rig) {
+        crate::config::AppConfig::update(&rig.fx.core.data_dir(), |config| {
+            config.providers.push(crate::connections::ProviderInstance { id: "claude_2".into(), display_name: "Claude personal".into(), ..crate::connections::default_claude() })
+        })
+        .unwrap();
+    }
+
+    fn on_claude_2() -> ModelChoice {
+        ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None }
+    }
+
+    #[tokio::test]
+    async fn pip_can_start_an_agent_on_a_workstream_choice_that_is_ready_while_the_default_login_is_signed_out() {
+        let rig = ready().await;
+        second_claude(&rig);
+        let (svc, _) = crate::runs::rig::with_second_login(&rig.fx, &rig.cli);
+        rig.cli.with(|s| s.logged_in = false);
+        assert_eq!(svc.unready(Some(&on_claude_2())).await, None);
+        assert!(svc.unready(None).await.is_some_and(|why| why.contains("sign")), "the default is the one that is signed out");
+    }
+
+    #[tokio::test]
+    async fn pip_is_told_when_the_workstream_choice_is_signed_out_though_the_default_is_ready() {
+        let rig = ready().await;
+        second_claude(&rig);
+        let (svc, second) = crate::runs::rig::with_second_login(&rig.fx, &rig.cli);
+        second.with(|s| s.logged_in = false);
+        assert!(svc.unready(Some(&on_claude_2())).await.is_some());
+        assert_eq!(svc.unready(None).await, None);
     }
 }

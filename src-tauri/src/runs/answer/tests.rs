@@ -227,3 +227,26 @@ async fn an_answer_to_a_run_on_the_second_login_stops_and_wakes_it_through_that_
     assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
     assert!(rig.cli.0.lock().unwrap().calls.is_empty());
 }
+
+#[tokio::test]
+async fn an_answer_to_a_run_on_a_login_that_is_off_is_kept_and_sent_once_the_login_is_back_on() {
+    let rig = ready().await;
+    let (svc, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
+    let run = crate::runs::rig::start_on_second_login(&rig, &svc, &second).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("blocked".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
+
+    let kept = svc.answer(&run.id, "Use staging.").await.unwrap();
+    assert_eq!(kept.state, RunState::NeedsAnswer);
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Use staging."));
+    assert!(second.0.lock().unwrap().calls.is_empty() && rig.cli.0.lock().unwrap().calls.is_empty());
+
+    login.set_off(None);
+    svc.deliver_queued().await;
+    assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
+}

@@ -159,7 +159,7 @@ impl RunService {
             }
             return self.settle_cleanup(&run, worktree_pending, leftovers, None, true).await;
         }
-        let tc = self.run_toolchain(&run).await?;
+        let tc = self.observing_toolchain(&run).await?;
         let live = self.live_sessions(&tc, &run).await;
         for session in &live {
             tc.cli.stop(session).await?;

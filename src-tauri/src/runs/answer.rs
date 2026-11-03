@@ -83,6 +83,14 @@ impl RunService {
         }
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to answer."))?;
         let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to answer."))?;
+        if self.login_is_off(&run).await {
+            if again {
+                return Err(refuse("Its Claude login is off, so the answer isn't sent. It is kept on the run; send it again once the login is on."));
+            }
+            self.core.queue_run_message(run_id, text).await?;
+            self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
+            return Ok(run);
+        }
         let tc = self.acting_toolchain(&run).await?;
 
         if !again {

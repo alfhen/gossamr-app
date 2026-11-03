@@ -331,7 +331,10 @@ async fn a_message_to_a_finished_run_on_the_second_login_resumes_it_through_that
 #[tokio::test]
 async fn a_message_to_a_run_on_a_login_that_is_off_waits_and_is_sent_once_the_login_is_back_on() {
     let rig = ready().await;
-    let (off, second, run) = crate::runs::rig::working_on_second_login(&rig, true).await;
+    let (off, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
+    let run = crate::runs::rig::start_on_second_login(&rig, &off, &second).await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    let run = rig.set(&run, |r| r.spec.workstream = Some(ws.clone())).await;
     std::fs::create_dir_all(&run.expected_worktree).unwrap();
     second.with(|s| {
         s.sessions[0].state = Some("done".into());
@@ -341,7 +344,27 @@ async fn a_message_to_a_run_on_a_login_that_is_off_waits_and_is_sent_once_the_lo
 
     let (_, delivery) = off.message_agent(&run.id, "One more thing.", Actor::Pip).await.unwrap();
     assert_eq!(delivery, Delivery::Queued);
-    off.deliver_queued().await;
+    for _ in 0..WAKE_TRIES + 2 {
+        off.deliver_queued().await;
+    }
     assert!(second.0.lock().unwrap().calls.is_empty(), "nothing is sent while the login is off");
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("One more thing."), "the message is kept");
+    assert!(!pip_lines(&rig, &ws).await.iter().any(|(action, _)| action == "agent_message_dropped"));
+
+    login.set_off(None);
+    off.deliver_queued().await;
+    assert_eq!(second.0.lock().unwrap().calls, ["resume:abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().calls.is_empty());
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_message_to_a_stopped_run_on_a_login_that_is_off_is_refused_in_words_that_do_not_say_it_waits() {
+    let rig = ready().await;
+    let (off, second, run) = crate::runs::rig::working_on_second_login(&rig, true).await;
+    rig.set(&run, |r| r.state = RunState::Stopped).await;
+    let why = off.message_agent(&run.id, "Go on.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("login is off") && !why.contains("Waits"), "{why}");
+    assert!(second.0.lock().unwrap().calls.is_empty());
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
 }

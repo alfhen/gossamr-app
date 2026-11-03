@@ -54,7 +54,7 @@ impl RunService {
         view.paused_reason.is_some().then(|| format!("The workstream “{}” is paused; only the person resumes it.", view.title))
     }
 
-    async fn login_is_off(&self, run: &Run) -> bool {
+    pub(super) async fn login_is_off(&self, run: &Run) -> bool {
         matches!(self.toolchain_of(run).await, Err(ToolchainError::Unusable { reason: Reason::Off, .. }))
     }
 
@@ -88,6 +88,7 @@ impl RunService {
                 Ok((run, Delivery::Queued))
             }
             RunState::Stopped if run.unsent_answer.is_some() => Err(refuse("A message is still waiting to be sent to it; the person sends it again from the run.")),
+            RunState::Stopped if self.login_is_off(&run).await => Err(refuse("Its Claude login is off, so it can't be resumed. Message it again once the login is on.")),
             RunState::Done | RunState::Stopped => self.resume_with(run_id, text, by).await.map(|r| (r, Delivery::Resumed)),
         }
     }

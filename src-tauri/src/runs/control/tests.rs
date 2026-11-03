@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::domain::{RefusedMode, RunFailure, RunSpec};
+use crate::runs::failure::Failure;
 use crate::runs::index::Entry;
 use crate::runs::rig::{ready, working_on_the_second_account, Rig};
 use crate::runs::testing::FakeCli;
