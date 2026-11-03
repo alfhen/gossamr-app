@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use super::backend::ToolsOffer;
 use crate::domain::{AGENT_CALL_TIMEOUT_MS, AGENT_SERVER};
 
 /// What a launch needs to offer the tools to a session: the config file that names the server and carries the token.
@@ -42,6 +43,10 @@ impl AgentChannel {
         self.port
     }
 
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub fn url_for(&self, run_id: &str) -> String {
         format!("http://127.0.0.1:{}/agent/{run_id}", self.port)
     }
@@ -53,12 +58,17 @@ impl AgentChannel {
     /// Writes the run's MCP config where only this user can read it. A second call for the same run replaces the file,
     /// and every token minted for the run stays valid on the server.
     pub fn write_config(&self, run_id: &str, token: &str) -> std::io::Result<AgentLaunch> {
+        self.write_offer(&ToolsOffer { run_id: run_id.into(), url: self.url_for(run_id), token: token.into() })
+    }
+
+    /// `write_config` for an offer that names its own address.
+    pub fn write_offer(&self, offer: &ToolsOffer) -> std::io::Result<AgentLaunch> {
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let path = self.config_path(run_id).ok_or_else(|| std::io::Error::other("not a run id"))?;
+        let path = self.config_path(&offer.run_id).ok_or_else(|| std::io::Error::other("not a run id"))?;
         std::fs::create_dir_all(&self.dir)?;
         std::fs::set_permissions(&self.dir, std::fs::Permissions::from_mode(0o700))?;
-        let config = json!({ "mcpServers": { AGENT_SERVER: { "type": "http", "url": self.url_for(run_id), "headers": { "Authorization": format!("Bearer {token}") }, "timeout": AGENT_CALL_TIMEOUT_MS } } });
+        let config = json!({ "mcpServers": { AGENT_SERVER: { "type": "http", "url": offer.url, "headers": { "Authorization": format!("Bearer {}", offer.token) }, "timeout": AGENT_CALL_TIMEOUT_MS } } });
         let temp = path.with_extension("json.tmp");
         let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&temp)?;
         file.write_all(config.to_string().as_bytes())?;

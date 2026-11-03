@@ -53,7 +53,7 @@ impl From<CliError> for Error {
 
 pub type CliResult<T> = std::result::Result<T, CliError>;
 
-fn last_line(s: &str) -> &str {
+pub(super) fn last_line(s: &str) -> &str {
     s.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message")
 }
 

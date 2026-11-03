@@ -185,6 +185,11 @@ impl Db {
         Ok(n > 0)
     }
 
+    /// Whether any run has this short id, whichever connections this handle reaches.
+    pub fn short_id_in_use(&self, short_id: &str) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT EXISTS(SELECT 1 FROM runs WHERE short_id = ?1)", [short_id], |r| r.get(0))?)
+    }
+
     pub fn run(&self, id: &str) -> Result<Option<Run>> {
         self.run_where("id = ?", id)
     }

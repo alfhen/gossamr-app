@@ -722,8 +722,8 @@ fn a_failed_call_as_an_instance_with_a_folder_says_so_and_one_without_does_not()
     let personal = Toolchain { login: Some(folder_login()), instance_name: "Claude personal".into(), ..plain.clone() };
     let folder = Path::new("/Users/me/Code/webshop");
     let untrusted = || crate::runs::cli::CliError::Failed { code: Some(1), stderr: "Workspace not trusted".into() };
-    assert!(matches!(Failure::from_cli(untrusted(), folder, &plain), Failure::NeedsTrust { own_folder: false, .. }));
-    assert!(matches!(Failure::from_cli(untrusted(), folder, &personal), Failure::NeedsTrust { own_folder: true, .. }));
+    assert!(matches!(Failure::from_cli(untrusted(), folder, &plain.instance_name, plain.has_own_folder()), Failure::NeedsTrust { own_folder: false, .. }));
+    assert!(matches!(Failure::from_cli(untrusted(), folder, &personal.instance_name, personal.has_own_folder()), Failure::NeedsTrust { own_folder: true, .. }));
     assert!(personal.has_own_folder() && !plain.has_own_folder());
 }
 

@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 
 use crate::config::TerminalChoice;
+use super::backend::claude::ClaudeBackend;
+use super::backend::RunBackend;
 use super::cli::{AgentEntry, JobInfo, ShortId, TimelineLine};
 use super::control::Terminal;
 use super::env::RunEnv;
@@ -13,7 +15,7 @@ use super::index::RunIndex;
 use super::repo::testing::{clone_with_origin, install_fake_git};
 use super::service::RunService;
 use super::testing::FakeCli;
-use super::toolchain::{FixedToolchain, Toolchain};
+use super::toolchain::{FixedToolchain, Toolchain, ToolchainError, ToolchainSource};
 use super::tracker::{Attention, RunNotifier};
 use crate::domain::fixtures::run_spec;
 use crate::domain::{Run, RunSpec, RunState};
@@ -237,8 +239,61 @@ impl Rig {
 
 /// A service that offers Gossamr's tools on a channel in `dir`.
 pub fn reporting(dir: &Path) -> impl FnOnce(RunService) -> RunService {
-    let channel = Arc::new(super::agent_config::AgentChannel::new(4242, dir.join("agents")));
-    move |svc| svc.with_agent_channel(channel)
+    on_channel(Arc::new(super::agent_config::AgentChannel::new(4242, dir.join("agents"))))
+}
+
+/// A service that offers Gossamr's tools on `channel`, whose folder its Claude backends write their MCP files in.
+pub fn on_channel(channel: Arc<super::agent_config::AgentChannel>) -> impl FnOnce(RunService) -> RunService {
+    move |svc| {
+        let files = channel.dir().to_path_buf();
+        let rebuilt = Rebacked::new(svc.tools.clone(), move |tc| {
+            Arc::new(ClaudeBackend::new(tc.cli.clone(), tc.env.clone(), files.clone(), tc.instance_name.clone(), tc.has_own_folder()))
+        });
+        let mut svc = svc.with_agent_channel(channel);
+        svc.tools = Arc::new(rebuilt);
+        svc
+    }
+}
+
+/// A service whose toolchains run on `backend`.
+pub fn backed_by(backend: Arc<dyn RunBackend>) -> impl FnOnce(RunService) -> RunService {
+    move |mut svc| {
+        svc.tools = Arc::new(Rebacked::new(svc.tools.clone(), move |_| backend.clone()));
+        svc
+    }
+}
+
+type Maker = Box<dyn Fn(&Toolchain) -> Arc<dyn RunBackend> + Send + Sync>;
+
+/// Toolchains of `inner` with the backend `make` builds from each.
+struct Rebacked {
+    inner: Arc<dyn ToolchainSource>,
+    make: Maker,
+}
+
+impl Rebacked {
+    fn new(inner: Arc<dyn ToolchainSource>, make: impl Fn(&Toolchain) -> Arc<dyn RunBackend> + Send + Sync + 'static) -> Self {
+        Self { inner, make: Box::new(make) }
+    }
+
+    fn rebuilt(&self, tc: Toolchain) -> Toolchain {
+        Toolchain { backend: (self.make)(&tc), ..tc }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolchainSource for Rebacked {
+    async fn get(&self) -> Result<Toolchain, ToolchainError> {
+        self.inner.get().await.map(|tc| self.rebuilt(tc))
+    }
+
+    async fn for_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
+        self.inner.for_instance(id).await.map(|tc| self.rebuilt(tc))
+    }
+
+    async fn observe_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
+        self.inner.observe_instance(id).await.map(|tc| self.rebuilt(tc))
+    }
 }
 
 /// The default Claude and a second login, each with its own scripted `claude`.

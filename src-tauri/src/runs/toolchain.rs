@@ -6,6 +6,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::binary::find_binary;
+use super::agent_config::config_dir;
+use super::backend::claude::ClaudeBackend;
+use super::backend::RunBackend;
 use super::cli::{ClaudeCli, SystemCli};
 use super::env::RunEnv;
 use super::provider_env::{ProviderEnv, ProviderState, Unavailable};
@@ -17,6 +20,7 @@ use crate::model_choice::Reason;
 #[derive(Clone)]
 pub struct Toolchain {
     pub cli: Arc<dyn ClaudeCli>,
+    pub backend: Arc<dyn RunBackend>,
     /// The captured shell environment, without any instance's login: `git` and `gh` run in it.
     pub env: Arc<RunEnv>,
     pub instance_id: String,
@@ -28,7 +32,8 @@ pub struct Toolchain {
 impl Toolchain {
     /// The default instance, with the login the shell has.
     pub fn new(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>) -> Self {
-        Self { cli, env, instance_id: connections::DEFAULT_CLAUDE.into(), instance_name: "Claude".into(), login: None }
+        let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), std::env::temp_dir().join("gossamr-agents"), "Claude".into(), false));
+        Self { cli, backend, env, instance_id: connections::DEFAULT_CLAUDE.into(), instance_name: "Claude".into(), login: None }
     }
 
     /// Whether the instance has a folder of its own, which a plain `claude` in the person's Terminal doesn't use.
@@ -98,7 +103,10 @@ impl SystemToolchain {
             return Err(ToolchainError::ClaudeMissing { instance: name.into() });
         };
         let run_env = login.as_ref().map_or_else(|| env.clone(), |login| Arc::new(login.over(&env)));
-        Ok(Toolchain { cli: Arc::new(SystemCli::new(binary, run_env)), env, instance_id: id.into(), instance_name: name.into(), login })
+        let cli = Arc::new(SystemCli::new(binary, run_env));
+        let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
+        let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), config_dir(&self.core.data_dir()), name.into(), own_folder));
+        Ok(Toolchain { cli, backend, env, instance_id: id.into(), instance_name: name.into(), login })
     }
 }
 
