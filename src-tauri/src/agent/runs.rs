@@ -513,7 +513,7 @@ async fn start_checked(st: &McpState, pip: &PipRun, request_id: &str, key: &str,
     if ws.paused_reason.is_some() {
         return Err(format!("The workstream “{}” is paused; only the person resumes it.", ws.title));
     }
-    if let Some(why) = st.driver.unready().await {
+    if let Some(why) = st.driver.unready(ws.agents_model.as_ref()).await {
         return Err(why);
     }
     let role = ask.role.clone();

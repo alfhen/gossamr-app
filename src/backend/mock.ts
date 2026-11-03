@@ -1214,7 +1214,9 @@ export class MockBackend implements Backend {
   }
 
   async providerAddModel(instanceId: string, model: string) {
-    return this.models.add(instanceId, model);
+    const listed = this.models.add(instanceId, model);
+    this.connectionsListeners.forEach((l) => l());
+    return listed;
   }
 
   async modelDefaults() {
@@ -1222,7 +1224,9 @@ export class MockBackend implements Backend {
   }
 
   async modelSetDefaults(defaults: ModelDefaults) {
-    return this.models.set(defaults);
+    const saved = this.models.set(defaults);
+    this.connectionsListeners.forEach((l) => l());
+    return saved;
   }
 
   async providerAdd(driver: Driver, displayName: string, configDir?: string) {
@@ -1325,11 +1329,13 @@ export class MockBackend implements Backend {
   }
 
   async connectionsList(refresh = false): Promise<ConnectionInfo[]> {
+    let probed = false;
     if (refresh) {
       this.github.recheck();
-      this.providers.touch();
+      probed = this.providers.touch();
     }
-    this.providers.settle();
+    probed = this.providers.settle() || probed;
+    if (probed) queueMicrotask(() => this.connectionsListeners.forEach((l) => l()));
     const refused = this.jiraToken === "refused";
     const site = this.jiraToken ? null : this.jiraAccount.site?.name ?? null;
     const status = this.jiraToken ? jiraSnapshot(refused ? "notSignedIn" : "expiresSoon", new Date().toISOString()) : site ? jiraSnapshot("ready", new Date().toISOString()) : null;

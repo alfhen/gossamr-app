@@ -152,10 +152,7 @@ impl RunService {
         if !at_rest(&run) {
             return Err(refuse(format!("This run is {}, so it has no other session to carry on in.", run.state.as_str())));
         }
-        let tc = self.toolchain().await?;
-        if run.instance_id() != tc.instance_id {
-            return Err(refuse("This run is on another login, which can't be looked at from here yet."));
-        }
+        let tc = self.acting_toolchain(&run).await?;
         let entries = tc.cli.agents(true).await?;
         let now = Utc::now();
         if carried_on(&entries, &run, now) {

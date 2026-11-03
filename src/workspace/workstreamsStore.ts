@@ -5,7 +5,7 @@ import { ofItem, runWorkstream } from "../lib/workstreamStage";
 import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt";
 import type { ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
-import { primaryConnection } from "./domains";
+import { drawerConnectionOf, primaryConnection } from "./domains";
 import { currentContext, useScreen } from "./pipHooks";
 import { usePip } from "./pipStore";
 import { buildScreenContext } from "./screenContext";
@@ -376,7 +376,9 @@ export function paneWorkstream(): WorkstreamView | null {
 export function paneConversation(): string {
   const ws = paneWorkstream();
   const open = (usePip.getState().pinned ?? currentContext()).item;
-  return ws ? workstreamConversation(ws.workstream.id) : generalOn(open?.connectionId, primaryConnection(useWorkspace.getState().connections));
+  const { connections } = useWorkspace.getState();
+  const drawer = drawerConnectionOf(connections, usePip.getState().drawerConnection);
+  return ws ? workstreamConversation(ws.workstream.id) : generalOn(open?.connectionId ?? drawer, primaryConnection(connections));
 }
 
 /** The conversation in focus: the one the Pip pane shows (`paneConversation`). */
@@ -388,8 +390,9 @@ export function useFocusedConversation(): string {
   const pinned = usePip((s) => s.pinned);
   const screen = useScreen();
   const open = (pinned ?? buildScreenContext(screen)).item;
-  const primary = useWorkspace((s) => primaryConnection(s.connections));
-  return pane ? workstreamConversation(pane.workstream.id) : generalOn(open?.connectionId, primary);
+  const connections = useWorkspace((s) => s.connections);
+  const picked = usePip((s) => s.drawerConnection);
+  return pane ? workstreamConversation(pane.workstream.id) : generalOn(open?.connectionId ?? drawerConnectionOf(connections, picked), primaryConnection(connections));
 }
 
 /** `paneWorkstream`, kept current as the selection, the tickets and the workstreams change. */

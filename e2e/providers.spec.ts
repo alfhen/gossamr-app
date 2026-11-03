@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp } from "./support/app";
+import { mockRuns, openApp, startAgent } from "./support/app";
 
-const QUERY = "runs=empty&mockRepos=6&providers=1&codex=1";
+const QUERY = "runs=empty&mockRepos=6";
 
 async function openSettings(page: Page) {
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
@@ -117,13 +117,107 @@ test.describe("adding Claude and Codex", () => {
     await expect(page.getByRole("dialog", { name: "Add Codex" })).toBeVisible();
   });
 
-  test("keeps Codex out of + Add unless the page asks for it", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+  test("offers Codex in + Add with a Beta label and the same on its sheet and row", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await page.getByRole("button", { name: "+ Add" }).click();
     const menu = page.getByRole("menu", { name: "Add a connection" });
     await expect(menu.getByRole("menuitem", { name: /^Claude/ })).toBeVisible();
-    await expect(menu.getByRole("menuitem", { name: /^Codex/ })).toHaveCount(0);
+    await expect(menu.getByRole("menuitem", { name: /^Claude/ })).not.toContainText("Beta");
+    await expect(menu.getByRole("menuitem", { name: /^Codex/ })).toContainText("Beta");
+    await menu.getByRole("menuitem", { name: /^Codex/ }).click();
+    const sheet = page.getByRole("dialog", { name: "Add Codex" });
+    await expect(sheet.getByRole("heading", { name: /Add Codex/ })).toContainText("Beta");
+    await sheet.getByLabel("Name").fill("Codex side");
+    await sheet.getByRole("button", { name: "Add Codex" }).click();
+    await sheet.getByRole("button", { name: "Open Terminal" }).click();
+    await sheet.getByRole("button", { name: "I've run it, check again" }).click();
+    await sheet.getByRole("button", { name: "Done" }).click();
+    await expect(rowOf(page, "Codex side")).toContainText("Beta");
+    await expect(page.getByRole("region", { name: "Codex side details" })).toContainText("Pip and agents can't run on it yet.");
+  });
+});
+
+test.describe("the model defaults in Settings", () => {
+  const pipPicker = (page: Page) => page.getByRole("button", { name: /^Pip uses / });
+  const agentsPicker = (page: Page) => page.getByRole("button", { name: /^New agents use / });
+
+  async function addClaudeWork(page: Page) {
+    const sheet = await openAddSheet(page, "Claude");
+    await sheet.getByLabel("Name").fill("Claude work");
+    await sheet.getByRole("button", { name: "Add Claude" }).click();
+    await sheet.getByRole("button", { name: "Open Terminal" }).click();
+    await sheet.getByRole("button", { name: "I've run it, check again" }).click();
+    await expect(sheet).toContainText("Authenticated");
+    await sheet.getByRole("button", { name: "Done" }).click();
+  }
+
+  test("shows Pip's and the agents' current choice", async ({ page }) => {
+    await openApp(page, QUERY);
+    await openSettings(page);
+    await expect(pipPicker(page)).toHaveAccessibleName("Pip uses Claude · Sonnet");
+    await expect(agentsPicker(page)).toHaveAccessibleName("New agents use Claude · Default");
+  });
+
+  test("starts a new agent on the Claude and model picked for New agents use", async ({ page }) => {
+    await openApp(page, QUERY);
+    await openSettings(page);
+    await addClaudeWork(page);
+    await agentsPicker(page).click();
+    await page.getByRole("menu", { name: "New agents use" }).getByRole("group", { name: "Claude work" }).getByRole("menuitemradio", { name: "Opus" }).click();
+    await expect(agentsPicker(page)).toHaveAccessibleName("New agents use Claude work · Opus");
+    await expect(pipPicker(page)).toHaveAccessibleName("Pip uses Claude · Sonnet");
+    await expect(page.locator("[data-promises]")).toContainText("Agents run on Claude work with its own Claude Code settings");
+
+    const id = await startAgent(page, "CA-401", "investigate");
+    const run = (await mockRuns(page)).find((r) => r.id === id);
+    expect(run?.runsOn).toEqual({ instanceId: "claude_2", model: "opus" });
+  });
+
+  test("keeps Pip's own default when the agents' one changes, and the reverse", async ({ page }) => {
+    await openApp(page, QUERY);
+    await openSettings(page);
+    await addClaudeWork(page);
+    await pipPicker(page).click();
+    await page.getByRole("menu", { name: "Pip uses" }).getByRole("group", { name: "Claude work" }).getByRole("menuitemradio", { name: "Haiku" }).click();
+    await expect(pipPicker(page)).toHaveAccessibleName("Pip uses Claude work · Haiku");
+    await expect(agentsPicker(page)).toHaveAccessibleName("New agents use Claude · Default");
+  });
+
+  test("greys a Codex in both pickers with the reason", async ({ page }) => {
+    await openApp(page, QUERY);
+    await openSettings(page);
+    const sheet = await openAddSheet(page, "Codex");
+    await sheet.getByLabel("Name").fill("Codex side");
+    await sheet.getByRole("button", { name: "Add Codex" }).click();
+    await sheet.getByRole("button", { name: "Done" }).click();
+
+    await agentsPicker(page).click();
+    const agents = page.getByRole("menu", { name: "New agents use" }).getByRole("group", { name: "Codex side" });
+    await expect(agents).toContainText("Agents can't run on Codex yet");
+    await expect(agents).toContainText("Beta");
+    const name = await agents.getByText("Codex side", { exact: true }).evaluate((el) => el.scrollWidth <= el.clientWidth);
+    expect(name).toBe(true);
+    await expect(agents.getByRole("menuitemradio")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await pipPicker(page).click();
+    const pip = page.getByRole("menu", { name: "Pip uses" }).getByRole("group", { name: "Codex side" });
+    await expect(pip).toContainText("Pip can't run on Codex yet");
+    await expect(pip.getByRole("menuitemradio")).toHaveCount(0);
+  });
+
+  test("adds a model from a Claude's detail and offers it in the pickers", async ({ page }) => {
+    await openApp(page, QUERY);
+    await openSettings(page);
+    await rowOf(page, "Claude").locator("[data-connection]").click();
+    const detail = page.getByRole("region", { name: "Claude details" });
+    await detail.getByRole("button", { name: "Add model…" }).click();
+    await detail.getByLabel("Model id").fill("claude-test-1");
+    await detail.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(detail).toContainText("claude-test-1");
+    await agentsPicker(page).click();
+    await expect(page.getByRole("menu", { name: "New agents use" }).getByRole("menuitemradio", { name: "claude-test-1" })).toBeVisible();
   });
 });
 

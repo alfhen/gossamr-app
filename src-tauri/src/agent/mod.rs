@@ -119,8 +119,8 @@ pub trait AgentDriver: Send + Sync {
     async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<ClonePlan, String>;
 
     /// Why no agent could start now because of Claude itself (missing, or signed out), in words Pip can pass on; `None`
-    /// when it can, or when that can't be told.
-    async fn unready(&self) -> Option<String> {
+    /// when it can, or when that can't be told. `workstream_choice` is the workstream's own instance and model, if it has one.
+    async fn unready(&self, _workstream_choice: Option<&crate::model_choice::ModelChoice>) -> Option<String> {
         None
     }
 

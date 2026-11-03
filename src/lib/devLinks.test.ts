@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CodeChange, DevLink, WorkItem } from "../types";
 import { compileFilter, describeFilter, parseQuery, usesCode, withoutCode, ALL, and } from "./filter";
-import { checksLine, codeFilterMatches, developmentLine, diffStat, keysIn, orderLinks, pillOf, provenanceHint, reviewLine, summarize, summaryLine } from "./devLinks";
+import { ambiguousNote, checksLine, codeFilterMatches, developmentLine, diffStat, keysIn, orderLinks, pillOf, provenanceHint, reviewLine, summarize, summaryLine } from "./devLinks";
 
 const change = (over: Partial<CodeChange>): CodeChange => ({
   connectionId: "github:ada",
@@ -126,5 +126,17 @@ describe("the filter chips over linked code", () => {
     expect(usesCode(mixed)).toBe(true);
     expect(withoutCode(mixed)).toEqual({ type: "mine" });
     expect(usesCode(ALL)).toBe(false);
+  });
+});
+
+describe("ambiguousNote", () => {
+  it("names the sites a link could belong to", () => {
+    expect(ambiguousNote(["acme.atlassian.net", "beta.atlassian.net"])).toBe("This could belong to acme.atlassian.net or beta.atlassian.net.");
+    expect(ambiguousNote(["a", "b", "c"])).toBe("This could belong to a, b or c.");
+  });
+
+  it("says nothing when only one site has the key", () => {
+    expect(ambiguousNote(["acme.atlassian.net"])).toBe("");
+    expect(ambiguousNote([])).toBe("");
   });
 });

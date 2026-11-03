@@ -1,7 +1,8 @@
 import { useState, type KeyboardEvent } from "react";
-import { ALL, and, containerKey, describeFilter } from "../lib/filter";
+import { accountOf, ALL, and, containerKey, describeFilter, withAccount } from "../lib/filter";
 import { CODE_FILTERS, CODE_FILTER_LABEL } from "../lib/devLinks";
 import { showsCode } from "./connectionsLogic";
+import { jiraOn } from "./domains";
 import type { CodeFilterKind, ContainerRef, WorkContainer, WorkFilter } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { usePopover } from "./Popover";
@@ -59,6 +60,25 @@ export function ProjectSwitcher({
   );
 }
 
+/** Narrows to one Jira account's tickets. Only offered while several are on. */
+export function AccountFilter({ accounts, value, onChange }: { accounts: readonly { id: string; displayName: string }[]; value: string | null; onChange(connectionId: string | null): void }) {
+  return (
+    <select
+      aria-label="Account"
+      value={value ?? ""}
+      onChange={(ev) => onChange(ev.target.value || null)}
+      className={`shrink-0 rounded-md bg-transparent px-1.5 py-1 text-sm font-semibold hover:bg-ws-hover ${value ? "text-ws-accent" : "text-ws-ink2"}`}
+    >
+      <option value="">All accounts</option>
+      {accounts.map((a) => (
+        <option key={a.id} value={a.id}>
+          {a.displayName}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** Narrows to tickets by their linked pull requests. Only offered while a code host is connected. */
 export function CodeFilterMenu({ active, onToggle }: { active: ReadonlySet<CodeFilterKind>; onToggle(check: CodeFilterKind): void }) {
   const { open, setOpen, root } = usePopover();
@@ -93,6 +113,8 @@ export function FilterBar() {
   const { setFilter, saveView } = useTabs.getState();
   const [text, setText] = useState("");
   const hasGithub = useWorkspace((s) => showsCode(s.connections));
+  const connections = useWorkspace((s) => s.connections);
+  const accounts = jiraOn(connections);
   const activeCode = new Set(filterChips(tab.filter).flatMap((c) => (c.type === "code" ? [c.check] : [])));
   const toggleCode = (check: CodeFilterKind) => {
     const chip: WorkFilter = { type: "code", check };
@@ -127,6 +149,7 @@ export function FilterBar() {
         onKeyDown={onKeyDown}
         className="min-w-[200px] flex-1 rounded-md bg-transparent px-2 py-1 outline-none placeholder:text-ws-ink3 focus-visible:bg-ws-hover"
       />
+      {accounts.length > 1 && <AccountFilter accounts={accounts} value={accountOf(tab.filter)} onChange={(id) => setFilter(withAccount(tab.filter, id))} />}
       {hasGithub && <CodeFilterMenu active={activeCode} onToggle={toggleCode} />}
       {chips.length > 0 && (
         <Button variant="quiet" size="sm" className="shrink-0" onClick={() => setFilter(scopeTo(stand?.filter ?? ALL, project))}>

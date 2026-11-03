@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBackend } from "../backend/useBackend";
-import { diffStat, filesLabel, NO_PR_HINT, orderLinks, provenanceHint, reviewLine } from "../lib/devLinks";
+import { ambiguousNote, diffStat, filesLabel, NO_PR_HINT, orderLinks, provenanceHint, reviewLine } from "../lib/devLinks";
 import type { CodeChange, DevLink, ItemRef, PullRequestDetail, WorkItem } from "../types";
 import { itemKey } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
 import { BranchIcon, ChecksMark, CommitIcon, PullIcon, ReviewChip, StatePill } from "./DevBits";
 import { useDev } from "./devStore";
 import { codeWatch } from "./domains";
+import { refsForKey, siteNamer } from "./keyLookup";
 import { openOnGithub, useGithubUi } from "./githubUi";
 import { SectionCard } from "./PeekParts";
 import { keyInitials } from "./projects";
@@ -156,6 +157,8 @@ export function PullDetail({ change, state, now, onOpen, onRetry }: { change: Co
 
 export interface ChangeRowProps {
   link: DevLink;
+  /** The sites whose tickets this link could name, once more than one has the key. */
+  sites?: readonly string[];
   now: Date;
   expanded: boolean;
   detail: DetailState | undefined;
@@ -164,7 +167,7 @@ export interface ChangeRowProps {
   onRetry(): void;
 }
 
-export function ChangeRow({ link, now, expanded, detail, onToggle, onOpen, onRetry }: ChangeRowProps) {
+export function ChangeRow({ link, sites = [], now, expanded, detail, onToggle, onOpen, onRetry }: ChangeRowProps) {
   const c = link.change;
   const pull = c.kind === "pullRequest";
   const Icon = pull ? <PullIcon state={c.state} className="size-4" /> : c.kind === "branch" ? <BranchIcon className="size-4" /> : <CommitIcon className="size-4" />;
@@ -198,6 +201,11 @@ export function ChangeRow({ link, now, expanded, detail, onToggle, onOpen, onRet
           {pull && reviewLine(c.review) && <ReviewChip review={c.review} />}
         </span>
         {c.kind === "branch" && <span className="text-sm text-ws-ink2">{NO_PR_HINT}</span>}
+        {link.ambiguous && ambiguousNote(sites) && (
+          <span data-ambiguous className="text-sm text-ws-ink2">
+            {ambiguousNote(sites)}
+          </span>
+        )}
       </span>
     </>
   );
@@ -229,6 +237,8 @@ export interface DevelopmentViewProps {
   itemKey: string;
   /** Null while the cache is being read. */
   links: DevLink[] | null;
+  /** The sites that have a ticket with this key, once more than one does. */
+  sites?: readonly string[];
   error: string | null;
   now: Date;
   searching: boolean;
@@ -285,6 +295,7 @@ export function DevelopmentView(p: DevelopmentViewProps) {
             <ChangeRow
               key={l.change.externalId}
               link={l}
+              sites={p.sites}
               now={p.now}
               expanded={p.expanded === l.change.externalId}
               detail={p.details[l.change.externalId]}
@@ -330,6 +341,13 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
   const hasOffGithub = useWorkspace((s) => s.connections.some((c) => c.kind === "github"));
   const watch = useWorkspace((s) => s.watch);
   const codeStates = useMemo(() => codeWatch(watch), [watch]);
+  const items = useWorkspace((s) => s.items);
+  const containers = useWorkspace((s) => s.containers);
+  const connections = useWorkspace((s) => s.connections);
+  const sites = useMemo(() => {
+    const siteOf = siteNamer(connections);
+    return refsForKey({ items, containers, connections, watch }, ref.key).flatMap((r) => siteOf(r) ?? []);
+  }, [items, containers, connections, watch, ref.key]);
   const [links, setLinks] = useState<DevLink[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
@@ -408,6 +426,7 @@ export function Development({ item, collapsed, onToggle, onCount }: { item: Work
     <DevelopmentView
       itemKey={ref.key}
       links={links}
+      sites={sites}
       error={error}
       now={now}
       searching={searching}

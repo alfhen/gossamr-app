@@ -549,7 +549,7 @@ export function nameOf(s: Pick<State, "names">, person: PersonRef | null): strin
 }
 
 /** What `parseQuery` and `describeFilter` need to resolve names. */
-export function queryLookup(s: Pick<State, "items" | "containers" | "names" | "me">): QueryLookup {
+export function queryLookup(s: Pick<State, "items" | "containers" | "names" | "me"> & { connections?: readonly ConnectionInfo[] }): QueryLookup {
   const seen = new Set<string>();
   const people: QueryLookup["people"][number][] = [];
   for (const i of Object.values(s.items)) {
@@ -559,7 +559,7 @@ export function queryLookup(s: Pick<State, "items" | "containers" | "names" | "m
       people.push({ ref, name: s.names[ref.accountId] ?? ref.accountId });
     }
   }
-  return { containers: allContainers(s), people, me: s.me, items: Object.values(s.items) };
+  return { containers: allContainers(s), people, me: s.me, items: Object.values(s.items), accounts: s.connections?.map((c) => ({ id: c.id, displayName: c.displayName })) };
 }
 
 /** Re-runs the filter when the data or the filter changes. */

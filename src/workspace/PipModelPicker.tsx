@@ -1,46 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import type { ModelPickerProps } from "../components/ModelPicker";
 import { useClaude } from "../claudeStore";
-import { movesTo, pickerInstances, pipModels, switchingLine, type PickerInstance } from "../lib/modelPicker";
-import type { ModelChoice, ModelDefaults, ModelOption } from "../types";
-import { useWorkspace } from "../workspaceStore";
-import { providersVisible } from "./connectionsLogic";
+import { movesTo, pipModels, switchingLine } from "../lib/modelPicker";
+import type { ModelChoice } from "../types";
 import { useTabs } from "./tabsStore";
-
-interface Options {
-  instances: PickerInstance[];
-  models: Record<string, ModelOption[]>;
-  defaults: ModelDefaults | null;
-}
-
-/** The provider instances Pip could run on, their models and the Settings default, kept current as connections change. */
-function useOptions() {
-  const backend = useWorkspace((s) => s.backend);
-  const [options, setOptions] = useState<Options>({ instances: [], models: {}, defaults: null });
-  const latest = useRef(0);
-  const read = useCallback(async () => {
-    if (!backend) return;
-    const mine = ++latest.current;
-    try {
-      const [connections, defaults] = await Promise.all([backend.connectionsList(), backend.modelDefaults()]);
-      const instances = pickerInstances(connections);
-      const lists = await Promise.all(instances.map((i) => backend.providerModels(i.id).then(pipModels, () => null)));
-      if (mine !== latest.current) return;
-      setOptions((prev) => ({ instances, models: Object.fromEntries(instances.map((i, at) => [i.id, lists[at] ?? prev.models[i.id] ?? []])), defaults }));
-    } catch {
-      // Settings reports what is wrong with a provider; the list stays as it was.
-    }
-  }, [backend]);
-  useEffect(() => {
-    void read();
-    return backend?.onConnectionsChanged(() => void read());
-  }, [backend, read]);
-  return { ...options, backend, read };
-}
+import { useModelOptions } from "./useModelOptions";
 
 /** What Pip's header needs to show and change the instance and model its next turns in `conversation` run on; null before the backend is there. */
 export function usePipModel(conversation: string): { picker: ModelPickerProps; note: string | null } | null {
-  const { instances, models, defaults, backend, read } = useOptions();
+  const { instances, models, defaults, backend, read } = useModelOptions();
   const chosen = useClaude((s) => s.choices[conversation]);
   const ranOn = useClaude((s) => [...(s.byTicket[conversation]?.turns ?? [])].reverse().find((t) => t.model)?.model?.instanceId);
   const fallback = defaults?.pip ?? null;
@@ -61,7 +29,7 @@ export function usePipModel(conversation: string): { picker: ModelPickerProps; n
         await read();
         return pipModels(listed);
       },
-      ...(providersVisible() ? { onManage: () => useTabs.getState().openSettings("connections") } : {}),
+      onManage: () => useTabs.getState().openSettings("connections"),
     },
     note: target ? switchingLine(target.name) : null,
   };

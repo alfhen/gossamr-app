@@ -245,6 +245,8 @@ export type WorkFilter =
   | { type: "items"; items: ItemRef[] }
   /** Client-only: the backend has no code links in its filter, so this is applied over the cached links and never sent to it. */
   | { type: "code"; check: CodeFilterKind }
+  /** Client-only, like `code`: the items of one Jira connection. Never sent to the backend. */
+  | { type: "connection"; connectionId: string }
   | { type: "and"; filters: WorkFilter[] };
 
 /** `has`/`none`: a linked pull request or not. `open` includes drafts. `failing` looks at open and draft ones. */

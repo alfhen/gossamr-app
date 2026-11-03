@@ -167,6 +167,12 @@ export function developmentLine(s: CodeSummary | undefined): string | null {
 }
 
 /** Rows in the Development section: pull requests first by relevance, then branches, then commits, each newest first. */
+/** What an ambiguous link says: which sites' tickets it could name. Empty unless more than one site could own it. */
+export function ambiguousNote(sites: readonly string[]): string {
+  if (sites.length < 2) return "";
+  return `This could belong to ${sites.slice(0, -1).join(", ")} or ${sites[sites.length - 1]}.`;
+}
+
 export function orderLinks(links: readonly DevLink[]): DevLink[] {
   const rank = (c: CodeChange) => (c.kind === "pullRequest" ? RELEVANCE[c.state] : c.kind === "branch" ? 10 : 20);
   return [...links].sort((a, b) => rank(a.change) - rank(b.change) || b.change.updatedAt.localeCompare(a.change.updatedAt));

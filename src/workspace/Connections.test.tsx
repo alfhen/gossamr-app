@@ -234,15 +234,15 @@ describe("a provider in the list", () => {
     const row = { ...claude, displayName: "Claude personal", configDir: "~/.claude-personal", status: claudeSnapshot("ready", CHECKED) };
     const all = view({ connections: [jira, gh, row], selectedId: "claude" });
     const out = all.slice(all.indexOf('aria-label="Claude personal details"'));
-    const at = [">Status<", ">Name<", ">Account<", ">Remove<", ">Config folder<", ">~/.claude-personal<", "Reveal in Finder", "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."].map((t) => out.indexOf(t));
+    const at = [">Status<", ">Name<", ">Account<", ">Remove<", ">Config folder<", ">~/.claude-personal<", "Reveal in Finder", ">Models<", "Add model…", "Pip and new agents run on Claude personal when you pick it. Agents already running keep going if you turn it off."].map((t) => out.indexOf(t));
     expect(at).not.toContain(-1);
     expect(at).toEqual([...at].sort((a, b) => a - b));
-    expect(out).not.toContain("Models</h4>");
   });
 
-  it("says Codex is for new agents, and shows no Reveal in Finder for a usual setup", () => {
+  it("says Codex is in beta and can't run anything yet, and shows no Reveal in Finder for a usual setup", () => {
     const out = view({ connections: [jira, gh, { ...claude, id: "codex", instanceId: "codex", displayName: "Codex", driver: "codex", status: claudeSnapshot("ready", CHECKED) }], selectedId: "codex" });
-    expect(out).toContain("New agents run on Codex when you pick it.");
+    expect(out).toContain("Codex is in beta. Pip and agents can&#x27;t run on it yet.");
+    expect(out).toContain(">Beta<");
     expect(out).toContain("Your usual setup");
     expect(out).not.toContain("Reveal in Finder");
   });

@@ -324,3 +324,22 @@ async fn a_finished_run_on_an_instance_that_is_off_is_still_cleaned_up_through_c
     assert!(!rig.cli.0.lock().unwrap().rms.is_empty(), "claude removed it");
     assert!(git_calls(&rig).is_empty());
 }
+
+#[tokio::test]
+async fn a_finished_run_on_the_second_login_is_cleaned_up_through_that_logins_claude_only_even_while_it_is_off() {
+    let rig = ready().await;
+    crate::config::AppConfig::update(&rig.fx.core.data_dir(), |config| {
+        config.providers.push(crate::connections::ProviderInstance { id: "claude_2".into(), display_name: "Claude personal".into(), ..crate::connections::default_claude() })
+    })
+    .unwrap();
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, true).await;
+    let run = rig.set(&run, |r| r.state = RunState::Stopped).await;
+    second.with(|s| {
+        s.sessions[0].state = Some("stopped".into());
+        s.sessions[0].pid = None;
+    });
+
+    assert_eq!(svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    assert_eq!(second.0.lock().unwrap().rms, ["abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().rms.is_empty());
+}
