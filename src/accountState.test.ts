@@ -22,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("per-account state", () => {
   beforeEach(async () => {
     stubStorage();
-    resetAccountState("jira:site:me");
+    resetAccountState("jira");
     await useWorkspace.getState().init(new MockBackend());
     useClaude.setState({ byTicket: { "CA-1": { turns: [], sessionId: "s" } } });
     usePip.setState({ filtered: { tabId: "t", before: { type: "open" }, beforeTitle: null, filter: { type: "open" }, note: "" } });
@@ -31,7 +31,7 @@ describe("per-account state", () => {
   });
 
   it("keeps tabs for the same account but drops conversations, filters and the loaded workspace", () => {
-    resetAccountState("jira:site:me");
+    resetAccountState("jira");
     expect(useClaude.getState().byTicket).toEqual({});
     expect(usePip.getState().filtered).toBeNull();
     expect(useWorkspace.getState().status).toBe("idle");
@@ -45,7 +45,7 @@ describe("per-account state", () => {
     useClaude.setState({
       byTicket: { workspace: { sessionId: null, turns: [{ ...turn, images: [{ id: "a", url: "blob:a", width: 1, height: 1 }, { id: "b", url: "blob:b", width: 1, height: 1 }] }, turn] } },
     });
-    resetAccountState("jira:site:me");
+    resetAccountState("jira");
     expect(revoke.mock.calls.map(([u]) => u)).toEqual(["blob:a", "blob:b"]);
     revoke.mockRestore();
   });
@@ -71,6 +71,13 @@ describe("the account key with several Jira accounts", () => {
     resetAccountState(accountKey(signedIn("acme", "ann")));
     useTabs.getState().openTab({ title: "Mine" });
     resetAccountState(accountKey(signedIn("beta", "bo")));
+    expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
+  });
+
+  it("reads the key stored before one key covered every Jira sign-in as the same account, so tabs and saved views stay", () => {
+    stubStorage({ "gossamr-account": JSON.stringify({ id: "jira:c1:u1" }) });
+    useTabs.getState().openTab({ title: "Mine" });
+    resetAccountState(accountKey(signedIn("c1", "u1")));
     expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
   });
 

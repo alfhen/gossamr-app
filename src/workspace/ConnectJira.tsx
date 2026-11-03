@@ -2,6 +2,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { announceSignedOut } from "../accountEvents";
+import { isSignedInToJira } from "../accountState";
 import { auth, type AuthStatus, type TokenSignIn } from "../backend/auth";
 import { MockBackend } from "../backend/mock";
 import type { Backend } from "../backend/types";
@@ -80,13 +81,6 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
       }}
       className="grid gap-4"
     >
-      {p.named && (
-        <label className="grid gap-1 text-sm font-semibold">
-          Name
-          <input value={values.name} disabled={p.busy} onChange={(ev) => p.onChange({ name: ev.target.value })} placeholder="Client work" autoComplete="off" spellCheck={false} className={FIELD} />
-          <span className="text-sm font-normal text-ws-ink3">Shown in Settings. Leave it empty to use the site.</span>
-        </label>
-      )}
       <div className="grid gap-1">
         <label className="grid gap-1 text-sm font-semibold">
           Your Jira site
@@ -162,6 +156,13 @@ export function ConnectJiraView(p: ConnectJiraViewProps) {
         </label>
       </div>
 
+      {p.named && (
+        <label className="grid gap-1 text-sm font-semibold">
+          Name
+          <input value={values.name} disabled={p.busy} onChange={(ev) => p.onChange({ name: ev.target.value })} placeholder="Client work" autoComplete="off" spellCheck={false} className={FIELD} />
+          <span className="text-sm font-normal text-ws-ink3">Shown in lists and on drafts. You can change it later. Leave it empty to use the site.</span>
+        </label>
+      )}
       <p className="m-0 text-sm text-ws-ink3">The token stays in your Keychain and goes only to Atlassian.</p>
       {p.error && (
         <p role="alert" className="selectable m-0 text-ws-blocked [overflow-wrap:anywhere]">
@@ -348,8 +349,12 @@ export function ConnectJiraDialog() {
     close();
     if (!instanceId) {
       useToasts.getState().push(`Added ${next.site?.name ?? "the account"}.`, "info");
+      if (addStartsOver(current)) {
+        announceSignedOut();
+        return;
+      }
       const ws = useWorkspace.getState();
-      void Promise.all([ws.refreshConnections(true), ws.refresh()]);
+      void Promise.all([ws.refreshConnections(true), ws.refresh(), ws.refreshWatch()]);
       useTabs.getState().openSettings("watching");
       return;
     }
@@ -380,6 +385,9 @@ export function ConnectJiraDialog() {
     </ConnectFrame>
   );
 }
+
+/** On the desktop, the first account added from the sample workspace has to switch the window to the real backend. */
+export const addStartsOver = (before: AuthStatus | null) => isTauri() && !isSignedInToJira(before);
 
 /** The browser build has no sign-in to start over from, so there the mock workspace stays and only re-reads its connections. */
 export const keepsWorkspace = (before: AuthStatus | null, after: AuthStatus) => !isTauri() || sameAccount(before, after);

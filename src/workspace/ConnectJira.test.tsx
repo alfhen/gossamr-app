@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
 import { JiraBackend } from "../backend/jira";
 import { auth } from "../backend/auth";
-import { ConnectJiraView, keepsWorkspace, sameAccount, signInApi, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
+import { ConnectJiraView, addStartsOver, keepsWorkspace, sameAccount, signInApi, signInFrom, type ConnectJiraViewProps, type JiraFormValues, type SiteLookup } from "./ConnectJira";
 
 const VALUES: JiraFormValues = { site: " acme.atlassian.net ", cloudId: "", email: " ann@acme.com ", token: " tok ", expiresOn: "2027-10-30", name: "" };
 const IDLE: SiteLookup = { state: "idle" };
@@ -165,5 +165,29 @@ describe("when a new sign-in starts the workspace over", () => {
     } finally {
       vi.mocked(isTauri).mockReturnValue(false);
     }
+  });
+});
+
+describe("adding a Jira account from + Add", () => {
+  const signedIn = { site: { name: "acme.atlassian.net", url: "", cloudId: "c1" }, me: { accountId: "u1", name: "Ann" }, email: "ann@acme.com", expiresOn: null } as never;
+
+  it("starts over on the desktop when nothing was signed in, and keeps the workspace otherwise", () => {
+    vi.mocked(isTauri).mockReturnValue(true);
+    try {
+      expect(addStartsOver(null)).toBe(true);
+      expect(addStartsOver(signedIn)).toBe(false);
+    } finally {
+      vi.mocked(isTauri).mockReturnValue(false);
+    }
+  });
+
+  it("never starts over in a browser", () => {
+    expect(addStartsOver(null)).toBe(false);
+  });
+
+  it("asks for the name after the token fields", () => {
+    const out = view({ named: true });
+    expect(out.indexOf("Name")).toBeGreaterThan(out.indexOf("Token expires"));
+    expect(out).toContain("Shown in lists and on drafts. You can change it later.");
   });
 });

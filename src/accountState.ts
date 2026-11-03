@@ -17,7 +17,9 @@ export const accountKey = (status: AuthStatus | null) => (isSignedInToJira(statu
 
 const lastAccount = (): string | null => {
   const raw = readStored(KEY) as { id?: unknown } | null;
-  return typeof raw?.id === "string" ? raw.id : null;
+  if (typeof raw?.id !== "string") return null;
+  // Keys stored before one key covered every Jira sign-in were `jira:<cloudId>:<accountId>`.
+  return raw.id.startsWith("jira:") ? "jira" : raw.id;
 };
 
 /**

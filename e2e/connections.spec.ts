@@ -472,11 +472,16 @@ test.describe("adding a Jira account beside the first", () => {
     await addAccount(page, "Jira");
     await expect(await fill(page, "acme.atlassian.net", "alf@acme.com")).toHaveCount(0);
     await addAccount(page, "Jira");
+    const watching = page.locator("#settings-watching").getByRole("heading", { name: "Watching", level: 2 });
+    await page.locator("#settings-connections").scrollIntoViewIfNeeded();
+    await page.getByRole("heading", { name: "Settings", level: 1 }).scrollIntoViewIfNeeded();
+    await expect(watching).not.toBeInViewport();
     await expect(await fill(page, "beta.atlassian.net", "alf@beta.example", "Client work")).toHaveCount(0);
 
     await expect(rowOf(page, "acme.atlassian.net")).toBeVisible();
     await expect(rowOf(page, "Client work")).toBeVisible();
-    await expect(page.locator("#settings-watching").getByRole("heading", { name: "Watching", level: 2 })).toBeInViewport();
+    await expect(watching).toBeInViewport();
+    await expect(page.locator("#settings-watching").getByText("beta.atlassian.net")).toBeVisible();
   });
 
   test("refuses an account that is already connected and keeps the sheet open", async ({ page }) => {

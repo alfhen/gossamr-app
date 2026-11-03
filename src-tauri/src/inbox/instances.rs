@@ -219,15 +219,6 @@ impl Core {
         renamed.ok_or_else(|| Error::Input("This connection is gone. Reopen Settings.".into()))
     }
 
-    /// Gives the instance bound to `connection_id` the name the person typed when adding it.
-    pub(super) fn name_instance_of(&self, connection_id: &str, name: &str) {
-        self.change_instances(|config| {
-            if let Some(instance) = config.connections.iter_mut().find(|i| i.bound_to.as_deref() == Some(connection_id)) {
-                instance.display_name = name.into();
-            }
-        });
-    }
-
     /// Turns `instance_id` on or off, and returns the connection (or instance) to tell the page about. Turning off refuses
     /// while one of its drafts is being posted. The cache and the token stay either way.
     pub async fn set_instance_enabled(&self, instance_id: &str, enabled: bool) -> Result<String> {

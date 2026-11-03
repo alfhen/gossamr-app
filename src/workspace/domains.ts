@@ -31,6 +31,11 @@ export function primaryConnection(connections: readonly ConnectionInfo[]): strin
   return (jira.length > 1 ? jira.find((c) => c.enabled) : undefined)?.id ?? jira[0]?.id;
 }
 
+export const primaryConnectionInfo = <T extends ConnectionInfo>(connections: readonly T[]): T | undefined => {
+  const id = primaryConnection(connections);
+  return connections.find((c) => c.id === id);
+};
+
 export const githubConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[]): T[] => connections.filter((c) => c.kind === "github");
 
 /** Containers that may appear as project badges, filters and switcher entries. */

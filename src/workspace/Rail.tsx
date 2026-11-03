@@ -5,7 +5,7 @@ import type { WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, projectOf, sameProject } from "./filters";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
-import { workConnections, workContainers } from "./domains";
+import { primaryConnectionInfo, workContainers } from "./domains";
 import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
 import { usePrefs } from "./prefs";
@@ -309,7 +309,7 @@ export function Rail() {
   const { setRoute, setProject } = useTabs.getState();
   const containers = useWorkspace((s) => s.containers);
   const watch = useWorkspace((s) => s.watch);
-  const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
+  const kind = useWorkspace((s) => primaryConnectionInfo(s.connections)?.kind);
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);

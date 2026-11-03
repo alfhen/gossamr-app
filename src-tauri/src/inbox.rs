@@ -323,15 +323,15 @@ impl Core {
         };
         let instance_id = instance_id.or(orphan.as_deref());
         self.refuse_taken_account(&connection.id, instance_id)?;
-        let binding = Binding::jira(&connection.id, &credentials.site.name, &credentials.site.url).with_email(input.email.trim());
+        let mut binding = Binding::jira(&connection.id, &credentials.site.name, &credentials.site.url).with_email(input.email.trim());
+        if let (Some(name), None) = (&name, instance_id) {
+            binding = binding.named(name);
+        }
         match instance_id {
             None => {
                 self.auth.add(credentials).await?;
                 if let Err(e) = self.try_bind_instance(binding) {
                     eprintln!("couldn't save the connections to config.json: {e}");
-                }
-                if let Some(name) = &name {
-                    self.name_instance_of(&connection.id, name);
                 }
                 self.probes_rebound();
             }
@@ -1359,7 +1359,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_in_as_another_account_takes_over_a_lone_instance_whose_account_has_no_sign_in() {
+    async fn signing_in_as_another_account_takes_over_a_lone_instance_whose_account_has_no_sign_in_and_keeps_its_name() {
         let vault = crate::secrets::fake::Fake::default();
         let _vault = crate::secrets::fake::install(&vault);
         let gated = Arc::new(Gated { begun: Notify::new(), release: Notify::new() });
@@ -1373,7 +1373,8 @@ mod tests {
         })
         .unwrap();
 
-        fx.core.connect_jira(&token_for("b", "fast"), None).await.unwrap();
+        let named = TokenSignIn { name: Some("Typed name".into()), ..token_for("b", "fast") };
+        fx.core.connect_jira(&named, None).await.unwrap();
 
         let config = AppConfig::load(&fx.core.data_dir());
         let [jira] = config.connections.as_slice() else { panic!("{:?}", config.connections) };
