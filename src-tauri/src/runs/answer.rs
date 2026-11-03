@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use chrono::Utc;
 
 use super::backend::{ResumeRequest, Resumed, RunBackend, Session};
-use super::cli::{is_uuid, ShortId};
+use super::cli::is_uuid;
 use super::service::RunService;
 use crate::domain::{Actor, EarlierSession, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
@@ -201,17 +201,12 @@ impl RunService {
         let request = ResumeRequest { message: message(text), cwd, tools: None, settle, finished };
         match tc.backend.resume(session, &request, &self.timing.waits()).await {
             Ok(Resumed::Same(_)) => None,
-            Ok(Resumed::Copy(copy)) => Some(self.stop_copy(tc, run, copy).await),
+            Ok(Resumed::Copy { session, note }) => {
+                run.earlier_sessions.push(EarlierSession { short_id: session.short_id, session_id: None, removed: false });
+                Some(note)
+            }
             Err(e) => Some(e.to_string()),
         }
-    }
-
-    /// Stops the second session a resume started and remembers it on the run, in words for the person.
-    async fn stop_copy(&self, tc: &super::toolchain::Toolchain, run: &mut Run, copy: ShortId) -> String {
-        let stopped = tc.backend.stop(&Session { short_id: copy.clone(), session_id: None, process: None }).await.is_ok();
-        let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {copy}`") };
-        run.earlier_sessions.push(EarlierSession { short_id: copy.clone(), session_id: None, removed: false });
-        format!("Claude started a copy ({copy}) instead of continuing this agent; {copy_note}.")
     }
 }
 

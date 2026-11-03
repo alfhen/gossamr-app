@@ -10,8 +10,8 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 
-use super::backend::claude::revived;
 use super::cli::{AgentEntry, ShortId};
+use super::state::revived;
 use super::service::{real, title_of, RunService};
 use crate::domain::{Continuation, EarlierSession, Run, RunQuery, RunState};
 use crate::error::{Error, Result};

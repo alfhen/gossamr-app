@@ -74,7 +74,8 @@ pub struct ResumeRequest {
 pub enum Resumed {
     Same(Session),
     /// The program started a second session instead of carrying on in the first.
-    Copy(ShortId),
+    /// `note` tells the person what became of the copy; the program stopped it if it could.
+    Copy { session: Session, note: String },
 }
 
 /// What removing a run's worktree and earlier sessions came to.

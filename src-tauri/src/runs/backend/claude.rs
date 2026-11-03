@@ -17,11 +17,7 @@ use crate::runs::env::RunEnv;
 use crate::runs::failure::Failure;
 use crate::runs::fresh::real;
 use crate::runs::final_answer::{answer_folders, timeline_answer};
-use crate::runs::state::{map_state, progress_at};
-
-/// A stopped run's session is listed as stopped within seconds, but until then it can still look alive; it is not
-/// taken for a session that carried on before this long has passed.
-const STOPPED_SETTLE: chrono::Duration = chrono::Duration::seconds(60);
+use crate::runs::state::{map_state, progress_at, revived};
 
 impl From<CliError> for BackendError {
     fn from(e: CliError) -> Self {
@@ -50,31 +46,6 @@ pub(in crate::runs) fn belongs_to(entry: &AgentEntry, listed_on: &str, run: &Run
         return false;
     }
     run.short_id.as_ref() == Some(&id) || entry.cwd.as_deref().is_some_and(|cwd| real(std::path::Path::new(cwd)) == real(&run.expected_worktree))
-}
-
-/// A session whose process is alive and that is not at rest, the only kind a finished run can be taken up by again.
-fn is_active(entry: &AgentEntry) -> bool {
-    entry.pid.is_some() && matches!(entry.state.as_deref(), Some("working" | "blocked")) && entry.status.as_deref() != Some("idle")
-}
-
-/// Whether the session listed for a run at rest has started working or asking again. A finished run only counts a
-/// session that is not at its prompt; a stopped one also counts a session waiting on a question, which Claude lists as
-/// idle. Gossamr's own answer in flight (`unsent_answer`) and a stop that is still settling don't count.
-pub(in crate::runs) fn revived(entry: &AgentEntry, run: &Run, now: DateTime<Utc>) -> bool {
-    match run.state {
-        RunState::Done => is_active(entry),
-        RunState::Stopped => {
-            let settled = run.ended_at.is_some_and(|at| now - at >= STOPPED_SETTLE);
-            let alive = entry.pid.is_some()
-                && match entry.state.as_deref() {
-                    Some("blocked") => true,
-                    Some("working") => entry.status.as_deref() != Some("idle"),
-                    _ => false,
-                };
-            settled && alive && run.unsent_answer.is_none()
-        }
-        _ => false,
-    }
 }
 
 const LOCK_RETRIES: u32 = 6;
@@ -337,7 +308,12 @@ impl RunBackend for ClaudeBackend {
         let session_id = session.session_id.as_deref().unwrap_or_default();
         match self.cli.resume(session_id, &req.message, Some(&req.cwd)).await {
             Ok(woken) if woken.short_id == session.short_id => Ok(Resumed::Same(session.clone())),
-            Ok(copy) => Ok(Resumed::Copy(copy.short_id)),
+            Ok(copy) => {
+                let copy_id = copy.short_id;
+                let copy = Session { short_id: copy_id.clone(), session_id: None, process: None };
+                let how = if self.stop(&copy).await.is_ok() { "it was stopped".to_owned() } else { format!("stop it with `claude stop {copy_id}`") };
+                Ok(Resumed::Copy { session: copy, note: format!("Claude started a copy ({copy_id}) instead of continuing this agent; {how}.") })
+            }
             Err(e) => Err(BackendError::Other(format!("Couldn't wake the agent: {}.", BackendError::from(e)))),
         }
     }
