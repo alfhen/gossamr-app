@@ -4,11 +4,9 @@
 use chrono::Utc;
 use serde::Serialize;
 
-use super::archive::contained;
 use super::backend::RemoveOutcome;
 use super::cli::ShortId;
-use super::fresh::{agents_root, is_work_path, real};
-use super::repo::Git;
+use super::repo::{remove_with_git, Git};
 use super::service::RunService;
 use crate::domain::{Run, RunState};
 use crate::error::{Error, Result};
@@ -50,33 +48,10 @@ impl RunService {
         }
     }
 
-    /// The run's worktree and branch through git alone, for a run whose instance is gone. Anything git refuses stays, in
-    /// git's own words. The clone and the worktree must lie in `~/Gossamr/agents`.
+    /// The run's worktree and branch through git alone, for a run whose instance is gone.
     async fn remove_with_git(&self, run: &Run) -> Result<Option<String>> {
-        let home = self.home.as_ref().ok_or_else(|| refuse("Gossamr doesn't know your home folder."))?;
-        let clone = &run.spec.clone_path;
-        let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, &run.spec.repo, clone);
-        if !in_work_folder {
-            return Err(refuse("Its clone isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."));
-        }
-        let worktree = if run.expected_worktree.symlink_metadata().is_ok() {
-            contained(&agents_root(home), &run.expected_worktree).ok_or_else(|| refuse("Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."))?
-        } else {
-            let missing = real(&run.expected_worktree);
-            if !missing.starts_with(real(&agents_root(home))) {
-                return Err(refuse("Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."));
-            }
-            missing
-        };
         let git: Git = self.git().await?;
-        let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
-        if let Err(message) = git.check_branch_deletable(clone, &branch).await {
-            return Ok(Some(message));
-        }
-        if let Err(message) = git.remove_worktree(clone, &worktree).await {
-            return Ok(Some(message));
-        }
-        Ok(git.delete_branch(clone, &branch).await.err())
+        remove_with_git(&git, self.home.as_deref(), run).await.map_err(refuse)
     }
 
     /// Removes the run's worktree and branch, and the earlier sessions it left behind. Never forces: unpushed work stays,

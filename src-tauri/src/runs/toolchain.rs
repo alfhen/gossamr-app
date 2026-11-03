@@ -142,7 +142,7 @@ impl SystemToolchain {
             }
             Driver::Codex => {
                 let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
-                let backend = Arc::new(CodexBackend::new(binary, run_env, env.clone(), runs_root(&self.core.data_dir()), name.into(), own_folder));
+                let backend = Arc::new(CodexBackend::new(binary, run_env, env.clone(), runs_root(&self.core.data_dir()), name.into(), own_folder).with_home(dirs::home_dir()));
                 Ok(Toolchain { backend, env, instance_id: id.into(), instance_name: name.into(), driver, login })
             }
         }

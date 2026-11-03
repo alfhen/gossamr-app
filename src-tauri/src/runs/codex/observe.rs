@@ -87,7 +87,7 @@ pub(super) fn processes_on(listing: &str, thread: &str, own_group: Option<u32>) 
         .collect()
 }
 
-async fn process_listing() -> String {
+pub(super) async fn process_listing() -> String {
     let run = tokio::process::Command::new("ps").args(["-axo", "pid=,pgid=,args="]).kill_on_drop(true).output();
     match tokio::time::timeout(PS_WAIT, run).await {
         Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).into_owned(),
