@@ -141,12 +141,34 @@ describe("PipConversation", () => {
     useRuns.getInitialState().runs = [];
     expect(wakeIsLong(long)).toBe(true);
     expect(wakeIsLong("R1 finished.")).toBe(false);
-    expect(html).toMatch(/id="wake-text-wake-l" data-wake-text="true" data-clamped="true" class="[^"]*line-clamp-3/);
-    expect(html).not.toMatch(/id="wake-text-wake-s"[^>]*data-clamped/);
+    const folded = html.match(/id="wake-text-wake-l" data-wake-text="true" data-clamped="true" class="([^"]*)"/)?.[1] ?? "";
+    expect(folded).toContain("max-h-[3lh]");
+    expect(folded).toContain("overflow-hidden");
+    expect(folded).not.toContain("line-clamp");
+    expect(folded).toContain("mask-image");
+    const shortTag = html.match(/<div id="wake-text-wake-s"[^>]*>/)?.[0] ?? "";
+    expect(shortTag).not.toMatch(/data-clamped|max-h-|overflow-hidden|line-clamp|mask-image/);
     expect(html.match(/>Show more</g)).toHaveLength(1);
     expect(html).toContain('aria-controls="wake-text-wake-l"');
     // Its cards follow the folded text.
     expect(html.indexOf('data-draft="p-w"')).toBeGreaterThan(html.indexOf("wake-text-wake-l"));
+  });
+
+  it("folds a paragraph followed by a list as one clipped block", () => {
+    const runs = new MockBackend({ runs: { seed: "busy" } }).runs.list();
+    const r = { ...runs[0], id: "run-9", spec: { ...runs[0].spec, workstream: "ws-1" } };
+    useRuns.setState({ runs: [r] });
+    useRuns.getInitialState().runs = [r];
+    const text = "R1 finished and found the rounding in the invoice total, which is why the numbers drifted.\n\n- Triage R2 is queued\n- Plan follows\n- Nothing needs you yet";
+    const wake: Turn = { requestId: "wake-m", kind: "wake", prompt: "[Event] run run-9 (investigate) Done", steps: [], text, status: "done", error: null };
+    setTurns({ [workstreamConversation("ws-1")]: { sessionId: "s1", turns: [wake] } });
+    const html = renderToStaticMarkup(<PipConversation conversation={workstreamConversation("ws-1")} proposals={[]} />);
+    useRuns.getInitialState().runs = [];
+    const tag = html.match(/<div id="wake-text-wake-m"[^>]*>/)?.[0] ?? "";
+    expect(tag).toContain('data-clamped="true"');
+    expect(tag).toContain("overflow-hidden");
+    expect(tag).not.toContain("line-clamp");
+    expect(html).toMatch(/<li[ >]/);
   });
 
   it("opens a wake's run by its sheet over the screen the person is on", () => {
