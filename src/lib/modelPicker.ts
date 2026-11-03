@@ -1,11 +1,14 @@
 import type { ConnectionInfo, ModelChoice, ModelOption } from "../types";
-import { DEFAULT_MODEL } from "./models";
+import { DEFAULT_MODEL, DRIVERS, type Driver } from "./models";
+
+/** What a picker chooses for: Pip's turns or the agents that runs start. */
+export type PickerPurpose = "pip" | "agents";
 
 /** A provider instance as the picker lists it. `unavailable` is why Pip can't run on it now, or null. */
 export interface PickerInstance {
   id: string;
   name: string;
-  driver: "claude" | "codex";
+  driver: Driver;
   unavailable: string | null;
 }
 
@@ -14,8 +17,8 @@ export interface PickerInstance {
  * (`status` null) counts as able, because a launch doesn't wait for a probe. `error` is a shell that can't be read or a
  * config folder that breaks the folder rules; the launch refuses both.
  */
-export function unavailableReason(c: Pick<ConnectionInfo, "enabled" | "driver" | "status">): string | null {
-  if (c.driver === "codex") return "Pip can't run on Codex yet";
+export function unavailableReason(c: Pick<ConnectionInfo, "enabled" | "driver" | "status">, purpose: PickerPurpose = "pip"): string | null {
+  if (c.driver && !(purpose === "pip" ? DRIVERS[c.driver].runsPip : DRIVERS[c.driver].runsAgents)) return `${purpose === "pip" ? "Pip" : "Agents"} can't run on ${DRIVERS[c.driver].label} yet`;
   if (!c.enabled) return "Off";
   switch (c.status?.state) {
     case "notSignedIn":
@@ -32,10 +35,10 @@ export function unavailableReason(c: Pick<ConnectionInfo, "enabled" | "driver" |
 }
 
 /** The provider instances in `connections`, in the order given. The row standing in for an unreadable providers list is left out. */
-export function pickerInstances(connections: readonly ConnectionInfo[]): PickerInstance[] {
+export function pickerInstances(connections: readonly ConnectionInfo[], purpose: PickerPurpose = "pip"): PickerInstance[] {
   return connections
     .filter((c) => c.kind === "provider" && c.driver)
-    .map((c) => ({ id: c.instanceId, name: c.displayName, driver: c.driver!, unavailable: unavailableReason(c) }));
+    .map((c) => ({ id: c.instanceId, name: c.displayName, driver: c.driver!, unavailable: unavailableReason(c, purpose) }));
 }
 
 /** Pip's models: whatever the instance lists except "Default", which would leave the choice to the CLI's own default. */

@@ -110,7 +110,7 @@ test("Settings states what Gossamr posts and what agents may do, and Work does n
   await expect(page.locator("body")).not.toContainText("Claude Code settings");
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
   const promises = page.locator("[data-promises] li");
-  await expect(promises).toHaveText(["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."]);
+  await expect(promises).toHaveText(["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run on Claude with its own Claude Code settings, so they can push branches and use your own tools."]);
 });
 
 test("the theme control moves with the arrow keys and Space flips the Follow my screen switch", async ({ page }) => {

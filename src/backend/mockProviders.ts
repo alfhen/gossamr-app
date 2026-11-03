@@ -97,17 +97,25 @@ export class MockProviders {
   }
 
   /** A check of everything: an instance whose sign-in was opened in Terminal now finds its login. */
-  touch() {
+  touch(): boolean {
     const now = new Date().toISOString();
+    let changed = false;
     for (const p of this.items) {
       p.checkedAt = now;
-      if (p.signInOpened && p.probe === "notSignedIn") p.probe = "ready";
+      if (p.signInOpened && p.probe === "notSignedIn") (p.probe = "ready"), (changed = true);
     }
+    return changed;
   }
 
   /** The first check of each added instance answers: signed out, the state a fresh folder is in. */
-  settle() {
-    for (const p of this.items) p.probe ??= "notSignedIn";
+  settle(): boolean {
+    let changed = false;
+    for (const p of this.items) {
+      if (p.probe) continue;
+      p.probe = "notSignedIn";
+      changed = true;
+    }
+    return changed;
   }
 
   has(id: string): boolean {

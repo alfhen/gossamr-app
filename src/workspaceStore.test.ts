@@ -48,10 +48,10 @@ describe("connection probes", () => {
     expect(s().connections.find((c) => c.kind === "github")?.status?.state).toBe("notSignedIn");
   });
 
-  it("keeps the provider rows the backend lists out of the store while they are hidden", async () => {
+  it("keeps the provider rows the backend lists in the store", async () => {
     expect((await backend.connectionsList()).map((c) => c.kind)).toContain("provider");
     await s().refreshConnections();
-    expect(s().connections.map((c) => c.kind)).not.toContain("provider");
+    expect(s().connections.map((c) => c.kind)).toContain("provider");
   });
 
   it("marks the connections loaded only once they have been read, and not when reading them fails", async () => {

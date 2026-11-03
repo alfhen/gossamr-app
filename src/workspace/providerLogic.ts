@@ -1,8 +1,8 @@
 import type { Backend } from "../backend/types";
-import type { Driver } from "../lib/models";
+import { DRIVERS, type Driver } from "../lib/models";
 import type { ConnectionInfo } from "../types";
 
-export const DRIVER_NAME: Record<Driver, string> = { claude: "Claude", codex: "Codex" };
+export const DRIVER_NAME: Record<Driver, string> = { claude: DRIVERS.claude.label, codex: DRIVERS.codex.label };
 
 const FOLDER_PREFIX: Record<Driver, string> = { claude: "~/.claude-", codex: "~/.codex-" };
 const SLUG_LIMIT = 40;
@@ -60,7 +60,7 @@ export function ignoredLine(c: Pick<ConnectionInfo, "displayName" | "status">): 
 
 /** What a provider's detail says it is used for. */
 export function usedForLine(c: Pick<ConnectionInfo, "driver" | "displayName">): string {
-  return c.driver === "codex" ? `New agents run on ${c.displayName} when you pick it.` : `Pip and new agents run on ${c.displayName} when you pick it. Agents already running keep going if you turn it off.`;
+  return c.driver && DRIVERS[c.driver].beta ? `${c.displayName} is in beta. Pip and agents can't run on it yet.` : `Pip and new agents run on ${c.displayName} when you pick it. Agents already running keep going if you turn it off.`;
 }
 
 /** Shows an instance's folder in Finder; a refusal or a failure goes to `report`. */

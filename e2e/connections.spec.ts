@@ -31,7 +31,7 @@ test.describe("the Connections list", () => {
     const list = page.getByRole("list", { name: "Connections" });
     await expect(list).toContainText("Code");
     await expect(list).toContainText("Tickets");
-    await expect(list).not.toContainText("Models");
+    await expect(list).toContainText("Models");
     const text = (await list.innerText()).replace(/\s+/g, " ");
     expect(text.indexOf("Code")).toBeLessThan(text.indexOf("GitHub"));
     expect(text.indexOf("GitHub")).toBeLessThan(text.indexOf("Tickets"));
@@ -43,23 +43,16 @@ test.describe("the Connections list", () => {
     await expect(rowOf(page, "GitHub").locator("[data-connection]")).toBeFocused();
   });
 
-  test("shows the Models group with the provider rows on providers=1", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+  test("shows the Models group with the provider rows", async ({ page }) => {
+    await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await expect(page.getByRole("list", { name: "Connections" })).toContainText("Models");
+    await expect(rowOf(page, "GitHub")).toBeVisible();
     await expect(rowOf(page, "Claude")).toBeVisible();
   });
 
-  test("hides the provider rows unless the page is opened with providers=1", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6");
-    await openSettings(page);
-    await expect(rowOf(page, "GitHub")).toBeVisible();
-    await expect(page.getByRole("list", { name: "Connections" }).getByRole("listitem")).toHaveCount(2);
-    await expect(rowOf(page, "Claude")).toHaveCount(0);
-  });
-
   test("lists the default Claude after the others, and turns it off and on from its row", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     const rows = page.getByRole("list", { name: "Connections" }).getByRole("listitem");
     await expect(rows).toHaveCount(3);
@@ -75,7 +68,7 @@ test.describe("the Connections list", () => {
   });
 
   test("shows what the Claude probe found on its row, and Off when it is turned off", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1&mockClaudeProbe=notSignedIn");
+    await openApp(page, "runs=empty&mockRepos=6&mockClaudeProbe=notSignedIn");
     await openSettings(page);
     await expect(rowOf(page, "Claude")).toContainText("Not signed in");
     await rowOf(page, "Claude").getByRole("switch", { name: "Claude" }).click();
@@ -85,7 +78,7 @@ test.describe("the Connections list", () => {
   });
 
   test("shows the signed-in Claude as who it is authenticated as", async ({ page }) => {
-    await openApp(page, "runs=empty&mockRepos=6&providers=1");
+    await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await expect(rowOf(page, "Claude")).toContainText("Authenticated · alf@acme.com");
   });
@@ -302,7 +295,7 @@ test.describe("the Connections list", () => {
     await expect(code).toBeVisible();
   });
 
-  test("opens + Add with Code and Tickets entries, closes it on Escape and keeps the menu out of the footer", async ({ page }) => {
+  test("opens + Add with Code, Tickets and Models entries, closes it on Escape and keeps the menu out of the footer", async ({ page }) => {
     await openApp(page, "runs=empty&mockRepos=6");
     await openSettings(page);
     await expect(page.getByRole("button", { name: /^Connect (another )?GitHub/ })).toHaveCount(0);
@@ -311,7 +304,7 @@ test.describe("the Connections list", () => {
     const menu = page.getByRole("menu", { name: "Add a connection" });
     await expect(menu.getByRole("group", { name: "Code" }).getByRole("menuitem")).toHaveText(/GitHub accountPull requests, branches and checks\./);
     await expect(menu.getByRole("group", { name: "Tickets" }).getByRole("menuitem")).toHaveText(/Jira accountTickets from one Jira site\./);
-    await expect(menu.getByRole("group", { name: "Models" })).toHaveCount(0);
+    await expect(menu.getByRole("group", { name: "Models" }).getByRole("menuitem")).toHaveCount(2);
     await expect(menu.getByRole("menuitem").first()).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(menu.getByRole("menuitem", { name: /^Jira account/ })).toBeFocused();
