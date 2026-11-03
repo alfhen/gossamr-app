@@ -294,11 +294,30 @@ pub fn with_login_off(fx: &Fixture, default_cli: &Arc<FakeCli>, off: &'static st
 fn with_logins(fx: &Fixture, default_cli: &Arc<FakeCli>, broken: Option<&'static str>, off: Option<&'static str>) -> (RunService, Arc<FakeCli>) {
     let second_cli = Arc::new(FakeCli::new());
     second_cli.with(|s| s.config_dir = fx.dir.join("claude-config-2"));
-    let env = Arc::new(RunEnv::from_pairs([("PATH", "/usr/bin:/bin".to_owned())]));
+    let bin = install_fake_git(&fx.dir);
+    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]));
     let mut second = Toolchain::new(second_cli.clone(), env.clone());
     second.instance_id = "claude_2".into();
     second.instance_name = "Claude personal".into();
     let tools = TwoLogins { default: Toolchain::new(default_cli.clone(), env), second, broken, off };
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index-two")), Arc::new(|_| {})).with_home(fx.home.canonicalize().unwrap());
     (svc, second_cli)
+}
+
+/// A run working on `claude_2` as session `abc12345`, listed only by that login's `claude`, and a service over both logins that tracks it. With `off`, `claude_2` is turned off.
+pub async fn working_on_second_login(rig: &Rig, off: bool) -> (RunService, Arc<FakeCli>, Run) {
+    let (svc, second) = if off { with_login_off(&rig.fx, &rig.cli, "claude_2") } else { with_second_login(&rig.fx, &rig.cli) };
+    let queued = rig.queued(1).await;
+    let session = FakeCli::session("abc12345", &queued.expected_worktree);
+    let run = rig
+        .set(&queued, |r| {
+            r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+            r.state = RunState::Working;
+            r.short_id = ShortId::parse("abc12345");
+            r.session_id = session.session_id.clone();
+        })
+        .await;
+    second.with(|s| s.sessions.push(session));
+    svc.remember(&run);
+    (svc, second, run)
 }

@@ -260,8 +260,14 @@ fn size_within(dir: &Path, limit: Duration) -> u64 {
 }
 
 impl RunService {
-    pub(super) async fn toolchain(&self) -> Result<Toolchain> {
-        self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
+    /// To act on `run` (resume, answer, open Terminal to fix it): its login must be on.
+    pub(super) async fn acting_toolchain(&self, run: &Run) -> Result<Toolchain> {
+        self.toolchain_of(run).await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
+    }
+
+    /// To look at, stop or remove `run`: works while its login is off.
+    pub(super) async fn run_toolchain(&self, run: &Run) -> Result<Toolchain> {
+        self.observing_toolchain_of(run).await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
     }
 
     pub(super) fn stopped(run: &mut Run) {
@@ -296,7 +302,7 @@ impl RunService {
             }));
         }
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to stop."))?;
-        let tc = self.toolchain().await?;
+        let tc = self.run_toolchain(&run).await?;
         tc.cli.stop(&id).await?;
         self.core.asks().cancel(&run.id);
         Self::stopped(&mut run);
@@ -345,8 +351,8 @@ impl RunService {
     /// index is never touched.
     pub async fn stop_all(&self) -> Result<StopAll> {
         let _turn = self.launching.lock().await;
-        let tc = self.toolchain().await?;
         let mut tally = StopAll::default();
+        let mut toolchains: std::collections::HashMap<String, Option<Toolchain>> = Default::default();
         for entry in self.index.live() {
             // This account's run says what it is doing; another account's can only be stopped by its session id.
             let mine = self.core.run(&entry.run_id).await.ok().flatten();
@@ -361,6 +367,13 @@ impl RunService {
                 }
             }
             let Some(id) = entry.short_id else {
+                tally.failed += 1;
+                continue;
+            };
+            if !toolchains.contains_key(&entry.instance_id) {
+                toolchains.insert(entry.instance_id.clone(), self.tools.observe_instance(&entry.instance_id).await.ok());
+            }
+            let Some(tc) = &toolchains[&entry.instance_id] else {
                 tally.failed += 1;
                 continue;
             };
@@ -400,7 +413,7 @@ impl RunService {
     pub async fn attach(&self, run_id: &str) -> Result<()> {
         let run = self.load(run_id).await?;
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to open yet."))?;
-        let tc = self.toolchain().await?;
+        let tc = self.run_toolchain(&run).await?;
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_attach_file(&dir, tc.login.as_ref(), &claude, &run.expected_worktree, &id)?;
@@ -429,11 +442,11 @@ impl RunService {
         if run.state != RunState::Failed || !purpose.allows(run.failure.as_ref()) {
             return Err(refuse(purpose.refusal()));
         }
-        self.open_claude_in(&run.spec.clone_path, purpose).await
+        let tc = self.acting_toolchain(&run).await?;
+        self.open_claude_in(&tc, &run.spec.clone_path, purpose).await
     }
 
-    async fn open_claude_in(&self, folder: &Path, purpose: Purpose) -> Result<()> {
-        let tc = self.toolchain().await?;
+    async fn open_claude_in(&self, tc: &Toolchain, folder: &Path, purpose: Purpose) -> Result<()> {
         let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
         let file = write_claude_file(&dir, tc.login.as_ref(), purpose, &claude, folder, self.home.as_deref())?;
@@ -444,8 +457,8 @@ impl RunService {
     /// this much, as the count stops after three seconds. Only this run's folder is read.
     pub async fn disk(&self, run_id: &str) -> Result<u64> {
         let run = self.load(run_id).await?;
-        let id = run.short_id.ok_or_else(|| refuse("This run has no session yet."))?;
-        let tc = self.toolchain().await?;
+        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session yet."))?;
+        let tc = self.run_toolchain(&run).await?;
         let config = self.claude_config_dir(&tc).await.ok_or_else(|| Error::Claude("Couldn't find Claude's folder.".into()))?;
         let dir = config.join("jobs").join(id.as_str());
         tokio::task::spawn_blocking(move || size_within(&dir, DISK_LIMIT)).await.map_err(|e| Error::Claude(e.to_string()))

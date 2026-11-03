@@ -8,6 +8,8 @@ use chrono::Utc;
 use super::answer::checked;
 use super::cli::{is_uuid, AgentEntry};
 use super::service::{belongs_to, RunService};
+use super::toolchain::ToolchainError;
+use crate::model_choice::Reason;
 use crate::domain::{Actor, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
@@ -18,7 +20,8 @@ pub enum Delivery {
     Answered,
     /// The agent's session was woken with it.
     Resumed,
-    /// The agent is working; it gets the message at its next `ask` or when its turn ends.
+    /// The agent is working, or its login is off; it gets the message at its next `ask`, when its turn ends or when the
+    /// login is back on.
     Queued,
 }
 
@@ -51,6 +54,10 @@ impl RunService {
         view.paused_reason.is_some().then(|| format!("The workstream “{}” is paused; only the person resumes it.", view.title))
     }
 
+    async fn login_is_off(&self, run: &Run) -> bool {
+        matches!(self.toolchain_of(run).await, Err(ToolchainError::Unusable { reason: Reason::Off, .. }))
+    }
+
     /// Sends `text` to run `run_id` as `by`. Refused for a run that hasn't started, failed, waits at a permission prompt
     /// or for a sign-in, or has a session open in Terminal.
     pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
@@ -61,8 +68,14 @@ impl RunService {
         if let Some(why) = self.workstream_hold(&run).await.filter(|_| by == Actor::Pip && wakes) {
             return Err(refuse(why));
         }
+        let waits_for_login = !asking && matches!(run.state, RunState::NeedsAnswer | RunState::Done) && self.login_is_off(&run).await;
         match run.state {
             _ if asking => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
+            RunState::NeedsAnswer | RunState::Done if waits_for_login => {
+                self.core.queue_run_message(run_id, text).await?;
+                self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
+                Ok((run, Delivery::Queued))
+            }
             RunState::Queued | RunState::Launching => Err(refuse("It hasn't started working yet; message it once it is working.")),
             RunState::Failed => Err(refuse("It failed, so there is nothing to message.")),
             RunState::Unknown => Err(refuse("Gossamr can't find its session right now.")),
@@ -98,7 +111,7 @@ impl RunService {
                 return Err(refuse(NO_SLOT));
             }
         }
-        let tc = self.toolchain().await?;
+        let tc = self.acting_toolchain(&run).await?;
         let listed = tc.cli.agents(true).await?;
         let attached = |e: &AgentEntry| match e.state.as_deref() {
             Some("stopped") => false,
@@ -132,7 +145,7 @@ impl RunService {
     async fn another_pass(&self, run: &mut Run, message: &str) -> Result<Option<String>> {
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to resume."))?;
         let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to resume."))?;
-        let tc = self.toolchain().await?;
+        let tc = self.acting_toolchain(run).await?;
         if let Some(why) = self.wake_from(&tc, run, &id, &session, message, true, &["stopped", "done"]).await {
             return Ok(Some(why));
         }
@@ -184,7 +197,7 @@ impl RunService {
                 continue;
             };
             let ready = match run.state {
-                RunState::Done | RunState::NeedsAnswer => self.workstream_hold(&run).await.is_none(),
+                RunState::Done | RunState::NeedsAnswer => self.workstream_hold(&run).await.is_none() && !self.login_is_off(&run).await,
                 RunState::Failed => true,
                 RunState::Stopped => run.unsent_answer.is_none(),
                 _ => false,

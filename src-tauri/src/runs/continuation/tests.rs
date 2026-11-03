@@ -333,3 +333,21 @@ async fn a_launch_waiting_on_another_login_does_not_unsettle_this_logins_adoptio
     let (_, launch_pending) = rig.svc.taken_ids(run.instance_id()).await.unwrap();
     assert!(!launch_pending);
 }
+
+#[tokio::test]
+async fn a_run_on_the_second_login_can_carry_on_in_a_session_that_login_lists() {
+    let rig = ready().await;
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, false).await;
+    let run = rig.set(&run, |r| r.state = RunState::Stopped).await;
+    second.with(|s| {
+        s.sessions[0].state = Some("stopped".into());
+        s.sessions[0].pid = None;
+        let mut next = FakeCli::session("0c0ffee1", &run.expected_worktree);
+        next.name = Some(title_of(&run));
+        next.started_at = Some((Utc::now() + Span::minutes(1)).timestamp_millis());
+        s.sessions.push(next);
+    });
+
+    let adopted = svc.adopt_session(&run.id, "0c0ffee1").await.unwrap();
+    assert_eq!(adopted.short_id.as_ref().map(|s| s.as_str()), Some("0c0ffee1"));
+}

@@ -83,7 +83,7 @@ impl RunService {
         }
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to answer."))?;
         let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to answer."))?;
-        let tc = self.toolchain().await?;
+        let tc = self.acting_toolchain(&run).await?;
 
         if !again {
             let listed = tc.cli.agents(true).await?;

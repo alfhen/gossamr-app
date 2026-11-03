@@ -6,7 +6,6 @@ use serde::Serialize;
 
 use super::archive::contained;
 use super::cli::{CliError, ShortId};
-use super::failure::Failure;
 use super::fresh::{agents_root, is_work_path, real};
 use super::repo::Git;
 use super::service::{belongs_to, RunService};
@@ -160,7 +159,7 @@ impl RunService {
             }
             return self.settle_cleanup(&run, worktree_pending, leftovers, None, true).await;
         }
-        let tc = self.tools.get().await.map_err(|e| Error::Claude(Failure::from(e).to_string()))?;
+        let tc = self.run_toolchain(&run).await?;
         let live = self.live_sessions(&tc, &run).await;
         for session in &live {
             tc.cli.stop(session).await?;

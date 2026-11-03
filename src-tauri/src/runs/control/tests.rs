@@ -814,3 +814,51 @@ async fn opening_a_providers_sign_in_writes_its_script_and_opens_it_in_terminal(
     assert!(rig.svc.open_provider_signin("github").await.is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn stopping_a_run_on_the_second_login_calls_only_that_logins_claude() {
+    let rig = ready().await;
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, false).await;
+
+    let stopped = svc.stop_as(&run.id, Actor::Person).await.unwrap();
+    assert_eq!(stopped.state, RunState::Stopped);
+    assert_eq!(second.0.lock().unwrap().stops, ["abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty());
+}
+
+#[tokio::test]
+async fn a_run_on_a_login_that_is_off_can_still_be_stopped() {
+    let rig = ready().await;
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, true).await;
+
+    assert_eq!(svc.stop_as(&run.id, Actor::Person).await.unwrap().state, RunState::Stopped);
+    assert_eq!(second.0.lock().unwrap().stops, ["abc12345"]);
+}
+
+#[tokio::test]
+async fn stop_all_stops_each_run_through_its_own_logins_claude() {
+    let rig = ready().await;
+    let (svc, second, _) = crate::runs::rig::working_on_second_login(&rig, false).await;
+    let first = rig.launched(2).await;
+    rig.poll().await;
+    let first = rig.get(&first).await;
+    assert_eq!(first.state, RunState::Working);
+    svc.remember(&first);
+    rig.cli.with(|s| s.sessions.push(FakeCli::session("abc12345", std::path::Path::new("/elsewhere"))));
+
+    let tally = svc.stop_all().await.unwrap();
+    assert_eq!((tally.stopped, tally.failed), (2, 0));
+    assert_eq!(second.0.lock().unwrap().stops, ["abc12345"]);
+    assert_eq!(rig.cli.0.lock().unwrap().stops, [first.short_id.unwrap().to_string()]);
+}
+
+#[tokio::test]
+async fn the_disk_of_a_run_on_the_second_login_is_read_from_that_logins_folder() {
+    let rig = ready().await;
+    let (svc, _, run) = crate::runs::rig::working_on_second_login(&rig, false).await;
+    let jobs = rig.fx.dir.join("claude-config-2/jobs/abc12345");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::write(jobs.join("big"), vec![0u8; 4096]).unwrap();
+
+    assert!(svc.disk(&run.id).await.unwrap() >= 4096);
+}

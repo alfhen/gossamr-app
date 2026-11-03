@@ -9,6 +9,7 @@ use super::failure::Failure;
 use super::fresh::{remote_default_branch, work_path};
 use super::launcher::RunLauncher;
 use super::message::Delivery;
+use super::toolchain::ToolchainError;
 use super::repo::{existing_names, new_name, origin_matches};
 use super::service::RunService;
 use crate::agent::AgentDriver;
@@ -35,9 +36,12 @@ impl AgentDriver for RunService {
     }
 
     async fn unready(&self) -> Option<String> {
-        let tc = match self.toolchain().await {
+        let (choice, _) = self.core.agents_target(None).ok()?;
+        let tc = match self.tools.for_instance(&choice.instance_id).await {
             Ok(tc) => tc,
-            Err(e) => return Some(e.to_string()),
+            // The run waits for its login instead.
+            Err(ToolchainError::Unusable { .. } | ToolchainError::BadFolder { .. } | ToolchainError::UnknownInstance(_)) => return None,
+            Err(e) => return Some(Failure::from(e).to_string()),
         };
         match tc.cli.auth_status().await {
             Ok(auth) if !auth.logged_in => Some(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() }.to_string()),

@@ -310,3 +310,38 @@ async fn pip_cannot_wake_an_agent_in_a_paused_workstream_of_the_second_account()
     let why = rig.svc.message_agent(&queued.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
     assert!(why.contains("is paused; only the person resumes it"), "{why}");
 }
+
+#[tokio::test]
+async fn a_message_to_a_finished_run_on_the_second_login_resumes_it_through_that_logins_claude_only() {
+    let rig = ready().await;
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, false).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("done".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::Done).await;
+
+    let (_, delivery) = svc.message_agent(&run.id, "One more thing.", Actor::Pip).await.unwrap();
+    assert_eq!(delivery, Delivery::Resumed);
+    assert_eq!(second.0.lock().unwrap().calls, ["resume:abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn a_message_to_a_run_on_a_login_that_is_off_waits_and_is_sent_once_the_login_is_back_on() {
+    let rig = ready().await;
+    let (off, second, run) = crate::runs::rig::working_on_second_login(&rig, true).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("done".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::Done).await;
+
+    let (_, delivery) = off.message_agent(&run.id, "One more thing.", Actor::Pip).await.unwrap();
+    assert_eq!(delivery, Delivery::Queued);
+    off.deliver_queued().await;
+    assert!(second.0.lock().unwrap().calls.is_empty(), "nothing is sent while the login is off");
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("One more thing."), "the message is kept");
+}

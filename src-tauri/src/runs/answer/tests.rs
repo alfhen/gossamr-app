@@ -210,3 +210,20 @@ async fn a_session_that_never_shows_as_stopped_is_not_woken() {
     let after = rig.get(&run).await;
     assert_eq!((after.state, after.unsent_answer.as_deref()), (RunState::Stopped, Some("Yes")));
 }
+
+#[tokio::test]
+async fn an_answer_to_a_run_on_the_second_login_stops_and_wakes_it_through_that_logins_claude_only() {
+    let rig = ready().await;
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, false).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("blocked".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
+
+    let answered = svc.answer(&run.id, "Use staging.").await.unwrap();
+    assert_eq!(answered.state, RunState::Working);
+    assert_eq!(second.0.lock().unwrap().calls, ["stop:abc12345", "resume:abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().calls.is_empty());
+}
