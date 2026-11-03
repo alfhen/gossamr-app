@@ -474,23 +474,37 @@ mod watching {
 
     #[tokio::test]
     async fn recovery_adopts_a_launching_codex_run_whose_turn_finished_while_the_app_was_closed_and_keeps_its_answer() {
-        let rig = Rig::new("recover", "answer=The cart is fixed.\n");
-        let launched = rig.backend.launch(&rig.request(Some(offer()))).await.unwrap();
-        exited(&rig).await;
-        let restarted = another_backend(&rig);
+        let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+        let root = runs_root(&fx.core.data_dir());
+        let codex = Rig::new("recover", "answer=The cart is fixed.\n");
+        let backend = CodexBackend::new(codex.backend.binary().unwrap(), codex.backend.login_env.clone(), codex.backend.git_env.clone(), root.clone(), "Codex".into(), false);
+        let rig = crate::runs::rig::ready_on(fx, crate::runs::rig::backed_by(Arc::new(backend))).await;
 
-        let mut lost = run(RunState::Launching);
-        lost.short_id = None;
-        lost.session_id = None;
-        let found = restarted.find(&lost, &Folders::default()).await.unwrap().expect("a finished turn is adopted");
-        assert_eq!((found.short_id.as_str(), found.session_id.as_deref()), ("0a1b2c3d", Some(THREAD)));
+        let queued = rig.queued(1).await;
+        let launched = codex.backend.launch(&LaunchRequest { run_id: queued.id.clone(), ..codex.request(Some(offer())) }).await.unwrap();
+        let made = codex.dir.join("agents").join("runs").join(&queued.id);
+        until("the fake to exit", || made.join("exit-1").exists()).await;
         assert!(!alive(launched.process.as_ref().unwrap()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::rename(&made, root.join(&queued.id)).unwrap();
+        rig.set(&queued, |r| {
+            r.state = RunState::Launching;
+            r.launched_at = Some(chrono::Utc::now());
+        })
+        .await;
 
-        let mut adopted = run(RunState::Launching);
-        adopted.process = found.process;
-        let seen = look(&restarted, adopted, None).await.unwrap();
-        assert_eq!((seen.seen.state, seen.answer.as_deref()), (RunState::Done, Some("The cart is fixed.")));
-        assert!(rig.folder().join("final.txt").is_file());
+        rig.svc.recover().await;
+        let adopted = rig.get(&queued).await;
+        assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str), adopted.session_id.as_deref()), (RunState::Launching, Some("0a1b2c3d"), Some(THREAD)));
+
+        rig.svc.sweep_agent_files().await;
+        assert!(root.join(&queued.id).join("final.txt").is_file(), "the sweep keeps the folder of a run that is not over");
+
+        rig.poll().await;
+        let done = rig.get(&queued).await;
+        assert_eq!((done.state, done.result.as_deref()), (RunState::Done, Some("The cart is fixed.")));
+        rig.svc.sweep_agent_files().await;
+        assert!(root.join(&queued.id).join("final.txt").is_file(), "the sweep keeps the folder of a run that just finished");
     }
 
     #[tokio::test]
@@ -673,8 +687,14 @@ mod watching {
     #[test]
     fn only_a_codex_process_that_names_the_thread_counts_as_the_terminal() {
         let listing = format!(
-            "  101 /usr/local/bin/codex resume {THREAD}\n  102 node /opt/codex/bin/codex.js resume {THREAD}\n  103 vim {THREAD}\n  104 /usr/local/bin/codex resume other\n  105 /usr/local/bin/codex resume {THREAD}x\n"
+            "  101 101 /usr/local/bin/codex resume {THREAD}\n  102 102 node /opt/codex/bin/codex.js resume {THREAD}\n  103 103 vim {THREAD}\n  104 104 /usr/local/bin/codex resume other\n  105 105 /usr/local/bin/codex resume {THREAD}x\n"
         );
-        assert_eq!(super::super::observe::processes_on(&listing, THREAD), vec![101, 102]);
+        assert_eq!(super::super::observe::processes_on(&listing, THREAD, None), vec![101, 102]);
+    }
+
+    #[test]
+    fn a_process_in_the_run_s_own_group_is_not_the_terminal() {
+        let listing = format!("  200 200 node /opt/codex/bin/codex.js exec resume {THREAD}\n  201 200 /opt/codex/vendor/codex/codex exec resume {THREAD}\n  300 300 /usr/local/bin/codex resume {THREAD}\n");
+        assert_eq!(super::super::observe::processes_on(&listing, THREAD, Some(200)), vec![300]);
     }
 }

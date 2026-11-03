@@ -1,11 +1,10 @@
 //! Reading the JSON lines `codex exec --json` prints: the thread, how the turn ended, tokens and what it is doing.
 
-use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use serde_json::Value;
 
+use super::read_file;
 use crate::runs::cli::TimelineLine;
 use crate::runs::result::cut;
 
@@ -34,22 +33,6 @@ pub struct Events {
     pub last_message: Option<String>,
     /// A command failed because the sandbox kept git from writing.
     pub git_blocked: bool,
-}
-
-/// At most `max` bytes of a regular file, from the end when `keep_end`. A symlink is not followed.
-pub fn read_file(path: &Path, max: u64, keep_end: bool) -> Option<String> {
-    let mut file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() {
-        return None;
-    }
-    let len = meta.len();
-    if keep_end && len > max {
-        file.seek(SeekFrom::Start(len - max)).ok()?;
-    }
-    let mut buf = Vec::new();
-    file.take(max).read_to_end(&mut buf).ok()?;
-    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// The events of one turn, from the end of its file.

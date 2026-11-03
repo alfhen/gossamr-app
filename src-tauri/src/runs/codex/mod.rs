@@ -5,6 +5,8 @@ mod launch;
 mod observe;
 pub mod process;
 
+use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +42,44 @@ pub fn runs_root(data_dir: &Path) -> PathBuf {
 /// The folder of one run, none for an id that isn't a plain run id.
 pub fn run_folder(root: &Path, run_id: &str) -> Option<PathBuf> {
     plain_id(run_id).then(|| root.join(run_id))
+}
+
+pub(super) const FINAL_FILE: &str = "final.txt";
+pub(super) const SHORT_ID_FILE: &str = "short-id";
+pub(super) const TERMINAL_FILE: &str = "terminal";
+pub(super) const TERMINAL_SEEN_FILE: &str = "terminal-seen";
+
+pub(super) fn events_file(folder: &Path, turn: u32) -> PathBuf {
+    folder.join(format!("events-{turn}.jsonl"))
+}
+
+pub(super) fn process_file(folder: &Path, turn: u32) -> PathBuf {
+    folder.join(format!("process-{turn}.json"))
+}
+
+pub(super) fn asked_file(folder: &Path, turn: u32) -> PathBuf {
+    folder.join(format!("asked-{turn}"))
+}
+
+/// Creates a file only this user can read, failing when it exists.
+pub(super) fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+}
+
+/// At most `max` bytes of a regular file, from the end when `keep_end`. A symlink is not followed.
+pub(super) fn read_file(path: &Path, max: u64, keep_end: bool) -> Option<String> {
+    let mut file = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let len = meta.len();
+    if keep_end && len > max {
+        file.seek(SeekFrom::Start(len - max)).ok()?;
+    }
+    let mut buf = Vec::new();
+    file.take(max).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// The runs that have a folder under `root`.

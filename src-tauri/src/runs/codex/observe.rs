@@ -1,7 +1,6 @@
 //! What a Codex run is doing, from its run folder, its process and the processes the person has open.
 
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -9,7 +8,7 @@ use chrono::{DateTime, Utc};
 
 use super::events::{self, Events, Outcome};
 use super::process::alive;
-use super::{run_folder, CodexBackend};
+use super::{asked_file, create_private, events_file, process_file, read_file, run_folder, CodexBackend, FINAL_FILE, SHORT_ID_FILE, TERMINAL_FILE, TERMINAL_SEEN_FILE};
 use crate::domain::{Run, RunProcess, RunState};
 use crate::runs::backend::{Observation, Observations, Session, Watched};
 use crate::runs::redact::redact;
@@ -36,17 +35,9 @@ pub(super) fn newest_turn(folder: &Path) -> Option<u32> {
     std::fs::read_dir(folder).ok()?.filter_map(|e| turn_of(e.ok()?.file_name().to_str()?, "events-", ".jsonl")).max()
 }
 
-fn events_file(folder: &Path, turn: u32) -> PathBuf {
-    folder.join(format!("events-{turn}.jsonl"))
-}
-
-fn asked_file(folder: &Path, turn: u32) -> PathBuf {
-    folder.join(format!("asked-{turn}"))
-}
-
 /// The process the launch or a resume recorded for `turn`.
 pub(super) fn recorded_process(folder: &Path, turn: u32) -> Option<RunProcess> {
-    let text = events::read_file(&folder.join(format!("process-{turn}.json")), PROCESS_FILE_MAX, false)?;
+    let text = read_file(&process_file(folder, turn), PROCESS_FILE_MAX, false)?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     Some(RunProcess { pid: u32::try_from(value["pid"].as_u64()?).ok()?, started: value["started"].as_u64()? })
 }
@@ -55,17 +46,13 @@ fn marked(folder: &Path, name: &str) -> bool {
     folder.join(name).symlink_metadata().is_ok()
 }
 
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
-}
-
 /// The question a turn waited with, none for a file that is missing, empty, over 64 KB or a symlink.
 pub(super) fn asked(folder: &Path, turn: u32) -> Option<String> {
     let path = asked_file(folder, turn);
     if path.symlink_metadata().ok()?.len() > ASKED_MAX {
         return None;
     }
-    let text = events::read_file(&path, ASKED_MAX, false)?;
+    let text = read_file(&path, ASKED_MAX, false)?;
     Some(text.trim().to_owned()).filter(|t| !t.is_empty())
 }
 
@@ -82,13 +69,17 @@ fn remember_ask(folder: &Path, turn: u32, question: &str) {
     }
 }
 
-/// The `codex` processes that have `thread` among their arguments, from `ps` output: their pids.
-pub(super) fn processes_on(listing: &str, thread: &str) -> Vec<u32> {
+/// The `codex` processes that have `thread` among their arguments, from `ps` output (`pid pgid args`): their pids.
+/// Whatever runs in the group `own_group` is the run's own, such as the native binary an npm launcher starts.
+pub(super) fn processes_on(listing: &str, thread: &str, own_group: Option<u32>) -> Vec<u32> {
     listing
         .lines()
         .filter_map(|line| {
-            let line = line.trim_start();
-            let (pid, args) = line.split_once(char::is_whitespace)?;
+            let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+            let (group, args) = rest.trim_start().split_once(char::is_whitespace)?;
+            if own_group.is_some() && group.parse().ok() == own_group {
+                return None;
+            }
             let words: Vec<&str> = args.split_whitespace().collect();
             let runs_codex = words.iter().take(2).any(|w| w.rsplit('/').next().is_some_and(|name| name.contains("codex")));
             (runs_codex && words.contains(&thread)).then(|| pid.parse().ok()).flatten()
@@ -97,7 +88,7 @@ pub(super) fn processes_on(listing: &str, thread: &str) -> Vec<u32> {
 }
 
 async fn process_listing() -> String {
-    let run = tokio::process::Command::new("ps").args(["-axo", "pid=,args="]).kill_on_drop(true).output();
+    let run = tokio::process::Command::new("ps").args(["-axo", "pid=,pgid=,args="]).kill_on_drop(true).output();
     match tokio::time::timeout(PS_WAIT, run).await {
         Ok(Ok(out)) => String::from_utf8_lossy(&out.stdout).into_owned(),
         _ => String::new(),
@@ -110,7 +101,7 @@ fn seen(state: RunState) -> Observed {
 
 /// The answer of the newest turn: the `-o` file, else the last message the agent printed.
 fn answer_in(folder: &Path, events: &Events) -> Option<String> {
-    let from_file = events::read_file(&folder.join("final.txt"), ANSWER_MAX, false).map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+    let from_file = read_file(&folder.join(FINAL_FILE), ANSWER_MAX, false).map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     from_file.or_else(|| events.last_message.clone())
 }
 
@@ -173,14 +164,14 @@ impl CodexBackend {
         let look = Look { run, folder, turn, events, process };
         let at_rest = matches!(run.state, RunState::Done | RunState::Stopped);
         let own_alive = look.process.as_ref().is_some_and(alive);
-        let terminal = marked(&look.folder, "terminal");
+        let terminal = marked(&look.folder, TERMINAL_FILE);
 
         let thread = run.session_id.clone().or_else(|| look.events.thread.clone());
-        let own_pid = look.process.as_ref().map(|p| p.pid);
-        let in_terminal = thread.as_deref().is_some_and(|t| processes_on(listing, t).into_iter().any(|pid| Some(pid) != own_pid));
+        let own_group = look.process.as_ref().map(|p| p.pid);
+        let in_terminal = thread.as_deref().is_some_and(|t| !processes_on(listing, t, own_group).is_empty());
         if in_terminal {
-            if terminal && !marked(&look.folder, "terminal-seen") {
-                let _ = create_private(&look.folder.join("terminal-seen"));
+            if terminal && !marked(&look.folder, TERMINAL_SEEN_FILE) {
+                let _ = create_private(&look.folder.join(TERMINAL_SEEN_FILE));
             }
             return Some(look.working(at_rest, Some(OPEN_IN_TERMINAL)));
         }
@@ -193,7 +184,7 @@ impl CodexBackend {
                 None => look.working(at_rest, None),
             });
         }
-        if terminal && marked(&look.folder, "terminal-seen") {
+        if terminal && marked(&look.folder, TERMINAL_SEEN_FILE) {
             return (run.state != RunState::Done).then(|| look.observation(seen(RunState::Done), Some(CARRIED_ON.to_owned()), false));
         }
         if at_rest {
@@ -223,7 +214,7 @@ impl CodexBackend {
     pub(super) fn find_run(&self, run: &Run) -> Option<Session> {
         let folder = run_folder(&self.runs_root, &run.id)?;
         let turn = newest_turn(&folder)?;
-        let short_id = run.short_id.clone().or_else(|| crate::runs::cli::ShortId::parse(events::read_file(&folder.join("short-id"), 16, false)?.trim()))?;
+        let short_id = run.short_id.clone().or_else(|| crate::runs::cli::ShortId::parse(read_file(&folder.join(SHORT_ID_FILE), 16, false)?.trim()))?;
         let events = events::read(&events_file(&folder, turn));
         let process = recorded_process(&folder, turn);
         let running = process.as_ref().is_some_and(alive);
