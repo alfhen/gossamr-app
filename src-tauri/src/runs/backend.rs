@@ -10,7 +10,7 @@ use super::failure::Failure;
 use super::index;
 use super::state::Observed;
 use super::trust::Refusal;
-use crate::domain::{RefusedMode, Run};
+use crate::domain::{RefusedMode, Run, RunProcess};
 use crate::error::Error;
 
 pub mod claude;
@@ -35,14 +35,6 @@ impl Purpose {
     }
 }
 
-/// A running turn of an agent that Gossamr started itself, and so has to find again by its pid.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunProcess {
-    pub pid: u32,
-    /// The process start time in seconds, to tell a reused pid from the original.
-    pub started: u64,
-}
-
 /// A run's session as a backend sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
@@ -54,12 +46,12 @@ pub struct Session {
 impl Session {
     /// None until the run has a short id.
     pub fn of(run: &Run) -> Option<Self> {
-        Some(Self { short_id: run.short_id.clone()?, session_id: run.session_id.clone(), process: None })
+        Some(Self { short_id: run.short_id.clone()?, session_id: run.session_id.clone(), process: run.process.clone() })
     }
 
     /// None while the entry has no short id.
     pub fn of_entry(entry: &index::Entry) -> Option<Self> {
-        Some(Self { short_id: entry.short_id.clone()?, session_id: None, process: None })
+        Some(Self { short_id: entry.short_id.clone()?, session_id: None, process: entry.process.clone() })
     }
 }
 

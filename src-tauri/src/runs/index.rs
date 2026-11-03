@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use super::cli::ShortId;
+use crate::domain::RunProcess;
 use crate::error::Result;
 
 const FILE: &str = "run-index.json";
@@ -26,6 +27,8 @@ pub struct Entry {
     /// The Claude login the run belongs to. An entry written before runs named one reads as the default.
     #[serde(default = "default_instance")]
     pub instance_id: String,
+    #[serde(default)]
+    pub process: Option<RunProcess>,
 }
 
 fn default_instance() -> String {
@@ -137,6 +140,7 @@ mod tests {
             short_id: short.and_then(ShortId::parse),
             terminal: false,
             instance_id: "claude".into(),
+            process: None,
         }
     }
 
@@ -188,7 +192,7 @@ mod tests {
         let d = dir("old-entries");
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("run-index.json"), r#"[{"dbFile":"inbox-a.sqlite","runId":"r","expectedWorktree":"/x"}]"#).unwrap();
-        assert_eq!(RunIndex::load(&d).live(), vec![Entry { run_id: "r".into(), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into() }]);
+        assert_eq!(RunIndex::load(&d).live(), vec![Entry { run_id: "r".into(), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into(), process: None }]);
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -225,5 +229,18 @@ mod tests {
         let index = RunIndex::load(&d);
         assert_eq!(index.live().iter().map(|e| e.instance_id.as_str()).collect::<Vec<_>>(), ["claude", "claude_2"]);
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn an_entry_keeps_its_process_through_the_file_and_reads_as_none_without_one() {
+        let d = dir("process");
+        let index = RunIndex::load(&d);
+        let with = Entry { process: Some(RunProcess { pid: 77, started: 1_700_000_000 }), ..entry("r", Some("0123abcd")) };
+        index.record(with.clone()).unwrap();
+        assert_eq!(RunIndex::load(&d).live(), vec![with]);
+        let old = r#"[{"dbFile":"app.sqlite","runId":"r","expectedWorktree":"/x"}]"#;
+        std::fs::write(d.join(FILE), old).unwrap();
+        assert_eq!(RunIndex::load(&d).live()[0].process, None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

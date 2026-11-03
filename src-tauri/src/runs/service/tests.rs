@@ -222,7 +222,7 @@ async fn two_launches_never_overlap_in_the_cli() {
 async fn the_cap_counts_runs_of_other_accounts_through_the_index() {
     let rig = build(None, |s| s.with_cap(2)).await;
     for n in 0..2 {
-        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into() };
+        let other = Entry { run_id: format!("other-{n}"), expected_worktree: "/x".into(), short_id: None, terminal: false, instance_id: "claude".into(), process: None };
         rig.svc.index.record(other).unwrap();
     }
     let run = rig.queued(1).await;
@@ -429,11 +429,11 @@ async fn rig_with(f: impl FnOnce(&FakeCli)) -> Rig {
 
 #[tokio::test]
 async fn no_claude_and_no_shell_environment_fail_the_run_and_nothing_starts() {
-    let rig = build(Some(ToolchainError::ClaudeMissing { instance: "Claude".into() }), |s| s).await;
+    let rig = build(Some(ToolchainError::ClaudeMissing { instance: "Claude".into(), driver: crate::connections::Driver::Claude }), |s| s).await;
     let run = rig.queued(1).await;
     rig.svc.launch(&run.id).await.unwrap();
     let after = rig.get(&run).await;
-    assert_eq!((after.state, after.error.unwrap()), (RunState::Failed, Failure::ClaudeMissing { instance: "Claude".into() }.to_string()));
+    assert_eq!((after.state, after.error.unwrap()), (RunState::Failed, Failure::ClaudeMissing { instance: "Claude".into(), driver: crate::connections::Driver::Claude }.to_string()));
     assert_eq!(after.failure, Some(RunFailure::ClaudeMissing));
 
     let why = "Couldn't read your shell environment: your shell took too long to start.";

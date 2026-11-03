@@ -201,6 +201,17 @@ async fn a_session_open_in_terminal_is_never_stopped_for_a_message() {
 }
 
 #[tokio::test]
+async fn a_message_resume_that_starts_a_copy_leaves_a_finished_run_out_of_the_live_index() {
+    let (rig, run, _) = working().await;
+    ends_turn(&rig, &run, "done");
+    rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+    rig.svc.index.mark_terminal(&run.id).unwrap();
+    rig.cli.with(|s| s.resume = Resume::Copies);
+    assert!(rig.svc.message_agent(&run.id, "More please.", Actor::Person).await.is_err());
+    assert!(rig.svc.index.live().iter().all(|e| e.run_id != run.id));
+}
+
+#[tokio::test]
 async fn a_resume_that_fails_leaves_the_agent_as_it_was_and_tells_pip_why() {
     let (rig, run, _) = working().await;
     ends_turn(&rig, &run, "done");

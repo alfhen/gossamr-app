@@ -438,6 +438,7 @@ impl RunService {
         if let Some(session) = &obs.session {
             run.short_id = run.short_id.take().or_else(|| Some(session.short_id.clone()));
             run.session_id = run.session_id.take().or_else(|| session.session_id.clone());
+            run.process = session.process.clone();
         }
         run.last_progress_at = obs.progress_at.unwrap_or(run.last_progress_at);
         run.tokens = obs.tokens.or(run.tokens);
@@ -498,7 +499,7 @@ impl RunService {
         if run.state == RunState::Done && before.state != RunState::Done && run.spec.workstream.is_some() {
             self.core.request_code_sync();
         }
-        if run.short_id != before.short_id || reopened {
+        if run.short_id != before.short_id || run.process != before.process || reopened {
             self.remember(&run);
         }
         if ended {

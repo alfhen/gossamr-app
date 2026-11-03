@@ -7,12 +7,13 @@ use super::backend::BackendError;
 use super::cli::CliError;
 use super::fresh::{tilde, CloneError};
 use super::toolchain::ToolchainError;
+use crate::connections::Driver;
 use crate::domain::{RefusedMode, RunFailure};
 use crate::model_choice::{Reason, Use};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
-    ClaudeMissing { instance: String },
+    ClaudeMissing { instance: String, driver: Driver },
     TooOld,
     /// `own_folder`: the instance has a folder, so a `claude` in the person's own Terminal would sign in to another login.
     NotSignedIn { instance: String, own_folder: bool },
@@ -37,7 +38,8 @@ pub enum Failure {
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Failure::ClaudeMissing { instance } => write!(f, "Claude Code isn't installed, or Gossamr can't find it for {instance}."),
+            Failure::ClaudeMissing { instance, driver: Driver::Claude } => write!(f, "Claude Code isn't installed, or Gossamr can't find it for {instance}."),
+            Failure::ClaudeMissing { driver: Driver::Codex, .. } => write!(f, "`codex` isn't installed, or Gossamr can't find it for Codex work."),
             Failure::TooOld => write!(f, "Your Claude Code is too old to run background agents. Update it, then retry."),
             Failure::NotSignedIn { instance, own_folder: false } => write!(f, "{instance} isn't signed in. Run `claude` in Terminal and sign in, then retry."),
             Failure::NotSignedIn { instance, own_folder: true } => write!(f, "{instance} isn't signed in. Sign in with Gossamr's Open Terminal button, not your own terminal, which would use another login. Then retry."),
@@ -70,7 +72,7 @@ impl fmt::Display for Failure {
 impl From<ToolchainError> for Failure {
     fn from(e: ToolchainError) -> Self {
         match e {
-            ToolchainError::ClaudeMissing { instance } => Failure::ClaudeMissing { instance },
+            ToolchainError::ClaudeMissing { instance, driver } => Failure::ClaudeMissing { instance, driver },
             ToolchainError::NoEnvironment(why) | ToolchainError::ConfigUnreadable(why) => Failure::NoEnvironment(why),
             ToolchainError::Unusable { reason, name } => Failure::NoEnvironment(reason.words(Use::Agents, &name)),
             ToolchainError::BadFolder { name, problem } => Failure::NoEnvironment(format!("{name}: {problem}")),
@@ -97,9 +99,9 @@ impl From<&Failure> for RunFailure {
 
 impl Failure {
     /// What a failed look at the program's sessions means.
-    pub fn from_backend(e: BackendError, instance: &str) -> Self {
+    pub fn from_backend(e: BackendError, instance: &str, driver: Driver) -> Self {
         match e {
-            BackendError::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
+            BackendError::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into(), driver },
             BackendError::Failed { stderr, .. } => Failure::CommandFailed(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message").to_owned()),
             other => Failure::CommandFailed(other.to_string()),
         }
@@ -111,7 +113,7 @@ impl Failure {
             return Failure::NeedsTrust { folder: folder.to_path_buf(), instance: instance.into(), own_folder };
         }
         match e {
-            CliError::Spawn(io) if io.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
+            CliError::Spawn(io) if io.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into(), driver: Driver::Claude },
             CliError::Unparseable { stdout } => Failure::Unparseable(stdout),
             CliError::Failed { stderr, .. } => {
                 let line = stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message");
@@ -143,9 +145,22 @@ mod tests {
         assert_eq!(Failure::from_cli(failed(&format!("Starting background service\n{bypass}\n")), folder, "Claude", false), Failure::ModeRefused { mode: RefusedMode::Bypass, message: bypass.into() });
         assert_eq!(Failure::from_cli(failed(auto), folder, "Claude", false).to_string(), auto, "Claude's own words, nothing added");
         let missing = CliError::Spawn(std::io::Error::from(std::io::ErrorKind::NotFound));
-        assert_eq!(Failure::from_cli(missing, folder, "Claude", false), Failure::ClaudeMissing { instance: "Claude".into() });
+        assert_eq!(Failure::from_cli(missing, folder, "Claude", false), Failure::ClaudeMissing { instance: "Claude".into(), driver: Driver::Claude });
         assert!(Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false }.to_string().contains("/Users/me/Code/webshop"));
         assert_eq!(Failure::Interrupted.to_string(), "Launch was interrupted");
+    }
+
+    #[test]
+    fn a_missing_binary_names_the_driver_it_was_looked_for() {
+        let missing = || BackendError::Spawn { program: "codex", source: std::io::Error::from(std::io::ErrorKind::NotFound) };
+        let codex = Failure::from_backend(missing(), "Codex", Driver::Codex);
+        assert_eq!(codex, Failure::ClaudeMissing { instance: "Codex".into(), driver: Driver::Codex });
+        assert_eq!(codex.to_string(), "`codex` isn't installed, or Gossamr can't find it for Codex work.");
+        assert_eq!(RunFailure::from(&codex), RunFailure::ClaudeMissing);
+        let claude = Failure::from_backend(missing(), "Claude", Driver::Claude);
+        assert_eq!(claude.to_string(), "Claude Code isn't installed, or Gossamr can't find it for Claude.");
+        let from_toolchain = Failure::from(ToolchainError::ClaudeMissing { instance: "Codex".into(), driver: Driver::Codex });
+        assert_eq!(from_toolchain, codex);
     }
 
     #[test]
@@ -153,7 +168,7 @@ mod tests {
         let folder = std::path::Path::new("/Users/me/My Code/web shop");
         let named = [
             (Failure::NotSignedIn { instance: "Claude personal".into(), own_folder: false }, RunFailure::NotSignedIn),
-            (Failure::ClaudeMissing { instance: "Claude personal".into() }, RunFailure::ClaudeMissing),
+            (Failure::ClaudeMissing { instance: "Claude personal".into(), driver: Driver::Claude }, RunFailure::ClaudeMissing),
             (Failure::NeedsTrust { folder: folder.into(), instance: "Claude personal".into(), own_folder: false }, RunFailure::UntrustedFolder { path: folder.into() }),
         ];
         for (why, kind) in named {
@@ -191,7 +206,7 @@ mod tests {
 
     fn every_failure(folder: &std::path::Path) -> Vec<(Failure, RunFailure)> {
         vec![
-            (Failure::ClaudeMissing { instance: "Claude".into() }, RunFailure::ClaudeMissing),
+            (Failure::ClaudeMissing { instance: "Claude".into(), driver: Driver::Claude }, RunFailure::ClaudeMissing),
             (Failure::TooOld, RunFailure::Other),
             (Failure::NotSignedIn { instance: "Claude".into(), own_folder: false }, RunFailure::NotSignedIn),
             (Failure::NoEnvironment("Couldn't read your shell environment.".into()), RunFailure::Other),

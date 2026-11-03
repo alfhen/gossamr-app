@@ -45,7 +45,7 @@ impl AgentDriver for RunService {
         };
         match tc.backend.signed_in().await {
             Ok(false) => Some(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() }.to_string()),
-            Err(BackendError::Spawn { source: e, .. }) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing { instance: tc.instance_name.clone() }.to_string()),
+            Err(BackendError::Spawn { source: e, .. }) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing { instance: tc.instance_name.clone(), driver: tc.driver }.to_string()),
             _ => None,
         }
     }

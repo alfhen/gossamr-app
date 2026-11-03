@@ -124,6 +124,7 @@ fn entry_of(run: &Run) -> Entry {
         short_id: run.short_id.clone(),
         terminal: false,
         instance_id: run.instance_id().to_owned(),
+        process: run.process.clone(),
     }
 }
 
@@ -257,6 +258,7 @@ impl RunService {
     async fn adopt(&self, run: &mut Run, session: &backend::Session) -> Result<()> {
         run.short_id = Some(session.short_id.clone());
         run.session_id = session.session_id.clone().or(run.session_id.take());
+        run.process = session.process.clone();
         run.state = RunState::Launching;
         run.error = None;
         run.failure = None;
@@ -310,7 +312,7 @@ impl RunService {
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
         let dirs = self.folders_of(&tc).await;
         loop {
-            if let Some(found) = tc.backend.find(run, &dirs).await.map_err(|e| Failure::from_backend(e, &tc.instance_name))? {
+            if let Some(found) = tc.backend.find(run, &dirs).await.map_err(|e| Failure::from_backend(e, &tc.instance_name, tc.driver))? {
                 return Ok(Some(found));
             }
             if Instant::now() >= deadline {
@@ -378,6 +380,7 @@ impl RunService {
                 if session.session_id.is_some() {
                     run.session_id = session.session_id;
                 }
+                run.process = session.process;
                 self.remember(run);
                 self.store(run).await?;
             }

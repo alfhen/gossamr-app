@@ -24,6 +24,7 @@ pub struct Toolchain {
     pub env: Arc<RunEnv>,
     pub instance_id: String,
     pub instance_name: String,
+    pub driver: Driver,
     /// Set for an instance with a folder, so the Terminal scripts run as its login too.
     pub login: Option<ProviderEnv>,
 }
@@ -34,7 +35,7 @@ impl Toolchain {
     pub fn for_login(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>, id: &str, name: &str, login: Option<ProviderEnv>, files: PathBuf) -> Self {
         let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
         let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), files, id.into(), name.into(), own_folder));
-        Self { backend, env, instance_id: id.into(), instance_name: name.into(), login }
+        Self { backend, env, instance_id: id.into(), instance_name: name.into(), driver: Driver::Claude, login }
     }
 
     /// The default instance, with the login the shell has, writing MCP files in a folder of its own.
@@ -74,7 +75,7 @@ fn scratch_files() -> PathBuf {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolchainError {
-    ClaudeMissing { instance: String },
+    ClaudeMissing { instance: String, driver: Driver },
     /// The shell environment couldn't be read. Launching without it would hand the shared Claude daemon the app's
     /// own environment instead, so nothing is started.
     NoEnvironment(String),
@@ -130,7 +131,7 @@ impl SystemToolchain {
         let (find, on) = (self.find, env.clone());
         let Some(binary) = tokio::task::spawn_blocking(move || find(Driver::Claude, &on)).await.ok().flatten() else {
             self.core.shell().forget().await;
-            return Err(ToolchainError::ClaudeMissing { instance: name.into() });
+            return Err(ToolchainError::ClaudeMissing { instance: name.into(), driver: Driver::Claude });
         };
         let run_env = login.as_ref().map_or_else(|| env.clone(), |login| Arc::new(login.over(&env)));
         let cli = Arc::new(SystemCli::new(binary, run_env));
@@ -379,7 +380,7 @@ mod tests {
         let (fx, tools) = rig("missing").await;
         add(&fx, "claude_2", Driver::Claude, Some("~/.claude-work"), true);
         let tools = tools.with_finder(|_, _| None);
-        assert_eq!(tools.for_instance("claude_2").await.err(), Some(ToolchainError::ClaudeMissing { instance: "claude_2 name".into() }));
-        assert_eq!(tools.get().await.err(), Some(ToolchainError::ClaudeMissing { instance: "Claude".into() }));
+        assert_eq!(tools.for_instance("claude_2").await.err(), Some(ToolchainError::ClaudeMissing { instance: "claude_2 name".into(), driver: Driver::Claude }));
+        assert_eq!(tools.get().await.err(), Some(ToolchainError::ClaudeMissing { instance: "Claude".into(), driver: Driver::Claude }));
     }
 }

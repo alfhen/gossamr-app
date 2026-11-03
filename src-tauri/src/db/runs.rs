@@ -23,8 +23,8 @@ fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> ru
     let draft = Some(run.proposal_id.as_str()).filter(|p| !p.is_empty());
     conn.execute(
         "INSERT INTO runs (id, proposal_id, start_key, connection_id, item_id, item_key, role, repo, expected_worktree, short_id, session_id,
-           state, queued_at, last_progress_at, ended_at, data, runs_on)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+           state, queued_at, last_progress_at, ended_at, data, runs_on, process)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             run.id,
             draft,
@@ -43,13 +43,19 @@ fn insert(conn: &rusqlite::Connection, run: &Run, start_key: Option<&str>) -> ru
             run.ended_at.map(stamp),
             serde_json::to_string(run).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
             run.instance_id(),
+            process_text(run)?,
         ],
     )
 }
 
+fn process_text(run: &Run) -> rusqlite::Result<Option<String>> {
+    run.process.as_ref().map(|p| serde_json::to_string(p).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))).transpose()
+}
+
 /// The run as stored, with `archived_at` taken from its column, which is the only place it is written.
-fn read_run(data: &str, archived_at: Option<&str>) -> Result<Run> {
+fn read_run(data: &str, archived_at: Option<&str>, process: Option<&str>) -> Result<Run> {
     let mut run = serde_json::from_str::<Run>(data)?.with_failure_filled();
+    run.process = process.and_then(|p| serde_json::from_str(p).ok());
     run.archived_at = archived_at.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| at.with_timezone(&chrono::Utc));
     Ok(run)
 }
@@ -156,7 +162,7 @@ impl Db {
         let n = self
             .conn
             .execute(
-                "UPDATE runs SET short_id = ?2, session_id = ?3, state = ?4, last_progress_at = ?5, ended_at = ?6, data = ?7, runs_on = ?8 WHERE id = ?1",
+                "UPDATE runs SET short_id = ?2, session_id = ?3, state = ?4, last_progress_at = ?5, ended_at = ?6, data = ?7, runs_on = ?8, process = ?9 WHERE id = ?1",
                 params![
                     run.id,
                     run.short_id.as_ref().map(|s| s.as_str().to_owned()),
@@ -166,6 +172,7 @@ impl Db {
                     run.ended_at.map(stamp),
                     serde_json::to_string(run)?,
                     run.instance_id(),
+                    process_text(run)?,
                 ],
             )
             .map_err(clash)?;
@@ -195,16 +202,16 @@ impl Db {
     }
 
     fn run_where(&self, clause: &str, arg: &str) -> Result<Option<Run>> {
-        let mut sql = format!("SELECT data, archived_at FROM runs WHERE {clause}");
+        let mut sql = format!("SELECT data, archived_at, process FROM runs WHERE {clause}");
         let mut args = vec![Sql::Text(arg.into())];
         self.visible(&mut sql, &mut args);
-        let row: Option<(String, Option<String>)> = self.conn.query_row(&sql, params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
-        row.map(|(data, archived)| read_run(&data, archived.as_deref())).transpose()
+        let row: Option<(String, Option<String>, Option<String>)> = self.conn.query_row(&sql, params_from_iter(args), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+        row.map(|(data, archived, process)| read_run(&data, archived.as_deref(), process.as_deref())).transpose()
     }
 
     /// Runs matching the query, newest first.
     pub fn runs(&self, q: &RunQuery) -> Result<Vec<Run>> {
-        let mut sql = String::from("SELECT data, archived_at FROM runs WHERE 1 = 1");
+        let mut sql = String::from("SELECT data, archived_at, process FROM runs WHERE 1 = 1");
         let mut args: Vec<Sql> = Vec::new();
         if let Some(states) = &q.states {
             let marks = vec!["?"; states.len()].join(",");
@@ -231,11 +238,11 @@ impl Db {
         self.visible(&mut sql, &mut args);
         sql.push_str(" ORDER BY queued_at DESC, id");
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?;
+        let rows = stmt.query_map(params_from_iter(args), |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            let (data, archived) = row?;
-            out.push(read_run(&data, archived.as_deref())?);
+            let (data, archived, process) = row?;
+            out.push(read_run(&data, archived.as_deref(), process.as_deref())?);
         }
         Ok(out)
     }
@@ -422,6 +429,25 @@ mod tests {
         assert_eq!(ids("ws-2"), ["d"]);
         assert!(ids("ws-3").is_empty());
         assert_eq!(db.runs(&RunQuery::default()).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn a_codex_run_keeps_its_process_in_the_database_and_the_index_but_not_in_what_the_page_gets() {
+        use crate::domain::RunProcess;
+        let db = Db::in_memory().unwrap();
+        let mut run = db.insert_started_run(&queued("a", "eng-1-cart-0001"), "pip:one").unwrap().0;
+        run.process = Some(RunProcess { pid: 77, started: 1_700_000_000 });
+        assert!(db.save_run(&run).unwrap());
+
+        assert!(serde_json::to_value(&run).unwrap().get("process").is_none());
+        let stored: String = db.conn.query_row("SELECT data FROM runs WHERE id = 'a'", [], |r| r.get(0)).unwrap();
+        assert!(!stored.contains("process"), "{stored}");
+        assert_eq!(db.run("a").unwrap().unwrap().process, run.process);
+        assert_eq!(db.runs(&RunQuery::default()).unwrap()[0].process, run.process);
+
+        run.process = None;
+        db.save_run(&run).unwrap();
+        assert_eq!(db.run("a").unwrap().unwrap().process, None);
     }
 
     #[test]
