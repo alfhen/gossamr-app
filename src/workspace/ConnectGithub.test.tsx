@@ -11,7 +11,7 @@ describe("the GitHub sheet", () => {
     expect(out).not.toContain("Connect GitHub");
   });
 
-  it("names its dialog Add GitHub account unless given another label", () => {
-    expect(renderToStaticMarkup(<ConnectFrame onClose={vi.fn()}>x</ConnectFrame>)).toContain('aria-label="Add GitHub account"');
+  it("names its dialog after the label it is given", () => {
+    expect(renderToStaticMarkup(<ConnectFrame label="Add GitHub account" onClose={vi.fn()}>x</ConnectFrame>)).toContain('aria-label="Add GitHub account"');
   });
 });

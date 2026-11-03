@@ -130,7 +130,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
   );
 }
 
-export function ConnectFrame({ children, onClose, label = "Add GitHub account", takesEscape = false }: { children: ReactNode; onClose(): void; label?: string; takesEscape?: boolean }) {
+export function ConnectFrame({ children, onClose, label, takesEscape = false }: { children: ReactNode; onClose(): void; label: string; takesEscape?: boolean }) {
   const sheet = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const at = document.activeElement;
@@ -214,7 +214,7 @@ function ConnectFlow({ backend, onClose }: { backend: Backend; onClose(): void }
 
   const github = connections.filter((c) => c.kind === "github");
   return (
-    <ConnectFrame onClose={() => connecting === null && onClose()}>
+    <ConnectFrame label="Add GitHub account" onClose={() => connecting === null && onClose()}>
       <ConnectGithubView
         found={found}
         connected={github.map((c) => c.workspace.toLowerCase())}
