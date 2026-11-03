@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::archive::contained;
 use super::cli::{CliError, ShortId};
 use super::failure::Failure;
-use super::fresh::agents_root;
+use super::fresh::{agents_root, is_work_path, real};
 use super::repo::Git;
 use super::service::{belongs_to, RunService};
 use crate::domain::{Run, RunState};
@@ -104,14 +104,22 @@ impl RunService {
     }
 
     /// The run's worktree and branch through git alone, for a run whose instance is gone. Anything git refuses stays, in
-    /// git's own words. The worktree must lie in `~/Gossamr/agents`.
+    /// git's own words. The clone and the worktree must lie in `~/Gossamr/agents`.
     async fn remove_with_git(&self, run: &Run) -> Result<Option<String>> {
         let home = self.home.as_ref().ok_or_else(|| refuse("Gossamr doesn't know your home folder."))?;
         let clone = &run.spec.clone_path;
+        let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, &run.spec.repo, clone);
+        if !in_work_folder {
+            return Err(refuse("Its clone isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."));
+        }
         let worktree = if run.expected_worktree.symlink_metadata().is_ok() {
             contained(&agents_root(home), &run.expected_worktree).ok_or_else(|| refuse("Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."))?
         } else {
-            run.expected_worktree.clone()
+            let missing = real(&run.expected_worktree);
+            if !missing.starts_with(real(&agents_root(home))) {
+                return Err(refuse("Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is."));
+            }
+            missing
         };
         let git: Git = self.git().await?;
         let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));

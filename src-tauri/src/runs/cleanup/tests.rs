@@ -291,6 +291,17 @@ async fn git_does_not_touch_a_worktree_outside_the_work_folder() {
 }
 
 #[tokio::test]
+async fn git_does_not_touch_a_clone_outside_the_work_folder_when_the_worktree_is_gone() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    let legacy = rig.fx.home.join("Code/webshop");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::remove_dir_all(&run.expected_worktree).unwrap();
+    rig.set(&run, |r| r.spec.clone_path = legacy.clone()).await;
+    assert!(rig.svc.cleanup(&run.id).await.unwrap_err().to_string().contains("clone isn't in ~/Gossamr/agents"));
+    assert!(git_calls(&rig).is_empty());
+}
+
+#[tokio::test]
 async fn earlier_sessions_of_a_run_on_a_removed_instance_are_left_in_its_folder_and_not_offered_again() {
     let (rig, run) = finished_on_a_removed_instance().await;
     let run = rig
