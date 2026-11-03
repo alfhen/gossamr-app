@@ -814,9 +814,9 @@ enum TerminalFor {
 async fn runs_open_terminal(runs: State<'_, RunsState>, id: String, purpose: TerminalFor) -> Result<()> {
     match purpose {
         TerminalFor::Session => runs.attach(&id).await,
-        TerminalFor::Trust => runs.open_claude(&id, runs::control::Purpose::Trust).await,
-        TerminalFor::SignIn => runs.open_claude(&id, runs::control::Purpose::SignIn).await,
-        TerminalFor::Mode { mode } => runs.open_claude(&id, runs::control::Purpose::Mode(mode)).await,
+        TerminalFor::Trust => runs.open_claude(&id, runs::backend::Purpose::Trust).await,
+        TerminalFor::SignIn => runs.open_claude(&id, runs::backend::Purpose::SignIn).await,
+        TerminalFor::Mode { mode } => runs.open_claude(&id, runs::backend::Purpose::Mode(mode)).await,
     }
 }
 

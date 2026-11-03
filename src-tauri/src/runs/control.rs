@@ -12,7 +12,7 @@ use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::backend::{RunBackend, Session};
+use super::backend::{Purpose, RunBackend, Session};
 use super::provider_env::ProviderEnv;
 use super::service::RunService;
 use super::toolchain::Toolchain;
@@ -20,7 +20,7 @@ use crate::auth::Scope;
 use crate::config::TerminalChoice;
 use crate::connections::Driver;
 use crate::domain::workstream::PauseReason;
-use crate::domain::{Actor, RefusedMode, Run, RunFailure, RunQuery, RunState};
+use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
 const STOP_LIMIT: Duration = Duration::from_secs(5);
@@ -140,25 +140,7 @@ pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, program: &Path
     write_script(dir, name, &format!("#!/bin/zsh\n{login}cd '{worktree}'\nexec '{program}'{words_text}\n"))
 }
 
-/// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Purpose {
-    Trust,
-    SignIn,
-    /// Opens Claude where it asks for the one-time opt-in the person's permission mode needs for `--bg`.
-    Mode(RefusedMode),
-}
-
 impl Purpose {
-    fn prefix(self) -> &'static str {
-        match self {
-            Purpose::Trust => "trust",
-            Purpose::SignIn => "signin",
-            Purpose::Mode(RefusedMode::Auto) => "auto",
-            Purpose::Mode(RefusedMode::Bypass) => "bypass",
-        }
-    }
-
     fn allows(self, failure: Option<&RunFailure>) -> bool {
         matches!((self, failure), (Purpose::Trust, Some(RunFailure::UntrustedFolder { .. })) | (Purpose::SignIn, Some(RunFailure::NotSignedIn)))
             || matches!((self, failure), (Purpose::Mode(wanted), Some(RunFailure::ModeRefused { mode })) if wanted == *mode)
@@ -471,7 +453,7 @@ impl RunService {
         let session = Session::of(&run).ok_or_else(|| refuse("This run has no session yet."))?;
         let tc = self.observing_toolchain(&run).await?;
         let dirs = self.folders_of(&tc).await;
-        let dir = tc.backend.scratch_dir(&session, &dirs).ok_or_else(|| Error::Claude("Couldn't find Claude's folder.".into()))?;
+        let dir = tc.backend.scratch_dir(&session, &dirs)?;
         tokio::task::spawn_blocking(move || size_within(&dir, DISK_LIMIT)).await.map_err(|e| Error::Claude(e.to_string()))
     }
 

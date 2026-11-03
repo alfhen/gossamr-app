@@ -253,9 +253,9 @@ impl RunBackend for Recorder {
         Some(Vec::new())
     }
 
-    fn scratch_dir(&self, session: &Session, _dirs: &Folders) -> Option<PathBuf> {
+    fn scratch_dir(&self, session: &Session, _dirs: &Folders) -> BackendResult<PathBuf> {
         self.did(format!("scratch_dir:{}", session.short_id));
-        Some(std::env::temp_dir().join(format!("gossamr-recorder-scratch-{}", session.short_id)))
+        Ok(std::env::temp_dir().join(format!("gossamr-recorder-scratch-{}", session.short_id)))
     }
 }
 
@@ -420,7 +420,7 @@ async fn a_live_answer_and_a_cancel_of_a_held_ask_both_tell_the_backend() {
     rig.set(&run, |r| r.state = RunState::Working).await;
     let timed_out = asks.open(&run.id, "Which schema?").unwrap().until(std::time::Duration::from_millis(10)).await;
     assert_eq!(timed_out, Outcome::TimedOut);
-    *backend.script.lock().unwrap() = Some(Seen { state: RunState::Working, text: None, answer: None });
+    *backend.script.lock().unwrap() = Some(Seen { state: RunState::Done, text: None, answer: Some("Finished.".into()) });
     rig.poll().await;
     assert_eq!(ended(), 3, "a call that timed out is not one the service ended");
 }

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 
 use super::{BackendError, BackendResult, Folders, LaunchRequest, Observation, Observations, RemoveOutcome, ResumeRequest, Resumed, RunBackend, Session, ToolsOffer, Waits, Watched};
 use crate::domain::{RefusedMode, Run, RunState, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER};
-use crate::runs::control::Purpose;
+use crate::runs::backend::Purpose;
 use crate::runs::trust::Refusal;
 use crate::runs::agent_config::{config_path, AgentLaunch};
 use crate::runs::cli::{self, AgentEntry, ClaudeCli, CliError, JobInfo, ShortId};
@@ -359,8 +359,9 @@ impl RunBackend for ClaudeBackend {
         Some(words.iter().map(|w| (*w).to_owned()).collect())
     }
 
-    fn scratch_dir(&self, session: &Session, dirs: &Folders) -> Option<PathBuf> {
-        dirs.config_dir.as_ref().map(|config| config.join("jobs").join(session.short_id.as_str()))
+    fn scratch_dir(&self, session: &Session, dirs: &Folders) -> BackendResult<PathBuf> {
+        let config = dirs.config_dir.as_ref().ok_or_else(|| BackendError::Other("Couldn't find Claude's folder.".into()))?;
+        Ok(config.join("jobs").join(session.short_id.as_str()))
     }
 
     #[cfg(test)]

@@ -6,15 +6,34 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use super::cli::{AgentEntry, ShortId, TimelineLine};
-use super::control::Purpose;
 use super::failure::Failure;
 use super::index;
 use super::state::Observed;
 use super::trust::Refusal;
-use crate::domain::Run;
+use crate::domain::{RefusedMode, Run};
 use crate::error::Error;
 
 pub mod claude;
+
+/// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    Trust,
+    SignIn,
+    /// Opens Claude where it asks for the one-time opt-in the person's permission mode needs for `--bg`.
+    Mode(RefusedMode),
+}
+
+impl Purpose {
+    pub(super) fn prefix(self) -> &'static str {
+        match self {
+            Purpose::Trust => "trust",
+            Purpose::SignIn => "signin",
+            Purpose::Mode(RefusedMode::Auto) => "auto",
+            Purpose::Mode(RefusedMode::Bypass) => "bypass",
+        }
+    }
+}
 
 /// A running turn of an agent that Gossamr started itself, and so has to find again by its pid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,7 +262,7 @@ pub trait RunBackend: Send + Sync {
     /// The arguments of the program run for `purpose` in a terminal, or none when it has no such use.
     fn terminal_words(&self, purpose: Purpose) -> Option<Vec<String>>;
     /// The folder where the session keeps its scratch files.
-    fn scratch_dir(&self, session: &Session, dirs: &Folders) -> Option<PathBuf>;
+    fn scratch_dir(&self, session: &Session, dirs: &Folders) -> BackendResult<PathBuf>;
     /// The backend's own value, for a test that has to reach what it wraps.
     #[cfg(test)]
     fn as_any(&self) -> Option<&dyn std::any::Any> {
