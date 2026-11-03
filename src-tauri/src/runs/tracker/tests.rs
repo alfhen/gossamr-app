@@ -1,9 +1,10 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Duration as Span;
 
 use super::*;
-use crate::runs::cli::TimelineLine;
+use crate::runs::cli::{AgentEntry, ShortId, TimelineLine};
 use crate::runs::index::RunIndex;
 use crate::runs::rig::{line, ready, Rig};
 use crate::runs::state::{quiet_for, QUIET_AFTER};
@@ -1253,4 +1254,46 @@ async fn a_queued_run_on_a_login_that_is_turned_off_does_not_start_its_cli() {
 
     svc.poll_at(Utc::now()).await;
     assert_eq!(second.0.lock().unwrap().listings, 0);
+}
+
+#[tokio::test]
+async fn the_tracker_applies_what_a_backend_observes_whatever_backend_it_is() {
+    use crate::runs::backend::tests::{Recorder, Seen};
+    use crate::runs::rig::{backed_by, ready_with};
+    let backend = Arc::new(Recorder::default());
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let run = rig.launched(1).await;
+    let step = |state, text: Option<&str>, answer: Option<&str>| Seen { state, text: text.map(Into::into), answer: answer.map(Into::into) };
+
+    *backend.script.lock().unwrap() = Some(step(RunState::Working, None, None));
+    rig.poll().await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working);
+
+    *backend.script.lock().unwrap() = Some(step(RunState::NeedsAnswer, Some("Which branch?"), None));
+    rig.poll().await;
+    let asking = rig.get(&run).await;
+    assert_eq!((asking.state, asking.needs.as_deref()), (RunState::NeedsAnswer, Some("Which branch?")));
+
+    *backend.script.lock().unwrap() = Some(step(RunState::Done, None, Some("All done. The fix is on the branch.")));
+    rig.poll().await;
+    let done = rig.get(&run).await;
+    assert_eq!((done.state, done.result.as_deref(), done.result_complete), (RunState::Done, Some("All done. The fix is on the branch."), true));
+    assert!(done.ended_at.is_some() && done.needs.is_none());
+    assert_eq!(rig.noticed(), vec![(Attention::Needs, RunState::NeedsAnswer), (Attention::Done, RunState::Done)]);
+    assert_eq!(rig.cli.0.lock().unwrap().listings, 0, "claude was never asked");
+}
+
+#[tokio::test]
+async fn a_held_ask_is_handed_to_the_backend_with_the_run_it_belongs_to() {
+    use crate::runs::backend::tests::{Recorder, Seen};
+    use crate::runs::rig::{backed_by, ready_with};
+    let backend = Arc::new(Recorder::default());
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let run = rig.launched(1).await;
+    *backend.script.lock().unwrap() = Some(Seen { state: RunState::Working, text: None, answer: None });
+    let _held = rig.svc.core.asks().open(&run.id, "Which database?").unwrap();
+    rig.poll().await;
+    let looked = backend.looked_at.lock().unwrap().clone();
+    let watched = &looked[0];
+    assert_eq!((watched.len(), watched[0].run.id.as_str(), watched[0].ask.as_deref()), (1, run.id.as_str(), Some("Which database?")));
 }

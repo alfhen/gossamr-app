@@ -6,7 +6,9 @@ use async_trait::async_trait;
 
 use super::claude::ClaudeBackend;
 use super::*;
+use crate::domain::RunState;
 use crate::runs::cli::CliError;
+use crate::runs::state::Observed;
 use crate::runs::env::RunEnv;
 use crate::runs::report::{new_token, well_formed};
 use crate::runs::rig::{backed_by, ready_with};
@@ -50,7 +52,7 @@ fn the_tools_offer_never_prints_its_token() {
 async fn the_claude_backend_writes_a_private_mcp_file_from_the_offer_and_passes_only_its_path() {
     let files = dir("file").join("agents");
     let cli = Arc::new(FakeCli::new());
-    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "Claude".into(), false);
+    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "claude".into(), "Claude".into(), false);
     let offer = offer("run-1");
     let session = backend.launch(&request(Some(offer.clone()))).await.unwrap();
     assert_eq!((session.session_id, session.process), (None, None));
@@ -89,7 +91,7 @@ fn a_second_mcp_file_for_a_run_replaces_the_first_and_a_bad_run_id_writes_nothin
 async fn the_claude_backend_adds_the_tools_guard_only_once_its_file_is_written() {
     let files = dir("guard").join("agents");
     let cli = Arc::new(FakeCli::new());
-    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "Claude".into(), false);
+    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "claude".into(), "Claude".into(), false);
     backend.launch(&request(Some(offer("run-1")))).await.unwrap();
     backend.launch(&request(Some(offer("../bad")))).await.unwrap();
     let launches = cli.0.lock().unwrap().launches.clone();
@@ -102,17 +104,31 @@ async fn the_claude_backend_adds_the_tools_guard_only_once_its_file_is_written()
 async fn the_claude_backend_launches_without_tools_when_none_are_offered() {
     let files = dir("none").join("agents");
     let cli = Arc::new(FakeCli::new());
-    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "Claude".into(), false);
+    let backend = ClaudeBackend::new(cli.clone(), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])), files.clone(), "claude".into(), "Claude".into(), false);
     backend.launch(&request(None)).await.unwrap();
     let sent = cli.0.lock().unwrap().launches[0].clone();
     assert!(sent.agent.is_none() && sent.guard == "Guard." && !files.exists());
 }
 
+/// What a scripted backend reports of every run it is asked to observe.
+#[derive(Clone)]
+pub(in crate::runs) struct Seen {
+    pub state: RunState,
+    pub text: Option<String>,
+    pub answer: Option<String>,
+}
+
 #[derive(Default)]
-struct Recorder {
-    preflights: Mutex<Vec<PathBuf>>,
-    launches: Mutex<Vec<LaunchRequest>>,
-    refuse: Mutex<Option<Failure>>,
+pub(in crate::runs) struct Recorder {
+    pub preflights: Mutex<Vec<PathBuf>>,
+    pub launches: Mutex<Vec<LaunchRequest>>,
+    pub refuse: Mutex<Option<Failure>>,
+    /// What every run is observed as; a test replaces it between looks.
+    pub script: Mutex<Option<Seen>>,
+    /// What each look at the runs was handed.
+    pub looked_at: Mutex<Vec<Vec<Watched>>>,
+    pub found: Mutex<Option<Session>>,
+    pub searched: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -125,6 +141,42 @@ impl RunBackend for Recorder {
     async fn launch(&self, req: &LaunchRequest) -> std::result::Result<Session, Failure> {
         self.launches.lock().unwrap().push(req.clone());
         Ok(Session { short_id: req.fresh_id.clone(), session_id: Some("thread-1".into()), process: None })
+    }
+
+    async fn folders(&self) -> Folders {
+        Folders::default()
+    }
+
+    async fn observe(&self, watched: &[Watched], _dirs: &Folders, _now: DateTime<Utc>) -> BackendResult<Observations> {
+        self.looked_at.lock().unwrap().push(watched.to_vec());
+        let step = self.script.lock().unwrap().clone();
+        let Some(step) = step else { return Ok(Observations::default()) };
+        let runs = watched
+            .iter()
+            .map(|w| Observation {
+                run_id: w.run.id.clone(),
+                seen: Observed { state: step.state, text: step.text.clone(), error: None, result: None, pid_misses: 0, idle_polls: 0 },
+                session: w.run.short_id.clone().map(|short_id| Session { short_id, session_id: Some("thread-1".into()), process: None }),
+                tokens: None,
+                detail: None,
+                branch: None,
+                progress_at: None,
+                suggested_reply: None,
+                timeline: Vec::new(),
+                answer: step.answer.clone(),
+                revived: false,
+            })
+            .collect();
+        Ok(Observations { runs, sessions: Vec::new() })
+    }
+
+    async fn find(&self, run: &Run, _dirs: &Folders) -> BackendResult<Option<Session>> {
+        self.searched.lock().unwrap().push(run.id.clone());
+        Ok(self.found.lock().unwrap().clone())
+    }
+
+    async fn final_answer(&self, _run: &Run, _dirs: &Folders) -> Option<String> {
+        None
     }
 }
 
@@ -183,4 +235,23 @@ fn a_backend_error_shows_the_program_that_built_it() {
         assert_eq!(Error::from(e).to_string(), Error::Claude(words.clone()).to_string());
     }
     assert!(BackendError::Failed { program: "codex", code: None, stderr: "a\nnot logged in\n".into() }.to_string().ends_with("not logged in"));
+}
+
+#[tokio::test]
+async fn the_claude_backend_reports_its_folders_and_finds_a_session_by_its_listing() {
+    use crate::runs::rig::ready;
+    let rig = ready().await;
+    let run = rig.launched(1).await;
+    let config = rig.fx.dir.join("claude-config");
+    let tc = rig.svc.tools.get().await.unwrap();
+    let dirs = tc.backend.folders().await;
+    assert_eq!((dirs.config_dir, dirs.projects_dir), (Some(config.clone()), Some(config.join("projects"))));
+
+    let found = tc.backend.find(&run, &Folders::default()).await.unwrap().expect("listed under the worktree");
+    assert_eq!(Some(&found.short_id), run.short_id.as_ref());
+    let stranger = Run { short_id: None, expected_worktree: PathBuf::from("/elsewhere"), ..run.clone() };
+    assert_eq!(tc.backend.find(&stranger, &Folders::default()).await.unwrap(), None);
+    rig.cli.with(|s| s.list_fails = true);
+    let error = tc.backend.find(&run, &Folders::default()).await.unwrap_err().to_string();
+    assert!(error.starts_with("claude failed") && error.contains("daemon unavailable"), "{error}");
 }

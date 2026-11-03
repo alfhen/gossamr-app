@@ -6,15 +6,15 @@
 //! the worktree path chosen before launch, or by the short id once known, never by name or start time.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::backend;
-use super::cli::{AgentEntry, ShortId};
+use super::backend::{self, BackendError, Folders};
+use super::cli::ShortId;
 use super::redact::redact;
 use super::failure::Failure;
 use super::index::{Entry, RunIndex};
@@ -88,9 +88,8 @@ pub struct RunService {
     pub(super) timing: Timing,
     pub(super) misses: Mutex<std::collections::HashMap<String, u32>>,
     pub(super) idle_polls: Mutex<std::collections::HashMap<String, u32>>,
-    /// What `claude auth status` reported, by instance id: each instance has its own folder.
-    pub(super) config_dir: Mutex<HashMap<String, PathBuf>>,
-    pub(super) projects_dir: Mutex<HashMap<String, PathBuf>>,
+    /// What each instance's backend reported about its session folders, by instance id. Only answers with a folder are kept, so a backend that failed to say is asked again.
+    pub(super) folders: Mutex<HashMap<String, Folders>>,
     /// Wakes the tracker when the window gains focus.
     pub focus: tokio::sync::Notify,
     /// When this service was made, so recovery can tell a slot wait from before a restart from one of this session's.
@@ -99,20 +98,15 @@ pub struct RunService {
 
 pub(super) use super::fresh::real;
 
-/// Whether `entry`, listed by the login `listed_on`, is the session of `run`. Interactive sessions never are, and short
-/// ids can repeat across logins, so a run only matches the listing of its own.
-pub(super) fn belongs_to(entry: &AgentEntry, listed_on: &str, run: &Run) -> bool {
-    if run.instance_id() != listed_on {
-        return false;
+pub(super) use super::backend::claude::belongs_to;
+
+/// A failed look for a run's session, worded as `Failure::from_cli` words the same failure of `claude`.
+fn listing_failure(e: BackendError, instance: &str) -> Failure {
+    match e {
+        BackendError::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
+        BackendError::Failed { stderr, .. } => Failure::CommandFailed(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).unwrap_or("no message").to_owned()),
+        other => Failure::CommandFailed(other.to_string()),
     }
-    let Some(id) = entry.id.as_deref().and_then(ShortId::parse) else { return false };
-    if entry.kind.as_deref() == Some("interactive") {
-        return false;
-    }
-    if run.earlier_sessions.iter().any(|e| e.short_id == id) {
-        return false;
-    }
-    run.short_id.as_ref() == Some(&id) || entry.cwd.as_deref().is_some_and(|cwd| real(Path::new(cwd)) == real(&run.expected_worktree))
 }
 
 /// How a session is titled in Claude's own lists. Only the title carries the prefix: the worktree folder and branch
@@ -165,8 +159,7 @@ impl RunService {
             timing: Timing::default(),
             misses: Mutex::new(std::collections::HashMap::new()),
             idle_polls: Mutex::new(std::collections::HashMap::new()),
-            config_dir: Mutex::new(HashMap::new()),
-            projects_dir: Mutex::new(HashMap::new()),
+            folders: Mutex::new(HashMap::new()),
             focus: tokio::sync::Notify::new(),
             started_at: Utc::now(),
         }
@@ -266,11 +259,9 @@ impl RunService {
     }
 
     /// The run is its session from here on; the tracker (which reads `claude agents`) takes over the state.
-    async fn adopt(&self, run: &mut Run, entry: &AgentEntry) -> Result<()> {
-        if let Some(id) = entry.id.as_deref().and_then(ShortId::parse) {
-            run.short_id = Some(id);
-        }
-        run.session_id = entry.session_id.clone().or(run.session_id.take());
+    async fn adopt(&self, run: &mut Run, session: &backend::Session) -> Result<()> {
+        run.short_id = Some(session.short_id.clone());
+        run.session_id = session.session_id.clone().or(run.session_id.take());
         run.state = RunState::Launching;
         run.error = None;
         run.failure = None;
@@ -317,14 +308,14 @@ impl RunService {
 
     /// The run's session, if `claude agents` lists one. After a launch whose answer was lost the session may still be
     /// listed at the clone root, so this keeps looking until the worktree has had time to appear.
-    async fn find_session(&self, run: &Run) -> std::result::Result<Option<AgentEntry>, Failure> {
+    async fn find_session(&self, run: &Run) -> std::result::Result<Option<backend::Session>, Failure> {
         // A login that can't run now has no session to find; the launch that follows waits or fails for it.
         let Ok(tc) = self.observing_toolchain_of(run).await else { return Ok(None) };
         let since = run.launched_at.and_then(|at| (Utc::now() - at).to_std().ok()).unwrap_or(Duration::MAX);
         let deadline = Instant::now() + self.timing.worktree_grace.saturating_sub(since);
+        let dirs = self.folders_of(&tc).await;
         loop {
-            let entries = tc.cli.agents(true).await.map_err(|e| Failure::from_cli(e, &run.spec.clone_path, &tc.instance_name, tc.has_own_folder()))?;
-            if let Some(found) = entries.into_iter().find(|e| belongs_to(e, &tc.instance_id, run)) {
+            if let Some(found) = tc.backend.find(run, &dirs).await.map_err(|e| listing_failure(e, &tc.instance_name))? {
                 return Ok(Some(found));
             }
             if Instant::now() >= deadline {
@@ -684,16 +675,13 @@ impl RunService {
                         continue;
                     }
                 };
-                let Ok(entries) = tc.cli.agents(true).await else {
-                    unmatched.extend(group);
-                    continue;
-                };
+                let dirs = self.folders_of(&tc).await;
                 for mut run in group {
-                    match entries.iter().find(|e| belongs_to(e, &tc.instance_id, &run)) {
-                        Some(found) => {
-                            let _ = self.adopt(&mut run, found).await;
+                    match tc.backend.find(&run, &dirs).await {
+                        Ok(Some(found)) => {
+                            let _ = self.adopt(&mut run, &found).await;
                         }
-                        None => unmatched.push(run),
+                        Ok(None) | Err(_) => unmatched.push(run),
                     }
                 }
             }
@@ -725,6 +713,18 @@ impl RunService {
                 eprintln!("couldn't clear the slot wait of run {}: {e}", run.id);
             }
         }
+    }
+
+    /// The session folders of the instance `tc` runs, asked of its backend once.
+    pub(super) async fn folders_of(&self, tc: &Toolchain) -> Folders {
+        if let Some(known) = self.folders.lock().expect("folders lock poisoned").get(&tc.instance_id) {
+            return known.clone();
+        }
+        let found = tc.backend.folders().await;
+        if !found.is_empty() {
+            self.folders.lock().expect("folders lock poisoned").insert(tc.instance_id.clone(), found.clone());
+        }
+        found
     }
 
     pub(super) async fn git(&self) -> Result<Git> {

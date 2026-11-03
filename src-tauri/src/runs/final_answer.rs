@@ -19,14 +19,14 @@ const AWAIT_WINDOW: Duration = Duration::from_secs(120);
 
 /// The text of the newest line when it is an answer, which is how a session that stayed open ends each turn, else of
 /// the timeline's `done` line. Equal to the summary it can't be told from one, so it doesn't count.
-fn timeline_answer(job: &JobInfo) -> Option<String> {
+pub(in crate::runs) fn timeline_answer(job: &JobInfo) -> Option<String> {
     let newest = job.timeline.last().filter(|_| turn_finished(job));
     let line = newest.or_else(|| job.timeline.iter().rev().find(|l| l.state.as_deref() == Some("done")));
     let text = line.and_then(|l| l.text.as_deref())?.trim();
     (!text.is_empty() && Some(text) != job.result.as_deref().map(str::trim)).then(|| text.to_owned())
 }
 
-fn folders(run: &Run, entry: Option<&AgentEntry>, job: Option<&JobInfo>) -> Vec<PathBuf> {
+pub(in crate::runs) fn answer_folders(run: &Run, entry: Option<&AgentEntry>, job: Option<&JobInfo>) -> Vec<PathBuf> {
     let named = [job.and_then(|j| j.worktree_path.as_deref()), entry.and_then(|e| e.cwd.as_deref())].into_iter().flatten().map(PathBuf::from);
     let mut out: Vec<PathBuf> = Vec::new();
     for path in named.chain([run.expected_worktree.clone()]) {
@@ -50,32 +50,9 @@ fn adopt(run: &mut Run, answer: &str) -> bool {
 }
 
 impl RunService {
-    /// `projects` under the config directory `claude auth status` reports.
+    #[cfg(test)]
     pub(super) async fn claude_projects_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
-        if let Some(known) = self.projects_dir.lock().expect("projects dir lock poisoned").get(&tc.instance_id) {
-            return Some(known.clone());
-        }
-        let status = tc.cli.auth_status().await.ok()?;
-        let found = status.projects_directory.or_else(|| status.config_directory.map(|c| c.join("projects")))?;
-        self.projects_dir.lock().expect("projects dir lock poisoned").insert(tc.instance_id.clone(), found.clone());
-        Some(found)
-    }
-
-    /// The run's final answer: the transcript's last message, else the timeline's `done` text. One look: the message
-    /// can land after the session is listed as done, which the polling of recently finished runs covers.
-    pub(super) async fn read_answer(&self, tc: &Toolchain, run: &Run, entry: Option<&AgentEntry>, job: Option<&JobInfo>) -> Option<String> {
-        let session = run.session_id.clone().or_else(|| entry.and_then(|e| e.session_id.clone()));
-        if let (Some(session), Some(projects)) = (session, self.claude_projects_dir(tc).await) {
-            if let Some(answer) = tc.cli.final_answer(&projects, &session, &folders(run, entry, job)).await {
-                return Some(answer);
-            }
-        }
-        job.and_then(timeline_answer)
-    }
-
-    async fn job_of(&self, tc: &Toolchain, run: &Run) -> Option<JobInfo> {
-        let (id, dir) = (run.short_id.as_ref()?, self.claude_config_dir(tc).await?);
-        tc.cli.job(&dir, id).await.ok().flatten()
+        self.folders_of(tc).await.projects_dir
     }
 
     /// Replaces a finished run's summary with its full answer when one can be read now. True when the run changed.
@@ -90,8 +67,8 @@ impl RunService {
     }
 
     async fn refresh_with(&self, tc: &Toolchain, run: &Run) -> bool {
-        let job = self.job_of(tc, run).await;
-        let Some(answer) = self.read_answer(tc, run, None, job.as_ref()).await else { return false };
+        let dirs = self.folders_of(tc).await;
+        let Some(answer) = tc.backend.final_answer(run, &dirs).await else { return false };
         let _turn = self.launching.lock().await;
         let Ok(Some(mut run)) = self.core.run(&run.id).await else { return false };
         if run.state != RunState::Done || run.result_complete || !adopt(&mut run, &answer) {
