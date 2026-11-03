@@ -257,6 +257,16 @@ fn a_reused_pid_is_not_the_run_s_process() {
 }
 
 #[tokio::test]
+async fn a_process_start_time_does_not_change_while_it_runs() {
+    let pid = std::process::id();
+    let first = started_of(pid).unwrap();
+    for _ in 0..5 {
+        tokio::time::sleep(std::time::Duration::from_millis(450)).await;
+        assert_eq!(started_of(pid), Some(first));
+    }
+}
+
+#[tokio::test]
 async fn a_failed_codex_launch_can_be_retried() {
     let rig = Rig::new("retry", "fail=Something broke\n");
     let failed = rig.backend.launch(&rig.request(Some(offer()))).await.unwrap_err();

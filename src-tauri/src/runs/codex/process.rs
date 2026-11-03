@@ -17,7 +17,15 @@ pub fn started_of(pid: u32) -> Option<u64> {
     Some(info.pbi_start_tvsec)
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Field 22 of `/proc/<pid>/stat`, in clock ticks since boot. Unlike `etimes`, it does not move between calls.
+#[cfg(target_os = "linux")]
+pub fn started_of(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_name = &stat[stat.rfind(')')? + 2..];
+    after_name.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn started_of(pid: u32) -> Option<u64> {
     let out = std::process::Command::new("ps").args(["-o", "etimes=", "-p", &pid.to_string()]).output().ok()?;
     let elapsed: u64 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
