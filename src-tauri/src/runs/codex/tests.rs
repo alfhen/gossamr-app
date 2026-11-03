@@ -836,7 +836,7 @@ mod control {
 
     #[tokio::test]
     async fn an_answer_to_a_codex_run_resumes_the_same_thread_with_a_new_process_and_the_reminder() {
-        let rig = Rig::new("answer", &scenario(1, ""));
+        let rig = Rig::new("answer-resume", &scenario(1, ""));
         let tools = offer();
         let first = rig.backend.launch(&rig.request(Some(tools.clone()))).await.unwrap();
         let folder = rig.folder();
@@ -926,6 +926,14 @@ mod control {
         assert!(!alive(&leader), "the launcher left on SIGINT");
         until("the orphaned child to be killed", || !pid_alive(child)).await;
         assert!(seam::sent_to(leader.pid).contains(&libc::SIGKILL), "the group got SIGKILL although its leader had already gone");
+    }
+
+    #[test]
+    fn the_default_codex_stop_budget_outlasts_a_stop_that_kills_the_group() {
+        let backend = CodexBackend::new(PathBuf::from(FAKE), Arc::new(RunEnv::from_pairs([("PATH", "/usr/bin")])), Arc::new(RunEnv::from_pairs([("PATH", "/usr/bin")])), PathBuf::from("/nonexistent"), "Codex".into(), false);
+        let budget = backend.stop_budget();
+        assert!(budget > crate::runs::codex::STOP_WAIT + crate::runs::codex::control::KILL_SETTLE, "{budget:?}");
+        assert!(budget > crate::runs::backend::STOP_BUDGET, "{budget:?}");
     }
 
     #[tokio::test]
@@ -1122,6 +1130,24 @@ mod control {
         assert!(!script.contains(&s.tools.token) && !script.contains(TOKEN_VARIABLE), "{script}");
         let run = s.get().await;
         assert_eq!((run.state, run.last_detail.as_deref()), (RunState::Stopped, Some("Opened in Terminal")));
+    }
+
+    #[tokio::test]
+    async fn polling_while_attach_stops_a_codex_turn_that_ignores_sigint_never_reads_the_run_failed() {
+        let s = Svc::new("attach-polled", 25, "hold=600\nignore_sigint=1\n").await;
+        let mut seen = Vec::new();
+        let attach = s.rig.svc.attach(&s.run.id);
+        tokio::pin!(attach);
+        let result = loop {
+            tokio::select! {
+                result = &mut attach => break result,
+                () = async { s.rig.poll().await; tokio::task::yield_now().await } => seen.push(s.get().await.state),
+            }
+        };
+        result.unwrap();
+        assert!(seen.iter().all(|state| *state == RunState::Working), "{seen:?}");
+        assert!(s.rig.noticed().is_empty(), "{:?}", s.rig.noticed());
+        assert_eq!(s.get().await.state, RunState::Stopped);
     }
 
     #[tokio::test]
