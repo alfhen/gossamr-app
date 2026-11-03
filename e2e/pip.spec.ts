@@ -160,9 +160,9 @@ test.describe("Pip's model picker", () => {
     await expect(pipPane(page).getByText("I'm running on Opus through claude.")).toBeVisible();
   });
 
-  test("Escape closes the list and leaves Pip open, and the list has no way to Settings until provider rows show", async ({ page }) => {
+  test("Escape closes the list and leaves Pip open", async ({ page }) => {
     await trigger(page).click();
-    await expect(menu(page).getByRole("menuitem", { name: "Add or manage…" })).toHaveCount(0);
+    await expect(menu(page).getByRole("menuitem", { name: "Add or manage…" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(menu(page)).toHaveCount(0);
     await expect(pipPane(page)).toBeVisible();
@@ -170,7 +170,7 @@ test.describe("Pip's model picker", () => {
   });
 
   test("another Claude starts Pip fresh, says so until Pip has run there, and one with a problem is greyed", async ({ page }) => {
-    await openApp(page, `${INSTANT_PIP}&providers=1`);
+    await openApp(page, `${INSTANT_PIP}`);
     await showPip(page);
     await addClaude(page, "Claude work", "~/.claude-work", "ready");
     await addClaude(page, "Claude broken", "~/.claude-broken", "error");
@@ -189,8 +189,8 @@ test.describe("Pip's model picker", () => {
     await expect(pipPane(page).getByRole("status").filter({ hasText: "Switching to" })).toHaveCount(0);
   });
 
-  test("Add or manage… opens Settings when provider rows show", async ({ page }) => {
-    await openApp(page, `${INSTANT_PIP}&providers=1`);
+  test("Add or manage… opens Settings", async ({ page }) => {
+    await openApp(page, `${INSTANT_PIP}`);
     await showPip(page);
     await trigger(page).click();
     await menu(page).getByRole("menuitem", { name: "Add or manage…" }).click();

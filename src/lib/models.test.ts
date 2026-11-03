@@ -1,5 +1,19 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CODEX_MODELS, defaultModelDefaults, modelList, validModelId } from "./models";
+import { CODEX_MODELS, defaultModelDefaults, DRIVERS, modelList, validModelId, type Driver } from "./models";
+
+describe("DRIVERS", () => {
+  it("say what Rust says each driver can run", () => {
+    const rust = readFileSync("src-tauri/src/connections.rs", "utf8");
+    const runs = (flag: string, driver: Driver) => {
+      const variants = new RegExp(`fn ${flag}\\(self\\) -> bool \\{\\s*matches!\\(self, ([^)]*)\\)`).exec(rust)?.[1] ?? "";
+      return variants.split("|").some((v) => v.trim() === `Self::${DRIVERS[driver].label}`);
+    };
+    for (const driver of Object.keys(DRIVERS) as Driver[]) {
+      expect({ runsPip: DRIVERS[driver].runsPip, runsAgents: DRIVERS[driver].runsAgents }).toEqual({ runsPip: runs("runs_pip", driver), runsAgents: runs("runs_agents", driver) });
+    }
+  });
+});
 
 describe("the model list", () => {
   it("is Default, Fable, Opus, Sonnet and Haiku, then the instance's own models", () => {

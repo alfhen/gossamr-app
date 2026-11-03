@@ -4,6 +4,7 @@ export const DEFAULT_MODEL = "default";
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export const MODEL_ID_LIMIT = 100;
+export const MODEL_ID_RULE = `Use letters, digits and . _ - [ ], starting with a letter or digit, up to ${MODEL_ID_LIMIT} characters.`;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._\-[\]]*$/;
 
 /** Letters, digits, `.`, `_`, `-`, `[` and `]`, starting with a letter or digit. The same rule Rust applies. */
@@ -29,6 +30,12 @@ export const CODEX_MODELS: ModelOption[] = [
 ];
 
 export type Driver = "claude" | "codex";
+
+/** What each driver can run. Mirrors `Driver::runs_pip` and `Driver::runs_agents` in connections.rs; a test keeps them equal. */
+export const DRIVERS: Record<Driver, { label: string; runsPip: boolean; runsAgents: boolean; beta: boolean }> = {
+  claude: { label: "Claude", runsPip: true, runsAgents: true, beta: false },
+  codex: { label: "Codex", runsPip: false, runsAgents: false, beta: true },
+};
 
 /** The driver's built-in list, then the ids added to the instance, leaving out any that is already listed in some case. */
 export function modelList(custom: string[], driver: Driver = "claude"): ModelOption[] {

@@ -578,14 +578,23 @@ async fn provider_models(core: State<'_, CoreState>, instance_id: String) -> Res
 
 /// Adds a model id to a provider instance's list and returns the list. An id that breaks the id rule is refused.
 #[tauri::command]
-fn provider_add_model(core: State<'_, CoreState>, instance_id: String, model: String) -> Result<Vec<model_choice::ModelOption>> {
-    core.provider_add_model(&instance_id, &model)
+fn provider_add_model(app: AppHandle, core: State<'_, CoreState>, instance_id: String, model: String) -> Result<Vec<model_choice::ModelOption>> {
+    let listed = core.provider_add_model(&instance_id, &model)?;
+    wire::changed(&app, wire::Topic::Connections, &instance_id);
+    Ok(listed)
 }
 
 /// The instance and model Pip and new agents use when nothing narrower says. With `set`, saves them first, checked as a run's choice would be.
 #[tauri::command]
-fn model_defaults(core: State<'_, CoreState>, set: Option<model_choice::ModelDefaultsSet>) -> Result<model_choice::ModelDefaults> {
-    core.model_defaults(set.map(Into::into))
+fn model_defaults(app: AppHandle, core: State<'_, CoreState>, set: Option<model_choice::ModelDefaultsSet>) -> Result<model_choice::ModelDefaults> {
+    let saving = set.is_some();
+    let defaults = core.model_defaults(set.map(Into::into))?;
+    if saving {
+        for choice in [&defaults.pip, &defaults.agents].into_iter().flatten() {
+            wire::changed(&app, wire::Topic::Connections, &choice.instance_id);
+        }
+    }
+    Ok(defaults)
 }
 
 /// Removes a finished run's worktree with `claude rm`, never forcing it.

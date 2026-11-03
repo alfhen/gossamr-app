@@ -1,4 +1,5 @@
 import { useEffect, type KeyboardEvent } from "react";
+import { Beta } from "../components/Beta";
 import { Button } from "../components/Button";
 import { ADD_GROUPS, type AddEntry, type AddEntryId } from "./connectionsLogic";
 import { usePopover } from "./Popover";
@@ -44,7 +45,10 @@ export function AddMenu({ entries, primary, onAdd }: AddMenuProps) {
                 </div>
                 {rows.map((e) => (
                   <button key={e.id} type="button" role="menuitem" onClick={() => (setOpen(false), onAdd(e.id))} className="block w-full px-3 py-1.5 text-left ws-glass-item">
-                    <span className="block font-semibold">{e.label}</span>
+                    <span className="flex items-center gap-1.5 font-semibold">
+                      {e.label}
+                      {e.beta && <Beta />}
+                    </span>
                     <span className="block text-ws-ink2">{e.line}</span>
                   </button>
                 ))}
