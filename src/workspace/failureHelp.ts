@@ -1,4 +1,5 @@
 import type { Run } from "../types";
+import type { RunInstance } from "./runInstance";
 
 export const INSTALL_COMMAND = "curl -fsSL https://claude.ai/install.sh | bash";
 export const INSTALL_URL = "https://code.claude.com/docs/en/setup";
@@ -83,7 +84,7 @@ function occupiedDetail(error: string | null | undefined): string {
 }
 
 /** What to offer for a failed run that never got a session. Null for anything else. */
-export function failureHelp(run: Run, refusal: string | null = null): FailureHelp | null {
+export function failureHelp(run: Run, refusal: string | null = null, instance: RunInstance | null = null): FailureHelp | null {
   if (run.state !== "failed" || run.shortId) return null;
   const failure = run.failure;
   // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
@@ -91,16 +92,18 @@ export function failureHelp(run: Run, refusal: string | null = null): FailureHel
   switch (failure?.type) {
     case "untrustedFolder":
       return untrusted(run, failure.path, refusal);
-    case "notSignedIn":
+    case "notSignedIn": {
+      const name = instance?.name ?? "Claude";
       return {
         kind: "notSignedIn",
-        summary: "Claude isn't signed in.",
-        detail: "Terminal opens with Claude in this run's folder. Type /login, finish signing in, then close it and retry.",
+        summary: `${name} isn't signed in.`,
+        detail: `Terminal opens with ${name} in this run's folder. Type /login, finish signing in, then close it and retry.`,
         primary: { label: "Open Terminal to sign in", act: "terminal" },
-        command: { text: "claude", note: "Then type /login." },
+        command: instance?.signIn ? { text: instance.signIn, note: null } : { text: "claude", note: "Then type /login." },
         retryNeedsTerminal: true,
         retry: true,
       };
+    }
     case "modeRefused": {
       const flag = failure.mode === "auto" ? "--permission-mode auto" : "--dangerously-skip-permissions";
       return {

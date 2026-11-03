@@ -155,6 +155,44 @@ test.describe("a queued run", () => {
   });
 });
 
+test.describe("what a queued run runs on", () => {
+  test("changes from the card, and the run starts on the new choice", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    const card = page.locator(`main article[data-run-id="${id}"]`);
+    await expect(card.locator("[data-runs-on]")).toContainText("Runs on Claude · Default");
+
+    await card.getByRole("button", { name: "Runs on Claude · Default" }).click();
+    await page.getByRole("menuitemradio", { name: "Haiku" }).click();
+    await expect(card.locator("[data-runs-on]")).toContainText("Runs on Claude · Haiku");
+    await expect(page.getByRole("dialog", { name: "Agent run" })).toHaveCount(0);
+
+    await advanceRuns(page, 2, id);
+    await expect(card.locator("[data-runs-on]")).toHaveText("Ran on Claude · Haiku");
+    await expect(card.getByRole("button", { name: "Change" })).toHaveCount(0);
+    await card.click();
+    await expect(runSheet(page).locator("[data-runs-on]")).toHaveText("Ran on Claude · Haiku");
+  });
+
+  test("is held back by a signed-out Claude, and the banner and the card name it and its sign-in command", async ({ page }) => {
+    await page.goto("/?runs=empty&mockRepos=14&mockClaudeProbe=notSignedIn");
+    await page.getByRole("button", { name: "Start watching" }).click();
+    await showWorkspace(page);
+    await expect(page.getByText("CA-401", { exact: true }).first()).toBeVisible();
+    const id = await startAgent(page, "CA-401", "investigate");
+    await railButton(page, /^Work/).click();
+    await expect(page.locator("[data-login-banner]")).toContainText("Claude is signed out, so agents on it wait. Sign in with claude auth login.");
+    await advanceRuns(page, 1, id);
+    const card = page.locator(`main article[data-run-id="${id}"]`);
+    await expect(card).toContainText("Waits until Claude is signed in.");
+    expect((await mockRuns(page)).find((r) => r.id === id)?.state).toBe("queued");
+  });
+});
+
 test.describe("a free role", () => {
   test("shows on the run's card and sheet as the role Pip gave it", async ({ page }) => {
     await page.goto("/?runs=empty&mockRepos=14");

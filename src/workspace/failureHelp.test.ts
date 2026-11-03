@@ -35,6 +35,18 @@ describe("failure help", () => {
     expect(shellQuote("/Users/me/My Code/it's")).toBe("'/Users/me/My Code/it'\\''s'");
   });
 
+  it("names the login a run was on and gives the sign-in command for its folder", () => {
+    const help = failureHelp(of("notSignedIn"), null, { name: "Claude work", signIn: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login" })!;
+    expect(help.summary).toBe("Claude work isn't signed in.");
+    expect(help.detail).toContain("Terminal opens with Claude work");
+    expect(help.command).toEqual({ text: "CLAUDE_CONFIG_DIR=~/.claude-work claude auth login", note: null });
+  });
+
+  it("keeps the plain Claude command for the usual login", () => {
+    const help = failureHelp(of("notSignedIn"), null, { name: "Claude", signIn: null })!;
+    expect([help.summary, help.command]).toEqual(["Claude isn't signed in.", { text: "claude", note: "Then type /login." }]);
+  });
+
   it("sends every failed run set up outside the work folder to Pip, whatever it failed on", () => {
     for (const type of ["noClone", "capReached", "notSignedIn", "untrustedFolder"]) {
       const help = failureHelp({ ...of(type), inWorkFolder: false });

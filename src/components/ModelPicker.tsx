@@ -23,12 +23,14 @@ export interface ModelPickerProps {
   name?: string;
   /** The trigger's tooltip. */
   title?: string;
+  /** What the trigger says in place of the choice, when the choice is shown beside it. */
+  action?: string;
 }
 
 const items = (menu: HTMLElement) => Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"], [data-menu-action]'));
 
 /** A popover list of instances and their models, with Add model… for the chosen instance. */
-export function ModelPicker({ instances, models, value, onChange, onAddModel, onManage, empty = "Choose a model", name = "Runs on", title = "Choose the Claude and model" }: ModelPickerProps) {
+export function ModelPicker({ instances, models, value, onChange, onAddModel, onManage, empty = "Choose a model", name = "Runs on", title = "Choose the Claude and model", action }: ModelPickerProps) {
   const { open, setOpen, root } = usePopover();
   const [adding, setAdding] = useState(false);
   const [id, setId] = useState("");
@@ -92,10 +94,12 @@ export function ModelPicker({ instances, models, value, onChange, onAddModel, on
   return (
     <div ref={root} className="relative flex min-w-0" data-model-picker>
       <Button variant="quiet" size="sm" data-popover-trigger aria-haspopup="menu" aria-expanded={open} aria-label={`${name} ${label}`} title={title} className="max-w-full -ml-1.5 !px-1.5 text-xs" onClick={() => setOpen(!open)}>
-        <span className="truncate">{label}</span>
-        <span aria-hidden className="text-ws-ink3">
-          ▾
-        </span>
+        <span className="truncate">{action ?? label}</span>
+        {!action && (
+          <span aria-hidden className="text-ws-ink3">
+            ▾
+          </span>
+        )}
       </Button>
       {open && (
         <ModelMenu

@@ -7,7 +7,8 @@ import { useWorkspace } from "../workspaceStore";
 import { roleLabel } from "../lib/roles";
 import { Icon } from "./AgentIcons";
 import { Box, BoxTitle, Btn, CodeBox, Details, Sec, SheetFrame } from "./AgentSheet";
-import { StateChip, useSlotQueue, type TrustState } from "./AgentParts";
+import { RunsOnLine, StateChip, useSlotQueue, type TrustState } from "./AgentParts";
+import { useRunInstance } from "./runInstance";
 import { agentGroups, ageText, formatTokens, ordinal, progressText, quietMinutes, quietText, repoName, runTitle, slotPosition } from "./agentsLogic";
 import { useStateView } from "./useStateView";
 import { openTicket } from "./jump";
@@ -189,7 +190,7 @@ export function waitingText(run: Run, place: number | null = null): string {
 
 function FailureBox({ run, opened, trust, on }: { run: Run; opened: boolean; trust?: TrustState; on: RunSheetActions }) {
   const { trusting = false, refused = null } = trust ?? {};
-  const help = failureHelp(run, refused);
+  const help = failureHelp(run, refused, useRunInstance(run));
   const message = run.error?.trim() || "No reason was recorded.";
   const ready = help ? retryEnabled(help, opened) : true;
   const stepDone = !!help?.primary && help.retryNeedsTerminal && opened;
@@ -323,6 +324,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         </div>
         <h2 className="font-display m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
+        <RunsOnLine run={run} />
         {answerSent && <AnswerSent />}
       </div>
 

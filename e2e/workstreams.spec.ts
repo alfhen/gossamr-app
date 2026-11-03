@@ -4,7 +4,7 @@ import {
   homeConversation, homeConversationRegion, homeSettled, INSTANT_PIP, jiraWrites, MANUAL_PRS, mockRuns, needsPane,
   needsYouCount, openAgents, openApp, openPip, paneSettled, pausedBanner, peekSheet, peekTicket, pipConversation,
   pipPane, selectWorkstream, showWorkspace, startInvestigationAfterWake, startWorkstream, stepRail, surfacePullRequests, toast, VAGUE_TICKET, wakes,
-  wakeTurns, workstreamEvents, workstreamGroup, workstreamOpen,
+  wakeTurns, workstreamEvents, workstreamGroup, workstreamOpen, workstreamSheet, startAgent,
 } from "./support/app";
 import { finishRun, newest } from "./support/steps";
 
@@ -567,5 +567,28 @@ test.describe("Close and Pause", () => {
     const keep = confirm.getByRole("button", { name: "Keep" });
     await expect(keep).toBeFocused();
     await expect(keep).toHaveAccessibleDescription(/Close it\? Its conversation goes back to General/);
+  });
+});
+
+test.describe("New agents use, per workstream", () => {
+  test("changes what an agent queued in the workstream runs on, and goes back to the Settings default", async ({ page }) => {
+    await openApp(page, "runs=empty");
+    await startWorkstream(page, "CA-401");
+    await openAgents(page);
+    await selectWorkstream(page, "CA-401");
+    const row = workstreamSheet(page).locator("[data-agents-model]");
+    await expect(row).toContainText("New agents use");
+    await expect(row).toContainText("the default in Settings");
+
+    await row.getByRole("button", { name: /^New agents in this workstream use/ }).click();
+    await page.getByRole("menuitemradio", { name: "Haiku" }).click();
+    await expect(row.getByRole("button", { name: "New agents in this workstream use Claude · Haiku" })).toBeVisible();
+    await startAgent(page, "CA-401", "investigate");
+    await expect.poll(async () => (await mockRuns(page))[0]?.runsOn).toEqual({ instanceId: "claude", model: "haiku" });
+
+    await row.getByRole("button", { name: "Use the default" }).click();
+    await expect(row).toContainText("the default in Settings");
+    await startAgent(page, "CA-401", "triage");
+    await expect.poll(async () => (await mockRuns(page))[0]?.runsOn).toEqual({ instanceId: "claude", model: "default" });
   });
 });
