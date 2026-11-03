@@ -201,8 +201,14 @@ impl RunService {
         let tools = if tc.backend.resumes_with_tools() { self.offer_tools(run).await } else { None };
         let request = ResumeRequest { message: message(text), cwd, tools, settle, finished };
         match tc.backend.resume(session, &request, &self.timing.waits()).await {
-            Ok(Resumed::Same(_)) => None,
+            Ok(Resumed::Same(same)) => {
+                run.process = same.process;
+                self.remember(run);
+                None
+            }
             Ok(Resumed::Copy { session, note }) => {
+                run.process = None;
+                self.remember(run);
                 run.earlier_sessions.push(EarlierSession { short_id: session.short_id, session_id: None, removed: false });
                 Some(note)
             }

@@ -531,7 +531,10 @@ CREATE INDEX runs_on_state ON runs(runs_on, state);";
 const RUN_MESSAGE_AUTHOR: &str = "
 ALTER TABLE run_messages ADD COLUMN author TEXT NOT NULL DEFAULT 'pip';";
 
-const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR];
+/// The agent process of a run's current turn as JSON, for a backend that has to find it again. It is not in `data`, which the page also gets.
+const RUN_PROCESS: &str = "ALTER TABLE runs ADD COLUMN process TEXT;";
+
+const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR, RUN_PROCESS];
 
 const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
 
@@ -675,6 +678,7 @@ mod tests {
             let mut expected = columns(&cache, table);
             if table == &"runs" {
                 expected.push(("runs_on".into(), "TEXT".into(), true));
+                expected.push(("process".into(), "TEXT".into(), false));
             }
             if table == &"run_messages" {
                 expected.push(("author".into(), "TEXT".into(), true));

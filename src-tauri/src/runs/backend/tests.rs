@@ -137,6 +137,10 @@ pub(in crate::runs) struct Recorder {
     pub attach_stops_the_run: std::sync::atomic::AtomicBool,
     pub trust_at: Mutex<Option<PathBuf>>,
     pub takes_tools_on_resume: std::sync::atomic::AtomicBool,
+    /// The process every launch and resume reports.
+    pub process: Mutex<Option<RunProcess>>,
+    /// The process of each session it was asked to stop.
+    pub stopped: Mutex<Vec<Option<RunProcess>>>,
 }
 
 impl Recorder {
@@ -158,7 +162,7 @@ impl RunBackend for Recorder {
 
     async fn launch(&self, req: &LaunchRequest) -> std::result::Result<Session, Failure> {
         self.launches.lock().unwrap().push(req.clone());
-        Ok(Session { short_id: req.fresh_id.clone(), session_id: Some("thread-1".into()), process: None })
+        Ok(Session { short_id: req.fresh_id.clone(), session_id: Some("thread-1".into()), process: self.process.lock().unwrap().clone() })
     }
 
     async fn folders(&self) -> Folders {
@@ -223,6 +227,7 @@ impl RunBackend for Recorder {
 
     async fn stop(&self, session: &Session) -> BackendResult<()> {
         self.did(format!("stop:{}", session.short_id));
+        self.stopped.lock().unwrap().push(session.process.clone());
         Ok(())
     }
 
@@ -235,7 +240,7 @@ impl RunBackend for Recorder {
         if let Some(offer) = &req.tools {
             self.did(format!("resume_tools:{}", offer.run_id));
         }
-        Ok(Resumed::Same(session.clone()))
+        Ok(Resumed::Same(Session { process: self.process.lock().unwrap().clone(), ..session.clone() }))
     }
 
     fn resumes_with_tools(&self) -> bool {
@@ -490,4 +495,46 @@ async fn opening_a_session_that_stops_the_run_cancels_its_held_ask_and_stores_it
     assert_eq!(rig.svc.core.asks().question(&run.id), None);
     assert!(backend.done().contains(&format!("ask_ended:{}", run.id)));
     assert_eq!(rig.opened.0.lock().unwrap().len(), 1, "Terminal was opened after the run was stored");
+}
+
+fn process(pid: u32) -> RunProcess {
+    RunProcess { pid, started: 1_700_000_000 + u64::from(pid) }
+}
+
+#[tokio::test]
+async fn a_launch_stores_the_process_the_backend_returns_in_the_run_and_the_index() {
+    let backend = Arc::new(Recorder::default());
+    *backend.process.lock().unwrap() = Some(process(4242));
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let run = rig.launched(1).await;
+
+    assert_eq!(run.process, Some(process(4242)));
+    assert_eq!(rig.get(&run).await.process, Some(process(4242)), "the stored run has it");
+    let entry = rig.svc.index.live().into_iter().find(|e| e.run_id == run.id).expect("indexed");
+    assert_eq!(entry.process, Some(process(4242)));
+    assert!(serde_json::to_value(&run).unwrap().get("process").is_none(), "the page never gets it");
+}
+
+#[tokio::test]
+async fn after_a_resume_the_index_holds_the_new_process_and_stop_all_stops_that_one() {
+    use crate::domain::Actor;
+    let backend = Arc::new(Recorder::default());
+    *backend.process.lock().unwrap() = Some(process(100));
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let launched = rig.launched(1).await;
+    let run = rig
+        .set(&launched, |r| {
+            r.session_id = Some(SESSION.into());
+            r.state = RunState::Stopped;
+        })
+        .await;
+
+    *backend.process.lock().unwrap() = Some(process(200));
+    rig.svc.message_agent(&run.id, "Carry on.", Actor::Person).await.unwrap();
+    let entry = rig.svc.index.live().into_iter().find(|e| e.run_id == run.id).expect("indexed");
+    assert_eq!(entry.process, Some(process(200)));
+    assert_eq!(rig.get(&run).await.process, Some(process(200)));
+
+    rig.svc.stop_all().await.unwrap();
+    assert_eq!(*backend.stopped.lock().unwrap(), vec![Some(process(200))]);
 }

@@ -381,6 +381,14 @@ impl RunState {
     }
 }
 
+/// A running turn of an agent that Gossamr started itself, and so has to find again by its pid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunProcess {
+    pub pid: u32,
+    /// The process start time in seconds, to tell a reused pid from the original.
+    pub started: u64,
+}
+
 /// Why a run failed, as far as the page needs to offer a next step. `Run::error` keeps the full text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -524,6 +532,10 @@ pub struct Run {
     /// Set when the person archived the run: it leaves the Agents view and Needs you but stays here until deleted.
     #[serde(default)]
     pub archived_at: Option<DateTime<Utc>>,
+    /// The agent process of the current turn, for a backend that has to find it again. Kept in its own column and
+    /// never sent to the page.
+    #[serde(skip)]
+    pub process: Option<RunProcess>,
     /// Set when the person carried on a finished run in Terminal: it is theirs from then on, and finishing again
     /// doesn't announce itself a second time.
     #[serde(default)]
@@ -625,6 +637,7 @@ impl Run {
             last_progress_at: at,
             ended_at: None,
             worktree_removed_at: None,
+            process: None,
             sessions_left: false,
             archived_at: None,
             continued_at: None,

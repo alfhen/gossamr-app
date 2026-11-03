@@ -201,7 +201,7 @@ async fn a_run_waits_when_the_default_for_agents_was_cleared_with_its_instance()
 #[tokio::test]
 async fn a_run_waits_for_an_instance_that_is_off_and_one_that_cannot_start_fails_as_before() {
     let off = ToolchainError::Unusable { reason: Reason::Off, name: "Claude".into() };
-    let missing = ToolchainError::ClaudeMissing { instance: "Claude".into() };
+    let missing = ToolchainError::ClaudeMissing { instance: "Claude".into(), driver: crate::connections::Driver::Claude };
     for (error, state, reason) in [(off, RunState::Queued, Some("Waits for Claude, which is off.")), (missing, RunState::Failed, None)] {
         let rig = ready().await;
         let run = rig.queued(1).await;
