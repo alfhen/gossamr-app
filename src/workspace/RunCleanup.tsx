@@ -1,10 +1,7 @@
 import { useState } from "react";
-import type { Driver } from "../lib/models";
 import type { Run } from "../types";
 import { Box, Btn, Sec } from "./AgentSheet";
-import { leftoverSessions } from "./cleanupLogic";
-import { DEFAULT_INSTANCE } from "./providerLogic";
-import { useRunInstance } from "./runInstance";
+import { leftoverSessions, removerOf, type Remover } from "./cleanupLogic";
 import { useRuns } from "./runsStore";
 import { useWorkspace } from "../workspaceStore";
 
@@ -13,10 +10,10 @@ export interface RunCleanupViewProps {
   reason: string | null;
   asking: boolean;
   busy: boolean;
-  /** The name of the login the run was on; null once that login is removed. */
+  /** The name of the login the run was on; null once that login is removed or while it is unknown. */
   login: string | null;
-  /** What removes the worktree: `claude rm` for Claude, git for Codex and for a removed login (null), which has no tool to ask. Claude when left out. */
-  driver?: Driver | null;
+  /** What removes the worktree. Claude when left out. */
+  remover?: Remover;
   /** Its own words when it refused. */
   refused: string | null;
   onAsk(): void;
@@ -24,7 +21,7 @@ export interface RunCleanupViewProps {
   onConfirm(): void;
 }
 
-export function RunCleanupView({ run, reason, login, driver = "claude", asking, busy, refused, onAsk, onCancel, onConfirm }: RunCleanupViewProps) {
+export function RunCleanupView({ run, reason, login, remover = "claude", asking, busy, refused, onAsk, onCancel, onConfirm }: RunCleanupViewProps) {
   if (run.worktreeRemovedAt) {
     const left = leftoverSessions(run);
     return (
@@ -57,9 +54,11 @@ export function RunCleanupView({ run, reason, login, driver = "claude", asking, 
       <Box>
         {reason && <p className="m-0 text-ws-ink">{reason}</p>}
         <p className="m-0 text-sm text-ws-ink2">
-          {driver === "claude"
+          {remover === "claude"
             ? "Removes this agent's worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here."
-            : "Removes this agent's worktree and branch with git. Git refuses to remove changes or a branch that isn't merged, and says why. Gossamr never forces it. The result stays here."}
+            : remover === "git"
+              ? "Removes this agent's worktree and branch with git. Git refuses to remove changes or a branch that isn't merged, and says why. Gossamr never forces it. The result stays here."
+              : "Removes this agent's worktree and branch with its login's own tool. It refuses to remove work that isn't pushed or merged, and says why. Gossamr never forces it. The result stays here."}
         </p>
         {refused && (
           <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
@@ -99,9 +98,8 @@ export function RunCleanup({ run, reason }: { run: Run; reason: string | null })
     setAsking(false);
     setRefused(result?.type === "refused" ? result.message : null);
   };
-  const instance = useRunInstance(run);
-  const instanceId = run.runsOn?.instanceId ?? DEFAULT_INSTANCE;
-  const known = useWorkspace((s) => s.connections.some((c) => c.kind === "provider" && c.instanceId === instanceId));
-  const login = known ? instance.name : null;
-  return <RunCleanupView run={run} reason={reason} login={login} driver={known ? instance.driver : null} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
+  const connections = useWorkspace((s) => s.connections);
+  const loaded = useWorkspace((s) => s.connectionsLoaded);
+  const { remover, login } = removerOf(run, connections, loaded);
+  return <RunCleanupView run={run} reason={reason} login={login} remover={remover} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
 }

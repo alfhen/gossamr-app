@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { sizeText } from "../lib/archiveRuns";
-import type { Driver } from "../lib/models";
 import type { Run, WorktreeInfo } from "../types";
 import { Btn } from "./AgentSheet";
 import { ageText, runTitle } from "./agentsLogic";
-import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
+import { removerOf, type Remover } from "./cleanupLogic";
 import { useRuns } from "./runsStore";
 import { useWorkspace } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
@@ -19,8 +18,8 @@ export interface DeleteAsk {
   /** The login's own words when it would not remove the worktree. */
   refused: string | null;
   /** What removes the worktree, and who is named when it refuses. Claude when left out. */
-  driver?: Driver | null;
-  login?: string;
+  remover?: Remover;
+  login?: string | null;
 }
 
 export interface ArchivedSectionViewProps {
@@ -53,7 +52,12 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
             Also remove its worktree folder{info.bytes !== null ? ` (${sizeText(info.bytes)})` : ""}
             <span className="selectable block font-mono text-xs text-ws-ink3 [overflow-wrap:anywhere]">{info.path}</span>
             <span className="block text-xs text-ws-ink3">
-              {ask.driver === undefined || ask.driver === "claude" ? "Removed with claude rm, which refuses work that was never pushed." : "Removed with git, which refuses changes and branches that aren't merged."} Only folders in ~/Gossamr/agents are ever removed.
+              {ask.remover === undefined || ask.remover === "claude"
+                ? "Removed with claude rm, which refuses work that was never pushed."
+                : ask.remover === "git"
+                  ? "Removed with git, which refuses changes and branches that aren't merged."
+                  : "Removed with its login's own tool, which refuses work that isn't pushed or merged."}{" "}
+              Only folders in ~/Gossamr/agents are ever removed.
             </span>
           </span>
         </label>
@@ -62,7 +66,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
       )}
       {ask.refused && (
         <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-          {ask.login ?? "Claude"} kept it: {ask.refused}. Nothing was deleted.
+          {ask.login ?? "The login"} kept it: {ask.refused}. Nothing was deleted.
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -126,10 +130,8 @@ export function ArchivedSection({ runs, now }: { runs: readonly Run[]; now: numb
   const ask = async (id: string) => {
     const run = runs.find((r) => r.id === id);
     const connections = useWorkspace.getState().connections;
-    const instanceId = run?.runsOn?.instanceId ?? DEFAULT_INSTANCE;
-    const instance = instanceOf(connections, instanceId);
-    const known = connections.some((c) => c.kind === "provider" && c.instanceId === instanceId);
-    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null, driver: known ? instance.driver : null, login: instance.name });
+    const { remover, login } = removerOf(run ?? {}, connections, useWorkspace.getState().connectionsLoaded);
+    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null, remover, login });
     try {
       const info = await useRuns.getState().backend?.runsWorktreeInfo(id);
       setAsking((a) => (a?.id === id && info ? { ...a, info } : a));

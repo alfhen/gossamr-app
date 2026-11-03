@@ -704,7 +704,7 @@ export class MockRuns {
   }
 
   /** The logins runs launch on; set by the mock backend. */
-  providers: Pick<MockProviders, "signedOutName" | "has" | "driverOf"> = { signedOutName: () => null, has: () => true, driverOf: () => "claude" };
+  providers: Pick<MockProviders, "signedOutName" | "has" | "keptDriverOf"> = { signedOutName: () => null, has: () => true, keptDriverOf: () => "claude" };
 
   /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
   choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
@@ -1103,7 +1103,7 @@ export class MockRuns {
     const run = this.get(id);
     if (!run?.shortId) throw new Error("that run has no session to attach to yet");
     this.attached.push(id);
-    if (this.providers.driverOf(run.runsOn?.instanceId ?? "claude") !== "codex") {
+    if (this.providers.keptDriverOf(run.runsOn?.instanceId ?? "claude") !== "codex") {
       this.attachCommands.push("claude attach");
       return;
     }

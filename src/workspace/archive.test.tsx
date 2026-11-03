@@ -134,6 +134,24 @@ describe("the Archived section", () => {
   const view = (over: Partial<ArchivedSectionViewProps> = {}) =>
     renderToStaticMarkup(<ArchivedSectionView runs={[run({ id: "a1" })]} open now={NOW} ticketTitle={() => "Retry webhooks"} asking={null} onToggle={vi.fn()} onRestore={vi.fn()} onAskDelete={vi.fn()} onCancelDelete={vi.fn()} onRemoveWorktree={vi.fn()} onConfirmDelete={vi.fn()} {...over} />);
 
+  it("names the tool that removes the folder, by the run's login", () => {
+    const folder = { path: "/p", removable: true, reason: null, bytes: 1 };
+    const ask = (over: object) => view({ asking: { id: "a1", info: folder, removeWorktree: false, busy: false, refused: null, ...over } });
+    expect(ask({ remover: "git", login: "Codex" })).toContain("Removed with git");
+    expect(ask({ remover: "git", login: null })).toContain("Removed with git");
+    expect(ask({ remover: "claude", login: "Claude" })).toContain("Removed with claude rm");
+    const unknown = ask({ remover: "unknown", login: null });
+    expect(unknown).toContain("its login&#x27;s own tool");
+    expect(unknown).not.toContain("claude rm");
+  });
+
+  it("names the login in a refusal only when it is known", () => {
+    const folder = { path: "/p", removable: true, reason: null, bytes: 1 };
+    const ask = (login: string | null) => view({ asking: { id: "a1", info: folder, removeWorktree: true, busy: false, refused: "no", remover: "git", login } });
+    expect(ask("Codex")).toContain("Codex kept it: no");
+    expect(ask(null)).toContain("The login kept it: no");
+  });
+
   it("is collapsed to a count and opens to rows with Restore and Delete permanently", () => {
     const closed = view({ open: false });
     expect(closed).toContain("Archived");

@@ -1,4 +1,5 @@
-import type { CodeChange, Run } from "../types";
+import type { CodeChange, ConnectionInfo, Run } from "../types";
+import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
 import { formatBytes } from "./runSheetLogic";
 
 export const STALE_DAYS = 14;
@@ -41,4 +42,16 @@ export function cleanupReport(removed: number, refused: readonly string[]): stri
   const done = `Removed ${removed} ${removed === 1 ? "worktree" : "worktrees"}.`;
   if (!refused.length) return done;
   return `${done} ${refused.length} kept: ${refused[0]}`;
+}
+
+/** What removes a run's worktree: `claude rm`, git (Codex, or a login that was removed), or unknown while the logins haven't loaded. */
+export type Remover = "claude" | "git" | "unknown";
+
+/** Follows `RunService::instance_removed`: git only for a run that records its login, once the logins have loaded and none has that id. */
+export function removerOf(run: Pick<Run, "runsOn">, connections: readonly ConnectionInfo[], loaded: boolean): { remover: Remover; login: string | null } {
+  const instanceId = run.runsOn?.instanceId ?? DEFAULT_INSTANCE;
+  const known = connections.some((c) => c.kind === "provider" && c.instanceId === instanceId);
+  if (!known && run.runsOn) return { remover: loaded ? "git" : "unknown", login: null };
+  const instance = instanceOf(connections, instanceId);
+  return { remover: instance.driver === "claude" ? "claude" : "git", login: instance.name };
 }
