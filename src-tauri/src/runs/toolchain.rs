@@ -63,7 +63,7 @@ pub trait ToolchainSource: Send + Sync {
     async fn for_instance(&self, id: &str) -> Result<Toolchain, ToolchainError>;
 
     /// The toolchain for looking at runs already on an instance: it works whether the instance is on or off. Only a
-    /// missing instance, an unreadable list, no environment or no binary refuse it.
+    /// missing instance, a folder that breaks the rules, an unreadable list, no environment or no binary refuse it.
     async fn observe_instance(&self, id: &str) -> Result<Toolchain, ToolchainError> {
         self.for_instance(id).await
     }
@@ -268,6 +268,20 @@ mod tests {
         assert_eq!(tools.for_instance("off").await.err(), Some(ToolchainError::Unusable { reason: Reason::Off, name: "off name".into() }));
         assert!(matches!(tools.for_instance("bad").await.err(), Some(ToolchainError::BadFolder { name, problem }) if name == "bad name" && problem.starts_with("This folder can't be used: ")));
         assert_eq!(tools.for_instance("codex").await.err(), Some(ToolchainError::Unusable { reason: Reason::CantRun(Driver::Codex), name: "codex name".into() }));
+    }
+
+    #[tokio::test]
+    async fn an_instance_that_is_off_is_still_observed_in_its_own_folder_and_one_with_a_bad_folder_is_not() {
+        let (fx, tools) = rig("observe").await;
+        add(&fx, "off", Driver::Claude, Some("~/.claude-off"), false);
+        add(&fx, "bad", Driver::Claude, Some("/tmp/outside-home"), true);
+        add(&fx, "bad_off", Driver::Claude, Some("/tmp/outside-home-2"), false);
+        assert!(matches!(tools.for_instance("off").await.err(), Some(ToolchainError::Unusable { reason: Reason::Off, .. })));
+        let tc = tools.observe_instance("off").await.unwrap();
+        assert_eq!(tc.cli.version().await.unwrap(), format!("{}|unset", fx.home.join(".claude-off").display()));
+        for id in ["bad", "bad_off"] {
+            assert!(matches!(tools.observe_instance(id).await.err(), Some(ToolchainError::BadFolder { .. })), "{id}");
+        }
     }
 
     #[tokio::test]

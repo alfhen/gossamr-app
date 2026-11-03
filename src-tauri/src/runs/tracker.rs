@@ -239,7 +239,7 @@ impl RunService {
         let turn = self.launching.lock().await;
         let now = clock();
         let mut by_instance: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
-        for run in runs.iter().chain(&finished) {
+        for run in runs.iter().filter(|r| r.state != RunState::Queued || r.short_id.is_some()).chain(&finished) {
             by_instance.entry(run.instance_id()).or_default().push(run);
         }
         let mut changed = HashSet::new();

@@ -131,26 +131,29 @@ pub struct TerminalLogin<'a> {
 /// The state of every provider instance, in order. A folder that fails the rules in `provider_folder` is an error
 /// whatever the shell says, and an instance that is turned off is never ready.
 pub fn states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
+    resolve_all(providers, places, shell, false)
+}
+
+/// Like `states`, but for watching runs that already exist: an instance that is off still gets its login. A folder
+/// that fails the rules is still an error, so nothing is spawned in it.
+pub fn observing_states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
+    resolve_all(providers, places, shell, true)
+}
+
+fn resolve_all(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>, observing: bool) -> Vec<(String, ProviderState)> {
     let problems = provider_folder::problems(providers, places, shell);
     let home = places.home.unwrap_or(Path::new(""));
     providers
         .iter()
         .map(|p| {
             let state = match problems.get(&p.id) {
-                _ if !p.enabled => ProviderState::Off,
+                _ if !p.enabled && !observing => ProviderState::Off,
                 Some(problem) => ProviderState::Error(provider_folder::describe(problem, p.config.config_dir.is_some())),
                 None => ProviderEnv::resolve(p, shell, home).map_or_else(ProviderState::Unavailable, ProviderState::Ready),
             };
             (p.id.clone(), state)
         })
         .collect()
-}
-
-/// Like `states`, but for watching runs that already exist: an instance that is off or has a bad folder still gets its
-/// login, and only a missing shell setup stops it.
-pub fn observing_states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
-    let home = places.home.unwrap_or(Path::new(""));
-    providers.iter().map(|p| (p.id.clone(), ProviderEnv::resolve(p, shell, home).map_or_else(ProviderState::Unavailable, ProviderState::Ready))).collect()
 }
 
 #[cfg(test)]

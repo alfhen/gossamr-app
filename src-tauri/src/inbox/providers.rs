@@ -69,8 +69,8 @@ impl Core {
         self.lookup(id, false).await
     }
 
-    /// Like `lookup_provider`, but an instance that is off or has a bad folder still gets its login, so the runs on it
-    /// can be watched.
+    /// Like `lookup_provider`, but an instance that is off still gets its login, so the runs on it can be watched. A
+    /// bad folder is still an error.
     pub async fn lookup_provider_for_observing(&self, id: &str) -> Lookup {
         self.lookup(id, true).await
     }

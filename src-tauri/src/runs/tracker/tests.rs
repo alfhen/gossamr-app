@@ -1243,3 +1243,14 @@ async fn a_run_on_a_login_that_is_turned_off_is_still_followed() {
     svc.poll_at(Utc::now()).await;
     assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
 }
+
+#[tokio::test]
+async fn a_queued_run_on_a_login_that_is_turned_off_does_not_start_its_cli() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    rig.set(&run, |r| r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None })).await;
+    let (svc, second) = crate::runs::rig::with_login_off(&rig.fx, &rig.cli, "claude_2");
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(second.0.lock().unwrap().listings, 0);
+}
