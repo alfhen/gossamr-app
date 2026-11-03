@@ -19,7 +19,7 @@ export interface DeleteAsk {
   /** The login's own words when it would not remove the worktree. */
   refused: string | null;
   /** What removes the worktree, and who is named when it refuses. Claude when left out. */
-  driver?: Driver;
+  driver?: Driver | null;
   login?: string;
 }
 
@@ -53,7 +53,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
             Also remove its worktree folder{info.bytes !== null ? ` (${sizeText(info.bytes)})` : ""}
             <span className="selectable block font-mono text-xs text-ws-ink3 [overflow-wrap:anywhere]">{info.path}</span>
             <span className="block text-xs text-ws-ink3">
-              {ask.driver === "codex" ? "Removed with git, which refuses changes and branches that aren't merged." : "Removed with claude rm, which refuses work that was never pushed."} Only folders in ~/Gossamr/agents are ever removed.
+              {ask.driver === null ? "Removed with its login's tool, which refuses work that isn't safe to lose." : ask.driver === "codex" ? "Removed with git, which refuses changes and branches that aren't merged." : "Removed with claude rm, which refuses work that was never pushed."} Only folders in ~/Gossamr/agents are ever removed.
             </span>
           </span>
         </label>
@@ -125,8 +125,11 @@ export function ArchivedSection({ runs, now }: { runs: readonly Run[]; now: numb
 
   const ask = async (id: string) => {
     const run = runs.find((r) => r.id === id);
-    const instance = instanceOf(useWorkspace.getState().connections, run?.runsOn?.instanceId ?? DEFAULT_INSTANCE);
-    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null, driver: instance.driver, login: instance.name });
+    const connections = useWorkspace.getState().connections;
+    const instanceId = run?.runsOn?.instanceId ?? DEFAULT_INSTANCE;
+    const instance = instanceOf(connections, instanceId);
+    const known = connections.some((c) => c.kind === "provider" && c.instanceId === instanceId);
+    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null, driver: known ? instance.driver : null, login: instance.name });
     try {
       const info = await useRuns.getState().backend?.runsWorktreeInfo(id);
       setAsking((a) => (a?.id === id && info ? { ...a, info } : a));

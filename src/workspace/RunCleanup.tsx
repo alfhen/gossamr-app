@@ -15,8 +15,8 @@ export interface RunCleanupViewProps {
   busy: boolean;
   /** The name of the login the run was on; null once that login is removed. */
   login: string | null;
-  /** What removes the worktree: `claude rm` for Claude, the tool called "git" for Codex. Claude when left out. */
-  driver?: Driver;
+  /** What removes the worktree: `claude rm` for Claude, the tool called "git" for Codex. Claude when left out; null once the login is removed and the tool is unknown. */
+  driver?: Driver | null;
   /** Its own words when it refused. */
   refused: string | null;
   onAsk(): void;
@@ -57,7 +57,9 @@ export function RunCleanupView({ run, reason, login, driver = "claude", asking, 
       <Box>
         {reason && <p className="m-0 text-ws-ink">{reason}</p>}
         <p className="m-0 text-sm text-ws-ink2">
-          {driver === "codex"
+          {driver === null
+            ? "Removes this agent's worktree and branch with its login's tool, which refuses to remove work that isn't safe to lose and says why. Gossamr never forces it. The result stays here."
+            : driver === "codex"
             ? "Removes this agent's worktree and branch with git. Git refuses to remove changes or a branch that isn't merged, and says why. Gossamr never forces it. The result stays here."
             : "Removes this agent's worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here."}
         </p>
@@ -103,5 +105,5 @@ export function RunCleanup({ run, reason }: { run: Run; reason: string | null })
   const instanceId = run.runsOn?.instanceId ?? DEFAULT_INSTANCE;
   const known = useWorkspace((s) => s.connections.some((c) => c.kind === "provider" && c.instanceId === instanceId));
   const login = known ? instance.name : null;
-  return <RunCleanupView run={run} reason={reason} login={login} driver={instance.driver} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
+  return <RunCleanupView run={run} reason={reason} login={login} driver={known ? instance.driver : null} asking={asking} busy={busy} refused={refused} onAsk={() => setAsking(true)} onCancel={() => setAsking(false)} onConfirm={() => void confirm()} />;
 }
