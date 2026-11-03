@@ -457,6 +457,14 @@ A launch waits up to 60 seconds for the first `thread.started` line in `events-1
 
 c0 check C5: SIGINT to a running `codex exec` ended it within 6 seconds with its events intact, and left no `turn.completed`. In the ChatGPT.app copy the pid is the real binary, not a node launcher (C4). A copy installed through npm may run as a `node` launcher; that is not checked. X08 stops with SIGINT, then SIGKILL to the process group after `stop_wait`, and sends nothing to a pid that is no longer the run's. Stop all allows a Codex stop `stop_wait` plus the kill settle time plus a second (`stop_budget`), so a codex that ignores SIGINT is killed and the run reads Stopped. Test: `stop_all_kills_a_codex_run_that_ignores_sigint_and_stores_it_stopped`.
 
+### Answering, messaging, attaching and cleaning up
+
+An answer or a message resumes the thread: `codex exec resume <thread uuid> --json -o final.txt` with the launch's `-m` and `-c` keys, a fresh token in `GOSSAMR_MCP_TOKEN`, and the reminder plus the text after `--`. `exec resume` takes no `-C`, so the process runs in the worktree. It writes `events-<n+1>.jsonl` and `process-<n+1>.json`, and only once the new process has started does it remove `asked-<n>`, `terminal` and `terminal-seen`. A resume that fails to start removes the files of its own turn and keeps `asked-<n>`, so the run still shows its question. Tests: `an_answer_to_a_codex_run_resumes_the_same_thread_with_a_new_process_and_the_reminder`, `a_failed_codex_resume_keeps_the_asked_file_and_removes_its_own_turn_files`.
+
+Attach stops the `exec`, writes `terminal` and opens `codex resume <thread uuid>` in Terminal. The script holds no token, so that session has no Gossamr tools. While a `codex` process with the thread id in its arguments is alive, a message or an answer is refused. Test: `attach_stops_the_codex_turn_then_opens_codex_resume_with_no_token_in_the_script`.
+
+Clean-up stops a live process, removes the worktree and branch with git (unpushed work stays, and a clone outside `~/Gossamr/agents` is refused), then runs `codex delete --force <thread uuid>`. A launch that fails after making its branch deletes it with `git update-ref -d <ref> <tip>`, so a branch that has moved on since is kept. Tests: `cleaning_up_a_codex_run_removes_its_worktree_branch_folder_and_saved_session`, `unpushed_codex_work_keeps_its_worktree_in_git_s_words`.
+
 ### The sandbox
 
 With no `--sandbox` flag, `codex exec` uses approval `never`, so a command the sandbox blocks fails and nothing asks. Under `workspace-write` the agent can edit files in its worktree but `git add` fails with `Unable to create '<clone>/.git/worktrees/<name>/index.lock': Operation not permitted`, and a push is rejected with `unable to create temporary object directory` (C6). Only `danger-full-access` commits and pushes. The Codex guard adds "If your sandbox stops git from committing or pushing, stop and say so in your report." (`CODEX_GUARD`).
