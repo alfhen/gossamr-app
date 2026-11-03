@@ -6,8 +6,9 @@
 use chrono::Utc;
 
 use super::answer::checked;
-use super::cli::{is_uuid, AgentEntry};
-use super::service::{belongs_to, RunService};
+use super::backend::Session;
+use super::cli::is_uuid;
+use super::service::RunService;
 use crate::domain::{Actor, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
@@ -110,13 +111,8 @@ impl RunService {
             }
         }
         let tc = self.acting_toolchain(&run).await?;
-        let listed = tc.cli.agents(true).await?;
-        let attached = |e: &AgentEntry| match e.state.as_deref() {
-            Some("stopped") => false,
-            Some("done") => e.pid.is_some(),
-            _ => true,
-        };
-        if listed.iter().find(|e| belongs_to(e, &tc.instance_id, &run)).is_some_and(attached) {
+        let session = Session::of(&run).ok_or_else(|| refuse("It has no session to resume."))?;
+        if tc.backend.open_elsewhere(&session, &run).await? {
             return Err(refuse(IN_TERMINAL));
         }
         if let Some(why) = self.another_pass(&mut run, text).await? {
@@ -141,10 +137,9 @@ impl RunService {
     /// it working on its next pass. `Ok(Some(why))` when the session couldn't be woken; the run is then left for the
     /// caller to store.
     async fn another_pass(&self, run: &mut Run, message: &str) -> Result<Option<String>> {
-        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to resume."))?;
-        let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to resume."))?;
+        let session = Session::of(run).filter(|s| s.session_id.as_deref().is_some_and(is_uuid)).ok_or_else(|| refuse("This run has no session to resume."))?;
         let tc = self.acting_toolchain(run).await?;
-        if let Some(why) = self.wake_from(&tc, run, &id, &session, message, true, &["stopped", "done"]).await {
+        if let Some(why) = self.wake(&tc, run, &session, message, true, true).await {
             return Ok(Some(why));
         }
         let now = Utc::now();

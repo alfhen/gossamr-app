@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::cli::CliError;
+use super::backend::BackendError;
 use super::failure::Failure;
 use super::fresh::{remote_default_branch, work_path};
 use super::launcher::RunLauncher;
@@ -43,9 +43,9 @@ impl AgentDriver for RunService {
             Err(e) if waiting_words(&e, &instance.display_name).is_some() => return None,
             Err(e) => return Some(Failure::from(e).to_string()),
         };
-        match tc.cli.auth_status().await {
-            Ok(auth) if !auth.logged_in => Some(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() }.to_string()),
-            Err(CliError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing { instance: tc.instance_name.clone() }.to_string()),
+        match tc.backend.signed_in().await {
+            Ok(false) => Some(Failure::NotSignedIn { instance: tc.instance_name.clone(), own_folder: tc.has_own_folder() }.to_string()),
+            Err(BackendError::Spawn { source: e, .. }) if e.kind() == std::io::ErrorKind::NotFound => Some(Failure::ClaudeMissing { instance: tc.instance_name.clone() }.to_string()),
             _ => None,
         }
     }

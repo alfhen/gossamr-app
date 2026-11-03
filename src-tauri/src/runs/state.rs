@@ -21,6 +21,10 @@ pub const IDLE_POLLS_TO_DONE: u32 = 2;
 /// shouldn't end a run, but a session that never comes back must not hold a slot in the concurrency cap for good.
 pub const UNLISTED_FAIL_AFTER: Duration = Duration::from_secs(10 * 60);
 
+/// A stopped run's session is listed as stopped within seconds, but until then it can still look alive; it is not
+/// taken for a session that carried on before this long has passed.
+const STOPPED_SETTLE: chrono::Duration = chrono::Duration::seconds(60);
+
 pub const WAITING_FOR_YOU: &str = "It is waiting for you";
 pub const NOT_LISTED: &str = "This session isn't listed any more";
 pub const LOST: &str = "This session hasn't been listed for 10 minutes";
@@ -174,6 +178,31 @@ pub fn progress_at(run: &Run, job: &JobInfo, now: DateTime<Utc>) -> DateTime<Utc
         at = now;
     }
     at
+}
+
+/// A session whose process is alive and that is not at rest, the only kind a finished run can be taken up by again.
+fn is_active(entry: &AgentEntry) -> bool {
+    entry.pid.is_some() && matches!(entry.state.as_deref(), Some("working" | "blocked")) && entry.status.as_deref() != Some("idle")
+}
+
+/// Whether the session listed for a run at rest has started working or asking again. A finished run only counts a
+/// session that is not at its prompt; a stopped one also counts a session waiting on a question, which Claude lists as
+/// idle. Gossamr's own answer in flight (`unsent_answer`) and a stop that is still settling don't count.
+pub(in crate::runs) fn revived(entry: &AgentEntry, run: &Run, now: DateTime<Utc>) -> bool {
+    match run.state {
+        RunState::Done => is_active(entry),
+        RunState::Stopped => {
+            let settled = run.ended_at.is_some_and(|at| now - at >= STOPPED_SETTLE);
+            let alive = entry.pid.is_some()
+                && match entry.state.as_deref() {
+                    Some("blocked") => true,
+                    Some("working") => entry.status.as_deref() != Some("idle"),
+                    _ => false,
+                };
+            settled && alive && run.unsent_answer.is_none()
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

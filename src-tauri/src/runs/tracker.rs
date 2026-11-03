@@ -5,7 +5,6 @@
 //! taken from them is redacted and capped before it is stored. Sessions that match no run are ignored.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -17,7 +16,6 @@ use super::cli::TimelineLine;
 use super::redact::redact;
 use super::service::RunService;
 use super::state::{self, parse_at};
-use super::toolchain::Toolchain;
 use crate::db::connection_of;
 use crate::domain::{Intent, Origin, ProposalQuery, ProposalState, Run, RunEvent, RunQuery, RunState, StateKind};
 use crate::notify::Notice;
@@ -67,8 +65,6 @@ pub struct NoNotices;
 impl RunNotifier for NoNotices {
     fn notify(&self, _run: &Run, _why: Attention) {}
 }
-
-pub(super) use super::backend::claude::revived;
 
 fn topic(run: &Run) -> &str {
     run.item.as_ref().map_or_else(|| run.spec.repo.as_str(), |i| i.key.as_str())
@@ -403,18 +399,17 @@ impl RunService {
         out
     }
 
-    /// `jobs/<id>` lives under the config directory the login's backend reports, never a hard-coded `~/.claude`.
-    pub(super) async fn claude_config_dir(&self, tc: &Toolchain) -> Option<PathBuf> {
+    #[cfg(test)]
+    pub(super) async fn claude_config_dir(&self, tc: &super::toolchain::Toolchain) -> Option<std::path::PathBuf> {
         self.folders_of(tc).await.config_dir
     }
 
     /// A run whose agent waits in its `ask` call reads as asking, whatever backend watches it. A run that ended while
     /// it waited has nobody left to answer.
-    fn with_pending_ask(&self, run_id: &str, seen: state::Observed) -> state::Observed {
-        let asks = self.core.asks();
-        let question = asks.question(run_id);
+    async fn with_pending_ask(&self, run: &Run, seen: state::Observed) -> state::Observed {
+        let question = self.core.asks().question(&run.id);
         if question.is_some() && matches!(seen.state, RunState::Done | RunState::Failed | RunState::Stopped) {
-            asks.cancel(run_id);
+            self.end_ask(run).await;
         }
         state::with_ask(seen, question.as_deref())
     }
@@ -424,7 +419,7 @@ impl RunService {
     async fn track(&self, before: Run, obs: &Observation, now: DateTime<Utc>) -> crate::error::Result<Option<String>> {
         let run_id = before.id.as_str();
         let finished = matches!(before.state, RunState::Done | RunState::Stopped);
-        let seen = self.with_pending_ask(run_id, obs.seen.clone());
+        let seen = self.with_pending_ask(&before, obs.seen.clone()).await;
         for (counts, n) in [(&self.misses, seen.pid_misses), (&self.idle_polls, seen.idle_polls)] {
             let mut all = counts.lock().expect("run counts lock poisoned");
             if n > 0 {

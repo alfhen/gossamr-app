@@ -11,8 +11,8 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 
 use super::cli::{AgentEntry, ShortId};
+use super::state::revived;
 use super::service::{real, title_of, RunService};
-use super::tracker::revived;
 use crate::domain::{Continuation, EarlierSession, Run, RunQuery, RunState};
 use crate::error::{Error, Result};
 
@@ -153,7 +153,7 @@ impl RunService {
             return Err(refuse(format!("This run is {}, so it has no other session to carry on in.", run.state.as_str())));
         }
         let tc = self.acting_toolchain(&run).await?;
-        let entries = tc.cli.agents(true).await?;
+        let entries = tc.backend.listed_sessions().await?;
         let now = Utc::now();
         if carried_on(&entries, &run, now) {
             return Err(refuse("This run's own session is working again, so it stays with that one."));

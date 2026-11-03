@@ -129,6 +129,24 @@ pub(in crate::runs) struct Recorder {
     pub looked_at: Mutex<Vec<Vec<Watched>>>,
     pub found: Mutex<Option<Session>>,
     pub searched: Mutex<Vec<String>>,
+    /// Every action asked of the backend, as `name` or `name:argument`.
+    pub actions: Mutex<Vec<String>>,
+    pub signed_out: std::sync::atomic::AtomicBool,
+    pub not_asking: std::sync::atomic::AtomicBool,
+    pub open_in_terminal: std::sync::atomic::AtomicBool,
+    pub attach_stops_the_run: std::sync::atomic::AtomicBool,
+    pub trust_at: Mutex<Option<PathBuf>>,
+    pub takes_tools_on_resume: std::sync::atomic::AtomicBool,
+}
+
+impl Recorder {
+    fn did(&self, action: impl Into<String>) {
+        self.actions.lock().unwrap().push(action.into());
+    }
+
+    pub fn done(&self) -> Vec<String> {
+        self.actions.lock().unwrap().clone()
+    }
 }
 
 #[async_trait]
@@ -177,6 +195,75 @@ impl RunBackend for Recorder {
 
     async fn final_answer(&self, _run: &Run, _dirs: &Folders) -> Option<String> {
         None
+    }
+
+    fn binary(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/opt/fake/bin/recorder"))
+    }
+
+    async fn signed_in(&self) -> BackendResult<bool> {
+        self.did("signed_in");
+        Ok(!self.signed_out.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    async fn trust_file(&self) -> std::result::Result<Option<PathBuf>, crate::runs::trust::Refusal> {
+        self.did("trust_file");
+        Ok(self.trust_at.lock().unwrap().clone())
+    }
+
+    async fn ready_for_answer(&self, session: &Session, _run: &Run) -> BackendResult<bool> {
+        self.did(format!("ready_for_answer:{}", session.short_id));
+        Ok(!self.not_asking.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    async fn open_elsewhere(&self, session: &Session, _run: &Run) -> BackendResult<bool> {
+        self.did(format!("open_elsewhere:{}", session.short_id));
+        Ok(self.open_in_terminal.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    async fn stop(&self, session: &Session) -> BackendResult<()> {
+        self.did(format!("stop:{}", session.short_id));
+        Ok(())
+    }
+
+    fn ask_ended(&self, run: &Run) {
+        self.did(format!("ask_ended:{}", run.id));
+    }
+
+    async fn resume(&self, session: &Session, req: &ResumeRequest, _waits: &Waits) -> BackendResult<Resumed> {
+        self.did(format!("resume:{}:{}:{}", session.short_id, req.settle, req.finished));
+        if let Some(offer) = &req.tools {
+            self.did(format!("resume_tools:{}", offer.run_id));
+        }
+        Ok(Resumed::Same(session.clone()))
+    }
+
+    fn resumes_with_tools(&self) -> bool {
+        self.takes_tools_on_resume.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn remove(&self, run: &Run, leftovers: &[ShortId], _waits: &Waits) -> BackendResult<RemoveOutcome> {
+        self.did(format!("remove:{}:{}", run.id, leftovers.len()));
+        Ok(RemoveOutcome::Removed { gone: leftovers.to_vec(), kept: None })
+    }
+
+    async fn prepare_attach(&self, session: &Session) -> BackendResult<bool> {
+        self.did(format!("prepare_attach:{}", session.short_id));
+        Ok(self.attach_stops_the_run.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    fn attach_words(&self, session: &Session) -> Vec<String> {
+        self.did(format!("attach_words:{}", session.short_id));
+        vec!["resume".into(), session.short_id.to_string()]
+    }
+
+    fn terminal_words(&self, _purpose: Purpose) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
+
+    fn scratch_dir(&self, session: &Session, _dirs: &Folders) -> BackendResult<PathBuf> {
+        self.did(format!("scratch_dir:{}", session.short_id));
+        Ok(std::env::temp_dir().join(format!("gossamr-recorder-scratch-{}", session.short_id)))
     }
 }
 
@@ -254,4 +341,153 @@ async fn the_claude_backend_reports_its_folders_and_finds_a_session_by_its_listi
     rig.cli.with(|s| s.list_fails = true);
     let error = tc.backend.find(&run, &Folders::default()).await.unwrap_err().to_string();
     assert!(error.starts_with("claude failed") && error.contains("daemon unavailable"), "{error}");
+}
+
+const SESSION: &str = "11111111-2222-4333-8444-555555555555";
+
+fn count(done: &[String], action: &str) -> usize {
+    done.iter().filter(|a| a.as_str() == action).count()
+}
+
+#[tokio::test]
+async fn every_action_on_a_run_reaches_its_own_backend() {
+    use crate::domain::Actor;
+    use crate::runs::message::Delivery;
+    let backend = Arc::new(Recorder::default());
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let launched = rig.launched(1).await;
+    let id = launched.short_id.clone().unwrap();
+    let run = rig
+        .set(&launched, |r| {
+            r.session_id = Some(SESSION.into());
+            r.state = RunState::Working;
+        })
+        .await;
+
+    rig.svc.stop(&run.id).await.unwrap();
+    assert_eq!(backend.done().last().map(String::as_str), Some(format!("stop:{id}").as_str()));
+
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Carry on.", Actor::Person).await.unwrap();
+    assert_eq!(delivery, Delivery::Resumed);
+    let done = backend.done();
+    assert!(done.contains(&format!("open_elsewhere:{id}")) && done.contains(&format!("resume:{id}:true:true")), "{done:?}");
+
+    rig.set(&run, |r| r.state = RunState::NeedsAnswer).await;
+    rig.svc.answer(&run.id, "Staging.").await.unwrap();
+    let done = backend.done();
+    assert!(done.contains(&format!("ready_for_answer:{id}")) && done.contains(&format!("resume:{id}:true:false")), "{done:?}");
+    assert_eq!(count(&done, &format!("stop:{id}")), 2, "the answer stopped the session before waking it");
+
+    rig.svc.attach(&run.id).await.unwrap();
+    let script = std::fs::read_to_string(rig.opened.0.lock().unwrap().last().unwrap()).unwrap();
+    assert!(script.contains(&format!("exec '/opt/fake/bin/recorder' resume {id}")), "{script}");
+    assert!(backend.done().contains(&format!("prepare_attach:{id}")));
+
+    rig.svc.disk(&run.id).await.unwrap();
+    assert!(backend.done().contains(&format!("scratch_dir:{id}")));
+
+    backend.signed_out.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(crate::agent::AgentDriver::unready(rig.svc.as_ref(), None).await.is_some());
+    assert_eq!(count(&backend.done(), "signed_in"), 1);
+
+    rig.set(&run, |r| r.state = RunState::Done).await;
+    rig.svc.cleanup(&run.id).await.unwrap();
+    assert!(backend.done().contains(&format!("remove:{}:0", run.id)));
+    assert_eq!(rig.cli.launches(), 0, "nothing reached claude");
+}
+
+#[tokio::test]
+async fn a_resume_carries_a_tools_offer_only_for_a_backend_that_takes_one() {
+    use crate::domain::Actor;
+    let dir = dir("resume-tools");
+    for takes in [false, true] {
+        let backend = Arc::new(Recorder::default());
+        backend.takes_tools_on_resume.store(takes, std::sync::atomic::Ordering::SeqCst);
+        let channel = Arc::new(crate::runs::agent_config::AgentChannel::new(4242, dir.join("agents")));
+        let rig = ready_with(|svc| backed_by(backend.clone())(crate::runs::rig::on_channel(channel)(svc))).await;
+        let launched = rig.launched(1).await;
+        let run = rig
+            .set(&launched, |r| {
+                r.session_id = Some(SESSION.into());
+                r.state = RunState::Stopped;
+            })
+            .await;
+        rig.svc.message_agent(&run.id, "Carry on.", Actor::Person).await.unwrap();
+        let offered = backend.done().contains(&format!("resume_tools:{}", run.id));
+        assert_eq!(offered, takes, "{:?}", backend.done());
+    }
+}
+
+#[tokio::test]
+async fn a_live_answer_and_a_cancel_of_a_held_ask_both_tell_the_backend() {
+    use crate::runs::ask::Outcome;
+    let backend = Arc::new(Recorder::default());
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let launched = rig.launched(1).await;
+    let run = rig
+        .set(&launched, |r| {
+            r.session_id = Some(SESSION.into());
+            r.state = RunState::Working;
+        })
+        .await;
+    let ended = || count(&backend.done(), &format!("ask_ended:{}", run.id));
+    let asks = rig.svc.core.asks();
+
+    let held = asks.open(&run.id, "Which database?").unwrap();
+    rig.svc.answer(&run.id, "Staging.").await.unwrap();
+    assert_eq!((ended(), held.until(std::time::Duration::from_secs(1)).await), (1, Outcome::Answered("Staging.".into())));
+
+    let _held = asks.open(&run.id, "Which branch?").unwrap();
+    rig.svc.stop(&run.id).await.unwrap();
+    assert_eq!(ended(), 2, "a stop ends the wait");
+
+    rig.set(&run, |r| r.state = RunState::Working).await;
+    let _held = asks.open(&run.id, "Which table?").unwrap();
+    *backend.script.lock().unwrap() = Some(Seen { state: RunState::Done, text: None, answer: Some("Finished.".into()) });
+    rig.poll().await;
+    assert_eq!(ended(), 3, "the tracker cancels the wait of a run that ended");
+
+    rig.set(&run, |r| r.state = RunState::Working).await;
+    let timed_out = asks.open(&run.id, "Which schema?").unwrap().until(std::time::Duration::from_millis(10)).await;
+    assert_eq!(timed_out, Outcome::TimedOut);
+    *backend.script.lock().unwrap() = Some(Seen { state: RunState::Done, text: None, answer: Some("Finished.".into()) });
+    rig.poll().await;
+    assert_eq!(ended(), 3, "a call that timed out is not one the service ended");
+}
+
+#[tokio::test]
+async fn retrying_with_trust_on_a_run_whose_backend_has_no_trust_file_is_refused_in_plain_words() {
+    use crate::runs::rig::ready_in;
+    let backend = Arc::new(Recorder::default());
+    *backend.refuse.lock().unwrap() = Some(Failure::NeedsTrust { folder: PathBuf::from("/clone"), instance: "Codex".into(), own_folder: false });
+    let fx = crate::inbox::testing::fixture_watching(&["acme/webshop"]).await;
+    let home = fx.home.canonicalize().unwrap();
+    let rig = ready_in(fx, &[("HOME", home.to_string_lossy().into_owned())], backed_by(backend.clone())).await;
+    let queued = rig.queued(1).await;
+    let run = rig.svc.start_now(&queued.id).await.unwrap();
+    assert_eq!((run.state, run.short_id.is_none()), (RunState::Failed, true), "{:?}", run.error);
+
+    let why = rig.svc.retry_with_trust(&run.id).await.unwrap_err().to_string();
+    assert_eq!(why, "Codex has no trust step, so there is nothing to trust.");
+    assert_eq!(backend.done(), vec!["trust_file".to_owned()]);
+    assert!(!home.join(".claude.json").exists(), "nothing was written");
+    assert!(backend.launches.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn opening_a_session_that_stops_the_run_cancels_its_held_ask_and_stores_it_stopped_first() {
+    let backend = Arc::new(Recorder::default());
+    backend.attach_stops_the_run.store(true, std::sync::atomic::Ordering::SeqCst);
+    let rig = ready_with(backed_by(backend.clone())).await;
+    let launched = rig.launched(1).await;
+    let run = rig.set(&launched, |r| r.state = RunState::Working).await;
+    let _held = rig.svc.core.asks().open(&run.id, "Which database?").unwrap();
+
+    rig.svc.attach(&run.id).await.unwrap();
+
+    let stored = rig.get(&run).await;
+    assert_eq!((stored.state, stored.last_detail.as_deref()), (RunState::Stopped, Some("Opened in Terminal")));
+    assert_eq!(rig.svc.core.asks().question(&run.id), None);
+    assert!(backend.done().contains(&format!("ask_ended:{}", run.id)));
+    assert_eq!(rig.opened.0.lock().unwrap().len(), 1, "Terminal was opened after the run was stored");
 }

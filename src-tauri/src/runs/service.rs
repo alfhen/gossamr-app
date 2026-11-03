@@ -56,6 +56,12 @@ impl Default for Timing {
     }
 }
 
+impl Timing {
+    pub(super) fn waits(&self) -> backend::Waits {
+        backend::Waits { stop_wait: self.stop_wait, poll: self.poll, stop_settle: self.stop_settle, rm_wait: self.rm_wait }
+    }
+}
+
 pub struct RunService {
     pub(super) core: Arc<Core>,
     pub(super) tools: Arc<dyn ToolchainSource>,
@@ -97,8 +103,6 @@ pub struct RunService {
 }
 
 pub(super) use super::fresh::real;
-
-pub(super) use super::backend::claude::belongs_to;
 
 /// How a session is titled in Claude's own lists. Only the title carries the prefix: the worktree folder and branch
 /// take `spec.name`, and the spec (and so its digest) is left as approved.

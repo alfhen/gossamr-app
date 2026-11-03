@@ -7,11 +7,33 @@ use chrono::{DateTime, Utc};
 
 use super::cli::{AgentEntry, ShortId, TimelineLine};
 use super::failure::Failure;
+use super::index;
 use super::state::Observed;
-use crate::domain::Run;
+use super::trust::Refusal;
+use crate::domain::{RefusedMode, Run};
 use crate::error::Error;
 
 pub mod claude;
+
+/// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Purpose {
+    Trust,
+    SignIn,
+    /// Opens Claude where it asks for the one-time opt-in the person's permission mode needs for `--bg`.
+    Mode(RefusedMode),
+}
+
+impl Purpose {
+    pub(super) fn prefix(self) -> &'static str {
+        match self {
+            Purpose::Trust => "trust",
+            Purpose::SignIn => "signin",
+            Purpose::Mode(RefusedMode::Auto) => "auto",
+            Purpose::Mode(RefusedMode::Bypass) => "bypass",
+        }
+    }
+}
 
 /// A running turn of an agent that Gossamr started itself, and so has to find again by its pid.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +56,58 @@ impl Session {
     pub fn of(run: &Run) -> Option<Self> {
         Some(Self { short_id: run.short_id.clone()?, session_id: run.session_id.clone(), process: None })
     }
+
+    /// None while the entry has no short id.
+    pub fn of_entry(entry: &index::Entry) -> Option<Self> {
+        Some(Self { short_id: entry.short_id.clone()?, session_id: None, process: None })
+    }
+}
+
+/// How long a backend may wait on its program while it acts on a session.
+#[derive(Debug, Clone, Copy)]
+pub struct Waits {
+    /// How long a stopped session is waited for before a resume gives up on it.
+    pub stop_wait: std::time::Duration,
+    pub poll: std::time::Duration,
+    /// The pause between a session showing as stopped and its resume.
+    pub stop_settle: std::time::Duration,
+    /// The pause between tries of a removal that is refused while the program still holds a lock.
+    pub rm_wait: std::time::Duration,
+}
+
+/// A message to carry on a session with.
+#[derive(Debug, Clone)]
+pub struct ResumeRequest {
+    pub message: String,
+    pub cwd: PathBuf,
+    /// Gossamr's tools, offered anew to a backend whose resume can take them (`resumes_with_tools`).
+    pub tools: Option<ToolsOffer>,
+    /// Pause after the session shows as stopped, before the resume.
+    pub settle: bool,
+    /// The session may have finished as well as stopped.
+    pub finished: bool,
+}
+
+/// What a resume came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resumed {
+    Same(Session),
+    /// The program started a second session instead of carrying on in the first.
+    /// `note` tells the person what became of the copy; the program stopped it if it could.
+    Copy { session: Session, note: String },
+}
+
+/// What removing a run's worktree and earlier sessions came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoveOutcome {
+    /// The worktree is still there, for the reason the program gave.
+    Refused(String),
+    Removed {
+        /// The earlier sessions that no longer exist.
+        gone: Vec<ShortId>,
+        /// Why an earlier session stays, if one does.
+        kept: Option<String>,
+    },
 }
 
 /// Gossamr's tools, offered to one run: where they are served and the token that opens them for that run alone.
@@ -161,6 +235,38 @@ pub trait RunBackend: Send + Sync {
     /// Every session the backend can list. A backend with no listing gives none.
     async fn listed_sessions(&self) -> BackendResult<Vec<AgentEntry>> {
         Ok(Vec::new())
+    }
+    /// Whether the program is signed in. A program that isn't installed is a `Spawn` error of kind `NotFound`.
+    async fn signed_in(&self) -> BackendResult<bool>;
+    /// The settings file that records which folders the program trusts. None for a program with no trust step.
+    async fn trust_file(&self) -> std::result::Result<Option<PathBuf>, Refusal>;
+    /// Whether the session waits on a question that a stop and a resume can answer.
+    async fn ready_for_answer(&self, session: &Session, run: &Run) -> BackendResult<bool>;
+    /// Whether someone has the session open, so a resume would end what they are doing.
+    async fn open_elsewhere(&self, session: &Session, run: &Run) -> BackendResult<bool>;
+    async fn stop(&self, session: &Session) -> BackendResult<()>;
+    /// A held `ask` call of the run ended without its turn ending: it was answered, stopped or cancelled.
+    fn ask_ended(&self, _run: &Run) {}
+    /// Carries on in a stopped or finished session with a message.
+    async fn resume(&self, session: &Session, req: &ResumeRequest, waits: &Waits) -> BackendResult<Resumed>;
+    /// Whether a resume takes the tools offer in place, rather than starting a copy.
+    fn resumes_with_tools(&self) -> bool {
+        false
+    }
+    /// Removes the run's worktree, when it still has one, and its earlier `leftovers`, stopping any session open on them first.
+    async fn remove(&self, run: &Run, leftovers: &[ShortId], waits: &Waits) -> BackendResult<RemoveOutcome>;
+    /// Gets the session ready for a terminal to open it. True when the run no longer works on its own afterwards.
+    async fn prepare_attach(&self, session: &Session) -> BackendResult<bool>;
+    /// The arguments that open the session in a terminal. Each is letters, digits and `-`.
+    fn attach_words(&self, session: &Session) -> Vec<String>;
+    /// The arguments of the program run for `purpose` in a terminal, or none when it has no such use.
+    fn terminal_words(&self, purpose: Purpose) -> Option<Vec<String>>;
+    /// The folder where the session keeps its scratch files.
+    fn scratch_dir(&self, session: &Session, dirs: &Folders) -> BackendResult<PathBuf>;
+    /// The backend's own value, for a test that has to reach what it wraps.
+    #[cfg(test)]
+    fn as_any(&self) -> Option<&dyn std::any::Any> {
+        None
     }
 }
 
