@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { claudeSnapshot } from "../backend/mockProbes";
-import { accountLine, accountOf, hasLogin, ignoredLine, revealProviderFolder, signInCommand, signOutCommand, suggestedFolder, usualSetupOffered } from "./providerLogic";
+import { accountLine, accountOf, hasLogin, ignoredLine, instanceOf, revealProviderFolder, signInCommand, signOutCommand, suggestedFolder, usualSetupOffered } from "./providerLogic";
 
 const CHECKED = "2026-10-30T11:57:00Z";
 
@@ -112,5 +112,18 @@ describe("Reveal in Finder", () => {
     const report = vi.fn();
     await revealProviderFolder({ providerRevealFolder: vi.fn().mockRejectedValue(failure) }, "claude", report);
     expect(report).toHaveBeenCalledWith("Couldn't show the folder", failure);
+  });
+});
+
+describe("the login a run is on", () => {
+  const rows = [
+    { kind: "provider", instanceId: "codex_2", displayName: "Codex work", driver: "codex", configDir: "~/.codex-work", status: null },
+    { kind: "provider", instanceId: "claude", displayName: "Claude", driver: "claude", configDir: null, status: null },
+  ] as Parameters<typeof instanceOf>[0];
+
+  it("carries the driver, and the sign-in command of a Codex login in its own folder", () => {
+    expect(instanceOf(rows, "codex_2")).toEqual({ name: "Codex work", driver: "codex", signIn: "CODEX_HOME=~/.codex-work codex login" });
+    expect(instanceOf(rows, "claude")).toEqual({ name: "Claude", driver: "claude", signIn: null });
+    expect(instanceOf(rows, "gone").driver).toBe("claude");
   });
 });

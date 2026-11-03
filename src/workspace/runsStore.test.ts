@@ -3,6 +3,8 @@ import { MockBackend } from "../backend/mock";
 import type { Backend } from "../backend/types";
 import { itemRef } from "../backend/mockConnector";
 import { NO_FILTERS, agentGroups } from "./agentsLogic";
+import { useWorkspace } from "../workspaceStore";
+import type { ConnectionInfo } from "../types";
 import { useWorkstreams } from "./workstreamsStore";
 import { useTabs } from "./tabsStore";
 import { useToasts } from "./toasts";
@@ -369,6 +371,16 @@ describe("the run sheet", () => {
       const open = vi.spyOn(backend, "openUrl");
       await s().fix(run.id, "install");
       expect(open).toHaveBeenCalledWith("https://code.claude.com/docs/en/setup");
+    });
+
+    it("opens Codex's install page for a missing Codex", async () => {
+      const run = await failing("claudeMissing");
+      s().runs = s().runs.map((r) => (r.id === run.id ? { ...r, runsOn: { instanceId: "codex", model: "default" } } : r));
+      useWorkspace.setState({ connections: [{ kind: "provider", instanceId: "codex", displayName: "Codex", driver: "codex", configDir: null, status: null } as unknown as ConnectionInfo] });
+      const open = vi.spyOn(backend, "openUrl");
+      await s().fix(run.id, "install");
+      expect(open).toHaveBeenCalledWith("https://developers.openai.com/codex/cli");
+      useWorkspace.setState({ connections: [] });
     });
 
     it("keeps every failure, a folder to trust among them, waiting on the person until it is dismissed", async () => {

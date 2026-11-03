@@ -4,12 +4,13 @@ import { labelsByRun } from "../lib/workstreamStage";
 import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, ModelChoice, Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
-import { INSTALL_URL, STILL_UNTRUSTED, failureHelp, type FailureAct } from "./failureHelp";
+import { STILL_UNTRUSTED, failureHelp, installUrl, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
+import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
 import { offerUndo } from "./undo";
 import { useTabs } from "./tabsStore";
 import { useWorkstreams } from "./workstreamsStore";
@@ -390,7 +391,10 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend } = get();
     if (!backend) return;
     try {
-      if (act === "install") return await backend.openUrl(INSTALL_URL);
+      if (act === "install") {
+        const on = get().runs.find((r) => r.id === id)?.runsOn?.instanceId ?? DEFAULT_INSTANCE;
+        return await backend.openUrl(installUrl(instanceOf(useWorkspace.getState().connections, on)));
+      }
       if (act === "trust") return await get().retryLaunch(id, { trust: true });
       const failure = get().runs.find((r) => r.id === id)?.failure;
       if (failure?.type === "modeRefused") await backend.runsAcceptMode(id, failure.mode);

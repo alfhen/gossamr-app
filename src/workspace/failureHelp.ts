@@ -3,6 +3,9 @@ import type { RunInstance } from "./runInstance";
 
 export const INSTALL_COMMAND = "curl -fsSL https://claude.ai/install.sh | bash";
 export const INSTALL_URL = "https://code.claude.com/docs/en/setup";
+export const CODEX_INSTALL_URL = "https://developers.openai.com/codex/cli";
+
+export const installUrl = (instance: Pick<RunInstance, "driver"> | null) => (instance?.driver === "codex" ? CODEX_INSTALL_URL : INSTALL_URL);
 
 export type FailureAct = "terminal" | "install" | "trust";
 
@@ -94,6 +97,17 @@ export function failureHelp(run: Run, refusal: string | null = null, instance: R
     case "untrustedFolder":
       return untrusted(run, failure.path, refusal, name);
     case "notSignedIn": {
+      if (instance?.driver === "codex") {
+        return {
+          kind: "notSignedIn",
+          summary: `${name} isn't signed in.`,
+          detail: `Terminal opens with ${name}'s sign-in in this run's folder. Run codex login, finish signing in, then close it and retry.`,
+          primary: { label: "Open Terminal to sign in", act: "terminal" },
+          command: { text: instance.signIn ?? "codex login", note: null },
+          retryNeedsTerminal: true,
+          retry: true,
+        };
+      }
       return {
         kind: "notSignedIn",
         summary: `${name} isn't signed in.`,
@@ -117,6 +131,17 @@ export function failureHelp(run: Run, refusal: string | null = null, instance: R
       };
     }
     case "claudeMissing":
+      if (instance?.driver === "codex") {
+        return {
+          kind: "claudeMissing",
+          summary: `Codex isn't installed, or Gossamr can't find it for ${name}.`,
+          detail: `Agents on ${name} are Codex sessions, so Gossamr needs the codex command. Install it, or the ChatGPT app, then retry.`,
+          primary: { label: "Open the install page", act: "install" },
+          command: null,
+          retryNeedsTerminal: false,
+          retry: true,
+        };
+      }
       return {
         kind: "claudeMissing",
         summary: name !== "Claude" ? `Claude Code isn't installed for ${name}, or Gossamr can't find it.` :"Claude Code isn't installed, or Gossamr can't find it.",

@@ -151,13 +151,13 @@ export interface WaitingLogin extends Pick<ConnectionInfo, "id" | "kind" | "disp
 const waitsOnLogin = (run: Run) => run.state === "queued" || run.state === "systemBlocked" || (run.state === "failed" && !run.shortId && run.failure?.type === "notSignedIn");
 
 /**
- * The Claude logins that are signed out while something needs them: a run that waits for it or stopped on it, or a Settings
+ * The Claude and Codex logins that are signed out while something needs them: a run that waits for it or stopped on it, or a Settings
  * default (Pip, new agents). A signed-out login nothing uses stays quiet in Settings.
  */
 export function providersNeedingSignIn(connections: readonly ConnectionInfo[], runs: readonly Run[], defaults: ModelDefaults | null): WaitingLogin[] {
   const used = new Set<string>([defaults?.pip?.instanceId, defaults?.agents?.instanceId].filter((id): id is string => !!id));
   for (const r of runs) if (waitsOnLogin(r)) used.add(r.runsOn?.instanceId ?? DEFAULT_INSTANCE);
   return connections
-    .filter((c) => c.kind === "provider" && c.driver === "claude" && c.enabled && c.status?.state === "notSignedIn" && used.has(c.instanceId))
+    .filter((c) => c.kind === "provider" && c.enabled && c.status?.state === "notSignedIn" && used.has(c.instanceId))
     .map((c) => ({ id: c.id, kind: c.kind, displayName: c.displayName, instanceId: c.instanceId, signIn: instanceOf(connections, c.instanceId).signIn }));
 }
