@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Markdown } from "../components/Markdown";
 import { draftsForTurn, targetOf } from "../lib/proposals";
 import { REMOVED_TURN } from "../backend/claude";
@@ -134,14 +134,33 @@ const WAKE_LINES = 3;
 const WAKE_CHARS = 240;
 export const wakeIsLong = (text: string) => text.trim().split(/\n+/).length > WAKE_LINES || text.length > WAKE_CHARS;
 
-/** A wake's answer, at most about three lines until the person asks for the rest. */
+export const overflows = (el: { scrollHeight: number; clientHeight: number }) => el.scrollHeight > el.clientHeight;
+
+export const WAKE_FADE = "[mask-image:linear-gradient(to_bottom,black_70%,transparent)]";
+
+/** A wake's answer, at most about three lines until the person asks for the rest. The fade shows only when the clip hides something. */
 function WakeText({ id, text }: { id: string; text: string }) {
   const [open, setOpen] = useState(false);
+  const [cut, setCut] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   const long = wakeIsLong(text);
+  const folded = long && !open;
   const panel = `wake-text-${id}`;
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || !folded) {
+      setCut(false);
+      return;
+    }
+    const measure = () => setCut(overflows(el));
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [folded, text]);
   return (
     <div className="grid gap-0.5">
-      <div id={panel} data-wake-text data-clamped={long && !open ? "true" : undefined} className={`ws-legacy text-ws-ink2 ${long && !open ? "max-h-[3lh] overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}>
+      <div ref={box} id={panel} data-wake-text data-clamped={folded ? "true" : undefined} data-overflows={folded && cut ? "true" : undefined} className={`ws-legacy text-ws-ink2 ${folded ? "max-h-[3lh] overflow-hidden" : ""} ${folded && cut ? WAKE_FADE : ""}`}>
         <Markdown text={text} />
       </div>
       {long && (

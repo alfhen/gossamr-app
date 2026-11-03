@@ -7,7 +7,7 @@ import type { Intent, Proposal, RunSpec, WorkstreamView, Run, WorkContainer, Wor
 import { useWorkspace } from "../workspaceStore";
 import { draftDecisions } from "./DraftPreview";
 import { DRAFT_CARD, onDraftCardKey, stepDraftCards, upToNewestDraft } from "./draftKeys";
-import { Composer, ComposerFooter, GENERAL_CONVERSATION, PipConversation, draftsForTicket, otherTicketsRow, openWakeRun, keepUnsentInput, unsentInputOf, wakeHeader, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
+import { Composer, ComposerFooter, GENERAL_CONVERSATION, PipConversation, draftsForTicket, otherTicketsRow, openWakeRun, keepUnsentInput, unsentInputOf, wakeHeader, overflows, WAKE_FADE, wakeIsLong, wakeParts, workstreamConversation, workstreamIntro } from "./PipConversation";
 import { useWorkView } from "./workViewStore";
 import { useTabs } from "./tabsStore";
 import { useRuns } from "./runsStore";
@@ -145,13 +145,21 @@ describe("PipConversation", () => {
     expect(folded).toContain("max-h-[3lh]");
     expect(folded).toContain("overflow-hidden");
     expect(folded).not.toContain("line-clamp");
-    expect(folded).toContain("mask-image");
+    expect(folded).not.toContain("mask-image");
+    expect(html).not.toContain("data-overflows");
     const shortTag = html.match(/<div id="wake-text-wake-s"[^>]*>/)?.[0] ?? "";
     expect(shortTag).not.toMatch(/data-clamped|max-h-|overflow-hidden|line-clamp|mask-image/);
     expect(html.match(/>Show more</g)).toHaveLength(1);
     expect(html).toContain('aria-controls="wake-text-wake-l"');
     // Its cards follow the folded text.
     expect(html.indexOf('data-draft="p-w"')).toBeGreaterThan(html.indexOf("wake-text-wake-l"));
+  });
+
+  it("fades a folded wake answer from 70% and only when the clip hides text", () => {
+    expect(overflows({ scrollHeight: 90, clientHeight: 60 })).toBe(true);
+    expect(overflows({ scrollHeight: 60, clientHeight: 60 })).toBe(false);
+    expect(WAKE_FADE).toContain("black_70%");
+    expect(WAKE_FADE).not.toContain("55%");
   });
 
   it("folds a paragraph followed by a list as one clipped block", () => {
