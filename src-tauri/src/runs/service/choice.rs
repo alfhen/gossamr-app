@@ -1,7 +1,7 @@
 //! The instance and model a run launches on, and what a queued run does while they can't run it.
 
 use super::*;
-use crate::model_choice::{ModelChoice, Reason, Use, DEFAULT_MODEL};
+use crate::model_choice::{ModelChoice, Reason, Use};
 use crate::runs::toolchain::ToolchainError;
 
 /// Where a run launches: the toolchain of its instance and the `--model` to pass, if any.
@@ -62,7 +62,7 @@ impl RunService {
     /// Settles what `run` launches on and freezes it on the run. A run with no choice takes the Settings default.
     pub(super) async fn launch_target(&self, run: &mut Run) -> std::result::Result<Target, Blocked> {
         let (choice, instance) = self.core.agents_target(run.runs_on.as_ref()).map_err(Blocked::Waits)?;
-        let model = (choice.model != DEFAULT_MODEL).then(|| choice.model.clone());
+        let model = choice.explicit_model();
         run.runs_on = Some(choice);
         let tc = self.toolchain_of(run).await.map_err(|e| match waiting_words(&e, &instance.display_name) {
             Some(words) => Blocked::Waits(words),

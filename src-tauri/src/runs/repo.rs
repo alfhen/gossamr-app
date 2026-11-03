@@ -275,7 +275,6 @@ fn find_in_path(env: &RunEnv, program: &str) -> Option<PathBuf> {
         .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
-/// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`.
 /// Removes a run's worktree and branch through git alone. Anything git refuses stays, in git's own words, as `Ok(Some)`.
 /// The clone and the worktree must lie in `~/Gossamr/agents`; otherwise the refusal is the `Err`.
 pub async fn remove_with_git(git: &Git, home: Option<&Path>, run: &Run) -> Result<Option<String>, String> {
@@ -305,6 +304,7 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, run: &Run) -> Resul
     Ok(git.delete_branch(clone, &branch).await.err())
 }
 
+/// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`.
 pub fn origin_matches(url: &str, repo: &str) -> bool {
     let url = url.trim();
     let Some((before, after)) = url.split_once("github.com") else { return false };

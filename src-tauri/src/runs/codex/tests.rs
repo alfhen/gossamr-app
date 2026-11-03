@@ -729,7 +729,7 @@ mod control {
     }
 
     fn resume_request(rig: &Rig, text: &str, tools: Option<ToolsOffer>) -> ResumeRequest {
-        ResumeRequest { message: message(text), cwd: rig.worktree(), tools, settle: false, finished: true }
+        ResumeRequest { message: message(text), cwd: rig.worktree(), run_id: "run-1".into(), model: None, tools, settle: false, finished: true }
     }
 
     async fn child_of(rig: &Rig) -> u32 {
@@ -1053,8 +1053,65 @@ mod control {
     }
 
     #[tokio::test]
+    async fn stop_all_kills_a_codex_run_that_ignores_sigint_and_stores_it_stopped() {
+        let s = Svc::new("stop-all-stubborn", 21, "hold=600\nignore_sigint=1\n").await;
+        let (leader, child) = (s.run.process.clone().unwrap(), child_of(&s.codex).await);
+        assert!(alive(&leader) && pid_alive(child));
+
+        let tally = s.rig.svc.stop_all().await.unwrap();
+        assert_eq!((tally.stopped, tally.failed), (1, 0));
+        until("the launcher and its child to be gone", || !pid_alive(leader.pid) && !pid_alive(child)).await;
+        assert_eq!(s.get().await.state, RunState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn a_message_to_a_finished_codex_run_whose_folder_was_swept_makes_the_folder_again_and_reads_working() {
+        let s = Svc::new("swept-message", 22, "").await.finished().await;
+        assert_eq!(s.get().await.state, RunState::Done);
+        std::fs::remove_dir_all(s.folder()).unwrap();
+
+        let (run, delivery) = s.rig.svc.message_agent(&s.run.id, "Carry on.", crate::domain::Actor::Person).await.unwrap();
+        assert_eq!((run.state, delivery), (RunState::Working, Delivery::Resumed));
+        let short_id = std::fs::read_to_string(s.folder().join("short-id")).unwrap();
+        assert_eq!(Some(short_id.as_str()), s.run.short_id.as_ref().map(|id| id.as_str()));
+        exited(&s.folder(), 1).await;
+        let calls = s.codex.calls();
+        let args = args_of(&calls);
+        let resume_at = args.iter().rposition(|a| *a == "resume").unwrap();
+        assert_eq!(args[resume_at + 1], s.thread());
+    }
+
+    #[tokio::test]
+    async fn a_resume_after_the_folder_was_swept_keeps_the_model_the_run_was_started_on() {
+        let rig = Rig::new("swept-model", &scenario(23, ""));
+        let first = rig.backend.launch(&LaunchRequest { model: Some("gpt-5".into()), ..rig.request(None) }).await.unwrap();
+        let folder = rig.folder();
+        exited(&folder, 1).await;
+        std::fs::remove_dir_all(&folder).unwrap();
+
+        let request = ResumeRequest { model: Some("gpt-5".into()), ..resume_request(&rig, "Carry on.", None) };
+        let resumed = rig.backend.resume(&first, &request, &waits()).await.unwrap();
+        assert!(matches!(resumed, Resumed::Same(_)));
+        let calls = rig.calls();
+        let args = args_of(&calls);
+        let resume_at = args.iter().rposition(|a| *a == "resume").unwrap();
+        assert!(args[resume_at..].windows(2).any(|w| w == ["-m", "gpt-5"]), "{calls}");
+        assert!(folder.join("events-1.jsonl").exists() && folder.join("short-id").exists());
+    }
+
+    #[tokio::test]
+    async fn attach_to_a_codex_run_whose_folder_was_swept_still_opens_codex_resume() {
+        let s = Svc::new("swept-attach", 24, "").await.finished().await;
+        std::fs::remove_dir_all(s.folder()).unwrap();
+
+        s.rig.svc.attach(&s.run.id).await.unwrap();
+        let script = std::fs::read_to_string(s.rig.opened.0.lock().unwrap().last().unwrap()).unwrap();
+        assert!(script.contains("resume") && script.contains(&s.thread()), "{script}");
+    }
+
+    #[tokio::test]
     async fn attach_stops_the_codex_turn_then_opens_codex_resume_with_no_token_in_the_script() {
-        let s = Svc::new("attach", 13, "hold_until_release=1\n").await;
+        let s = Svc::new("attach", 13, "hold=600\n").await;
         let process = s.run.process.clone().unwrap();
 
         s.rig.svc.attach(&s.run.id).await.unwrap();
@@ -1069,7 +1126,7 @@ mod control {
 
     #[tokio::test]
     async fn after_attach_a_codex_run_stays_stopped_until_terminal_runs_then_reads_done_carried_on_in_terminal() {
-        let s = Svc::new("carried-on", 14, "hold_until_release=1\nterminal_hold=30\n").await;
+        let s = Svc::new("carried-on", 14, "hold=600\nterminal_hold=30\n").await;
         s.rig.svc.attach(&s.run.id).await.unwrap();
 
         s.rig.poll().await;
@@ -1089,7 +1146,7 @@ mod control {
 
     #[tokio::test]
     async fn a_message_after_terminal_ended_starts_a_new_pass_and_the_run_reads_working() {
-        let s = Svc::new("after-terminal", 15, "hold_until_release=1\nterminal_hold=30\n").await;
+        let s = Svc::new("after-terminal", 15, "hold=600\nterminal_hold=30\n").await;
         s.rig.svc.attach(&s.run.id).await.unwrap();
         let terminal = s.terminal();
         until("the Terminal process to be listed", || listed_on(&s.thread())).await;
@@ -1157,7 +1214,7 @@ mod control {
 
     #[tokio::test]
     async fn a_codex_run_whose_held_ask_was_answered_live_reads_done_when_the_turn_completes() {
-        let s = Svc::new("ask-live", 19, "hold_until_release=1\n").await;
+        let s = Svc::new("ask-live", 19, "hold=600\n").await;
         let asks = s.rig.fx.core.asks();
         let _held = asks.open(&s.run.id, "Which table?").unwrap();
         s.rig.poll().await;
@@ -1177,7 +1234,7 @@ mod control {
 
     #[tokio::test]
     async fn a_second_ask_in_one_codex_turn_left_unanswered_reads_needs_answer_with_the_second_question() {
-        let s = Svc::new("ask-twice", 20, "hold_until_release=1\n").await;
+        let s = Svc::new("ask-twice", 20, "hold=600\n").await;
         let asks = s.rig.fx.core.asks();
         let first = asks.open(&s.run.id, "First?").unwrap();
         s.rig.poll().await;

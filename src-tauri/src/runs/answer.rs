@@ -199,7 +199,7 @@ impl RunService {
     pub(super) async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, session: &Session, text: &str, settle: bool, finished: bool) -> Option<String> {
         let cwd: PathBuf = if run.expected_worktree.is_dir() { run.expected_worktree.clone() } else { run.spec.clone_path.clone() };
         let tools = if tc.backend.resumes_with_tools() { self.offer_tools(run).await } else { None };
-        let request = ResumeRequest { message: message(text), cwd, tools, settle, finished };
+        let request = ResumeRequest { message: message(text), cwd, run_id: run.id.clone(), model: run.runs_on.as_ref().and_then(|choice| choice.explicit_model()), tools, settle, finished };
         match tc.backend.resume(session, &request, &self.timing.waits()).await {
             Ok(Resumed::Same(same)) => {
                 run.process = same.process;

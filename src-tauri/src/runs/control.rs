@@ -23,7 +23,6 @@ use crate::domain::workstream::PauseReason;
 use crate::domain::{Actor, Run, RunFailure, RunQuery, RunState};
 use crate::error::{Error, Result};
 
-const STOP_LIMIT: Duration = Duration::from_secs(5);
 const DISK_LIMIT: Duration = Duration::from_secs(3);
 const ATTACH_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
 const ATTACH_DIR: &str = "attach";
@@ -349,7 +348,7 @@ impl RunService {
                 tally.failed += 1;
                 continue;
             };
-            match tokio::time::timeout(STOP_LIMIT, tc.backend.stop(&session)).await {
+            match tokio::time::timeout(tc.backend.stop_budget(), tc.backend.stop(&session)).await {
                 Ok(Ok(())) => {
                     match &mine {
                         Some(run) => self.end_ask_on(tc.backend.as_ref(), run),

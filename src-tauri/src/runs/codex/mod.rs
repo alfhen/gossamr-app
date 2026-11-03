@@ -50,7 +50,6 @@ pub fn run_folder(root: &Path, run_id: &str) -> Option<PathBuf> {
 
 pub(super) const FINAL_FILE: &str = "final.txt";
 pub(super) const SHORT_ID_FILE: &str = "short-id";
-pub(super) const MODEL_FILE: &str = "model";
 pub(super) const TERMINAL_FILE: &str = "terminal";
 pub(super) const TERMINAL_SEEN_FILE: &str = "terminal-seen";
 
@@ -204,6 +203,10 @@ impl RunBackend for CodexBackend {
         self.stop_session(session).await
     }
 
+    fn stop_budget(&self) -> Duration {
+        self.stop_wait + control::KILL_SETTLE + Duration::from_secs(1)
+    }
+
     fn ask_ended(&self, run: &Run) {
         self.forget_ask(run);
     }
@@ -221,8 +224,7 @@ impl RunBackend for CodexBackend {
     }
 
     async fn prepare_attach(&self, session: &Session) -> BackendResult<bool> {
-        self.hand_to_terminal(session).await?;
-        Ok(true)
+        self.hand_to_terminal(session).await
     }
 
     fn attach_words(&self, session: &Session) -> Vec<String> {

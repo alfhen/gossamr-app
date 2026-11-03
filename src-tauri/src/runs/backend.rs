@@ -15,6 +15,8 @@ use crate::error::Error;
 
 pub mod claude;
 
+pub const STOP_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
@@ -72,6 +74,10 @@ pub struct Waits {
 pub struct ResumeRequest {
     pub message: String,
     pub cwd: PathBuf,
+    /// The run the session belongs to, and the model it was started on (none for Default). A backend that keeps a
+    /// folder for the run makes it again from these when it has been swept.
+    pub run_id: String,
+    pub model: Option<String>,
     /// Gossamr's tools, offered anew to a backend whose resume can take them (`resumes_with_tools`).
     pub tools: Option<ToolsOffer>,
     /// Pause after the session shows as stopped, before the resume.
@@ -241,6 +247,11 @@ pub trait RunBackend: Send + Sync {
     /// Whether someone has the session open, so a resume would end what they are doing.
     async fn open_elsewhere(&self, session: &Session, run: &Run) -> BackendResult<bool>;
     async fn stop(&self, session: &Session) -> BackendResult<()>;
+    /// The longest a `stop` may take before it is given up on. A backend that kills what ignores its first signal
+    /// reports the time that takes.
+    fn stop_budget(&self) -> std::time::Duration {
+        STOP_BUDGET
+    }
     /// A held `ask` call of the run ended without its turn ending: it was answered, stopped or cancelled.
     fn ask_ended(&self, _run: &Run) {}
     /// Carries on in a stopped or finished session with a message.

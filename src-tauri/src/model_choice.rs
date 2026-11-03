@@ -24,6 +24,13 @@ pub struct ModelChoice {
     pub effort: Option<String>,
 }
 
+impl ModelChoice {
+    /// The model to pass to the program, none for Default.
+    pub fn explicit_model(&self) -> Option<String> {
+        (self.model != DEFAULT_MODEL).then(|| self.model.clone())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ModelOption {
     pub id: String,

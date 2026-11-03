@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::launch::resume_args;
+use super::launch::{make_folder, resume_args, write_short_id};
 use super::observe::{newest_turn, process_listing, processes_on, recorded_process};
 use super::process::{alive, kill_group, signal};
-use super::{asked_file, create_private, events_file, exit_file, process_file, read_file, run_folder, run_folders, stderr_file, CodexBackend, FINAL_FILE, MODEL_FILE, PROGRAM, SHORT_ID_FILE, TERMINAL_FILE, TERMINAL_SEEN_FILE, TOKEN_VARIABLE};
+use super::{asked_file, create_private, events_file, exit_file, process_file, read_file, run_folder, run_folders, stderr_file, CodexBackend, FINAL_FILE, PROGRAM, SHORT_ID_FILE, TERMINAL_FILE, TERMINAL_SEEN_FILE, TOKEN_VARIABLE};
 use crate::domain::{Run, RunProcess};
 use crate::runs::backend::{BackendError, BackendResult, RemoveOutcome, ResumeRequest, Resumed, Session, Waits};
 use crate::runs::cli::{is_uuid, last_line, ShortId};
@@ -16,9 +16,8 @@ use crate::runs::repo::{random_hex, remove_with_git, Git};
 const DELETE_WAIT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(25);
 /// How long a process that was just killed is given to show as gone.
-const KILL_SETTLE: Duration = Duration::from_secs(3);
+pub(super) const KILL_SETTLE: Duration = Duration::from_secs(3);
 const SHORT_ID_MAX: u64 = 16;
-const MODEL_MAX: u64 = 256;
 
 fn stop_failed(why: impl std::fmt::Display) -> BackendError {
     BackendError::Other(format!("Couldn't stop the Codex run: {why}"))
@@ -113,14 +112,19 @@ impl CodexBackend {
         !processes_on(&process_listing().await, thread, own.map(|p| p.pid)).is_empty()
     }
 
-    pub(super) async fn hand_to_terminal(&self, session: &Session) -> BackendResult<()> {
-        let folder = self.folder_of(session).ok_or_else(no_folder)?;
+    /// Stops the turn and marks the run for Terminal. False when the folder was swept: nothing is recorded, and
+    /// `codex resume` in Terminal carries on in the thread all the same.
+    pub(super) async fn hand_to_terminal(&self, session: &Session) -> BackendResult<bool> {
+        let Some(folder) = self.folder_of(session) else {
+            self.stop_turn(None, 1, session.process.clone(), self.stop_wait).await?;
+            return Ok(false);
+        };
         let (turn, process) = Self::newest_process(&folder, session.process.as_ref());
         self.stop_turn(Some(&folder), turn, process, self.stop_wait).await?;
         let _ = std::fs::remove_file(folder.join(TERMINAL_SEEN_FILE));
         match create_private(&folder.join(TERMINAL_FILE)) {
-            Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(true),
             Err(e) => Err(BackendError::Other(format!("Couldn't mark the Codex run for Terminal: {e}"))),
         }
     }
@@ -129,11 +133,24 @@ impl CodexBackend {
         self.folder_of(session).ok_or_else(no_folder)
     }
 
+    /// Makes the run's folder again after a sweep took it, with the session's short id so it is found by it.
+    fn remake_folder(&self, session: &Session, run_id: &str) -> Result<PathBuf, String> {
+        let folder = run_folder(&self.runs_root, run_id).ok_or("the run has no usable id")?;
+        make_folder(&self.runs_root, &folder).and_then(|()| write_short_id(&folder, &session.short_id)).map_err(|e| format!("the run folder: {e}"))?;
+        Ok(folder)
+    }
+
     pub(super) async fn resume_session(&self, session: &Session, req: &ResumeRequest, waits: &Waits) -> BackendResult<Resumed> {
         let wake_failed = |why: String| BackendError::Other(format!("Couldn't wake the agent: {why}"));
-        let folder = self.folder_of(session).ok_or_else(no_folder)?;
         let thread = session.session_id.clone().filter(|t| is_uuid(t)).ok_or_else(|| BackendError::Other("This run has no Codex thread to carry on in.".into()))?;
-        let (turn, process) = Self::newest_process(&folder, session.process.as_ref());
+        let folder = match self.folder_of(session) {
+            Some(folder) => folder,
+            None => self.remake_folder(session, &req.run_id).map_err(wake_failed)?,
+        };
+        let (turn, process) = match newest_turn(&folder) {
+            Some(_) => Self::newest_process(&folder, session.process.as_ref()),
+            None => (0, session.process.clone()),
+        };
         if let Some(process) = &process {
             if !wait_until_gone(Some(&folder), turn, process, waits.stop_wait, waits.poll.max(Duration::from_millis(5))).await {
                 return Err(BackendError::Other("The Codex run didn't stop, so it wasn't woken.".into()));
@@ -141,8 +158,7 @@ impl CodexBackend {
         }
 
         let next = turn + 1;
-        let model = read_file(&folder.join(MODEL_FILE), MODEL_MAX, false).map(|m| m.trim().to_owned()).filter(|m| !m.is_empty());
-        let args = resume_args(&thread, &folder.join(FINAL_FILE), model.as_deref(), req.tools.as_ref(), &req.message);
+        let args = resume_args(&thread, &folder.join(FINAL_FILE), req.model.as_deref(), req.tools.as_ref(), &req.message);
         let started = match self.start_turn(&folder, next, args, &req.cwd, req.tools.as_ref()) {
             Ok(started) => started,
             Err(why) => {

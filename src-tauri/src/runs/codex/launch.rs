@@ -9,9 +9,10 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use super::process::{signal_group, started_of};
-use super::{create_private, events, events_file, exit_file, process_file, run_folder, stderr_file, CodexBackend, CODEX_GUARD, FINAL_FILE, MODEL_FILE, PROGRAM, SHORT_ID_FILE, TOKEN_VARIABLE};
+use super::{create_private, events, events_file, exit_file, process_file, run_folder, stderr_file, CodexBackend, CODEX_GUARD, FINAL_FILE, PROGRAM, SHORT_ID_FILE, TOKEN_VARIABLE};
 use crate::domain::{worktree_in, RunProcess, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER, GUARD};
 use crate::runs::backend::{LaunchRequest, Session, ToolsOffer};
+use crate::runs::cli::ShortId;
 use crate::runs::failure::Failure;
 use crate::runs::redact::redact;
 use crate::runs::repo::Git;
@@ -76,7 +77,11 @@ pub(super) fn resume_args(thread: &str, final_answer: &Path, model: Option<&str>
     args
 }
 
-fn make_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
+pub(super) fn write_short_id(folder: &Path, id: &ShortId) -> std::io::Result<()> {
+    create_private(&folder.join(SHORT_ID_FILE)).and_then(|mut f| f.write_all(id.as_str().as_bytes()))
+}
+
+pub(super) fn make_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
     let private = |dir: &Path| match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         other => other,
@@ -139,16 +144,9 @@ impl CodexBackend {
         }
         made.folder = Some(&folder);
         // A launch whose answer is lost is found again by this id (`find`).
-        if let Err(e) = create_private(&folder.join(SHORT_ID_FILE)).and_then(|mut f| f.write_all(req.fresh_id.as_str().as_bytes())) {
+        if let Err(e) = write_short_id(&folder, &req.fresh_id) {
             made.undo().await;
             return Err(failure(format!("the run folder: {e}")));
-        }
-
-        if let Some(model) = &req.model {
-            if let Err(e) = create_private(&folder.join(MODEL_FILE)).and_then(|mut f| f.write_all(model.as_bytes())) {
-                made.undo().await;
-                return Err(failure(format!("the run folder: {e}")));
-            }
         }
 
         let process = match self.spawn(req, &worktree, &folder) {
