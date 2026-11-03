@@ -3,7 +3,9 @@
 # beside it. Keys: login (the line `login status` prints on stderr), login_code (its exit code), thread_id,
 # start_delay (seconds to wait before thread.started), hold (seconds to stay alive after the first answer; SIGINT
 # ends it with 130 and no turn.completed), fail (text printed on stderr before the process exits 1 with no thread),
-# answer (the text written to the -o file).
+# answer (the text written to the -o file), exit_early=1 (exit 1 after the answer item, no turn.completed),
+# turn_failed (text of a turn.failed line, then exit 1), sandbox_git=1 (a failed `git add` item with the sandbox's
+# message), terminal_hold (seconds `resume <thread>` stays alive, as a Terminal session would).
 set -u
 scenario=${FAKE_CODEX_SCENARIO:?FAKE_CODEX_SCENARIO is not set}
 dir=$(dirname "$scenario")
@@ -17,6 +19,12 @@ case "${1-}" in
   login)
     echo "$(cfg login 'Logged in using ChatGPT')" >&2
     exit "$(cfg login_code 0)"
+    ;;
+  resume)
+    trap 'exit 130' INT
+    sleep "$(cfg terminal_hold 30)" &
+    wait $!
+    exit 0
     ;;
   exec) ;;
   *) echo "fake codex: unknown command ${1-}" >&2; exit 2 ;;
@@ -42,6 +50,18 @@ answer=$(cfg answer "All done.")
 printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread"
 printf '{"type":"turn.started"}\n'
 printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"%s"}}\n' "$answer"
+
+if [ "$(cfg sandbox_git 0)" = 1 ]; then
+  printf '%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"git add -A","aggregated_output":"fatal: Unable to create /repo/.git/worktrees/x/index.lock'"'"': Operation not permitted","exit_code":128,"status":"failed"}}'
+fi
+
+[ "$(cfg exit_early 0)" = 1 ] && exit 1
+
+turn_failed=$(cfg turn_failed "")
+if [ -n "$turn_failed" ]; then
+  printf '{"type":"turn.failed","error":{"message":"%s"}}\n' "$turn_failed"
+  exit 1
+fi
 
 hold=$(cfg hold 0)
 if [ "$hold" != 0 ]; then

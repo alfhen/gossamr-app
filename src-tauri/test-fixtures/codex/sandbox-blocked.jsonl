@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"019a0000-0000-7000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"git add -A","aggregated_output":"fatal: Unable to create '/repo/.git/worktrees/x/index.lock': Operation not permitted","exit_code":128,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I could not stage the change."}}
+{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":5}}

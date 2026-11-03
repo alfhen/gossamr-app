@@ -1,16 +1,15 @@
 //! Starting a Codex run: its worktree, its run folder and the `codex exec` process.
 
 use std::ffi::OsString;
-use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use super::process::{signal_group, started_of};
-use super::{run_folder, CodexBackend, CODEX_GUARD, PROGRAM, TOKEN_VARIABLE};
+use super::{create_private, events, events_file, process_file, run_folder, CodexBackend, CODEX_GUARD, FINAL_FILE, PROGRAM, SHORT_ID_FILE, TOKEN_VARIABLE};
 use crate::domain::{worktree_in, RunProcess, AGENT_CALL_TIMEOUT_MS, AGENT_GUARD, AGENT_SERVER};
 use crate::runs::backend::{LaunchRequest, Session};
 use crate::runs::failure::Failure;
@@ -59,11 +58,6 @@ fn exec_args(req: &LaunchRequest, worktree: &Path, final_answer: &Path) -> Vec<O
     args
 }
 
-/// Creates a file only this user can read, failing when it exists.
-fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
-    OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
-}
-
 fn make_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
     let private = |dir: &Path| match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
@@ -76,14 +70,6 @@ fn make_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
         std::fs::remove_dir_all(folder)?;
     }
     private(folder)
-}
-
-/// The thread id of the first `thread.started` line in the events so far.
-fn thread_in(events: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(events).ok()?;
-    text.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()).find_map(|line| {
-        (line["type"] == "thread.started").then(|| line["thread_id"].as_str().map(str::to_owned)).flatten().filter(|id| !id.is_empty())
-    })
 }
 
 /// The last line Codex wrote to stderr, with anything secret masked.
@@ -134,6 +120,11 @@ impl CodexBackend {
             return Err(failure(format!("the run folder: {e}")));
         }
         made.folder = Some(&folder);
+        // A launch whose answer is lost is found again by this id (`find`).
+        if let Err(e) = create_private(&folder.join(SHORT_ID_FILE)).and_then(|mut f| f.write_all(req.fresh_id.as_str().as_bytes())) {
+            made.undo().await;
+            return Err(failure(format!("the run folder: {e}")));
+        }
 
         let process = match self.spawn(req, &worktree, &folder) {
             Ok(process) => process,
@@ -158,10 +149,10 @@ impl CodexBackend {
     /// Starts `codex exec` for turn 1 in its own session, with its output in the run folder, and records the process
     /// before anything waits on it so a quit leaves it findable.
     fn spawn(&self, req: &LaunchRequest, worktree: &Path, folder: &Path) -> Result<RunProcess, String> {
-        let events = create_private(&folder.join("events-1.jsonl")).map_err(|e| format!("the events file: {e}"))?;
+        let events = create_private(&events_file(folder, 1)).map_err(|e| format!("the events file: {e}"))?;
         let stderr = create_private(&folder.join("stderr-1.log")).map_err(|e| format!("the error file: {e}"))?;
         let mut command = std::process::Command::new(&self.binary);
-        command.args(exec_args(req, worktree, &folder.join("final.txt"))).current_dir(worktree).stdin(Stdio::null()).stdout(events).stderr(stderr);
+        command.args(exec_args(req, worktree, &folder.join(FINAL_FILE))).current_dir(worktree).stdin(Stdio::null()).stdout(events).stderr(stderr);
         self.login_env.apply(&mut command);
         match &req.tools {
             Some(offer) => command.env(TOKEN_VARIABLE, &offer.token),
@@ -191,7 +182,7 @@ impl CodexBackend {
         });
 
         let record = serde_json::json!({ "pid": process.pid, "started": process.started });
-        let written = create_private(&folder.join("process-1.json")).and_then(|mut f| f.write_all(record.to_string().as_bytes()));
+        let written = create_private(&process_file(folder, 1)).and_then(|mut f| f.write_all(record.to_string().as_bytes()));
         if let Err(e) = written {
             let _ = signal_group(&process, libc::SIGKILL);
             return Err(format!("the process file: {e}"));
@@ -200,16 +191,16 @@ impl CodexBackend {
     }
 
     async fn wait_for_thread(&self, folder: &Path) -> Result<String, String> {
-        let (events, exit, stderr) = (folder.join("events-1.jsonl"), folder.join("exit-1"), folder.join("stderr-1.log"));
+        let (events, exit, stderr) = (events_file(folder, 1), folder.join("exit-1"), folder.join("stderr-1.log"));
         let deadline = Instant::now() + self.launch_wait;
         loop {
-            if let Some(thread) = thread_in(&events) {
+            if let Some(thread) = events::read(&events).thread {
                 return Ok(thread);
             }
             // The reaper writes the exit file after the process is gone, so a launch that fails has nothing left to write into the folder it removes.
             if exit.exists() {
                 // Output written just before the exit may have landed after the look above.
-                if let Some(thread) = thread_in(&events) {
+                if let Some(thread) = events::read(&events).thread {
                     return Ok(thread);
                 }
                 let code = std::fs::read_to_string(&exit).ok();
