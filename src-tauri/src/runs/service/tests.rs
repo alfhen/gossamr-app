@@ -1387,3 +1387,27 @@ async fn recovery_finds_a_launching_run_on_the_second_login_in_that_logins_listi
     assert_eq!((adopted.state, adopted.short_id.as_ref().map(ShortId::as_str)), (RunState::Launching, Some("0c0ffee1")));
     assert_eq!(svc.index.live().iter().map(|e| e.instance_id.as_str()).collect::<Vec<_>>(), ["claude_2"]);
 }
+
+#[tokio::test]
+async fn recovery_fails_runs_of_a_login_without_a_toolchain_at_once_and_the_other_logins_unmatched_run_as_interrupted() {
+    let rig = ready().await;
+    let launching = |r: &mut Run, instance: &str| {
+        r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: instance.into(), model: "default".into(), effort: None });
+        r.state = RunState::Launching;
+        r.launched_at = Some(Utc::now());
+    };
+    let first = rig.queued(1).await;
+    let first = rig.set(&first, |r| launching(r, "claude")).await;
+    let second = rig.queued(2).await;
+    let second = rig.set(&second, |r| launching(r, "claude_2")).await;
+    let (svc, _) = crate::runs::rig::with_second_login_where(&rig.fx, &rig.cli, Some("claude_2"));
+    let svc = svc.with_timing(FAST);
+
+    let started = std::time::Instant::now();
+    svc.recover().await;
+    assert!(started.elapsed() >= FAST.recover_window, "the default login's run is still looked for");
+    let (gone, lost) = (rig.get(&second).await, rig.get(&first).await);
+    assert_eq!(gone.state, RunState::Failed);
+    assert_ne!(gone.error, lost.error, "each run gets its own login's reason");
+    assert_eq!((lost.state, lost.error.as_deref()), (RunState::Failed, Some("Launch was interrupted")));
+}

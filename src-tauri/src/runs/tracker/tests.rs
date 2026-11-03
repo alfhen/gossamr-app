@@ -1194,11 +1194,34 @@ async fn a_run_follows_only_its_own_logins_listing_when_another_login_lists_the_
         elsewhere.pid = None;
         s.sessions.push(elsewhere);
     });
-    second.with(|s| s.sessions.push(FakeCli::session("abc12345", &run.expected_worktree)));
-    assert!(rig.cli.0.lock().unwrap().sessions.iter().any(|e| e.state.as_deref() == Some("done")), "the default listing holds a finished session with the same id");
+    second.with(|s| {
+        let mut asking = FakeCli::session("abc12345", &run.expected_worktree);
+        asking.state = Some("blocked".into());
+        asking.status = Some("idle".into());
+        asking.needs = Some("Which one?".into());
+        s.sessions.push(asking);
+    });
 
     svc.poll_at(Utc::now()).await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working);
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer, "the run follows the second login's blocked session");
     svc.poll_at(Utc::now()).await;
-    assert_eq!(rig.get(&run).await.state, RunState::Working, "the default login's finished session is not this run's");
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer, "the default login's finished session is not this run's");
+}
+
+#[tokio::test]
+async fn a_run_on_the_second_login_is_tracked_while_the_default_login_has_no_toolchain() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| on_second_login(r, "abc12345")).await;
+    let (svc, second) = crate::runs::rig::with_second_login_where(&rig.fx, &rig.cli, Some("claude"));
+    second.with(|s| {
+        let mut asking = FakeCli::session("abc12345", &run.expected_worktree);
+        asking.state = Some("blocked".into());
+        asking.status = Some("idle".into());
+        asking.needs = Some("Which one?".into());
+        s.sessions.push(asking);
+    });
+
+    svc.poll_at(Utc::now()).await;
+    assert_eq!(rig.get(&run).await.state, RunState::NeedsAnswer);
 }

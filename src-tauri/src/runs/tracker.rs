@@ -226,8 +226,15 @@ impl RunService {
         }
         // A run waiting for a slot counts: the next look should be soon, so it starts promptly once one frees.
         let mut busy = runs.iter().any(|r| r.state != RunState::Queued || r.slot_wait_since.is_some()) || !waiting.is_empty();
-        let Ok(tc) = self.tools.get().await else { return Polled { busy } };
-        self.collect_answers(&tc, &waiting).await;
+        let mut waiting_by_instance: BTreeMap<&str, Vec<Run>> = BTreeMap::new();
+        for run in &waiting {
+            waiting_by_instance.entry(run.instance_id()).or_default().push(run.clone());
+        }
+        for group in waiting_by_instance.into_values() {
+            if let Ok(tc) = self.toolchain_of(&group[0]).await {
+                self.collect_answers(&tc, &group).await;
+            }
+        }
 
         let turn = self.launching.lock().await;
         let now = clock();

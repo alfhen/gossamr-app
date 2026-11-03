@@ -97,7 +97,8 @@ pub struct RunService {
 
 pub(super) use super::fresh::real;
 
-/// Whether `entry` is the session of `run`. Interactive sessions never are.
+/// Whether `entry` is the session of `run`. Interactive sessions never are. `entry` must come from the listing of the
+/// run's own login (`toolchain_of(run)`); short ids can repeat across logins.
 pub(super) fn belongs_to(entry: &AgentEntry, run: &Run) -> bool {
     let Some(id) = entry.id.as_deref().and_then(ShortId::parse) else { return false };
     if entry.kind.as_deref() == Some("interactive") {
@@ -654,7 +655,6 @@ impl RunService {
         let in_flight = self.in_flight.lock().expect("in-flight lock poisoned").clone();
         let mut waiting: Vec<Run> = runs.into_iter().filter(|r| r.state == RunState::Launching && !in_flight.contains(&r.id)).collect();
         let deadline = Instant::now() + self.timing.recover_window;
-        let mut why = Failure::Interrupted;
         while !waiting.is_empty() {
             let mut unmatched = Vec::new();
             let mut by_instance: std::collections::BTreeMap<String, Vec<Run>> = Default::default();
@@ -665,8 +665,10 @@ impl RunService {
                 let tc = match self.toolchain_of(&group[0]).await {
                     Ok(tc) => tc,
                     Err(e) => {
-                        why = e.into();
-                        unmatched.extend(group);
+                        let why: Failure = e.into();
+                        for mut run in group {
+                            let _ = self.fail(&mut run, &why).await;
+                        }
                         continue;
                     }
                 };
@@ -690,7 +692,7 @@ impl RunService {
             tokio::time::sleep(self.timing.poll).await;
         }
         for mut run in waiting {
-            let _ = self.fail(&mut run, &why).await;
+            let _ = self.fail(&mut run, &Failure::Interrupted).await;
         }
         self.sweep_agent_files().await;
     }
