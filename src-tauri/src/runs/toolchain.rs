@@ -19,7 +19,6 @@ use crate::model_choice::Reason;
 
 #[derive(Clone)]
 pub struct Toolchain {
-    pub cli: Arc<dyn ClaudeCli>,
     pub backend: Arc<dyn RunBackend>,
     /// The captured shell environment, without any instance's login: `git` and `gh` run in it.
     pub env: Arc<RunEnv>,
@@ -35,7 +34,7 @@ impl Toolchain {
     pub fn for_login(cli: Arc<dyn ClaudeCli>, env: Arc<RunEnv>, id: &str, name: &str, login: Option<ProviderEnv>, files: PathBuf) -> Self {
         let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
         let backend = Arc::new(ClaudeBackend::new(cli.clone(), env.clone(), files, id.into(), name.into(), own_folder));
-        Self { cli, backend, env, instance_id: id.into(), instance_name: name.into(), login }
+        Self { backend, env, instance_id: id.into(), instance_name: name.into(), login }
     }
 
     /// The default instance, with the login the shell has, writing MCP files in a folder of its own.
@@ -47,13 +46,18 @@ impl Toolchain {
     /// This toolchain as another instance, with the backend that instance's name and login give.
     #[cfg(test)]
     pub fn into_instance(self, id: &str, name: &str, login: Option<ProviderEnv>) -> Self {
-        Self::for_login(self.cli, self.env, id, name, login, scratch_files())
+        Self::for_login(self.claude_cli(), self.env, id, name, login, scratch_files())
     }
 
     /// This toolchain with its backend keeping MCP files in `files`.
     #[cfg(test)]
     pub fn with_files(self, files: PathBuf) -> Self {
-        Self::for_login(self.cli, self.env, &self.instance_id, &self.instance_name, self.login, files)
+        Self::for_login(self.claude_cli(), self.env, &self.instance_id, &self.instance_name, self.login, files)
+    }
+
+    #[cfg(test)]
+    fn claude_cli(&self) -> Arc<dyn ClaudeCli> {
+        self.backend.as_any().and_then(|any| any.downcast_ref::<ClaudeBackend>()).expect("a Claude backend").cli()
     }
 
     /// Whether the instance has a folder of its own, which a plain `claude` in the person's Terminal doesn't use.
@@ -257,7 +261,7 @@ mod tests {
     async fn the_default_instance_runs_claude_with_the_login_the_shell_has() {
         let (_fx, tools) = rig("default").await;
         for tc in [tools.get().await.unwrap(), tools.for_instance(connections::DEFAULT_CLAUDE).await.unwrap()] {
-            assert_eq!(tc.cli.version().await.unwrap(), "/shell/folder|sk-shell");
+            assert_eq!(tc.backend.as_any().and_then(|any| any.downcast_ref::<ClaudeBackend>()).unwrap().cli().version().await.unwrap(), "/shell/folder|sk-shell");
             assert_eq!((tc.instance_id.as_str(), tc.instance_name.as_str()), ("claude", "Claude"));
         }
     }
@@ -281,7 +285,7 @@ mod tests {
         let (fx, tools) = rig("folder").await;
         add(&fx, "claude_2", Driver::Claude, Some("~/.claude-work"), true);
         let tc = tools.for_instance("claude_2").await.unwrap();
-        assert_eq!(tc.cli.version().await.unwrap(), format!("{}|unset", fx.home.join(".claude-work").display()));
+        assert_eq!(tc.backend.as_any().and_then(|any| any.downcast_ref::<ClaudeBackend>()).unwrap().cli().version().await.unwrap(), format!("{}|unset", fx.home.join(".claude-work").display()));
         assert_eq!((tc.instance_id.as_str(), tc.instance_name.as_str()), ("claude_2", "claude_2 name"));
         assert!(tc.login.is_some());
     }
@@ -325,7 +329,7 @@ mod tests {
         add(&fx, "bad_off", Driver::Claude, Some("/tmp/outside-home-2"), false);
         assert!(matches!(tools.for_instance("off").await.err(), Some(ToolchainError::Unusable { reason: Reason::Off, .. })));
         let tc = tools.observe_instance("off").await.unwrap();
-        assert_eq!(tc.cli.version().await.unwrap(), format!("{}|unset", fx.home.join(".claude-off").display()));
+        assert_eq!(tc.backend.as_any().and_then(|any| any.downcast_ref::<ClaudeBackend>()).unwrap().cli().version().await.unwrap(), format!("{}|unset", fx.home.join(".claude-off").display()));
         for id in ["bad", "bad_off"] {
             assert!(matches!(tools.observe_instance(id).await.err(), Some(ToolchainError::BadFolder { .. })), "{id}");
         }

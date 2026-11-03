@@ -5,15 +5,14 @@ use chrono::Utc;
 use serde::Serialize;
 
 use super::archive::contained;
-use super::cli::{CliError, ShortId};
+use super::backend::RemoveOutcome;
+use super::cli::ShortId;
 use super::fresh::{agents_root, is_work_path, real};
 use super::repo::Git;
-use super::service::{belongs_to, RunService};
+use super::service::RunService;
 use crate::domain::{Run, RunState};
 use crate::error::{Error, Result};
 use crate::inbox::Lookup;
-
-const LOCK_RETRIES: u32 = 6;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -26,26 +25,6 @@ pub enum Cleanup {
 /// A run that is over and still has something to remove: its worktree, or an earlier session that was kept.
 pub fn cleanable(run: &Run) -> bool {
     matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown) && run.short_id.is_some() && (run.worktree_removed_at.is_none() || !run.leftover_sessions().is_empty())
-}
-
-/// `claude rm` straight after `claude stop` is refused while Claude's lock names a process that is still exiting, for
-/// about four seconds. A refusal about unpushed work is final.
-pub(super) fn lock_refusal(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    !text.contains("unpushed") && (text.contains("lock") || text.contains("still running"))
-}
-
-/// `claude rm` saying the session is not there. The wording is not documented, so this only recognises the usual phrasings;
-/// anything else is kept as a refusal and retried by the next clean up.
-fn absent_refusal(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    ["no session", "no such", "not found", "unknown session", "does not exist", "doesn't exist", "already removed"].iter().any(|phrase| text.contains(phrase))
-}
-
-pub(super) enum Removal {
-    Gone,
-    /// Claude's own words.
-    Refused(String),
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -62,37 +41,6 @@ impl Drop for Cleaning<'_> {
 }
 
 impl RunService {
-    /// The ids the listing gives sessions of a finished run that are still open at their prompt. One holds the
-    /// worktree's lock, which `claude rm` refuses until it is stopped, and after a resume it can differ from the stored
-    /// id. The run's earlier sessions are looked at too.
-    async fn live_sessions(&self, tc: &super::toolchain::Toolchain, run: &Run) -> Vec<ShortId> {
-        let Ok(entries) = tc.cli.agents(true).await else { return Vec::new() };
-        let ours = run.session_ids();
-        entries
-            .iter()
-            .filter(|e| e.pid.is_some() && (belongs_to(e, &tc.instance_id, run) || e.id.as_deref().and_then(ShortId::parse).is_some_and(|id| ours.contains(&id))))
-            .filter_map(|e| e.id.as_deref().and_then(ShortId::parse))
-            .collect()
-    }
-
-    /// `claude rm` on one session, retried while Claude's lock on a just-stopped worktree clears. A session that is
-    /// already gone counts as removed.
-    pub(super) async fn remove_session(&self, tc: &super::toolchain::Toolchain, id: &ShortId) -> Result<Removal> {
-        let mut tries = 0;
-        loop {
-            match tc.cli.rm(id).await {
-                Ok(()) => return Ok(Removal::Gone),
-                Err(CliError::Failed { stderr, .. }) if tries < LOCK_RETRIES && lock_refusal(&stderr) => {
-                    tries += 1;
-                    tokio::time::sleep(self.timing.rm_wait).await;
-                }
-                Err(CliError::Failed { stderr, .. }) if absent_refusal(&stderr) => return Ok(Removal::Gone),
-                Err(CliError::Failed { stderr, .. }) => return Ok(Removal::Refused(stderr.trim().to_owned())),
-                Err(other) => return Err(other.into()),
-            }
-        }
-    }
-
     /// Whether the login the run launched on is gone from the providers. A login that is off or broken, or a list that
     /// can't be read, is not gone: cleaning up must work while a login is off.
     async fn instance_removed(&self, run: &Run) -> bool {
@@ -145,12 +93,12 @@ impl RunService {
         if !worktree_pending && leftovers.is_empty() {
             return Err(refuse("This run's worktree is already removed."));
         }
-        let Some(id) = run.short_id.clone().filter(|_| cleanable(&run)) else {
+        if !cleanable(&run) {
             return Err(refuse(match run.state {
                 RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown => "This run has no session, so there is no worktree to remove.".to_owned(),
                 other => format!("This run is {}. Stop it first, then clean it up.", other.as_str()),
             }));
-        };
+        }
         if self.instance_removed(&run).await {
             if worktree_pending {
                 if let Some(message) = self.remove_with_git(&run).await? {
@@ -160,25 +108,10 @@ impl RunService {
             return self.settle_cleanup(&run, worktree_pending, leftovers, None, true).await;
         }
         let tc = self.observing_toolchain(&run).await?;
-        let live = self.live_sessions(&tc, &run).await;
-        for session in &live {
-            tc.cli.stop(session).await?;
-        }
-        let id = live.into_iter().find(|l| !run.earlier_sessions.iter().any(|e| e.short_id == *l)).unwrap_or(id);
-        if worktree_pending {
-            if let Removal::Refused(message) = self.remove_session(&tc, &id).await? {
-                return Ok(Cleanup::Refused { message });
-            }
-        }
-        let (mut gone, mut kept) = (Vec::new(), None);
-        for earlier in leftovers.iter().filter(|e| **e != id) {
-            match self.remove_session(&tc, earlier).await? {
-                Removal::Gone => gone.push(earlier.clone()),
-                Removal::Refused(message) => {
-                    kept.get_or_insert(message);
-                }
-            }
-        }
+        let (gone, kept) = match tc.backend.remove(&run, &leftovers, &self.timing.waits()).await? {
+            RemoveOutcome::Refused(message) => return Ok(Cleanup::Refused { message }),
+            RemoveOutcome::Removed { gone, kept } => (gone, kept),
+        };
         if !worktree_pending && gone.is_empty() {
             if let Some(message) = kept {
                 return Ok(Cleanup::Refused { message });

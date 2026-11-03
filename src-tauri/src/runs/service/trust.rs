@@ -42,8 +42,9 @@ impl RunService {
         if !self.is_own_clone(&run, &tc).await {
             return Err(refused(Refusal::NotOurClone));
         }
-        let auth = tc.cli.auth_status().await.map_err(|_| refused(Refusal::CantTell))?;
-        let file = trust::config_file(&tc.env, &auth).map_err(refused)?;
+        let Some(file) = tc.backend.trust_file().await.map_err(refused)? else {
+            return Err(Error::Proposal("Codex has no trust step, so there is nothing to trust.".into()));
+        };
         if trust::trust(&file, &run.spec.clone_path).await.map_err(refused)? {
             let text = format!("You trusted Gossamr's clone of {} for {LOGIN}", run.spec.repo);
             let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "trust_saved".into(), text, detail: None };

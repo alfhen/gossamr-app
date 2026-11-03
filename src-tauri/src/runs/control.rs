@@ -12,7 +12,7 @@ use chrono::Utc;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::cli::ShortId;
+use super::backend::{RunBackend, Session};
 use super::provider_env::ProviderEnv;
 use super::service::RunService;
 use super::toolchain::Toolchain;
@@ -122,13 +122,22 @@ fn write_script(dir: &Path, name: &str, script: &str) -> Result<PathBuf> {
     Ok(file)
 }
 
-/// Writes `<dir>/<short id>-<digest>.command`: `cd` into the worktree, then `claude attach`. Nothing from a model or a ticket
-/// can be in it: the id is eight hex characters, and both paths are checked.
-pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, claude: &Path, worktree: &Path, id: &ShortId) -> Result<PathBuf> {
-    let id = ShortId::parse(id.as_str()).ok_or_else(|| refuse("that isn't a session id"))?;
-    let (claude, worktree) = (quotable(claude)?, quotable(worktree)?);
+/// The words after the program in a script: each only letters, digits and `-`, so none can be quoting or a separator. A
+/// backend's words are a session id or a fixed flag; this keeps it so.
+fn plain_words(words: &[String]) -> Result<String> {
+    if words.iter().any(|w| w.is_empty() || !w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        return Err(refuse("Gossamr won't open Terminal with that: a word in it isn't plain letters, digits and dashes."));
+    }
+    Ok(words.iter().map(|w| format!(" {w}")).collect())
+}
+
+/// Writes `<dir>/<last word>-<digest>.command`: `cd` into the worktree, then the program with the backend's `words`
+/// that attach to the session. Nothing from a model or a ticket can be in it: the words are checked, and so are both paths.
+pub fn write_attach_file(dir: &Path, login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String]) -> Result<PathBuf> {
+    let name = words.last().ok_or_else(|| refuse("that isn't a session"))?;
+    let (program, worktree, words_text) = (quotable(program)?, quotable(worktree)?, plain_words(words)?);
     let login = login_lines(login)?;
-    write_script(dir, id.as_str(), &format!("#!/bin/zsh\n{login}cd '{worktree}'\nexec '{claude}' attach {id}\n"))
+    write_script(dir, name, &format!("#!/bin/zsh\n{login}cd '{worktree}'\nexec '{program}'{words_text}\n"))
 }
 
 /// Why Terminal is opened with plain `claude` in a clone, and so what the file is called.
@@ -147,15 +156,6 @@ impl Purpose {
             Purpose::SignIn => "signin",
             Purpose::Mode(RefusedMode::Auto) => "auto",
             Purpose::Mode(RefusedMode::Bypass) => "bypass",
-        }
-    }
-
-    /// The flag Claude's own message names for the opt-in; fixed text, never from outside.
-    fn flags(self) -> &'static str {
-        match self {
-            Purpose::Trust | Purpose::SignIn => "",
-            Purpose::Mode(RefusedMode::Auto) => " --permission-mode auto",
-            Purpose::Mode(RefusedMode::Bypass) => " --dangerously-skip-permissions",
         }
     }
 
@@ -191,13 +191,14 @@ fn checked_clone(clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     Ok(real)
 }
 
-/// Writes `<dir>/<trust|signin|auto|bypass>-<digest>.command`: `cd` into the clone, then `claude`, which is
-/// interactive and, for a refused mode, started in that mode. Both paths are checked, and the name is a digest, so no outside text reaches the script or its name.
-pub fn write_claude_file(dir: &Path, login: Option<&ProviderEnv>, purpose: Purpose, claude: &Path, clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
+/// Writes `<dir>/<trust|signin|auto|bypass>-<digest>.command`: `cd` into the clone, then the program, which is
+/// interactive and, for a refused mode, started with the backend's `words` for that mode. Both paths and the words are
+/// checked, and the name is a digest, so no outside text reaches the script or its name.
+pub fn write_claude_file(dir: &Path, login: Option<&ProviderEnv>, purpose: Purpose, program: &Path, words: &[String], clone: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let clone = checked_clone(clone, home)?;
-    let (claude, clone_text) = (quotable(claude)?, quotable(&clone)?);
+    let (program, clone_text, words_text) = (quotable(program)?, quotable(&clone)?, plain_words(words)?);
     let login_text = login_lines(login)?;
-    write_script(dir, purpose.prefix(), &format!("#!/bin/zsh\n{login_text}cd '{clone_text}'\nexec '{claude}'{}\n", purpose.flags()))
+    write_script(dir, purpose.prefix(), &format!("#!/bin/zsh\n{login_text}cd '{clone_text}'\nexec '{program}'{words_text}\n"))
 }
 
 /// Writes `<dir>/provider-signin-<digest>.command`: the instance's login lines, then its CLI's sign-in command. The
@@ -290,10 +291,10 @@ impl RunService {
                 other => format!("This run is {}, so there is nothing to stop.", other.as_str()),
             }));
         }
-        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to stop."))?;
+        let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to stop."))?;
         let tc = self.observing_toolchain(&run).await?;
-        tc.cli.stop(&id).await?;
-        self.core.asks().cancel(&run.id);
+        tc.backend.stop(&session).await?;
+        self.end_ask_on(tc.backend.as_ref(), &run);
         Self::stopped(&mut run);
         if let Err(e) = self.index.mark_terminal(&run.id) {
             eprintln!("couldn't update the run index: {e}");
@@ -355,7 +356,7 @@ impl RunService {
                     continue;
                 }
             }
-            let Some(id) = entry.short_id else {
+            let Some(session) = Session::of_entry(&entry) else {
                 tally.failed += 1;
                 continue;
             };
@@ -366,9 +367,12 @@ impl RunService {
                 tally.failed += 1;
                 continue;
             };
-            match tokio::time::timeout(STOP_LIMIT, tc.cli.stop(&id)).await {
+            match tokio::time::timeout(STOP_LIMIT, tc.backend.stop(&session)).await {
                 Ok(Ok(())) => {
-                    self.core.asks().cancel(&entry.run_id);
+                    match &mine {
+                        Some(run) => self.end_ask_on(tc.backend.as_ref(), run),
+                        None => self.core.asks().cancel(&entry.run_id),
+                    }
                     tally.stopped += 1;
                     let _ = self.index.mark_terminal(&entry.run_id);
                     self.reset_counts(&entry.run_id);
@@ -398,15 +402,32 @@ impl RunService {
         Ok(tally)
     }
 
-    /// Opens Terminal in the run's worktree with `claude attach` for its session.
+    /// Opens Terminal in the run's worktree with the backend's attach command for its session.
     pub async fn attach(&self, run_id: &str) -> Result<()> {
         let run = self.load(run_id).await?;
-        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to open yet."))?;
+        let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.observing_toolchain(&run).await?;
-        let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
+        let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
+        if tc.backend.prepare_attach(&session).await? {
+            self.leave_to_terminal(run_id, tc.backend.as_ref()).await?;
+        }
         let dir = self.core.data_dir().join(ATTACH_DIR);
-        let file = write_attach_file(&dir, tc.login.as_ref(), &claude, &run.expected_worktree, &id)?;
+        let file = write_attach_file(&dir, tc.login.as_ref(), &program, &run.expected_worktree, &tc.backend.attach_words(&session))?;
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+    }
+
+    /// Hands the run to the terminal that is about to open it: its held question is cancelled and it reads as stopped.
+    async fn leave_to_terminal(&self, run_id: &str, backend: &dyn RunBackend) -> Result<()> {
+        let _turn = self.launching.lock().await;
+        let mut run = self.load(run_id).await?;
+        self.end_ask_on(backend, &run);
+        Self::stopped(&mut run);
+        run.last_detail = Some("Opened in Terminal".into());
+        if let Err(e) = self.index.mark_terminal(&run.id) {
+            eprintln!("couldn't update the run index: {e}");
+        }
+        self.reset_counts(&run.id);
+        self.store(&run).await
     }
 
     /// Opens Terminal running `command`, in the Terminal or iTerm the person chose. The caller takes `command` from
@@ -436,9 +457,10 @@ impl RunService {
     }
 
     async fn open_claude_in(&self, tc: &Toolchain, folder: &Path, purpose: Purpose) -> Result<()> {
-        let claude = tc.cli.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
+        let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which Claude to open.".into()))?;
+        let words = tc.backend.terminal_words(purpose).ok_or_else(|| refuse("There is nothing to open Terminal for here."))?;
         let dir = self.core.data_dir().join(ATTACH_DIR);
-        let file = write_claude_file(&dir, tc.login.as_ref(), purpose, &claude, folder, self.home.as_deref())?;
+        let file = write_claude_file(&dir, tc.login.as_ref(), purpose, &program, &words, folder, self.home.as_deref())?;
         self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
     }
 
@@ -446,10 +468,10 @@ impl RunService {
     /// this much, as the count stops after three seconds. Only this run's folder is read.
     pub async fn disk(&self, run_id: &str) -> Result<u64> {
         let run = self.load(run_id).await?;
-        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session yet."))?;
+        let session = Session::of(&run).ok_or_else(|| refuse("This run has no session yet."))?;
         let tc = self.observing_toolchain(&run).await?;
-        let config = self.claude_config_dir(&tc).await.ok_or_else(|| Error::Claude("Couldn't find Claude's folder.".into()))?;
-        let dir = config.join("jobs").join(id.as_str());
+        let dirs = self.folders_of(&tc).await;
+        let dir = tc.backend.scratch_dir(&session, &dirs).ok_or_else(|| Error::Claude("Couldn't find Claude's folder.".into()))?;
         tokio::task::spawn_blocking(move || size_within(&dir, DISK_LIMIT)).await.map_err(|e| Error::Claude(e.to_string()))
     }
 

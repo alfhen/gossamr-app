@@ -4,6 +4,8 @@ use std::sync::Arc;
 use chrono::Duration as Span;
 
 use super::*;
+use crate::runs::toolchain::Toolchain;
+use std::path::PathBuf;
 use crate::runs::cli::{AgentEntry, ShortId, TimelineLine};
 use crate::runs::index::RunIndex;
 use crate::runs::rig::{line, ready, Rig};

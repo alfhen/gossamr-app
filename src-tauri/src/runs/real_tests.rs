@@ -205,7 +205,7 @@ async fn rm_waiting_out_the_lock(cli: &SystemCli, id: &ShortId) -> (Result<(), S
     loop {
         match cli.rm(id).await {
             Ok(()) => return (Ok(()), waits, started.elapsed()),
-            Err(super::cli::CliError::Failed { stderr, .. }) if super::cleanup::lock_refusal(&stderr) && started.elapsed() < Duration::from_secs(30) => {
+            Err(super::cli::CliError::Failed { stderr, .. }) if super::backend::claude::lock_refusal(&stderr) && started.elapsed() < Duration::from_secs(30) => {
                 waits += 1;
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }

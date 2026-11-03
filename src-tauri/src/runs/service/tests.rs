@@ -7,6 +7,7 @@ use crate::domain::fixtures::run_spec;
 use crate::domain::{RunFailure, RunSpec};
 use crate::codehost::github::testserver::{pull_reply, Reply};
 use crate::inbox::testing::{fixture_watching, fixture_watching_with, Fixture};
+use crate::runs::backend::claude::belongs_to;
 use crate::runs::cli::{AgentEntry, ClaudeCli, LaunchRequest, SystemCli};
 use crate::runs::env::RunEnv;
 use crate::runs::repo::testing::{clone_with_origin, install_fake_git};

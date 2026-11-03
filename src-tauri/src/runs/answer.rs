@@ -8,8 +8,9 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 
-use super::cli::is_uuid;
-use super::service::{belongs_to, RunService};
+use super::backend::{ResumeRequest, Resumed, RunBackend, Session};
+use super::cli::{is_uuid, ShortId};
+use super::service::RunService;
 use crate::domain::{Actor, EarlierSession, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
@@ -71,7 +72,7 @@ impl RunService {
             if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
                 return self.answer_ask(run, text, by).await;
             }
-            self.core.asks().cancel(run_id);
+            self.end_ask(&run).await;
         }
         let again = run.state == RunState::Stopped && run.unsent_answer.is_some();
         if run.state != RunState::NeedsAnswer && !again {
@@ -81,8 +82,7 @@ impl RunService {
                 other => format!("This run is {}, so it isn't waiting for an answer.", other.as_str()),
             }));
         }
-        let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to answer."))?;
-        let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to answer."))?;
+        let session = Session::of(&run).filter(|s| s.session_id.as_deref().is_some_and(is_uuid)).ok_or_else(|| refuse("This run has no session to answer."))?;
         if self.login_is_off(&run).await {
             if again {
                 return Err(refuse("Its Claude login is off, so the answer isn't sent. It is kept on the run; send it again once the login is on."));
@@ -97,13 +97,11 @@ impl RunService {
         let tc = self.acting_toolchain(&run).await?;
 
         if !again {
-            let listed = tc.cli.agents(true).await?;
-            let asking = listed.iter().find(|e| belongs_to(e, &tc.instance_id, &run)).is_some_and(|e| e.state.as_deref() == Some("blocked") && e.waiting_for.is_none());
-            if !asking {
+            if !tc.backend.ready_for_answer(&session, &run).await? {
                 return Err(refuse("It isn't waiting for an answer any more. Look again in a moment."));
             }
-            tc.cli.stop(&id).await?;
-            self.core.asks().cancel(&run.id);
+            tc.backend.stop(&session).await?;
+            self.end_ask_on(tc.backend.as_ref(), &run);
             Self::stopped(&mut run);
             if let Err(e) = self.index.mark_terminal(&run.id) {
                 eprintln!("couldn't update the run index: {e}");
@@ -114,7 +112,7 @@ impl RunService {
             self.store(&run).await?;
         }
 
-        let failure = self.wake(&tc, &mut run, &id, &session, text, !again).await;
+        let failure = self.wake(&tc, &mut run, &session, text, !again, false).await;
         match failure {
             None => self.answered(run, text, by).await,
             Some(why) => {
@@ -147,7 +145,29 @@ impl RunService {
             return Err(gone());
         }
         self.remember(&run);
+        if let Ok(tc) = self.observing_toolchain(&run).await {
+            tc.backend.ask_ended(&run);
+        }
         self.after_answer(run, text, now, by).await
+    }
+
+    /// Cancels the run's held `ask` call, if it has one, and tells the backend its wait ended.
+    pub(super) async fn end_ask(&self, run: &Run) {
+        if self.core.asks().question(&run.id).is_none() {
+            return;
+        }
+        match self.observing_toolchain(run).await {
+            Ok(tc) => self.end_ask_on(tc.backend.as_ref(), run),
+            Err(_) => self.core.asks().cancel(&run.id),
+        }
+    }
+
+    /// `end_ask` for a caller that has the run's backend at hand.
+    pub(super) fn end_ask_on(&self, backend: &dyn RunBackend, run: &Run) {
+        if self.core.asks().question(&run.id).is_some() {
+            self.core.asks().cancel(&run.id);
+            backend.ask_ended(run);
+        }
     }
 
     /// Records that the run has its answer and is working again.
@@ -174,43 +194,24 @@ impl RunService {
         Ok(run)
     }
 
-    /// Waits for the session to be listed as stopped, gives its process a moment, and resumes it. `None` is success;
-    /// otherwise what to tell the person.
-    pub(super) async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool) -> Option<String> {
-        self.wake_from(tc, run, id, session, text, settle, &["stopped"]).await
+    /// Resumes the stopped session with `text`, waiting for it to show as stopped first. `finished` also accepts a
+    /// session that ended its turn. `None` is success; otherwise what to tell the person.
+    pub(super) async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, session: &Session, text: &str, settle: bool, finished: bool) -> Option<String> {
+        let cwd: PathBuf = if run.expected_worktree.is_dir() { run.expected_worktree.clone() } else { run.spec.clone_path.clone() };
+        let request = ResumeRequest { message: message(text), cwd, tools: None, settle, finished };
+        match tc.backend.resume(session, &request, &self.timing.waits()).await {
+            Ok(Resumed::Same(_)) => None,
+            Ok(Resumed::Copy(copy)) => Some(self.stop_copy(tc, run, copy).await),
+            Err(e) => Some(e.to_string()),
+        }
     }
 
-    /// `wake`, waiting for the session to be listed in any of the `at_rest` states.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) async fn wake_from(&self, tc: &super::toolchain::Toolchain, run: &mut Run, id: &super::cli::ShortId, session: &str, text: &str, settle: bool, at_rest: &[&str]) -> Option<String> {
-        let deadline = std::time::Instant::now() + self.timing.stop_wait;
-        loop {
-            let listed = match tc.cli.agents(true).await {
-                Ok(listed) => listed,
-                Err(e) => return Some(format!("Couldn't check that the session stopped: {e}.")),
-            };
-            if listed.iter().find(|e| e.id.as_deref() == Some(id.as_str())).is_some_and(|e| e.state.as_deref().is_some_and(|s| at_rest.contains(&s))) {
-                break;
-            }
-            if std::time::Instant::now() >= deadline {
-                return Some("The session didn't show as stopped or finished, so it wasn't woken.".into());
-            }
-            tokio::time::sleep(self.timing.poll).await;
-        }
-        if settle {
-            tokio::time::sleep(self.timing.stop_settle).await;
-        }
-        let cwd: PathBuf = if run.expected_worktree.is_dir() { run.expected_worktree.clone() } else { run.spec.clone_path.clone() };
-        match tc.cli.resume(session, &message(text), Some(&cwd)).await {
-            Ok(woken) if woken.short_id == *id => None,
-            Ok(copy) => {
-                let stopped = tc.cli.stop(&copy.short_id).await.is_ok();
-                let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {}`", copy.short_id) };
-                run.earlier_sessions.push(EarlierSession { short_id: copy.short_id.clone(), session_id: None, removed: false });
-                Some(format!("Claude started a copy ({}) instead of continuing this agent; {copy_note}.", copy.short_id))
-            }
-            Err(e) => Some(format!("Couldn't wake the agent: {e}.")),
-        }
+    /// Stops the second session a resume started and remembers it on the run, in words for the person.
+    async fn stop_copy(&self, tc: &super::toolchain::Toolchain, run: &mut Run, copy: ShortId) -> String {
+        let stopped = tc.backend.stop(&Session { short_id: copy.clone(), session_id: None, process: None }).await.is_ok();
+        let copy_note = if stopped { "it was stopped".to_owned() } else { format!("stop it with `claude stop {copy}`") };
+        run.earlier_sessions.push(EarlierSession { short_id: copy.clone(), session_id: None, removed: false });
+        format!("Claude started a copy ({copy}) instead of continuing this agent; {copy_note}.")
     }
 }
 

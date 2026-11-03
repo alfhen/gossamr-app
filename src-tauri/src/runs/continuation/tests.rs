@@ -3,7 +3,7 @@ use chrono::Duration as Span;
 use super::*;
 use crate::domain::fixtures::run_spec;
 use crate::runs::rig::{line, ready, Rig};
-use crate::runs::service::belongs_to;
+use crate::runs::backend::claude::belongs_to;
 use crate::runs::testing::FakeCli;
 
 fn stopped_run() -> Run {

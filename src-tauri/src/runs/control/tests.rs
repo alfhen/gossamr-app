@@ -2,6 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use super::*;
+use crate::runs::cli::ShortId;
 use crate::domain::{RefusedMode, RunFailure, RunSpec};
 use crate::runs::failure::Failure;
 use crate::runs::index::Entry;
@@ -215,6 +216,10 @@ async fn stop_all_stops_the_runs_waiting_for_a_slot_so_none_takes_a_freed_one() 
     assert!(rig.run_actions(&ws).await.iter().any(|(a, run, _)| a == "run_stopped" && run.as_deref() == Some(in_ws.id.as_str())));
 }
 
+fn attach_words(id: &ShortId) -> Vec<String> {
+    vec!["attach".into(), id.to_string()]
+}
+
 fn ids() -> (ShortId, PathBuf) {
     (ShortId::parse("1a2b3c4d").unwrap(), PathBuf::from("/opt/fake/bin/claude"))
 }
@@ -224,7 +229,7 @@ fn the_attach_file_is_exactly_three_lines_and_private() {
     let dir = tmp("attach-file");
     let (id, claude) = ids();
     let worktree = Path::new("/Users/me/My Code/webshop/.claude/worktrees/ce-1-fix-cart-0a1b");
-    let file = write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
+    let file = write_attach_file(&dir, None, &claude, worktree, &attach_words(&id)).unwrap();
     assert_eq!(file.parent(), Some(dir.as_path()));
     let name = file.file_name().unwrap().to_str().unwrap();
     assert!(name.starts_with("1a2b3c4d-") && name.ends_with(".command"), "{name}");
@@ -234,7 +239,7 @@ fn the_attach_file_is_exactly_three_lines_and_private() {
     );
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
-    write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
+    write_attach_file(&dir, None, &claude, worktree, &attach_words(&id)).unwrap();
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -261,9 +266,9 @@ fn a_path_that_could_reach_the_shell_is_refused_and_nothing_is_written() {
         "/work/'; touch /tmp/pwned; echo '",
         "/work/esc\u{1b}[31m",
     ] {
-        let refused = write_attach_file(&dir, None, &claude, Path::new(bad), &id);
+        let refused = write_attach_file(&dir, None, &claude, Path::new(bad), &attach_words(&id));
         assert!(refused.is_err(), "{bad:?}");
-        let refused = write_attach_file(&dir, None, Path::new(bad), Path::new("/work/ok"), &id);
+        let refused = write_attach_file(&dir, None, Path::new(bad), Path::new("/work/ok"), &attach_words(&id));
         assert!(refused.is_err(), "{bad:?} as the claude path");
     }
     assert!(std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none()));
@@ -274,7 +279,7 @@ fn spaces_dollars_and_backticks_stay_inert_inside_single_quotes() {
     let dir = tmp("attach-inert");
     let (id, claude) = ids();
     let worktree = "/work/with space/$(touch /tmp/pwned)/`id`/${HOME}/a\"b/c\\d";
-    let file = write_attach_file(&dir, None, &claude, Path::new(worktree), &id).unwrap();
+    let file = write_attach_file(&dir, None, &claude, Path::new(worktree), &attach_words(&id)).unwrap();
     let script = std::fs::read_to_string(&file).unwrap();
     assert_eq!(script.lines().nth(1).unwrap(), format!("cd '{worktree}'"));
 
@@ -422,13 +427,13 @@ fn the_trust_and_sign_in_files_are_exactly_three_lines_named_by_a_digest_and_pri
     let claude = Path::new("/opt/fake/bin/claude");
     let script = format!("#!/bin/zsh\ncd '{}'\nexec '/opt/fake/bin/claude'\n", clone.display());
     for (purpose, prefix) in [(Purpose::Trust, "trust-"), (Purpose::SignIn, "signin-")] {
-        let file = write_claude_file(&dir, None, purpose, claude, &clone, Some(&home)).unwrap();
+        let file = write_claude_file(&dir, None, purpose, claude, &[], &clone, Some(&home)).unwrap();
         let name = file.file_name().unwrap().to_str().unwrap().to_owned();
         let digest = name.strip_prefix(prefix).and_then(|n| n.strip_suffix(".command")).unwrap();
         assert!(digest.len() == 16 && digest.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), script);
         assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o700);
-        assert_eq!(write_claude_file(&dir, None, purpose, claude, &clone, Some(&home)).unwrap(), file, "writing again replaces it");
+        assert_eq!(write_claude_file(&dir, None, purpose, claude, &[], &clone, Some(&home)).unwrap(), file, "writing again replaces it");
     }
     assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
     let _ = std::fs::remove_dir_all(dir);
@@ -442,7 +447,7 @@ fn zsh_reads_a_hostile_but_quotable_folder_back_as_the_same_path_and_runs_nothin
     let bin = home.join("fake-claude");
     std::fs::write(&bin, "#!/bin/zsh\nprint -rn -- \"$PWD|$#\" > \"$GOSSAMR_OUT\"\n").unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let file = write_claude_file(&dir, None, Purpose::Trust, &bin, &clone, Some(&home)).unwrap();
+    let file = write_claude_file(&dir, None, Purpose::Trust, &bin, &[], &clone, Some(&home)).unwrap();
 
     let out = home.join("out.txt");
     let status = std::process::Command::new("/bin/zsh").arg(&file).env("GOSSAMR_OUT", &out).status().unwrap();
@@ -478,10 +483,10 @@ fn a_folder_that_is_not_a_plain_clone_inside_home_gets_no_file() {
         (Path::new("relative/path"), "relative"),
     ];
     for (folder, why) in cases {
-        assert!(write_claude_file(&dir, None, Purpose::Trust, claude, folder, Some(&home)).is_err(), "{why}");
+        assert!(write_claude_file(&dir, None, Purpose::Trust, claude, &[], folder, Some(&home)).is_err(), "{why}");
     }
-    assert!(write_claude_file(&dir, None, Purpose::Trust, claude, &real, None).is_err(), "no home to compare with");
-    assert!(write_claude_file(&dir, None, Purpose::Trust, Path::new("/opt/it's/claude"), &real, Some(&home)).is_err(), "a hostile claude path");
+    assert!(write_claude_file(&dir, None, Purpose::Trust, claude, &[], &real, None).is_err(), "no home to compare with");
+    assert!(write_claude_file(&dir, None, Purpose::Trust, Path::new("/opt/it's/claude"), &[], &real, Some(&home)).is_err(), "a hostile claude path");
     assert!(!dir.exists() || std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing was written");
     let _ = std::fs::remove_dir_all(outside.parent().unwrap());
     let _ = std::fs::remove_dir_all(home);
@@ -650,7 +655,7 @@ fn a_script_for_an_instance_with_a_folder_removes_the_other_logins_and_sets_the_
     let dir = tmp("login-lines");
     let (id, claude) = ids();
     let login = folder_login();
-    let attach = std::fs::read_to_string(write_attach_file(&dir, Some(&login), &claude, Path::new("/work/ok"), &id).unwrap()).unwrap();
+    let attach = std::fs::read_to_string(write_attach_file(&dir, Some(&login), &claude, Path::new("/work/ok"), &attach_words(&id)).unwrap()).unwrap();
     let lines: Vec<_> = attach.lines().collect();
     assert_eq!(lines[0], "#!/bin/zsh");
     let unset: Vec<_> = lines[1].strip_prefix("unset ").expect("an unset line").split(' ').collect();
@@ -659,7 +664,7 @@ fn a_script_for_an_instance_with_a_folder_removes_the_other_logins_and_sets_the_
 
     let home = dir.join("home");
     let clone = clone_in(&home, "webshop");
-    let trust = std::fs::read_to_string(write_claude_file(&dir, Some(&login), Purpose::Trust, &claude, &clone, Some(&home)).unwrap()).unwrap();
+    let trust = std::fs::read_to_string(write_claude_file(&dir, Some(&login), Purpose::Trust, &claude, &[], &clone, Some(&home)).unwrap()).unwrap();
     assert!(trust.starts_with(&format!("#!/bin/zsh\n{}\nexport CLAUDE_CONFIG_DIR='/Users/me/.claude-work'\ncd '", lines[1])), "{trust}");
     assert!(trust.ends_with("exec '/opt/fake/bin/claude'\n"), "{trust}");
     let _ = std::fs::remove_dir_all(dir);
@@ -703,15 +708,15 @@ fn the_same_clone_opened_as_two_instances_gets_two_files_so_one_cannot_replace_t
     let (id, claude) = ids();
     let login = folder_login();
     for purpose in [Purpose::Trust, Purpose::SignIn, Purpose::Mode(RefusedMode::Auto)] {
-        let plain = write_claude_file(&dir, None, purpose, &claude, &clone, Some(&home)).unwrap();
-        let personal = write_claude_file(&dir, Some(&login), purpose, &claude, &clone, Some(&home)).unwrap();
+        let plain = write_claude_file(&dir, None, purpose, &claude, &[], &clone, Some(&home)).unwrap();
+        let personal = write_claude_file(&dir, Some(&login), purpose, &claude, &[], &clone, Some(&home)).unwrap();
         assert_ne!(plain, personal, "{purpose:?}");
         assert!(!std::fs::read_to_string(&plain).unwrap().contains("CLAUDE_CONFIG_DIR"));
         assert!(std::fs::read_to_string(&personal).unwrap().contains("export CLAUDE_CONFIG_DIR="));
     }
     let worktree = Path::new("/work/ok");
-    let plain = write_attach_file(&dir, None, &claude, worktree, &id).unwrap();
-    let personal = write_attach_file(&dir, Some(&login), &claude, worktree, &id).unwrap();
+    let plain = write_attach_file(&dir, None, &claude, worktree, &attach_words(&id)).unwrap();
+    let personal = write_attach_file(&dir, Some(&login), &claude, worktree, &attach_words(&id)).unwrap();
     assert_ne!(plain, personal, "two daemons can hand out the same short id");
     assert!(!std::fs::read_to_string(&plain).unwrap().contains("CLAUDE_CONFIG_DIR"));
     let _ = std::fs::remove_dir_all(dir);
@@ -864,4 +869,24 @@ async fn the_disk_of_a_run_on_the_second_login_is_read_from_that_logins_folder()
     std::fs::write(jobs.join("big"), vec![0u8; 4096]).unwrap();
 
     assert!(svc.disk(&run.id).await.unwrap() >= 4096);
+}
+
+#[test]
+fn an_attach_word_with_a_quote_or_a_space_is_refused_before_a_script_is_written() {
+    let dir = tmp("attach-words");
+    let (_, claude) = ids();
+    for bad in ["it's", "two words", "$(touch pwned)", "a;b", "a`b`", "line\nbreak", "", "--flag=value", "../x"] {
+        for words in [vec!["attach".to_owned(), bad.to_owned()], vec![bad.to_owned()]] {
+            assert!(write_attach_file(&dir, None, &claude, Path::new("/work/ok"), &words).is_err(), "{bad:?}");
+        }
+    }
+    assert!(write_attach_file(&dir, None, &claude, Path::new("/work/ok"), &[]).is_err(), "no words, no session");
+    assert!(std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none()));
+    let (dir2, home) = (tmp("claude-words"), home("claude-words"));
+    let clone = clone_in(&home, "webshop");
+    assert!(write_claude_file(&dir2, None, Purpose::Trust, &claude, &["it's".to_owned()], &clone, Some(&home)).is_err());
+    assert!(std::fs::read_dir(&dir2).map_or(true, |mut entries| entries.next().is_none()));
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(dir2);
+    let _ = std::fs::remove_dir_all(home);
 }
