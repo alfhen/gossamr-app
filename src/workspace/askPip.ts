@@ -13,7 +13,7 @@ import { contextFor, focusedConversation, useWorkstreams } from "./workstreamsSt
  * `query` the person wrote goes as it is; an instruction the page wrote for Pip comes as a `PipAsk`, whose `shown` line is
  * what the person's bubble shows while Pip still gets the whole prompt.
  */
-export function askPip(query: string | PipAsk, conversation: string = focusedConversation((usePip.getState().pinned ?? currentContext()).item)) {
+export function askPip(query: string | PipAsk, conversation: string = focusedConversation()) {
   const { prompt, shown } = typeof query === "string" ? { prompt: query, shown: null } : query;
   const text = prompt.trim();
   if (!text) return;

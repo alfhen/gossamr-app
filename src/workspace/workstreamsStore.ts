@@ -3,8 +3,12 @@ import type { Backend } from "../backend/types";
 import { generalOn, workstreamConversation, workstreamOfConversation } from "../lib/conversations";
 import { ofItem, runWorkstream } from "../lib/workstreamStage";
 import { adoptCount, adoptedText, adoptUndoneText } from "../lib/workstreamAdopt";
-import type { ConnectionInfo, ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
+import type { ItemRef, Run, ScreenContext, Workstream, WorkstreamEvent, WorkstreamUndo, WorkstreamView } from "../types";
 import { useWorkspace } from "../workspaceStore";
+import { primaryConnection } from "./domains";
+import { currentContext, useScreen } from "./pipHooks";
+import { usePip } from "./pipStore";
+import { buildScreenContext } from "./screenContext";
 import { PIP_INPUT_ID } from "./draftKeys";
 import { focusAdopted, focusAdoptButton, focusWorkstreamRow } from "./focusDrawn";
 import { NO_WORKSTREAM_ID, keepSelectionOpen, useWorkView } from "./workViewStore";
@@ -368,25 +372,23 @@ export function paneWorkstream(): WorkstreamView | null {
   return focusedWorkstream(useWorkstreams.getState().list, ticket, focusedRun(tabs.route), shownDetail(tabs.route, useWorkView.getState().selected));
 }
 
-/** The conversation the Pip pane shows: the focused workstream's, otherwise General. */
-export function paneConversation(open?: ItemRef | null): string {
+/** The conversation the Pip pane shows: the focused workstream's, otherwise General on the open ticket's connection. */
+export function paneConversation(): string {
   const ws = paneWorkstream();
-  return ws ? workstreamConversation(ws.workstream.id) : generalOn(open?.connectionId, primaryOf(useWorkspace.getState().connections));
-}
-
-/** The connection a bare conversation id is the primary's on, as Rust picks it: the first Jira connection, or the first one that is on when there are several. */
-export function primaryOf(connections: ConnectionInfo[]): string | undefined {
-  const jira = connections.filter((c) => c.kind === "jira" || c.kind === "mock");
-  return (jira.length > 1 ? jira.find((c) => c.enabled) : undefined)?.id ?? jira[0]?.id;
+  const open = (usePip.getState().pinned ?? currentContext()).item;
+  return ws ? workstreamConversation(ws.workstream.id) : generalOn(open?.connectionId, primaryConnection(useWorkspace.getState().connections));
 }
 
 /** The conversation in focus: the one the Pip pane shows (`paneConversation`). */
 export const focusedConversation = paneConversation;
 
-/** `focusedConversation`, kept current. */
-export function useFocusedConversation(open?: ItemRef | null): string {
+/** `paneConversation`, kept current. */
+export function useFocusedConversation(): string {
   const pane = usePaneWorkstream();
-  const primary = useWorkspace((s) => primaryOf(s.connections));
+  const pinned = usePip((s) => s.pinned);
+  const screen = useScreen();
+  const open = (pinned ?? buildScreenContext(screen)).item;
+  const primary = useWorkspace((s) => primaryConnection(s.connections));
   return pane ? workstreamConversation(pane.workstream.id) : generalOn(open?.connectionId, primary);
 }
 

@@ -25,6 +25,12 @@ export const isWorkConnection = (connectionId: string) => domainOfKind(connectio
 
 export const workConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[]): T[] => connections.filter((c) => domainOfKind(c.kind) === "work");
 
+/** The connection a bare conversation id is the primary's on, as `Core::primary` in src-tauri/src/inbox.rs picks it: the first work connection, or the first one that is on when there are several. */
+export function primaryConnection(connections: readonly ConnectionInfo[]): string | undefined {
+  const jira = workConnections(connections).filter((c) => isJira(c.kind));
+  return (jira.length > 1 ? jira.find((c) => c.enabled) : undefined)?.id ?? jira[0]?.id;
+}
+
 export const githubConnections = <T extends Pick<ConnectionInfo, "kind">>(connections: readonly T[]): T[] => connections.filter((c) => c.kind === "github");
 
 /** Containers that may appear as project badges, filters and switcher entries. */

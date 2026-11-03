@@ -16,7 +16,7 @@ import { contextFor, conversationTitle, focusComposer, focusedConversation, pane
 import { useWorkView } from "./workViewStore";
 import { undoLog } from "./undo";
 import { useToasts } from "./toasts";
-import type { WorkstreamView } from "../types";
+import type { ConnectionInfo, WorkstreamView } from "../types";
 import { GENERAL_CONVERSATION, workstreamConversation } from "../lib/conversations";
 
 const memory = () => {
@@ -165,6 +165,26 @@ describe("the workstreams store", () => {
     handlePipView({ requestId: "in-general", filter: { type: "blocked" }, note: "x" });
     expect(activeTab(useTabs.getState()).filter).toEqual(ALL);
     handlePipView({ requestId: asked, filter: { type: "blocked" }, note: "x" });
+    expect(activeTab(useTabs.getState()).filter).toEqual({ type: "blocked" });
+  });
+});
+
+describe("a question asked in a second site's General", () => {
+  it("is the pane's conversation, so its filter applies", async () => {
+    const jira = (id: string) => ({ id, kind: "jira", enabled: true }) as ConnectionInfo;
+    useWorkspace.setState({ connections: [jira("alpha"), jira("beta")] });
+    usePip.setState({ pinned: { view: "Ticket CA-1", item: { connectionId: "beta", externalId: "CA-1", key: "CA-1" }, filter: null, selection: [] } });
+    const sent: AskRequest[] = [];
+    const ask = vi.spyOn(claude, "ask").mockImplementation(async (req) => (sent.push(req), { queued: false, ahead: 0 }));
+    try {
+      askPip("what is blocked?");
+      await vi.waitFor(() => expect(sent).toHaveLength(1));
+    } finally {
+      ask.mockRestore();
+    }
+    expect(sent[0].conversation).toBe("beta:general");
+    expect(paneConversation()).toBe("beta:general");
+    handlePipView({ requestId: sent[0].requestId, filter: { type: "blocked" }, note: "x" });
     expect(activeTab(useTabs.getState()).filter).toEqual({ type: "blocked" });
   });
 });
