@@ -17,6 +17,16 @@ The kind-specific briefs, structured reports, heading parsing and automatic draf
 
 All of them run with stdin from `/dev/null`, because the CLI otherwise reads stdin as a prompt.
 
+## One daemon per config folder
+
+Each `CLAUDE_CONFIG_DIR` has its own background daemon, Keychain login and agent list. Checked with two signed-in folders on Claude Code 2.1.316 (step o10, below):
+
+- `claude agents --json --all` lists only the agents of its own folder. `claude stop <id>` in the wrong folder finds no job and changes nothing in the other.
+- Removing one folder's last agent leaves the other folder's daemon and agents running.
+- Short ids differ between folders in the check, but Gossamr keys a run by instance and short id anyway.
+- The default login runs with `CLAUDE_CONFIG_DIR` unset. Setting it to `~/.claude` reads as signed out.
+- A resume that passes flags starts a copy of the session. Gossamr resumes without flags, so a run keeps the model it started with.
+
 ## What the real run showed (scratch config, signed out)
 
 - A fresh `CLAUDE_CONFIG_DIR` is not logged in and refuses an untrusted folder: exit 1, stderr `Workspace not trusted. Run `claude` in <path> once and accept the trust prompt, then retry.` Trust is written to the scratch `<config>/.claude.json` as `projects.<path>.hasTrustDialogAccepted`, which the tests do through `runs::trust::trust` and the app does only on a click (see Folder trust).
@@ -390,7 +400,7 @@ These are the two outputs of c0. Later steps read them from here.
 | Pip may run on Codex | Yes only if C1, C2 and C3 all pass and each lockdown flag has a name Gossamr can test (rule 3). If not, Codex runs agents only and c2 is skipped. | Confirmed by the owner on 2 Nov 2026: **Codex runs agents only; c2 is skipped, and Pip stays on Claude.** C2 and C3 pass. C1 does not meet rule 3 (no built-in tools): even with every flag in the C1 result, the built-ins `exec` (a script tool), `wait`, `request_user_input`, `clock.sleep` and `collaboration.*` remain, and no testable flag removes them. C1 passes the shell test only because `exec` fails with `tools.exec_command is not a function`. Allowing Pip on Codex needs rule 3 to change. |
 | Sandbox for agents | The narrowest setting from C6 that can commit and push. If none can, say that Gossamr commits and pushes for the agent. | Confirmed by the owner on 2 Nov 2026: **pass no `--sandbox` flag, so the person's own Codex config decides.** This keeps AGENTS.md rule 4 (no restricting flags, agents push with the person's own credentials). C6 shows what that means: `workspace-write` cannot commit in a worktree, and only `danger-full-access` can commit and push. Two other options would need rule 4 and its tests in `src-tauri/src/runs/cli.rs` to change, and the owner did not choose them: Gossamr passes `--sandbox workspace-write` and commits and pushes itself with the connection's login (which can be another account), or Gossamr passes `--sandbox danger-full-access` for an unsandboxed agent in its own worktree. |
 
-Codex is a beta provider (owner decision, 2 Nov 2026). Its row, sheet and picker entries carry a Beta label, and nothing is hidden behind a switch. Codex rows show with Beta from r14a. **+ Add** offers Codex, and agents run on it, only after the Codex runner (c3 to c6), which moves to a follow-up plan.
+Codex is a beta provider (owner decision, 2 Nov 2026). Its row, sheet and picker entries carry a Beta label, and nothing is hidden behind a switch. Codex rows show with Beta from r14a. **+ Add** offers Codex from r14a. Agents run on it only after the Codex runner (c3 to c6), which moves to a follow-up plan.
 
 ### Finding `codex` and its models (step c1)
 

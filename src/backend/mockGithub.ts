@@ -131,6 +131,7 @@ export class MockGithub {
     if (login ? !usable.some((a) => a.login === login) : usable.length === 0) throw new Error(`gh has no token${login ? ` for ${login}` : ""}. Run \`gh auth login -h github.com\` in a terminal.`);
     if (!this.connected) this.signIn();
     this.tokenRefused = false;
+    this.checkedAt = new Date().toISOString();
     return this.info();
   }
 

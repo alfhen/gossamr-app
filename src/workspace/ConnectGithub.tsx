@@ -85,7 +85,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
   return (
     <div className="grid gap-3.5">
       <div>
-        <h2 className="font-display m-0 text-lg font-semibold">Connect GitHub</h2>
+        <h2 className="font-display m-0 text-lg font-semibold">Add GitHub account</h2>
         <p className="mt-1 mb-0 text-ws-ink2">Pick an account gh is signed in as. {agentsPush((found?.accounts.find((a) => a.active) ?? (found?.accounts.length === 1 ? found.accounts[0] : undefined))?.login ?? null)}</p>
       </div>
       {!found && (
@@ -130,7 +130,7 @@ export function ConnectGithubView(p: ConnectGithubViewProps) {
   );
 }
 
-export function ConnectFrame({ children, onClose, label = "Connect GitHub", takesEscape = false }: { children: ReactNode; onClose(): void; label?: string; takesEscape?: boolean }) {
+export function ConnectFrame({ children, onClose, label, takesEscape = false }: { children: ReactNode; onClose(): void; label: string; takesEscape?: boolean }) {
   const sheet = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const at = document.activeElement;
@@ -214,7 +214,7 @@ function ConnectFlow({ backend, onClose }: { backend: Backend; onClose(): void }
 
   const github = connections.filter((c) => c.kind === "github");
   return (
-    <ConnectFrame onClose={() => connecting === null && onClose()}>
+    <ConnectFrame label="Add GitHub account" onClose={() => connecting === null && onClose()}>
       <ConnectGithubView
         found={found}
         connected={github.map((c) => c.workspace.toLowerCase())}
