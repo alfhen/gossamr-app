@@ -411,3 +411,66 @@ Seen on 2 Nov 2026 with codex-cli 0.165.0-alpha.1.2. Gossamr's code relies on ea
 - **`codex debug models`.** It prints one JSON object, `{"models": [...]}`, about 745 KB because each entry holds the model's full instructions. It ran with an empty `CODEX_HOME` and no login, so it reads a catalog and does not ask the account. Gossamr reads only `slug`, `display_name`, `visibility` and `priority`. Entries are kept only when `visibility` is the string `list` (`hide` was seen), so a renamed or missing field drops the entry, and lower `priority` comes first. Each entry also has `supported_reasoning_levels`, which includes `ultra`, a level outside Gossamr's `EFFORTS`. Agents pass no effort, so nothing reads it yet.
 - **If it fails.** A non-zero exit, output that is not this shape, more than 8 MB, or no answer in 20 seconds gives the built-in list. A failed ask is tried again after a minute and a good one after ten.
 - **Not used here.** `codex delete --force <uuid>` and the MCP approval key `default_tools_approval_mode="approve"` (C2) matter from c4 on, when Gossamr starts and removes Codex sessions.
+
+## Codex runner (steps X04 to X08 of docs/plan-codex-runner.md)
+
+Read from the code on `main` after X05 and from the 0.166 binary's help and strings (codex-cli 0.166.0-alpha.5.1, 3 Nov 2026). Nothing in this section was run against a real login; the owner check at the end does that.
+
+### The command line
+
+`runs/codex/launch.rs` (`exec_args`) starts turn 1 as:
+
+```
+codex exec --json -C <worktree> -o <run folder>/final.txt [-m <model>]
+  [-c mcp_servers.gossamr.url="<url>"]
+  [-c mcp_servers.gossamr.bearer_token_env_var="GOSSAMR_MCP_TOKEN"]
+  [-c mcp_servers.gossamr.default_tools_approval_mode="approve"]
+  [-c mcp_servers.gossamr.tool_timeout_sec=600]
+  -c developer_instructions="<guard>" -- <prompt>
+```
+
+The `mcp_servers.gossamr.*` keys are left out when the run has no tools offer. There is no `--sandbox`, no approval flag, no `--ignore-user-config` and no `--skip-git-repo-check`: the person's own Codex config decides. stdin is null, the process leads its own session (`setsid`), and its stdout and stderr go to files in the run folder. Tests: `a_codex_launch_passes_the_server_the_approval_the_tool_timeout_and_the_guard_and_no_sandbox`, `a_codex_launch_with_no_offer_leaves_out_the_server_and_the_token`, `the_chosen_model_is_passed_with_m`.
+
+### The tool timeout
+
+Codex cuts an MCP tool call at the server's `tool_timeout_sec`, in seconds. The key name is in the 0.166 binary's strings and in Codex's source (`McpServerConfig.tool_timeout_sec`). Its default is 300 s, below `ASK_WAIT` (9 minutes), so without the key every `ask` held longer than 5 minutes is cut. Gossamr passes `AGENT_CALL_TIMEOUT_MS / 1000`, 600, on every turn, and the existing check that `AGENT_CALL_TIMEOUT_MS` exceeds `ASK_WAIT` covers both CLIs. The launch test above checks the argument. Whether the held call really survives 5 minutes is part of the owner check.
+
+### The token and the environment
+
+The token is in `GOSSAMR_MCP_TOKEN` of the `codex` process only, set after `RunEnv::apply` (which clears the environment first). It is in no argument and no file. Test: `the_mcp_token_is_in_the_codex_environment_and_in_no_argument` (it also checks the run folder and the `Debug` output of the session and the request).
+
+Codex hands its environment to the commands the agent runs. `shell_environment_policy.ignore_default_excludes` defaults to true (`codex-rs/config/src/shell_environment_policy.rs`), so variables with `TOKEN` in the name are not filtered. The agent and what it runs can read the token, as they can read Claude's 0600 file. It reaches only that run's four tools and stops working when the run ends. Hiding it would need `-c shell_environment_policy.exclude=[...]`, which would replace the person's own list, so Gossamr does not. Child output that quotes the token can reach the run folder (#399); `redact` masks `gsr_` tokens in what Gossamr stores.
+
+### The run folder and the pid
+
+Each run has `<data dir>/agents/runs/<run id>/`, mode 0700, with files 0600 made by `create_new`: `events-<n>.jsonl` (stdout of turn n), `stderr-<n>.log`, `final.txt` (`-o`), `exit-<n>` (the exit code, written by the task that waits on the child) and `process-<n>.json` (`{pid, started}`, written right after the spawn, before the thread is named). Tests: `a_codex_launch_makes_the_worktree_and_run_folder_and_records_the_thread_and_a_live_process`, `a_codex_launch_writes_process_1_json_before_thread_started`.
+
+A pid alone is not trusted. `started` is the process start time in seconds (`proc_pidinfo(PROC_PIDTBSDINFO)` on macOS), and `runs/codex/process.rs` sends a signal only when the pid still answers and started when the run says. Tests: `a_reused_pid_is_not_the_run_s_process`, `a_process_start_time_does_not_change_while_it_runs`.
+
+### Events read
+
+A launch waits up to 60 seconds for the first `thread.started` line in `events-1.jsonl` and takes its `thread_id` as the run's `session_id`. If the process exits first, the last line of stderr (secrets masked) is the failure, and the worktree and folder are undone. Tests: `a_codex_launch_that_never_names_a_thread_fails_and_stops_the_process`, `stderr_in_a_failed_launch_has_its_secrets_masked`. The other event types (`item.*`, `turn.completed`, `mcp_tool_call`, `command_execution`) are read by the tracker in X06.
+
+### Stopping
+
+c0 check C5: SIGINT to a running `codex exec` ended it within 6 seconds with its events intact, and left no `turn.completed`. In the ChatGPT.app copy the pid is the real binary, not a node launcher (C4). A copy installed through npm may run as a `node` launcher; that is not checked. X08 stops with SIGINT, then SIGKILL to the process group after `stop_wait`, and sends nothing to a pid that is no longer the run's.
+
+### The sandbox
+
+With no `--sandbox` flag, `codex exec` uses approval `never`, so a command the sandbox blocks fails and nothing asks. Under `workspace-write` the agent can edit files in its worktree but `git add` fails with `Unable to create '<clone>/.git/worktrees/<name>/index.lock': Operation not permitted`, and a push is rejected with `unable to create temporary object directory` (C6). Only `danger-full-access` commits and pushes. The Codex guard adds "If your sandbox stops git from committing or pushing, stop and say so in your report." (`CODEX_GUARD`).
+
+### Commands in 0.166 that Gossamr does not use
+
+`codex agents` (agent sessions on a shared local app-server daemon), `codex queue --thread <id> --message <text> [--resume]` and `exec --worktree`. c0 did not check them, and the runner builds on the `exec` path c0 checked. A daemon path could later replace Gossamr's own process supervision; the `RunBackend` trait keeps that change inside `runs/codex/`.
+
+### Owner check, once, with a real Codex login
+
+Not run yet. Use a scratch `CODEX_HOME`, a throwaway repo and a small model. Record the version, the date and how you signed in.
+
+- Version: ______  Date: ______  Login: ______
+- [ ] Launch an agent. `events-1.jsonl` has `thread.started`, and `process-1.json` holds a pid that is the real binary.
+- [ ] Have it call `ask` and wait longer than 5 minutes. The call is still held (this proves `tool_timeout_sec`). Then answer it.
+- [ ] Open the run in Terminal. The `exec` stops, `codex resume <thread>` starts, and no second writer exists.
+- [ ] Stop a run with SIGINT and check no child process is left.
+- [ ] Clean up the run. The worktree, branch, run folder and thread (`codex delete --force <uuid>`) are gone.
+- [ ] Check the ChatGPT.app copy and, if installed, an npm copy: does SIGINT to the pid end the real process?
