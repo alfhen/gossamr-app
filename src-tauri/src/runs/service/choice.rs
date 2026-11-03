@@ -16,8 +16,19 @@ pub(super) enum Blocked {
     Fails(Failure),
 }
 
+/// The words a run waits with when its toolchain can't be had yet, or `None` when the failure ends the run instead.
+/// Pip's check that agents can start uses the same rule.
+pub(in crate::runs) fn waiting_words(e: &ToolchainError, instance_name: &str) -> Option<String> {
+    match e {
+        ToolchainError::Unusable { reason, name } => Some(reason.words(Use::Agents, name)),
+        ToolchainError::BadFolder { name, problem } => Some(format!("{name}: {problem}")),
+        ToolchainError::UnknownInstance(_) => Some(Reason::Removed.words(Use::Agents, instance_name)),
+        _ => None,
+    }
+}
+
 impl RunService {
-    /// For acting on a run (launch, message, answer, trust): its instance's toolchain, never the default's unless that is its instance. `observing_toolchain_of` is for looking at an existing run.
+    /// For acting on a run (launch, message, answer, trust): its instance's toolchain, never the default's unless that is its instance. It refuses an instance that is off; `observing_toolchain_of` accepts one, for looking at, stopping or removing an existing run.
     pub(in crate::runs) async fn toolchain_of(&self, run: &Run) -> std::result::Result<Toolchain, ToolchainError> {
         match &run.runs_on {
             Some(choice) => self.tools.for_instance(&choice.instance_id).await,
@@ -33,16 +44,29 @@ impl RunService {
         }
     }
 
+    /// `toolchain_of` for a caller that reports to the person.
+    pub(in crate::runs) async fn acting_toolchain(&self, run: &Run) -> Result<Toolchain> {
+        self.toolchain_of(run).await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
+    }
+
+    /// Whether acting on `run` waits only because its instance's login is off.
+    pub(in crate::runs) async fn login_is_off(&self, run: &Run) -> bool {
+        matches!(self.toolchain_of(run).await, Err(ToolchainError::Unusable { reason: Reason::Off, .. }))
+    }
+
+    /// `observing_toolchain_of` for a caller that reports to the person.
+    pub(in crate::runs) async fn observing_toolchain(&self, run: &Run) -> Result<Toolchain> {
+        self.observing_toolchain_of(run).await.map_err(|e| Error::Claude(Failure::from(e).to_string()))
+    }
+
     /// Settles what `run` launches on and freezes it on the run. A run with no choice takes the Settings default.
     pub(super) async fn launch_target(&self, run: &mut Run) -> std::result::Result<Target, Blocked> {
         let (choice, instance) = self.core.agents_target(run.runs_on.as_ref()).map_err(Blocked::Waits)?;
         let model = (choice.model != DEFAULT_MODEL).then(|| choice.model.clone());
         run.runs_on = Some(choice);
-        let tc = self.toolchain_of(run).await.map_err(|e| match e {
-            ToolchainError::Unusable { reason, name } => Blocked::Waits(reason.words(Use::Agents, &name)),
-            ToolchainError::BadFolder { name, problem } => Blocked::Waits(format!("{name}: {problem}")),
-            ToolchainError::UnknownInstance(_) => Blocked::Waits(Reason::Removed.words(Use::Agents, &instance.display_name)),
-            other => Blocked::Fails(other.into()),
+        let tc = self.toolchain_of(run).await.map_err(|e| match waiting_words(&e, &instance.display_name) {
+            Some(words) => Blocked::Waits(words),
+            None => Blocked::Fails(e.into()),
         })?;
         Ok(Target { tc, model })
     }

@@ -251,8 +251,7 @@ fn accepts(provider: &ProviderInstance, model: &str, found: &Found) -> bool {
 /// Whether `choice` names a model the instance lists and, for Pip only, an effort from the fixed list, for a use its driver runs.
 pub fn check_choice(config: &AppConfig, use_: Use, choice: &ModelChoice, found: &Found) -> Result<ProviderInstance, Reason> {
     let provider = config.providers.iter().find(|p| p.id == choice.instance_id).ok_or(Reason::Removed)?;
-    // Until runs are tracked per instance, an agent started anywhere but the default would run where nothing watches it.
-    if !use_.allowed_on(provider.driver) || (use_ == Use::Agents && provider.id != crate::connections::DEFAULT_CLAUDE) {
+    if !use_.allowed_on(provider.driver) {
         return Err(Reason::CantRun(provider.driver));
     }
     let listed = accepts(provider, &choice.model, found);
@@ -435,6 +434,13 @@ mod tests {
         assert_eq!(reason(&config, Use::Pip, &pick("claude_9", "sonnet"), READY), Reason::Removed);
         assert_eq!(Reason::Removed.words(Use::Pip, "Claude personal"), "Pick which Claude Pip runs on.");
         assert_eq!(Reason::Removed.words(Use::Agents, "Claude personal"), "Claude personal was removed. Pick another.");
+    }
+
+
+    #[test]
+    fn a_second_claude_instance_that_is_on_and_signed_in_is_accepted_for_agents() {
+        let config = config();
+        assert_eq!(resolve_with(&config, Use::Agents, &pick("claude_2", "default"), READY), Resolution::Ready { instance_id: "claude_2".into(), model: None, effort: None });
     }
 
     #[test]

@@ -527,7 +527,11 @@ const RUNS_ON: &str = "
 ALTER TABLE runs ADD COLUMN runs_on TEXT NOT NULL DEFAULT 'claude';
 CREATE INDEX runs_on_state ON runs(runs_on, state);";
 
-const APP_STEPS: &[&str] = &[APP, RUNS_ON];
+/// Who queued a waiting message, so it is delivered and recorded as theirs. Messages from before were Pip's.
+const RUN_MESSAGE_AUTHOR: &str = "
+ALTER TABLE run_messages ADD COLUMN author TEXT NOT NULL DEFAULT 'pip';";
+
+const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR];
 
 const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
 
@@ -672,9 +676,22 @@ mod tests {
             if table == &"runs" {
                 expected.push(("runs_on".into(), "TEXT".into(), true));
             }
+            if table == &"run_messages" {
+                expected.push(("author".into(), "TEXT".into(), true));
+            }
             assert_eq!(columns(&app, table), expected, "{table}");
         }
         assert_eq!(app.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), APP_STEPS.len() as i64);
+    }
+
+    #[test]
+    fn a_message_queued_before_the_author_column_is_pips() {
+        let mut app = Connection::open_in_memory().unwrap();
+        apply(&mut app, &APP_STEPS[..2]).unwrap();
+        app.execute_batch("INSERT INTO run_messages (run_id, text, queued_at) VALUES ('old', 'Hi.', 't');").unwrap();
+        migrate_app(&mut app).unwrap();
+        let author: String = app.query_row("SELECT author FROM run_messages WHERE run_id = 'old'", [], |r| r.get(0)).unwrap();
+        assert_eq!(author, "pip");
     }
 
     #[test]

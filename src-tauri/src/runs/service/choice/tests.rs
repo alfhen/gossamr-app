@@ -113,32 +113,33 @@ async fn on_second_claude(rig: &Rig, n: u32) -> Run {
 }
 
 #[tokio::test]
-async fn a_second_instance_is_refused_for_agents_wherever_a_choice_is_made_until_runs_are_tracked_per_instance() {
+async fn a_second_instance_is_accepted_for_agents_wherever_a_choice_is_made() {
     let rig = ready().await;
     add_second_claude(&rig);
-    let words = "Agents can't run on Claude personal yet.";
     let run = rig.queued(1).await;
     let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap();
     let defaults = crate::model_choice::ModelDefaults { pip: None, agents: Some(pick("claude_2", "opus")) };
-    assert!(matches!(rig.fx.core.model_defaults(Some(defaults)), Err(Error::Input(w)) if w == words));
-    assert!(matches!(rig.fx.core.set_workstream_model(&rig.fx.scope, &ws.id, Some(pick("claude_2", "opus"))).await, Err(Error::Input(w)) if w == words));
-    assert!(matches!(rig.svc.set_model(&run.id, pick("claude_2", "opus")).await, Err(Error::Input(w)) if w == words));
-    assert_eq!(rig.get(&run).await.runs_on, Some(pick("claude", "default")));
+    rig.fx.core.model_defaults(Some(defaults)).unwrap();
+    rig.fx.core.set_workstream_model(&rig.fx.scope, &ws.id, Some(pick("claude_2", "opus"))).await.unwrap();
+    assert_eq!(rig.svc.set_model(&run.id, pick("claude_2", "opus")).await.unwrap().runs_on, Some(pick("claude_2", "opus")));
 }
 
 #[tokio::test]
-async fn a_run_stored_on_a_second_instance_waits_with_its_reason_and_starts_once_it_has_another_choice() {
+async fn a_run_stored_on_a_second_instance_that_is_off_waits_with_its_reason_and_starts_once_it_has_another_choice() {
     let rig = ready().await;
     add_second_claude(&rig);
     let run = on_second_claude(&rig, 1).await;
+    let off = ToolchainError::Unusable { reason: Reason::Off, name: "Claude personal".into() };
+    let tools = Instances { default: Toolchain::new(rig.cli.clone(), rig_env(&rig)), by_id: HashMap::from([("claude_2".to_owned(), Err(off)), ("claude".to_owned(), Ok(Toolchain::new(rig.cli.clone(), rig_env(&rig))))]), gets: AtomicUsize::new(0) };
+    let svc = Arc::new(RunService::new(rig.fx.core.clone(), Arc::new(tools), RunIndex::load(&rig.fx.dir.join("index2")), Arc::new(|_| {})).with_home(rig.fx.home.canonicalize().unwrap()));
 
-    let waiting = rig.svc.start_now(&run.id).await.unwrap();
+    let waiting = svc.start_now(&run.id).await.unwrap();
     assert_eq!(waiting.state, RunState::Queued);
-    assert_eq!(waiting.wait_reason.as_deref(), Some("Agents can't run on Claude personal yet."));
+    assert_eq!(waiting.wait_reason.as_deref(), Some("Waits for Claude personal, which is off."));
     assert_eq!(waiting.slot_wait_since, None, "it waits for its choice, not for a slot");
     assert_eq!(rig.cli.launches(), 0);
 
-    let started = rig.svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
+    let started = svc.set_model(&run.id, pick("claude", "haiku")).await.unwrap();
     assert_eq!((started.state, started.wait_reason, started.slot_wait_since), (RunState::Launching, None, None), "a new choice is tried at once");
     assert_eq!(rig.cli.launches(), 1);
 }

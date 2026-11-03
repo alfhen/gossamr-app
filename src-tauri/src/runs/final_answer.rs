@@ -85,7 +85,7 @@ impl RunService {
         if run.state != RunState::Done || run.result_complete {
             return false;
         }
-        let Ok(tc) = self.tools.get().await else { return false };
+        let Ok(tc) = self.observing_toolchain_of(&run).await else { return false };
         self.refresh_with(&tc, &run).await
     }
 

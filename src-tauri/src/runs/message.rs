@@ -18,7 +18,8 @@ pub enum Delivery {
     Answered,
     /// The agent's session was woken with it.
     Resumed,
-    /// The agent is working; it gets the message at its next `ask` or when its turn ends.
+    /// The agent is working, or its login is off; it gets the message at its next `ask`, when its turn ends or when the
+    /// login is back on.
     Queued,
 }
 
@@ -56,13 +57,22 @@ impl RunService {
     pub async fn message_agent(&self, run_id: &str, text: &str, by: Actor) -> Result<(Run, Delivery)> {
         let text = checked(text)?;
         let run = self.load(run_id).await?;
+        if by == Actor::Pip && self.core.run_message_author(run_id).await? == Some(Actor::Person) {
+            return Err(refuse("The person's message is waiting to be sent to it; message it once that is sent."));
+        }
         let asking = !at_rest(run.state) && self.core.asks().question(run_id).is_some();
         let wakes = asking || matches!(run.state, RunState::NeedsAnswer | RunState::Done | RunState::Stopped);
         if let Some(why) = self.workstream_hold(&run).await.filter(|_| by == Actor::Pip && wakes) {
             return Err(refuse(why));
         }
+        let waits_for_login = !asking && matches!(run.state, RunState::NeedsAnswer | RunState::Done) && self.login_is_off(&run).await;
         match run.state {
             _ if asking => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
+            RunState::NeedsAnswer | RunState::Done if waits_for_login => {
+                self.core.queue_run_message(run_id, text, by).await?;
+                self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
+                Ok((run, Delivery::Queued))
+            }
             RunState::Queued | RunState::Launching => Err(refuse("It hasn't started working yet; message it once it is working.")),
             RunState::Failed => Err(refuse("It failed, so there is nothing to message.")),
             RunState::Unknown => Err(refuse("Gossamr can't find its session right now.")),
@@ -70,11 +80,12 @@ impl RunService {
             RunState::SystemBlocked => Err(refuse("Claude needs the person to sign in, in Terminal.")),
             RunState::NeedsAnswer => self.answer_as(run_id, text, by).await.map(|r| (r, Delivery::Answered)),
             RunState::Working => {
-                self.core.queue_run_message(run_id, text).await?;
+                self.core.queue_run_message(run_id, text, by).await?;
                 self.note_by(&run, by, "agent_message_queued", Some(text.chars().count().to_string())).await;
                 Ok((run, Delivery::Queued))
             }
             RunState::Stopped if run.unsent_answer.is_some() => Err(refuse("A message is still waiting to be sent to it; the person sends it again from the run.")),
+            RunState::Stopped if self.login_is_off(&run).await => Err(refuse("Its Claude login is off, so it can't be resumed. Message it again once the login is on.")),
             RunState::Done | RunState::Stopped => self.resume_with(run_id, text, by).await.map(|r| (r, Delivery::Resumed)),
         }
     }
@@ -98,7 +109,7 @@ impl RunService {
                 return Err(refuse(NO_SLOT));
             }
         }
-        let tc = self.toolchain().await?;
+        let tc = self.acting_toolchain(&run).await?;
         let listed = tc.cli.agents(true).await?;
         let attached = |e: &AgentEntry| match e.state.as_deref() {
             Some("stopped") => false,
@@ -132,7 +143,7 @@ impl RunService {
     async fn another_pass(&self, run: &mut Run, message: &str) -> Result<Option<String>> {
         let id = run.short_id.clone().ok_or_else(|| refuse("This run has no session to resume."))?;
         let session = run.session_id.clone().filter(|s| is_uuid(s)).ok_or_else(|| refuse("This run has no session to resume."))?;
-        let tc = self.toolchain().await?;
+        let tc = self.acting_toolchain(run).await?;
         if let Some(why) = self.wake_from(&tc, run, &id, &session, message, true, &["stopped", "done"]).await {
             return Ok(Some(why));
         }
@@ -178,13 +189,13 @@ impl RunService {
     pub(super) async fn deliver_queued(&self) {
         let Ok(waiting) = self.core.runs_with_messages().await else { return };
         for id in waiting {
-            let Ok(Some(_)) = self.core.run_message(&id).await else { continue };
+            let Ok(Some(by)) = self.core.run_message_author(&id).await else { continue };
             let Ok(run) = self.load(&id).await else {
                 let _ = self.core.take_run_message(&id).await;
                 continue;
             };
             let ready = match run.state {
-                RunState::Done | RunState::NeedsAnswer => self.workstream_hold(&run).await.is_none(),
+                RunState::Done | RunState::NeedsAnswer => (by != Actor::Pip || self.workstream_hold(&run).await.is_none()) && !self.login_is_off(&run).await,
                 RunState::Failed => true,
                 RunState::Stopped => run.unsent_answer.is_none(),
                 _ => false,
@@ -192,10 +203,10 @@ impl RunService {
             if !ready {
                 continue;
             }
-            let Ok(Some(text)) = self.core.take_run_message(&id).await else { continue };
+            let Ok(Some((text, by))) = self.core.take_run_message(&id).await else { continue };
             let sent = match run.state {
-                RunState::Done => self.resume_with(&id, &text, Actor::Pip).await.map(drop),
-                RunState::NeedsAnswer => self.answer_as(&id, &text, Actor::Pip).await.map(drop),
+                RunState::Done => self.resume_with(&id, &text, by).await.map(drop),
+                RunState::NeedsAnswer => self.answer_as(&id, &text, by).await.map(drop),
                 _ => Err(refuse(format!("the run is {}", run.state.as_str()))),
             };
             let Err(e) = sent else {
@@ -207,12 +218,12 @@ impl RunService {
                 continue;
             }
             if self.worth_retrying(&id, &e) {
-                if let Err(e) = self.core.restore_run_message(&id, &text).await {
+                if let Err(e) = self.core.restore_run_message(&id, &text, by).await {
                     eprintln!("couldn't keep the message waiting for run {id}: {e}");
                 }
             } else {
                 self.delivery_failures.lock().expect("delivery failures lock poisoned").remove(&id);
-                self.note_by(&run, Actor::Pip, "agent_message_dropped", Some(e.to_string())).await;
+                self.note_by(&run, by, "agent_message_dropped", Some(e.to_string())).await;
             }
         }
     }
@@ -221,12 +232,13 @@ impl RunService {
 /// When a queued message reaches its run at its next `ask`: it is the result of that call, so the run never waits.
 /// The question is kept on the run's steps, as nobody else sees it.
 pub async fn take_for_ask(core: &crate::inbox::Core, run: &Run, question: &str) -> Option<String> {
-    let text = core.take_run_message(&run.id).await.ok().flatten()?;
-    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: "Pip answered".into(), detail: Some(format!("It asked: {question}")) };
+    let (text, by) = core.take_run_message(&run.id).await.ok().flatten()?;
+    let said = if by == Actor::Pip { "Pip answered" } else { "You answered" };
+    let event = RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "answered".into(), text: said.into(), detail: Some(format!("It asked: {question}")) };
     if let Err(e) = core.append_run_events(&run.id, &[event]).await {
         eprintln!("couldn't record the answer: {e}");
     }
-    if let Err(e) = core.record_run_action_by(run, Actor::Pip, "run_answered", Some(text.chars().count().to_string())).await {
+    if let Err(e) = core.record_run_action_by(run, by, "run_answered", Some(text.chars().count().to_string())).await {
         eprintln!("couldn't record the answer to run {} in its workstream: {e}", run.id);
     }
     if let Err(e) = core.report_stale(&run.id).await {

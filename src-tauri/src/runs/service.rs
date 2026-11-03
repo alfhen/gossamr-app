@@ -22,6 +22,7 @@ use super::fresh::is_work_path;
 use super::repo::{origin_matches, CommitIdentity, Git};
 use super::toolchain::{Toolchain, ToolchainSource};
 use self::choice::{Blocked, Target};
+pub(super) use self::choice::waiting_words;
 use super::control::{MacTerminal, Terminal};
 use super::tracker::{Attention, NoNotices, RunNotifier};
 use crate::config::{AgentSettings, AppConfig};

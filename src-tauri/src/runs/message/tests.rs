@@ -292,8 +292,8 @@ async fn a_queued_message_whose_wake_fails_is_kept_for_a_few_tries_then_dropped_
     assert_eq!(rig.get(&run).await.state, RunState::Done);
     assert!(pip_lines(&rig, &ws).await.iter().any(|(action, _)| action == "agent_message_dropped"));
 
-    rig.fx.core.queue_run_message(&run.id, "Newer.").await.unwrap();
-    rig.fx.core.restore_run_message(&run.id, "Older.").await.unwrap();
+    rig.fx.core.queue_run_message(&run.id, "Newer.", Actor::Pip).await.unwrap();
+    rig.fx.core.restore_run_message(&run.id, "Older.", Actor::Pip).await.unwrap();
     assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("Newer."));
 }
 
@@ -309,4 +309,84 @@ async fn pip_cannot_wake_an_agent_in_a_paused_workstream_of_the_second_account()
 
     let why = rig.svc.message_agent(&queued.id, "Hello.", Actor::Pip).await.unwrap_err().to_string();
     assert!(why.contains("is paused; only the person resumes it"), "{why}");
+}
+
+#[tokio::test]
+async fn a_message_to_a_finished_run_on_the_second_login_resumes_it_through_that_logins_claude_only() {
+    let rig = ready().await;
+    let (svc, second, run) = crate::runs::rig::working_on_second_login(&rig, false).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("done".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::Done).await;
+
+    let (_, delivery) = svc.message_agent(&run.id, "One more thing.", Actor::Pip).await.unwrap();
+    assert_eq!(delivery, Delivery::Resumed);
+    assert_eq!(second.0.lock().unwrap().calls, ["resume:abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
+async fn a_message_to_a_run_on_a_login_that_is_off_waits_and_is_sent_once_the_login_is_back_on() {
+    let rig = ready().await;
+    let (off, second, login) = crate::runs::rig::with_login_switch(&rig.fx, &rig.cli, "claude_2");
+    let run = crate::runs::rig::start_on_second_login(&rig, &off, &second).await;
+    let ws = rig.fx.core.open_workstream(&rig.fx.scope, Some(rig.fx.item("CA-1")), None).await.unwrap().id;
+    let run = rig.set(&run, |r| r.spec.workstream = Some(ws.clone())).await;
+    std::fs::create_dir_all(&run.expected_worktree).unwrap();
+    second.with(|s| {
+        s.sessions[0].state = Some("done".into());
+        s.sessions[0].pid = None;
+    });
+    rig.set(&run, |r| r.state = RunState::Done).await;
+
+    let (_, delivery) = off.message_agent(&run.id, "One more thing.", Actor::Pip).await.unwrap();
+    assert_eq!(delivery, Delivery::Queued);
+    for _ in 0..WAKE_TRIES + 2 {
+        off.deliver_queued().await;
+    }
+    assert!(second.0.lock().unwrap().calls.is_empty(), "nothing is sent while the login is off");
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap().as_deref(), Some("One more thing."), "the message is kept");
+    assert!(!pip_lines(&rig, &ws).await.iter().any(|(action, _)| action == "agent_message_dropped"));
+
+    login.set_off(None);
+    off.deliver_queued().await;
+    assert_eq!(second.0.lock().unwrap().calls, ["resume:abc12345"]);
+    assert!(rig.cli.0.lock().unwrap().calls.is_empty());
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_message_to_a_stopped_run_on_a_login_that_is_off_is_refused_in_words_that_do_not_say_it_waits() {
+    let rig = ready().await;
+    let (off, second, run) = crate::runs::rig::working_on_second_login(&rig, true).await;
+    rig.set(&run, |r| r.state = RunState::Stopped).await;
+    let why = off.message_agent(&run.id, "Go on.", Actor::Pip).await.unwrap_err().to_string();
+    assert!(why.contains("login is off") && !why.contains("Waits"), "{why}");
+    assert!(second.0.lock().unwrap().calls.is_empty());
+    assert_eq!(rig.fx.core.run_message(&run.id).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_persons_queued_answer_taken_at_the_agents_next_ask_is_recorded_as_theirs() {
+    let (rig, run, ws) = working().await;
+    rig.fx.core.queue_run_message(&run.id, "Use staging.", Actor::Person).await.unwrap();
+    assert_eq!(take_for_ask(&rig.fx.core, &run, "Which database?").await.as_deref(), Some("Use staging."));
+    let events = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert_eq!(events.last().map(|e| e.text.as_str()), Some("You answered"));
+    let audit = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "run_answered" && e.actor == Actor::Person));
+}
+
+#[tokio::test]
+async fn a_persons_queued_message_for_a_failed_run_is_dropped_as_the_persons() {
+    let (rig, run, ws) = working().await;
+    rig.fx.core.queue_run_message(&run.id, "Carry on.", Actor::Person).await.unwrap();
+    rig.set(&run, |r| r.state = RunState::Failed).await;
+    rig.svc.deliver_queued().await;
+    let audit = rig.fx.core.workstream_events(&rig.fx.scope, &ws).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "agent_message_dropped" && e.actor == Actor::Person));
+    assert!(!audit.iter().any(|e| e.action == "agent_message_dropped" && e.actor == Actor::Pip));
 }

@@ -59,7 +59,7 @@ pub trait ToolchainSource: Send + Sync {
     /// The default instance.
     async fn get(&self) -> Result<Toolchain, ToolchainError>;
 
-    /// The toolchain of one provider instance. Until runs name an instance only tests call it.
+    /// The toolchain of one provider instance; refuses one that is off.
     async fn for_instance(&self, id: &str) -> Result<Toolchain, ToolchainError>;
 
     /// The toolchain for looking at runs already on an instance: it works whether the instance is on or off. Only a

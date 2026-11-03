@@ -572,7 +572,7 @@ mod tests {
                 ann.append_events(id, &[event(id)]).unwrap();
             }
             ann.archive_runs(&["archived".into()], now()).unwrap();
-            ann.put_run_message("open", "Later.", now()).unwrap();
+            ann.put_run_message("open", "Later.", crate::domain::Actor::Pip, now()).unwrap();
 
             let bob = Db::open_with_app(&dir.join("inbox-site-bob.sqlite"), &app).unwrap().for_connection("jira:site:bob");
             assert!(bob.run("open").unwrap().is_none());

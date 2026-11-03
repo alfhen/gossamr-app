@@ -248,7 +248,14 @@ pub struct TwoLogins {
     /// The instance whose toolchain can't be built, if any.
     pub broken: Option<&'static str>,
     /// The instance that is turned off: it can be watched but not launched on.
-    pub off: Option<&'static str>,
+    pub off: std::sync::Mutex<Option<&'static str>>,
+}
+
+impl TwoLogins {
+    /// Turns the instance `off` on or off from now on.
+    pub fn set_off(&self, off: Option<&'static str>) {
+        *self.off.lock().unwrap() = off;
+    }
 }
 
 #[async_trait::async_trait]
@@ -258,7 +265,7 @@ impl super::toolchain::ToolchainSource for TwoLogins {
     }
 
     async fn for_instance(&self, id: &str) -> Result<Toolchain, super::toolchain::ToolchainError> {
-        if self.off == Some(id) {
+        if *self.off.lock().unwrap() == Some(id) {
             return Err(super::toolchain::ToolchainError::Unusable { reason: crate::model_choice::Reason::Off, name: id.into() });
         }
         self.observe_instance(id).await
@@ -283,22 +290,54 @@ pub fn with_second_login(fx: &Fixture, default_cli: &Arc<FakeCli>) -> (RunServic
 
 /// Like `with_second_login`, but the toolchain of the instance `broken` fails as if it had been removed.
 pub fn with_second_login_where(fx: &Fixture, default_cli: &Arc<FakeCli>, broken: Option<&'static str>) -> (RunService, Arc<FakeCli>) {
-    with_logins(fx, default_cli, broken, None)
+    let (svc, second, _) = with_logins(fx, default_cli, broken, None);
+    (svc, second)
 }
 
 /// Like `with_second_login`, but the instance `off` is turned off.
 pub fn with_login_off(fx: &Fixture, default_cli: &Arc<FakeCli>, off: &'static str) -> (RunService, Arc<FakeCli>) {
+    let (svc, second, _) = with_logins(fx, default_cli, None, Some(off));
+    (svc, second)
+}
+
+/// Like `with_login_off`, with the handle that turns the login back on.
+pub fn with_login_switch(fx: &Fixture, default_cli: &Arc<FakeCli>, off: &'static str) -> (RunService, Arc<FakeCli>, Arc<TwoLogins>) {
     with_logins(fx, default_cli, None, Some(off))
 }
 
-fn with_logins(fx: &Fixture, default_cli: &Arc<FakeCli>, broken: Option<&'static str>, off: Option<&'static str>) -> (RunService, Arc<FakeCli>) {
+fn with_logins(fx: &Fixture, default_cli: &Arc<FakeCli>, broken: Option<&'static str>, off: Option<&'static str>) -> (RunService, Arc<FakeCli>, Arc<TwoLogins>) {
     let second_cli = Arc::new(FakeCli::new());
     second_cli.with(|s| s.config_dir = fx.dir.join("claude-config-2"));
-    let env = Arc::new(RunEnv::from_pairs([("PATH", "/usr/bin:/bin".to_owned())]));
+    let bin = install_fake_git(&fx.dir);
+    let env = Arc::new(RunEnv::from_pairs([("PATH", format!("{}:/usr/bin:/bin", bin.display())), ("FAKE_GIT_LOG", fx.dir.join("git.log").to_string_lossy().into_owned())]));
     let mut second = Toolchain::new(second_cli.clone(), env.clone());
     second.instance_id = "claude_2".into();
     second.instance_name = "Claude personal".into();
-    let tools = TwoLogins { default: Toolchain::new(default_cli.clone(), env), second, broken, off };
-    let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index-two")), Arc::new(|_| {})).with_home(fx.home.canonicalize().unwrap());
-    (svc, second_cli)
+    let tools = Arc::new(TwoLogins { default: Toolchain::new(default_cli.clone(), env), second, broken, off: std::sync::Mutex::new(off) });
+    let svc = RunService::new(fx.core.clone(), tools.clone(), RunIndex::load(&fx.dir.join("index-two")), Arc::new(|_| {})).with_home(fx.home.canonicalize().unwrap());
+    (svc, second_cli, tools)
+}
+
+/// A run working on `claude_2` as session `abc12345`, listed only by that login's `claude`, and a service over both logins that tracks it. With `off`, `claude_2` is turned off.
+pub async fn working_on_second_login(rig: &Rig, off: bool) -> (RunService, Arc<FakeCli>, Run) {
+    let (svc, second) = if off { with_login_off(&rig.fx, &rig.cli, "claude_2") } else { with_second_login(&rig.fx, &rig.cli) };
+    let run = start_on_second_login(rig, &svc, &second).await;
+    (svc, second, run)
+}
+
+/// Puts a run working on `claude_2` as session `abc12345` into `second`'s list, tracked by `svc`.
+pub async fn start_on_second_login(rig: &Rig, svc: &RunService, second: &Arc<FakeCli>) -> Run {
+    let queued = rig.queued(1).await;
+    let session = FakeCli::session("abc12345", &queued.expected_worktree);
+    let run = rig
+        .set(&queued, |r| {
+            r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude_2".into(), model: "default".into(), effort: None });
+            r.state = RunState::Working;
+            r.short_id = ShortId::parse("abc12345");
+            r.session_id = session.session_id.clone();
+        })
+        .await;
+    second.with(|s| s.sessions.push(session));
+    svc.remember(&run);
+    run
 }
