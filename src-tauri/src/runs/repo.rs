@@ -127,6 +127,43 @@ impl Git {
         self.out_or_why_within(clone, &["worktree", "remove", "--", &path], GIT_WRITE_TIMEOUT).await.map(drop)
     }
 
+    /// Makes the worktree at `worktree` on a new `branch` from `start`. Refuses a folder or a branch that exists, except
+    /// the worktree of an earlier try at this launch: that one is on `branch`, still at `start`, with nothing changed.
+    pub async fn add_worktree(&self, clone: &Path, worktree: &Path, branch: &str, start: &str) -> Result<(), String> {
+        let folder = worktree.symlink_metadata().is_ok();
+        let branch_there = self.branch_exists(clone, branch).await?;
+        if folder || branch_there {
+            return if folder && branch_there && self.is_untouched_worktree(clone, worktree, branch, start).await { Ok(()) } else { Err(format!("{} or the branch '{branch}' is already there", worktree.display())) };
+        }
+        let path = worktree.to_string_lossy();
+        self.out_or_why_within(clone, &["worktree", "add", "--no-track", "-b", branch, "--", &path, start], GIT_WRITE_TIMEOUT).await.map(drop)
+    }
+
+    async fn is_untouched_worktree(&self, clone: &Path, worktree: &Path, branch: &str, start: &str) -> bool {
+        let listed = self.out(clone, &["worktree", "list", "--porcelain"]).await.unwrap_or_default();
+        let here = listed.split("\n\n").any(|entry| {
+            entry.lines().any(|l| l.strip_prefix("worktree ").is_some_and(|p| super::fresh::real(Path::new(p)) == super::fresh::real(worktree)))
+                && entry.lines().any(|l| l.strip_prefix("branch ").is_some_and(|b| b == format!("refs/heads/{branch}")))
+        });
+        here && self.at_start(clone, branch, start).await && self.out(worktree, &["status", "--porcelain"]).await.is_some_and(|s| s.is_empty())
+    }
+
+    async fn at_start(&self, clone: &Path, branch: &str, start: &str) -> bool {
+        let tip = self.out(clone, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).await;
+        tip.is_some() && tip == self.out(clone, &["rev-parse", "--verify", "--quiet", &format!("{start}^{{commit}}")]).await
+    }
+
+    /// Removes a worktree made by `add_worktree` and its branch, when nothing was committed or changed in it. Does
+    /// nothing otherwise, so work is never lost.
+    pub async fn discard_untouched_worktree(&self, clone: &Path, worktree: &Path, branch: &str, start: &str) {
+        if !self.is_untouched_worktree(clone, worktree, branch, start).await {
+            return;
+        }
+        if self.remove_worktree(clone, worktree).await.is_ok() {
+            let _ = self.out_or_why_within(clone, &["branch", "-D", "--", branch], GIT_WRITE_TIMEOUT).await;
+        }
+    }
+
     async fn branch_exists(&self, clone: &Path, branch: &str) -> Result<bool, String> {
         let found = self.out_or_why(clone, &["branch", "--list", "--format=%(refname:short)", "--", branch]).await?;
         Ok(!found.trim().is_empty())

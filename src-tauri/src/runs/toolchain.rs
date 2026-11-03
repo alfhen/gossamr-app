@@ -10,6 +10,7 @@ use super::agent_config::config_dir;
 use super::backend::claude::ClaudeBackend;
 use super::backend::RunBackend;
 use super::cli::{ClaudeCli, SystemCli};
+use super::codex::{runs_root, CodexBackend};
 use super::env::RunEnv;
 use super::provider_env::{ProviderEnv, ProviderState, Unavailable};
 use crate::config::AppConfig;
@@ -107,7 +108,7 @@ pub trait ToolchainSource: Send + Sync {
 
 type Finder = fn(Driver, &RunEnv) -> Option<PathBuf>;
 
-/// Finds `claude` on the shell environment `Core` captured, on first use. A failure is tried again next time, so
+/// Finds the CLI of the instance's driver on the shell environment `Core` captured, on first use. A failure is tried again next time, so
 /// fixing the problem doesn't need a restart.
 pub struct SystemToolchain {
     core: Arc<Core>,
@@ -126,16 +127,25 @@ impl SystemToolchain {
         self
     }
 
-    async fn build(&self, id: &str, name: &str, login: Option<ProviderEnv>, shell: Result<Arc<RunEnv>, String>) -> Result<Toolchain, ToolchainError> {
+    async fn build(&self, id: &str, name: &str, driver: Driver, login: Option<ProviderEnv>, shell: Result<Arc<RunEnv>, String>) -> Result<Toolchain, ToolchainError> {
         let env = shell.map_err(ToolchainError::NoEnvironment)?;
         let (find, on) = (self.find, env.clone());
-        let Some(binary) = tokio::task::spawn_blocking(move || find(Driver::Claude, &on)).await.ok().flatten() else {
+        let Some(binary) = tokio::task::spawn_blocking(move || find(driver, &on)).await.ok().flatten() else {
             self.core.shell().forget().await;
-            return Err(ToolchainError::ClaudeMissing { instance: name.into(), driver: Driver::Claude });
+            return Err(ToolchainError::ClaudeMissing { instance: name.into(), driver });
         };
         let run_env = login.as_ref().map_or_else(|| env.clone(), |login| Arc::new(login.over(&env)));
-        let cli = Arc::new(SystemCli::new(binary, run_env));
-        Ok(Toolchain::for_login(cli, env, id, name, login, config_dir(&self.core.data_dir())))
+        match driver {
+            Driver::Claude => {
+                let cli = Arc::new(SystemCli::new(binary, run_env));
+                Ok(Toolchain::for_login(cli, env, id, name, login, config_dir(&self.core.data_dir())))
+            }
+            Driver::Codex => {
+                let own_folder = login.as_ref().is_some_and(ProviderEnv::uses_own_folder);
+                let backend = Arc::new(CodexBackend::new(binary, run_env, env.clone(), runs_root(&self.core.data_dir()), name.into(), own_folder));
+                Ok(Toolchain { backend, env, instance_id: id.into(), instance_name: name.into(), driver, login })
+            }
+        }
     }
 }
 
@@ -148,7 +158,7 @@ impl ToolchainSource for SystemToolchain {
         }
         let name = AppConfig::load(&self.core.data_dir()).providers.into_iter().find(|p| p.id == connections::DEFAULT_CLAUDE).map_or_else(|| "Claude".to_owned(), |p| p.display_name);
         let shell = self.core.shell().get().await.map_err(|e| e.to_string());
-        let t = self.build(connections::DEFAULT_CLAUDE, &name, None, shell).await?;
+        let t = self.build(connections::DEFAULT_CLAUDE, &name, Driver::Claude, None, shell).await?;
         *found = Some(t.clone());
         Ok(t)
     }
@@ -178,7 +188,7 @@ impl SystemToolchain {
             ProviderState::Off => Err(ToolchainError::Unusable { reason: Reason::Off, name }),
             ProviderState::Error(problem) => Err(ToolchainError::BadFolder { name, problem }),
             ProviderState::Unavailable(Unavailable::NoShellSetup) => Err(ToolchainError::Unusable { reason: Reason::NoShellSetup, name }),
-            ProviderState::Ready(login) => self.build(&instance.id, &name, Some(login), shell).await,
+            ProviderState::Ready(login) => self.build(&instance.id, &name, instance.driver, Some(login), shell).await,
         }
     }
 }
@@ -382,5 +392,16 @@ mod tests {
         let tools = tools.with_finder(|_, _| None);
         assert_eq!(tools.for_instance("claude_2").await.err(), Some(ToolchainError::ClaudeMissing { instance: "claude_2 name".into(), driver: Driver::Claude }));
         assert_eq!(tools.get().await.err(), Some(ToolchainError::ClaudeMissing { instance: "Claude".into(), driver: Driver::Claude }));
+    }
+
+    #[tokio::test]
+    async fn build_gives_a_codex_instance_the_codex_backend_while_for_instance_still_refuses_it() {
+        let (fx, tools) = rig("codex").await;
+        add(&fx, "codex", Driver::Codex, Some("~/.codex-work"), true);
+        let env = fx.core.shell().get().await.unwrap();
+        let tc = tools.build("codex", "codex name", Driver::Codex, None, Ok(env)).await.unwrap();
+        assert!(tc.backend.as_any().and_then(|any| any.downcast_ref::<CodexBackend>()).is_some());
+        assert_eq!((tc.driver, tc.instance_id.as_str()), (Driver::Codex, "codex"));
+        assert_eq!(tools.for_instance("codex").await.err(), Some(ToolchainError::Unusable { reason: Reason::CantRun(Driver::Codex), name: "codex name".into() }));
     }
 }

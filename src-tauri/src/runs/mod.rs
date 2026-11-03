@@ -9,6 +9,7 @@ pub mod backend;
 pub mod binary;
 pub mod cleanup;
 pub mod cli;
+pub mod codex;
 pub mod codex_models;
 mod continuation;
 pub mod control;

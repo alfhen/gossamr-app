@@ -246,7 +246,7 @@ impl RunSpec {
 
     /// Where the session's worktree will be. The public `cwd` of the session is this path once it exists.
     pub fn worktree(&self) -> PathBuf {
-        self.clone_path.join(".claude").join("worktrees").join(&self.name)
+        worktree_in(&self.clone_path, &self.name)
     }
 
     /// Hex SHA-256 over what runs: the same spec and guard text always give the same digest, and a change to any part
@@ -379,6 +379,11 @@ impl RunState {
             RunState::Unknown => "unknown",
         }
     }
+}
+
+/// Where the worktree called `name` goes in the clone.
+pub fn worktree_in(clone: &std::path::Path, name: &str) -> PathBuf {
+    clone.join(".claude").join("worktrees").join(name)
 }
 
 /// A running turn of an agent that Gossamr started itself, and so has to find again by its pid.

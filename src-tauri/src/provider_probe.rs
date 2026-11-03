@@ -177,7 +177,7 @@ async fn claude_account(binary: &Path, folder: Option<Folder<'_>>, env: &RunEnv,
     Snapshot { account: status.email.filter(|e| !e.is_empty()), ..Snapshot::new(State::Ready, format!("Authenticated · {login}")) }
 }
 
-async fn codex_account(binary: &Path, folder: Option<Folder<'_>>, env: &RunEnv, timeout: Duration) -> Snapshot {
+pub(crate) async fn codex_account(binary: &Path, folder: Option<Folder<'_>>, env: &RunEnv, timeout: Duration) -> Snapshot {
     let ran = run(binary, &["login", "status"], env, timeout).await;
     let Ran::Done { code, stderr, .. } = &ran else { return failed(Driver::Codex, &ran) };
     // `login status` prints on stderr, and that can hold part of an API key, so only the matched prefix is looked at.
