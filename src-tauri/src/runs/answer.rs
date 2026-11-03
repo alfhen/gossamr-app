@@ -198,7 +198,8 @@ impl RunService {
     /// session that ended its turn. `None` is success; otherwise what to tell the person.
     pub(super) async fn wake(&self, tc: &super::toolchain::Toolchain, run: &mut Run, session: &Session, text: &str, settle: bool, finished: bool) -> Option<String> {
         let cwd: PathBuf = if run.expected_worktree.is_dir() { run.expected_worktree.clone() } else { run.spec.clone_path.clone() };
-        let request = ResumeRequest { message: message(text), cwd, tools: None, settle, finished };
+        let tools = if tc.backend.resumes_with_tools() { self.offer_tools(run).await } else { None };
+        let request = ResumeRequest { message: message(text), cwd, tools, settle, finished };
         match tc.backend.resume(session, &request, &self.timing.waits()).await {
             Ok(Resumed::Same(_)) => None,
             Ok(Resumed::Copy { session, note }) => {

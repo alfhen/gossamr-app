@@ -136,6 +136,7 @@ pub(in crate::runs) struct Recorder {
     pub open_in_terminal: std::sync::atomic::AtomicBool,
     pub attach_stops_the_run: std::sync::atomic::AtomicBool,
     pub trust_at: Mutex<Option<PathBuf>>,
+    pub takes_tools_on_resume: std::sync::atomic::AtomicBool,
 }
 
 impl Recorder {
@@ -231,7 +232,14 @@ impl RunBackend for Recorder {
 
     async fn resume(&self, session: &Session, req: &ResumeRequest, _waits: &Waits) -> BackendResult<Resumed> {
         self.did(format!("resume:{}:{}:{}", session.short_id, req.settle, req.finished));
+        if let Some(offer) = &req.tools {
+            self.did(format!("resume_tools:{}", offer.run_id));
+        }
         Ok(Resumed::Same(session.clone()))
+    }
+
+    fn resumes_with_tools(&self) -> bool {
+        self.takes_tools_on_resume.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn remove(&self, run: &Run, leftovers: &[ShortId], _waits: &Waits) -> BackendResult<RemoveOutcome> {
@@ -386,6 +394,28 @@ async fn every_action_on_a_run_reaches_its_own_backend() {
     rig.svc.cleanup(&run.id).await.unwrap();
     assert!(backend.done().contains(&format!("remove:{}:0", run.id)));
     assert_eq!(rig.cli.launches(), 0, "nothing reached claude");
+}
+
+#[tokio::test]
+async fn a_resume_carries_a_tools_offer_only_for_a_backend_that_takes_one() {
+    use crate::domain::Actor;
+    let dir = dir("resume-tools");
+    for takes in [false, true] {
+        let backend = Arc::new(Recorder::default());
+        backend.takes_tools_on_resume.store(takes, std::sync::atomic::Ordering::SeqCst);
+        let channel = Arc::new(crate::runs::agent_config::AgentChannel::new(4242, dir.join("agents")));
+        let rig = ready_with(|svc| backed_by(backend.clone())(crate::runs::rig::on_channel(channel)(svc))).await;
+        let launched = rig.launched(1).await;
+        let run = rig
+            .set(&launched, |r| {
+                r.session_id = Some(SESSION.into());
+                r.state = RunState::Stopped;
+            })
+            .await;
+        rig.svc.message_agent(&run.id, "Carry on.", Actor::Person).await.unwrap();
+        let offered = backend.done().contains(&format!("resume_tools:{}", run.id));
+        assert_eq!(offered, takes, "{:?}", backend.done());
+    }
 }
 
 #[tokio::test]
