@@ -21,6 +21,8 @@ Gossamr signs in with an Atlassian API token that you make:
 
 The token is kept in the macOS Keychain under `dk.alfhen.gossamr`. When it expires or is revoked, a banner offers **Make a new token**. If the page doesn't fill in, **The page didn't fill in** lists the scopes to tick. "Try it with sample data" skips all of this.
 
+To add another Jira account, open Settings › Connections, choose **+ Add**, then **Jira account**. The sheet has the same fields plus a **Name**, shown in lists and on drafts; leave it empty to use the site. The first account stays signed in, and the Inbox and Board show tickets from both. An account that is already connected is refused: use **Make a new token** on its row. Removing one account leaves the others. Removing the last one returns you to Setup.
+
 ## Connecting GitHub
 
 Gossamr signs in through `gh`. It never asks for a GitHub token and never stores one: each time it needs a token, it asks `gh` for the one it holds for that account. A token an earlier version saved stays in the Keychain until that account is connected through `gh`; **Remove** deletes it at once.
