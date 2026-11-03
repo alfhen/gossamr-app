@@ -15,7 +15,7 @@ export interface RunCleanupViewProps {
   busy: boolean;
   /** The name of the login the run was on; null once that login is removed. */
   login: string | null;
-  /** What removes the worktree: `claude rm` for Claude, the tool called "git" for Codex. Claude when left out; null once the login is removed and the tool is unknown. */
+  /** What removes the worktree: `claude rm` for Claude, git for Codex and for a removed login (null), which has no tool to ask. Claude when left out. */
   driver?: Driver | null;
   /** Its own words when it refused. */
   refused: string | null;
@@ -57,11 +57,9 @@ export function RunCleanupView({ run, reason, login, driver = "claude", asking, 
       <Box>
         {reason && <p className="m-0 text-ws-ink">{reason}</p>}
         <p className="m-0 text-sm text-ws-ink2">
-          {driver === null
-            ? "Removes this agent's worktree and branch with its login's tool, which refuses to remove work that isn't safe to lose and says why. Gossamr never forces it. The result stays here."
-            : driver === "codex"
-            ? "Removes this agent's worktree and branch with git. Git refuses to remove changes or a branch that isn't merged, and says why. Gossamr never forces it. The result stays here."
-            : "Removes this agent's worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here."}
+          {driver === "claude"
+            ? "Removes this agent's worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here."
+            : "Removes this agent's worktree and branch with git. Git refuses to remove changes or a branch that isn't merged, and says why. Gossamr never forces it. The result stays here."}
         </p>
         {refused && (
           <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">

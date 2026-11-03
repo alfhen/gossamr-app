@@ -70,11 +70,10 @@ describe("the clean up section of the run sheet", () => {
     expect(html).not.toContain("claude rm");
   });
 
-  it("names neither claude rm nor git for a run whose login is removed", () => {
+  it("names git and never claude rm for a run whose login is removed", () => {
     const html = view({ driver: null, login: null });
-    expect(html).toContain("its login&#x27;s tool");
+    expect(html).toContain("with git");
     expect(html).not.toContain("claude rm");
-    expect(html).not.toContain("with git");
   });
 
   it("shows Claude's refusal as it was said", () => {

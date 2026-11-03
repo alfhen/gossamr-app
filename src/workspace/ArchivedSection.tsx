@@ -53,7 +53,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
             Also remove its worktree folder{info.bytes !== null ? ` (${sizeText(info.bytes)})` : ""}
             <span className="selectable block font-mono text-xs text-ws-ink3 [overflow-wrap:anywhere]">{info.path}</span>
             <span className="block text-xs text-ws-ink3">
-              {ask.driver === null ? "Removed with its login's tool, which refuses work that isn't safe to lose." : ask.driver === "codex" ? "Removed with git, which refuses changes and branches that aren't merged." : "Removed with claude rm, which refuses work that was never pushed."} Only folders in ~/Gossamr/agents are ever removed.
+              {ask.driver === undefined || ask.driver === "claude" ? "Removed with claude rm, which refuses work that was never pushed." : "Removed with git, which refuses changes and branches that aren't merged."} Only folders in ~/Gossamr/agents are ever removed.
             </span>
           </span>
         </label>
