@@ -31,6 +31,15 @@ export function primaryConnection(connections: readonly ConnectionInfo[]): strin
   return (jira.length > 1 ? jira.find((c) => c.enabled) : undefined)?.id ?? jira[0]?.id;
 }
 
+/** The Jira connections that are on, in list order. */
+export const jiraOn = <T extends Pick<ConnectionInfo, "kind" | "enabled">>(connections: readonly T[]): T[] => workConnections(connections).filter((c) => isJira(c.kind) && c.enabled !== false);
+
+/** The connection picked in Pip's drawer, if it is still one of several Jira connections that are on. */
+export const drawerConnectionOf = (connections: readonly ConnectionInfo[], picked: string | null): string | null => {
+  const on = jiraOn(connections);
+  return on.length > 1 && on.some((c) => c.id === picked) ? picked : null;
+};
+
 export const primaryConnectionInfo = <T extends ConnectionInfo>(connections: readonly T[]): T | undefined => {
   const id = primaryConnection(connections);
   return connections.find((c) => c.id === id);

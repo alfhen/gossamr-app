@@ -27,7 +27,8 @@ import { newRiskQuote, newRisks, type Risk, type RiskQuotes } from "../lib/risky
 import { PostingPause } from "./PostingPause";
 import { liveDraft, setLiveDraft, touchDrafts, useDraftsRev } from "./draftLive";
 import { focusWhenDrawn } from "./focusDrawn";
-import { DraftAccount, useHeldNote } from "./draftHold";
+import { DraftAccount, useDraftSite, useHeldNote } from "./draftHold";
+import { SiteChip } from "./CanvasBits";
 
 import { FromRun, useFromRunName } from "./RunProvenance";
 import { Button } from "../components/Button";
@@ -405,6 +406,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
   const action = "Approve";
   const moveName = undefined;
   const Title = headingLevel === 4 ? "h4" : "h3";
+  const site = useDraftSite(p);
   const titleId = useId();
   return (
     <article
@@ -428,6 +430,7 @@ function DraftCardBody({ proposal: p, statusName, people, working, error, onAppr
         <Title id={titleId} className="m-0 text-sm font-semibold">
           {draftTitle(p)}
         </Title>
+        <SiteChip site={site} className="!text-ws-pip" />
         <span ref={doneLine} tabIndex={-1} data-draft-state className="ml-auto font-normal text-ws-ink3 focus-visible:outline-2 focus-visible:outline-ws-pip">
           {BADGE[state]}
         </span>

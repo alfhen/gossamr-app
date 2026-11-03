@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type Re
 import { PipGlyph } from "../components/PipGlyph";
 import { itemKey, YOUR_TURN, YOUR_TURN_WHY } from "../lib/filter";
 import { useWorkspace } from "../workspaceStore";
-import { AgeChip, AttentionDot, Avatar, StatusPill, TurnPill } from "./CanvasBits";
+import { AgeChip, AttentionDot, Avatar, SiteChip, StatusPill, TurnPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
 import { CanvasFooter } from "./CanvasFooter";
 import { daysQuiet } from "./boardLogic";
@@ -59,7 +59,7 @@ export function GroupHeader({ group, collapsed, onToggle }: { group: ListGroup; 
   );
 }
 
-type RowProps = Pick<ItemCardProps, "item" | "assignee" | "now" | "blocked" | "needsMe" | "unread" | "draft" | "moreDrafts" | "code" | "selected" | "marked" | "onSelect">;
+type RowProps = Pick<ItemCardProps, "item" | "site" | "assignee" | "now" | "blocked" | "needsMe" | "unread" | "draft" | "moreDrafts" | "code" | "selected" | "marked" | "onSelect">;
 
 /** A row's badges and status in words, for the title's tooltip: a narrow row may have no room to show them all. */
 export function badgeWords(p: Pick<RowProps, "needsMe" | "blocked" | "draft" | "moreDrafts">, status: string): string[] {
@@ -166,6 +166,7 @@ export function ListRow(p: RowProps) {
         <span data-row-title title={[item.title, ...badgeWords(p, item.status.name)].join(" · ")} className="min-w-[6ch] shrink-[100] truncate">
           {item.title}
         </span>
+        <SiteChip site={p.site} className="shrink-0" />
         <span ref={badges} data-row-badges={compact ? "compact" : "full"} className="flex min-w-0 shrink-[0.01] items-center gap-x-2 overflow-hidden whitespace-nowrap [&>*]:shrink-0">
           <RowBadges {...p} compact={compact} />
         </span>

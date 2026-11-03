@@ -7,7 +7,7 @@ import { witherClass, type WitherLevel } from "../lib/views";
 import type { CodeSummary } from "../lib/devLinks";
 import type { ItemRef, StatusDef, WorkItem, WorkPriority } from "../types";
 import { daysQuiet } from "./boardLogic";
-import { AgeChip, AttentionDot, Avatar, StatusPill } from "./CanvasBits";
+import { AgeChip, AttentionDot, Avatar, SiteChip, StatusPill } from "./CanvasBits";
 import { PrBadge } from "./DevBits";
 import { selectHow, showsAge } from "./canvasShared";
 import { Button } from "../components/Button";
@@ -20,6 +20,8 @@ export interface CardDraft {
 
 export interface ItemCardProps {
   item: WorkItem;
+  /** The Jira account's name, once more than one is on. */
+  site?: string | null;
   assignee: string;
   now: Date;
   wither: WitherLevel;
@@ -125,6 +127,7 @@ export function ItemCard(p: ItemCardProps) {
       <div className="flex items-center gap-1.5">
         <AttentionDot needsMe={p.needsMe} unread={p.unread} />
         <span className="font-mono text-sm font-semibold text-ws-ink2">{item.item.key}</span>
+        <SiteChip site={p.site} />
         {item.kind === "bug" && <span title="Bug" aria-label="Bug" className="text-[9px] text-ws-blocked">●</span>}
         {priority && (
           <span title={priority.label} role="img" aria-label={priority.label} className={`text-[10px] font-bold ${priority.tone}`}>

@@ -22,6 +22,16 @@ export function StatusPill({ status, title }: { status: StatusDef; title?: strin
   );
 }
 
+/** The Jira account a ticket belongs to. Given a name only while several accounts are on. */
+export function SiteChip({ site, className = "" }: { site: string | null | undefined; className?: string }) {
+  if (!site) return null;
+  return (
+    <span data-site title={`Jira account: ${site}`} className={`max-w-[12ch] truncate text-xs font-medium text-ws-ink3 ${className}`}>
+      {site}
+    </span>
+  );
+}
+
 export function Avatar({ name }: { name: string }) {
   return (
     <span title={name} className="grid size-[22px] flex-none place-items-center rounded-full bg-ws-sel text-[10px] font-bold text-ws-ink2">
