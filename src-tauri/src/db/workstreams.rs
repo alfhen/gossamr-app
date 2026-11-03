@@ -98,13 +98,14 @@ impl Db {
         Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
     }
 
-    /// Whether `session_id` is the Pip session of an open workstream on `instance_id`, which keeps it resumable however
-    /// many other sessions Pip has started since. A workstream from before instances has no instance and matches none.
-    pub fn is_open_workstream_session(&self, session_id: &str, instance_id: &str) -> Result<bool> {
+    /// Whether `session_id` is the Pip session of an open workstream on `instance_id` and `connection_id`, which keeps it
+    /// resumable however many other sessions Pip has started since. A workstream from before instances has no instance and
+    /// matches none. The session read that workstream's tickets, so a turn on another connection never matches it.
+    pub fn is_open_workstream_session(&self, session_id: &str, instance_id: &str, connection_id: &str) -> Result<bool> {
         let n: i64 = self.conn.query_row(
             "SELECT count(*) FROM workstreams WHERE closed_at IS NULL AND json_extract(data, '$.pipSession') = ?1
-             AND json_extract(data, '$.pipInstance') = ?2",
-            params![session_id, instance_id],
+             AND json_extract(data, '$.pipInstance') = ?2 AND connection_id = ?3",
+            params![session_id, instance_id, connection_id],
             |r| r.get(0),
         )?;
         Ok(n > 0)
@@ -225,9 +226,10 @@ mod tests {
         before_instances.pip_session = Some("s-2".into());
         db.insert_workstream(&on_work).unwrap();
         db.insert_workstream(&before_instances).unwrap();
-        assert!(db.is_open_workstream_session("s-1", "claude_2").unwrap());
-        assert!(!db.is_open_workstream_session("s-1", "claude").unwrap());
-        assert!(!db.is_open_workstream_session("s-2", "claude").unwrap(), "no folder is known to hold it");
+        assert!(db.is_open_workstream_session("s-1", "claude_2", "c").unwrap());
+        assert!(!db.is_open_workstream_session("s-1", "claude", "c").unwrap());
+        assert!(!db.is_open_workstream_session("s-2", "claude", "c").unwrap(), "no folder is known to hold it");
+        assert!(!db.is_open_workstream_session("s-1", "claude_2", "other").unwrap(), "another connection never resumes it");
     }
 
     #[test]

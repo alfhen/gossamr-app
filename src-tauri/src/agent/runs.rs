@@ -1,12 +1,12 @@
 //! Pip's view of the person's agent runs, and its tools to drive them: start one in a workstream, message one and stop
 //! one. Whatever an agent wrote is handed to Pip as marked data.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
-use super::mcp::{item_ref, opt, reachable, required, tool, McpState, PipRun, Reply};
+use super::mcp::{item_ref, opt, reachable, required, tool, Keyed, McpState, PipRun, Reply};
 use crate::auth::Scope;
 use crate::domain::workstream::run_labels;
 use crate::domain::{clip, without_markers, ItemRef, Role, Run, RunQuery, RunState, PIP_BRIEF_LIMIT};
@@ -200,16 +200,16 @@ pub(super) fn context_block(runs: &[Run], open_ticket: Option<&ItemRef>, now: Da
     Some(format!("[Agent runs: {whose}. {DATA_NOTE} get_run reads one.]\n{}\n", lines.join("\n")))
 }
 
-async fn can_see(core: &Core, scope: &Scope, handed: &HashSet<String>, key: &str) -> bool {
-    handed.contains(&key.to_uppercase()) || core.is_item_watched(scope, key).await.unwrap_or(false)
+async fn can_see(core: &Core, scope: &Scope, handed: &Keyed, key: &str) -> bool {
+    handed.contains(scope, key) || core.is_item_watched(scope, key).await.unwrap_or(false)
 }
 
 /// The account's runs that Pip may know about: the ones with no ticket, or on a watched or handed one.
-pub(super) async fn context_runs(core: &Core, scope: &Scope, handed: &HashSet<String>) -> Vec<Run> {
+pub(super) async fn context_runs(core: &Core, scope: &Scope, handed: &Keyed) -> Vec<Run> {
     visible(core, scope, handed, core.runs_in(scope, &RunQuery::default()).await.unwrap_or_default()).await
 }
 
-async fn visible(core: &Core, scope: &Scope, handed: &HashSet<String>, runs: Vec<Run>) -> Vec<Run> {
+async fn visible(core: &Core, scope: &Scope, handed: &Keyed, runs: Vec<Run>) -> Vec<Run> {
     let mut known: HashMap<String, bool> = HashMap::new();
     let mut out = Vec::new();
     for run in runs {
@@ -725,7 +725,11 @@ mod tests {
         }
 
         fn hand(&self, keys: &[&str]) {
-            self.st.runs.lock().unwrap().get_mut("run-1").unwrap().handed = keys.iter().map(|k| k.to_uppercase()).collect();
+            let mut runs = self.st.runs.lock().unwrap();
+            let run = runs.get_mut("run-1").unwrap();
+            let scope = run.scope.clone();
+            run.handed = Default::default();
+            keys.iter().for_each(|k| run.handed.hand(&scope, k));
         }
 
         /// Watches only `CA`, with another project's ticket `OTH-1` cached.

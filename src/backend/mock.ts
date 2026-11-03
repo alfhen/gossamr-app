@@ -767,6 +767,10 @@ export class MockBackend implements Backend {
     return this.runs.list();
   }
 
+  pipConnectionOn(id: string) {
+    return this.connectorFor(id) !== undefined;
+  }
+
   pipDrafts() {
     return this.proposals.list({ states: ["pending"] });
   }

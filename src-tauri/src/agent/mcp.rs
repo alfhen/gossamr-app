@@ -44,12 +44,12 @@ pub type ViewSink = Arc<dyn Fn(&str, &Filter, &str) + Send + Sync>;
 #[derive(Clone, Debug)]
 pub struct PipRun {
     pub scope: Scope,
-    /// Keys (upper case) of tickets the user opened or named in the request. Pip may read and draft on these even in a
-    /// project that isn't watched, and on nothing else outside the watched projects.
-    pub handed: std::collections::HashSet<String>,
-    /// The title and description of each ticket (key upper-cased) the run was shown or read. A rewrite starts from
-    /// what Pip saw, so one drafted without a read, or after the ticket moved on, is refused.
-    pub read: std::collections::HashMap<String, TextSeen>,
+    /// The tickets the user opened or named in the request. Pip may read and draft on these even in a project that
+    /// isn't watched, and on nothing else outside the watched projects.
+    pub handed: Keyed,
+    /// The title and description of each ticket the run was shown or read. A rewrite starts from what Pip saw, so one
+    /// drafted without a read, or after the ticket moved on, is refused.
+    pub read: Keyed<TextSeen>,
     /// The workstream whose conversation the request belongs to, if any. Drafts of a workstream are revised only from
     /// its own conversation.
     pub workstream: Option<String>,
@@ -58,6 +58,37 @@ pub struct PipRun {
     /// The request is a wake turn (Gossamr asked Pip, the person didn't): what it was woken for. A wake given back and
     /// run again has the same facts, so an agent it started comes back instead of starting twice.
     pub wake: Option<String>,
+}
+
+/// Tickets by the connection they are on and their key, upper-cased: two sites can both have `TAF-12`, and what Pip was
+/// handed or read on one says nothing about the other.
+#[derive(Clone, Debug)]
+pub struct Keyed<T = ()>(std::collections::HashMap<(String, String), T>);
+
+impl<T> Default for Keyed<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<T> Keyed<T> {
+    pub fn insert(&mut self, scope: &Scope, key: &str, value: T) {
+        self.0.insert((scope.connection_id.clone(), key.to_uppercase()), value);
+    }
+
+    pub fn get(&self, scope: &Scope, key: &str) -> Option<&T> {
+        self.0.get(&(scope.connection_id.clone(), key.to_uppercase()))
+    }
+
+    pub fn contains(&self, scope: &Scope, key: &str) -> bool {
+        self.get(scope, key).is_some()
+    }
+}
+
+impl Keyed {
+    pub fn hand(&mut self, scope: &Scope, key: &str) {
+        self.insert(scope, key, ());
+    }
 }
 
 impl PipRun {
@@ -547,7 +578,7 @@ fn refuse_off(core: &Core, scope: &Scope) -> std::result::Result<(), String> {
 /// run. Creating a new item in any project is a different tool and isn't held to this.
 pub(super) async fn reachable(st: &McpState, run: &PipRun, key: &str) -> std::result::Result<(), String> {
     refuse_off(&st.core, &run.scope)?;
-    if run.handed.contains(&key.to_uppercase()) || st.core.is_item_watched(&run.scope, key).await.map_err(|e| e.to_string())? {
+    if run.handed.contains(&run.scope, key) || st.core.is_item_watched(&run.scope, key).await.map_err(|e| e.to_string())? {
         return Ok(());
     }
     Err(format!(
@@ -654,7 +685,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             reachable(st, run, key).await?;
             let (ticket, seen) = core.ticket_for_pip(scope, key).await.map_err(|e| format!("Couldn't read {key}: {e}"))?;
             if let Some(r) = st.runs.lock().expect("runs lock poisoned").get_mut(run_id) {
-                r.read.insert(key.to_uppercase(), seen.clone());
+                r.read.insert(scope, key, seen.clone());
             }
             let query = ProposalQuery { states: Some(open_states()), item: Some(item_ref(scope, key)), ..Default::default() };
             let drafts = core.proposals_in(scope, &query).await.unwrap_or_default();
@@ -753,7 +784,7 @@ async fn run_tool(st: &McpState, run: &PipRun, run_id: &str, name: &str, args: &
             if opt(args, "title").is_none() && opt(args, "description").is_none() {
                 return Err("give a new title, a new description, or both".into());
             }
-            let before = st.runs.lock().expect("runs lock poisoned").get(run_id).and_then(|r| r.read.get(&key.to_uppercase()).cloned());
+            let before = st.runs.lock().expect("runs lock poisoned").get(run_id).and_then(|r| r.read.get(scope, key).cloned());
             let now = core.ticket_for_pip(scope, key).await.map_err(|e| format!("Couldn't read {key}: {e}"))?.1;
             match before {
                 None => return Err(format!("Read {key} with get_item first, so the new description starts from what it says now.")),
@@ -1042,7 +1073,11 @@ mod tests {
     impl Rig {
         /// The user hands Pip these tickets in this run.
         fn hand(&self, keys: &[&str]) {
-            self.st.runs.lock().unwrap().get_mut("run-1").unwrap().handed = keys.iter().map(|k| k.to_uppercase()).collect();
+            let mut runs = self.st.runs.lock().unwrap();
+            let run = runs.get_mut("run-1").unwrap();
+            let scope = run.scope.clone();
+            run.handed = Default::default();
+            keys.iter().for_each(|k| run.handed.hand(&scope, k));
         }
 
         /// Watches only `CA`, with another project's ticket `OTH-1` in the cache and both projects known.
@@ -1755,6 +1790,24 @@ mod tests {
         let drafts = r.drafts().await;
         assert!(matches!(&drafts[0].intent, Intent::Create { container, .. } if container.external_id == "WHS"));
         assert!(r.err("propose_create", json!({ "container": "NOPE", "title": "x" })).await.contains("find_containers"));
+    }
+
+    #[tokio::test]
+    async fn a_tool_acts_only_in_its_turns_connection_even_for_a_key_handed_over_on_another() {
+        let (fx, second) = crate::inbox::testing::fixture_with_two_jira().await;
+        let r = rig_on(fx).await;
+        r.ok("get_item", json!({ "key": "CA-1" })).await;
+        {
+            let mut runs = r.st.runs.lock().unwrap();
+            let run = runs.get_mut("run-1").unwrap();
+            run.handed.hand(&r.fx.scope, "CA-1");
+            run.scope = second;
+        }
+
+        assert!(r.err("get_item", json!({ "key": "CA-1" })).await.contains("out of reach"));
+        assert!(r.err("draft", json!({ "kind": "link", "key": "CA-1", "to": "CA-2", "link_kind": "relates" })).await.contains("out of reach"));
+        assert!(r.ok("search_items", json!({})).await.starts_with("0 items match"));
+        assert!(r.drafts().await.is_empty());
     }
 
     #[tokio::test]

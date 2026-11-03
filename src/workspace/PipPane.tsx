@@ -8,7 +8,7 @@ import { useDev } from "./devStore";
 import { useLookup, useSiteOf } from "./hooks";
 import { PipResizer } from "./PaneResizers";
 import { PipAvatar } from "./PipAvatar";
-import { Composer, GENERAL_CONVERSATION, PIP_INPUT_ID, PipConversation, useAnswering, workstreamConversation } from "./PipConversation";
+import { Composer, PIP_INPUT_ID, PipConversation, useAnswering } from "./PipConversation";
 import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { popoverOpen } from "./Popover";
 import { currentContext, useScreen } from "./pipHooks";
@@ -22,7 +22,7 @@ import { useTabs } from "./tabsStore";
 import { useWorkspace } from "../workspaceStore";
 import { useClaude } from "../claudeStore";
 import { inWorkstreamPane } from "../lib/proposals";
-import { conversationTitle, usePaneWorkstream } from "./workstreamsStore";
+import { conversationTitle, useFocusedConversation, usePaneWorkstream } from "./workstreamsStore";
 import { WorkstreamControls } from "./WorkstreamControls";
 import { HeaderStatus } from "./StatusPill";
 import { composerFooter } from "./workViewLogic";
@@ -180,14 +180,13 @@ export function ConversationLine({ conversation, workstream }: { conversation: s
 export function PipPane({ onClose }: { onClose(): void }) {
   // The ticket the peek shows has an open workstream: its conversation is the one here. Otherwise it is General.
   const workstream = usePaneWorkstream();
-  const workstreamId = workstream?.workstream.id ?? null;
-  const conversation = workstreamId ? workstreamConversation(workstreamId) : GENERAL_CONVERSATION;
+  const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
+  const conversation = useFocusedConversation();
   const running = useAnswering(conversation);
   const [seeing, setSeeing] = useState(false);
   const attached = useAttachments();
   const drop = useFileDrop((files) => void attached.add(files));
   const proposalList = useConversationDrafts(conversation, workstream);
-  const { scene, kind, label, context, words, quote, following } = usePipScene(workstream);
   const model = usePipModel(conversation);
   const needs = useNeedsYou();
   const runs = useRuns((s) => s.runs);

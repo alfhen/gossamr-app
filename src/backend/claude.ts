@@ -91,6 +91,8 @@ export interface AskRequest {
   meta?: TurnMeta;
   /** The instance and model to run on. Without one, the conversation's last choice, else the Settings default for Pip. */
   model?: ModelChoice;
+  /** The Jira connection picked in the drawer, for a conversation with no ticket. A workstream's connection or the open ticket's comes first; one that is off or gone is refused. */
+  connectionId?: string;
   /** `wake` for a turn the supervisor started; the sample backend's own wake turns are asked this way. */
   kind?: "user" | "wake";
 }

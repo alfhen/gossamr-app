@@ -121,6 +121,13 @@ impl Db {
         Ok(())
     }
 
+    /// Puts `connection_id` in front of every conversation that names none: not a workstream's `ws:<id>`, and not one that has
+    /// one already.
+    pub fn scope_bare_pip_conversations(&self, connection_id: &str) -> Result<()> {
+        self.conn.execute("UPDATE pip_turns SET conversation = ?1 || ':' || conversation WHERE conversation NOT LIKE '%:%'", params![connection_id])?;
+        Ok(())
+    }
+
     /// The choice the latest turn of `conversation` that kept one ran with.
     pub fn last_pip_model(&self, conversation: &str) -> Result<Option<ModelChoice>> {
         let kept: Option<String> = self
@@ -179,12 +186,22 @@ impl Db {
 
     /// The turns of `conversation`, oldest first. A question whose answer row is missing is left out.
     pub fn pip_turns(&self, conversation: &str) -> Result<Vec<PipTurn>> {
-        let mut stmt = self.conn.prepare(
+        self.read_pip_turns("u.conversation = ?1", conversation)
+    }
+
+    /// The turns of the conversation called `name` on any connection, oldest first: what is shown while no connection is
+    /// registered to say which one the person means.
+    pub fn pip_turns_named(&self, name: &str) -> Result<Vec<PipTurn>> {
+        self.read_pip_turns("(u.conversation = ?1 OR substr(u.conversation, -length(?1) - 1) = ':' || ?1)", name)
+    }
+
+    fn read_pip_turns(&self, matching: &str, conversation: &str) -> Result<Vec<PipTurn>> {
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT u.request_id, u.prompt, u.meta, p.text, p.steps, p.status, p.error, p.session_id, p.usage, u.created_at, u.role
              FROM pip_turns u JOIN pip_turns p ON p.request_id = u.request_id AND p.role = 'pip'
-             WHERE u.role IN ('user', 'wake') AND u.conversation = ?1
-             ORDER BY u.created_at, u.request_id",
-        )?;
+             WHERE u.role IN ('user', 'wake') AND {matching}
+             ORDER BY u.created_at, u.request_id"
+        ))?;
         let rows = stmt.query_map(params![conversation], |r| {
             Ok((
                 r.get::<_, String>(0)?,
