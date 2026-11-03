@@ -424,7 +424,7 @@ impl AgentService {
             }
             Sending { set: &self.sending, id: req.request_id.clone() }
         };
-        let drawer = req.connection_id.as_deref().or(split_conversation(&req.conversation).0);
+        let drawer = req.connection_id.as_deref().filter(|c| !c.is_empty()).or(split_conversation(&req.conversation).0);
         let scope = self.core.pip_scope(workstream_of_conversation(&req.conversation), req.context.item.as_ref(), drawer).await?;
         req.conversation = conversation_in(&req.conversation, &scope.connection_id);
         let mut meta = req.meta.clone().unwrap_or_else(|| TurnMeta { image_count: req.images.len() as u32, ..Default::default() });
@@ -1592,6 +1592,18 @@ mod tests {
             let err = svc.ask(ask("q2", "jira:gone:nobody:general"), sink).await.unwrap_err();
             assert!(matches!(err, Error::SiteChanged), "{err}");
             assert_eq!(fx.core.pip_turns("jira:gone:nobody:general").await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn an_empty_drawer_connection_falls_back_to_the_conversations() {
+            let (fx, second) = fixture_with_two_jira().await;
+            let fake = Fake::default();
+            let (svc, _, sink) = service(&fx, fake.clone()).await;
+            let mut req = ask("q1", &format!("{}:general", second.connection_id));
+            req.connection_id = Some(String::new());
+            svc.ask(req, sink).await.unwrap();
+            fake.until_started(1).await;
+            assert_eq!(turn_scope(&svc, "q1"), second);
         }
 
         #[tokio::test]
