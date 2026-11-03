@@ -15,7 +15,7 @@ import { pressed } from "../lib/keys";
 import { showsCode } from "./connectionsLogic";
 import { workspaceTicketLinks } from "./jump";
 import { KeyChooser } from "./KeyChooser";
-import { workConnections } from "./domains";
+import { primaryConnectionInfo } from "./domains";
 import { FilterBar } from "./FilterBar";
 import { useActiveTab } from "./hooks";
 import { MAIN_ID, Palette } from "./Palette";
@@ -56,7 +56,7 @@ function Canvas() {
     if (wantsCode) useDev.getState().ensure(candidates.slice(0, FILTER_LIMIT).map((i) => i.item));
   }, [wantsCode, candidates]);
   const anything = useWorkspace((s) => Object.keys(s.items).length > 0);
-  const connection = useWorkspace((s) => workConnections(s.connections)[0]);
+  const connection = useWorkspace((s) => primaryConnectionInfo(s.connections));
   const View = CANVASES[tab.view];
   const filterOrder = useMemo(() => items.map((i) => itemKey(i.item)), [items]);
   useStepKeys(filterOrder);

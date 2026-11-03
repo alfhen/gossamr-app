@@ -1,11 +1,13 @@
 import { showOf } from "../lib/keys";
-import { useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
 import { containerKey, describeFilter, filterChips } from "../lib/filter";
 import type { WorkContainer } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { BUILT_IN_VIEWS, projectOf, sameProject } from "./filters";
 import { useActiveTab, useFilterCounts, useLookup } from "./hooks";
-import { workConnections, workContainers } from "./domains";
+import { primaryConnectionInfo, workContainers } from "./domains";
+import { siteNamer } from "./keyLookup";
+import { projectLabels } from "./projects";
 import { usePopover } from "./Popover";
 import { projectColour, projectInitials } from "./projects";
 import { usePrefs } from "./prefs";
@@ -182,10 +184,12 @@ export interface ProjectsMenuPanelProps {
   onQuery(q: string): void;
   onPick(c: WorkContainer): void;
   onManage(): void;
+  /** The name a container is listed by; its own name when omitted. */
+  labelOf?(c: WorkContainer): string;
 }
 
 /** The watched containers that have no badge, with a way to find one and to change what is watched. */
-export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick, onManage }: ProjectsMenuPanelProps) {
+export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick, onManage, labelOf = (c) => c.name }: ProjectsMenuPanelProps) {
   const shown = rest.filter((c) => matchesQuery(c, query));
   return (
     <div className="grid">
@@ -197,7 +201,7 @@ export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick
               <span aria-hidden style={{ background: colourOf(c) }} className="grid size-6 shrink-0 place-items-center rounded-[7px] text-[10px] font-bold text-white">
                 {projectInitials(c)}
               </span>
-              <span className="min-w-0 flex-1 truncate">{c.name}</span>
+              <span className="min-w-0 flex-1 truncate">{labelOf(c)}</span>
               <span className="shrink-0 text-xs font-medium text-ws-ink">{c.key}</span>
             </button>
           </li>
@@ -215,7 +219,7 @@ export function ProjectsMenuPanel({ rest, colourOf, noun, query, onQuery, onPick
   );
 }
 
-function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProps, "rest" | "colourOf" | "noun">) {
+function ProjectsMenuButton({ rest, colourOf, noun, labelOf }: Pick<ProjectsMenuPanelProps, "rest" | "colourOf" | "noun" | "labelOf">) {
   const { open, setOpen, root } = usePopover();
   const [query, setQuery] = useState("");
   return (
@@ -228,6 +232,7 @@ function ProjectsMenuButton({ rest, colourOf, noun }: Pick<ProjectsMenuPanelProp
           <ProjectsMenuPanel
             rest={rest}
             colourOf={colourOf}
+            labelOf={labelOf}
             noun={noun}
             query={query}
             onQuery={setQuery}
@@ -309,7 +314,8 @@ export function Rail() {
   const { setRoute, setProject } = useTabs.getState();
   const containers = useWorkspace((s) => s.containers);
   const watch = useWorkspace((s) => s.watch);
-  const kind = useWorkspace((s) => workConnections(s.connections)[0]?.kind);
+  const kind = useWorkspace((s) => primaryConnectionInfo(s.connections)?.kind);
+  const connections = useWorkspace((s) => s.connections);
   const pipOpen = usePrefs((s) => s.pipOpen);
   const setPaletteOpen = usePrefs((s) => s.setPaletteOpen);
   const project = projectOf(tab.filter);
@@ -317,6 +323,8 @@ export function Rail() {
   const all = workContainers(Object.values(containers)).sort((a, b) => a.key.localeCompare(b.key));
   const { badges, rest } = railSplit(all, watch, project, RAIL_BADGES);
   const colourOf = (c: WorkContainer) => projectColour(all, c.ref);
+  const siteOf = useMemo(() => siteNamer(connections), [connections]);
+  const labelOf = projectLabels(all, (c) => siteOf({ connectionId: c.ref.connectionId, externalId: "", key: "" }));
   const noun = nounFor(kind);
   const glass = useRef<HTMLDivElement>(null);
   const lens = useRef<HTMLSpanElement>(null);
@@ -342,7 +350,7 @@ export function Rail() {
           return (
             <RailButton
               key={containerKey(c.ref)}
-              label={c.name}
+              label={labelOf(c)}
               current={on}
               onClick={() => setProject(c.ref)}
             >
@@ -353,7 +361,7 @@ export function Rail() {
           );
         })}
         </div>
-        <ProjectsMenuButton rest={rest} colourOf={colourOf} noun={noun} />
+        <ProjectsMenuButton rest={rest} colourOf={colourOf} labelOf={labelOf} noun={noun} />
         <Divider />
         <ViewsButton />
       </nav>

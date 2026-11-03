@@ -21,7 +21,8 @@ export function useLookup(): QueryLookup {
   const containers = useWorkspace((s) => s.containers);
   const names = useWorkspace((s) => s.names);
   const me = useWorkspace((s) => s.me);
-  return useMemo(() => queryLookup({ items, containers, names, me }), [items, containers, names, me]);
+  const connections = useWorkspace((s) => s.connections);
+  return useMemo(() => queryLookup({ items, containers, names, me, connections }), [items, containers, names, me, connections]);
 }
 
 /** How many items each filter matches, keyed by the index in `filters`, with the project scope applied. */

@@ -8,7 +8,7 @@ import { JiraBackend } from "./backend/jira";
 import { MockBackend } from "./backend/mock";
 import { mockOptionsFromUrl } from "./backend/mockWatch";
 import { onSignedOut } from "./accountEvents";
-import { resetAccountState } from "./accountState";
+import { accountKey, isSignedInToJira, resetAccountState } from "./accountState";
 import type { Backend } from "./backend/types";
 import { Setup } from "./components/Setup";
 import { desktopFirstRun, type FirstRunApi } from "./backend/firstRun";
@@ -20,9 +20,6 @@ type Phase =
   | { name: "app"; backend: Backend }
   | { name: "error"; message: string };
 
-const accountKey = (account: { site: { cloudId: string }; me: { accountId: string } } | null) =>
-  account ? `jira:${account.site.cloudId}:${account.me.accountId}` : "mock";
-
 export function Root() {
   const [phase, setPhase] = useState<Phase>({ name: "loading" });
   const [firstRun] = useState<FirstRunApi | null>(() => {
@@ -32,10 +29,10 @@ export function Root() {
   });
 
   const start = (status: AuthStatus | null) => {
-    const account = status?.site && status.me ? { site: status.site, me: status.me } : null;
-    resetAccountState(accountKey(account));
-    const backend: Backend = account ? new JiraBackend() : firstRun?.sampleBackend?.() ?? new MockBackend(mockOptionsFromUrl());
-    if (account) void askForNotifications();
+    const signedIn = isSignedInToJira(status);
+    resetAccountState(accountKey(status));
+    const backend: Backend = signedIn ? new JiraBackend() : firstRun?.sampleBackend?.() ?? new MockBackend(mockOptionsFromUrl());
+    if (signedIn) void askForNotifications();
     setPhase({ name: "app", backend });
   };
 

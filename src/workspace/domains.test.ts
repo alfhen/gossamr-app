@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConnectionInfo, WatchState, WorkContainer } from "../types";
 import { allContainers } from "../workspaceStore";
-import { codeWatch, domainOfConnection, domainOfKind, githubConnections, isJira, isWorkConnection, primaryConnection, workConnections, workContainers, workWatch } from "./domains";
+import { codeWatch, drawerConnectionOf, domainOfConnection, domainOfKind, githubConnections, isJira, isWorkConnection, primaryConnection, primaryConnectionInfo, workConnections, workContainers, workWatch } from "./domains";
 import { railSplit } from "./watchLogic";
 
 const container = (connectionId: string, key: string): WorkContainer => ({ ref: { connectionId, externalId: key }, key, name: key, workflow: null }) as unknown as WorkContainer;
@@ -75,7 +75,25 @@ describe("the primary connection", () => {
     expect(primaryConnection([conn("jira:a", "jira", false), conn("jira:b", "jira", false)])).toBe("jira:a");
   });
 
+  it("gives the row of the primary, not the first row, when the first Jira is off", () => {
+    expect(primaryConnectionInfo([conn("jira:a", "jira", false), conn("jira:b", "jira")])?.id).toBe("jira:b");
+  });
+
   it("is none without a Jira connection", () => {
     expect(primaryConnection([conn("github:ada", "github"), conn("claude", "provider")])).toBeUndefined();
+  });
+});
+
+describe("the connection picked in Pip's drawer", () => {
+  const conn = (id: string, enabled = true) => ({ id, kind: "jira", enabled }) as ConnectionInfo;
+
+  it("counts when it is one of several Jira connections that are on", () => {
+    expect(drawerConnectionOf([conn("a"), conn("b")], "b")).toBe("b");
+  });
+
+  it("is ignored when only one Jira is on, or the pick is off or gone", () => {
+    expect(drawerConnectionOf([conn("a"), conn("b", false)], "a")).toBeNull();
+    expect(drawerConnectionOf([conn("a"), conn("b", false), conn("c")], "b")).toBeNull();
+    expect(drawerConnectionOf([conn("a"), conn("c")], "gone")).toBeNull();
   });
 });

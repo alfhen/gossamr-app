@@ -49,14 +49,20 @@ export interface AddEntry {
   line: string;
 }
 
-/** What + Add and the palette offer. Jira only while there is no Jira connection, and only once the connections have loaded: an unread list would offer it over a sign-in that exists. The Models entries only once provider rows are shown and the driver can run something. */
-export function addEntries(connections: readonly Pick<ConnectionInfo, "kind">[], providers = providersOn(), loaded = true, codex = codexAsked()): AddEntry[] {
-  const entries: AddEntry[] = [{ id: "github", group: "Code", label: "GitHub account", line: "Pull requests, branches and checks." }];
-  if (loaded && !connections.some((c) => c.kind === "jira")) entries.push({ id: "jira", group: "Tickets", label: "Jira account", line: "Tickets from one Jira site." });
+/** What + Add and the palette offer: both account kinds always. The Models entries only once provider rows are shown and the driver can run something. */
+export function addEntries(providers = providersOn(), codex = codexAsked()): AddEntry[] {
+  const entries: AddEntry[] = [
+    { id: "github", group: "Code", label: "GitHub account", line: "Pull requests, branches and checks." },
+    { id: "jira", group: "Tickets", label: "Jira account", line: "Tickets from one Jira site." },
+  ];
   if (providers && DRIVER_CAPABILITIES.claude.runsAgents) entries.push({ id: "claude", group: "Models", label: "Claude", line: "A login that Pip and agents can run on." });
   if (providers && (DRIVER_CAPABILITIES.codex.runsAgents || codex)) entries.push({ id: "codex", group: "Models", label: "Codex", line: "A login that agents can run on." });
   return entries;
 }
+
+/** Whether removing `c` leaves no other Jira connection, so the app has nothing to show and goes back to Setup. */
+export const removesLastJira = (connections: readonly Pick<ConnectionInfo, "kind" | "instanceId">[], c: Pick<ConnectionInfo, "kind" | "instanceId">) =>
+  c.kind === "jira" && !connections.some((o) => o.kind === "jira" && o.instanceId !== c.instanceId);
 
 /** Whether a GitHub or Jira connection exists. The sample data and providers don't count. */
 export const hasRealConnection = (connections: readonly Pick<ConnectionInfo, "kind">[]) => connections.some((c) => c.kind === "github" || c.kind === "jira");

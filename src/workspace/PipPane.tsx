@@ -13,6 +13,7 @@ import { lightboxOpen, useAttachments, useFileDrop } from "./PipImages";
 import { popoverOpen } from "./Popover";
 import { currentContext, useScreen } from "./pipHooks";
 import { usePip } from "./pipStore";
+import { drawerConnectionOf, jiraOn, primaryConnection } from "./domains";
 import { keyChooserOpen } from "./keyChooserStore";
 import { usePrefs } from "./prefs";
 import { buildScreenContext, contextLabel, contextLines } from "./screenContext";
@@ -151,6 +152,32 @@ export function usePipScene(workstream: WorkstreamView | null = null) {
   return { scene, kind, label, context, words, quote, following: pinned === null };
 }
 
+/** Which Jira connection Pip works in while no ticket is open, once several are on. */
+export function DrawerConnection() {
+  const connections = useWorkspace((s) => s.connections);
+  const picked = usePip((s) => s.drawerConnection);
+  const on = jiraOn(connections);
+  if (on.length < 2) return null;
+  const value = drawerConnectionOf(connections, picked) ?? primaryConnection(connections) ?? "";
+  return (
+    <label className="flex min-w-0 items-center gap-1.5 text-xs text-ws-ink2">
+      Pip works in
+      <select
+        aria-label="Pip works in"
+        value={value}
+        onChange={(ev) => usePip.getState().setDrawerConnection(ev.target.value)}
+        className="min-w-0 truncate rounded-md bg-transparent py-0.5 text-sm font-semibold text-ws-ink hover:bg-ws-hover"
+      >
+        {on.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.displayName}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /** The line naming the conversation: "General", or "Workstream: <title>" with the title cut short. */
 export function ConversationLine({ conversation, workstream }: { conversation: string; workstream: WorkstreamView | null }) {
   return (
@@ -223,6 +250,7 @@ export function PipPane({ onClose }: { onClose(): void }) {
           )}
           <ConversationLine conversation={conversation} workstream={workstream} />
           {workstream && <WorkstreamControls key={workstream.workstream.id} view={workstream} />}
+          {!workstream && !context.item && <DrawerConnection />}
           <ContextChip kind={kind} label={label} following={following} open={seeing} onToggle={() => setSeeing(!seeing)} />
           {seeing && <SeeingPanel lines={contextLines(context, quote, words)} following={following} onFollow={(on) => usePip.getState().setPinned(on ? null : currentContext())} />}
         </header>

@@ -41,6 +41,9 @@ pub struct TokenSignIn {
     pub token: String,
     /// `YYYY-MM-DD`. Atlassian doesn't report a token's expiry, so this is what the person says it is.
     pub expires_on: String,
+    /// What Settings calls a new connection; the site's name when empty.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -555,7 +558,7 @@ mod tests {
         let fake = secrets::fake::Fake::default();
         let _vault = secrets::fake::install(&fake);
         let auth = Auth::with_authenticator(Arc::new(Slow { answer_after: Duration::ZERO }), Credentials { token: "old".into(), ..credentials() });
-        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "secret-token".into(), expires_on: "2027-10-30".into() };
+        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "ann@acme.com".into(), token: "secret-token".into(), expires_on: "2027-10-30".into(), name: None };
         assert_eq!(replace_with(&auth, "jira:c1:u1", &input).await.unwrap().id, "jira:c1:u1");
         assert_eq!(secrets::load::<Credentials>(&token_key("jira:c1:u1")).unwrap().unwrap().token, "secret-token");
         assert_eq!(auth.credentials_for(&credentials().site_scope()).await.unwrap().token, "secret-token");
@@ -582,7 +585,7 @@ mod tests {
         let _vault = secrets::fake::install(&fake);
         secrets::save(&token_key("jira:c1:u1"), &credentials()).unwrap();
         let auth = Auth::with_authenticator(Arc::new(Refusing), credentials());
-        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "x".into(), token: "bad".into(), expires_on: "2027-10-30".into() };
+        let input = TokenSignIn { site: "acme".into(), cloud_id: None, email: "x".into(), token: "bad".into(), expires_on: "2027-10-30".into(), name: None };
         assert!(replace_with(&auth, "jira:c1:u1", &input).await.is_err());
         assert!(add_as(&auth, &input).await.is_err());
         assert_eq!(auth.credentials_for(&credentials().site_scope()).await.unwrap().token, "secret-token");
@@ -617,7 +620,7 @@ mod tests {
     }
 
     fn sign_in_as(c: &Credentials) -> TokenSignIn {
-        TokenSignIn { site: c.site.name.clone(), cloud_id: None, email: c.email.clone(), token: c.token.clone(), expires_on: c.expires_on.clone() }
+        TokenSignIn { site: c.site.name.clone(), cloud_id: None, email: c.email.clone(), token: c.token.clone(), expires_on: c.expires_on.clone(), name: None }
     }
 
     /// Signs in as whichever of `known` has the token it is given.

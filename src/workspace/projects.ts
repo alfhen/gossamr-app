@@ -9,6 +9,16 @@ export function projectColour(containers: readonly WorkContainer[], ref: Contain
   return COLOURS[Math.max(0, at) % COLOURS.length];
 }
 
+/** A container's name for the rail: with its site's name when another site has a container with the same key. */
+export function projectLabels(containers: readonly WorkContainer[], siteOf: (c: WorkContainer) => string | null): (c: WorkContainer) => string {
+  const sites = new Map<string, Set<string>>();
+  for (const c of containers) sites.set(c.key.toLowerCase(), (sites.get(c.key.toLowerCase()) ?? new Set()).add(c.ref.connectionId));
+  return (c) => {
+    const site = (sites.get(c.key.toLowerCase())?.size ?? 0) > 1 ? siteOf(c) : null;
+    return site ? `${c.name} · ${site}` : c.name;
+  };
+}
+
 export const projectInitials = (c: WorkContainer) => c.key.slice(0, 2).toUpperCase();
 
 /** A colour for a container that isn't in the watched list, such as a row in the picker; stable for a given key. */

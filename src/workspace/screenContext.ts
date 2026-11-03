@@ -1,6 +1,6 @@
 import type { ContainerRef, ItemRef, Run, ScreenContext, WorkContainer, WorkItem, WorkstreamView } from "../types";
 import { projectOf } from "./filters";
-import { containerKey, withoutCode } from "../lib/filter";
+import { containerKey, forBackend } from "../lib/filter";
 import { FILTER_LABEL, type InboxFilter } from "./activityLogic";
 import { applyFilters, isFiltered, summaryLine, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { VIEW_LABEL, type Route, type Tab } from "./tabsStore";
@@ -67,8 +67,8 @@ export function screenLine(s: Pick<Screen, "route" | "tab" | "shown" | "containe
 export function buildScreenContext(s: Screen): ScreenContext {
   const open = s.route !== "settings" && s.selected ? (s.items[s.selected] ?? s.peeked?.[s.selected]) : undefined;
   const onBoard = s.route === "workspace";
-  // Filters over linked code exist only in the page, and the backend rejects a filter it can't parse.
-  const filter = withoutCode(s.tab.filter);
+  // Filters over linked code and the account exist only in the page, and the backend rejects a filter it can't parse.
+  const filter = forBackend(s.tab.filter);
   const shown = s.route === "agents" && s.agents ? runsShown(s.agents) : [];
   const filtered = onBoard && (filter.type !== "and" || filter.filters.length > 0);
   return {

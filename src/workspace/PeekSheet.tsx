@@ -19,6 +19,8 @@ import { PEEK_DEFAULT } from "./paneSizes";
 import { keyChooserOpen } from "./keyChooserStore";
 import { usePrefs } from "./prefs";
 import { CommentCard, HistoryRow, SectionCard, SectionNav, showComment } from "./PeekParts";
+import { SiteChip } from "./CanvasBits";
+import { useSiteOf } from "./hooks";
 import { displayName, historyNotes, isCollapsed, linkRows, parentCrumb, replyDraft, sectionChips, shownComments, subtasksOf, type Collapsed, type Crumb, type LinkRow, type Note, type PeekSectionId, type ReplyDraft, type Subtasks } from "./peekLogic";
 import { TicketAgents, runsOfTicket } from "./TicketAgents";
 import { CLOSE_RUNS_NOTE } from "./WorkstreamControls";
@@ -70,6 +72,8 @@ export interface DraftSlots {
 
 export interface PeekViewProps {
   item: WorkItem;
+  /** The Jira account's name, once more than one is on. */
+  site?: string | null;
   /** Shows the item as a draft that doesn't exist yet: editable fields and a Create button, and no comments, history, links or code. */
   draft?: DraftSlots;
   assignee: string;
@@ -153,6 +157,7 @@ export function PeekView(p: PeekViewProps) {
       <div className={`ws-sheet pointer-events-auto flex h-full min-h-0 flex-col ${draft ? "outline-2 -outline-offset-[5px] outline-dashed outline-ws-pip" : ""}`}>
         <div data-peek-head data-under={under || undefined} className="ws-sheet-head z-10 flex shrink-0 items-center gap-2 px-3 py-2.5">
           <span title={draft ? undefined : "j and k browse, esc closes"} className={`shrink-0 font-mono text-sm font-semibold ${draft ? "text-ws-pip" : "text-ws-ink2"}`}>{item.item.key}</span>
+          <SiteChip site={p.site} />
           {draft?.nav}
           <span className="min-w-0 flex-1" />
           {!draft && <SectionNav chips={sectionChips({ links: p.links.length, comments: commentCount, history: p.history.length, development: p.developmentCount })} onJump={p.onJump} />}
@@ -592,6 +597,7 @@ let keyboardInPeek = false;
 
 function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem } & Motion) {
   const ref = item.item;
+  const siteOf = useSiteOf();
   const key = itemKey(ref);
   // Stepping with j and k from inside the peek (as one opened from the palette has the keyboard) swaps it for the next
   // one; the keyboard goes along to it rather than falling to the page.
@@ -708,6 +714,7 @@ function OpenPeek({ item, motion, wide, onWide, onMotionEnd }: { item: WorkItem 
   return (
     <PeekView
       item={item}
+      site={siteOf(item.item)}
       assignee={who(item.assignee?.accountId ?? null)}
       now={now}
       moves={moves}

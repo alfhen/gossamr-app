@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetAccountState } from "./accountState";
+import { accountKey, isSignedInToJira, resetAccountState } from "./accountState";
+import type { AuthStatus } from "./backend/auth";
 import { MockBackend } from "./backend/mock";
 import { useClaude } from "./claudeStore";
 import { usePip } from "./workspace/pipStore";
@@ -21,7 +22,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("per-account state", () => {
   beforeEach(async () => {
     stubStorage();
-    resetAccountState("jira:site:me");
+    resetAccountState("jira");
     await useWorkspace.getState().init(new MockBackend());
     useClaude.setState({ byTicket: { "CA-1": { turns: [], sessionId: "s" } } });
     usePip.setState({ filtered: { tabId: "t", before: { type: "open" }, beforeTitle: null, filter: { type: "open" }, note: "" } });
@@ -30,7 +31,7 @@ describe("per-account state", () => {
   });
 
   it("keeps tabs for the same account but drops conversations, filters and the loaded workspace", () => {
-    resetAccountState("jira:site:me");
+    resetAccountState("jira");
     expect(useClaude.getState().byTicket).toEqual({});
     expect(usePip.getState().filtered).toBeNull();
     expect(useWorkspace.getState().status).toBe("idle");
@@ -44,7 +45,7 @@ describe("per-account state", () => {
     useClaude.setState({
       byTicket: { workspace: { sessionId: null, turns: [{ ...turn, images: [{ id: "a", url: "blob:a", width: 1, height: 1 }, { id: "b", url: "blob:b", width: 1, height: 1 }] }, turn] } },
     });
-    resetAccountState("jira:site:me");
+    resetAccountState("jira");
     expect(revoke.mock.calls.map(([u]) => u)).toEqual(["blob:a", "blob:b"]);
     revoke.mockRestore();
   });
@@ -53,6 +54,38 @@ describe("per-account state", () => {
     resetAccountState("jira:site:someone-else");
     expect(usePip.getState().filtered).toBeNull();
     expect(useTabs.getState().tabs).toHaveLength(1);
+  });
+});
+
+describe("the account key with several Jira accounts", () => {
+  const signedIn = (site: string, accountId: string): AuthStatus => ({
+    site: { cloudId: site, name: `${site}.atlassian.net`, url: `https://${site}.atlassian.net` },
+    me: { accountId, name: accountId, avatarUrl: null },
+    email: `${accountId}@${site}.example`,
+    expiresOn: "2027-10-30",
+  });
+  const none: AuthStatus = { site: null, me: null, email: null, expiresOn: null };
+
+  it("is the same whichever Jira account the status names, so a second account keeps the tabs", () => {
+    stubStorage();
+    resetAccountState(accountKey(signedIn("acme", "ann")));
+    useTabs.getState().openTab({ title: "Mine" });
+    resetAccountState(accountKey(signedIn("beta", "bo")));
+    expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
+  });
+
+  it("reads the key stored before one key covered every Jira sign-in as the same account, so tabs and saved views stay", () => {
+    stubStorage({ "gossamr-account": JSON.stringify({ id: "jira:c1:u1" }) });
+    useTabs.getState().openTab({ title: "Mine" });
+    resetAccountState(accountKey(signedIn("c1", "u1")));
+    expect(useTabs.getState().tabs.length).toBeGreaterThan(1);
+  });
+
+  it("chooses the desktop backend for any signed-in status and the sample for none", () => {
+    expect(isSignedInToJira(signedIn("beta", "bo"))).toBe(true);
+    expect(isSignedInToJira(none)).toBe(false);
+    expect(isSignedInToJira(null)).toBe(false);
+    expect(accountKey(none)).not.toBe(accountKey(signedIn("acme", "ann")));
   });
 });
 
