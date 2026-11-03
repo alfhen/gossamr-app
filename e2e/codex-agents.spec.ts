@@ -35,15 +35,20 @@ test("an agent runs on the Codex chosen for New agents use, opens in Terminal wi
   const card = page.locator(`main article[data-run-id="${id}"]`);
   await expect(card.getByRole("button", { name: /^Runs on Codex side · / })).toBeVisible();
 
-  await advanceRuns(page, 3, id);
-  await card.getByRole("button", { name: "Open in Terminal" }).click();
-  expect(await mockAttached(page)).toEqual([id]);
-  expect(await attachCommands(page)).toEqual(["codex resume"]);
-
   await advanceRuns(page, 12, id);
   await expect(card).toHaveAttribute("data-state", "done");
   await card.click();
   await expect(runSheet(page).locator("[data-run-report]")).toBeVisible();
+  await runSheet(page).getByRole("button", { name: "Close", exact: true }).click();
+
+  const second = await startAgent(page, "CA-402", "look again");
+  await advanceRuns(page, 3, second);
+  const next = page.locator(`main article[data-run-id="${second}"]`);
+  await next.getByRole("button", { name: "Open in Terminal" }).click();
+  expect(await mockAttached(page)).toEqual([second]);
+  expect(await attachCommands(page)).toEqual(["codex resume"]);
+  await expect(next).toHaveAttribute("data-state", "stopped");
+  await expect(next).toContainText("Opened in Terminal");
 });
 
 test("Pip's picker still greys Codex with the reason", async ({ page }) => {

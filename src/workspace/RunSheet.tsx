@@ -103,7 +103,7 @@ function AnswerSent() {
   return (
     <p ref={line} tabIndex={-1} role="status" data-answer-sent className="m-0 flex items-center gap-1.5 text-sm font-semibold text-ws-pip outline-none">
       <Icon name="check" className="size-3.5" />
-      Answer sent. Claude is picking it back up.
+      Answer sent. The agent is picking it back up.
     </p>
   );
 }
@@ -141,7 +141,7 @@ function Attention({ run, label, opened, trust, answering, slotPlace, on }: { ru
       return (
         <Box tone="needs" label="Permission request">
           <BoxTitle icon="hand" tone="needs">
-            Claude is asking permission
+            The agent is asking permission
           </BoxTitle>
           <PermissionAsk run={run} label={label} onAttach={on.attach} />
         </Box>

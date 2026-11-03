@@ -1103,7 +1103,13 @@ export class MockRuns {
     const run = this.get(id);
     if (!run?.shortId) throw new Error("that run has no session to attach to yet");
     this.attached.push(id);
-    this.attachCommands.push(this.providers.driverOf(run.runsOn?.instanceId ?? "claude") === "codex" ? "codex resume" : "claude attach");
+    if (this.providers.driverOf(run.runsOn?.instanceId ?? "claude") !== "codex") {
+      this.attachCommands.push("claude attach");
+      return;
+    }
+    this.attachCommands.push("codex resume");
+    this.update(id, { state: "stopped", needs: null, suggestedReply: null, endedAt: this.now(), lastDetail: "Opened in Terminal" });
+    this.changed();
   }
 
   private failed(id: string, want: RunFailure["type"], refusal: string): Run {

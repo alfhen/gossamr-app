@@ -340,8 +340,8 @@ test.describe("answering a question and retrying a run", () => {
     expect(place).toBeTruthy();
     await runSheet(page).getByRole("textbox", { name: "Your answer" }).fill("Yes, keep the old rounding for refunds.");
     await runSheet(page).getByRole("textbox", { name: "Your answer" }).press("ControlOrMeta+Enter");
-    await expectToast(page, "Answer sent. Claude is picking it back up.");
-    await expect(runSheet(page).locator("[data-answer-sent]")).toHaveText("Answer sent. Claude is picking it back up.");
+    await expectToast(page, "Answer sent. The agent is picking it back up.");
+    await expect(runSheet(page).locator("[data-answer-sent]")).toHaveText("Answer sent. The agent is picking it back up.");
     // The answer box had the keyboard; it goes to the line that replaced it, not to the page.
     await expect(runSheet(page).locator("[data-answer-sent]")).toBeFocused();
     await expect(runSheet(page).locator("[data-state]").first()).toHaveAttribute("data-state", "working");

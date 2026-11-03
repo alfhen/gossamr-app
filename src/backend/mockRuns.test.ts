@@ -199,6 +199,8 @@ describe("mock runs", () => {
     const working = (await backend.runsList({ states: ["working"] }))[0];
     await backend.runsAttach(working.id);
     expect(backend.runs.attachCommands).toEqual(["codex resume"]);
+    const after = (await backend.runsList({})).find((r) => r.id === working.id);
+    expect([after?.state, after?.lastDetail]).toEqual(["stopped", "Opened in Terminal"]);
   });
 
   it("has one failed launch of each kind, and the busy set's failed run is an untrusted folder", async () => {
