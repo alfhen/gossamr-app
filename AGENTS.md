@@ -29,7 +29,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/claude/` | Pip's turns (`claude -p`) |
 | `src-tauri/src/agent/` | The gossamr MCP server: Pip's tools and the agents' tools |
 | `src-tauri/src/runs/` | Agent runs: launch, track, answer, stop, clean up (`claude --bg --worktree`). Each run is tracked on the Claude login (config folder) it started on |
-| `src-tauri/src/runs/backend.rs`, `runs/backend/` | The `RunBackend` trait (launch, preflight, watching runs, finding a run's session and reading its final answer so far) and `ClaudeBackend`, which wraps `ClaudeCli`. `Toolchain` holds the backend; the service and the tracker call it instead of the CLI for those |
+| `src-tauri/src/runs/backend.rs`, `runs/backend/` | The `RunBackend` trait (launch, preflight, watching runs, finding a run's session, reading its final answer so far, and every action on a session: answer, message, stop, resume, clean up, attach, sign-in and trust) and `ClaudeBackend`, which wraps `ClaudeCli`. `Toolchain` holds the backend; the service and the tracker call it instead of the CLI for those, and `Toolchain` no longer holds the CLI. A backend states what it can do with plain methods (`resumes_with_tools`, `trust_file`), never by its driver |
 | `src-tauri/src/inbox/` | Draft storage and approval, prose run outcomes, workstreams |
 | `src/backend/` | The `Backend` interface (`types.ts`), the desktop one (`jira.ts`) and the in-browser mock (`mock*.ts`) |
 | `src/workspace/` | The workspace UI: Inbox, Board and List, Work, peek, Pip pane, review draft hunks |
