@@ -9,6 +9,7 @@ import { draftStatus } from "./boardLogic";
 import { draftSummary, draftTitle, linkSentence, useEditedDraft } from "./DraftCard";
 import { collapsible, draftFacts, isCreate, showDraft } from "./draftTicket";
 import { showMe } from "./jump";
+import { useRuns } from "./runsStore";
 import { useRepoReviewAccess, useReviewAccess } from "./reviewAccess";
 import { sameCommit, usePullDiff } from "./reviewDiff";
 import { FROM_INPUT, PIP_INPUT_ID, PIP_ROOT, draftKeyHint, draftKeyShortcuts, focusAfterLeaving, onDraftCardKey, setDraftEditIntent, type Asking } from "./draftKeys";
@@ -322,6 +323,8 @@ export function draftDecisions(id: string, seen?: Proposal): { approve(): void; 
  * yet shows that draft.
  */
 export function openLiveDraft(p: Proposal, { inline = false }: { inline?: boolean } = {}) {
+  // An open run sheet sits above the peek and the draft, so it would hide what this opens.
+  useRuns.getState().closeSheet();
   const target = targetOf(p.intent);
   if (target && inline && useWorkspace.getState().items[itemKey(target)]) {
     useTabs.getState().select(itemKey(target));
