@@ -325,13 +325,11 @@ fn launched_unrestricted(run: &Run, launches: &[crate::runs::cli::LaunchRequest]
     Ok(())
 }
 
-/// The source files under `src` that build a `LaunchRequest`, test code left out, as paths relative to `src`. Test code
-/// is a file a `#[cfg(test)] mod name;` declares (and everything under its directory) and, in any other file,
-/// everything from a `#[cfg(test)]` inline `mod name {` on, since a file's test module comes last.
-fn files_that_build_launch_requests() -> std::io::Result<Vec<String>> {
+/// The non-test source of every file under `src`, as (path relative to `src`, code). Test code is a file a
+/// `#[cfg(test)] mod name;` declares (and everything under its directory) and, in any other file, everything from a
+/// `#[cfg(test)]` inline `mod name {` on, since a file's test module comes last.
+fn non_test_sources() -> std::io::Result<Vec<(String, String)>> {
     use std::path::Path;
-    // Spelled in two parts so this file never matches itself, though it is test code anyway.
-    let name = format!("{}Request", "Launch");
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![];
     let mut stack = vec![src.clone()];
@@ -358,7 +356,7 @@ fn files_that_build_launch_requests() -> std::io::Result<Vec<String>> {
             test_paths.push(base.join(name));
         }
     }
-    let mut found = vec![];
+    let mut sources = vec![];
     for (path, text) in &files {
         if test_paths.iter().any(|t| path.starts_with(t)) {
             continue;
@@ -373,12 +371,23 @@ fn files_that_build_launch_requests() -> std::io::Result<Vec<String>> {
             code.push_str(line);
             code.push('\n');
         }
-        if builds(&code, &name) > 0 {
-            found.push(path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/"));
-        }
+        sources.push((path.strip_prefix(&src).unwrap_or(path).to_string_lossy().replace('\\', "/"), code));
     }
-    found.sort();
-    Ok(found)
+    sources.sort();
+    Ok(sources)
+}
+
+/// The paths among `sources` whose code builds a `LaunchRequest`, at either level.
+fn files_that_build_launch_requests(sources: &[(String, String)]) -> Vec<String> {
+    // Spelled in two parts so this file never matches itself, though it is test code anyway.
+    let name = format!("{}Request", "Launch");
+    sources.iter().filter(|(_, code)| builds(code, &name) > 0).map(|(path, _)| path.clone()).collect()
+}
+
+/// The paths among `sources` whose code launches on a toolchain's backend.
+fn files_that_launch_on_a_backend(sources: &[(String, String)]) -> Vec<String> {
+    let call = format!("backend.{}(", "launch");
+    sources.iter().filter(|(_, code)| code.contains(&call)).map(|(path, _)| path.clone()).collect()
 }
 
 /// How many times `code` builds (or has an `impl` block for) the struct `name`: the name followed by `{` with any
@@ -393,11 +402,17 @@ fn builds(code: &str, name: &str) -> usize {
         .count()
 }
 
-/// Only the run service builds a `LaunchRequest` (its `spawn`), so no other code path can launch a run around it. Tests build their own; they are left out.
-fn launch_requests_are_built_only_by_the_run_service() -> std::result::Result<(), String> {
-    let found = files_that_build_launch_requests().map_err(|e| e.to_string())?;
-    if found != ["runs/service.rs"] {
-        return Err(format!("a LaunchRequest is built outside the run service's spawn: {found:?}"));
+/// Only the run service's spawn and the Claude backend build a `LaunchRequest` (the backend builds the command line's own), and only
+/// the run service's spawn launches on a backend, so no other code path can launch a run around the service. Tests build
+/// their own; they are left out.
+fn launches_go_only_through_the_run_service(sources: &[(String, String)]) -> std::result::Result<(), String> {
+    let built = files_that_build_launch_requests(sources);
+    if built != ["runs/backend/claude.rs", "runs/service.rs"] {
+        return Err(format!("a LaunchRequest is built outside the run service's spawn and the Claude backend: {built:?}"));
+    }
+    let launching = files_that_launch_on_a_backend(sources);
+    if launching != ["runs/service.rs"] {
+        return Err(format!("a backend is launched on outside the run service's spawn: {launching:?}"));
     }
     Ok(())
 }
@@ -675,13 +690,33 @@ mod tests {
     }
 
     #[test]
-    fn launch_requests_are_built_only_by_the_run_service() {
-        super::launch_requests_are_built_only_by_the_run_service().unwrap();
-        // The scan sees what it should: test code builds requests too, and is left out only because it is test code.
-        let found = files_that_build_launch_requests().unwrap();
-        assert_eq!(found, ["runs/service.rs"]);
+    fn launches_go_only_through_the_run_service() {
+        let sources = non_test_sources().unwrap();
+        super::launches_go_only_through_the_run_service(&sources).unwrap();
+        // The scans see what they should: test code builds requests too, and is left out only because it is test code.
+        assert_eq!(files_that_build_launch_requests(&sources), ["runs/backend/claude.rs", "runs/service.rs"]);
+        assert_eq!(files_that_launch_on_a_backend(&sources), ["runs/service.rs"]);
         let cli = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runs/cli.rs")).unwrap();
         assert!(cli.matches(&format!("{}Request {{", "Launch")).count() >= 2, "cli.rs's own tests build one, after its struct");
+    }
+
+    #[test]
+    fn a_launch_request_built_in_the_finder_or_a_backend_launched_from_control_is_an_error() {
+        let sources = non_test_sources().unwrap();
+        let with = |path: &str, extra: &str| -> Vec<(String, String)> {
+            let mut all = sources.clone();
+            match all.iter_mut().find(|(p, _)| p == path) {
+                Some((_, code)) => code.push_str(extra),
+                None => panic!("no source {path}"),
+            }
+            all
+        };
+        let request = format!("fn f() {{ let r = {}Request {{ cwd }}; }}", "Launch");
+        let error = super::launches_go_only_through_the_run_service(&with("runs/finder.rs", &request)).unwrap_err();
+        assert!(error.contains("runs/finder.rs"), "{error}");
+        let call = format!("async fn f(tc: Toolchain) {{ tc.backend.{}(&request).await; }}", "launch");
+        let error = super::launches_go_only_through_the_run_service(&with("runs/control.rs", &call)).unwrap_err();
+        assert!(error.contains("runs/control.rs"), "{error}");
     }
 
     #[tokio::test]

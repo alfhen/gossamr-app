@@ -1,10 +1,11 @@
-//! Offering a run's session Gossamr's tools: a token minted for the launch and a config file only this user can read.
+//! Offering a run's session Gossamr's tools: a token minted for the launch, handed to the backend that writes it where only this user can read it.
 //! Nothing here can fail a launch. A run that can't be offered the tools launches without them and its written answer is
 //! read as it always was.
 
 use chrono::Utc;
 
-use super::agent_config::{AgentChannel, AgentLaunch};
+use super::agent_config::AgentChannel;
+use super::backend::ToolsOffer;
 use super::report::{new_token, token_hash};
 use super::service::RunService;
 use crate::domain::{Run, RunState, REPORT_TOOL_VERSION};
@@ -19,10 +20,10 @@ impl RunService {
         self
     }
 
-    /// Mints a token for this launch and writes the config that carries it, when the server is listening. Every launch of
+    /// Mints a token for this launch, when the server is listening. Every launch of
     /// a run gets its own token and all of them stay valid for that run, so a launch whose answer was lost and is later
     /// adopted still reports.
-    pub(super) async fn offer_tools(&self, run: &Run) -> Option<AgentLaunch> {
+    pub(super) async fn offer_tools(&self, run: &Run) -> Option<ToolsOffer> {
         let channel = self.agents.as_ref()?;
         let token = match new_token() {
             Ok(token) => token,
@@ -35,13 +36,7 @@ impl RunService {
             eprintln!("couldn't offer Gossamr's tools to run {}: {e}", run.id);
             return None;
         }
-        match channel.write_config(&run.id, &token) {
-            Ok(launch) => Some(launch),
-            Err(e) => {
-                eprintln!("couldn't offer Gossamr's tools to run {}: {e}", run.id);
-                None
-            }
-        }
+        Some(ToolsOffer { run_id: run.id.clone(), url: channel.url_for(&run.id), token })
     }
 
     /// A run's tokens and config files go when its worktree does.

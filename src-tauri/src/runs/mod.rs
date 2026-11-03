@@ -5,6 +5,7 @@ pub mod agent_config;
 pub mod answer;
 pub mod ask;
 pub mod archive;
+pub mod backend;
 pub mod binary;
 pub mod cleanup;
 pub mod cli;

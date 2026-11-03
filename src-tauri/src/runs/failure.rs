@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use super::cli::CliError;
 use super::fresh::{tilde, CloneError};
-use super::toolchain::{Toolchain, ToolchainError};
+use super::toolchain::ToolchainError;
 use crate::domain::{RefusedMode, RunFailure};
 use crate::model_choice::{Reason, Use};
 
@@ -95,11 +95,10 @@ impl From<&Failure> for RunFailure {
 }
 
 impl Failure {
-    /// What a failed `claude` call means. `folder` is where the launch ran, and `tc` is the toolchain it ran as.
-    pub fn from_cli(e: CliError, folder: &std::path::Path, tc: &Toolchain) -> Self {
-        let instance = tc.instance_name.as_str();
+    /// What a failed `claude` call means. `folder` is where the launch ran; `instance` and `own_folder` are the login it ran as.
+    pub fn from_cli(e: CliError, folder: &std::path::Path, instance: &str, own_folder: bool) -> Self {
         if e.stderr_mentions("Workspace not trusted") {
-            return Failure::NeedsTrust { folder: folder.to_path_buf(), instance: instance.into(), own_folder: tc.has_own_folder() };
+            return Failure::NeedsTrust { folder: folder.to_path_buf(), instance: instance.into(), own_folder };
         }
         match e {
             CliError::Spawn(io) if io.kind() == std::io::ErrorKind::NotFound => Failure::ClaudeMissing { instance: instance.into() },
@@ -119,29 +118,22 @@ impl Failure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runs::env::RunEnv;
-    use crate::runs::testing::FakeCli;
-    use std::sync::Arc;
-
-    fn claude() -> Toolchain {
-        Toolchain::new(Arc::new(FakeCli::new()), Arc::new(RunEnv::from_pairs([("PATH", "/bin")])))
-    }
 
     #[test]
     fn cli_errors_map_to_what_the_person_can_do() {
         let folder = std::path::Path::new("/Users/me/Code/webshop");
         let failed = |stderr: &str| CliError::Failed { code: Some(1), stderr: stderr.into() };
-        assert_eq!(Failure::from_cli(failed("Workspace not trusted. Run `claude` in /x once"), folder, &claude()), Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false });
-        assert_eq!(Failure::from_cli(failed("boom\nsomething broke"), folder, &claude()), Failure::CommandFailed("something broke".into()));
-        assert_eq!(Failure::from_cli(CliError::Unparseable { stdout: "hm".into() }, folder, &claude()), Failure::Unparseable("hm".into()));
-        assert_eq!(Failure::from_cli(CliError::TimedOut, folder, &claude()), Failure::CommandFailed("claude took too long to answer".into()));
+        assert_eq!(Failure::from_cli(failed("Workspace not trusted. Run `claude` in /x once"), folder, "Claude", false), Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false });
+        assert_eq!(Failure::from_cli(failed("boom\nsomething broke"), folder, "Claude", false), Failure::CommandFailed("something broke".into()));
+        assert_eq!(Failure::from_cli(CliError::Unparseable { stdout: "hm".into() }, folder, "Claude", false), Failure::Unparseable("hm".into()));
+        assert_eq!(Failure::from_cli(CliError::TimedOut, folder, "Claude", false), Failure::CommandFailed("claude took too long to answer".into()));
         let auto = "--bg with auto mode requires opting in first. Run `claude --permission-mode auto` once interactively.";
         let bypass = "--bg with bypassPermissions requires accepting the disclaimer first. Run `claude --dangerously-skip-permissions` once interactively.";
-        assert_eq!(Failure::from_cli(failed(auto), folder, &claude()), Failure::ModeRefused { mode: RefusedMode::Auto, message: auto.into() });
-        assert_eq!(Failure::from_cli(failed(&format!("Starting background service\n{bypass}\n")), folder, &claude()), Failure::ModeRefused { mode: RefusedMode::Bypass, message: bypass.into() });
-        assert_eq!(Failure::from_cli(failed(auto), folder, &claude()).to_string(), auto, "Claude's own words, nothing added");
+        assert_eq!(Failure::from_cli(failed(auto), folder, "Claude", false), Failure::ModeRefused { mode: RefusedMode::Auto, message: auto.into() });
+        assert_eq!(Failure::from_cli(failed(&format!("Starting background service\n{bypass}\n")), folder, "Claude", false), Failure::ModeRefused { mode: RefusedMode::Bypass, message: bypass.into() });
+        assert_eq!(Failure::from_cli(failed(auto), folder, "Claude", false).to_string(), auto, "Claude's own words, nothing added");
         let missing = CliError::Spawn(std::io::Error::from(std::io::ErrorKind::NotFound));
-        assert_eq!(Failure::from_cli(missing, folder, &claude()), Failure::ClaudeMissing { instance: "Claude".into() });
+        assert_eq!(Failure::from_cli(missing, folder, "Claude", false), Failure::ClaudeMissing { instance: "Claude".into() });
         assert!(Failure::NeedsTrust { folder: folder.into(), instance: "Claude".into(), own_folder: false }.to_string().contains("/Users/me/Code/webshop"));
         assert_eq!(Failure::Interrupted.to_string(), "Launch was interrupted");
     }

@@ -98,6 +98,11 @@ impl RunIndex {
         self.entries.lock().expect("run index poisoned").iter().filter(|e| e.instance_id == instance).filter_map(|e| e.short_id.clone()).collect()
     }
 
+    /// Whether any run, of any login, has used this session id.
+    pub fn has_short_id(&self, id: &ShortId) -> bool {
+        self.entries.lock().expect("run index poisoned").iter().any(|e| e.short_id.as_ref() == Some(id))
+    }
+
     pub fn contains(&self, run_id: &str) -> bool {
         self.entries.lock().expect("run index poisoned").iter().any(|e| e.run_id == run_id)
     }

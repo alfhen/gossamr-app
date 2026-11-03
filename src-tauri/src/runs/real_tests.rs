@@ -583,7 +583,7 @@ async fn real_agent_tools_are_called_from_a_background_session_and_the_token_sta
     let run = rig.launched(1).await;
     let token = new_token().unwrap();
     core.report_reserve(&run.id, &token_hash(&token), crate::domain::REPORT_TOOL_VERSION).await.unwrap();
-    let launch = channel.write_config(&run.id, &token).unwrap();
+    let launch = super::rig::write_config(&channel, &run.id, &token).unwrap();
     let allowed = crate::domain::agent_allow_rules();
     let config_arg = launch.config.to_string_lossy().into_owned();
     let prompt = "Do these in order. 1. Call the report tool once with status done and note 'spike ok'. 2. Call read_workstream once. 3. Call the ask tool once with the question 'Which colour? ticket CA-1' and use the answer. Then reply with the single word OK followed by the answer.";

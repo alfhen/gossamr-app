@@ -49,10 +49,7 @@ fn rig_env(rig: &Rig) -> Arc<RunEnv> {
 }
 
 fn toolchain_named(id: &str, name: &str) -> Toolchain {
-    let mut tc = Toolchain::new(Arc::new(FakeCli::new()), Arc::new(RunEnv::from_pairs([("WHO", id)])));
-    tc.instance_id = id.into();
-    tc.instance_name = name.into();
-    tc
+    Toolchain::new(Arc::new(FakeCli::new()), Arc::new(RunEnv::from_pairs([("WHO", id)]))).into_instance(id, name, None)
 }
 
 #[tokio::test]

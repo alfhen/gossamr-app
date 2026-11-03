@@ -9,7 +9,7 @@ use crate::agent::mcp::{bind, McpServer, PipRun};
 use crate::domain::{Actor, Link, LinkKind, RunSpec, RunState};
 use crate::runs::ask::ASK_WAIT;
 use crate::runs::report::new_token;
-use crate::runs::rig::{ready_on, ready_with, Rig};
+use crate::runs::rig::{on_channel, ready_on, ready_with, Rig};
 use crate::runs::tracker::Attention;
 
 const OPEN: &str = "<<<AGENT_OUTPUT";
@@ -35,7 +35,7 @@ async fn live(tag: &str) -> Live {
     let bound = bind(dir.join("agents")).await.unwrap();
     let channel = bound.channel();
     let port = channel.port();
-    let rig = ready_with(move |svc| svc.with_agent_channel(channel).with_cap(6)).await;
+    let rig = ready_with(move |svc| on_channel(channel)(svc).with_cap(6)).await;
     let server = McpServer::start_on(bound, rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
     Live { rig, server, port, dir, http: reqwest::Client::new() }
 }
@@ -50,7 +50,7 @@ async fn live_on_two_accounts(tag: &str) -> (Live, crate::auth::Scope, String) {
     let (fx, second) = crate::inbox::testing::fixture_watching_two_jira(&["acme/webshop"], Vec::new()).await;
     fx.core.adopt_instances().await;
     fx.add_item_in(&second, "BETA-1").await;
-    let rig = ready_on(fx, move |svc| svc.with_agent_channel(channel).with_cap(6)).await;
+    let rig = ready_on(fx, move |svc| on_channel(channel)(svc).with_cap(6)).await;
     let server = McpServer::start_on(bound, rig.fx.core.clone(), rig.svc.clone(), Arc::new(|_| {}), Arc::new(|_| {}), Arc::new(|_, _, _| {})).unwrap();
     let item = crate::domain::ItemRef { connection_id: second.connection_id.clone(), external_id: "BETA-1".into(), key: "BETA-1".into() };
     let ws = rig.fx.core.open_workstream(&second, Some(item), None).await.unwrap().id;
