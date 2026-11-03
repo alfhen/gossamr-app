@@ -195,7 +195,7 @@ describe("mock runs", () => {
 
   it("opens a run on a Codex instance in Terminal with codex resume", async () => {
     const backend = new MockBackend();
-    backend.runs.providers = { signedOutName: () => null, has: () => true, keptDriverOf: () => "codex" };
+    backend.runs.providers = { signedOutName: () => null, has: () => true, driverOf: () => "codex" };
     const working = (await backend.runsList({ states: ["working"] }))[0];
     await backend.runsAttach(working.id);
     expect(backend.runs.attachCommands).toEqual(["codex resume"]);
@@ -203,15 +203,15 @@ describe("mock runs", () => {
     expect([after?.state, after?.lastDetail]).toEqual(["stopped", "Opened in Terminal"]);
   });
 
-  it("opens a run with codex resume after its Codex instance was removed", async () => {
+  it("refuses to open a run whose Codex instance was removed, as the backend does", async () => {
     const backend = new MockBackend();
     const { instanceId } = await backend.providerAdd("codex", "Codex side");
     const done = (await backend.runsList({ states: ["done"] })).find((r) => r.shortId)!;
     const inner = backend.runs as unknown as { runs: Run[] };
     inner.runs = inner.runs.map((r) => (r.id === done.id ? { ...r, runsOn: { instanceId, model: "m" } } : r));
     await backend.connectionRemove(instanceId);
-    await backend.runsAttach(done.id);
-    expect(backend.runs.attachCommands).toEqual(["codex resume"]);
+    await expect(backend.runsAttach(done.id)).rejects.toThrow("That Claude was removed. Pick another.");
+    expect(backend.runs.attachCommands).toEqual([]);
   });
 
   it("has one failed launch of each kind, and the busy set's failed run is an untrusted folder", async () => {

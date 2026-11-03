@@ -141,15 +141,18 @@ describe("the Archived section", () => {
     expect(ask({ remover: "git", login: null })).toContain("Removed with git");
     expect(ask({ remover: "claude", login: "Claude" })).toContain("Removed with claude rm");
     const unknown = ask({ remover: "unknown", login: null });
-    expect(unknown).toContain("its login&#x27;s own tool");
+    expect(unknown).toContain("only if the work in it is pushed or merged");
     expect(unknown).not.toContain("claude rm");
   });
 
-  it("names the login in a refusal only when it is known", () => {
+  it("names git, or the login when Claude removes it, in a refusal", () => {
     const folder = { path: "/p", removable: true, reason: null, bytes: 1 };
     const ask = (login: string | null) => view({ asking: { id: "a1", info: folder, removeWorktree: true, busy: false, refused: "no", remover: "git", login } });
-    expect(ask("Codex")).toContain("Codex kept it: no");
-    expect(ask(null)).toContain("The login kept it: no");
+    expect(ask("Codex")).toContain("Git kept it: no");
+    expect(ask(null)).toContain("Git kept it: no");
+    const claude = view({ asking: { id: "a1", info: folder, removeWorktree: true, busy: false, refused: "no", remover: "claude", login: "Claude work" } });
+    expect(claude).toContain("Claude work kept it: no");
+    expect(view({ asking: { id: "a1", info: folder, removeWorktree: true, busy: false, refused: "no", remover: "unknown", login: null } })).toContain("The login kept it: no");
   });
 
   it("is collapsed to a count and opens to rows with Restore and Delete permanently", () => {

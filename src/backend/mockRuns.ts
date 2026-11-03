@@ -704,7 +704,7 @@ export class MockRuns {
   }
 
   /** The logins runs launch on; set by the mock backend. */
-  providers: Pick<MockProviders, "signedOutName" | "has" | "keptDriverOf"> = { signedOutName: () => null, has: () => true, keptDriverOf: () => "claude" };
+  providers: Pick<MockProviders, "signedOutName" | "has" | "driverOf"> = { signedOutName: () => null, has: () => true, driverOf: () => "claude" };
 
   /** What a run queued in `workstream` runs on: the workstream's choice, else the Settings default. Set by the mock backend. */
   choiceFor: (workstream: string | null) => ModelChoice | null = () => null;
@@ -1102,8 +1102,9 @@ export class MockRuns {
   attach(id: string) {
     const run = this.get(id);
     if (!run?.shortId) throw new Error("that run has no session to attach to yet");
+    if (run.runsOn && !this.providers.has(run.runsOn.instanceId)) throw new Error("That Claude was removed. Pick another.");
     this.attached.push(id);
-    if (this.providers.keptDriverOf(run.runsOn?.instanceId ?? "claude") !== "codex") {
+    if (this.providers.driverOf(run.runsOn?.instanceId ?? "claude") !== "codex") {
       this.attachCommands.push("claude attach");
       return;
     }
@@ -1364,7 +1365,7 @@ export class MockRuns {
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
     const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
-    const left = !this.providers.has(run.runsOn?.instanceId ?? "claude");
+    const left = !!run.runsOn && !this.providers.has(run.runsOn.instanceId);
     this.update(id, { worktreeRemovedAt: run.worktreeRemovedAt ?? this.now(), lastDetail: "Worktree removed", ...(earlier ? { earlierSessions: earlier } : {}), ...(left ? { sessionsLeft: true } : {}) });
     this.changed();
     return { type: "removed" };

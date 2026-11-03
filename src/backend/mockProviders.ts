@@ -79,7 +79,6 @@ function snapshot(p: MockProvider) {
 
 /** The mock's provider instances: the default Claude, and any added with the desktop backend's folder rules. */
 export class MockProviders {
-  private readonly removedDrivers = new Map<string, Driver>();
   private items: MockProvider[] = [{ id: "claude", driver: "claude", displayName: "Claude", enabled: true, probe: "ready", checkedAt: new Date().toISOString() }];
   private retired: string[] = [];
 
@@ -95,11 +94,6 @@ export class MockProviders {
 
   driverOf(id: string): Driver | null {
     return this.items.find((p) => p.id === id)?.driver ?? null;
-  }
-
-  /** The driver of `id` even after it was removed, which a run on it still needs to be opened. */
-  keptDriverOf(id: string): Driver | null {
-    return this.driverOf(id) ?? this.removedDrivers.get(id) ?? null;
   }
 
   /** A check of everything: an instance whose sign-in was opened in Terminal now finds its login. */
@@ -152,8 +146,6 @@ export class MockProviders {
   }
 
   remove(id: string) {
-    const gone = this.items.find((p) => p.id === id);
-    if (gone) this.removedDrivers.set(id, gone.driver);
     this.items = this.items.filter((p) => p.id !== id);
     this.retired.push(id);
   }

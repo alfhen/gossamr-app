@@ -44,14 +44,21 @@ export function cleanupReport(removed: number, refused: readonly string[]): stri
   return `${done} ${refused.length} kept: ${refused[0]}`;
 }
 
-/** What removes a run's worktree: `claude rm`, git (Codex, or a login that was removed), or unknown while the logins haven't loaded. */
+/** What removes a run's worktree: `claude rm`, git (Codex, or a login that was removed), or unknown while the logins haven't loaded or can't be read. */
 export type Remover = "claude" | "git" | "unknown";
 
-/** Follows `RunService::instance_removed`: git only for a run that records its login, once the logins have loaded and none has that id. */
+/** Follows `RunService::instance_removed`: git only for a run that records its login, once the logins have loaded and none has that id. An unreadable list, shown as one provider row without a driver or as no provider row, is not a removed login. */
 export function removerOf(run: Pick<Run, "runsOn">, connections: readonly ConnectionInfo[], loaded: boolean): { remover: Remover; login: string | null } {
   const instanceId = run.runsOn?.instanceId ?? DEFAULT_INSTANCE;
   const known = connections.some((c) => c.kind === "provider" && c.instanceId === instanceId);
-  if (!known && run.runsOn) return { remover: loaded ? "git" : "unknown", login: null };
+  if (!known && run.runsOn) {
+    const rows = connections.filter((c) => c.kind === "provider");
+    const readable = rows.length > 0 && rows.every((c) => c.driver);
+    return { remover: loaded && readable ? "git" : "unknown", login: null };
+  }
   const instance = instanceOf(connections, instanceId);
   return { remover: instance.driver === "claude" ? "claude" : "git", login: instance.name };
 }
+
+/** Who is named when the worktree could not be removed. */
+export const refuserOf = (remover: Remover, login: string | null) => (remover === "git" ? "Git" : (login ?? "The login"));

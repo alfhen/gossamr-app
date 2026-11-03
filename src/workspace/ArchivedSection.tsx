@@ -3,7 +3,7 @@ import { sizeText } from "../lib/archiveRuns";
 import type { Run, WorktreeInfo } from "../types";
 import { Btn } from "./AgentSheet";
 import { ageText, runTitle } from "./agentsLogic";
-import { removerOf, type Remover } from "./cleanupLogic";
+import { refuserOf, removerOf, type Remover } from "./cleanupLogic";
 import { useRuns } from "./runsStore";
 import { useWorkspace } from "../workspaceStore";
 import { itemKey } from "../lib/filter";
@@ -56,7 +56,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
                 ? "Removed with claude rm, which refuses work that was never pushed."
                 : ask.remover === "git"
                   ? "Removed with git, which refuses changes and branches that aren't merged."
-                  : "Removed with its login's own tool, which refuses work that isn't pushed or merged."}{" "}
+                  : "Removes the folder only if the work in it is pushed or merged."}{" "}
               Only folders in ~/Gossamr/agents are ever removed.
             </span>
           </span>
@@ -66,7 +66,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
       )}
       {ask.refused && (
         <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">
-          {ask.login ?? "The login"} kept it: {ask.refused}. Nothing was deleted.
+          {refuserOf(ask.remover ?? "claude", ask.login ?? null)} kept it: {ask.refused}. Nothing was deleted.
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -124,14 +124,14 @@ export function ArchivedSectionView({ runs, open, now, ticketTitle, asking, onTo
 export function ArchivedSection({ runs, now }: { runs: readonly Run[]; now: number }) {
   const open = useRuns((s) => s.archivedOpen);
   const items = useWorkspace((s) => s.items);
-  const [asking, setAsking] = useState<DeleteAsk | null>(null);
+  const connections = useWorkspace((s) => s.connections);
+  const loaded = useWorkspace((s) => s.connectionsLoaded);
+  const [asked, setAsking] = useState<DeleteAsk | null>(null);
   if (runs.length === 0) return null;
+  const asking = asked && { ...asked, ...removerOf(runs.find((r) => r.id === asked.id) ?? {}, connections, loaded) };
 
   const ask = async (id: string) => {
-    const run = runs.find((r) => r.id === id);
-    const connections = useWorkspace.getState().connections;
-    const { remover, login } = removerOf(run ?? {}, connections, useWorkspace.getState().connectionsLoaded);
-    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null, remover, login });
+    setAsking({ id, info: null, removeWorktree: false, busy: false, refused: null });
     try {
       const info = await useRuns.getState().backend?.runsWorktreeInfo(id);
       setAsking((a) => (a?.id === id && info ? { ...a, info } : a));
