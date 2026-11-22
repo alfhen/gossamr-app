@@ -11,7 +11,6 @@ use crate::connections::{self, Driver, ProviderInstance};
 use crate::error::{Error, Result};
 use crate::model_choice::{self, Found, ModelChoice, ModelDefaults, ModelOption, Reason, Resolution, Standing, Use};
 use crate::probe::State;
-use crate::runs::binary::find_binary;
 use crate::runs::codex_models;
 use crate::runs::provider_env::ProviderState;
 
@@ -103,8 +102,8 @@ impl Core {
     async fn ask_codex_models(&self, instance_id: &str) -> Option<Vec<ModelOption>> {
         let ProviderState::Ready(login) = self.provider_states().await.into_iter().find(|(id, _)| id == instance_id)?.1 else { return None };
         let shell = self.shell.get().await.ok()?;
-        let on = shell.clone();
-        let binary = tokio::task::spawn_blocking(move || find_binary(Driver::Codex, &on)).await.ok().flatten()?;
+        let (on, places) = (shell.clone(), self.places.clone());
+        let binary = tokio::task::spawn_blocking(move || places.find(Driver::Codex, &on)).await.ok().flatten()?;
         codex_models::discover(&binary, &login.over(&shell)).await
     }
 
