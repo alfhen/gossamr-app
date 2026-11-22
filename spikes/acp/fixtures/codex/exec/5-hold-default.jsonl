@@ -1,0 +1,17 @@
+{"seq":1,"ms":16,"dir":"driver","data":{"note":"spawned","detail":{"pid":44883,"driver_pid":44808,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-5-hold-default","-c","mcp_servers.spike.url=\"http://127.0.0.1:61089/mcp\"","-c","mcp_servers.spike.bearer_token_env_var=\"SPIKE_MCP_TOKEN\"","-c","mcp_servers.spike.default_tools_approval_mode=\"approve\"","Call the hold tool of the spike MCP server with seconds set to 540, then tell me exactly what it returned or what error you got."],"cwd":"$SCRATCH/wt/codex-exec-5-hold-default"}}}
+{"seq":2,"ms":29,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":62,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":4,"ms":257,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202c2-c9ef-7222-9a31-102f2bcaebfe"}}
+{"seq":5,"ms":682,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":6,"ms":3084,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll call the Spike MCP hold tool with `seconds: 540` and report its response verbatim."}}}
+{"seq":7,"ms":3084,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":3050}}}
+{"seq":8,"ms":3107,"dir":"driver","data":{"note":"processes","detail":{"when":"running","agent_pid":44883,"descendants":[]}}}
+{"seq":9,"ms":5064,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"spike","tool":"hold","arguments":{"seconds":540},"result":null,"error":null,"status":"in_progress"}}}
+{"seq":10,"ms":74865,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The hold call is still running and has not returned a result or error yet. I’m waiting for the tool response."}}}
+{"seq":11,"ms":174367,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"It’s still pending after several minutes; I haven’t received any output from the Spike tool yet. I’ll keep the call open until it completes or errors."}}}
+{"seq":12,"ms":305069,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"spike","tool":"hold","arguments":{"seconds":540},"result":null,"error":{"message":"tool call error: tool call failed for `spike/hold`\n\nCaused by:\n    timed out awaiting tools/call after 300s"},"status":"failed"}}}
+{"seq":13,"ms":306892,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"The call `mcp__spike__hold({seconds:540})` returned this error:\n\n```text\ntool call error: tool call failed for `spike/hold`\n\nCaused by:\n    timed out awaiting tools/call after 300s\n```"}}}
+{"seq":14,"ms":306914,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":397754,"cached_input_tokens":384128,"cache_write_input_tokens":0,"output_tokens":916,"reasoning_output_tokens":0}}}
+{"seq":15,"ms":307353,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":16,"ms":307353,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":307319}}}
+{"seq":17,"ms":307353,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

@@ -1,0 +1,4 @@
+still running after 61 s: no
+stdout: 
+stderr: Authentication required. Please visit the URL to log in:
+  https://accounts.google.com/o/oauth2/auth?<query removed>

@@ -1,0 +1,10 @@
+before kill: driver 44393 agent 44403
+46225 sleep 120
+agent tree:
+46193 /opt/homebrew/Caskroom/codex/0.171.0/bin/codex-code-mode-host --listen grpc+stdio://
+46211 /bin/zsh -c sleep 120; echo slept > slept.txt
+scripts/codex-app-server.sh: line 11: 44393 Killed: 9               "$SPIKE" app-server --model "$MODEL" --effort low "$@"
+after 2s: agent alive: no
+after 10s: agent alive: no
+after 30s: agent alive: no
+thread 01a202cf-eafb-7043-82fd-b363ae287cc4

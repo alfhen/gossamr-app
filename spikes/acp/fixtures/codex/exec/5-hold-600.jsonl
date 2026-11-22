@@ -1,0 +1,16 @@
+{"seq":1,"ms":16,"dir":"driver","data":{"note":"spawned","detail":{"pid":44576,"driver_pid":44531,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-5-hold-600","-c","mcp_servers.spike.url=\"http://127.0.0.1:61087/mcp\"","-c","mcp_servers.spike.bearer_token_env_var=\"SPIKE_MCP_TOKEN\"","-c","mcp_servers.spike.default_tools_approval_mode=\"approve\"","-c","mcp_servers.spike.tool_timeout_sec=600","Call the hold tool of the spike MCP server with seconds set to 540, then tell me exactly what it returned or what error you got."],"cwd":"$SCRATCH/wt/codex-exec-5-hold-600"}}}
+{"seq":2,"ms":16,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":53,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":4,"ms":180,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202c2-c8cc-7d33-baf9-31a468761bd9"}}
+{"seq":5,"ms":485,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":6,"ms":3826,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll call the Spike hold tool with `seconds: 540` and report its response verbatim."}}}
+{"seq":7,"ms":3826,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":3809}}}
+{"seq":8,"ms":3850,"dir":"driver","data":{"note":"processes","detail":{"when":"running","agent_pid":44576,"descendants":[]}}}
+{"seq":9,"ms":6683,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"spike","tool":"hold","arguments":{"seconds":540},"result":null,"error":null,"status":"in_progress"}}}
+{"seq":10,"ms":322566,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The call is still pending; the tool is configured to wait the requested 540 seconds before responding."}}}
+{"seq":11,"ms":546696,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_1","type":"mcp_tool_call","server":"spike","tool":"hold","arguments":{"seconds":540},"result":{"content":[{"type":"text","text":"held 540 s"}],"structured_content":null},"error":null,"status":"completed"}}}
+{"seq":12,"ms":548108,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"It returned exactly:\n\n```json\n{\"content\":[{\"type\":\"text\",\"text\":\"held 540 s\"}]}\n```"}}}
+{"seq":13,"ms":548131,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":186058,"cached_input_tokens":180864,"cache_write_input_tokens":0,"output_tokens":452,"reasoning_output_tokens":0}}}
+{"seq":14,"ms":548412,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":15,"ms":548412,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":548395}}}
+{"seq":16,"ms":548413,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

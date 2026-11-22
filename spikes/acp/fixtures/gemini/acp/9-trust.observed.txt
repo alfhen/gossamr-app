@@ -1,0 +1,2 @@
+trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json before: 1 in all, 0 for the scratch folder
+after: 1 in all, 0 for the scratch folder

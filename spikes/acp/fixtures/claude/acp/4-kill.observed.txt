@@ -1,0 +1,7 @@
+2026-11-22T10:42:49Z kill -9 of the driver while 'ping -c 90' runs
+before: agent 94268 alive: yes; command: 1 process(es)
+agent's process tree before:
+  94287 $SCRATCH/adapters/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude
++2s: agent alive: no; its children alive: 94287; command: 0 process(es)
++8s: agent alive: no; its children alive: none; command: 0 process(es)
++20s: agent alive: no; its children alive: none; command: 0 process(es)

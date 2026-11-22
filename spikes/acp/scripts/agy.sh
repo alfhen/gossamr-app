@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# Gemini through the Antigravity CLI: (a) `agy acp`, (b) `agy -p` with stream-json in and out.
+# Usage: bash scripts/agy.sh <check>. Checks marked (model) need `agy` signed in: run `agy` once yourself.
+source "$(dirname "$0")/env.sh"
+
+P=gemini
+# The model is a config option (gemini-3.8-flash), the effort another (thought_level).
+MODEL=${AGY_MODEL:-gemini-3.8-flash}
+ACPM=(--model "$MODEL" --set-config thought_level=low)
+acp() { "$SPIKE" acp "$@"; }
+
+signed_in() { agy models </dev/null >/dev/null 2>&1; }
+
+case "${1:?check}" in
+  0-acp-list)
+    # initialize and session/new only: capabilities, auth methods, modes, models.
+    wt=$(new_worktree gemini-acp-0)
+    "$SPIKE" acp --cwd "$wt" --transcript "$(fixture $P acp 0-list)" --list-only --keep-open 3 -- agy acp ;;
+
+  0-print-signed-out)
+    # What -p does when it cannot run a model, with stdout piped and no terminal (check 15 when signed out).
+    wt=$(new_worktree gemini-print-0)
+    # Not `agy -p --input-format ...`: -p takes the next argument as its prompt, and agy refuses (exit 2).
+    "$SPIKE" agy-stream --cwd "$wt" --transcript "$(fixture $P print 0-signed-out-stream)" --turn-timeout 90 \
+      --prompt "Reply with the single word ok." \
+      -- agy --input-format stream-json --output-format stream-json
+    "$SPIKE" raw --cwd "$wt" --transcript "$(fixture $P print 0-signed-out-text)" --turn-timeout 60 \
+      -- agy -p "Reply with the single word ok." --output-format stream-json ;;
+
+  7-login-folders)
+    # Which variables or flags move agy's login. Each candidate gets an empty scratch folder.
+    obs="$(fixture $P acp 7-login-folders)"; obs="${obs%.jsonl}.observed.txt"; : > "$obs"
+    try() { # LABEL ENV... -- ARGS
+      local label=$1; shift
+      local out; out=$(env "$@" </dev/null 2>&1 | tail -1 | cut -c1-160) || true
+      echo "$label: $out" | sed "s#$SPIKE_SCRATCH#\$SCRATCH#g; s#$HOME#\$HOME#g" | tee -a "$obs"
+    }
+    d="$SPIKE_SCRATCH/agy-home"; mkdir -p "$d/home" "$d/gcli" "$d/app" "$d/gem" "$d/gem2"
+    try "real home" agy models
+    try "HOME=empty" HOME="$d/home" agy models
+    try "GEMINI_CLI_HOME=empty" GEMINI_CLI_HOME="$d/gcli" agy models
+    try "acp --app-data-dir=empty (initialize only, see 7-acp-app-data-dir.jsonl)" true
+    "$SPIKE" acp --cwd "$SPIKE_SCRATCH" --transcript "$(fixture $P acp 7-acp-app-data-dir)" --list-only \
+      -- agy acp --app-data-dir "$d/app" --gemini-dir "$d/gem"
+    # --app-data-dir must be relative ("must not be absolute"); it sits under --gemini-dir.
+    "$SPIKE" acp --cwd "$SPIKE_SCRATCH" --transcript "$(fixture $P acp 7-acp-gemini-dir)" --list-only \
+      -- agy acp --gemini-dir "$d/gem2" --app-data-dir second-login
+    "$SPIKE" acp --cwd "$SPIKE_SCRATCH" --transcript "$(fixture $P acp 7-acp-home)" --list-only --env HOME="$d/home" \
+      -- agy acp
+    echo "files the empty folders gained:" | tee -a "$obs"
+    (cd "$d" && find . -type f | sed 's#^#  #' | sort | head -40) | tee -a "$obs" ;;
+
+  15-no-tty)
+    # agy -p with stdout piped and stdin not a terminal: does it run or hang?
+    wt=$(new_worktree gemini-print-15)
+    obs="$(fixture $P print 15-no-tty)"; obs="${obs%.jsonl}.observed.txt"
+    start=$(date +%s)
+    (cd "$wt" && agy -p "Reply with the single word ok." </dev/null > "$SPIKE_SCRATCH/agy-15.out" 2> "$SPIKE_SCRATCH/agy-15.err" & echo $! > "$SPIKE_SCRATCH/agy-15.pid"; wait) &
+    for _ in $(seq 120); do sleep 1; kill -0 "$(cat "$SPIKE_SCRATCH/agy-15.pid")" 2>/dev/null || break; done
+    alive=$(kill -0 "$(cat "$SPIKE_SCRATCH/agy-15.pid")" 2>/dev/null && echo yes || echo no)
+    [ "$alive" = yes ] && kill "$(cat "$SPIKE_SCRATCH/agy-15.pid")"
+    { echo "still running after $(( $(date +%s) - start )) s: $alive"
+      echo "stdout: $(head -c 300 "$SPIKE_SCRATCH/agy-15.out")"
+      echo "stderr: $(head -c 300 "$SPIKE_SCRATCH/agy-15.err" | sed -E 's#(https://accounts.google.com/[^?]*)\?.*#\1?<query removed>#')"; } | sed "s#$HOME#\$HOME#g" | tee "$obs" ;;
+
+  1-edit-run)
+    wt=$(new_worktree gemini-acp-1)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 1-edit-run)" --permission allow "${ACPM[@]}" \
+      --prompt "Create a file named note.txt containing the single word hello. Then run the shell command 'ls' and tell me its output in one short sentence." \
+      -- agy acp
+    ls "$wt" ;;
+
+  2-permission)
+    wt=$(new_worktree gemini-acp-2)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 2-permission)" --permission alt "${ACPM[@]}" \
+      --prompt "Run the shell command 'echo one > a.txt'. Then, as a separate command, run 'echo two > b.txt'. Then read README.md and say how many lines it has. Report what happened to each step." \
+      -- agy acp
+    ls "$wt" ;;
+
+  3-cancel)
+    wt=$(new_worktree gemini-acp-3)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 3-cancel)" --permission allow "${ACPM[@]}" --cancel-after 15 \
+      --prompt "Run the shell command 'ping -c 40 127.0.0.1 > ping.txt' in the foreground and wait for it to finish." \
+      --prompt "Reply with the single word ready." \
+      -- agy acp
+    { echo "ping after the cancel: $(pgrep -f '^ping -c 40' | wc -l | tr -d ' ') process(es)"; } | tee "$(fixture $P acp 3-cancel | sed 's/.jsonl$/.observed.txt/')" ;;
+
+  4-kill-resume)
+    wt=$(new_worktree gemini-acp-4)
+    tr=$(fixture $P acp 4-kill); pidf="$SPIKE_SCRATCH/gemini-acp-4.pid"
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --pid-file "$pidf" \
+      --prompt "Run the shell command 'ping -c 90 127.0.0.1 > ping.txt' in the foreground, wait for it, then say done." \
+      -- agy acp &
+    kill_watch "$pidf" 'ping -c 90' "${tr%.jsonl}.observed.txt"
+    pkill -f '^ping -c 90' || true
+    kill "$KW_AGENT" 2>/dev/null || true
+    sid=$(python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    d=json.loads(l)["data"]
+    if isinstance(d,dict) and d.get("note")=="session": print(d["detail"]["id"]); break' "$tr")
+    acp --cwd "$wt" --transcript "$(fixture $P acp 4-resume)" --permission allow --resume "$sid" \
+      --prompt "What exactly did I ask you to do in my previous message, and did the command finish? Answer in two short sentences." \
+      -- agy acp ;;
+
+  5-mcp)
+    wt=$(new_worktree gemini-acp-5); mcp_start gemini-acp-5
+    tr=$(fixture $P acp 5-mcp)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN \
+      --prompt "Call the ping tool of the spike MCP server and tell me what it answered (say NO SPIKE if you have no such tool). Then run the shell command 'printenv SPIKE_MCP_TOKEN | wc -c' and tell me the number it printed (never print the variable itself)." \
+      -- agy acp
+    keep_mcp_log "$tr"; mcp_stop ;;
+
+  5-mcp-workspace)
+    # The token in the person's own way: a workspace .agents/mcp_config.json with a header naming nothing secret
+    # is not possible, so the header holds the token; the file is in the scratch worktree only.
+    wt=$(new_worktree gemini-acp-5w); mcp_start gemini-acp-5w; mkdir -p "$wt/.agents"
+    printf '{"mcpServers":{"spike":{"serverUrl":"%s","headers":{"Authorization":"Bearer %s"}}}}\n' "$MCP_URL" "$SPIKE_MCP_TOKEN" > "$wt/.agents/mcp_config.json"
+    tr=$(fixture $P acp 5-mcp-workspace)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --redact-env SPIKE_MCP_TOKEN \
+      --prompt "Call the ping tool of the spike MCP server and tell me what it answered (say NO SPIKE if you have no such tool)." \
+      -- agy acp
+    keep_mcp_log "$tr"; mcp_stop ;;
+
+  5-hold)
+    # A call held 540 s, through ACP's mcpServers (a workspace .agents/mcp_config.json is not offered to the model
+    # in an untrusted workspace, see 5-mcp-workspace).
+    wt=$(new_worktree gemini-acp-5h2); mcp_start gemini-acp-5h2
+    tr=$(fixture $P acp 5-hold-default)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN --turn-timeout 900 \
+      --prompt "Call the hold tool of the spike MCP server with seconds set to 540 and wait for its answer. Then tell me exactly what it answered, or the exact error if it failed." \
+      -- agy acp
+    keep_mcp_log "$tr"; mcp_stop ;;
+
+  6-model)
+    wt=$(new_worktree gemini-acp-6)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 6-model)" --permission deny --model gemini-4-neon --set-config thought_level=low \
+      --prompt "Reply with the single word ok." -- agy acp ;;
+
+  7-second-login)
+    # The real login and an empty HOME at the same moment.
+    d="$SPIKE_SCRATCH/agy-home-7"; rm -rf "$d"; mkdir -p "$d"
+    wt=$(new_worktree gemini-acp-7)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 7-second-login-empty-home)" --permission deny --env HOME="$d" "${ACPM[@]}" \
+      --prompt "Reply with the single word ok." -- agy acp &
+    acp --cwd "$wt" --transcript "$(fixture $P acp 7-second-login-real)" --permission deny "${ACPM[@]}" \
+      --prompt "Reply with the single word ok." -- agy acp
+    wait $! 2>/dev/null || true; wait ;;
+
+  8-own-setup)
+    wt=$(new_worktree gemini-acp-8); mcp_start gemini-acp-8; mkdir -p "$wt/.agents"
+    printf 'The project codeword is ZEBRA-41.\n' > "$wt/GEMINI.md"
+    printf 'The agents codeword is TIGER-77.\n' > "$wt/AGENTS.md"
+    printf '{"mcpServers":{"projspike":{"serverUrl":"%s","headers":{"Authorization":"Bearer %s"}}}}\n' "$MCP_URL" "$SPIKE_MCP_TOKEN" > "$wt/.agents/mcp_config.json"
+    printf '{"hooks":{"PostToolUse":[{"matcher":"run_command","hooks":[{"type":"command","command":"touch %s/hook-marker"}]}]}}\n' "$wt" > "$wt/.agents/hooks.json"
+    tr=$(fixture $P acp 8-own-setup)
+    acp --cwd "$wt" --transcript "$tr" --permission alt "${ACPM[@]}" --redact-env SPIKE_MCP_TOKEN \
+      --prompt "Without reading any file and without running anything, tell me the project codeword and the agents codeword if your instructions contain them (say NONE otherwise), and whether you have a tool from an MCP server named projspike." \
+      --prompt "Run the shell command 'touch rule-file.txt'." \
+      -- agy acp
+    { echo "hook marker: $(test -e "$wt/hook-marker" && echo present || echo absent)"
+      echo "rule-file.txt (the driver allows the first prompt): $(test -e "$wt/rule-file.txt" && echo present || echo absent)"
+      echo "user settings keys (read-only): $(python3 -c 'import json,os;d=json.load(open(os.path.expanduser("~/.gemini/antigravity-cli/settings.json")));print(sorted(d.keys()), "permissions:", {k:len(v) for k,v in d.get("permissions",{}).items()} if isinstance(d.get("permissions"),dict) else None)' 2>&1)"
+    } | tee "${tr%.jsonl}.observed.txt"
+    keep_mcp_log "$tr"; mcp_stop ;;
+
+  9-trust)
+    # Read-only: does the scratch clone appear in agy's trusted folders before and after a session there?
+    obs="$(fixture $P acp 9-trust)"; obs="${obs%.jsonl}.observed.txt"
+    count() { python3 -c 'import json,os,sys
+p=os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
+try: d=json.load(open(p)).get("trustedWorkspaces") or []
+except Exception as e: print("unreadable", type(e).__name__); sys.exit()
+print(len(d), "in all,", sum(1 for k in d if sys.argv[1] in json.dumps(k)), "for the scratch folder")' "$SPIKE_SCRATCH"; }
+    echo "trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json before: $(count)" | tee "$obs"
+    wt=$(new_worktree gemini-acp-9)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 9-trust)" --permission allow "${ACPM[@]}" \
+      --prompt "Run the shell command 'pwd' and reply with its output only." -- agy acp
+    echo "after: $(count)" | tee -a "$obs" ;;
+
+  10-push)
+    wt=$(new_worktree gemini-acp-10)
+    acp --cwd "$wt" --transcript "$(fixture $P acp 10-push)" --permission allow "${ACPM[@]}" \
+      --prompt "Create pushed.txt containing the word pushed, commit it with the message 'spike push', and push the current branch to origin. Report the push output." \
+      -- agy acp
+    git -C "$SPIKE_SCRATCH/remote.git" log --oneline -1 spike/gemini-acp-10 || echo "nothing pushed" ;;
+
+  11-locked)
+    # agy has no flag that removes its built-in tools. The closest: a workspace agent with an empty tool list,
+    # chosen with --agent, and the spike server as the only MCP server.
+    wt=$(new_worktree gemini-acp-11); mcp_start gemini-acp-11; mkdir -p "$wt/.agents/agents"
+    printf -- '---\nname: locked\ndescription: Answers with the spike tools only.\ntools: []\nmainAgent: true\nsubagent: false\n---\nYou answer questions. You have no file, shell or web tools.\n' > "$wt/.agents/agents/locked.md"
+    tr=$(fixture $P acp 11-locked)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN \
+      --prompt "Read the file README.md and quote it." \
+      --prompt "Run the shell command 'echo hi > ran.txt' and tell me the result." \
+      --prompt "Fetch https://example.com and tell me its title." \
+      --prompt "List every tool you have, by exact name, one per line." \
+      -- agy acp --agent locked
+    echo "ran.txt: $(test -e "$wt/ran.txt" && echo present || echo absent)" | tee "${tr%.jsonl}.observed.txt"
+    keep_mcp_log "$tr"; mcp_stop ;;
+
+  13-agent)
+    wt=$(new_worktree gemini-acp-13); mkdir -p "$wt/.agents/agents"
+    printf -- '---\nname: reader\ndescription: Reads files only.\ntools:\n  - view_file\n  - grep_search\nmainAgent: true\nsubagent: false\n---\nYou read files and answer questions about them.\n' > "$wt/.agents/agents/reader.md"
+    acp --cwd "$wt" --transcript "$(fixture $P acp 13-agent)" --permission allow "${ACPM[@]}" \
+      --prompt "Run the shell command 'echo hi > ran.txt'. If you cannot, say NO SHELL and list your tools by exact name." \
+      -- agy acp --agent reader
+    ls "$wt" ;;
+
+  1-print)
+    # The stream-json path: edit and run, with no one to answer a permission (headless soft-denies).
+    wt=$(new_worktree gemini-print-1)
+    "$SPIKE" agy-stream --cwd "$wt" --transcript "$(fixture $P print 1-edit-run)" --turn-timeout 300 \
+      --prompt "Create a file named note.txt containing the single word hello. Then run the shell command 'ls' and tell me its output in one short sentence." \
+      --prompt "What file did you just create? One sentence." \
+      -- agy --input-format stream-json --output-format stream-json --model "$MODEL"
+    ls "$wt" ;;
+
+  3-print-cancel)
+    wt=$(new_worktree gemini-print-3)
+    "$SPIKE" agy-stream --cwd "$wt" --transcript "$(fixture $P print 3-cancel)" --cancel-after 15 --turn-timeout 120 \
+      --prompt "Run the shell command 'ping -c 40 127.0.0.1 > ping.txt' and wait for it to finish." \
+      --prompt "Reply with the single word ready." \
+      -- agy --input-format stream-json --output-format stream-json --model "$MODEL" --mode auto ;;
+
+  11-print-locked)
+    # The stream-json init event lists the session's tools: the default set, then a workspace agent with none.
+    wt=$(new_worktree gemini-print-11); mkdir -p "$wt/.agents/agents"
+    printf -- '---\nname: locked\ndescription: Answers questions only.\ntools: []\nmainAgent: true\nsubagent: false\n---\nYou answer questions. You have no file, shell or web tools.\n' > "$wt/.agents/agents/locked.md"
+    "$SPIKE" agy-stream --cwd "$wt" --transcript "$(fixture $P print 11-locked)" --turn-timeout 120 \
+      --prompt "Run the shell command 'echo hi > ran.txt' and tell me the result." \
+      --prompt "Read the file README.md and quote it." \
+      -- agy --input-format stream-json --output-format stream-json --model "$MODEL" --agent locked
+    echo "ran.txt: $(test -e "$wt/ran.txt" && echo present || echo absent)" | tee "$(fixture $P print 11-locked | sed 's/.jsonl$/.observed.txt/')" ;;
+
+  15-no-tty-signed-in)
+    wt=$(new_worktree gemini-print-15s)
+    obs="$(fixture $P print 15-no-tty-signed-in)"; obs="${obs%.jsonl}.observed.txt"
+    start=$(date +%s)
+    (cd "$wt" && agy -p "Reply with the single word ok." --model "$MODEL" </dev/null > "$SPIKE_SCRATCH/agy-15s.out" 2> "$SPIKE_SCRATCH/agy-15s.err" & echo $! > "$SPIKE_SCRATCH/agy-15s.pid"; wait) &
+    for _ in $(seq 120); do sleep 1; kill -0 "$(cat "$SPIKE_SCRATCH/agy-15s.pid")" 2>/dev/null || break; done
+    alive=$(kill -0 "$(cat "$SPIKE_SCRATCH/agy-15s.pid")" 2>/dev/null && echo yes || echo no)
+    [ "$alive" = yes ] && kill "$(cat "$SPIKE_SCRATCH/agy-15s.pid")"
+    { echo "ran for about $(( $(date +%s) - start )) s; still running at the end: $alive"
+      echo "stdout: $(head -c 300 "$SPIKE_SCRATCH/agy-15s.out")"
+      echo "stderr: $(head -c 300 "$SPIKE_SCRATCH/agy-15s.err")"; } | sed "s#$HOME#\$HOME#g" | tee "$obs" ;;
+
+  *)
+    if ! signed_in; then echo "blocked: agy is not signed in (run agy once to sign in)"; exit 3; fi
+    echo "unknown check $1" >&2; exit 2 ;;
+esac

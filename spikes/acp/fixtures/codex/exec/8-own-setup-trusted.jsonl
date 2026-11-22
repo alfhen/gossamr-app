@@ -1,0 +1,12 @@
+{"seq":1,"ms":7,"dir":"driver","data":{"note":"spawned","detail":{"pid":72349,"driver_pid":72325,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-8","-c","projects.\"$SCRATCH/clone\".trust_level=\"trusted\"","Answer in three short lines. 1: the project codeword if your instructions give one, else NONE. 2: run the shell command 'printf ok' and say what happened. 3: the names of the MCP servers you can use."],"cwd":"$SCRATCH/wt/codex-exec-8"}}}
+{"seq":2,"ms":9,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":30,"dir":"stderr","data":"warning: Untrusted project-local configuration is disabled. Run `codex exec --trust` to allow project configuration and MCP servers for this and future chats in the project, including MCP commands outside the sandbox. Explicitly untrusted projects must have their trust setting updated first."}
+{"seq":4,"ms":40,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":5,"ms":94,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202d1-acb8-78a1-9c1e-1643c8e8684e"}}
+{"seq":6,"ms":452,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":7,"ms":2679,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"MANGO-7\nI can’t run `printf ok` because shell access is unavailable.\nMCP servers: none listed."}}}
+{"seq":8,"ms":2679,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":2670}}}
+{"seq":9,"ms":2694,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":15172,"cached_input_tokens":11648,"cache_write_input_tokens":0,"output_tokens":30,"reasoning_output_tokens":0}}}
+{"seq":10,"ms":2879,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":11,"ms":2880,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":2870}}}
+{"seq":12,"ms":2880,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

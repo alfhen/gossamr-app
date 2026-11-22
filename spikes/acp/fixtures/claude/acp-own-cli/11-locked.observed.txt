@@ -1,0 +1,3 @@
+processes under the adapter:
+  16381 $HOME/.local/bin/claude --output-format stream-json --verbose --input-format stream-json --permission-prompt-tool=stdio --allowedTools=mcp__gossamr --disallowedTools=AskUserQuestion --tools= --mcp-config {"mcpServers":{"spike":{"type":"http","url":"http://127.0.0.1:65521/mcp","headers":{"Authorization":"Bearer <redacted>"}}}} --setting-sources= --strict-mcp-config --permission-mode=auto --allow-dangerously-skip-permissions --include-partial-messages --session-id=bdc03aa5-a674-4545-aebc-b0efe7ff94b3 --disable-slash-commands --replay-user-messages 
+ran.txt: absent

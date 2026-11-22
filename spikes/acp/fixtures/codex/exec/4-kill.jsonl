@@ -1,0 +1,9 @@
+{"seq":1,"ms":5,"dir":"driver","data":{"note":"spawned","detail":{"pid":35171,"driver_pid":35159,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-4","-s","workspace-write","Run the shell command 'sleep 120; echo slept > slept.txt' and wait for it to finish, then say done."],"cwd":"$SCRATCH/wt/codex-exec-4"}}}
+{"seq":2,"ms":6,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":23,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":4,"ms":56,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202cf-47f3-7270-82c7-e7e7c4901e2c"}}
+{"seq":5,"ms":420,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":6,"ms":2407,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run the requested command and wait for it to finish."}}}
+{"seq":7,"ms":2408,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":2401}}}
+{"seq":8,"ms":3192,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'sleep 120; echo slept > slept.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"seq":9,"ms":3295,"dir":"driver","data":{"note":"processes","detail":{"when":"running","agent_pid":35171,"descendants":[{"pid":35541,"comm":"/opt/homebrew/Caskroom/codex/0.171.0/bin/codex-code-mode-host"},{"pid":35542,"comm":"/bin/zsh"},{"pid":35566,"comm":"sleep"}]}}}
