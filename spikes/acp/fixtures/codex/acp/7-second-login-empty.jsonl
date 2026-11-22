@@ -1,0 +1,11 @@
+{"seq":1,"ms":4,"dir":"driver","data":{"note":"spawned","detail":{"pid":33096,"driver_pid":33076,"argv":["node","$SCRATCH/adapters/node_modules/@agentclientprotocol/codex-acp/dist/index.js"],"cwd":"$SCRATCH/wt/codex-acp-7"}}}
+{"seq":2,"ms":5,"dir":"to_agent","data":{"id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"acp-spike","version":"0.1.0"}},"jsonrpc":"2.0"}}
+{"seq":3,"ms":241,"dir":"from_agent","data":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"@agentclientprotocol/codex-acp","title":"Codex","version":"2.9.0"},"agentCapabilities":{"auth":{"logout":{},"status":{}},"providers":{},"loadSession":true,"promptCapabilities":{"embeddedContext":true,"image":true},"sessionCapabilities":{"resume":{},"list":{},"close":{},"delete":{},"fork":{},"title":{},"additionalDirectories":{},"systemPrompt":{}},"mcpCapabilities":{"acp":true,"http":true,"sse":false},"_meta":{"authStatus":{}}},"authMethods":[{"id":"api-key","name":"API Key","description":"Use an API key to authenticate","_meta":{"api-key":{"provider":"openai"}}},{"id":"chat-gpt","name":"ChatGPT","description":"Use ChatGPT to authenticate"}],"_meta":{"steering":{"supported":true}}}}}
+{"seq":4,"ms":242,"dir":"to_agent","data":{"id":2,"method":"session/new","params":{"cwd":"$SCRATCH/wt/codex-acp-7","mcpServers":[]},"jsonrpc":"2.0"}}
+{"seq":5,"ms":246,"dir":"from_agent","data":{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authentication required"}}}
+{"seq":6,"ms":247,"dir":"driver","data":{"note":"session_failed","detail":{"method":"session/new","answer":{"code":-32000,"message":"Authentication required"}}}}
+{"seq":7,"ms":247,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":8,"ms":247,"dir":"from_agent","data":{"jsonrpc":"2.0","method":"_auth/status_update","params":{"authStatus":{"kind":"none","label":"Not logged in"}}}}
+{"seq":9,"ms":247,"dir":"from_agent","data":{"jsonrpc":"2.0","method":"auth/status_update","params":{"state":"unauthenticated"}}}
+{"seq":10,"ms":2253,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":11,"ms":2253,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":2005}}}

@@ -1,0 +1,2 @@
+trusted entry for the clone in ~/.claude.json before: False
+after: {}

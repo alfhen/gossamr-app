@@ -1,0 +1,9 @@
+before kill: driver 53263 agent 53275
+55638 sleep 120
+agent tree:
+53295 $SCRATCH/adapters/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex app-server
+scripts/codex-acp.sh: line 14: 53263 Killed: 9               "$SPIKE" acp ${ENV[@]+"${ENV[@]}"} "$@"
+after 2s: agent alive: no
+after 10s: agent alive: no
+after 30s: agent alive: no
+session 01a202d0-84ad-75d1-8617-ccdf406316ab

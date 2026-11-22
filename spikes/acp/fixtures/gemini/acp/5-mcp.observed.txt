@@ -1,0 +1,3 @@
+files under ~/.gemini/antigravity-cli holding the token: 1
+which (folder and kind, ids masked): $HOME/.gemini/antigravity-cli/conversations/<id>.db 
+30 s later: 1

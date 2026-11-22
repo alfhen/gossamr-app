@@ -1,0 +1,3 @@
+commit: init / signature status N
+on the remote: no
+agent commands that turn signing or hooks off: 0

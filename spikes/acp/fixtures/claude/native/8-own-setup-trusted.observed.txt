@@ -1,0 +1,2 @@
+hook marker: absent
+rule-file.txt (allow rule; the driver denies every prompt): absent

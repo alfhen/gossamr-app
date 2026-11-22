@@ -1,0 +1,17 @@
+{"seq":1,"ms":5,"dir":"driver","data":{"note":"spawned","detail":{"pid":74068,"driver_pid":74059,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-8","-c","projects.\"$SCRATCH/clone\".trust_level=\"trusted\"","--dangerously-bypass-hook-trust","Answer in three short lines. 1: the project codeword if your instructions give one, else NONE. 2: run the shell command 'printf ok' and say what happened. 3: the names of the MCP servers you can use."],"cwd":"$SCRATCH/wt/codex-exec-8"}}}
+{"seq":2,"ms":6,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":21,"dir":"stderr","data":"warning: Untrusted project-local configuration is disabled. Run `codex exec --trust` to allow project configuration and MCP servers for this and future chats in the project, including MCP commands outside the sandbox. Explicitly untrusted projects must have their trust setting updated first."}
+{"seq":4,"ms":29,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":5,"ms":98,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202d1-b7fa-7d50-aed5-4df3f66740d6"}}
+{"seq":6,"ms":317,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}}
+{"seq":7,"ms":318,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_1","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}}
+{"seq":8,"ms":350,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":9,"ms":3339,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'printf ok'","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"seq":10,"ms":3340,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'printf ok'","aggregated_output":"ok","exit_code":0,"status":"completed"}}}
+{"seq":11,"ms":3400,"dir":"driver","data":{"note":"processes","detail":{"when":"running","agent_pid":74068,"descendants":[{"pid":76473,"comm":"/opt/homebrew/Caskroom/codex/0.171.0/bin/codex-code-mode-host"}]}}}
+{"seq":12,"ms":5866,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"MANGO-7\n`printf ok` ran and printed `ok`.\nMCP servers: codex_apps__chatgpt_space, codex_apps__codex_document_control, codex_apps__hotline, codex_apps__pets, codex_apps__plugin_management, codex_apps__search_service, codex_apps__safety_settings, codex_apps__sites."}}}
+{"seq":13,"ms":5867,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":5861}}}
+{"seq":14,"ms":5876,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":30436,"cached_input_tokens":26624,"cache_write_input_tokens":0,"output_tokens":116,"reasoning_output_tokens":0}}}
+{"seq":15,"ms":6289,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":16,"ms":6289,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":6283}}}
+{"seq":17,"ms":6289,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

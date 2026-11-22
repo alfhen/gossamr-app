@@ -1,0 +1,4 @@
+run r1: remote has spike/codex-r1-push-r1: no; local commit: init
+thread sandbox: {"type": "readOnly", "networkAccess": false}
+commands run: 1
+signing or hook bypass in a command: none

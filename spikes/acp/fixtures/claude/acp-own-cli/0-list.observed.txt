@@ -1,0 +1,2 @@
+processes under the adapter (node 99880):
+  99883 $HOME/.local/bin/claude --output-format stream-json --verbose --input-format stream-json --permission-prompt-tool=stdio --disallowedTools=AskUserQuestion --tools=default --setting-sources=user,project,local --permission-mode=auto --allow-dangerously-skip-permissions --include-partial-messages --session-id=312d3896-b2e4-4a65-822a-ed5e3b30a61d --replay-user-messages 

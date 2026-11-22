@@ -1,0 +1,9 @@
+{"event":"listening","port":51645,"pid":19841,"ms":0}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"server/discover","tool":null,"args":null,"user_agent":"claude-code/2.1.330 (sdk-cli)","header_names":["accept","accept-encoding","authorization","content-type","user-agent","mcp-method","mcp-protocol-version","connection","host","content-length"],"ms":1941}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"initialize","tool":null,"args":null,"user_agent":"claude-code/2.1.330 (sdk-cli)","header_names":["accept","accept-encoding","authorization","content-type","user-agent","connection","host","content-length"],"ms":2003}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"notifications/initialized","tool":null,"args":null,"user_agent":"claude-code/2.1.330 (sdk-cli)","header_names":["accept","accept-encoding","authorization","content-type","user-agent","mcp-protocol-version","connection","host","content-length"],"ms":2009}
+{"event":"request","http":"GET","auth":"ok","rpc_method":null,"tool":null,"args":null,"user_agent":"claude-code/2.1.330 (sdk-cli)","header_names":["accept","accept-encoding","authorization","user-agent","mcp-protocol-version","connection","host"],"ms":2014}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"tools/list","tool":null,"args":null,"user_agent":"claude-code/2.1.330 (sdk-cli)","header_names":["accept","accept-encoding","authorization","content-type","user-agent","mcp-protocol-version","connection","host","content-length"],"ms":2023}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"tools/call","tool":"hold","args":{"seconds":540},"user_agent":"claude-code/2.1.330 (sdk-cli)","header_names":["accept","accept-encoding","authorization","content-type","user-agent","mcp-protocol-version","connection","host","content-length"],"ms":6259}
+{"event":"hold_start","seconds":540.0,"ms":6259}
+{"event":"hold_answered","written":true,"error":null,"ms":546268}

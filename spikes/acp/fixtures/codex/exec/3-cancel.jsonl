@@ -1,0 +1,15 @@
+{"seq":1,"ms":6,"dir":"driver","data":{"note":"spawned","detail":{"pid":81073,"driver_pid":81043,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-3","-s","workspace-write","Run the shell command 'sleep 60; echo slept > slept.txt' and wait for it to finish."],"cwd":"$SCRATCH/wt/codex-exec-3"}}}
+{"seq":2,"ms":7,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":33,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":4,"ms":94,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202cb-ea0f-7bb1-8fbb-510898cfecb9"}}
+{"seq":5,"ms":464,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":6,"ms":2587,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run that command in the workspace and wait for it to finish."}}}
+{"seq":7,"ms":2588,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":2580}}}
+{"seq":8,"ms":3382,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'sleep 60; echo slept > slept.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"seq":9,"ms":3494,"dir":"driver","data":{"note":"processes","detail":{"when":"running","agent_pid":81073,"descendants":[{"pid":82721,"comm":"/opt/homebrew/Caskroom/codex/0.171.0/bin/codex-code-mode-host"},{"pid":82729,"comm":"/bin/zsh"},{"pid":82743,"comm":"sleep"}]}}}
+{"seq":10,"ms":12257,"dir":"driver","data":{"note":"processes","detail":{"when":"before_cancel","agent_pid":81073,"descendants":[{"pid":82721,"comm":"/opt/homebrew/Caskroom/codex/0.171.0/bin/codex-code-mode-host"},{"pid":82729,"comm":"/bin/zsh"},{"pid":82743,"comm":"sleep"}]}}}
+{"seq":11,"ms":12258,"dir":"driver","data":{"note":"signal","detail":{"sig":2,"pid":81073}}}
+{"seq":12,"ms":12268,"dir":"stderr","data":"2026-11-22T10:27:40.110358Z ERROR codex_core::session: failed to record rollout items: thread 01a202cb-ea0f-7bb1-8fbb-510898cfecb9 not found"}
+{"seq":13,"ms":12382,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":14,"ms":12383,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":12375}}}
+{"seq":15,"ms":12383,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 1","after_ms":0}}}

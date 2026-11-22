@@ -1,0 +1,11 @@
+2026-11-22T13:32:59Z kill -9 of the driver while the agent runs 'ping -c 90'
+before: agent alive: yes; the command under the agent: 1 process(es)
+agent's children before:
+  zsh
++2s: agent alive: yes; its children alive: 1; the command alive: 1
++8s: agent alive: yes; its children alive: 1; the command alive: 1
++20s: agent alive: yes; its children alive: 1; the command alive: 1
+old server stopped after the kill; requests it got: 6
+new server, requests after resume: 7, with the new token: 6, with another token: 1
+tools/call ping after resume: 1
+the old token sent to the new server: HTTP 401

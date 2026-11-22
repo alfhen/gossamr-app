@@ -1,0 +1,5 @@
+signed run: remote has spike/codex-r1-push-signed: no; local commit: init
+git log -1 --format=%G? in the worktree: N (subject: init)
+thread sandbox: {"type": "readOnly", "networkAccess": false}
+commands run: 1
+signing or hook bypass in a command: none

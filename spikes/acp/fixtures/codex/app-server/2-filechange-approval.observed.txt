@@ -1,0 +1,5 @@
+a.txt: present; b.txt: absent
+request: item/fileChange/requestApproval | reason:  | command: 
+  answer: permission_answer {'method': 'item/fileChange/requestApproval', 'allow': True}
+request: item/fileChange/requestApproval | reason:  | command: 
+  answer: permission_answer {'method': 'item/fileChange/requestApproval', 'allow': False}

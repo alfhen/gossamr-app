@@ -1,0 +1,3 @@
+commit: init / signature status N
+on the remote: no
+commands that touch signing or hooks:    2 --no-gpg-sign    5 gpg.format    7 gpgsign 

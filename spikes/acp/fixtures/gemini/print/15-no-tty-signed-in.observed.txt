@@ -1,0 +1,3 @@
+ran for about 6 s; still running at the end: no
+stdout: ok
+stderr: 

@@ -1,0 +1,45 @@
+real home: Error: Please sign in to view available models. Launch the CLI without arguments to sign in.
+HOME=empty: Error: Please sign in to view available models. Launch the CLI without arguments to sign in.
+GEMINI_CLI_HOME=empty: Error: Please sign in to view available models. Launch the CLI without arguments to sign in.
+acp --app-data-dir=empty (initialize only, see 7-acp-app-data-dir.jsonl): 
+files the empty folders gained:
+  ./gem$SCRATCH/agy-home/app/log/acp-server-20261122_114650-43215.log
+  ./gem2/config/.migrated
+  ./gem2/config/config.json
+  ./gem2/config/mcp_config.json
+  ./gem2/second-login/builtin/.checksum
+  ./gem2/second-login/builtin/.manifest
+  ./gem2/second-login/builtin/keep.txt
+  ./gem2/second-login/builtin/plugins/swarm/README.md
+  ./gem2/second-login/builtin/plugins/swarm/assets/logo.svg
+  ./gem2/second-login/builtin/plugins/swarm/plugin.json
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/README.md
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/app.js
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/board_cache.mjs
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/channels.mjs
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/gif.js
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/hive.css
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/hive.js
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/index.html
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/main.mjs
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/narrator_bootstrap.js
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/package.json
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/sidecar.json
+  ./gem2/second-login/builtin/plugins/swarm/sidecars/swarm_board/styles.css
+  ./gem2/second-login/builtin/skills/agy-customizations/SKILL.md
+  ./gem2/second-login/builtin/skills/agy-customizations/docs/hooks.md
+  ./gem2/second-login/builtin/skills/agy-customizations/docs/json_configs.md
+  ./gem2/second-login/builtin/skills/agy-customizations/docs/mcp_servers.md
+  ./gem2/second-login/builtin/skills/agy-customizations/docs/plugins.md
+  ./gem2/second-login/builtin/skills/agy-customizations/docs/rules.md
+  ./gem2/second-login/builtin/skills/agy-customizations/docs/skills.md
+  ./gem2/second-login/builtin/skills/antigravity_guide/SKILL.md
+  ./gem2/second-login/builtin/skills/antigravity_guide/references/app.md
+  ./gem2/second-login/builtin/skills/antigravity_guide/references/cli.md
+  ./gem2/second-login/builtin/skills/antigravity_guide/references/ide.md
+  ./gem2/second-login/builtin/skills/antigravity_guide/references/sdk.md
+  ./gem2/second-login/builtin/skills/automation/SKILL.md
+  ./gem2/second-login/builtin/skills/conversations/SKILL.md
+  ./gem2/second-login/builtin/skills/generative_ui/SKILL.md
+  ./gem2/second-login/builtin/skills/mcp-app-development/SKILL.md
+  ./gem2/second-login/builtin/skills/migrate-agent-settings/SKILL.md

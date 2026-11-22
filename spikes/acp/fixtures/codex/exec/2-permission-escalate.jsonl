@@ -1,0 +1,17 @@
+{"seq":1,"ms":5,"dir":"driver","data":{"note":"spawned","detail":{"pid":22502,"driver_pid":22475,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-2e","-c","approval_policy=\"on-request\"","Run the shell command 'echo one > a.txt'. If the sandbox blocks it, request approval to run it outside the sandbox (with escalated permissions) instead of giving up. Then do the same for 'echo two > b.txt'. Report what happened to each."],"cwd":"$SCRATCH/wt/codex-exec-2e"}}}
+{"seq":2,"ms":6,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":32,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":4,"ms":88,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202c7-edad-7892-8b30-87d16247f29d"}}
+{"seq":5,"ms":1200,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":6,"ms":3497,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run each command in the workspace and report whether the sandbox allows the write."}}}
+{"seq":7,"ms":3497,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":3491}}}
+{"seq":8,"ms":3524,"dir":"driver","data":{"note":"processes","detail":{"when":"running","agent_pid":22502,"descendants":[]}}}
+{"seq":9,"ms":4190,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo one > a.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"seq":10,"ms":4190,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'echo one > a.txt'","aggregated_output":"","exit_code":0,"status":"completed"}}}
+{"seq":11,"ms":5802,"dir":"from_agent","data":{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'echo two > b.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}}
+{"seq":12,"ms":5803,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc 'echo two > b.txt'","aggregated_output":"","exit_code":0,"status":"completed"}}}
+{"seq":13,"ms":7219,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Both commands succeeded in the workspace (exit code 0): `a.txt` was written with `one`, and `b.txt` with `two`."}}}
+{"seq":14,"ms":7245,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":47259,"cached_input_tokens":42752,"cache_write_input_tokens":0,"output_tokens":137,"reasoning_output_tokens":0}}}
+{"seq":15,"ms":7658,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":16,"ms":7658,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":7651}}}
+{"seq":17,"ms":7658,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

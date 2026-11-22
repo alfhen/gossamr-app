@@ -1,0 +1,1 @@
+files under ~/.codex that hold the token (auth.json and other credential files skipped): 0

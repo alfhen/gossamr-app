@@ -1,0 +1,14 @@
+before kill: driver 35159 agent 35171
+35566 sleep 120
+agent tree:
+35541 /opt/homebrew/Caskroom/codex/0.171.0/bin/codex-code-mode-host --listen grpc+stdio://
+35542 /bin/zsh -c sleep 120; echo slept > slept.txt
+scripts/codex-exec.sh: line 11: 35159 Killed: 9               "$SPIKE" raw "$@"
+after 2s: agent alive: yes
+35566 sleep 120
+after 10s: agent alive: yes
+35566 sleep 120
+after 30s: agent alive: yes
+35566 sleep 120
+thread 01a202cf-47f3-7270-82c7-e7e7c4901e2c
+codex exec of the killed driver alive: no

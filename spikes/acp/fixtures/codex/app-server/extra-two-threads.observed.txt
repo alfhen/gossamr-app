@@ -1,0 +1,4 @@
+threads: 2 in pid 40720
+thread 0 answered: apple
+thread 1 answered: pear
+exit 0
