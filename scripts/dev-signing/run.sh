@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cargo runner (see src-tauri/.cargo/config.toml): signs the app binary with the local dev identity, then runs it.
+# Cargo runner (see .cargo/config.toml): signs the app binary with the local dev identity, then runs it.
 # Without the identity (a fresh clone, CI) it just runs the binary unsigned. Set it up with setup.sh.
 KC="${GOSSAMR_DEV_KEYCHAIN:-$HOME/Library/Keychains/gossamr-dev.keychain-db}"
 NAME="Gossamr Dev Signing"

@@ -1,6 +1,8 @@
 //! Gossamr's agent harness: a program beside the app that starts, watches and stops agent sessions. See
 //! `docs/harness-proposal.md`. So far it only says which build it is.
 
+use std::ffi::OsString;
+
 /// The crate's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -22,7 +24,8 @@ pub enum Request {
 
 pub const USAGE: &str = "usage: harness --version";
 
-pub fn request(args: &[String]) -> Request {
+/// An argument that is not UTF-8 is never one the harness knows, so it gets the usage line like any other.
+pub fn request(args: &[OsString]) -> Request {
     match args {
         [only] if only == "--version" || only == "-V" => Request::Version,
         _ => Request::Usage,
@@ -33,8 +36,8 @@ pub fn request(args: &[String]) -> Request {
 mod tests {
     use super::*;
 
-    fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|a| a.to_string()).collect()
+    fn args(list: &[&str]) -> Vec<OsString> {
+        list.iter().map(OsString::from).collect()
     }
 
     #[test]
@@ -47,8 +50,14 @@ mod tests {
     }
 
     #[test]
+    fn an_argument_that_is_not_utf8_asks_for_nothing() {
+        use std::os::unix::ffi::OsStringExt;
+        assert_eq!(request(&[OsString::from_vec(vec![0xff])]), Request::Usage);
+    }
+
+    #[test]
     fn the_version_line_names_the_crate_version_and_a_build_id() {
         assert_eq!(version_line(), format!("harness {} (build {BUILD_ID})", env!("CARGO_PKG_VERSION")));
-        assert!(!BUILD_ID.is_empty() && !BUILD_ID.contains(char::is_whitespace), "{BUILD_ID:?}");
+        assert!(!BUILD_ID.is_empty() && !BUILD_ID.contains(char::is_whitespace), "build.rs makes it one word: {BUILD_ID:?}");
     }
 }
