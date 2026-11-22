@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::launch::toml_string;
-use super::process::{alive, kill_group, signal, signal_group, started_of};
+use super::process::{alive, signal, signal_group, started_of};
+#[cfg(target_os = "macos")]
+use super::process::kill_group;
 use super::*;
 use crate::connections::Driver;
 use crate::domain::{RunProcess, AGENT_GUARD};
@@ -256,16 +258,23 @@ fn a_reused_pid_is_not_the_run_s_process() {
     assert!(!signal_group(&reused, 0).unwrap());
 }
 
-#[test]
-fn killing_a_group_whose_leader_exited_but_is_not_reaped_yet_succeeds() {
+/// A shell that leads a group of its own and runs `script`.
+#[cfg(target_os = "macos")]
+fn group_leader(script: &str) -> std::process::Child {
     use std::os::unix::process::CommandExt;
     let mut command = Command::new("/bin/sh");
-    command.args(["-c", "exit 0"]);
+    command.args(["-c", script]);
     // SAFETY: `setsid` is async-signal-safe and the closure touches nothing else.
     unsafe {
         command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
     }
-    let mut child = command.spawn().unwrap();
+    command.spawn().unwrap()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn killing_a_group_whose_leader_exited_but_is_not_reaped_yet_succeeds() {
+    let mut child = group_leader("exit 0");
     let pid = child.id();
     let process = RunProcess { pid, started: started_of(pid).unwrap_or(0) };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -278,6 +287,53 @@ fn killing_a_group_whose_leader_exited_but_is_not_reaped_yet_succeeds() {
     assert!(!alive(&process), "a stop reads the zombie leader as gone and goes on to kill its group");
     kill_group(&process).unwrap();
     child.wait().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refused_group_kill_with_a_live_member_listed_is_still_an_error() {
+    let mut child = group_leader("sleep 30");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap() };
+    process::seam::refuse_group_kills(process.pid, usize::MAX);
+    let refused = kill_group(&process).unwrap_err();
+    assert_eq!(refused.raw_os_error(), Some(libc::EPERM), "the live leader is listed and is no zombie");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refused_group_kill_whose_listing_is_full_or_fails_is_still_an_error() {
+    let child = group_leader("sleep 30");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap() };
+    process::seam::refuse_group_kills(process.pid, usize::MAX);
+    process::seam::list_group_as(process.pid, process::Listing::Full);
+    assert_eq!(kill_group(&process).unwrap_err().raw_os_error(), Some(libc::EPERM), "a full listing may hide a live member");
+    let group_kills = |pid| process::seam::sent_to(pid).iter().filter(|s| **s == libc::SIGKILL).count();
+    assert_eq!(group_kills(process.pid), 1, "nothing more is sent after a full listing");
+
+    let other = group_leader("sleep 30");
+    let second = RunProcess { pid: other.id(), started: started_of(other.id()).unwrap() };
+    process::seam::refuse_group_kills(second.pid, usize::MAX);
+    process::seam::list_group_as(second.pid, process::Listing::Nothing);
+    assert_eq!(kill_group(&second).unwrap_err().raw_os_error(), Some(libc::EPERM), "a failed listing proves nothing while the group still refuses");
+    assert_eq!(group_kills(second.pid), 2, "the group is asked once more when the listing is empty");
+    for mut c in [child, other] {
+        c.kill().unwrap();
+        c.wait().unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_group_that_is_gone_by_the_time_it_is_listed_counts_as_killed() {
+    let mut child = group_leader("exit 0");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap_or(0) };
+    child.wait().unwrap();
+    process::seam::refuse_group_kills(process.pid, 1);
+    process::seam::list_group_as(process.pid, process::Listing::Nothing);
+    kill_group(&process).unwrap();
+    assert_eq!(process::seam::sent_to(process.pid).iter().filter(|s| **s == libc::SIGKILL).count(), 2, "asked again, and the group was gone");
 }
 
 #[tokio::test]
