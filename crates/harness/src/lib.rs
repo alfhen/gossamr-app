@@ -1,7 +1,15 @@
 //! Gossamr's agent harness: a program beside the app that starts, watches and stops agent sessions. See
-//! `docs/harness-proposal.md`. So far it only says which build it is.
+//! `docs/harness-proposal.md`. So far it has a store, sessions and a mock provider, and says which build it is.
 
 use std::ffi::OsString;
+
+pub mod driver;
+pub mod error;
+pub mod event;
+pub mod mock;
+pub mod redact;
+pub mod session;
+pub mod store;
 
 /// The crate's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
