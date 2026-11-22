@@ -331,16 +331,23 @@ print(" ".join(seen))' "$tr")"; } | tee "$obs" ;;
     wt=$(new_worktree gemini-acp-r7); tr=$(fixture $P acp r7-background)
     acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --keep-open 60 \
       --prompt "Run the shell command 'ping -c 30 127.0.0.1 > ping.txt'." -- agy acp
-    python3 -c 'import json,sys
-end=None
+    # From the driver's own notes and what agy sent after the turn ended, with no prompt.
+    python3 - "$tr" <<'PY' | tee "${tr%.jsonl}.observed.txt"
+import json, sys
+end = None; after = []
 for l in open(sys.argv[1]):
-    e=json.loads(l); d=e["data"]
-    if not isinstance(d,dict): continue
-    if e["dir"]=="driver" and d.get("note")=="turn_end": end=e["ms"]; print("turn end at %d ms: %s" % (e["ms"], json.dumps(d["detail"]["answer"])[:80]))
-    if e["dir"]=="driver" and d.get("note")=="processes": print("%d ms %s: %s" % (e["ms"], d["detail"]["when"], [x["comm"].split("/")[-1] for x in d["detail"]["descendants"]]))
-    if end and e["dir"]=="from_agent" and d.get("method")=="session/update":
-        u=d["params"]["update"] if isinstance(d.get("params"),dict) and isinstance(d["params"].get("update"),dict) else {}
-        if u.get("sessionUpdate") in ("agent_message_chunk","tool_call","tool_call_update"): print("%d ms after the turn: %s %s" % (e["ms"], u["sessionUpdate"], (u.get("content") or {}).get("text") or u.get("status") or ""))' "$tr" | tee "${tr%.jsonl}.observed.txt"
+    e = json.loads(l); d = e["data"]
+    if not isinstance(d, dict): continue
+    if e["dir"] == "driver" and d.get("note") == "turn_end":
+        end = e["ms"]; print("turn ended (end_turn) at %d ms" % e["ms"])
+    if e["dir"] == "driver" and d.get("note") == "processes":
+        print("%d ms %s: agy's descendants %s" % (e["ms"], d["detail"]["when"], [x["comm"].split("/")[-1] for x in d["detail"]["descendants"]]))
+    if end and e["dir"] == "from_agent" and d.get("method") == "session/update":
+        u = (d.get("params") or {}).get("update")
+        k = u.get("sessionUpdate") if isinstance(u, dict) else None
+        if k in ("tool_call_update", "agent_message_chunk") and (not after or after[-1] != k):
+            print("%d ms, with no prompt sent: %s" % (e["ms"], k)); after.append(k)
+PY
     echo "ping.txt lines: $(wc -l < "$wt/ping.txt" 2>/dev/null || echo none)" | tee -a "${tr%.jsonl}.observed.txt" ;;
 
   *)

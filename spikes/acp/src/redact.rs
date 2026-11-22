@@ -145,6 +145,11 @@ impl Redactor {
             p(r"mcp__claude_ai_[A-Za-z0-9_\-<>]+", "mcp__<connector>"),
             // The numeric user id in the temp folder's name.
             p(r"\bclaude-[0-9]{2,}\b", "claude-<uid>"),
+            // The rest of a scratch path that an earlier pass cut after `-Users-<path>` (a run split across deltas).
+            p(
+                r#"(?:(?:/private)?/tmp/claude-<uid>/-Users-<path>|\$SCRATCH/<path>)[^\s"'\\)\]>`]*"#,
+                "$$SCRATCH/<path>",
+            ),
             p(r"claude\.ai [A-Z][A-Za-z0-9 <>]+", "claude.ai <connector>"),
         ];
         let keys = Regex::new(r"(?i)^(email|e_mail|emailaddress|account_?uuid|account_?id|chatgpt_?account_?id|installation_?id|org(anization)?(_?(id|uuid|name))?|user_?id|access_?token|refresh_?token|id_?token|api_?key)$").unwrap();
@@ -376,7 +381,9 @@ pub fn redact_run(r: &Redactor, parts: &[String]) -> Vec<String> {
 
 /// Redacts a whole transcript: every line, then every streamed run joined.
 pub fn redact_lines(r: &Redactor, lines: Vec<Value>) -> Vec<Value> {
-    let mut lines: Vec<Value> = lines.iter().map(|l| r.value(l)).collect();
+    // Streamed runs first, on the text as it came: a value split across deltas (a scratch path) is whole only there,
+    // and the per-line pass would break it up before the run could match it.
+    let mut lines = lines;
     let (mut msg, mut turn) = (0u64, 0u64);
     let mut runs: BTreeMap<String, Vec<(usize, Vec<&'static str>)>> = BTreeMap::new();
     for (i, l) in lines.iter().enumerate() {
@@ -410,7 +417,7 @@ pub fn redact_lines(r: &Redactor, lines: Vec<Value>) -> Vec<Value> {
             }
         }
     }
-    lines
+    lines.iter().map(|l| r.value(l)).collect()
 }
 
 /// Redacts a transcript file in place. Lines that are not JSON (observation files) are redacted as text.
@@ -508,6 +515,51 @@ mod tests {
             joined.contains("<user>") && joined.ends_with("/work done"),
             "{joined}"
         );
+    }
+
+    #[test]
+    fn a_scratch_path_split_across_deltas_is_masked_whole() {
+        let mut r = Redactor::new(&[]);
+        r.literals.insert(
+            0,
+            (
+                "/tmp/claude-77/-Users-zebra-x/sess/scratchpad/h0".into(),
+                "$SCRATCH".into(),
+            ),
+        );
+        r.literals.push(("zebra".into(), "<user>".into()));
+        let acp = |t: &str| {
+            json!({"dir": "from_agent", "data": {"method": "session/update", "params": {"sessionId": "s",
+            "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": t}}}}})
+        };
+        let out = redact_lines(
+            &r,
+            vec![
+                acp("see /tmp/claude-77/-Users-zeb"),
+                acp("ra-x/sess/scr"),
+                acp("atchpad/h0/wt/a.txt done"),
+            ],
+        );
+        let joined = joined_runs(&out).concat();
+        assert_eq!(joined, "see $SCRATCH/wt/a.txt done");
+        // A fixture an earlier redactor cut after `-Users-<path>` loses the rest of the path too.
+        let old = redact_lines(
+            &r,
+            vec![
+                acp("at /private/tmp/claude-<uid>/-Users-<path>"),
+                acp("/sess/scratchpad/h0/wt/a.txt"),
+            ],
+        );
+        assert_eq!(joined_runs(&old).concat(), "at $SCRATCH/<path>");
+        // And one a live pass already turned into `$SCRATCH/<path>` before the rest of the path arrived.
+        let live = redact_lines(
+            &r,
+            vec![
+                acp("at $SCRATCH/<path>"),
+                acp("app-x/sess/scratchpad/h0/wt/a.txt)"),
+            ],
+        );
+        assert_eq!(joined_runs(&live).concat(), "at $SCRATCH/<path>)");
     }
 
     #[test]
@@ -616,7 +668,7 @@ mod tests {
             }
         }
         let forbidden = Regex::new(
-            r#"(?i)/Users/[^<]|-Users-[^<]|\$HOME/[^.<]|claude\.ai [^<]|mcp__claude_ai_|spk_[0-9a-f]{16}|sk-ant-[a-z0-9]|ya29\.|/tmp/claude-[0-9]|"[^"]*(subscription|plan_?type|rate_?limit|overage|utilization)[^"]*"\s*:\s*([^"\s]|"[^<])"#,
+            r#"(?i)/Users/[^<]|-Users-[^<]|\$HOME/[^.<]|claude\.ai [^<]|mcp__claude_ai_|spk_[0-9a-f]{16}|sk-ant-[a-z0-9]|ya29\.|/tmp/claude-[0-9]|-tmp-claude-[0-9]|[0-9a-f-]{36}/scratchpad|"[^"]*(subscription|plan_?type|rate_?limit|overage|utilization)[^"]*"\s*:\s*([^"\s]|"[^<])"#,
         )
         .unwrap();
         // Any email address, except the spike's own commit identity and the attribution address.

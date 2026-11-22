@@ -1,16 +1,17 @@
-1174 ms after_session: agy's descendants []
-turn ended (end_turn) at 7954 ms
-8007 ms after_turn: agy's descendants ['ping']
-13235 ms idle: agy's descendants ['ping']
-18267 ms idle: agy's descendants ['ping']
-23276 ms idle: agy's descendants ['ping']
-28288 ms idle: agy's descendants ['ping']
-33328 ms idle: agy's descendants ['ping']
-34439 ms, with no prompt sent: tool_call_update
-38123 ms, with no prompt sent: agent_message_chunk
-38400 ms idle: agy's descendants []
-43596 ms idle: agy's descendants []
-48602 ms idle: agy's descendants []
-53609 ms idle: agy's descendants []
-58800 ms idle: agy's descendants []
-64027 ms idle: agy's descendants []
+1405 ms after_session: agy's descendants []
+turn ended (end_turn) at 8499 ms
+8557 ms after_turn: agy's descendants ['ping']
+13720 ms idle: agy's descendants ['ping']
+18876 ms idle: agy's descendants ['ping']
+24048 ms idle: agy's descendants ['ping']
+29196 ms idle: agy's descendants ['ping']
+33400 ms, with no prompt sent: tool_call_update
+34242 ms idle: agy's descendants []
+36090 ms, with no prompt sent: agent_message_chunk
+39273 ms idle: agy's descendants []
+44399 ms idle: agy's descendants []
+49515 ms idle: agy's descendants []
+54646 ms idle: agy's descendants []
+59778 ms idle: agy's descendants []
+64898 ms idle: agy's descendants []
+ping.txt lines:       35
