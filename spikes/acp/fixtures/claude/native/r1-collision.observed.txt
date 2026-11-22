@@ -1,0 +1,5 @@
+own endpoint: spka_b (pre-allowed: mcp__spka_b__c); other server: spka
+init tools from MCP servers: mcp__spka__ask mcp__spka__b_c mcp__spka__hold mcp__spka__ping mcp__spka_b__ask mcp__spka_b__c mcp__spka_b__hold mcp__spka_b__ping
+permission requests:
+claude can_use_tool: mcp__spka__b_c
+  answered: {"tool": "mcp__spka__b_c", "allow": true}

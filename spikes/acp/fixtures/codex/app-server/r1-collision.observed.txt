@@ -1,0 +1,5 @@
+own endpoint: spka_b (default_tools_approval_mode approve); other server: spka
+MCP tool calls (server/tool): spka_b/c spka/b_c
+permission requests:
+codex elicitation: server=spka message=Allow the spka MCP server to run tool "b_c"?
+  answered: {"method": "mcpServer/elicitation/request", "allow": true}

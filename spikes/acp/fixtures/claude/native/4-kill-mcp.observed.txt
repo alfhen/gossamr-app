@@ -6,6 +6,6 @@ agent's children before:
 +8s: agent alive: yes; its children alive: 1; the command alive: 1
 +20s: agent alive: yes; its children alive: 1; the command alive: 1
 old server stopped after the kill; requests it got: 6
-new server, requests after resume: 7, with the new token: 6, with another token: 1
+new server, requests after resume and before the script's own curl: 6, with the new token: 6, with another token: 0, with none: 0
 tools/call ping after resume: 1
-the old token sent to the new server: HTTP 401
+the old token, sent by the script's own curl to the new server: HTTP 401 (the spike server knows only the new token; this shows the agent sent only the new one, not that a provider refuses the old)

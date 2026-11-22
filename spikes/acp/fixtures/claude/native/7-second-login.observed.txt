@@ -1,4 +1,4 @@
 empty CLAUDE_CONFIG_DIR: {'loggedIn': False, 'authMethod': 'none'}
 exit 1
 real login (variable unset): {'loggedIn': True, 'authMethod': 'claude.ai'}
-files the empty folder gained: ./.claude.json ./backups/.claude.json.backup.1795343207495 ./plugins/store/cc-plugin-agents-md_builtin-b049b47b3618.json ./projects/-private-tmp-claude-501--Users-<path>/114f3850-74ea-463e-bb29-bdf2436891bd.jsonl 
+files the empty folder gained: ./.claude.json ./backups/.claude.json.backup.1795343207495 ./plugins/store/cc-plugin-agents-md_builtin-b049b47b3618.json ./projects/-private-tmp-claude-<uid>--Users-<path>/114f3850-74ea-463e-bb29-bdf2436891bd.jsonl 

@@ -1,0 +1,4 @@
+ask answered 'question pending' at 24155 ms (turn 0)
+turn 0 ended at 25602 ms: {"turn": 0, "completed": "completed", "ms": 25374}
+turn 1 ended at 29573 ms: {"turn": 1, "completed": "completed", "ms": 3921}
+colour.txt: absent

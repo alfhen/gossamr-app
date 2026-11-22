@@ -1,0 +1,4 @@
+ask answered 'question pending' at 22819 ms (turn 0)
+turn 0 ended at 24019 ms: {"turn": 0, "subtype": "success", "ms": 23231}
+turn 1 ended at 26103 ms: {"turn": 1, "subtype": "success", "ms": 2058}
+colour.txt: BLUE

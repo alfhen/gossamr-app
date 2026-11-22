@@ -1,0 +1,5 @@
+own endpoint: spkeab8a229 (default_tools_approval_mode approve); other server: spkx3371e522
+MCP tool calls (server/tool): spkeab8a229/ping spkx3371e522/ping
+permission requests:
+codex elicitation: server=spkx3371e522 message=Allow the spkx3371e522 MCP server to run tool "ping"?
+  answered: {"method": "mcpServer/elicitation/request", "allow": true}

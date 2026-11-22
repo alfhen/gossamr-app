@@ -1,0 +1,16 @@
+1174 ms after_session: agy's descendants []
+turn ended (end_turn) at 7954 ms
+8007 ms after_turn: agy's descendants ['ping']
+13235 ms idle: agy's descendants ['ping']
+18267 ms idle: agy's descendants ['ping']
+23276 ms idle: agy's descendants ['ping']
+28288 ms idle: agy's descendants ['ping']
+33328 ms idle: agy's descendants ['ping']
+34439 ms, with no prompt sent: tool_call_update
+38123 ms, with no prompt sent: agent_message_chunk
+38400 ms idle: agy's descendants []
+43596 ms idle: agy's descendants []
+48602 ms idle: agy's descendants []
+53609 ms idle: agy's descendants []
+58800 ms idle: agy's descendants []
+64027 ms idle: agy's descendants []
