@@ -1,0 +1,8 @@
+{"seq":1,"ms":4,"dir":"driver","data":{"note":"spawned","detail":{"pid":27007,"driver_pid":26997,"argv":["agy","-p","Reply with the single word ok.","--output-format","stream-json"],"cwd":"$SCRATCH/wt/gemini-print-0"}}}
+{"seq":2,"ms":4,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":116,"dir":"stderr","data":"Error: authentication required. Run 'antigravity' to log in, then retry."}
+{"seq":4,"ms":117,"dir":"stderr","data":"error: authentication failed or timed out"}
+{"seq":5,"ms":117,"dir":"from_agent","data":{"event":"result","result":{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out","duration_seconds":0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0},"finished_reason":"error"}}}
+{"seq":6,"ms":324,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":7,"ms":325,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":320}}}
+{"seq":8,"ms":325,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 1","after_ms":0}}}

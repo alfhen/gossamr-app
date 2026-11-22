@@ -1,0 +1,7 @@
+2026-11-22T11:22:40Z kill -9 of the driver while 'ping -c 90' runs
+before: agent 84328 alive: yes; command: 1 process(es)
+agent's process tree before:
+  84397 ping
++2s: agent alive: no; its children alive: none; command: 0 process(es)
++8s: agent alive: no; its children alive: none; command: 0 process(es)
++20s: agent alive: no; its children alive: none; command: 0 process(es)

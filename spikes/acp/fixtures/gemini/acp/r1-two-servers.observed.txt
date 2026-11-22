@@ -1,0 +1,7 @@
+own endpoint: spk050101c6; other server: spkx58aa38f4
+permission requests (the driver allowed each):
+acp request_permission: name=mcp_spk050101c6_ping title=Run mcp_spk050101c6_ping kind=other
+  answered: {"allow": true, "kind": "allow_once", "optionId": "allow"}
+acp request_permission: name=mcp_spkx58aa38f4_ping title=Run mcp_spkx58aa38f4_ping kind=other
+  answered: {"allow": true, "kind": "allow_once", "optionId": "allow"}
+tool_call names: mcp_spk050101c6_ping mcp_spkx58aa38f4_ping

@@ -1,0 +1,5 @@
+own endpoint: spk0f0949ae (pre-allowed: mcp__spk0f0949ae__ping); other server: spkx1be8eb2a
+init tools from MCP servers: mcp__spk0f0949ae__ask mcp__spk0f0949ae__hold mcp__spk0f0949ae__ping mcp__spkx1be8eb2a__ask mcp__spkx1be8eb2a__hold mcp__spkx1be8eb2a__ping
+permission requests:
+claude can_use_tool: mcp__spkx1be8eb2a__ping
+  answered: {"tool": "mcp__spkx1be8eb2a__ping", "allow": true}

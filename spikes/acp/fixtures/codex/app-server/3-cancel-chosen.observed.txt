@@ -1,0 +1,5 @@
+122 ms, after_thread: sleep among the agent's descendants: 0
+12157 ms, turn 0 ended: interrupted
+12259 ms, after_turn: sleep among the agent's descendants: 1
+13610 ms, turn 1 ended: completed
+13711 ms, after_turn: sleep among the agent's descendants: 1

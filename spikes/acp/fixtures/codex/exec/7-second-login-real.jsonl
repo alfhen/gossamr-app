@@ -1,0 +1,11 @@
+{"seq":1,"ms":4,"dir":"driver","data":{"note":"spawned","detail":{"pid":30541,"driver_pid":30522,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-7","Reply with the word ok."],"cwd":"$SCRATCH/wt/codex-exec-7"}}}
+{"seq":2,"ms":5,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":24,"dir":"stderr","data":"Reading additional input from stdin..."}
+{"seq":4,"ms":75,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202d5-4bd4-7701-96aa-411e6e505dc0"}}
+{"seq":5,"ms":415,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":6,"ms":2086,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}}
+{"seq":7,"ms":2086,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":2081}}}
+{"seq":8,"ms":2093,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":15021,"cached_input_tokens":11648,"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}}
+{"seq":9,"ms":2324,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":10,"ms":2324,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":2319}}}
+{"seq":11,"ms":2324,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

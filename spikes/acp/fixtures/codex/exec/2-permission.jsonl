@@ -1,0 +1,6 @@
+{"seq":1,"ms":9,"dir":"driver","data":{"note":"spawned","detail":{"pid":15745,"driver_pid":15714,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","-C","$SCRATCH/wt/codex-exec-2","-s","workspace-write","-c","approval_policy=\"untrusted\"","Run the shell command 'echo one > a.txt'. Then, as a separate command, run 'echo two > b.txt'. Then read README.md and say how many lines it has. Report what happened to each step."],"cwd":"$SCRATCH/wt/codex-exec-2"}}}
+{"seq":2,"ms":9,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":38,"dir":"stderr","data":"Error: approval_policy = \"untrusted\" is no longer supported; remove this setting"}
+{"seq":4,"ms":39,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":5,"ms":40,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":30}}}
+{"seq":6,"ms":40,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 1","after_ms":0}}}

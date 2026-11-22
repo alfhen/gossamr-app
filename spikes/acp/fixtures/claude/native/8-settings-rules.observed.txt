@@ -1,0 +1,4 @@
+allowed.txt: present
+denied.txt: absent
+neither.txt: absent
+can_use_tool requests: 1, for: "command":"touch allowed.txt" "command":"touch denied.txt" "command":"touch neither.txt" 

@@ -1,0 +1,11 @@
+2026-11-22T13:32:39Z kill -9 of the driver while the agent runs 'ping -c 90'
+before: agent alive: yes; the command under the agent: 1 process(es)
+agent's children before:
+  ping
++2s: agent alive: no; its children alive: 0; the command alive: 0
++8s: agent alive: no; its children alive: 0; the command alive: 0
++20s: agent alive: no; its children alive: 0; the command alive: 0
+old server stopped after the kill
+new server, requests after resume and before the script's own curl: 8, with the new token: 6, with another token: 0, with none: 2
+tools/call ping after resume: 1
+the old token, sent by the script's own curl to the new server: HTTP 401 (the spike server knows only the new token; this shows the agent sent only the new one, not that a provider refuses the old)

@@ -1,0 +1,5 @@
+a.txt: present
+request: item/permissions/requestApproval | reason: May I have write access to the current workspace folder so I can create a.txt as requested? | command: 
+  answer: permission_answer {'method': 'item/permissions/requestApproval', 'allow': True}
+request: item/permissions/requestApproval | reason: May I have network access, as requested? | command: 
+  answer: permission_answer {'method': 'item/permissions/requestApproval', 'allow': False}

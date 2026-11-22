@@ -30,7 +30,8 @@ Sessions that write the same files run one after the other.
 - Each step adds a regression test that fails when the change is removed.
 - Tests never touch the real `~/.claude*`, `~/.codex`, `~/.gemini`, the Keychain or the real PATH. They use the fake CLIs in `src-tauri/test-support/` and the mock provider (H2).
 - Real-provider checks are `#[ignore]` tests or scripts under `spikes/`, run by the verify session on the owner's logins, in a scratch repo under the session's temp folder with a local bare repo as its remote. Each proves afterwards that no process, worktree or scratch login is left.
-- Every library or CLI API is checked against current documentation (Context7 first) and the installed version. What differs goes into `docs/harness-findings.md`.
+- A real-provider script records each login's config files before and after (a hash of each config file, and only the size and modification time of a credential file) and fails when one changed. H0 found that `codex app-server` writes `~/.codex/config.toml` by itself.
+- Every library or CLI API is checked against current documentation (a docs lookup tool first, where the session has one) and the installed version. What differs goes into `docs/harness-findings.md`.
 - A step that deletes code deletes its tests and its UI in the same pull request, and says what a person can no longer do.
 - The TypeScript mock and the e2e specs are kept in step by the step that changes a behaviour they cover.
 - Schema changes are new steps at the end of `APP_STEPS` or `STEPS`. The harness has its own database and its own step list.
@@ -47,7 +48,7 @@ Sessions that write the same files run one after the other.
 - **Touches:** `docs/goals.md` only.
 - **Does:** the goal and non-goal wording of proposal section 4.
 - **Lands as:** alfhen/gossamr-app#451, a pull request to `main` of its own for the maintainer, as `docs/goals.md` requires. The build goes on meanwhile on `harness`. The final pull request is not offered for merge before G0 is merged.
-- **The rules in `AGENTS.md` and `docs/product.md`** describe the code, so each changes on `harness` in the step that changes the behaviour: rule 2 in H5 and H9, rule 4 in H10 to H13, rule 3 in H16, rule 1 in H19 and H20. H23 checks that the result matches proposal section 4.
+- **The rules in `AGENTS.md` and `docs/product.md`** describe the code, so each changes on `harness` in the step that changes the behaviour: rule 2 in H5a and H9, rule 4 in H10 to H13, rule 3 in H16, rule 1 in H19 and H20. H23 checks that the result matches proposal section 4.
 
 ### H0. Check the providers for real (gate)
 
@@ -55,7 +56,7 @@ Sessions that write the same files run one after the other.
 - **Does:** for Claude, Codex and Gemini (`agy`), on the owner's logins, the checks of proposal section 5 on each path a driver could use: the native two-way stream, and ACP. For each: a prompt that edits and runs a command; a permission request answered allow and deny; cancel; kill the client in the middle of a turn, record whether the agent and its commands died, then resume by id; an HTTP MCP server per session with a token and a call held 9 minutes; model per session; a second login folder; whether settings, hooks, permission rules and instruction files apply; folder trust; commit and push; the locked profile, proven by the advertised tool list; which program an adapter really runs; tool limits per session; the Workflow tool with the agent-pr-pipeline plugin inside a `claude -p` session; `agy -p` with no terminal.
 - **Acceptance:** `docs/harness-findings.md` has one row per check, provider and path with the command, what was seen and the version, and ends with a decision per provider and the outcome of every row of proposal section 5. Each check has a redacted transcript under `spikes/acp/fixtures/`. `pgrep -fl 'claude|codex|agy'` and `git worktree list` in the scratch repo show nothing left. A "stop" row that fails ends the build for that provider and goes to the owner.
 - **Verify:** reruns every check.
-- **A provider that H0 stops is skipped.** Its driver step (H6, H7 or H8) and every acceptance line that names it are dropped, the other providers go on, and the final pull request lists it. H13's "Gemini appears in Settings" then shows it as not available, with the reason.
+- **A provider that H0 stops is skipped.** Its driver step (H6, H7a and H7b, or H8) and every acceptance line that names it are dropped, the other providers go on, and the final pull request lists it. H13's "Gemini appears in Settings" then shows it as not available, with the reason.
 
 ### H1. Green baseline and a workspace
 
@@ -67,51 +68,69 @@ Sessions that write the same files run one after the other.
 ### H2. Harness: sessions, events and the mock provider
 
 - **Touches:** `crates/harness` only.
-- **Does:** its own SQLite file with its own migration list, in a data folder it locks so two harnesses cannot share it. Sessions and events with a sequence number. Redaction before anything is stored; no payload stored for a locked session; payload dropped at clean-up or after 30 days. The driver interface with capability flags. A limit on sessions in a turn. A mock provider that plays a script and replays H0's fixtures. `harness run --provider mock` runs a session in-process and prints its events.
+- **Does:** its own SQLite file with its own migration list, in a data folder it locks so two harnesses cannot share it. Sessions and events with a sequence number. Redaction before anything is stored; no payload stored for a locked session; payload dropped at clean-up or after 30 days. The driver interface with capability flags. A limit on sessions in a turn. A mock provider that plays a script and replays H0's fixtures. `harness run --provider mock` runs a session in-process and prints its events. The mock maps request ids, pids, ports and session ids instead of matching lines, because H0's fixtures carry the spike's own. Fixtures for all three Codex approval kinds (command, file change, permissions) where H0 recorded them. The mock has a limit on how long a tool call may be held and can be resumed with a new token, so H5b tests `ask` before the drivers exist.
 - **Regression test:** a session's life against the mock: prompt, text, tool call, permission request, answer, cancel, end, failure. A second harness on the same data folder is refused. A secret in agent text never reaches the store. A locked session's text is in no table. A session past the limit waits.
 - **Acceptance:** `harness run --provider mock --script <fixture>` prints the fixture's events in order and exits 0.
 
 ### H3. Harness: the API and the command line
 
 - **Touches:** `crates/harness` (server, client module, CLI).
-- **Does:** `harness serve` on a Unix socket in a folder only the user can open. The first client token is handed over at first start; `harness token new` needs a valid token. A client proves its token by answering a challenge. A descriptor with protocol number and build id. Requests: open a session, send a message, cancel, answer a permission request, answer a question, post a tool result, close, clean up, list sessions, list providers. Events over a WebSocket from a sequence number. A session option "ends when its client leaves". A Rust client, used by `harness sessions`, `events`, `send`, `answer` and later by the app.
+- **Does:** `harness serve` on a Unix socket in a folder only the user can open. The first client token is handed over at first start; `harness token new` needs a valid token. A client proves its token by answering a challenge. A descriptor with protocol number and build id. Requests: open a session, send a message, cancel, answer a permission request, answer a question, post a tool result, close, hand over (close the session as handed over to Terminal, keeping its provider id for a later resume), clean up, list sessions, list providers. Events over a WebSocket from a sequence number. A session option "ends when its client leaves". A Rust client, used by `harness sessions`, `events`, `send`, `answer` and later by the app.
 - **Regression test:** no token, a wrong token and a session's tool token are refused on the client API. `token new` without a token is refused once one exists. The token is never sent on the socket (the test's fake server sees only the challenge answer). A client that reconnects with a sequence number gets exactly what it missed. A session that ends with its client is not resumed.
 - **Acceptance:** with `harness serve` running, `harness run --provider mock` from a second terminal streams the events of H2; after `kill -9` of that client, `harness events --after N` prints the rest; `harness answer` allows a mock permission request.
 
 ### H4. Harness: clones, worktrees and logins
 
 - **Touches:** `crates/harness`; `src-tauri` depends on the harness crate. Moves, with their tests, `runs/repo.rs`, `runs/fresh.rs`, `runs/env.rs`, `runs/provider_env.rs`, `runs/binary.rs`, `runs/provider_folder.rs` and `provider_probe.rs` into the harness, onto its own types. The app imports them from there, with thin conversions at the call sites (`runs/`, `claude/mod.rs`, `inbox/pip_model.rs`, `inbox/provider_probes.rs`, `inbox/providers.rs`, `inbox/models.rs`). One copy, never two.
-- **Does:** a session may name a repo, base and branch; the harness clones into its work root, fetches, adds a worktree, and removes it on clean-up without ever forcing. The provider table as code, with a login folder per instance. The shell environment is captured again each time a client connects. `harness providers` reports installed, signed in and models per login.
+- **Does:** a session may name a repo, base and branch; the harness clones into its work root, fetches, adds a worktree, and removes it on clean-up without ever forcing. The provider table as code, with a login folder per instance. The shell environment is captured again each time a client connects. `harness providers` reports installed, signed in and models per login. Gemini has no login folder and one login until `--gemini-dir` is shown signed in: `HOME` separates logins but also moves git, SSH and `gh` for the agent.
 - **Regression test:** the moved tests pass in their new home, among them the credential-helper refusal, the symlinked owner folder and unpushed work refused. The app's own tests pass unchanged.
 - **Acceptance:** `harness providers` on this Mac lists Claude and Codex as signed in and an empty scratch login folder as signed out, in one call.
 
-### H5. Harness: the tools endpoint
+### H5a. Harness: the tools endpoint
 
-- **Touches:** `crates/harness`. Moves the transport, token and origin checks out of `agent/mcp.rs`, and `runs/ask.rs`, the same way as H4; the app's server keeps working on the moved code.
-- **Does:** one MCP endpoint per session on loopback with its own token, stored as a hash. `result` with an optional schema. `ask`: stored, survives a restart, blocks "carry on", answered through the API. Tools the client declared: each call is an event the client answers; with no client it fails at once. A cap on calls per session. Each provider row names the setting that makes a tool call outwait a question, and a test asserts the numbers.
-- **Regression test:** a session's token opens only its own tools and stops working when the session closes. A request from a web page or another host is refused. A `result` that does not fit its schema goes back to the agent with the reason. The token is in no argv, log or event. A question asked before a restart is still open after it.
-- **Acceptance:** the mock provider calls a client tool; `harness events` shows the call; `harness` posts an answer and the mock receives it.
+- **Touches:** `crates/harness`. Moves the transport, token and origin checks out of `agent/mcp.rs` the same way as H4; the app's server keeps working on the moved code.
+- **Does:** one MCP endpoint per session on loopback, with its own token stored as a hash and a per-session name drawn at random from a secure source, at least 64 bits, written in letters and digits only. What protects the allowance is that the name cannot be predicted: a person's server cannot be named to collide with it. `result` with an optional schema; `result` is refused while a question is open (H5b). Tools the client declared: each call is an event the client answers; with no client it fails at once. A cap on calls per session. Calls to the session's own endpoint are allowed by the harness without asking the person, only for the exact full tool names built from the per-session name and never a prefix; each driver says how (H6 to H8), and nothing else is allowed that way. Each provider row names the setting that makes a tool call outwait a question, and its limit where none does. A resumed session gets a fresh token and the old one is refused.
+- **Regression test:** a session's token opens only its own tools and stops working when the session closes or is resumed. A request from a web page or another host is refused. A `result` that does not fit its schema goes back to the agent with the reason. The token is in no argv, log or event. An endpoint name comes from the secure random source with at least 64 bits, and has no `_` or `-`; a counter or a fixed prefix fails the test.
+- **Acceptance:** `cargo test -p harness tools_endpoint` passes, and `harness run --provider mock --script <client-tool fixture>` prints the client-tool call event, then the answer the mock received.
+
+### H5b. Harness: `ask`
+
+- **Touches:** `crates/harness`. Moves `runs/ask.rs` the same way as H4.
+- **Does:** `ask` is stored, survives a restart, blocks "carry on", and is answered through the API. Where a provider's limit on a tool call is below the wait, `ask` returns before the limit, measured from the call's start with a margin, with "question pending, end your turn". An answer whose call is no longer held (cut by that limit, or lost when the harness or the agent restarted) is sent as the next prompt on every provider, after the running turn ends, resuming the session first, with a fresh token, if it is not running. A second `ask` while one is open is refused with a message that names the open question. Stop, the hand-over request (H3, used by H14) and a turn that a deny ended close open questions, and the run says so. The mock provider has a tool-call limit and a resume (H2), so all of this is tested before the drivers exist.
+- **Regression test:** one each: a question asked before a restart is still open after it, and its answer arrives as the next prompt after a resume with a new token; an `ask` on a mock with a 180 s limit returns before the limit; an answer that arrives while a turn runs waits for the turn to end; `result` is refused while a question is open; a second `ask` while one is open is refused, naming the open question; Stop, the hand-over request and a deny-ended turn each close the open question and say so; an answer to a live session is sent with no resume.
+- **Acceptance:** `cargo test -p harness ask_` passes, and `harness run --provider mock --script <ask fixture>` with `harness answer` from a second terminal prints the question, "question pending", the turn's end, and the answer sent as the next prompt.
 
 ### H6. Harness: the Claude driver
 
-- **Touches:** `crates/harness`. Moves the launch flags and stream parser of `claude/mod.rs` and `claude/stream.rs` with their flag tests; the app's Pip keeps working on the moved code.
-- **Does:** the driver H0 decided for Claude. The normal profile adds only the tools endpoint, the guard and a model. The locked profile is today's flag list. Leftovers of a dead harness are stopped at start, by pid and start time. Resume by id with the "carry on" rule.
-- **Regression test:** against the fake Claude: the exact argv of both profiles; no restricting flag in the normal one; a restart in the middle of a turn resumes once; a restart with an open question sends no "carry on"; a reused pid is never signalled.
-- **Acceptance (real, `cargo test -p harness -- --ignored claude_real`):** in a scratch worktree the agent edits a file, asks through `ask`, is answered, commits, and ends with a `result` that fits a schema. A locked session's advertised tools are exactly the declared ones.
+- **Touches:** `crates/harness`, and its fake `claude` in `crates/harness/test-support/` (moved from `src-tauri/test-support/`; the app's own run and Pip tests use the moved copy until H17 removes them). Moves the launch flags and stream parser of `claude/mod.rs` and `claude/stream.rs` with their flag tests; the app's Pip keeps working on the moved code.
+- **Does:** the native driver H0 decided for Claude: `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio`, with `initialize`, `interrupt` and `can_use_tool` on the control channel. The tools endpoint is given by the `mcp_set_servers` control request on stdin, with its header and a `timeout` above the `ask` wait, under its per-session name, so the token is in no argv and not in the agent's environment. The locked profile is today's flag list with the endpoint given the same way instead of `--mcp-config`, and with `--allowedTools` naming exactly `mcp__<name>__<tool>` for each of the session's own tools, like the normal profile, never today's `mcp__gossamr` prefix: under `--strict-mcp-config --tools ""` the session's `init` tools are exactly the endpoint's tools (H0, `r4-locked-control`), so both profiles use one route. The normal profile adds only that endpoint, `--allowedTools` with exactly `mcp__<name>__<tool>` for each of its tools, the guard and a model. The guard says never to turn off commit signing or hooks, and to report it. Leftovers of a dead harness are stopped at start, by pid and start time: an orphaned `claude` outlives its client and ends its turn alone. Resume by id with the "carry on" rule, never after a turn that a deny ended, with a fresh token. Turns are counted by `result`, not by prompt: one prompt can give two `result`s when Claude starts a turn by itself after a background workflow ends, and the turn limit and "carry on" use that count. Events after `result` are accepted, and Stop also stops background tasks.
+- **Regression test:** against the fake Claude: the exact argv of both profiles; no restricting flag in the normal one; a restart in the middle of a turn resumes once; a restart with an open question sends no "carry on"; a reused pid is never signalled. `--allowedTools` names exactly the endpoint's tools; a second server's tool and a colliding name (server `a_b` with tool `c` beside server `a` with tool `b_c`) are not allowed by the driver. The endpoint is sent by `mcp_set_servers` in both profiles, and the token is in no argv and no environment variable of the child. No "carry on" after a deny-ended turn. A resumed session gets a new token. Two `result`s from one prompt count as two turns. On the locked profile a call to one of the session's own tools is not denied, and `--allowedTools` holds no prefix rule.
+- **Acceptance (real, `cargo test -p harness -- --ignored claude_real`):** in a scratch worktree the agent edits a file, asks through `ask`, is answered, commits, and ends with a `result` that fits a schema. A locked session's advertised tools are exactly the declared ones. The build session reports its non-test line count; over 800 it stops and proposes a split.
 
-### H7. Harness: the Codex driver
+### H7a. Harness: the Codex driver, sessions
 
-- **Touches:** `crates/harness`.
-- **Does:** the driver H0 decided for Codex, with the same life as H6 and no `--sandbox` or approval flag from us. A run the person's sandbox stops from committing says so.
-- **Regression test:** against the fake Codex: the argv; the token only in the environment; a reused pid is never signalled.
-- **Acceptance (real, `-- --ignored codex_real`):** the H6 scenario, with the sandbox outcome recorded.
+- **Touches:** `crates/harness`: an app-server client, and a fake app-server in `crates/harness/test-support/fake-codex-app-server` that records every request.
+- **Does:** `codex app-server`, the one Codex driver; no `exec` fallback is built, because it is a different capability set. One app-server process per session, so Stop can stop the process tree (an interrupt leaves a running command alive). At start it checks the protocol's shape: the `initialize` answer, and that `thread/start`, `turn/start`, `turn/interrupt`, `thread/resume` and the three approval requests keep their v2 names. There is no version ceiling: a version that passes the shape check but was not tested is a warning in Settings and on the run, not a block; a failed check reports "this Codex version is not supported". It never sets `experimentalApi` and ignores unknown notifications. No `sandbox`, `sandbox_mode`, approval policy or trust from us: a sandbox on `thread/start` makes Codex write project trust into the person's `config.toml`. The tools endpoint goes in `config.mcp_servers` under its per-session name, with the token in `http_headers`, `tool_timeout_sec = 600` and `default_tools_approval_mode = "approve"` on that one server key. Resume by thread id with a fresh token. `spikes/acp/scripts/codex-recheck.sh` reruns the checks this rests on against any installed `codex`.
+- **Regression test:** against the fake app-server: the token only in `http_headers`, in no argv and no environment variable; every request recorded, with no `sandbox`, `sandbox_mode`, `approvalPolicy`, `projects` or `trust_level` key on `thread/start`, `thread/resume` or `turn/start`; `default_tools_approval_mode` on the endpoint's server key only, so a second server's tool and a colliding name are not auto-allowed; a missing v2 name fails the shape check with that message; an untested version that passes is a warning; Stop kills a command that outlived `turn/interrupt`; a reused pid is never signalled. In the ignored real test, the driver's exact `thread/start` in an empty signed-out `CODEX_HOME` leaves no `config.toml`.
+- **Acceptance (real, `cargo test -p harness -- --ignored codex_real`):** a session in a scratch worktree edits a file, asks through `ask`, is answered, and ends with a `result`; `~/.codex/config.toml` is the same before and after.
+
+### H7b. Harness: the Codex driver, approvals
+
+- **Touches:** `crates/harness` (the Codex driver and its fake app-server).
+- **Does:** all three approval kinds (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, `item/permissions/requestApproval`) and `mcpServer/elicitation/request` become permission requests. Commands and file changes are answered with `decision`, permissions with a granted profile and a scope, an elicitation with `action`. No answer is ever wider than once: never `acceptForSession`, never an execpolicy amendment, never `scope: session`. The per-repo auto-allow (H11) never answers a request that carries `grantRoot`, never answers a permissions request, and never answers an elicitation for a server other than the session's own. An escalation request goes to Needs you with the whole command; a run that ends blocked says so.
+- **Regression test:** against the fake app-server: each kind answered allow and deny in its own shape; `grantRoot` and permissions requests are never auto-allowed; no answer carries `scope: session` or `acceptForSession`; the Needs you event carries the whole command.
+- **Acceptance (real, `cargo test -p harness -- --ignored codex_approvals_real`):** in a scratch worktree under the person's default, an escalation to commit is allowed through `harness answer` and the commit lands; `~/.codex/config.toml` is the same before and after.
 
 ### H8. Harness: the Gemini driver
 
-- **Touches:** `crates/harness`.
-- **Does:** `agy` through ACP, or what H0 decided. One login unless H0 found a way to keep two apart.
-- **Regression test:** the driver against the mock replaying H0's `agy` fixtures.
-- **Acceptance (real, `-- --ignored gemini_real`):** the H6 scenario. If `agy` is not signed in the step waits; it is not merged on fixtures alone.
+- **Touches:** `crates/harness`, and the mock provider's replay of H0's `agy` fixtures.
+- **Does:** `agy acp`. One login, no login folder. The tools endpoint goes in `session/new` and `session/load` `mcpServers` under its per-session name, with the token in `headers`; the driver answers `allow_once` by itself only when a permission request names exactly `mcp_<name>_<tool>` for one of the endpoint's tools, never by prefix. A deny ends agy's turn with no reply: no "carry on" after it, and the capability flag says so. MCP calls are cut at 180 s, so `ask` returns early and its answer comes as the next prompt (H5b). agy may end a turn (`end_turn`) while a command it started still runs: the driver tracks agy's descendants after `end_turn`, does not report the run as finished while one runs, and stops the process tree on Stop. When such a command ends, agy reports it and writes a new message by itself, with no prompt; the driver accepts updates after `end_turn` as the same run's output (H0, `r7-background`). `session/cancel` usually stops the running command but did not in 1 of 3 runs, and `agy acp` may take 15 s to exit while a command runs. agy keeps the session's MCP header, token included, in its conversation database, so the token must stop working when the session ends or is resumed. The `tool_call` fields agy adds (`name`, `args`, snake_case copies) and HTTP MCP without `mcpCapabilities` are feature-detected. Resume by `session/load` with a fresh token. A turn whose text is agy's "failed to construct executor: tool name conflict" ends as a failed turn, not a finished run, even though agy reports `end_turn`.
+- **Regression test:** the driver against the mock replaying H0's `agy` fixtures; `allow_once` is sent by itself only for an exact own tool name, never for a second server's tool or a colliding name; no "carry on" after a deny-ended turn; a run whose turn ended with a command still running is not finished until the command ends; Stop kills a command that outlived `session/cancel`; a resumed session gets a new token; a token is refused after its session ended. Replaying H0's `gemini/acp/r1-collision` fixture gives a failed turn with that reason.
+- **Acceptance (real, `cargo test -p harness -- --ignored gemini_real`):** a session in a scratch worktree edits a file, asks through `ask`, gets the answer as the next prompt, and ends with a `result`. If `agy` is not signed in the step waits; it is not merged on fixtures alone. The build session reports its non-test line count; over 800 it stops and proposes a split.
+
+### Built on "partly shown" (H7a, H7b, H8)
+
+H0 showed the person's own setup only partly for Codex and Gemini, because the person has little setup of their own there. H7a, H7b and H8 are built on that. The owner checks are listed in `docs/harness-findings.md`, "What could not be checked": Codex settings, hooks and rules in a second signed-in `CODEX_HOME`; agy in a trusted workspace. Each step's real test covers its owner check when a scratch login or a trusted scratch clone exists. If such a check later fails, proposal section 5's consequence applies, and that provider's step stops.
 
 ### H9. The app starts or adopts the harness
 
@@ -123,49 +142,49 @@ Sessions that write the same files run one after the other.
 ### H10. Claude runs on the harness
 
 - **Touches:** `src-tauri/src/runs/` (service, a new event consumer), `domain/run.rs`, `db/`, `agent/agent_tools.rs`, the run parts of `src/workspace/`, the mock and e2e.
-- **Does:** every Claude run, from Pip or from an approved draft, opens a harness session. The consumer turns events into state, the timeline, notices and Pip's wakes. One "send message". `report` becomes `result`; `read_ticket` and `read_workstream` are client tools; `ask` is the harness's. The app's queue keeps its order and waits when the harness is at its limit. A migration stops every `--bg` session the old code started and marks its run interrupted; its worktree stays and Clean up removes it with git.
+- **Does:** every Claude run, from Pip or from an approved draft, opens a harness session. The consumer turns events into state, the timeline, notices and Pip's wakes. One "send message". `report` becomes `result`; `read_ticket` and `read_workstream` are client tools; `ask` is the harness's. The app's queue keeps its order and waits when the harness is at its limit. A migration stops every `--bg` session the old code started and marks its run interrupted; its worktree stays and Clean up removes it with git. "Signing needs you" is a run outcome: a commit that the person's signing agent refused ends the run with that reason. Turns are counted by `result`, not by prompt, and the turn limit and "carry on" use that count.
 - **Regression test:** with the mock provider: start, stream, ask, answer, stop, a harness restart in the middle of a turn, clean-up with unpushed work refused, a full limit. An `app.sqlite` from `main` with a Claude run in every state opens and shows each with a sensible state.
-- **Acceptance (real, an `#[ignore]` test that starts the harness):** Pip's start path launches a Claude agent in a scratch workstream; it edits, asks, is answered, commits and returns a `result`; the test asserts the first text event is stored by the app less than one second after the harness emitted it.
+- **Acceptance (real, `cargo test -p gossamr -- --ignored claude_on_harness_real`, a test that starts the harness):** Pip's start path launches a Claude agent in a scratch workstream; it edits, asks, is answered, commits and returns a `result`; the test asserts the first text event is stored by the app less than one second after the harness emitted it.
 
 ### H11. Permission answers in the app
 
 - **Touches:** the consumer, `src/workspace/` (Needs you, the run sheet), Settings per repo, the mock and e2e.
-- **Does:** a permission request is a Needs you item with Allow and Deny, once. The per-repo setting of proposal section 3.2, checked against the real path. Where the provider path cannot be answered, the run stops and offers "Take over in Terminal" (H14).
-- **Regression test:** allow and deny reach the mock. With the setting on: an edit inside the worktree is allowed; an edit under `.git`, through a symlink out of the worktree, a command, and anything on a locked session are not.
-- **Acceptance:** a Playwright spec on the mock for the two buttons; the Rust tests above.
+- **Does:** a permission request is a Needs you item with Allow and Deny, once. The per-repo setting of proposal section 3.2, checked against the real path. Where the provider path cannot be answered, the run stops and offers "Take over in Terminal" (H14). All three Codex approval kinds are permission requests. Where a provider's capability flag says a deny ends the turn (Gemini), Deny reads "Deny ends this turn" and the run shows "stopped after a deny". The per-repo auto-allow never answers a Codex request that carries `grantRoot`, never answers a permissions request, and no answer is ever wider than `scope: turn`. The Needs you item shows the whole command.
+- **Regression test:** allow and deny reach the mock. With the setting on: an edit inside the worktree is allowed; an edit under `.git`, through a symlink out of the worktree, a command, and anything on a locked session are not. A Codex `grantRoot` request, a permissions request and a command are never auto-allowed; no answer carries `scope: session`; the Needs you item shows the whole command; on Gemini, Deny reads "Deny ends this turn".
+- **Acceptance:** `pnpm e2e e2e/permissions.spec.ts` passes (the two buttons, the whole command shown, "Deny ends this turn" on Gemini), and `cargo test -p gossamr permission_` passes.
 
 ### H12. Codex runs on the harness
 
 - **Touches:** `runs/service.rs`, the consumer, the mock and e2e.
-- **Does:** Codex runs open a harness session. A migration stops every Codex process the old code started and marks its run interrupted.
+- **Does:** Codex runs open a harness session. A migration stops every Codex process the old code started and marks its run interrupted. When the Codex protocol check fails, at start or in the middle of a run, the run stops with "this Codex version is not supported", names the installed version, and offers "Take over in Terminal"; an untested version that passes shows a warning on the run and in Settings.
 - **Regression test:** the H10 list with the mock provider standing in for Codex; the migration on a database with a live Codex run.
-- **Acceptance (real):** the H10 scenario on Codex.
+- **Acceptance (real, `cargo test -p gossamr -- --ignored codex_on_harness_real`):** the H10 scenario on Codex, with the escalation request that the agent sends to commit allowed in Needs you; the test prints the run's states in order and ends "done".
 
 ### H13. Providers as data, and Gemini
 
 - **Touches:** `connections.rs`, `config.rs`, `model_choice.rs`, `inbox/providers.rs`, `inbox/provider_probes.rs`, `inbox/models.rs`, `src/lib/models.ts`, the provider UI, the mock and e2e.
-- **Does:** `Driver` stops being a closed pair. Label, sign-in command, install hint, models and "can run Pip" come from the harness. Gemini appears in Settings and can run agents.
+- **Does:** `Driver` stops being a closed pair. Label, sign-in command, install hint, models and "can run Pip" come from the harness. Gemini appears in Settings and can run agents. Gemini has one login and no login folder until `--gemini-dir` is shown signed in.
 - **Regression test:** an unknown provider id in `config.json` disables that entry and nothing else.
-- **Acceptance (real):** the H10 scenario on Gemini. `rg '"claude" \| "codex"' src` finds nothing.
+- **Acceptance (real, `cargo test -p gossamr -- --ignored gemini_on_harness_real`):** the H10 scenario on Gemini, with the answer to `ask` arriving as the next prompt; the test prints the run's states in order and ends "done". `rg '"claude" \| "codex"' src` finds nothing.
 
 ### H14. Take over in Terminal
 
 - **Touches:** `runs/control.rs`, the run sheet.
 - **Does:** stops the harness's session, marks the run handed over, shows the provider's resume command in the worktree, and refuses a message to it until "Resume here".
 - **Regression test:** a message to a handed-over run is refused; "Resume here" reopens the session by id.
-- **Acceptance:** those tests, and a Playwright spec on the mock.
+- **Acceptance:** `cargo test -p gossamr hand_over` passes, and `pnpm e2e e2e/take-over.spec.ts` passes: the run reads "handed over", a message to it is refused, and "Resume here" reopens it.
 
 ### H15. Live output
 
 - **Touches:** `wire.rs`, `src/backend/events.ts`, the run sheet and agents view.
 - **Does:** text and tool calls show as they arrive. Still four event names.
 - **Regression test:** a page that opens in the middle of a turn shows the whole turn once, in order (Playwright on the mock).
-- **Acceptance:** that spec, and the H10 test extended to the page's event.
+- **Acceptance:** `pnpm e2e e2e/live-output.spec.ts` passes, and `cargo test -p gossamr -- --ignored claude_on_harness_real` asserts the page's event arrives less than one second after the harness emitted the text.
 
 ### H16. Pip through the harness
 
 - **Touches:** `agent/mod.rs`, `agent/mcp.rs`, `agent/supervisor.rs`, `claude/`, `inbox/pip_model.rs`.
-- **Does:** a Pip turn is a locked harness session that ends when the app leaves; Pip's tools are client tools; the app's MCP server, port file and token table go. Pip is woken by session events. A timer stays for wakes that were given back, and a resumed workstream is checked once.
+- **Does:** a Pip turn is a locked harness session that ends when the app leaves; Pip's tools are client tools; the app's MCP server, port file and token table go. Pip is woken by session events. A timer stays for wakes that were given back, and a resumed workstream is checked once. Pip runs on Claude only: Codex and Gemini have no locked profile (H0, check 11). The session's advertised tools, from `init`, are checked to be exactly Gossamr's before any tool call is answered. Its `--allowedTools` names exactly the endpoint's own tools under the per-session name, never a prefix (H6).
 - **Regression test:** the lock-down tests on the locked profile. `the_tools_are_the_neutral_set_and_none_of_them_writes` passes unchanged. A wake refused for quota is retried. A run that finished while its workstream was paused wakes Pip on resume. Pip's text is not in the harness's store.
 - **Acceptance (real, `-- --ignored pip_real`):** Pip answers, drafts a Jira comment on a fixture connection and starts an agent; asked to read a file, run a command and fetch a URL, its session lists no tool that could.
 
@@ -188,13 +207,13 @@ Sessions that write the same files run one after the other.
 - **Touches:** `codehost/` (reads: checks, reviews, changed paths, a file on the default branch; one write: merge a pull request at a named commit), `inbox/` (a landing module), Settings per repo (the choice, and the review bot's login).
 - **Does:** the five checks of proposal section 3.4, failing closed.
 - **Regression test:** on the fake GitHub server: each condition failing alone blocks the merge; a moved head blocks it; a 403 on checks, no checks at all, and more changed files than were listed each block it; a reply or a resolved thread from the owner's account is not an approval; an approval from a bot that is not the named one is not either; a gates file changed in the pull request is read from the default branch; a repo where the person has landed no wave yet waits for the person even when all five hold.
-- **Acceptance:** those tests. No real merge is made by this step.
+- **Acceptance:** `cargo test -p gossamr landing_` passes, each test printing the condition that blocked the merge. No real merge is made by this step.
 
 ### H20. Pipelines, stage 1
 
 - **Depends on:** H0's Workflow-tool check. If it failed, this step is skipped.
 - **Touches:** `agent/` (Pip tools: propose a wave, read a wave), `domain/` (a wave), `src/workspace/` (wave proposals and escalations in Needs you, a wave list).
-- **Does:** proposal section 3.4, stage 1. Pip proposes; the person starts. The agent runs the wave workflow and none of the landing steps. The session gets no "carry on"; "Resume wave" uses the pipeline's own resume. A repo with no goals document or gates file gets no wave and a message that says what is missing.
+- **Does:** proposal section 3.4, stage 1. Pip proposes; the person starts. The agent runs the wave workflow and none of the landing steps. The session gets no "carry on"; "Resume wave" uses the pipeline's own resume. A repo with no goals document or gates file gets no wave and a message that says what is missing. Before anything else, one real workflow runs in a harness session and its completion is seen in the stream; H0 ran one tiny workflow, not a wave.
 - **Regression test:** on the mock provider and the fake GitHub: Pip cannot start a wave, only propose one; an escalation waits in Needs you and its answer reaches the agent; a restart shows the wave interrupted and sends nothing; a missing goals file refuses.
 - **Acceptance (real):** on a scratch private GitHub repo, made only after the owner says yes, a two-entry plan goes through a wave on Claude up to open pull requests. `gh pr list --state merged` on that repo is empty until the person merges.
 
@@ -216,7 +235,7 @@ Sessions that write the same files run one after the other.
 
 - **Touches:** `agent/` (waves run on the host), Settings (a login per role), the wave view, landing (the merge-safety verdict now comes from its own session).
 - **Regression test:** a wave on the host with the mock provider and the fake GitHub, with review on a different provider from build; "merge when all five hold" merges on the fake GitHub only when all five do.
-- **Acceptance (real):** the H20 wave with build on one provider and review on another. No real automatic merge is made: the scratch repo has no review bot.
+- **Acceptance (real, `harness workflow run` of the wave script on a scratch repo):** the H20 wave with build on one provider and review on another; `harness sessions` lists the sessions on both providers. No real automatic merge is made: the scratch repo has no review bot.
 
 ### H23. Docs and the final pull request
 
@@ -229,8 +248,8 @@ Sessions that write the same files run one after the other.
 | --- | --- | --- |
 | 0 | G0, H0, H1 | Parallel: `docs/goals.md`, `spikes/`, workspace |
 | 1 | H2, H3 | One after the other |
-| 2 | H4, H5 | One after the other |
-| 3 | H6, H7, H8 | One after the other; H9 beside them |
+| 2 | H4, H5a, H5b | One after the other |
+| 3 | H6, H7a, H7b, H8 | One after the other; H9 beside them |
 | 4 | H10, H11, H12, H13, H14 | One after the other |
 | 5 | H15, H16 | Parallel: page, Pip |
 | 6 | H17 | H19 beside it |
@@ -256,7 +275,7 @@ The owner has something usable after wave 4: all three providers, live state, an
 
 ## Flagged concerns
 
-- **H0 can change the plan.** Entries H6 to H8 name "the driver H0 decided". Their briefs are written after H0.
+- **H0 can change the plan.** Entries H6 to H8 name "the driver H0 decided"; H0 decided them, and the entries now say which. Their briefs are written after H0.
 - **Automatic merging is never exercised for real.** It is tested against the fake GitHub only. This repo's review bot never approves, and the scratch repo has none. The first real use is the owner's, and the first wave in a repo waits for the owner anyway.
 - **Same user.** Agents run as the owner, like the harness. The controls stop accidents and simple injection, not a program that sets out to read the harness's store (proposal section 8).
 - **Provider terms** are the owner's decision (proposal section 8).

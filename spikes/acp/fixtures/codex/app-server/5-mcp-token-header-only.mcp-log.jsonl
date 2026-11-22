@@ -1,0 +1,5 @@
+{"event":"listening","port":59717,"pid":5830,"ms":0}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"initialize","tool":null,"args":null,"user_agent":"codex-mcp-client/0.171.0","header_names":["user-agent","authorization","accept","content-type","accept-encoding","host","content-length"],"ms":71}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"notifications/initialized","tool":null,"args":null,"user_agent":"codex-mcp-client/0.171.0","header_names":["user-agent","authorization","mcp-protocol-version","accept","content-type","accept-encoding","host","content-length"],"ms":72}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"tools/list","tool":null,"args":null,"user_agent":"codex-mcp-client/0.171.0","header_names":["user-agent","authorization","mcp-protocol-version","accept","content-type","accept-encoding","host","content-length"],"ms":72}
+{"event":"request","http":"POST","auth":"ok","rpc_method":"tools/call","tool":"ping","args":{},"user_agent":"codex-mcp-client/0.171.0","header_names":["user-agent","authorization","mcp-protocol-version","accept","content-type","accept-encoding","host","content-length"],"ms":6403}

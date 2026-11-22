@@ -1,0 +1,17 @@
+[package]
+name = "acp-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "H0 spike: drives claude, codex and agy over their native streams and ACP, and records the wire"
+
+# Stands alone: not part of the app's build or any workspace.
+[workspace]
+
+[dependencies]
+agent-client-protocol = "=5.5.1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+regex = "1"
+serde = "1"
+serde_json = "1"

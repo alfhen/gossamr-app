@@ -1,0 +1,3 @@
+turn 0 ended at 26534 ms: {"turn": 0, "answer": {"stopReason": "end_turn", "usage": {"inputTokens": 11629, "outputTokens": 48, "cachedReadTokens": 7419, "cachedWriteT
+turn 1 ended at 33288 ms: {"turn": 1, "answer": {"stopReason": "end_turn", "usage": {"inputTokens": 4363, "outputTokens": 252, "cachedReadTokens": 15217, "cachedWrite
+colour.txt: BLUE

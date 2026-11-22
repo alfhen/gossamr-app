@@ -1,0 +1,3 @@
+hook marker: present
+rule-file.txt (the driver allows the first prompt): present
+user settings keys (read-only): ['trustedWorkspaces'] permissions: None

@@ -1,0 +1,8 @@
+2026-11-22T13:30:40Z kill -9 of the driver while the agent runs 'sleep 120$'
+before: agent alive: yes; the command under the agent: 1 process(es)
+agent's children before:
+  codex-code-mode-host
+  zsh
++2s: agent alive: no; its children alive: 0; the command alive: 0
++8s: agent alive: no; its children alive: 0; the command alive: 0
++20s: agent alive: no; its children alive: 0; the command alive: 0

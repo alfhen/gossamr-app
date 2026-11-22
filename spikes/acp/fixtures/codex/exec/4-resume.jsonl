@@ -1,0 +1,10 @@
+{"seq":1,"ms":7,"dir":"driver","data":{"note":"spawned","detail":{"pid":44019,"driver_pid":44009,"argv":["codex","exec","--json","-m","gpt-6-luna","-c","model_reasoning_effort=\"low\"","resume","01a202cf-47f3-7270-82c7-e7e7c4901e2c","What exactly did I ask you to do in my previous message, and did the command finish? Answer in two short sentences."],"cwd":"$SCRATCH/wt/codex-exec-4"}}}
+{"seq":2,"ms":7,"dir":"driver","data":{"note":"close_stdin","detail":null}}
+{"seq":3,"ms":58,"dir":"from_agent","data":{"type":"thread.started","thread_id":"01a202cf-47f3-7270-82c7-e7e7c4901e2c"}}
+{"seq":4,"ms":615,"dir":"from_agent","data":{"type":"turn.started"}}
+{"seq":5,"ms":2736,"dir":"from_agent","data":{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"You asked me to run `sleep 120; echo slept > slept.txt` and wait for it to finish. Yes, it finished successfully."}}}
+{"seq":6,"ms":2736,"dir":"driver","data":{"note":"first_text","detail":{"turn":0,"ms_after_prompt":2728}}}
+{"seq":7,"ms":2748,"dir":"from_agent","data":{"type":"turn.completed","usage":{"input_tokens":47548,"cached_input_tokens":42752,"cache_write_input_tokens":0,"output_tokens":135,"reasoning_output_tokens":0}}}
+{"seq":8,"ms":2971,"dir":"driver","data":{"note":"stdout_closed","detail":null}}
+{"seq":9,"ms":2971,"dir":"driver","data":{"note":"turn_end","detail":{"turn":0,"ms":2963}}}
+{"seq":10,"ms":2971,"dir":"driver","data":{"note":"exited","detail":{"status":"exit status: 0","after_ms":0}}}

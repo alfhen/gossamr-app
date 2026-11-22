@@ -1,0 +1,2 @@
+init tools: ['mcp__gossamr__ask', 'mcp__gossamr__hold', 'mcp__gossamr__ping']
+ran.txt: absent

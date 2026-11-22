@@ -1,0 +1,2 @@
+token on any argv under the adapter: 1
+--mcp-config on the CLI's argv: 1
