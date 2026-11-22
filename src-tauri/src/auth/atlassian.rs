@@ -85,6 +85,15 @@ impl Atlassian {
         Self { http, endpoints: Endpoints::default() }
     }
 
+    /// One that reaches no Atlassian host: every request goes to a loopback port nothing listens on, and is refused.
+    /// Its client uses no proxy, so a proxy in the environment can't take the request instead.
+    #[cfg(test)]
+    pub fn nowhere() -> Self {
+        let http = reqwest::Client::builder().no_proxy().build().expect("a client with no proxy");
+        let closed = "http://127.0.0.1:1".to_string();
+        Self { http, endpoints: Endpoints { tenant: Some(closed.clone()), api: closed } }
+    }
+
     async fn myself(&self, email: &str, token: &str, cloud_id: &str) -> Result<Account> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]

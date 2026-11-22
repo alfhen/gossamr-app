@@ -1,0 +1,9 @@
+[package]
+name = "harness"
+version = "0.1.0"
+description = "Gossamr's agent harness: a program beside the app that runs agent sessions"
+authors = ["Alf Henderson"]
+edition = "2024"
+publish = false
+
+[dependencies]

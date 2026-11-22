@@ -10,7 +10,6 @@ use crate::config::AppConfig;
 use crate::connections::{self, Driver, ProviderInstance};
 use crate::error::{Error, Result};
 use crate::probe::State;
-use crate::runs::binary::find_binary_from;
 use crate::runs::env::RunEnv;
 use crate::runs::provider_env::{observing_states, states,ProviderEnv, ProviderState};
 use crate::runs::provider_folder::{self, Places};
@@ -168,7 +167,7 @@ impl Core {
         if self.provider_snapshot_for(&instance).is_none_or(|s| s.state != State::NotSignedIn) {
             return Err(Error::Input("Gossamr opens Terminal to sign in only when the last check found you signed out. Check it again.".into()));
         }
-        let binary = find_binary_from(self.home.as_deref(), instance.driver, &login.over(&shell)).ok_or_else(|| Error::Input(format!("`{}` isn't installed.", instance.driver.binary())))?;
+        let binary = self.places.find(instance.driver, &login.over(&shell)).ok_or_else(|| Error::Input(format!("`{}` isn't installed.", instance.driver.binary())))?;
         Ok(SignIn { driver: instance.driver, binary, login })
     }
 

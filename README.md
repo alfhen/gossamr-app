@@ -102,7 +102,7 @@ macOS ties Keychain access to the app's code signature. An unsigned dev build ge
 ./scripts/dev-signing/setup.sh
 ```
 
-It creates a throwaway signing certificate in its own keychain (`~/Library/Keychains/gossamr-dev.keychain-db`, empty password, nothing else in it). `cargo run` and `pnpm tauri dev` then sign the binary with it before launching, through the runner in `src-tauri/.cargo/config.toml`. Click **Always Allow** on the first prompt after setting it up and it stays quiet from then on. Without the identity (a fresh clone, CI) the runner just launches the binary unsigned.
+It creates a throwaway signing certificate in its own keychain (`~/Library/Keychains/gossamr-dev.keychain-db`, empty password, nothing else in it). `cargo run` and `pnpm tauri dev` then sign the binary with it before launching, through the runner in `.cargo/config.toml`. Click **Always Allow** on the first prompt after setting it up and it stays quiet from then on. Without the identity (a fresh clone, CI) the runner just launches the binary unsigned.
 
 To undo it, delete the keychain file.
 
@@ -110,11 +110,11 @@ Checks that CI runs:
 
 ```bash
 pnpm typecheck && pnpm test
-cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
+mkdir -p dist && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 ```
 
 Two tests run the real `claude` CLI and are skipped by default. With Claude Code installed and logged in:
 
 ```bash
-cd src-tauri && cargo test -- --ignored
+cargo test -p gossamr -- --ignored
 ```

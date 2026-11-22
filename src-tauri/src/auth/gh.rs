@@ -12,7 +12,16 @@ use crate::probe::{run_gh, Ran, TIMEOUT};
 /// A GUI app's PATH is minimal, so the usual places for `gh` are tried as well.
 const GH_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
+/// Where `gh` is looked for. A test build has no folder of the machine's, so a test reaches only a `gh` it puts in
+/// place itself, through `GithubAuth::for_test`.
 pub fn path_dirs() -> Vec<PathBuf> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    dirs_of_this_mac()
+}
+
+fn dirs_of_this_mac() -> Vec<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     GH_DIRS.iter().map(PathBuf::from).chain(std::env::split_paths(&path)).collect()
 }
@@ -121,8 +130,13 @@ mod tests {
 
     #[test]
     fn the_homebrew_folders_are_searched_before_path() {
-        let dirs = path_dirs();
+        let dirs = dirs_of_this_mac();
         assert_eq!(&dirs[..2], [PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")]);
+    }
+
+    #[test]
+    fn a_test_build_looks_for_gh_in_no_folder_of_the_machine() {
+        assert_eq!(path_dirs(), Vec::<PathBuf>::new());
     }
 
     #[tokio::test]

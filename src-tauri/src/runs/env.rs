@@ -114,23 +114,31 @@ pub struct ShellCapture {
     /// None reads `$SHELL` at each capture.
     shell: Option<String>,
     found: tokio::sync::Mutex<Option<Arc<RunEnv>>>,
+    /// What `with_env` gave. A forget goes back to it, so a test's capture never turns into the machine's shell.
+    #[cfg(test)]
+    fixed: Option<Arc<RunEnv>>,
 }
 
 impl ShellCapture {
     #[cfg(test)]
     pub fn with_shell(shell: &str) -> Self {
-        Self { shell: Some(shell.into()), found: Default::default() }
+        Self { shell: Some(shell.into()), ..Default::default() }
     }
 
     /// A capture that already holds `env`, so a test never starts a shell.
     #[cfg(test)]
     pub fn with_env(env: RunEnv) -> Self {
-        Self { shell: None, found: tokio::sync::Mutex::new(Some(Arc::new(env))) }
+        let env = Arc::new(env);
+        Self { shell: None, found: tokio::sync::Mutex::new(Some(env.clone())), fixed: Some(env) }
     }
 
     /// Drops a kept capture, so the next `get` reads the shell again.
     pub async fn forget(&self) {
-        *self.found.lock().await = None;
+        #[cfg(test)]
+        let kept = self.fixed.clone();
+        #[cfg(not(test))]
+        let kept = None;
+        *self.found.lock().await = kept;
     }
 
     pub async fn get(&self) -> Result<Arc<RunEnv>> {

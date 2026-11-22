@@ -32,4 +32,4 @@ pnpm install
 mkdir -p dist
 
 # Warm the Rust build and clippy (CI runs it) so the first check in the session is quick.
-(cd src-tauri && cargo build --all-targets && cargo clippy --all-targets)
+cargo build --workspace --all-targets && cargo clippy --workspace --all-targets

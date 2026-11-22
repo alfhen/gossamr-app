@@ -8,7 +8,7 @@ use crate::connections::Driver;
 /// GUI apps on macOS don't inherit the shell PATH, so look where installers put `claude` before asking a login shell.
 pub fn find_claude() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    if let Some(found) = installed(Driver::Claude, &home).into_iter().find(|p| p.is_file()) {
+    if let Some(found) = CliPlaces::of_this_mac(Some(home)).installed(Driver::Claude).into_iter().find(|p| p.is_file()) {
         return Some(found);
     }
     let out = std::process::Command::new("/bin/zsh").args(["-lc", "command -v claude"]).output().ok()?;
@@ -16,21 +16,71 @@ pub fn find_claude() -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-/// The CLI of `driver`: where installers put it, then the PATH of the captured shell environment, which holds what
-/// `.zshrc` adds (an npm `codex` under nvm), then the copy an app bundles. A copy on PATH wins over a bundled one
-/// because the person put it there.
+/// The CLI of `driver` in this build's places: see `CliPlaces::find`.
 pub fn find_binary(driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
-    find_binary_from(dirs::home_dir().as_deref(), driver, shell)
+    CliPlaces::for_this_build(dirs::home_dir()).find(driver, shell)
 }
 
-/// `find_binary` with the home folder given, so a test or a caller that already knows it need not ask the system.
-pub fn find_binary_from(home: Option<&Path>, driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
-    let apps: Vec<PathBuf> = [Some(PathBuf::from("/Applications")), home.map(|h| h.join("Applications"))].into_iter().flatten().collect();
-    find_with(driver, home, &apps, shell.get("PATH"))
+/// Where installers put the CLIs outside the home folder.
+const SYSTEM_BINS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+
+/// The folders a CLI is looked for in besides the shell's PATH: where installers put it, and the app folders whose apps
+/// may bundle one. A test build has none unless the test gives folders of its own, so the CLIs installed on the machine
+/// never answer a test.
+#[derive(Clone, Debug)]
+pub struct CliPlaces {
+    home: Option<PathBuf>,
+    bins: Vec<PathBuf>,
+    apps: Vec<PathBuf>,
 }
 
-fn find_with(driver: Driver, home: Option<&Path>, apps: &[PathBuf], path: Option<&OsStr>) -> Option<PathBuf> {
-    find_in(&home.map(|h| installed(driver, h)).unwrap_or_default(), driver.binary(), path).or_else(|| bundled(driver, apps))
+impl CliPlaces {
+    /// This Mac's places in the app, and none in a test build.
+    pub fn for_this_build(home: Option<PathBuf>) -> Self {
+        if cfg!(test) {
+            Self { home: None, bins: Vec::new(), apps: Vec::new() }
+        } else {
+            Self::of_this_mac(home)
+        }
+    }
+
+    /// The folders under `home`, then Homebrew's and `/usr/local`'s, then the app folders. Without a home folder no
+    /// install folder is searched.
+    fn of_this_mac(home: Option<PathBuf>) -> Self {
+        let apps = [Some(PathBuf::from("/Applications")), home.as_ref().map(|h| h.join("Applications"))].into_iter().flatten().collect();
+        let bins = if home.is_some() { SYSTEM_BINS.map(PathBuf::from).to_vec() } else { Vec::new() };
+        Self { home, bins, apps }
+    }
+
+    /// Only `home` and its `Applications` folder.
+    #[cfg(test)]
+    pub fn only_under(home: &Path) -> Self {
+        Self { home: Some(home.to_path_buf()), bins: Vec::new(), apps: vec![home.join("Applications")] }
+    }
+
+    /// The CLI of `driver`: where installers put it, then the PATH of the captured shell environment, which holds what
+    /// `.zshrc` adds (an npm `codex` under nvm), then the copy an app bundles. A copy on PATH wins over a bundled one
+    /// because the person put it there.
+    pub fn find(&self, driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
+        self.find_on(driver, shell.get("PATH"))
+    }
+
+    fn find_on(&self, driver: Driver, path: Option<&OsStr>) -> Option<PathBuf> {
+        find_in(&self.installed(driver), driver.binary(), path).or_else(|| bundled(driver, &self.apps))
+    }
+
+    fn installed(&self, driver: Driver) -> Vec<PathBuf> {
+        let name = driver.binary();
+        let mut paths = Vec::new();
+        if let Some(home) = &self.home {
+            paths.push(home.join(".local/bin").join(name));
+            if driver == Driver::Claude {
+                paths.push(home.join(".claude/local/claude"));
+            }
+        }
+        paths.extend(self.bins.iter().map(|bin| bin.join(name)));
+        paths
+    }
 }
 
 /// Where apps that ship the Codex CLI keep it. ChatGPT.app is the one the owner's Mac has, and it is not on PATH.
@@ -53,16 +103,6 @@ fn bundled(driver: Driver, roots: &[PathBuf]) -> Option<PathBuf> {
 
 fn runnable(path: &Path) -> bool {
     path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-fn installed(driver: Driver, home: &Path) -> Vec<PathBuf> {
-    let name = driver.binary();
-    let mut paths = vec![home.join(".local/bin").join(name)];
-    if driver == Driver::Claude {
-        paths.push(home.join(".claude/local/claude"));
-    }
-    paths.extend([PathBuf::from("/opt/homebrew/bin").join(name), PathBuf::from("/usr/local/bin").join(name)]);
-    paths
 }
 
 fn find_in(fixed: &[PathBuf], name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
@@ -155,10 +195,39 @@ mod tests {
         let on_path = tool(&dir.join("nvm"), "codex", "#!/bin/sh\n");
         let path = std::env::join_paths([dir.join("nvm")]).unwrap();
         let apps = [dir.join("Applications")];
-        let nowhere = dir.join("home");
-        assert_eq!(find_with(Driver::Codex, Some(&nowhere), &apps, Some(&path)), Some(on_path));
-        assert_eq!(find_with(Driver::Codex, Some(&nowhere), &apps, None), bundled(Driver::Codex, &apps));
-        assert_eq!(find_with(Driver::Claude, Some(&nowhere), &apps, None), None);
+        let places = CliPlaces::only_under(&dir);
+        assert_eq!(places.find_on(Driver::Codex, Some(&path)), Some(on_path));
+        assert_eq!(places.find_on(Driver::Codex, None), bundled(Driver::Codex, &apps));
+        assert_eq!(places.find_on(Driver::Claude, None), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn this_macs_places_are_the_home_folder_then_homebrew_then_usr_local_and_both_app_folders_and_none_without_a_home() {
+        let home = PathBuf::from("/Users/someone");
+        let places = CliPlaces::of_this_mac(Some(home.clone()));
+        let claude = ["/Users/someone/.local/bin/claude", "/Users/someone/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
+        assert_eq!(places.installed(Driver::Claude), claude.map(PathBuf::from));
+        assert_eq!(places.installed(Driver::Codex), ["/Users/someone/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"].map(PathBuf::from));
+        assert_eq!(places.apps, [PathBuf::from("/Applications"), home.join("Applications")]);
+        let homeless = CliPlaces::of_this_mac(None);
+        assert_eq!(homeless.installed(Driver::Codex), Vec::<PathBuf>::new(), "without a home folder no install folder is searched");
+        assert_eq!(homeless.apps, [PathBuf::from("/Applications")]);
+    }
+
+    #[test]
+    fn a_test_build_looks_in_no_folder_of_the_machine() {
+        let places = CliPlaces::for_this_build(dirs::home_dir());
+        assert!(places.home.is_none() && places.bins.is_empty() && places.apps.is_empty(), "{places:?}");
+        assert_eq!(places.find_on(Driver::Codex, None), None);
+    }
+
+    #[test]
+    fn places_under_a_folder_find_nothing_the_machine_has_installed() {
+        let dir = scratch("only-under");
+        let places = CliPlaces::only_under(&dir);
+        assert!(places.installed(Driver::Codex).iter().all(|p| p.starts_with(&dir)), "{:?}", places.installed(Driver::Codex));
+        assert_eq!(places.find_on(Driver::Codex, None), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
