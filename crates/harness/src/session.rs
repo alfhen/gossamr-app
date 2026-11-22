@@ -336,6 +336,9 @@ impl Task {
         let (cut, mut cuts) = mpsc::unbounded_channel::<String>();
         let mut calls_open = true;
         let stopped = 'run: loop {
+            if self.broken.load(Ordering::Relaxed) {
+                break true;
+            }
             if !in_turn && waiting.is_none() && !queued.is_empty() {
                 if turns.try_take() {
                     slot = Some(Slot(turns.clone()));
@@ -433,8 +436,9 @@ impl Task {
                         }
                     },
                     Some(Request::Answer { id, driver_id, decision, message }) => {
-                        self.emit(Body::Answered { id, decision, message: message.clone() });
-                        let _ = link.commands.send(Command::Answer { id: driver_id, decision, message });
+                        if self.emit(Body::Answered { id, decision, message: message.clone() }) {
+                            let _ = link.commands.send(Command::Answer { id: driver_id, decision, message });
+                        }
                     }
                     Some(Request::ToolResult { id, reply }) => {
                         if let Some(held) = held_calls.remove(&id) {
@@ -517,15 +521,21 @@ impl Task {
         }
     }
 
-    /// Stores the event and sends it to the session's clients; a text delta is only sent. When the store fails, the
-    /// clients get one `failed` event and the last `closed`, numbered 0 since no number could be given, and the
-    /// session stops.
+    /// Stores the event and sends it to the session's clients; a text delta is only sent. True when it was stored.
+    /// When the store fails, the clients get one `failed` event and the last `closed`, numbered 0 since no number
+    /// could be given, and the session stops; nothing is written after that, even if the store would take it again.
     fn emit(&self, body: Body) -> bool {
         if let Body::TextDelta { text } = &body {
             self.delta(text);
             return true;
         }
         self.flush_delta();
+        if self.broken.load(Ordering::Relaxed) {
+            if body == Body::Closed {
+                let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+            }
+            return false;
+        }
         let body = redact::body(body, &self.secrets);
         let stored = self.inner.store().append(&self.id, &body, now_ms());
         match stored {
