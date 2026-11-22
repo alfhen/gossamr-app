@@ -2,13 +2,16 @@
 //! through redaction into the store and out to the clients that listen.
 //!
 //! The harness holds a limit on how many sessions are in a turn at once. A prompt past the limit waits, and says so.
-//! A turn the agent starts by itself takes no slot, since nothing can hold it back.
+//! A turn the agent starts by itself takes no slot: it has begun before the harness sees it, so nothing can hold it
+//! back, and a stray event after a turn's end would otherwise hold a slot for good.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -22,6 +25,13 @@ use crate::store::{Store, now_ms};
 
 pub const DEFAULT_TURN_LIMIT: usize = 4;
 
+/// How long a stopped agent may take to go. Until it has gone, or this has passed, its slot and its session id stay
+/// taken, so neither another turn nor a resume of the same session can start beside it.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// How often a running harness drops payload older than 30 days.
+const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
+
 #[derive(Clone)]
 pub struct Harness {
     inner: Arc<Inner>,
@@ -32,7 +42,7 @@ struct Inner {
     drivers: HashMap<String, Arc<dyn Driver>>,
     slots: Arc<Semaphore>,
     live: Mutex<HashMap<String, Live>>,
-    starts: std::sync::atomic::AtomicU64,
+    starts: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -52,16 +62,26 @@ pub struct Open {
 }
 
 impl Harness {
+    /// Call it inside a Tokio runtime: the harness sweeps old payload on a task of its own.
     pub fn new(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, turn_limit: usize) -> Harness {
-        Harness {
-            inner: Arc::new(Inner {
-                store: Mutex::new(store),
-                drivers: drivers.into_iter().collect(),
-                slots: Arc::new(Semaphore::new(turn_limit)),
-                live: Mutex::new(HashMap::new()),
-                starts: std::sync::atomic::AtomicU64::new(0),
-            }),
-        }
+        let inner = Arc::new(Inner {
+            store: Mutex::new(store),
+            drivers: drivers.into_iter().collect(),
+            slots: Arc::new(Semaphore::new(turn_limit)),
+            live: Mutex::new(HashMap::new()),
+            starts: AtomicU64::new(0),
+        });
+        let weak = Arc::downgrade(&inner);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(SWEEP_EVERY).await;
+                let Some(inner) = weak.upgrade() else { return };
+                if let Err(e) = inner.store().sweep(now_ms()) {
+                    eprintln!("harness: sweeping old payload: {e}");
+                }
+            }
+        });
+        Harness { inner }
     }
 
     /// Starts a session. The receiver gets every event from the first.
@@ -86,9 +106,6 @@ impl Harness {
 
     /// Starts a session again by its provider's session id, with a new tools token.
     pub fn resume(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
-        if self.inner.live().contains_key(id) {
-            return Err(Error::Running(id.to_owned()));
-        }
         let row = self.inner.store().session(id)?;
         let provider_session =
             row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} never started at its provider")))?;
@@ -132,7 +149,9 @@ impl Harness {
     }
 
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
-        self.inner.store().events(id, after)
+        let store = self.inner.store();
+        store.sweep(now_ms())?;
+        store.events(id, after)
     }
 
     pub fn subscribe(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
@@ -151,20 +170,38 @@ impl Harness {
         self.live(id)?.requests.send(command).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
+    /// Takes the session's id before the driver opens, so two starts of one session cannot both open it.
     fn start(&self, id: &str, driver: Arc<dyn Driver>, launch: Launch) -> Result<broadcast::Receiver<Event>> {
         let secrets = vec![launch.tools_token.expose().to_owned()];
-        let link = driver.open(launch).map_err(Error::Driver)?;
         let (events, receiver) = broadcast::channel(1024);
         let (requests, requests_rx) = mpsc::unbounded_channel();
-        let start = self.inner.starts.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.inner.live().insert(id.to_owned(), Live { requests, events: events.clone(), start });
-        let task = Task { inner: self.inner.clone(), id: id.to_owned(), secrets, events, start };
+        let start = self.inner.starts.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut live = self.inner.live();
+            if live.contains_key(id) {
+                return Err(Error::Running(id.to_owned()));
+            }
+            live.insert(id.to_owned(), Live { requests, events: events.clone(), start });
+        }
+        let link = driver.open(launch).map_err(|e| {
+            self.inner.forget(id, start);
+            Error::Driver(e)
+        })?;
+        let task = Task { inner: self.inner.clone(), id: id.to_owned(), secrets, events, start, broken: AtomicBool::new(false) };
         tokio::spawn(task.run(link, requests_rx));
         Ok(receiver)
     }
 }
 
 impl Inner {
+    /// Removes the session's live entry if it is still this start's.
+    fn forget(&self, id: &str, start: u64) {
+        let mut live = self.live();
+        if live.get(id).is_some_and(|entry| entry.start == start) {
+            live.remove(id);
+        }
+    }
+
     fn store(&self) -> MutexGuard<'_, Store> {
         self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -182,6 +219,8 @@ struct Task {
     secrets: Vec<String>,
     events: broadcast::Sender<Event>,
     start: u64,
+    /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
+    broken: AtomicBool,
 }
 
 impl Task {
@@ -189,7 +228,7 @@ impl Task {
         let mut queued: VecDeque<String> = VecDeque::new();
         let mut slot: Option<OwnedSemaphorePermit> = None;
         let mut acquiring: Option<Acquiring> = None;
-        loop {
+        let stopped = 'run: loop {
             if slot.is_none() && acquiring.is_none() && !queued.is_empty() {
                 match self.inner.slots.clone().try_acquire_owned() {
                     Ok(permit) => slot = Some(self.prompt(&link, permit, &mut queued)),
@@ -201,6 +240,10 @@ impl Task {
                         }));
                     }
                 }
+            }
+            if self.broken.load(Ordering::Relaxed) {
+                let _ = link.commands.send(Command::Stop);
+                break true;
             }
             // The agent's events go first, so what it said is in the record before what the client asked next.
             tokio::select! {
@@ -221,7 +264,7 @@ impl Task {
                         if slot.is_some() {
                             self.emit(Body::Failed { reason: "the agent stopped in the middle of a turn".into() });
                         }
-                        break;
+                        break 'run false;
                     }
                 },
                 permit = async { acquiring.as_mut().expect("the branch runs only while acquiring").await },
@@ -242,37 +285,58 @@ impl Task {
                     }
                     Some(Command::Stop) | None => {
                         let _ = link.commands.send(Command::Stop);
-                        break;
+                        break 'run true;
                     }
                     Some(other) => {
                         let _ = link.commands.send(other);
                     }
                 },
             }
+        };
+        if stopped {
+            let gone = async {
+                while let Some(body) = link.output.recv().await {
+                    self.emit(body);
+                }
+            };
+            if tokio::time::timeout(STOP_GRACE, gone).await.is_err() {
+                eprintln!("harness: session {}: the agent was still running {} s after the stop", self.id, STOP_GRACE.as_secs());
+            }
         }
         drop(slot);
-        let mut live = self.inner.live();
-        if live.get(&self.id).is_some_and(|entry| entry.start == self.start) {
-            live.remove(&self.id);
-        }
-        drop(live);
+        self.inner.forget(&self.id, self.start);
         self.emit(Body::Closed);
     }
 
     fn prompt(&self, link: &Link, permit: OwnedSemaphorePermit, queued: &mut VecDeque<String>) -> OwnedSemaphorePermit {
         let text = queued.pop_front().expect("a prompt is queued");
-        self.emit(Body::Prompted { text: text.clone() });
-        let _ = link.commands.send(Command::Prompt(text));
+        if self.emit(Body::Prompted { text: text.clone() }) {
+            let _ = link.commands.send(Command::Prompt(text));
+        }
         permit
     }
 
-    fn emit(&self, body: Body) {
+    /// Stores the event and sends it to the session's clients. When the store fails, the clients get one `failed` event
+    /// and the last `closed`, numbered 0 since no number could be given, and the session stops.
+    fn emit(&self, body: Body) -> bool {
         let body = redact::body(body, &self.secrets);
-        match self.inner.store().append(&self.id, &body, now_ms()) {
+        let stored = self.inner.store().append(&self.id, &body, now_ms());
+        match stored {
             Ok(event) => {
                 let _ = self.events.send(event);
+                true
             }
-            Err(e) => eprintln!("harness: session {}: {e}", self.id),
+            Err(e) => {
+                eprintln!("harness: session {}: {e}", self.id);
+                if !self.broken.swap(true, Ordering::Relaxed) {
+                    let reason = format!("the store could not keep this session's events, so it stops: {e}");
+                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body: Body::Failed { reason } });
+                }
+                if body == Body::Closed {
+                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                }
+                false
+            }
         }
     }
 }

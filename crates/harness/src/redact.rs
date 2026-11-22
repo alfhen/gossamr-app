@@ -38,12 +38,22 @@ pub fn text(s: &str, secrets: &[String]) -> String {
     }
 }
 
-/// Calls `f` on every string in `value`, object keys left out.
+/// Calls `f` on every string in `value`, object keys among them: an agent's tool input can hold a secret as a key.
+/// An event's own field names are fixed words that no secret or token shape matches.
 pub fn each_string(value: &mut Value, f: &mut impl FnMut(&mut String)) {
     match value {
         Value::String(s) => f(s),
         Value::Array(items) => items.iter_mut().for_each(|item| each_string(item, f)),
-        Value::Object(fields) => fields.values_mut().for_each(|field| each_string(field, f)),
+        Value::Object(fields) => {
+            *fields = std::mem::take(fields)
+                .into_iter()
+                .map(|(mut key, mut field)| {
+                    f(&mut key);
+                    each_string(&mut field, f);
+                    (key, field)
+                })
+                .collect();
+        }
         _ => {}
     }
 }
@@ -82,11 +92,11 @@ mod tests {
     }
 
     #[test]
-    fn redact_masks_every_string_of_a_body_and_keeps_its_shape() {
+    fn redact_masks_every_string_of_a_body_its_keys_among_them_and_keeps_its_shape() {
         let secret = "s3cr3t-value".to_owned();
-        let body = Body::ToolCall { id: "t1".into(), name: "curl".into(), input: serde_json::json!({ "args": ["-H", "x s3cr3t-value"], "n": 3 }) };
-        let masked = super::body(body, &[secret]);
-        let expected = serde_json::json!({ "args": ["-H", format!("x {MASK}")], "n": 3 });
+        let input = serde_json::json!({ "args": ["-H", "x s3cr3t-value"], "n": 3, "s3cr3t-value": true });
+        let masked = super::body(Body::ToolCall { id: "t1".into(), name: "curl".into(), input }, &[secret]);
+        let expected = serde_json::json!({ "args": ["-H", format!("x {MASK}")], "n": 3, MASK: true });
         assert_eq!(masked, Body::ToolCall { id: "t1".into(), name: "curl".into(), input: expected });
     }
 }

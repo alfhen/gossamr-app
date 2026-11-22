@@ -121,3 +121,13 @@ fn store_the_data_folder_is_private_to_the_user() {
     assert!(matches!(Store::open(&open), Err(Error::NotPrivate(_))), "a folder others can open is refused");
     assert!(!open.join("harness.sqlite").exists(), "and nothing is written into it");
 }
+
+#[test]
+fn store_a_sessions_folder_comes_back_byte_for_byte_even_when_it_is_not_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let cwd = Path::new(std::ffi::OsStr::from_bytes(b"/work/caf\xe9"));
+    store.create_session("a", "mock", false, cwd, None).unwrap();
+    assert_eq!(store.session("a").unwrap().cwd, cwd);
+}
