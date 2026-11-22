@@ -1080,6 +1080,8 @@ mod tests {
         let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), dir.clone());
         let shell = core.shell().get().await.unwrap();
         assert_eq!(shell.get("PATH"), Some(std::ffi::OsStr::new("/usr/bin:/bin")), "not the person's login shell");
+        core.shell().forget().await;
+        assert_eq!(core.shell().get().await.unwrap().get("PATH"), Some(std::ffi::OsStr::new("/usr/bin:/bin")), "a missing CLI forgets the capture, which keeps the test's");
         for driver in [Driver::Claude, Driver::Codex] {
             assert_eq!(core.places.find(driver, &shell), None, "{driver:?}");
         }
@@ -2098,7 +2100,6 @@ pub(crate) mod testing {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!("gossamr-core-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let scope = sessions[0].scope();
-        let http = reqwest::Client::new();
         let tracker = Arc::new(Recorder::default());
         let shared = tracker.clone();
         let second_tracker = Arc::new(Recorder::default());
@@ -2110,7 +2111,7 @@ pub(crate) mod testing {
         let data_dir = if shell.is_some() { home.join("data") } else { dir.clone() };
         std::fs::create_dir_all(&data_dir).unwrap();
         let connections: Vec<Connection> = sessions.iter().map(Credentials::connection).collect();
-        let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::nowhere(http)));
+        let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::nowhere()));
         let mut core = Core::new(Arc::new(Auth::with_sessions(authenticator, sessions)), registry, data_dir).with_home(home.clone());
         core = core.with_shell(shell.unwrap_or_else(|| ShellCapture::with_env(crate::runs::env::RunEnv::from_pairs([("PATH", "/usr/bin:/bin")]))));
         if let Some(code) = code {
