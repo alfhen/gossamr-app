@@ -70,26 +70,55 @@ pub fn kill_group(process: &RunProcess) -> std::io::Result<()> {
 
 /// macOS refuses a signal to a group with EPERM when every process left in it is a zombie, as a leader is between its
 /// exit and the app reaping it. So a refused group kill is done when the group lists only zombies, and when a second
-/// kill finds the group gone or kills what it holds. A listing that fails or may be cut short proves nothing.
+/// kill finds the group gone or kills what it holds. A listed member that is still running keeps the refusal, and a
+/// listing that may be cut short proves nothing.
 fn after_a_refused_group_kill(group: libc::pid_t, refused: std::io::Error) -> std::io::Result<()> {
     match group_members(group) {
-        Listing::Members(members) if members.iter().all(|pid| unreaped_zombie(*pid)) => Ok(()),
-        Listing::Members(_) | Listing::Full => Err(refused),
-        // An empty group and a failed listing look the same, so the group is asked once more.
-        Listing::Nothing => match deliver(-group, libc::SIGKILL) {
-            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
-            Ok(()) => Ok(()),
-            Err(_) => Err(refused),
-        },
+        Listing::Full => Err(refused),
+        Listing::Members(members) => {
+            let states: Vec<Member> = members.iter().map(|pid| member(*pid)).collect();
+            if states.contains(&Member::Running) {
+                Err(refused)
+            } else if states.iter().all(|m| *m == Member::Zombie) {
+                Ok(())
+            } else {
+                // A member was reaped after the listing.
+                kill_group_again(group, refused)
+            }
+        }
+        // An empty group and a failed listing look the same.
+        Listing::Nothing => kill_group_again(group, refused),
     }
 }
 
-/// A process of ours that has exited and not been reaped: it takes a signal sent to it alone, and has no start time
-/// any more, which is how `alive` reads it as gone.
-fn unreaped_zombie(pid: libc::pid_t) -> bool {
+/// Done when the group is gone or takes the kill; otherwise the first refusal stands.
+fn kill_group_again(group: libc::pid_t, refused: std::io::Error) -> std::io::Result<()> {
+    match deliver(-group, libc::SIGKILL) {
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(_) => Err(refused),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Member {
+    /// Exited and not reaped: it takes a signal sent to it alone, and has no start time any more, which is how `alive`
+    /// reads it as gone.
+    Zombie,
+    /// No such process: reaped since it was listed.
+    Gone,
+    /// Anything else, including a process that refuses a signal.
+    Running,
+}
+
+fn member(pid: libc::pid_t) -> Member {
     // SAFETY: signal 0 only checks that the process exists and may be signalled.
-    let answers = unsafe { libc::kill(pid, 0) } == 0;
-    answers && u32::try_from(pid).is_ok_and(|pid| started_of(pid).is_none())
+    match unsafe { libc::kill(pid, 0) } {
+        0 if u32::try_from(pid).is_ok_and(|pid| started_of(pid).is_none()) => Member::Zombie,
+        0 => Member::Running,
+        _ if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) => Member::Gone,
+        _ => Member::Running,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

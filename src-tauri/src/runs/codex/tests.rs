@@ -336,6 +336,26 @@ fn a_group_that_is_gone_by_the_time_it_is_listed_counts_as_killed() {
     assert_eq!(process::seam::sent_to(process.pid).iter().filter(|s| **s == libc::SIGKILL).count(), 2, "asked again, and the group was gone");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn a_listed_member_reaped_before_it_is_checked_gets_the_group_asked_again() {
+    let group_kills = |pid| process::seam::sent_to(pid).iter().filter(|s| **s == libc::SIGKILL).count();
+    let mut child = group_leader("exit 0");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap_or(0) };
+    child.wait().unwrap();
+    process::seam::refuse_group_kills(process.pid, 1);
+    process::seam::list_group_as(process.pid, process::Listing::Members(vec![process.pid as libc::pid_t]));
+    kill_group(&process).unwrap();
+    assert_eq!(group_kills(process.pid), 2, "the reaped leader sent the kill to the group once more, which found it gone");
+
+    let mut child = group_leader("exit 0");
+    let still = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap_or(0) };
+    child.wait().unwrap();
+    process::seam::refuse_group_kills(still.pid, 2);
+    process::seam::list_group_as(still.pid, process::Listing::Members(vec![still.pid as libc::pid_t]));
+    assert_eq!(kill_group(&still).unwrap_err().raw_os_error(), Some(libc::EPERM), "a group that still refuses keeps the refusal");
+}
+
 #[tokio::test]
 async fn a_process_start_time_does_not_change_while_it_runs() {
     let pid = std::process::id();
