@@ -10,9 +10,10 @@ use crate::event::Body;
 
 pub const MASK: &str = "<redacted>";
 
-/// The longest token the shapes are meant to catch whole in streamed text. A longer one (a long JWT) is masked in the
-/// stored text, which is whole, but its start can show in live text deltas.
-pub const LONGEST_SHAPE: usize = 512;
+/// How far live text may lag the agent while one unbroken run of token characters is being written: the longest
+/// real token, a long JWT, fits. A longer run is let go but for its last `HOLD_BACK` bytes, so its start can show in
+/// live text; the stored text, which is whole, is masked whole. A private key that has not ended is held whole.
+pub const HOLD_BACK: usize = 2048;
 
 const PRIVATE_KEY: &str = "-----BEGIN";
 
@@ -48,18 +49,41 @@ pub fn text(s: &str, secrets: &[String]) -> String {
     }
 }
 
-/// Where streamed text can be cut so that what comes before it is masked as well as it can be: no later piece can
-/// complete a secret that starts before the cut. It keeps back the last `LONGEST_SHAPE` characters, and everything
-/// from a private key that has not ended yet.
-pub fn safe_cut(masked: &str) -> usize {
-    let mut cut = masked.len().saturating_sub(LONGEST_SHAPE);
-    while !masked.is_char_boundary(cut) {
+/// Every shape but a bearer header and a private key is one unbroken run of these characters, so the run at the end
+/// of streamed text, with a `bearer` before it, is the only place a secret can still be growing.
+static TRAILING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(?:bearer\s*)?[A-Za-z0-9._~+/=-]*\z").expect("the run compiles"));
+
+/// Where raw streamed text can be cut so that masking what comes before the cut masks it as the whole text would be
+/// masked: no later piece can complete or extend a secret that starts before the cut. It holds back the run of token
+/// characters still being written (at most `HOLD_BACK` bytes of it), any match or secret that reaches the held part,
+/// and a private key that has not ended.
+pub fn safe_cut(raw: &str, secrets: &[String]) -> usize {
+    let end = raw.len();
+    let run = TRAILING.find(raw).map_or(end, |run| run.start());
+    let mut cut = run.max(end.saturating_sub(HOLD_BACK));
+    for found in SHAPES.find_iter(raw) {
+        if found.end() > cut {
+            cut = cut.min(found.start());
+        }
+    }
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        for (at, _) in raw.match_indices(secret.as_str()) {
+            if at + secret.len() > cut {
+                cut = cut.min(at);
+            }
+        }
+        if let Some(part) = (1..secret.len()).rev().find(|part| raw.ends_with(&secret[..*part])) {
+            cut = cut.min(end - part);
+        }
+    }
+    if let Some(key) = raw.rfind(PRIVATE_KEY).filter(|key| !raw[*key..].contains("-----END")) {
+        cut = cut.min(key);
+    }
+    while !raw.is_char_boundary(cut) {
         cut -= 1;
     }
-    match masked.rfind(PRIVATE_KEY) {
-        Some(key) if !masked[key..].contains("-----END") => cut.min(key),
-        _ => cut,
-    }
+    cut
 }
 
 /// Calls `f` on every string in `value`, object keys among them: an agent's tool input can hold a secret as a key.
@@ -135,13 +159,16 @@ mod cut_tests {
     use super::*;
 
     #[test]
-    fn redact_a_cut_keeps_back_the_longest_shape_and_an_unfinished_private_key() {
-        let text = "a".repeat(1000);
-        assert_eq!(safe_cut(&text), 1000 - LONGEST_SHAPE);
-        assert_eq!(safe_cut("short"), 0);
-        let key = format!("{}-----BEGIN RSA PRIVATE KEY-----\n{}", "b".repeat(600), "c".repeat(900));
-        assert_eq!(safe_cut(&key), 600, "an unfinished key is held back whole");
-        let wide = "é".repeat(600);
-        assert!(wide.is_char_boundary(safe_cut(&wide)));
+    fn redact_a_cut_holds_back_the_word_being_written_and_an_unfinished_private_key() {
+        assert_eq!(safe_cut("ready to go", &[]), "ready to ".len(), "only the last word waits");
+        assert_eq!(safe_cut("ready ", &[]), "ready ".len());
+        assert_eq!(safe_cut("auth: Bearer ", &[]), "auth: ".len(), "a bearer header waits for its token");
+        let long = "a".repeat(5000);
+        assert_eq!(safe_cut(&long, &[]), 5000 - HOLD_BACK, "a run longer than the hold-back is let go");
+        let key = format!("{} -----BEGIN RSA PRIVATE KEY-----\n{}", "b".repeat(600), "c d ".repeat(900));
+        assert_eq!(safe_cut(&key, &[]), 601, "an unfinished key is held back whole");
+        assert_eq!(safe_cut("token 0123ab", &["0123abcd".into()]), "token ".len());
+        let wide = "é".repeat(3000);
+        assert!(wide.is_char_boundary(safe_cut(&wide, &[])));
     }
 }

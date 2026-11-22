@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use common::*;
-use harness::driver::{Capabilities, Command, Driver, Launch, Link};
+use harness::driver::{Capabilities, Command, Driver, Launch, Link, OpenError};
 use harness::error::Error;
 use harness::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use harness::session::Harness;
@@ -233,7 +233,7 @@ async fn limit_a_cancel_while_waiting_drops_the_prompt_and_frees_nothing() {
     harness.send(&second, "two").unwrap();
     until(&mut second_events, |body| *body == Body::Waiting).await;
     harness.cancel(&second).unwrap();
-    assert_eq!(next(&mut second_events).await.body, Body::TurnEnded { how: TurnEnd::Cancelled });
+    assert_eq!(next(&mut second_events).await.body, Body::PromptsDropped, "no turn end without a turn start");
     harness.cancel(&first).unwrap();
     until(&mut first_events, |body| matches!(body, Body::TurnEnded { .. })).await;
     quiet(&mut second_events, 200).await;
@@ -285,7 +285,7 @@ async fn limit_a_turn_the_agent_starts_by_itself_takes_a_slot_and_a_prompt_waits
 async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
     let (_tmp, dir) = data_dir();
     let drivers: Vec<(String, Arc<dyn Driver>)> =
-        vec![("slow".into(), Arc::new(SlowToStop { kill: None })), ("mock".into(), Arc::new(mock(LIFE)))];
+        vec![("slow".into(), Arc::new(Stopper { going: Going::Slowly })), ("mock".into(), Arc::new(mock(LIFE)))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
     let (slow, mut slow_events) = open_on(&harness, "slow", false).await;
     let (other, mut other_events) = open(&harness, false).await;
@@ -307,14 +307,56 @@ async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
 async fn limit_an_agent_that_will_not_stop_is_killed_after_the_grace_and_the_session_says_so() {
     let (_tmp, dir) = data_dir();
     let killed = Arc::new(Mutex::new(false));
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stubborn".into(), Arc::new(SlowToStop { kill: Some(killed.clone()) }))];
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stubborn".into(), Arc::new(Stopper { going: Going::WhenKilled(killed.clone()) }))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
     let (id, mut events) = open_on(&harness, "stubborn", false).await;
     harness.close(&id).unwrap();
     let rest = until(&mut events, |body| *body == Body::Closed).await;
     assert!(*killed.lock().unwrap(), "the driver was told to kill");
-    let reason = "the agent was still running 300 ms after the stop, so it was killed".to_owned();
-    assert!(rest.iter().any(|event| event.body == Body::Failed { kind: FailKind::AgentStopped, reason: reason.clone() }), "{rest:?}");
+    let reason = "the agent was still running 300 ms after the stop, so the driver was told to kill it".to_owned();
+    assert_eq!(types(&rest), ["started", "failed", "closed"]);
+    assert_eq!(rest[1].body, Body::Failed { kind: FailKind::AgentStopped, reason });
+}
+
+#[tokio::test]
+async fn limit_an_agent_that_ignores_stop_and_kill_keeps_its_session_taken_until_it_goes() {
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> =
+        vec![("stuck".into(), Arc::new(Stopper { going: Going::WhenLet(let_go.clone()) })), ("mock".into(), Arc::new(mock(LIFE)))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
+    let (id, mut events) = open_on(&harness, "stuck", false).await;
+    harness.send(&id, "run").unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnStarted)).await;
+    let (other, mut other_events) = open(&harness, false).await;
+    harness.send(&other, "next").unwrap();
+    until(&mut other_events, |body| *body == Body::Waiting).await;
+    harness.close(&id).unwrap();
+    let stuck = until(&mut events, |body| matches!(body, Body::Failed { kind: FailKind::Stuck, .. })).await;
+    assert_eq!(types(&stuck), ["failed", "failed"], "told to kill, then stuck: {stuck:?}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(matches!(harness.resume(&id).await, Err(Error::Running(_))), "never freed on a timer");
+    assert!(matches!(harness.clean_up(&id), Err(Error::Running(_))));
+    quiet(&mut other_events, 100).await;
+    assert!(!harness.events(&other, 0).unwrap().iter().any(|event| matches!(event.body, Body::Prompted { .. })), "its slot is still taken");
+
+    let_go.notify_one();
+    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
+    assert!(!matches!(harness.resume(&id).await, Err(Error::Running(_))), "free once the agent has gone");
+}
+
+#[tokio::test]
+async fn limit_a_stopping_session_refuses_requests() {
+    let (_tmp, dir) = data_dir();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(Stopper { going: Going::Slowly }))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
+    let (id, mut events) = open_on(&harness, "slow", false).await;
+    harness.close(&id).unwrap();
+    assert!(matches!(harness.send(&id, "late"), Err(Error::NotRunning(_))));
+    assert!(matches!(harness.answer(&id, "p1", Decision::Allow, None), Err(Error::NotRunning(_))));
+    assert!(matches!(harness.tool_result(&id, "c1", json!(1), false), Err(Error::NotRunning(_))));
+    until(&mut events, |body| *body == Body::Closed).await;
 }
 
 #[tokio::test]
@@ -360,7 +402,7 @@ impl Driver for Tattler {
         Capabilities::default()
     }
 
-    fn open(&self, launch: Launch) -> Result<Link, String> {
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
         let (commands, mut commands_rx) = mpsc::unbounded_channel();
         let (output, receiver) = mpsc::unbounded_channel();
         let token = launch.tools_token.expose().to_owned();
@@ -425,19 +467,23 @@ impl Driver for Refuser {
         Capabilities::default()
     }
 
-    fn open(&self, launch: Launch) -> Result<Link, String> {
-        Err(format!("could not start with token {}", launch.tools_token.expose()))
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let message = format!("not signed in; tried token {}", launch.tools_token.expose());
+        Err(OpenError { kind: FailKind::SignedOut, message })
     }
 }
 
 #[tokio::test]
-async fn redact_a_drivers_error_is_masked_and_frees_the_session() {
+async fn redact_a_drivers_error_is_masked_keeps_its_kind_and_frees_the_session() {
     let (_tmp, dir) = data_dir();
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("refuser".into(), Arc::new(Refuser))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let spec = harness::session::Open { provider: "refuser".into(), locked: false, cwd: "/nowhere".into(), model: None };
     match harness.open(spec).await {
-        Err(Error::Driver(message)) => assert_eq!(message, "could not start with token <redacted>"),
+        Err(Error::Open { kind, message }) => {
+            assert_eq!(kind, FailKind::SignedOut, "the kind reaches the client");
+            assert_eq!(message, "not signed in; tried token <redacted>");
+        }
         other => panic!("{:?}", other.map(|(id, _)| id)),
     }
 }
@@ -611,9 +657,9 @@ async fn resume_a_resume_that_cannot_open_leaves_the_session_free() {
     drop(harness);
     // A mock that never saw the session cannot resume it.
     let harness = harness_on(reopen(&dir).await, &mock(TURNS), 4);
-    assert!(matches!(harness.resume(&id).await, Err(Error::Driver(_))));
+    assert!(matches!(harness.resume(&id).await, Err(Error::Open { .. })));
     assert!(matches!(harness.send(&id, "x"), Err(Error::NotRunning(_))), "no reservation is left behind");
-    assert!(matches!(harness.resume(&id).await, Err(Error::Driver(_))), "and it can be tried again");
+    assert!(matches!(harness.resume(&id).await, Err(Error::Open { .. })), "and it can be tried again");
 }
 
 #[tokio::test]
@@ -644,7 +690,7 @@ async fn mock_a_prompt_that_comes_while_the_mock_waits_is_kept_for_the_next_turn
 #[tokio::test]
 async fn caps_the_mock_takes_its_capabilities_from_its_script() {
     let mock = mock(
-        r#"{"capabilities": {"deny_ends_turn": true, "tool_call_limit_ms": 180000, "stop_kills_process_tree": true, "runs_locked_profile": false, "starts_turns_unprompted": true}}
+        r#"{"capabilities": {"deny_ends_turn": true, "tool_call_limit_ms": 180000, "stop_kills_process_tree": true, "runs_locked_profile": false, "starts_turns_unprompted": true, "stop_takes_up_to_ms": 30000}}
         {"prompt": null}"#,
     );
     let expected = Capabilities {
@@ -653,6 +699,7 @@ async fn caps_the_mock_takes_its_capabilities_from_its_script() {
         stop_kills_process_tree: true,
         runs_locked_profile: false,
         starts_turns_unprompted: true,
+        stop_takes_up_to_ms: Some(30_000),
     };
     assert_eq!(mock.capabilities(), expected);
     let unknown = harness::mock::Script::parse(r#"{"capabilities": {"deny_ends_turn": true, "codex": true}}"#);
@@ -684,38 +731,53 @@ async fn caps_a_deny_ends_the_turn_where_the_script_says_so() {
     }
 }
 
-/// Takes a while to go after a stop, as an agent with a command running can; with `kill` set it goes only when killed.
-struct SlowToStop {
-    kill: Option<Arc<Mutex<bool>>>,
+/// How a test agent goes after a stop.
+#[derive(Clone)]
+enum Going {
+    /// 200 ms after the stop, saying a last word.
+    Slowly,
+    /// Only when killed.
+    WhenKilled(Arc<Mutex<bool>>),
+    /// Not even when killed, until the test lets it.
+    WhenLet(Arc<tokio::sync::Notify>),
 }
 
-impl Driver for SlowToStop {
+/// An agent that starts a turn on each prompt and goes after a stop as `going` says. Its driver gives 300 ms for a
+/// stop.
+struct Stopper {
+    going: Going,
+}
+
+impl Driver for Stopper {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
+        Capabilities { stop_takes_up_to_ms: Some(300), ..Capabilities::default() }
     }
 
-    fn open(&self, _launch: Launch) -> Result<Link, String> {
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
         let (commands, mut commands_rx) = mpsc::unbounded_channel();
         let (output, receiver) = mpsc::unbounded_channel();
-        output.send(Body::Started { provider_session: "slow".into(), resumed: false }).unwrap();
-        let kill = self.kill.clone();
+        output.send(Body::Started { provider_session: "stopper".into(), resumed: false }).unwrap();
+        let going = self.going.clone();
         tokio::spawn(async move {
             loop {
-                match commands_rx.recv().await {
-                    Some(Command::Prompt(_)) => {
+                match (commands_rx.recv().await, &going) {
+                    (Some(Command::Prompt(_)), _) => {
                         let _ = output.send(Body::TurnStarted);
                     }
-                    Some(Command::Stop) if kill.is_none() => break,
-                    Some(Command::Kill) => {
-                        *kill.as_ref().unwrap().lock().unwrap() = true;
+                    (Some(Command::Stop), Going::Slowly) => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let _ = output.send(Body::Text { text: "stopped at last".into() });
                         return;
                     }
-                    None => return,
+                    (Some(Command::Kill), Going::WhenKilled(killed)) => {
+                        *killed.lock().unwrap() = true;
+                        return;
+                    }
+                    (Some(Command::Kill), Going::WhenLet(let_go)) => return let_go.notified().await,
+                    (None, _) => return,
                     _ => {}
                 }
             }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            let _ = output.send(Body::Text { text: "stopped at last".into() });
         });
         Ok(Link { commands, output: receiver })
     }
@@ -759,7 +821,7 @@ async fn life_an_answer_that_cannot_be_recorded_is_not_sent_and_nothing_is_writt
 #[tokio::test]
 async fn life_a_store_that_comes_back_after_a_failure_gets_nothing_more_from_the_session() {
     let (_tmp, dir) = data_dir();
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(SlowToStop { kill: None }))];
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(Stopper { going: Going::Slowly }))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "slow", false).await;
     next(&mut events).await;
@@ -772,4 +834,258 @@ async fn life_a_store_that_comes_back_after_a_failure_gets_nothing_more_from_the
     let rest = until(&mut events, |body| *body == Body::Closed).await;
     assert!(rest.iter().all(|event| event.seq == 0), "{rest:?}");
     assert_eq!(harness.events(&id, 0).unwrap().len(), 1, "only `started`, from before the failure, is stored");
+}
+
+/// Plays lists of events: one list per open, taken in order, with `{token}` replaced by the session's tools token.
+/// With `on_prompt` it plays its list on every prompt instead of at once.
+struct Says {
+    lists: Mutex<std::collections::VecDeque<Vec<Body>>>,
+    on_prompt: bool,
+    panics: bool,
+}
+
+impl Says {
+    fn new(lists: Vec<Vec<Body>>, on_prompt: bool) -> Says {
+        Says { lists: Mutex::new(lists.into()), on_prompt, panics: false }
+    }
+}
+
+impl Driver for Says {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        assert!(!self.panics, "a driver that panics as it opens");
+        let token = launch.tools_token.expose().to_owned();
+        let list = self.lists.lock().unwrap().pop_front().unwrap_or_default();
+        let list: Vec<Body> = list
+            .into_iter()
+            .map(|body| serde_json::from_str(&serde_json::to_string(&body).unwrap().replace("{token}", &token)).unwrap())
+            .collect();
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: format!("says-{}", harness::driver::random_hex(4)), resumed: false }).unwrap();
+        if !self.on_prompt {
+            list.iter().for_each(|body| output.send(body.clone()).unwrap());
+        }
+        let on_prompt = self.on_prompt;
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                match command {
+                    Command::Prompt(_) if on_prompt => list.iter().for_each(|body| {
+                        let _ = output.send(body.clone());
+                    }),
+                    Command::Stop => return,
+                    _ => {}
+                }
+            }
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+/// One token of each shape the redaction knows, and the session's own token.
+fn tokens() -> Vec<String> {
+    vec![
+        format!("sk-ant-api03-{}", "Ab9_".repeat(24)),
+        format!("sk-proj-{}", "c".repeat(48)),
+        format!("ghp_{}", "D1".repeat(18)),
+        format!("github_pat_11{}", "e2_".repeat(27)),
+        format!("ATATT3xFfGF0{}", "fG3=".repeat(45)),
+        format!("glpat-{}", "h".repeat(20)),
+        format!("npm_{}", "i4".repeat(18)),
+        format!("sk_live_{}", "j".repeat(40)),
+        format!("rk_live_{}", "k".repeat(40)),
+        // Built here, not written out, so no scanner takes a test value for a real token.
+        format!("xox{}-{}-{}-{}", "b", "1".repeat(12), "2".repeat(13), "r".repeat(16)),
+        format!("AIza{}", "L".repeat(35)),
+        format!("ya29.{}", "m".repeat(60)),
+        format!("AKIA{}", "S".repeat(16)),
+        format!("eyJ{}.eyJ{}.{}", "n".repeat(20), "o".repeat(60), "p".repeat(43)),
+        format!("Bearer {}", "q5".repeat(20)),
+        "{token}".to_owned(),
+    ]
+}
+
+#[tokio::test]
+async fn redact_a_token_of_every_shape_cut_at_every_place_between_two_deltas_is_masked_whole_live() {
+    let (_tmp, dir) = data_dir();
+    let mut cases = vec![];
+    for token in tokens() {
+        // The session's token is only known at open: 64 characters, between the same words.
+        let len = if token == "{token}" { "here: ".len() + 64 + " done".len() } else { format!("here: {token} done").len() };
+        cases.extend((1..len).map(|at| (token.clone(), at)));
+    }
+    // The driver cuts each text where the case says, once it knows the token.
+    let lists: Vec<Vec<Body>> = cases
+        .iter()
+        .map(|(token, at)| vec![Body::Text { text: format!("here: {token} done\u{1}{at}") }])
+        .collect();
+    let splitter = Arc::new(Splitter(Mutex::new(lists.into())));
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("splitter".into(), splitter)];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let mut leaked = vec![];
+    for (token, at) in &cases {
+        let (id, mut events) = open_on(&harness, "splitter", false).await;
+        let seen = until(&mut events, |body| matches!(body, Body::Text { .. })).await;
+        let live: String = seen.iter().filter_map(|event| match &event.body { Body::TextDelta { text } => Some(text.as_str()), _ => None }).collect();
+        let Body::Text { text: stored } = &seen.last().unwrap().body else { unreachable!() };
+        assert!(stored.contains("<redacted>") && !stored.contains(token.as_str()), "{token}: {stored}");
+        if live != *stored {
+            leaked.push(format!("{token} cut at {at}: live {live:?}"));
+        }
+        harness.close(&id).unwrap();
+        until(&mut events, |body| *body == Body::Closed).await;
+    }
+    assert!(leaked.is_empty(), "{} of {} cuts differ from the whole text masked:\n{}", leaked.len(), cases.len(), leaked.join("\n"));
+    let disk = bytes_on_disk(&dir);
+    for token in tokens().iter().filter(|token| *token != "{token}") {
+        assert!(!contains(&disk, &token[..12]), "{token} is in the store");
+    }
+}
+
+/// Sends `here: <token> done` as two deltas cut at a given place, then the whole text. Each open takes the next case,
+/// written as the whole text, `\u{1}`, and the place.
+struct Splitter(Mutex<std::collections::VecDeque<Vec<Body>>>);
+
+impl Driver for Splitter {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let case = self.0.lock().unwrap().pop_front().expect("a case for each open");
+        let Body::Text { text } = &case[0] else { unreachable!() };
+        let (whole, at) = text.split_once('\u{1}').unwrap();
+        let whole = whole.replace("{token}", launch.tools_token.expose());
+        let at: usize = at.parse().unwrap();
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: "splitter".into(), resumed: false }).unwrap();
+        output.send(Body::TextDelta { text: whole[..at].to_owned() }).unwrap();
+        output.send(Body::TextDelta { text: whole[at..].to_owned() }).unwrap();
+        output.send(Body::Text { text: whole }).unwrap();
+        tokio::spawn(async move {
+            let _output = output;
+            while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+#[tokio::test]
+async fn turn_a_driver_that_starts_a_turn_inside_a_turn_or_ends_one_it_never_started_fails_it() {
+    let (_tmp, dir) = data_dir();
+    let twice = vec![Body::TurnStarted, Body::Text { text: "one".into() }, Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Done }];
+    let unstarted = vec![Body::TurnEnded { how: TurnEnd::Done }];
+    let says = Says::new(vec![twice, unstarted], true);
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("says".into(), Arc::new(says))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
+
+    let (id, mut events) = open_on(&harness, "says", false).await;
+    harness.send(&id, "go").unwrap();
+    let turn = until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+    assert_eq!(types(&turn), ["started", "prompted", "turn_started", "text", "failed", "turn_started", "turn_ended"]);
+    assert_eq!(turn[4].body, Body::Failed { kind: FailKind::Driver, reason: "the driver started a turn while one was running".into() });
+
+    let (other, mut other_events) = open_on(&harness, "says", false).await;
+    harness.send(&other, "go").unwrap();
+    let turn = until(&mut other_events, |body| matches!(body, Body::Failed { .. })).await;
+    assert_eq!(types(&turn), ["started", "prompted", "failed"], "the stray end is not passed on");
+    assert_eq!(turn[2].body, Body::Failed { kind: FailKind::Driver, reason: "the driver ended a turn it never started".into() });
+    // Both turns gave their slot back: with a limit of one, a third prompt runs.
+    harness.send(&id, "again").unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+}
+
+/// Asks, then ends its turn when the test lets it, without waiting for the answer.
+struct EndsWhenLet(Arc<tokio::sync::Notify>);
+
+impl Driver for EndsWhenLet {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: "ends".into(), resumed: false }).unwrap();
+        let let_go = self.0.clone();
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                match command {
+                    Command::Prompt(_) => {
+                        let _ = output.send(Body::TurnStarted);
+                        let request = Body::Permission { id: "d1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({}) };
+                        let _ = output.send(request);
+                        let let_go = let_go.clone();
+                        let output = output.clone();
+                        tokio::spawn(async move {
+                            let_go.notified().await;
+                            let _ = output.send(Body::TurnEnded { how: TurnEnd::Done });
+                        });
+                    }
+                    Command::Answer { .. } => panic!("an answer reached the driver after its turn ended"),
+                    Command::Stop => return,
+                    _ => {}
+                }
+            }
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+#[tokio::test]
+async fn answer_an_answer_that_races_its_turns_end_is_never_recorded_or_sent() {
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("ends".into(), Arc::new(EndsWhenLet(let_go.clone())))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "ends", false).await;
+    harness.send(&id, "go").unwrap();
+    let request = ask(&mut events).await;
+    // The turn ends first, then the answer arrives: one thread, and the driver is woken before the session.
+    let_go.notify_one();
+    harness.answer(&id, &request, Decision::Allow, None).expect("the request was still open when answered");
+    let ended = until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+    quiet(&mut events, 200).await;
+    assert_eq!(types(&ended), ["turn_ended"]);
+    let stored = types(&harness.events(&id, 0).unwrap());
+    assert!(!stored.contains(&"answered".to_owned()), "an answer was recorded after its turn ended: {stored:?}");
+}
+
+#[tokio::test]
+async fn resume_a_driver_that_panics_as_it_opens_leaves_the_session_free() {
+    let (_tmp, dir) = data_dir();
+    let mut says = Says::new(vec![], false);
+    says.panics = true;
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("panics".into(), Arc::new(says))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let spec = harness::session::Open { provider: "panics".into(), locked: false, cwd: "/nowhere".into(), model: None };
+    let opening = harness.clone();
+    let opened = tokio::spawn(async move { opening.open(spec).await.map(|(id, _)| id) }).await;
+    assert!(opened.unwrap_err().is_panic());
+    let row: String = rusqlite::Connection::open(dir.join("harness.sqlite"))
+        .unwrap()
+        .query_row("SELECT id FROM sessions", [], |row| row.get(0))
+        .unwrap();
+    assert!(matches!(harness.clean_up(&row), Ok(())), "no reservation is left behind");
+}
+
+#[tokio::test]
+async fn hold_a_client_tool_call_ended_by_a_close_gets_its_end() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(&HOLD.replace("200", "60000"));
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false).await;
+    let ps = provider_session(&next(&mut events).await.body);
+    harness.send(&id, "ask me").unwrap();
+    let held = until(&mut events, |body| matches!(body, Body::ClientToolCall { .. })).await;
+    let Body::ClientToolCall { id: call, .. } = &held.last().unwrap().body else { unreachable!() };
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let ended = Body::ToolResult { id: call.clone(), output: json!("the session has ended"), error: true };
+    assert_eq!(rest[0].body, ended, "{rest:?}");
+    assert!(mock.replies(&ps).iter().all(|reply| reply.is_err()));
 }

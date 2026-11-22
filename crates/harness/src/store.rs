@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
-use crate::event::{Body, Event, PRIVATE_FIELDS};
+use crate::event::{Body, Event, KEPT_FIELDS};
 
 /// The migration steps, in order. `PRAGMA user_version` counts the steps applied, so a step that has shipped is never
 /// edited: a change is a new step at the end.
@@ -168,10 +168,14 @@ impl Store {
     }
 }
 
-/// Turns a stored event into `Body::Withheld`: its type in `of`, its other fields but the private ones in `kept`.
+/// Turns a stored event into `Body::Withheld`: its type in `of`, and only its fields on `KEPT_FIELDS` in `kept`.
 static WITHHOLD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    let private: String = PRIVATE_FIELDS.iter().map(|field| format!(", '$.{field}'")).collect();
-    format!("withheld = 1, payload = json_object('type', 'withheld', 'of', type, 'kept', json_remove(payload, '$.type'{private}))")
+    let kept: Vec<String> = KEPT_FIELDS.iter().map(|field| format!("'{field}'")).collect();
+    let kept = kept.join(", ");
+    format!(
+        "withheld = 1, payload = json_object('type', 'withheld', 'of', type, 'kept', \
+         (SELECT json_group_object(key, value) FROM json_each(payload) WHERE key IN ({kept})))"
+    )
 });
 
 fn migrate(conn: &mut Connection) -> Result<()> {

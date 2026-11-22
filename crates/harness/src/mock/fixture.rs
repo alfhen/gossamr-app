@@ -88,6 +88,8 @@ struct Converter {
     text: String,
     cancelled: bool,
     in_turn: bool,
+    /// The running turn is one the agent started by itself.
+    unprompted: bool,
     /// The id of an ACP `session/load` not yet answered: the updates before its answer replay old history.
     loading: Option<Value>,
     finished: HashSet<String>,
@@ -104,6 +106,7 @@ impl Converter {
             Step::End(_) | Step::Fail(_) => false,
             _ => self.in_turn,
         };
+        self.unprompted &= self.in_turn && !matches!(step, Step::Prompt(_));
         self.steps.push(step);
     }
 
@@ -111,6 +114,7 @@ impl Converter {
         if !self.in_turn && !matches!(step, Step::Prompt(_) | Step::Cancel | Step::Fail(_) | Step::ToolResult { .. }) {
             self.steps.push(Step::Turn);
             self.in_turn = true;
+            self.unprompted = true;
         }
     }
 
@@ -288,6 +292,13 @@ impl Converter {
                         self.acp_finished(update);
                     }
                     Some("tool_call_update") => self.acp_finished(update),
+                    // agy ends a message it sent by itself with its usage and nothing else: that ends the turn.
+                    Some("usage_update") => {
+                        self.flush();
+                        if self.in_turn && self.unprompted {
+                            self.push(Step::End(TurnEnd::Done));
+                        }
+                    }
                     _ => {}
                 }
             }

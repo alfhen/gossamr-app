@@ -21,11 +21,15 @@ pub enum Body {
     Prompted { text: String },
     /// The prompt waits because the limit of sessions in a turn is reached.
     Waiting,
-    /// A turn began, prompted or not. A driver sends it once per turn, before anything the turn says.
+    /// A cancel dropped the prompts that waited for a slot; no turn had started.
+    PromptsDropped,
+    /// A turn began, prompted or not. A driver sends it once per turn, before anything the turn says, and ends every
+    /// turn it starts with exactly one `turn_ended` or `failed`.
     TurnStarted,
-    /// A piece of text as it streams, for live output only: it is never stored. A driver that streams sends the whole
-    /// block as one `Text` after its pieces, and redaction holds back the end of the stream until a secret cut between
-    /// two pieces can be masked whole.
+    /// A piece of text as it streams, for live output only: it is never stored, and is numbered 0. A driver that
+    /// streams sends the whole block as one `Text` after its pieces. Redaction holds back the word still being written
+    /// until a secret cut between two pieces can be masked whole, so live text may lag the agent by that word, by at
+    /// most `redact::HOLD_BACK` bytes of an unbroken run, or by a private key that has not ended.
     TextDelta { text: String },
     /// A whole block of the agent's text. This is what is stored: a driver joins its pieces before it sends one.
     Text { text: String },
@@ -56,7 +60,11 @@ pub enum Body {
     },
 }
 
-/// Fields that can hold what the agent or the person wrote. A withheld event keeps every other field.
+/// The fields a withheld event keeps, because they hold no text the agent or the person wrote. A field not on this
+/// list is dropped, so a new one stays private until someone adds it here; `PRIVATE_FIELDS` lists those that must be.
+pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
+
+/// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
 pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message"];
 
 impl Body {
@@ -79,9 +87,7 @@ impl Body {
             unreachable!("a body is an object")
         };
         let of = kept.remove("type").and_then(|of| of.as_str().map(str::to_owned)).unwrap_or_default();
-        for field in PRIVATE_FIELDS {
-            kept.remove(*field);
-        }
+        kept.retain(|field, _| KEPT_FIELDS.contains(&field.as_str()));
         Body::Withheld { of, kept }
     }
 }
@@ -124,6 +130,62 @@ pub enum FailKind {
     Provider,
     /// The agent went away, or would not stop.
     AgentStopped,
+    /// The agent has not gone though it was killed; the session stays running until it does.
+    Stuck,
+    /// The driver broke its contract, for example a turn it ended but never started.
+    Driver,
     /// The harness itself could not go on, for example its store.
     Harness,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// One of each event. The match makes a new variant fail to compile here until it has a sample.
+    fn samples() -> Vec<Body> {
+        let all = vec![
+            Body::Started { provider_session: "p".into(), resumed: false },
+            Body::Prompted { text: "t".into() },
+            Body::Waiting,
+            Body::PromptsDropped,
+            Body::TurnStarted,
+            Body::TextDelta { text: "t".into() },
+            Body::Text { text: "t".into() },
+            Body::ToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
+            Body::ClientToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
+            Body::ToolResult { id: "i".into(), output: json!("o"), error: false },
+            Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
+            Body::Answered { id: "i".into(), decision: Decision::Deny, message: Some("m".into()) },
+            Body::Question { id: "i".into(), text: "t".into() },
+            Body::TurnEnded { how: TurnEnd::Done },
+            Body::Failed { kind: FailKind::Provider, reason: "r".into() },
+            Body::Closed,
+        ];
+        for body in &all {
+            match body {
+                Body::Started { .. } | Body::Prompted { .. } | Body::Waiting | Body::PromptsDropped | Body::TurnStarted => {}
+                Body::TextDelta { .. } | Body::Text { .. } | Body::ToolCall { .. } | Body::ClientToolCall { .. } => {}
+                Body::ToolResult { .. } | Body::Permission { .. } | Body::Answered { .. } | Body::Question { .. } => {}
+                Body::TurnEnded { .. } | Body::Failed { .. } | Body::Closed => {}
+                Body::Withheld { .. } => unreachable!("the store makes these"),
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn withheld_every_field_of_every_event_is_classified_kept_or_private() {
+        for body in samples() {
+            let Value::Object(fields) = serde_json::to_value(&body).unwrap() else { unreachable!() };
+            for field in fields.keys().filter(|field| *field != "type") {
+                let kept = KEPT_FIELDS.contains(&field.as_str());
+                let private = PRIVATE_FIELDS.contains(&field.as_str());
+                assert!(kept ^ private, "`{field}` of `{}` must be on exactly one of KEPT_FIELDS and PRIVATE_FIELDS", body.type_name());
+            }
+            let Body::Withheld { kept, .. } = body.withheld() else { unreachable!() };
+            assert!(kept.keys().all(|field| KEPT_FIELDS.contains(&field.as_str())), "{kept:?}");
+        }
+    }
 }

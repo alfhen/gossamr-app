@@ -129,3 +129,15 @@ async fn replay_an_answer_that_differs_from_the_recording_fails_the_session() {
     assert_eq!(failed.as_deref(), Some("the replay was answered Deny where the recording has Some(Allow)"));
     assert!(!events.iter().any(|event| matches!(event.body, Body::TurnEnded { .. })), "nothing past the divergence is played");
 }
+
+#[tokio::test]
+async fn replay_agys_message_after_a_background_command_is_a_turn_of_its_own_that_ends() {
+    let events = replay(&fixtures().join("gemini/acp/r7-background.jsonl"), vec![]).await;
+    let kinds: Vec<String> = events.iter().map(|event| event.body.type_name()).collect();
+    assert!(!events.iter().any(|event| matches!(event.body, Body::Failed { .. })), "{kinds:?}");
+    let starts = kinds.iter().filter(|kind| *kind == "turn_started").count();
+    let ends = kinds.iter().filter(|kind| *kind == "turn_ended").count();
+    assert_eq!((starts, ends), (2, 2), "the prompted turn and the one agy started by itself, each ended: {kinds:?}");
+    let unprompted = kinds.iter().rposition(|kind| kind == "turn_started").unwrap();
+    assert_ne!(kinds[unprompted - 1], "prompted", "no prompt started the second turn: {kinds:?}");
+}
