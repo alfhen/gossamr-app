@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
-use crate::event::{Body, Decision};
+use crate::event::{Body, Decision, FailKind};
 use crate::tools::Endpoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -25,6 +25,9 @@ pub struct Capabilities {
     pub runs_locked_profile: bool,
     /// The agent may start a turn by itself after one ended, so events after a turn end still belong to the session.
     pub starts_turns_unprompted: bool,
+    /// How long a stopped agent may take to go before the driver is told to kill it; the harness's default when the
+    /// driver does not say.
+    pub stop_takes_up_to_ms: Option<u64>,
 }
 
 /// A value that must never be printed or stored. `Debug` shows nothing of it.
@@ -88,9 +91,20 @@ pub struct Link {
     pub output: UnboundedReceiver<Body>,
 }
 
+/// Why a driver could not open, with the kind a client acts on: signed out, a version it does not support, or another
+/// provider error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenError {
+    pub kind: FailKind,
+    pub message: String,
+}
+
+/// A driver turns a provider into events. It sends `Started` as soon as it knows the provider's session id, which for
+/// some providers is only after the first prompt. For every turn it starts with `TurnStarted`, prompted or not, it
+/// sends exactly one `TurnEnded` or `Failed`; a session fails a turn that breaks this. It closes `output` once the
+/// agent is gone.
 pub trait Driver: Send + Sync {
     fn capabilities(&self) -> Capabilities;
-    /// Starts the agent, or resumes it when `launch.resume` names its session. The driver sends `Started` as soon as it
-    /// knows the provider's session id, which for some providers is only after the first prompt.
-    fn open(&self, launch: Launch) -> Result<Link, String>;
+    /// Starts the agent, or resumes it when `launch.resume` names its session.
+    fn open(&self, launch: Launch) -> Result<Link, OpenError>;
 }

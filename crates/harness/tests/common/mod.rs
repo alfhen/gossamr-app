@@ -32,7 +32,7 @@ pub fn harness_on(store: Store, mock: &Mock, limit: usize) -> Harness {
 }
 
 pub fn settings(turn_limit: usize) -> Settings {
-    Settings { turn_limit, stop_grace: Duration::from_millis(300) }
+    Settings { turn_limit }
 }
 
 pub async fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiver<Event>) {

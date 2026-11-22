@@ -63,7 +63,10 @@ mod tests {
     async fn tools_a_call_with_another_token_is_refused_and_one_with_no_session_fails() {
         let (calls, mut received) = tokio::sync::mpsc::unbounded_channel();
         let endpoint = Endpoint::new("this-start", calls);
-        let refused = endpoint.call("an-old-start", "ask", Value::Null).await;
+        // A call that got through would wait for a client that never answers.
+        let refused = tokio::time::timeout(std::time::Duration::from_secs(1), endpoint.call("an-old-start", "ask", Value::Null))
+            .await
+            .expect("a refused call returns at once");
         assert_eq!(refused, Err("this token does not open this session's tools".to_owned()));
         assert!(received.try_recv().is_err(), "a refused call reaches nobody");
         let unattached = Endpoint::unattached("t").call("t", "ask", Value::Null).await;

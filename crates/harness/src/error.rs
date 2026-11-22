@@ -22,6 +22,8 @@ pub enum Error {
     /// The session was cleaned up, so it cannot be resumed.
     CleanedUp(String),
     Driver(String),
+    /// The driver could not open the agent, and says why.
+    Open { kind: crate::event::FailKind, message: String },
     Sqlite(rusqlite::Error),
     Io(std::io::Error),
     Json(serde_json::Error),
@@ -43,6 +45,7 @@ impl fmt::Display for Error {
             Error::NotOpen(id) => write!(f, "no open permission request {id}: it was answered, its turn ended, or it never was"),
             Error::CleanedUp(id) => write!(f, "session {id} was cleaned up"),
             Error::Driver(message) => write!(f, "the driver failed: {message}"),
+            Error::Open { kind, message } => write!(f, "the agent could not start ({kind:?}): {message}"),
             Error::Sqlite(e) => write!(f, "the store failed: {e}"),
             Error::Io(e) => write!(f, "{e}"),
             Error::Json(e) => write!(f, "{e}"),

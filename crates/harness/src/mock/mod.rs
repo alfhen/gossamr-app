@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use crate::driver::{Capabilities, Command, Driver, Launch, Link, random_hex};
+use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, random_hex};
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::tools::{Endpoint, Reply};
 
@@ -147,13 +147,14 @@ impl Driver for Mock {
         self.inner.script.capabilities
     }
 
-    fn open(&self, launch: Launch) -> Result<Link, String> {
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
         let token = launch.tools_token.expose().to_owned();
         let resumed = launch.resume.is_some();
         let (key, run) = match launch.resume {
             Some(key) => {
                 let mut plays = self.plays();
-                let play = plays.get_mut(&key).ok_or_else(|| format!("the mock has no session {key}"))?;
+                let message = format!("the mock has no session {key}");
+                let play = plays.get_mut(&key).ok_or(OpenError { kind: FailKind::Provider, message })?;
                 play.tokens.push(token.clone());
                 play.run += 1;
                 let run = play.run;
