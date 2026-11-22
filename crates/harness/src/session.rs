@@ -491,8 +491,10 @@ impl Task {
                     if let Some(reply) = held_calls.remove(&id) {
                         let limit = caps.tool_call_limit_ms.unwrap_or_default();
                         let reason = format!("timed out after {limit} ms");
-                        self.emit(Body::ToolResult { id, output: json!(reason), error: true });
-                        let _ = reply.send(Err(reason));
+                        // Unrecorded, the agent hears only that the session ended.
+                        if self.emit(Body::ToolResult { id, output: json!(reason), error: true }) {
+                            let _ = reply.send(Err(reason));
+                        }
                     }
                 }
                 request = requests.recv() => match request {
@@ -517,8 +519,9 @@ impl Task {
                         }
                     }
                     Some(Request::ToolResult { id, reply }) => {
-                        if let Some(held) = held_calls.remove(&id) {
-                            self.emit(Body::ToolResult { id, output: reply.output.clone(), error: reply.error });
+                        if let Some(held) = held_calls.remove(&id)
+                            && self.emit(Body::ToolResult { id, output: reply.output.clone(), error: reply.error })
+                        {
                             let _ = held.send(Ok(reply));
                         }
                     }
