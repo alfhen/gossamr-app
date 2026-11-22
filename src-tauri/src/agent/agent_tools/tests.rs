@@ -315,6 +315,13 @@ async fn a_run_id_that_could_be_a_path_reaches_no_tool() {
     assert_eq!(text_of(&reply), (crate::runs::report::UNAVAILABLE, true));
 }
 
+/// A free loopback port below the ranges macOS (from 49152) and Linux (from 32768) hand to a bind on port 0. A port
+/// freed in that range can be handed to another test's server before it is bound again; this one can't.
+fn a_port_bind_zero_never_gets() -> u16 {
+    let start = 20_000 + (std::process::id() % 10_000) as u16;
+    (start..32_000).chain(10_000..start).find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok()).expect("a free port below 32000")
+}
+
 #[tokio::test]
 async fn a_server_that_restarts_on_the_same_port_is_invisible_because_each_request_stands_alone() {
     let dir = std::env::temp_dir().join(format!("gossamr-agent-tools-port-{}", std::process::id()));
@@ -327,6 +334,7 @@ async fn a_server_that_restarts_on_the_same_port_is_invisible_because_each_reque
     assert_eq!(std::fs::read_to_string(dir.join("port")).unwrap(), taken.channel().port().to_string());
     drop((first, taken));
 
+    let port = a_port_bind_zero_never_gets();
     std::fs::write(dir.join("port"), port.to_string()).unwrap();
     let again = bind(dir.clone()).await.unwrap();
     assert_eq!(again.channel().port(), port, "the port used last time is used again");
