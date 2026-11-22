@@ -3,12 +3,13 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::event::{Body, Decision};
+use crate::tools::Endpoint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -61,20 +62,24 @@ pub struct Launch {
     pub model: Option<String>,
     /// The provider's own session id, to resume it.
     pub resume: Option<String>,
-    /// The session's tools token. Every start and every resume gets a new one.
+    /// The session's tools token. Every start and every resume gets a new one, and the endpoint refuses the old.
     pub tools_token: Secret,
-    /// The session's tools endpoint, when it has one.
-    pub tools_url: Option<String>,
+    /// The session's tools endpoint. A real agent reaches it over HTTP at its URL; the mock calls it in-process.
+    pub tools: Arc<Endpoint>,
 }
 
-/// What the client asks of a running agent.
+/// What the client asks of a running agent. Calls to the session's tools do not come this way: the agent makes them
+/// to the tools endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Prompt(String),
-    Answer { id: String, decision: Decision },
-    ToolResult { id: String, output: Value, error: bool },
+    /// `id` is the driver's own id of the request. A deny can say why.
+    Answer { id: String, decision: Decision, message: Option<String> },
     Cancel,
+    /// Ends the session. The driver closes `output` once the agent is gone.
     Stop,
+    /// Sent when a stopped agent has not gone in time: kill its process tree.
+    Kill,
 }
 
 /// A running agent. It is gone when `output` closes.
@@ -85,6 +90,7 @@ pub struct Link {
 
 pub trait Driver: Send + Sync {
     fn capabilities(&self) -> Capabilities;
-    /// Starts the agent, or resumes it when `launch.resume` names its session. The first event is `Started`.
+    /// Starts the agent, or resumes it when `launch.resume` names its session. The driver sends `Started` as soon as it
+    /// knows the provider's session id, which for some providers is only after the first prompt.
     fn open(&self, launch: Launch) -> Result<Link, String>;
 }

@@ -68,7 +68,7 @@ One Rust program in a crate of its own, with no dependency on the app.
 
 **Everything a session does is an event** with a sequence number, written to the harness's own store after redaction: started, text, tool call, permission request, question, tool call for the client, usage, turn ended, failed. A client reads events from a sequence number onward, so it catches up after a reconnect or a restart. There is no polling and no reading of a CLI's files.
 
-**What rests in the store.** Redaction masks token shapes, not private text. So a locked session (Pip) stores no text or tool payload at all: its events go to the connected client only, and the app keeps Pip's turns as it does today. Other sessions keep their payload until the run is cleaned up, or 30 days. Anything that runs as you on that machine can read the store file; section 8 says what that means.
+**What rests in the store.** Redaction masks token shapes, not private text. So a locked session (Pip) stores no text or tool payload at all: its events go to the connected client only, and the app keeps Pip's turns as it does today. Other sessions keep their payload until the run is cleaned up, or 30 days. Clean-up and the 30-day sweep promise that the payload leaves the database file, where it is overwritten; they do not reach free disk blocks, the journal file SQLite has already unlinked, or backups made before. Anything that runs as you on that machine can read the store file; section 8 says what that means.
 
 **The harness owns what it starts.**
 

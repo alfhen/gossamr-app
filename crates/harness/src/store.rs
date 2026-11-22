@@ -1,17 +1,17 @@
 //! The harness's own SQLite file, in a data folder it locks for as long as it runs. Sessions, and their events with a
-//! sequence number. A locked session's events keep their number and type but no payload; any session's payload is
-//! dropped at clean-up or once it is 30 days old.
+//! sequence number. A locked session's events keep their number, type and fields that are not private, and nothing
+//! the agent or the person wrote; any session's private fields are dropped at clean-up or once they are 30 days old.
 
 use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
-use crate::event::{Body, Event};
+use crate::event::{Body, Event, PRIVATE_FIELDS};
 
 /// The migration steps, in order. `PRAGMA user_version` counts the steps applied, so a step that has shipped is never
 /// edited: a change is a new step at the end.
@@ -30,9 +30,11 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
         seq INTEGER NOT NULL,
         ms INTEGER NOT NULL,
         type TEXT NOT NULL,
-        payload TEXT,
+        payload TEXT NOT NULL,
+        withheld INTEGER NOT NULL,
         PRIMARY KEY (session, seq)
-    );"];
+    );
+    CREATE INDEX events_kept_by_age ON events (ms) WHERE withheld = 0;"];
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -55,8 +57,13 @@ pub struct SessionRow {
 impl Store {
     /// Opens the store in `dir`, making the folder (only you can open it) and the file (only you can read it).
     pub fn open(dir: &Path) -> Result<Store> {
+        if std::fs::symlink_metadata(dir).is_ok_and(|link| link.is_symlink()) && std::fs::metadata(dir).is_err() {
+            return Err(Error::DanglingLink(dir.to_owned()));
+        }
         DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-        if std::fs::metadata(dir)?.permissions().mode() & 0o077 != 0 {
+        let folder = std::fs::metadata(dir)?;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        if folder.permissions().mode() & 0o077 != 0 || folder.uid() != unsafe { libc::geteuid() } {
             return Err(Error::NotPrivate(dir.to_owned()));
         }
         let lock = OpenOptions::new().create(true).truncate(false).write(true).mode(0o600).open(dir.join("lock"))?;
@@ -66,10 +73,13 @@ impl Store {
         })?;
         let path = dir.join("harness.sqlite");
         OpenOptions::new().create(true).append(true).mode(0o600).open(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let mut conn = Connection::open(&path)?;
         // Dropped payload is overwritten in the file, not only unlinked from it.
-        conn.execute_batch("PRAGMA secure_delete = ON; PRAGMA foreign_keys = ON;")?;
+        conn.execute_batch("PRAGMA secure_delete = ON;")?;
         migrate(&mut conn)?;
+        // Not before: inside the migration's transaction this pragma does nothing.
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         let store = Store { conn, _lock: lock };
         store.sweep(now_ms())?;
         Ok(store)
@@ -109,34 +119,33 @@ impl Store {
         Ok(())
     }
 
-    /// Stores `body` as the session's next event. Redaction is the caller's: this stores what it is given.
+    /// Stores `body` as the session's next event, without its private fields for a locked or cleaned-up session.
+    /// Redaction is the caller's: this stores what it is given.
     pub fn append(&self, session: &str, body: &Body, ms: i64) -> Result<Event> {
         let row = self.session(session)?;
-        let payload = (!row.locked && !row.cleaned).then(|| serde_json::to_string(body)).transpose()?;
+        let withheld = row.locked || row.cleaned;
+        let payload = serde_json::to_string(&if withheld { body.withheld() } else { body.clone() })?;
         let seq = self.conn.query_row(
-            "INSERT INTO events (session, seq, ms, type, payload)
-             VALUES (?1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session = ?1), ?2, ?3, ?4)
+            "INSERT INTO events (session, seq, ms, type, payload, withheld)
+             VALUES (?1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session = ?1), ?2, ?3, ?4, ?5)
              RETURNING seq",
-            params![session, ms, body.type_name(), payload],
+            params![session, ms, body.type_name(), payload, withheld],
             |row| row.get::<_, i64>(0),
         )?;
         Ok(Event { seq: seq as u64, ms, body: body.clone() })
     }
 
-    /// The session's events after `after`, in order.
+    /// The session's events after `after`, in order. An event of a type this build does not know reads as withheld.
     pub fn events(&self, session: &str, after: u64) -> Result<Vec<Event>> {
         let mut stmt =
             self.conn.prepare("SELECT seq, ms, type, payload FROM events WHERE session = ?1 AND seq > ?2 ORDER BY seq")?;
         let after = i64::try_from(after).unwrap_or(i64::MAX);
         let rows = stmt.query_map(params![session, after], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?))
+            Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
         })?;
         rows.map(|row| {
             let (seq, ms, of, payload) = row?;
-            let body = match payload {
-                Some(json) => serde_json::from_str(&json)?,
-                None => Body::Withheld { of },
-            };
+            let body = serde_json::from_str(&payload).unwrap_or_else(|_| Body::Withheld { of, kept: Default::default() });
             Ok(Event { seq: seq as u64, ms, body })
         })
         .collect()
@@ -148,16 +157,22 @@ impl Store {
         // Both or neither: a session marked clean must not keep its payload.
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("UPDATE sessions SET cleaned_ms = ?2 WHERE id = ?1", params![session, now_ms()])?;
-        tx.execute("UPDATE events SET payload = NULL WHERE session = ?1", [session])?;
+        tx.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND session = ?1", WITHHOLD.as_str()), [session])?;
         tx.commit()?;
         Ok(())
     }
 
-    /// Drops the payload of every event older than 30 days at `now`.
+    /// Drops the private fields of every event older than 30 days at `now`.
     pub fn sweep(&self, now: i64) -> Result<usize> {
-        Ok(self.conn.execute("UPDATE events SET payload = NULL WHERE payload IS NOT NULL AND ms < ?1", [now - KEEP_MS])?)
+        Ok(self.conn.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND ms < ?1", WITHHOLD.as_str()), [now - KEEP_MS])?)
     }
 }
+
+/// Turns a stored event into `Body::Withheld`: its type in `of`, its other fields but the private ones in `kept`.
+static WITHHOLD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let private: String = PRIVATE_FIELDS.iter().map(|field| format!(", '$.{field}'")).collect();
+    format!("withheld = 1, payload = json_object('type', 'withheld', 'of', type, 'kept', json_remove(payload, '$.type'{private}))")
+});
 
 fn migrate(conn: &mut Connection) -> Result<()> {
     let done: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;

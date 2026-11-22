@@ -10,6 +10,7 @@ pub mod mock;
 pub mod redact;
 pub mod session;
 pub mod store;
+pub mod tools;
 
 /// The crate's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

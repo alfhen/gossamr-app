@@ -7,7 +7,7 @@ use std::time::Duration;
 use harness::driver::Driver;
 use harness::event::{Body, Event};
 use harness::mock::{Mock, Script};
-use harness::session::{Harness, Open};
+use harness::session::{Harness, Open, Settings};
 use harness::store::Store;
 use tokio::sync::broadcast;
 
@@ -28,11 +28,19 @@ pub fn harness(dir: &Path, mock: &Mock, limit: usize) -> Harness {
 
 pub fn harness_on(store: Store, mock: &Mock, limit: usize) -> Harness {
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
-    Harness::new(store, drivers, limit)
+    Harness::new(store, drivers, settings(limit))
 }
 
-pub fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiver<Event>) {
-    harness.open(Open { provider: "mock".into(), locked, cwd: "/nowhere".into(), model: None }).unwrap()
+pub fn settings(turn_limit: usize) -> Settings {
+    Settings { turn_limit, stop_grace: Duration::from_millis(300) }
+}
+
+pub async fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiver<Event>) {
+    open_on(harness, "mock", locked).await
+}
+
+pub async fn open_on(harness: &Harness, provider: &str, locked: bool) -> (String, broadcast::Receiver<Event>) {
+    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), model: None }).await.unwrap()
 }
 
 pub async fn next(events: &mut broadcast::Receiver<Event>) -> Event {
