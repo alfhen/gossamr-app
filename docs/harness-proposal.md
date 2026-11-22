@@ -66,16 +66,22 @@ One Rust program in a crate of its own, with no dependency on the app.
 
 **A session is the unit.** A client opens a session with: a provider and login, a place to work (a repo, a base and a branch name, from which the harness makes a clone and a worktree; or an empty folder), a first prompt, a guard text, a model, a list of tools the client offers, and optionally a JSON schema for the result. The harness answers with an id. From then on the client can send a message, cancel, answer a permission request, close, and clean up.
 
-**Everything a session does is an event** with a sequence number, written to the harness's own store after redaction: started, text, tool call, permission request, tool call for the client, usage, turn ended, failed. A client reads events from a sequence number onward, so it catches up after a reconnect or a restart. There is no polling and no reading of a CLI's files.
+**Everything a session does is an event** with a sequence number, written to the harness's own store after redaction: started, text, tool call, permission request, question, tool call for the client, usage, turn ended, failed. A client reads events from a sequence number onward, so it catches up after a reconnect or a restart. There is no polling and no reading of a CLI's files.
+
+**What rests in the store.** Redaction masks token shapes, not private text. So a locked session (Pip) stores no text or tool payload at all: its events go to the connected client only, and the app keeps Pip's turns as it does today. Other sessions keep their payload until the run is cleaned up, or 30 days. Anything that runs as you on that machine can read the store file; section 8 says what that means.
 
 **The harness owns what it starts.**
 
 - It makes the clone and the worktree with the hardened git code Gossamr has today, for every provider.
 - The agent is its child. A message to an agent is one call for every provider and state.
-- If the harness restarts, agent processes are gone. It resumes each session by the provider's own session id and sends one "carry on" prompt, at most three in a row, never after Stop and never while a permission request is open.
+- If the harness restarts, it first stops any agent process a dead harness left behind, found by pid and start time. It then resumes each session by the provider's own session id and sends one "carry on" prompt, at most three in a row, never after Stop, and never while a permission request or a question is open. A session can be opened as "ends when its client leaves"; such a session is never resumed.
+- It limits how many sessions are in a turn at once, for every way a session starts: a client, the command line, a resume, a workflow. The app's queue decides the order; the harness holds the limit.
 - It adds what rule 4 allows and nothing else: its tools endpoint, a guard, and a model when one was chosen. No sandbox or restricting flag.
 
-**Tools.** Each session gets one MCP endpoint on loopback with a token of its own, delivered through the environment or a file only that run uses, never argv. It offers `result` (the agent ends its work by calling it; with a schema the data must fit), `ask` (a question to whoever opened the session), and the tools the client declared. A call to a client tool becomes an event; the client posts the answer. This is how Gossamr's `read_ticket` and `read_workstream`, and all of Pip's tools, reach a session without the harness knowing what they are.
+**Tools.** Each session gets one MCP endpoint on loopback with a token of its own, delivered through the environment or a file only that run uses, never argv. It offers `result` (the agent ends its work by calling it; with a schema the data must fit), `ask`, and the tools the client declared.
+
+- `ask` belongs to the harness. The question is stored, survives a restart, and is answered through the API. Each provider row carries the setting that makes that provider's tool call outwait the question, with a test that it does.
+- A call to a client tool becomes an event and the client posts the answer. With no client connected the call fails at once with "the client is away". This is how Gossamr's `read_ticket` and `read_workstream`, and all of Pip's tools, reach a session without the harness knowing what they are.
 
 **Providers are a compiled-in table.** A row names the program, the variable that selects a login folder, the sign-in check, how models are listed, and the driver. A row is code, reviewed like code; it is not editable data.
 
@@ -90,15 +96,15 @@ One Rust program in a crate of its own, with no dependency on the app.
 
 **Its own front doors.**
 
-- A command line: `harness serve`, `harness run --provider codex "prompt"`, `harness sessions`, `harness providers`, `harness token`.
+- A command line that can do everything the API can: `harness serve`, `harness run --provider codex "prompt"`, `harness sessions`, `harness events`, `harness send`, `harness answer`, `harness providers`, `harness token`.
 - An API on a Unix socket in a folder only you can open. No TCP port for clients, so a web page or another user cannot reach it.
-- A client token. The harness keeps its hash. The app keeps the token in the Keychain. An agent runs as you and could read a file; it cannot read the app's Keychain item without a prompt.
+- A client token. The app makes it and hands it over when it first starts the harness; the harness keeps a hash. Later tokens need a valid one (`harness token new`). The app keeps its token in the Keychain and proves it by answering a challenge, so the token never crosses the socket and a program posing as the harness learns nothing. An agent's own token opens only its session's tools.
 
 ### 3.2 The app as a client
 
-- **Start or adopt.** The app starts the bundled harness detached, so it outlives the window, or adopts the one already serving its socket. A protocol mismatch asks the harness to restart when no session is in a turn. Settings gets "Stop all agents and the harness".
+- **Start or adopt.** The app starts the bundled harness detached, so it outlives the window, or adopts the one already serving its socket. It keeps working with an older harness as long as the protocol number matches, and Settings offers "Restart the harness to update". Only a protocol mismatch forces it: sessions are stopped, the bundled harness starts, and they are resumed. A newer harness than the app says "update Gossamr". Settings also gets "Stop all agents and the harness".
 - **Runs.** A run is a row in the app that points at a harness session. One consumer turns session events into run state, the timeline, notices and Pip's wakes. The tracker loop, the listing diff and both backends go.
-- **Permission requests** show in Needs you with Allow and Deny, once. You may turn on, per repo, "allow file edits inside the run's worktree without asking". That covers an edit whose real path is in the worktree and outside `.git`, and nothing else: never a command, never "always", never Pip. The setting lives in the app, where no agent can change it.
+- **Permission requests** show in Needs you with Allow and Deny, once. On a provider path where the client cannot answer one, the run stops with the reason and offers "Take over in Terminal". You may turn on, per repo, "allow file edits inside the run's worktree without asking". That covers an edit whose real path is in the worktree and outside `.git`, and nothing else: never a command, never "always", never Pip. The setting lives in the app, where no agent can change it.
 - **Failures** arrive as a kind with steps to fix, from the harness. The page stops carrying per-provider help.
 - **Providers in the UI** come from the harness: label, signed in or not, the sign-in command, models, whether it can run Pip.
 
@@ -106,16 +112,16 @@ One Rust program in a crate of its own, with no dependency on the app.
 
 Pip stays an assistant with no file, shell or web tools that acts only through Gossamr's tools, and it still writes nothing itself (rule 3).
 
-- A Pip turn becomes a harness session opened with the **locked profile**. For Claude that is today's flag list, moved into the harness with the tests that check each flag. The proof a provider must pass is stricter than today: the session's advertised tool list equals Gossamr's tools and nothing else, for each CLI version tested.
+- A Pip turn becomes a harness session opened with the **locked profile**, and as "ends when its client leaves": if the app quits, the turn ends, as it does today. For Claude that is today's flag list, moved into the harness with the tests that check each flag. The proof a provider must pass is stricter than today: the session's advertised tool list equals Gossamr's tools and nothing else, for each CLI version tested.
 - Pip's tools are client tools of that session. The app's own MCP server, its port file and its token table go.
 - Pip is woken by session events instead of a sweep. The once-per-agent-and-state rule and the wake limits stay.
-- Pip gets no tool that answers for you, approves, or merges.
+- Pip gets no tool that answers for you, approves, or merges. Pip proposes a wave; you start it from Needs you.
 
 ### 3.4 Pipelines
 
 A pipeline lets Pip build a release without you reading every step. It arrives in two stages.
 
-**Stage 1: the pipeline as it is, on Claude.** Rule 4 already gives an agent your own plugins. Pip starts one Claude agent in the repo's clone with a role that runs agent-pr-pipeline's `pr-pipeline` skill on the plan entries you chose. The agent escalates through `ask`, which lands in Needs you with the options and its recommendation, and it ends with a `result`: each pull request, its head commit, what was verified, and the pipeline's own verdict. H0 checks that the Workflow tool works in such a session; if it does not, stage 1 is dropped and stage 2 carries the feature.
+**Stage 1: the pipeline as it is, on Claude.** Rule 4 already gives an agent your own plugins. Once you start a wave, one Claude agent in the repo's clone runs agent-pr-pipeline's wave workflow on the plan entries you chose: everything up to open pull requests, and none of its landing steps. The agent escalates through `ask`, which lands in Needs you with the options and its recommendation, and it ends with a `result`: each pull request, its head commit and what was verified. In stage 1 you merge; one agent's word is not enough for Gossamr to merge by itself. If the harness restarts, a wave is shown as interrupted and "Resume wave" uses the pipeline's own resume; the harness sends it no "carry on". H0 checks that the Workflow tool works in such a session; if it does not, stage 1 is dropped and stage 2 carries the feature.
 
 **Stage 2: roles on any provider.** The harness gains a workflow host: it runs a workflow script and supplies `agent()`, `parallel()` and `log()` itself. An `agent()` call opens a harness session with the role's prompt, a worktree when asked, a schema enforced through `result`, and a login chosen per role in Settings, so review can run on a different provider from build. A journal of calls makes a restart replay what finished. agent-pr-pipeline needs small changes for this (plan step P1). Stage 2 is the largest and least certain part of this proposal and is built last.
 
@@ -126,10 +132,12 @@ A pipeline lets Pip build a release without you reading every step. It arrives i
 1. the head commit is the one that was verified,
 2. the changed paths pass the gates read from the default branch,
 3. CI is green,
-4. a review bot approved by its own account (a reply from your account does not count, since agents post as you),
-5. the pipeline's merge-safety verdict is "safe".
+4. a review bot you named for that repo submitted an approving review of that commit from its own account (a reply or a resolved thread does not count, since agents act as you),
+5. the merge-safety verdict is "safe", from a session that did not build or review the change.
 
-Per repo you choose "I merge" (the default) or "merge when all five hold". The first wave in a repo always waits for you. No agent is told to merge.
+Anything Gossamr cannot read counts as failed: checks it may not see, no checks at all, more changed files than it could list.
+
+Per repo you choose "I merge" (the default) or, from stage 2 on, "merge when all five hold". Until you have landed one wave in a repo yourself, every wave there waits for you. No agent is told to merge. A repo whose review bot never approves (this one, as `.coderabbit.yaml` is set today) stays on "I merge".
 
 **What this cannot stop.** With one GitHub account, an agent that is talked into it can still call `gh` and merge or push to the default branch. Two things close that, and both are yours to set up: branch protection on the default branch that applies to administrators, and a separate GitHub account for agents. The proposal says so in Settings.
 
@@ -138,7 +146,8 @@ Per repo you choose "I merge" (the default) or "merge when all five hold". The f
 - `harness serve` on the server, signed in there once per provider (`claude setup-token`, `codex login --device-auth`, `agy acp --login`). The app shows the command; it cannot open a Terminal on another machine.
 - The app reaches it by forwarding the harness's Unix socket over SSH. No listening port, no TLS and no pairing code to write or get wrong. `harness token new` on the server prints a client token once; the app stores it in the Keychain.
 - One harness at a time: this Mac or the server. Pip's turns run where the agents run.
-- With the laptop closed, sessions and stage 2 waves go on. A question to you waits. Pip and its wakes resume when the app reconnects and reads the events it missed. No notice reaches you while no app is open.
+- With the laptop closed, sessions and stage 2 waves go on. A question to you waits. A call to one of the app's tools fails with "the client is away". Pip and its wakes resume when the app reconnects and reads the events it missed. No notice reaches you while no app is open.
+- What an agent was given (the ticket text in its brief) and what it wrote rest in the harness's store on the server until clean-up. Pip's text does not.
 - The harness holds no Jira or GitHub secret. Git and `gh` on the server use that machine's own credentials, as agents use your shell's today.
 - Linux is built and tested in CI. A real server with real logins is not checked by this build.
 
@@ -170,7 +179,7 @@ H0 runs every provider for real before anything is built on it. It is a gate: ea
 
 | Check | If it fails |
 | --- | --- |
-| A two-way stream with a permission request answered by the client | That provider runs without in-app permission answers, as today, and says so. |
+| A two-way stream with a permission request answered by the client | On that provider a run that hits a permission request stops with the reason and offers "Take over in Terminal". |
 | Resume a session by id after the client is killed | That provider's sessions are marked interrupted on a harness restart. |
 | A tool call held open for 9 minutes | `ask` on that provider returns after the provider's limit and the agent ends its turn with the question, as Codex does today. |
 | The person's own setup is honoured (settings, hooks, permission rules, instructions) | That path breaks rule 4. Use the provider's native path. If none passes: **stop**. |
@@ -221,7 +230,8 @@ The TypeScript mock stays, and each step keeps it in step. Moving the page's tes
 | Provider terms. Anthropic: third-party developers may not "route requests through Free, Pro, Max, or Ultra plan credentials on behalf of their users", developers using the Agent SDK "should use API key authentication", plan limits "assume ordinary, individual usage"; and nothing prevents "an end user from signing in to the unmodified Claude Code binary with their own Claude subscription". Google: using third-party software "to access the Service" with Antigravity OAuth is a breach and "may be grounds for suspension or termination", while its docs tell editors to launch `agy acp`. | The harness starts only the vendor's own unmodified CLI on your own login and never reads, stores or forwards a provider token. For Claude that means the native `claude -p` path, which Gossamr uses today, and not the SDK-based adapter. H0 records which program every path runs. Whether your use is inside each provider's terms is your decision, most of all before anyone else uses this. |
 | An agent is talked into merging or pushing to the default branch with your `gh`. | Section 3.4: Gossamr's own merges are checked in code, and Settings tells you to protect the branch and use a second account. The risk exists today. |
 | Hostile text reaches Pip and Pip leaks private ticket text. | Pip keeps no write tool and its GitHub comments stay drafts. |
-| The harness's API is used by an agent. | Unix socket, client token in the Keychain, hash only on disk. An agent's own token reaches only its session's tools. |
+| The harness's API is used by an agent. | Unix socket, client token in the Keychain and proven by challenge, hash only on disk, new tokens only with a valid one. An agent's own token reaches only its session's tools. |
+| Agents and the harness run as the same user. | These controls stop accidents and an agent that was talked into something simple. They do not stop a program that sets out to read the harness's store or its memory. The real boundary is another user or another machine, which is what a server gives you. Said in Settings. |
 | ACP and Codex's app-server are both moving. | The driver interface does not depend on either. Versions are pinned and features detected. |
 | `agy` may allow one Google login and may not run without a terminal. | H0 checks both. |
 | The pipeline's script changes weekly. | Pinned by commit in a path only you merge. |
@@ -248,6 +258,15 @@ Decisions this proposal makes that you may want to reverse: Pip's own GitHub com
 - "Boundaries" were undefined. Now there is one setting, in the app, with a narrow meaning.
 - Pairing, TLS, generated types, replay of the app's own events, and the move of the page's tests were cut.
 - H0 was a check with no consequence. Now it is a gate.
+
+A fourth review read the rewrite and changed it again:
+
+- Stage 1 had an agent run the pipeline's landing steps. Now it runs the wave only, and you merge.
+- `harness token new` would have given any agent a client token. Now it needs one.
+- "A review bot approved" could not hold here, because this repo's bot never approves, and could be faked by a reply. Now it is an approving review from a bot you name, and a repo without one stays on "I merge".
+- Code was to be copied into the harness and kept twice for three waves. Now it moves once and the app imports it.
+- Pip's text would have rested in the harness's store. Now a locked session stores none.
+- Pip could start a wave on a wake. Now Pip proposes and you start.
 
 ## 11. Open after this build
 
