@@ -2,7 +2,7 @@
 
 Gossamr is a macOS app that helps a person work with Jira and GitHub. It keeps a local cache of their tickets and pull requests. Pip, the assistant, talks with the person and starts Claude Code agents inside workstreams. Nothing reaches Jira or GitHub until the person approves a draft.
 
-It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and Zustand front end in `src/`.
+It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and Zustand front end in `src/`. The Rust code is a Cargo workspace at the root, with one `Cargo.lock` and one `target/`: the app in `src-tauri/` and the agent harness in `crates/harness/`.
 
 ## Read first
 
@@ -32,6 +32,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/runs/backend.rs`, `runs/backend/` | The `RunBackend` trait (launch, preflight, watching runs, finding a run's session, reading its final answer so far, and every action on a session: answer, message, stop, resume, clean up, attach, sign-in and trust) and `ClaudeBackend`, which wraps `ClaudeCli`. `Toolchain` holds the backend; the service and the tracker call it instead of the CLI for those, and `Toolchain` no longer holds the CLI. A backend states what it can do with plain methods (`resumes_with_tools`, `trust_file`), never by its driver |
 | `src-tauri/src/runs/codex/` | `CodexBackend`: launches `codex exec` in a worktree of the clone, keeps the run folder `<data dir>/agents/runs/<run id>` (events, stderr, final answer, process file, `short-id`) and finds the process again by pid. It also answers, messages, stops, attaches and cleans up a run. The folder goes with the worktree and in the sweep |
 | `src-tauri/src/inbox/` | Draft storage and approval, prose run outcomes, workstreams |
+| `crates/harness/` | The agent harness ([proposal](docs/harness-proposal.md)): a program beside the app that will run agent sessions. It depends on neither Tauri nor the app, and builds on Linux |
 | `src/backend/` | The `Backend` interface (`types.ts`), the desktop one (`jira.ts`) and the in-browser mock (`mock*.ts`) |
 | `src/workspace/` | The workspace UI: Inbox, Board and List, Work, peek, Pip pane, review draft hunks |
 | `src/lib/` | Pure front-end logic |
@@ -55,13 +56,13 @@ CI runs these on every pull request. Run them before you push:
 
 ```bash
 pnpm typecheck && pnpm test && pnpm build
-mkdir -p dist && cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
+mkdir -p dist && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 pnpm e2e
 ```
 
 - `cargo` needs `dist/` to exist, because `generate_context!` embeds the front end.
 - `pnpm e2e` starts its own Vite server and runs one worker on purpose, because the mock paces its answers on timers. A full run takes about 11 minutes. Set `E2E_PORT` to run beside another server, and pass `--shard=1/4` for a quarter of it.
-- The tests marked `#[ignore]` start the real `claude` CLI and need Claude Code installed and signed in: `cd src-tauri && cargo test -- --ignored`. They start real background sessions, so check that none are left afterwards.
+- The tests marked `#[ignore]` start the real `claude` CLI and need Claude Code installed and signed in: `cargo test -p gossamr -- --ignored`. They start real background sessions, so check that none are left afterwards.
 
 ## Rules that must hold
 

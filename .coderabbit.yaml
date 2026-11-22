@@ -15,6 +15,10 @@ reviews:
       instructions: >-
         Tokens and client secrets must only live in the macOS Keychain, never on disk or in logs.
         Nothing may write to Jira without an explicit user action in the UI.
+    - path: "crates/**/*.rs"
+      instructions: >-
+        Tokens and client secrets must only live in the macOS Keychain, never on disk or in logs.
+        Nothing may write to Jira without an explicit user action in the UI.
     - path: "src/**/*.{ts,tsx}"
       instructions: >-
         Keyboard shortcuts must not fire while the user is typing in an input or textarea.
