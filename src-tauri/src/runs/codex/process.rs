@@ -60,10 +60,30 @@ pub fn signal_group(process: &RunProcess, signal: libc::c_int) -> std::io::Resul
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
 /// group. Only for a stop that found the leader alive and the run's own at its start, so the group id is still the run's.
 pub fn kill_group(process: &RunProcess) -> std::io::Result<()> {
-    match deliver(-(process.pid as libc::pid_t), libc::SIGKILL) {
+    let group = process.pid as libc::pid_t;
+    match deliver(-group, libc::SIGKILL) {
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EPERM) && only_zombies_in(group) => Ok(()),
         other => other,
     }
+}
+
+/// macOS refuses a signal to a group with EPERM when every process left in it is a zombie, as a leader is between its
+/// exit and the app reaping it, and `alive` already reads such a leader as gone. A zombie of our own still takes a
+/// signal sent to it alone, so a group none of whose members refuse one has nothing left to kill.
+#[cfg(target_os = "macos")]
+fn only_zombies_in(group: libc::pid_t) -> bool {
+    let mut members = [0 as libc::pid_t; 256];
+    let size = std::mem::size_of_val(&members) as libc::c_int;
+    // SAFETY: `members` is as large as `size` says, and the call fills at most that much.
+    let count = unsafe { libc::proc_listpgrppids(group, members.as_mut_ptr().cast(), size) };
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    count >= 0 && members[..count as usize].iter().all(|pid| unsafe { libc::kill(*pid, 0) } == 0)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn only_zombies_in(_group: libc::pid_t) -> bool {
+    false
 }
 
 fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::launch::toml_string;
-use super::process::{alive, signal, signal_group, started_of};
+use super::process::{alive, kill_group, signal, signal_group, started_of};
 use super::*;
 use crate::connections::Driver;
 use crate::domain::{RunProcess, AGENT_GUARD};
@@ -254,6 +254,30 @@ fn a_reused_pid_is_not_the_run_s_process() {
     assert!(!alive(&reused));
     assert!(!signal(&reused, 0).unwrap(), "nothing is sent to a process that is not the run's");
     assert!(!signal_group(&reused, 0).unwrap());
+}
+
+#[test]
+fn killing_a_group_whose_leader_exited_but_is_not_reaped_yet_succeeds() {
+    use std::os::unix::process::CommandExt;
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "exit 0"]);
+    // SAFETY: `setsid` is async-signal-safe and the closure touches nothing else.
+    unsafe {
+        command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+    }
+    let mut child = command.spawn().unwrap();
+    let pid = child.id();
+    let process = RunProcess { pid, started: started_of(pid).unwrap_or(0) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // A zombie still answers signal 0 but has no start time any more.
+    while started_of(pid).is_some() {
+        assert!(std::time::Instant::now() < deadline, "the shell never exited");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, 0, "not reaped yet");
+    assert!(!alive(&process), "a stop reads the zombie leader as gone and goes on to kill its group");
+    kill_group(&process).unwrap();
+    child.wait().unwrap();
 }
 
 #[tokio::test]
