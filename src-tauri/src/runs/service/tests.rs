@@ -815,8 +815,20 @@ mod through_the_real_spawner {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let out = std::process::Command::new("git").args(args).current_dir(dir).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// The environment the runs get: the scratch folder as home, no system git config (Homebrew's and Xcode's both name
+    /// the Keychain credential helper) and only the file protocol, so git reaches neither the network nor the Keychain.
+    fn run_env(dir: &Path, scenario: &Path) -> Arc<RunEnv> {
+        Arc::new(RunEnv::from_pairs([
+            ("PATH", "/usr/bin:/bin".to_string()),
+            ("HOME", dir.to_string_lossy().into_owned()),
+            ("GIT_CONFIG_NOSYSTEM", "1".to_string()),
+            ("GIT_ALLOW_PROTOCOL", "file".to_string()),
+            ("FAKE_CLAUDE_SCENARIO", scenario.to_string_lossy().into_owned()),
+        ]))
     }
 
     async fn real() -> Real {
@@ -829,11 +841,7 @@ mod through_the_real_spawner {
         let scenario_dir = fx.dir.join("claude");
         std::fs::create_dir_all(&scenario_dir).unwrap();
         std::fs::write(scenario_dir.join("scenario"), "service_line=1\n").unwrap();
-        let env = Arc::new(RunEnv::from_pairs([
-            ("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".to_string()),
-            ("HOME", fx.dir.to_string_lossy().into_owned()),
-            ("FAKE_CLAUDE_SCENARIO", scenario_dir.join("scenario").to_string_lossy().into_owned()),
-        ]));
+        let env = run_env(&fx.dir, &scenario_dir.join("scenario"));
         let cli = Arc::new(SystemCli::new(PathBuf::from(FAKE), env.clone()));
         let tools = FixedToolchain(Ok(Toolchain::new(cli.clone(), env)));
         let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), Arc::new(|_| {})).with_home(fx.home.clone()).with_timing(FAST);
@@ -843,6 +851,24 @@ mod through_the_real_spawner {
 
     fn calls(real: &Real) -> String {
         std::fs::read_to_string(real.scenario_dir.join("calls.log")).unwrap()
+    }
+
+    #[test]
+    fn the_git_these_runs_get_refuses_https_at_once_and_has_no_credential_helper() {
+        let dir = std::env::temp_dir().join(format!("gossamr-spawner-git-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = run_env(&dir, &dir.join("scenario"));
+        let git = |args: &[&str]| {
+            let mut cmd = std::process::Command::new("/usr/bin/git");
+            cmd.args(args).current_dir(&dir);
+            env.apply(&mut cmd);
+            cmd.output().unwrap()
+        };
+        let fetch = git(&["ls-remote", ORIGIN]);
+        assert!(String::from_utf8_lossy(&fetch.stderr).contains("transport 'https' not allowed"), "{fetch:?}");
+        let config = String::from_utf8_lossy(&git(&["config", "--list", "--show-origin"]).stdout).into_owned();
+        assert!(!config.contains("credential.helper"), "{config}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
@@ -871,7 +897,7 @@ mod through_the_real_spawner {
         assert!(!RESTRICTING_FLAGS.iter().any(|flag| launch.lines().any(|l| l == *flag)), "the person's own settings apply: {launch}");
 
         let seen: BTreeSet<String> = std::fs::read_to_string(real.scenario_dir.join("env.last")).unwrap().lines().map(String::from).collect();
-        let captured: BTreeSet<String> = ["PATH", "HOME", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
+        let captured: BTreeSet<String> = ["PATH", "HOME", "GIT_CONFIG_NOSYSTEM", "GIT_ALLOW_PROTOCOL", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
         let shell_added: BTreeSet<String> = ["PWD", "SHLVL", "_", "OLDPWD"].map(String::from).into();
         assert!(seen.difference(&captured).all(|k| shell_added.contains(k)), "nothing is added per launch: {seen:?}");
 

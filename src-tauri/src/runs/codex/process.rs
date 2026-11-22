@@ -60,10 +60,99 @@ pub fn signal_group(process: &RunProcess, signal: libc::c_int) -> std::io::Resul
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
 /// group. Only for a stop that found the leader alive and the run's own at its start, so the group id is still the run's.
 pub fn kill_group(process: &RunProcess) -> std::io::Result<()> {
-    match deliver(-(process.pid as libc::pid_t), libc::SIGKILL) {
+    let group = process.pid as libc::pid_t;
+    match deliver(-group, libc::SIGKILL) {
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EPERM) => after_a_refused_group_kill(group, e),
         other => other,
     }
+}
+
+/// macOS refuses a signal to a group with EPERM when every process left in it is a zombie, as a leader is between its
+/// exit and the app reaping it. So a refused group kill is done when the group lists only zombies, and when a second
+/// kill finds the group gone or kills what it holds. A listed member that is still running keeps the refusal, and a
+/// listing that may be cut short proves nothing.
+fn after_a_refused_group_kill(group: libc::pid_t, refused: std::io::Error) -> std::io::Result<()> {
+    match group_members(group) {
+        Listing::Full => Err(refused),
+        Listing::Members(members) => {
+            let states: Vec<Member> = members.iter().map(|pid| member(*pid)).collect();
+            if states.contains(&Member::Running) {
+                Err(refused)
+            } else if states.iter().all(|m| *m == Member::Zombie) {
+                Ok(())
+            } else {
+                // A member was reaped after the listing.
+                kill_group_again(group, refused)
+            }
+        }
+        // An empty group and a failed listing look the same.
+        Listing::Nothing => kill_group_again(group, refused),
+    }
+}
+
+/// Done when the group is gone or takes the kill; otherwise the first refusal stands.
+fn kill_group_again(group: libc::pid_t, refused: std::io::Error) -> std::io::Result<()> {
+    match deliver(-group, libc::SIGKILL) {
+        Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
+        Ok(()) => Ok(()),
+        Err(_) => Err(refused),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Member {
+    /// Exited and not reaped: it takes a signal sent to it alone, and has no start time any more, which is how `alive`
+    /// reads it as gone.
+    Zombie,
+    /// No such process: reaped since it was listed.
+    Gone,
+    /// Anything else, including a process that refuses a signal.
+    Running,
+}
+
+fn member(pid: libc::pid_t) -> Member {
+    // SAFETY: signal 0 only checks that the process exists and may be signalled.
+    match unsafe { libc::kill(pid, 0) } {
+        0 if u32::try_from(pid).is_ok_and(|pid| started_of(pid).is_none()) => Member::Zombie,
+        0 => Member::Running,
+        _ if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) => Member::Gone,
+        _ => Member::Running,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Listing {
+    Members(Vec<libc::pid_t>),
+    /// The call listed nobody, or failed: libproc answers 0 for both.
+    Nothing,
+    /// As many as the buffer holds, so there may be more.
+    Full,
+}
+
+const MEMBERS_MAX: usize = 256;
+
+#[cfg(target_os = "macos")]
+fn group_members(group: libc::pid_t) -> Listing {
+    #[cfg(test)]
+    if let Some(listing) = seam::listing(group) {
+        return listing;
+    }
+    let mut members = [0 as libc::pid_t; MEMBERS_MAX];
+    let size = std::mem::size_of_val(&members) as libc::c_int;
+    // SAFETY: `members` is as large as `size` says, and the call fills at most that much.
+    let count = unsafe { libc::proc_listpgrppids(group, members.as_mut_ptr().cast(), size) };
+    match usize::try_from(count) {
+        Ok(0) | Err(_) => Listing::Nothing,
+        Ok(n) if n >= MEMBERS_MAX => Listing::Full,
+        Ok(n) => Listing::Members(members[..n].to_vec()),
+    }
+}
+
+/// Only macOS refuses a group of zombies, so elsewhere a refusal stands.
+#[cfg(not(target_os = "macos"))]
+fn group_members(_group: libc::pid_t) -> Listing {
+    Listing::Full
 }
 
 fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
@@ -83,17 +172,38 @@ fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
 #[cfg(test)]
 pub mod seam {
     use std::cell::RefCell;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+
+    use super::Listing;
 
     thread_local! {
         static SENT: RefCell<Vec<(libc::pid_t, libc::c_int)>> = const { RefCell::new(Vec::new()) };
         static FAILING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+        static REFUSED_GROUPS: RefCell<HashMap<libc::pid_t, usize>> = RefCell::new(HashMap::new());
+        static LISTINGS: RefCell<Vec<(libc::pid_t, Listing)>> = const { RefCell::new(Vec::new()) };
     }
 
     pub(super) fn intercept(target: libc::pid_t, signal: libc::c_int) -> Option<std::io::Result<()>> {
         SENT.with(|sent| sent.borrow_mut().push((target, signal)));
         let fails = signal != libc::SIGKILL && FAILING.with(|set| set.borrow().contains(&target.abs()));
-        fails.then(|| Err(std::io::Error::from_raw_os_error(libc::EPERM)))
+        let refused = signal == libc::SIGKILL
+            && target < 0
+            && REFUSED_GROUPS.with(|left| left.borrow_mut().get_mut(&-target).is_some_and(|n| n.checked_sub(1).map(|rest| *n = rest).is_some()));
+        (fails || refused).then(|| Err(std::io::Error::from_raw_os_error(libc::EPERM)))
+    }
+
+    pub(super) fn listing(group: libc::pid_t) -> Option<Listing> {
+        LISTINGS.with(|all| all.borrow().iter().find(|(g, _)| *g == group).map(|(_, listing)| listing.clone()))
+    }
+
+    /// Makes the next `times` SIGKILLs to the group `pid` leads fail with EPERM, as macOS answers for a group of zombies.
+    pub fn refuse_group_kills(pid: u32, times: usize) {
+        REFUSED_GROUPS.with(|left| left.borrow_mut().insert(pid as libc::pid_t, times));
+    }
+
+    /// What listing the members of the group `pid` leads gives, in place of asking the system.
+    pub fn list_group_as(pid: u32, listing: Listing) {
+        LISTINGS.with(|all| all.borrow_mut().push((pid as libc::pid_t, listing)));
     }
 
     /// Every signal that was aimed at `pid` or its group.

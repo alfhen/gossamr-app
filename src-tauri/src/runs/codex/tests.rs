@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 
 use super::launch::toml_string;
 use super::process::{alive, signal, signal_group, started_of};
+#[cfg(target_os = "macos")]
+use super::process::kill_group;
 use super::*;
 use crate::connections::Driver;
 use crate::domain::{RunProcess, AGENT_GUARD};
@@ -254,6 +256,104 @@ fn a_reused_pid_is_not_the_run_s_process() {
     assert!(!alive(&reused));
     assert!(!signal(&reused, 0).unwrap(), "nothing is sent to a process that is not the run's");
     assert!(!signal_group(&reused, 0).unwrap());
+}
+
+/// A shell that leads a group of its own and runs `script`.
+#[cfg(target_os = "macos")]
+fn group_leader(script: &str) -> std::process::Child {
+    use std::os::unix::process::CommandExt;
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", script]);
+    // SAFETY: `setsid` is async-signal-safe and the closure touches nothing else.
+    unsafe {
+        command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+    }
+    command.spawn().unwrap()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn killing_a_group_whose_leader_exited_but_is_not_reaped_yet_succeeds() {
+    let mut child = group_leader("exit 0");
+    let pid = child.id();
+    let process = RunProcess { pid, started: started_of(pid).unwrap_or(0) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    // A zombie still answers signal 0 but has no start time any more.
+    while started_of(pid).is_some() {
+        assert!(std::time::Instant::now() < deadline, "the shell never exited");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, 0, "not reaped yet");
+    assert!(!alive(&process), "a stop reads the zombie leader as gone and goes on to kill its group");
+    kill_group(&process).unwrap();
+    child.wait().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refused_group_kill_with_a_live_member_listed_is_still_an_error() {
+    let mut child = group_leader("sleep 30");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap() };
+    process::seam::refuse_group_kills(process.pid, usize::MAX);
+    let refused = kill_group(&process).unwrap_err();
+    assert_eq!(refused.raw_os_error(), Some(libc::EPERM), "the live leader is listed and is no zombie");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refused_group_kill_whose_listing_is_full_or_fails_is_still_an_error() {
+    let child = group_leader("sleep 30");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap() };
+    process::seam::refuse_group_kills(process.pid, usize::MAX);
+    process::seam::list_group_as(process.pid, process::Listing::Full);
+    assert_eq!(kill_group(&process).unwrap_err().raw_os_error(), Some(libc::EPERM), "a full listing may hide a live member");
+    let group_kills = |pid| process::seam::sent_to(pid).iter().filter(|s| **s == libc::SIGKILL).count();
+    assert_eq!(group_kills(process.pid), 1, "nothing more is sent after a full listing");
+
+    let other = group_leader("sleep 30");
+    let second = RunProcess { pid: other.id(), started: started_of(other.id()).unwrap() };
+    process::seam::refuse_group_kills(second.pid, usize::MAX);
+    process::seam::list_group_as(second.pid, process::Listing::Nothing);
+    assert_eq!(kill_group(&second).unwrap_err().raw_os_error(), Some(libc::EPERM), "a failed listing proves nothing while the group still refuses");
+    assert_eq!(group_kills(second.pid), 2, "the group is asked once more when the listing is empty");
+    for mut c in [child, other] {
+        c.kill().unwrap();
+        c.wait().unwrap();
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_group_that_is_gone_by_the_time_it_is_listed_counts_as_killed() {
+    let mut child = group_leader("exit 0");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap_or(0) };
+    child.wait().unwrap();
+    process::seam::refuse_group_kills(process.pid, 1);
+    process::seam::list_group_as(process.pid, process::Listing::Nothing);
+    kill_group(&process).unwrap();
+    assert_eq!(process::seam::sent_to(process.pid).iter().filter(|s| **s == libc::SIGKILL).count(), 2, "asked again, and the group was gone");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_listed_member_reaped_before_it_is_checked_gets_the_group_asked_again() {
+    let group_kills = |pid| process::seam::sent_to(pid).iter().filter(|s| **s == libc::SIGKILL).count();
+    let mut child = group_leader("exit 0");
+    let process = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap_or(0) };
+    child.wait().unwrap();
+    process::seam::refuse_group_kills(process.pid, 1);
+    process::seam::list_group_as(process.pid, process::Listing::Members(vec![process.pid as libc::pid_t]));
+    kill_group(&process).unwrap();
+    assert_eq!(group_kills(process.pid), 2, "the reaped leader sent the kill to the group once more, which found it gone");
+
+    let mut child = group_leader("exit 0");
+    let still = RunProcess { pid: child.id(), started: started_of(child.id()).unwrap_or(0) };
+    child.wait().unwrap();
+    process::seam::refuse_group_kills(still.pid, 2);
+    process::seam::list_group_as(still.pid, process::Listing::Members(vec![still.pid as libc::pid_t]));
+    assert_eq!(kill_group(&still).unwrap_err().raw_os_error(), Some(libc::EPERM), "a group that still refuses keeps the refusal");
 }
 
 #[tokio::test]
