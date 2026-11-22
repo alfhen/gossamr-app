@@ -12,6 +12,10 @@ fn text(s: &str) -> Body {
     Body::Text { text: s.into() }
 }
 
+fn withheld_text() -> Body {
+    Body::Withheld { of: "text".into(), kept: Default::default() }
+}
+
 fn user_version(dir: &Path) -> i64 {
     let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
     conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap()
@@ -61,8 +65,8 @@ fn retention_clean_up_drops_the_payload_and_keeps_the_numbers() {
     store.append("a", &text("quince-after"), now_ms()).unwrap();
     let events = store.events("a", 0).unwrap();
     assert_eq!(events.iter().map(|event| (event.seq, event.body.clone())).collect::<Vec<_>>(), [
-        (1, Body::Withheld { of: "text".into() }),
-        (2, Body::Withheld { of: "text".into() })
+        (1, withheld_text()),
+        (2, withheld_text())
     ]);
     assert_eq!(store.events("b", 0).unwrap()[0].body, text(&format!("kept 0 {}", "x".repeat(200))), "another session keeps its payload");
     assert!(store.session("a").unwrap().cleaned);
@@ -82,9 +86,9 @@ fn retention_payload_older_than_30_days_is_dropped() {
     // Opening the store sweeps it.
     let store = Store::open(&dir).unwrap();
     let bodies: Vec<Body> = store.events("a", 0).unwrap().into_iter().map(|event| event.body).collect();
-    assert_eq!(bodies, [Body::Withheld { of: "text".into() }, text("young")]);
+    assert_eq!(bodies, [withheld_text(), text("young")]);
     assert_eq!(store.sweep(now + 2 * 60_000).unwrap(), 1, "the sweep drops what has aged since");
-    assert_eq!(store.events("a", 0).unwrap()[1].body, Body::Withheld { of: "text".into() });
+    assert_eq!(store.events("a", 0).unwrap()[1].body, withheld_text());
     assert_eq!(KEEP_MS, 30 * 24 * 60 * 60 * 1000);
 }
 
@@ -130,4 +134,53 @@ fn store_a_sessions_folder_comes_back_byte_for_byte_even_when_it_is_not_utf8() {
     let cwd = Path::new(std::ffi::OsStr::from_bytes(b"/work/caf\xe9"));
     store.create_session("a", "mock", false, cwd, None).unwrap();
     assert_eq!(store.session("a").unwrap().cwd, cwd);
+}
+
+#[test]
+fn store_an_event_of_a_type_this_build_does_not_know_reads_as_withheld() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    store.append("a", &text("before"), now_ms()).unwrap();
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute(
+        "INSERT INTO events (session, seq, ms, type, payload, withheld) VALUES ('a', 2, 0, 'from_the_future', '{\"type\":\"from_the_future\"}', 0)",
+        [],
+    )
+    .unwrap();
+    store.append("a", &text("after"), now_ms()).unwrap();
+    let bodies: Vec<Body> = store.events("a", 0).unwrap().into_iter().map(|event| event.body).collect();
+    let unknown = Body::Withheld { of: "from_the_future".into(), kept: Default::default() };
+    assert_eq!(bodies, [text("before"), unknown, text("after")], "the read does not fail");
+}
+
+#[test]
+fn store_the_sweep_has_an_index_and_foreign_keys_hold_after_migrating() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    let index: String = raw
+        .query_row("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'events_kept_by_age'", [], |row| row.get(0))
+        .unwrap();
+    assert!(index.contains("(ms) WHERE withheld = 0"), "{index}");
+    let plan: String = raw
+        .query_row("EXPLAIN QUERY PLAN UPDATE events SET withheld = 1 WHERE withheld = 0 AND ms < 5", [], |row| row.get(3))
+        .unwrap();
+    assert!(plan.contains("events_kept_by_age"), "{plan}");
+    assert!(matches!(store.append("nobody", &text("x"), now_ms()), Err(Error::NoSuchSession(_))));
+}
+
+#[test]
+fn store_a_link_to_nothing_is_named_and_a_file_others_could_read_is_made_private() {
+    let (tmp, dir) = data_dir();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(tmp.path().join("missing"), &link).unwrap();
+    assert!(matches!(Store::open(&link), Err(Error::DanglingLink(_))));
+    assert_eq!(Error::DanglingLink(link.clone()).to_string(), format!("the data folder {} is a link to nothing", link.display()));
+
+    drop(Store::open(&dir).unwrap());
+    let file = dir.join("harness.sqlite");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    drop(Store::open(&dir).unwrap());
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
 }

@@ -18,7 +18,7 @@ async fn replay(fixture: &Path, answers: Vec<Decision>) -> Vec<Event> {
     let mock = Mock::new(Script::load(fixture).unwrap());
     let harness = harness(&dir, &mock, 4);
     let client = mock.client();
-    let (id, events) = open(&harness, false);
+    let (id, events) = open(&harness, false).await;
     let mut seen = vec![];
     let play = drive(&harness, &id, events, client, answers, None, |event| seen.push(event.clone()));
     tokio::time::timeout(Duration::from_secs(10), play).await.unwrap_or_else(|_| panic!("{} did not end", fixture.display()));
@@ -49,7 +49,7 @@ async fn replay_every_fixture_of_the_chosen_drivers_plays_to_its_end() {
             let events = replay(&file, vec![]).await;
             assert_eq!(events.first().map(|event| event.body.type_name()).as_deref(), Some("started"), "{}", file.display());
             assert_eq!(events.last().map(|event| &event.body), Some(&Body::Closed), "{}", file.display());
-            let diverged = events.iter().any(|event| matches!(&event.body, Body::Failed { reason } if reason.starts_with("the replay")));
+            let diverged = events.iter().any(|event| matches!(&event.body, Body::Failed { reason, .. } if reason.starts_with("the replay")));
             assert!(!diverged, "{} diverged from its recording", file.display());
             played += 1;
         }
@@ -125,7 +125,7 @@ async fn replay_maps_the_fixtures_ids_pids_and_ports_to_fresh_ones() {
 #[tokio::test]
 async fn replay_an_answer_that_differs_from_the_recording_fails_the_session() {
     let events = replay(&fixtures().join("claude/native/2-permission.jsonl"), vec![Decision::Deny]).await;
-    let failed = events.iter().find_map(|event| match &event.body { Body::Failed { reason } => Some(reason.clone()), _ => None });
+    let failed = events.iter().find_map(|event| match &event.body { Body::Failed { reason, .. } => Some(reason.clone()), _ => None });
     assert_eq!(failed.as_deref(), Some("the replay was answered Deny where the recording has Some(Allow)"));
     assert!(!events.iter().any(|event| matches!(event.body, Body::TurnEnded { .. })), "nothing past the divergence is played");
 }

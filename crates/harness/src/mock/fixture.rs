@@ -87,18 +87,38 @@ struct Converter {
     /// ACP streams a message in chunks; they become one text, so a secret split over two chunks is masked whole.
     text: String,
     cancelled: bool,
+    in_turn: bool,
+    /// The id of an ACP `session/load` not yet answered: the updates before its answer replay old history.
+    loading: Option<Value>,
     finished: HashSet<String>,
 }
 
 impl Converter {
+    /// Adds a step. What the agent says with no turn running starts a turn of its own, as when it goes on by itself
+    /// after a background task; a late result of a call it made before does not.
     fn push(&mut self, step: Step) {
         self.flush();
+        self.turn_for(&step);
+        self.in_turn = match step {
+            Step::Prompt(_) => true,
+            Step::End(_) | Step::Fail(_) => false,
+            _ => self.in_turn,
+        };
         self.steps.push(step);
+    }
+
+    fn turn_for(&mut self, step: &Step) {
+        if !self.in_turn && !matches!(step, Step::Prompt(_) | Step::Cancel | Step::Fail(_) | Step::ToolResult { .. }) {
+            self.steps.push(Step::Turn);
+            self.in_turn = true;
+        }
     }
 
     fn flush(&mut self) {
         if !self.text.is_empty() {
-            self.steps.push(Step::Say(std::mem::take(&mut self.text)));
+            let say = Step::Say(std::mem::take(&mut self.text));
+            self.turn_for(&say);
+            self.steps.push(say);
         }
     }
 
@@ -132,6 +152,7 @@ impl Converter {
             Some("turn/start") => self.prompt(texts(&data["params"]["input"])),
             Some("session/prompt") => self.prompt(texts(&data["params"]["prompt"])),
             Some("turn/interrupt" | "session/cancel") => self.cancel(),
+            Some("session/load") => self.loading = Some(data["id"].clone()),
             _ => {}
         }
     }
@@ -250,6 +271,12 @@ impl Converter {
     }
 
     fn acp_agent(&mut self, data: &Value, after: &[Value]) {
+        if let Some(loading) = &self.loading {
+            if data.get("method").is_none() && data["id"] == *loading {
+                self.loading = None;
+            }
+            return;
+        }
         let params = &data["params"];
         match data["method"].as_str() {
             Some("session/update") => {

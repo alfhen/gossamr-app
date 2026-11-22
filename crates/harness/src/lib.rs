@@ -11,6 +11,7 @@ pub mod redact;
 pub mod run;
 pub mod session;
 pub mod store;
+pub mod tools;
 
 use event::Decision;
 use run::RunArgs;

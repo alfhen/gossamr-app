@@ -72,7 +72,7 @@ fn run_plays_a_harness_script_with_the_command_lines_prompt_and_answers() {
     assert!(out.status.success(), "{out:?}");
     let events = printed(&out);
     assert_eq!(events[1]["text"], "write it", "the command line's prompt comes before the recorded one");
-    assert_eq!(events.iter().map(|event| event["type"].as_str().unwrap()).collect::<Vec<_>>(), ["started", "prompted", "permission", "answered", "text", "turn_ended", "closed"]);
+    assert_eq!(events.iter().map(|event| event["type"].as_str().unwrap()).collect::<Vec<_>>(), ["started", "prompted", "turn_started", "permission", "answered", "text", "turn_ended", "closed"]);
 
     let out = run(&tmp.path().join("data"), &["--script".as_ref(), script.as_os_str(), "--answer".as_ref(), "deny".as_ref()]);
     assert_eq!(out.status.code(), Some(1), "a failure exits 1: {out:?}");
