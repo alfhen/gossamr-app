@@ -42,11 +42,12 @@ Sessions that write the same files run one after the other.
 
 ## Steps
 
-### G0. Goals and rules
+### G0. Goals
 
-- **Touches:** `docs/goals.md`, `AGENTS.md` ("Rules that must hold"), `docs/product.md`.
-- **Does:** the wording of proposal section 4, each changed sentence mapped to a line there.
-- **Lands as:** a pull request to `main` of its own, for the maintainer, as `docs/goals.md` requires. The build goes on meanwhile on `harness`. The final pull request is not offered for merge before G0 is merged.
+- **Touches:** `docs/goals.md` only.
+- **Does:** the goal and non-goal wording of proposal section 4.
+- **Lands as:** alfhen/gossamr-app#451, a pull request to `main` of its own for the maintainer, as `docs/goals.md` requires. The build goes on meanwhile on `harness`. The final pull request is not offered for merge before G0 is merged.
+- **The rules in `AGENTS.md` and `docs/product.md`** describe the code, so each changes on `harness` in the step that changes the behaviour: rule 2 in H5 and H9, rule 4 in H10 to H13, rule 3 in H16, rule 1 in H19 and H20. H23 checks that the result matches proposal section 4.
 
 ### H0. Check the providers for real (gate)
 
@@ -226,7 +227,7 @@ Sessions that write the same files run one after the other.
 
 | Wave | Steps | Notes |
 | --- | --- | --- |
-| 0 | G0, H0, H1 | Parallel: docs, `spikes/`, workspace |
+| 0 | G0, H0, H1 | Parallel: `docs/goals.md`, `spikes/`, workspace |
 | 1 | H2, H3 | One after the other |
 | 2 | H4, H5 | One after the other |
 | 3 | H6, H7, H8 | One after the other; H9 beside them |
