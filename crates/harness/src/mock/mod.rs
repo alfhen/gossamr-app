@@ -317,3 +317,37 @@ impl Player {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::driver::Secret;
+
+    fn launch(resume: Option<String>) -> Launch {
+        let tools = Arc::new(Endpoint::unattached("t"));
+        Launch { cwd: "/".into(), locked: false, model: None, resume, tools_token: Secret::random(), tools }
+    }
+
+    #[tokio::test]
+    async fn mock_a_start_that_was_resumed_over_cannot_move_the_new_one() {
+        let script = Script::parse("{\"prompt\": null}\n{\"say\": \"one\"}\n{\"end\": \"done\"}\n{\"prompt\": null}").unwrap();
+        let mock = Mock::new(script);
+        let mut old = mock.open(launch(None)).unwrap();
+        let Some(Body::Started { provider_session, .. }) = old.output.recv().await else { panic!() };
+        // A resume while the old start still runs, as after a stop grace that ran out.
+        let mut new = mock.open(launch(Some(provider_session))).unwrap();
+        old.commands.send(Command::Prompt("stale".into())).unwrap();
+        while let Some(body) = old.output.recv().await {
+            assert!(!matches!(body, Body::TurnStarted | Body::Text { .. }), "the old start played a step: {body:?}");
+        }
+        new.commands.send(Command::Prompt("fresh".into())).unwrap();
+        let mut said = vec![];
+        while let Some(body) = tokio::time::timeout(Duration::from_secs(5), new.output.recv()).await.unwrap() {
+            said.push(body.type_name());
+            if said.last().is_some_and(|last| last == "turn_ended") {
+                break;
+            }
+        }
+        assert_eq!(said, ["started", "turn_started", "text", "turn_ended"], "the new start plays the turn from its start");
+    }
+}

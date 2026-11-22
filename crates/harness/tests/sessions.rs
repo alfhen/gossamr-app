@@ -732,3 +732,44 @@ async fn retention_a_running_harness_withholds_payload_once_it_is_30_days_old() 
     let stored = harness.events(&id, 0).unwrap();
     assert!(matches!(&stored[0].body, Body::Withheld { of, .. } if of == "started"), "a read sweeps first: {stored:?}");
 }
+
+#[tokio::test]
+async fn life_an_answer_that_cannot_be_recorded_is_not_sent_and_nothing_is_written_after_the_failure() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(LIFE);
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false).await;
+    harness.send(&id, "list the files").unwrap();
+    let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+    let ps = provider_session(&asked[0].body);
+    let request = permission_id(&asked.last().unwrap().body);
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("ALTER TABLE events RENAME TO gone").unwrap();
+    harness.answer(&id, &request, Decision::Allow, None).unwrap();
+    let failed = next(&mut events).await;
+    assert!(matches!(failed.body, Body::Failed { kind: FailKind::Harness, .. }) && failed.seq == 0, "{failed:?}");
+    // The store takes writes again before the session has closed.
+    raw.execute_batch("ALTER TABLE gone RENAME TO events").unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert!(rest.iter().all(|event| event.seq == 0), "nothing is numbered after the failure: {rest:?}");
+    assert!(!mock.received(&ps).iter().any(|c| matches!(c, Command::Answer { .. })), "an answer that could not be recorded is not sent");
+    assert_eq!(harness.events(&id, 0).unwrap().len(), asked.len(), "nothing was written after the failure");
+}
+
+#[tokio::test]
+async fn life_a_store_that_comes_back_after_a_failure_gets_nothing_more_from_the_session() {
+    let (_tmp, dir) = data_dir();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(SlowToStop { kill: None }))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "slow", false).await;
+    next(&mut events).await;
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("ALTER TABLE events RENAME TO gone").unwrap();
+    harness.send(&id, "go").unwrap();
+    assert!(matches!(next(&mut events).await.body, Body::Failed { kind: FailKind::Harness, .. }));
+    // Back before the agent, which takes 200 ms to stop, has said its last word.
+    raw.execute_batch("ALTER TABLE gone RENAME TO events").unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert!(rest.iter().all(|event| event.seq == 0), "{rest:?}");
+    assert_eq!(harness.events(&id, 0).unwrap().len(), 1, "only `started`, from before the failure, is stored");
+}
