@@ -23,8 +23,12 @@ pub fn mock(script: &str) -> Mock {
 }
 
 pub fn harness(dir: &Path, mock: &Mock, limit: usize) -> Harness {
+    harness_on(Store::open(dir).unwrap(), mock, limit)
+}
+
+pub fn harness_on(store: Store, mock: &Mock, limit: usize) -> Harness {
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
-    Harness::new(Store::open(dir).unwrap(), drivers, limit)
+    Harness::new(store, drivers, limit)
 }
 
 pub fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiver<Event>) {

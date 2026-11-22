@@ -3,6 +3,8 @@
 //! dropped at clean-up or once it is 30 days old.
 
 use std::fs::{DirBuilder, File, OpenOptions, TryLockError};
+use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -17,7 +19,7 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
         id TEXT PRIMARY KEY,
         provider TEXT NOT NULL,
         locked INTEGER NOT NULL,
-        cwd TEXT NOT NULL,
+        cwd BLOB NOT NULL,
         model TEXT,
         provider_session TEXT,
         created_ms INTEGER NOT NULL,
@@ -76,7 +78,8 @@ impl Store {
     pub fn create_session(&self, id: &str, provider: &str, locked: bool, cwd: &Path, model: Option<&str>) -> Result<()> {
         self.conn.execute(
             "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, provider, locked, cwd.to_string_lossy(), model, now_ms()],
+            // The folder's bytes, as they are: a path need not be UTF-8.
+            params![id, provider, locked, cwd.as_os_str().as_bytes(), model, now_ms()],
         )?;
         Ok(())
     }
@@ -90,7 +93,7 @@ impl Store {
                     Ok(SessionRow {
                         provider: row.get(0)?,
                         locked: row.get(1)?,
-                        cwd: PathBuf::from(row.get::<_, String>(2)?),
+                        cwd: PathBuf::from(OsString::from_vec(row.get(2)?)),
                         model: row.get(3)?,
                         provider_session: row.get(4)?,
                         cleaned: row.get(5)?,
@@ -142,8 +145,11 @@ impl Store {
     /// Drops the session's payload, now and for any event it has later.
     pub fn clean_up(&self, session: &str) -> Result<()> {
         self.session(session)?;
-        self.conn.execute("UPDATE sessions SET cleaned_ms = ?2 WHERE id = ?1", params![session, now_ms()])?;
-        self.conn.execute("UPDATE events SET payload = NULL WHERE session = ?1", [session])?;
+        // Both or neither: a session marked clean must not keep its payload.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE sessions SET cleaned_ms = ?2 WHERE id = ?1", params![session, now_ms()])?;
+        tx.execute("UPDATE events SET payload = NULL WHERE session = ?1", [session])?;
+        tx.commit()?;
         Ok(())
     }
 

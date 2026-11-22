@@ -185,7 +185,11 @@ impl Driver for Tattler {
         output.send(Body::Started { provider_session: "tattler".into(), resumed: false }).unwrap();
         let text = format!("my token is {token} and my key is sk-ant-api03-{}", "x".repeat(40));
         output.send(Body::Text { text }).unwrap();
-        let input = json!({ "headers": { "Authorization": format!("Bearer {token}") }, "env": [format!("GH_TOKEN=ghp_{}", "a".repeat(36))] });
+        let input = json!({
+            "headers": { "Authorization": format!("Bearer {token}") },
+            "env": [format!("GH_TOKEN=ghp_{}", "a".repeat(36))],
+            token.clone(): "a secret can be a key",
+        });
         output.send(Body::ToolCall { id: "t1".into(), name: "curl".into(), input }).unwrap();
         tokio::spawn(async move {
             let _output = output;
@@ -233,13 +237,14 @@ async fn hold_a_client_tool_call_held_past_the_mock_limit_is_cut_with_a_timeout_
     let mock = mock(HOLD);
     let harness = harness(&dir, &mock, 4);
     let (id, mut events) = open(&harness, false);
+    // The hold starts after the prompt reaches the mock, so it is measured from before the prompt is sent.
+    let sent = std::time::Instant::now();
     harness.send(&id, "ask me").unwrap();
     let held = until(&mut events, |body| matches!(body, Body::ClientToolCall { .. })).await;
-    let called = std::time::Instant::now();
     let Body::ClientToolCall { id: call, name, .. } = &held.last().unwrap().body else { unreachable!() };
     assert_eq!(name, "ask");
     let rest = until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
-    assert!(called.elapsed() >= std::time::Duration::from_millis(150), "held until the limit");
+    assert!(sent.elapsed() >= std::time::Duration::from_millis(200), "held until the limit");
     assert_eq!(types(&rest), ["tool_result", "text", "turn_ended"]);
     assert_eq!(rest[0].body, Body::ToolResult { id: call.clone(), output: json!("timed out after 0 s"), error: true });
     let late = harness.tool_result(&id, call, json!("blue"), false);
@@ -360,4 +365,92 @@ async fn caps_a_deny_ends_the_turn_where_the_script_says_so() {
         drop(harness);
         drop(reopen(&dir).await);
     }
+}
+
+#[tokio::test]
+async fn resume_a_resume_that_cannot_open_leaves_the_session_free() {
+    let (_tmp, dir) = data_dir();
+    let first = mock(TURNS);
+    let harness = harness(&dir, &first, 4);
+    let (id, mut events) = open(&harness, false);
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    drop(harness);
+    // A mock that never saw the session cannot resume it.
+    let stranger = mock(TURNS);
+    let harness = common::harness_on(reopen(&dir).await, &stranger, 4);
+    assert!(matches!(harness.resume(&id), Err(harness::error::Error::Driver(_))));
+    assert!(matches!(harness.send(&id, "x"), Err(harness::error::Error::NotRunning(_))), "no reservation is left behind");
+    assert!(matches!(harness.resume(&id), Err(harness::error::Error::Driver(_))), "and it can be tried again");
+}
+
+/// Takes a while to go after a stop, as an agent with a command running can.
+struct SlowToStop;
+
+impl Driver for SlowToStop {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, String> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: "slow".into(), resumed: false }).unwrap();
+        tokio::spawn(async move {
+            while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let _ = output.send(Body::Text { text: "stopped at last".into() });
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+#[tokio::test]
+async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
+    let (_tmp, dir) = data_dir();
+    let waiter = mock(LIFE);
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(SlowToStop)), ("mock".into(), Arc::new(waiter))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, 1);
+    let (slow, mut slow_events) = harness.open(Open { provider: "slow".into(), locked: false, cwd: "/nowhere".into(), model: None }).unwrap();
+    let (other, mut other_events) = open(&harness, false);
+    harness.send(&slow, "run something long").unwrap();
+    until(&mut slow_events, |body| matches!(body, Body::Prompted { .. })).await;
+    harness.send(&other, "next").unwrap();
+    until(&mut other_events, |body| *body == Body::Waiting).await;
+    let stopped = std::time::Instant::now();
+    harness.close(&slow).unwrap();
+    let gone = until(&mut slow_events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&gone), ["text", "closed"], "what the agent says while it stops is kept");
+    until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
+    assert!(stopped.elapsed() >= std::time::Duration::from_millis(300), "the slot was held until the agent had gone");
+}
+
+#[tokio::test]
+async fn life_a_store_that_fails_stops_the_session_and_says_so() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(LIFE);
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false);
+    let ps = provider_session(&next(&mut events).await.body);
+    rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute_batch("ALTER TABLE events RENAME TO gone").unwrap();
+    harness.send(&id, "list the files").unwrap();
+    let failed = next(&mut events).await;
+    assert_eq!(failed.seq, 0, "no number could be given");
+    assert!(matches!(&failed.body, Body::Failed { reason } if reason.starts_with("the store could not keep this session's events")));
+    assert!(!mock.received(&ps).contains(&Command::Prompt("list the files".into())), "a prompt that could not be recorded is not sent");
+    let closed = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(closed.last().unwrap().seq, 0);
+}
+
+#[tokio::test]
+async fn retention_a_running_harness_withholds_payload_once_it_is_30_days_old() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(LIFE);
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false);
+    next(&mut events).await;
+    let old = harness::store::now_ms() - harness::store::KEEP_MS - 1;
+    rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE events SET ms = ?1 WHERE seq = 1", [old]).unwrap();
+    let stored = harness.events(&id, 0).unwrap();
+    assert_eq!(stored[0].body, Body::Withheld { of: "started".into() }, "a read sweeps first");
 }
