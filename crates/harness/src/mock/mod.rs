@@ -126,7 +126,7 @@ impl Mock {
     fn next_step(&self, key: &str, run: u64) -> Option<Step> {
         self.play(key, run, |play, steps| {
             let step = steps.get(play.at).cloned();
-            play.at += 1;
+            play.at += usize::from(step.is_some());
             step
         })
         .flatten()
@@ -266,7 +266,9 @@ impl Player {
                     let (tools, token) = (self.tools.clone(), self.token.clone());
                     let call = async move { tools.call(&token, &name, input).await };
                     let (mock, key, run) = (self.mock.clone(), self.key.clone(), self.run);
+                    // A reply that is ready is taken before a stop, as an agent reads what it was sent.
                     tokio::select! {
+                        biased;
                         reply = call => {
                             mock.play(&key, run, |play, _| play.replies.push(reply));
                             Got::Go
@@ -350,5 +352,32 @@ mod tests {
             }
         }
         assert_eq!(said, ["started", "turn_started", "text", "turn_ended"], "the new start plays the turn from its start");
+    }
+
+    #[tokio::test]
+    async fn mock_an_old_start_stopped_inside_a_step_after_a_resume_cannot_move_the_new_one() {
+        let lines = ["{\"prompt\": null}", "{\"sleep\": 60000}", "{\"end\": \"done\"}", "{\"prompt\": null}", "{\"say\": \"two\"}", "{\"end\": \"done\"}"];
+        let mock = Mock::new(Script::parse(&lines.join("\n")).unwrap());
+        let mut old = mock.open(launch(None)).unwrap();
+        let Some(Body::Started { provider_session, .. }) = old.output.recv().await else { panic!() };
+        old.commands.send(Command::Prompt("one".into())).unwrap();
+        assert_eq!(old.output.recv().await, Some(Body::TurnStarted));
+        while mock.plays()[&provider_session].at < 2 {
+            tokio::task::yield_now().await;
+        }
+        // The old start is now inside its sleep.
+        // A resume while the old start still sleeps, as after a stop grace that ran out.
+        let mut new = mock.open(launch(Some(provider_session.clone()))).unwrap();
+        new.output.recv().await;
+        new.commands.send(Command::Prompt("two".into())).unwrap();
+        let mut said = vec![];
+        for _ in 0..3 {
+            said.push(tokio::time::timeout(Duration::from_secs(5), new.output.recv()).await.unwrap().unwrap());
+        }
+        assert_eq!(said[1], Body::Text { text: "two".into() });
+        let at = mock.plays()[&provider_session].at;
+        old.commands.send(Command::Stop).unwrap();
+        assert_eq!(old.output.recv().await, None, "the old start ends");
+        assert_eq!(mock.plays()[&provider_session].at, at, "its stop did not move the new start's place");
     }
 }

@@ -1089,3 +1089,26 @@ async fn hold_a_client_tool_call_ended_by_a_close_gets_its_end() {
     assert_eq!(rest[0].body, ended, "{rest:?}");
     assert!(mock.replies(&ps).iter().all(|reply| reply.is_err()));
 }
+
+#[tokio::test]
+async fn hold_a_tool_result_or_a_cut_that_cannot_be_recorded_does_not_reach_the_agent() {
+    for cut in [false, true] {
+        let (_tmp, dir) = data_dir();
+        let limit = if cut { "200" } else { "60000" };
+        let mock = mock(&HOLD.replace("200", limit));
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        let ps = provider_session(&next(&mut events).await.body);
+        harness.send(&id, "ask me").unwrap();
+        let held = until(&mut events, |body| matches!(body, Body::ClientToolCall { .. })).await;
+        let Body::ClientToolCall { id: call, .. } = &held.last().unwrap().body else { unreachable!() };
+        rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute_batch("ALTER TABLE events RENAME TO gone").unwrap();
+        if !cut {
+            harness.tool_result(&id, call, json!("blue"), false).unwrap();
+        }
+        until(&mut events, |body| *body == Body::Closed).await;
+        let replies = mock.replies(&ps);
+        let ended = Err("the session has ended".to_owned());
+        assert!(replies.iter().all(|reply| *reply == ended), "cut {cut}: nothing unrecorded reached the agent: {replies:?}");
+    }
+}
