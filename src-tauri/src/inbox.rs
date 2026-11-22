@@ -18,7 +18,7 @@ use crate::domain::{
 use crate::model::{CachedTicket, Person, Status, Transition};
 use crate::proposals;
 use crate::runs::ask::Asks;
-use crate::runs::binary::Places;
+use crate::runs::binary::CliPlaces;
 use crate::runs::env::ShellCapture;
 use crate::sync::{self, Schedule, Trigger, CLOCK_SKEW_MINUTES};
 use crate::tracker::{self, Connection, Move, Registry, WorkTracker};
@@ -202,7 +202,7 @@ pub struct Core {
     /// Clones a run may use have to be under this folder.
     home: Option<PathBuf>,
     /// Where the CLIs of provider instances are looked for.
-    places: Places,
+    places: CliPlaces,
     /// The databases, behind one lock so the app database is never written from two handles at once.
     db: Mutex<Open>,
     jira_sync: Mutex<HashMap<String, JiraSync>>,
@@ -249,7 +249,7 @@ impl Core {
             code: CodeService::new(crate::net::client()),
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
-            places: Places::of_this_mac(dirs::home_dir().and_then(|h| h.canonicalize().ok())),
+            places: CliPlaces::for_this_build(dirs::home_dir().and_then(|h| h.canonicalize().ok())),
             db: Mutex::new(Open::default()),
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
@@ -281,7 +281,7 @@ impl Core {
     #[cfg(test)]
     pub fn with_home(mut self, home: PathBuf) -> Self {
         self.home = home.canonicalize().ok();
-        self.places = Places::only_under(self.home.as_deref().unwrap_or(&home));
+        self.places = CliPlaces::only_under(self.home.as_deref().unwrap_or(&home));
         self
     }
 
