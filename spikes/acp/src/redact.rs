@@ -141,12 +141,15 @@ impl Redactor {
                 "$1 <plan>",
             ),
             // The person's claude.ai connectors and the tools they bring.
-            p(r"mcp__claude_ai_[A-Za-z0-9_\-]+", "mcp__<connector>"),
+            // `<` and `>` too: the word list may already have put `<masked>` inside the name.
+            p(r"mcp__claude_ai_[A-Za-z0-9_\-<>]+", "mcp__<connector>"),
+            // The numeric user id in the temp folder's name.
+            p(r"\bclaude-[0-9]{2,}\b", "claude-<uid>"),
             p(r"claude\.ai [A-Z][A-Za-z0-9 <>]+", "claude.ai <connector>"),
         ];
         let keys = Regex::new(r"(?i)^(email|e_mail|emailaddress|account_?uuid|account_?id|chatgpt_?account_?id|installation_?id|org(anization)?(_?(id|uuid|name))?|user_?id|access_?token|refresh_?token|id_?token|api_?key)$").unwrap();
         // Subscription, plan, rate-limit and overage details, whatever their type.
-        let account = Regex::new(r"(?i)^(subscription\w*|plan_?type|chatgpt_?plan_?type|tier|rate_?limit\w*|overage\w*|is_?using_?overage|utilization|unified_?windows|credits?\w*|upgrade_?uri)$").unwrap();
+        let account = Regex::new(r"(?i)(^|[/_.])(subscription\w*|plan_?type|chatgpt_?plan_?type|tier|rate_?limit\w*|overage\w*|is_?using_?overage|utilization|unified_?windows|credits?\w*|upgrade_?uri)$").unwrap();
         Redactor {
             literals,
             patterns,
@@ -178,7 +181,9 @@ impl Redactor {
                                 x,
                                 Value::Null | Value::Bool(_) | Value::Object(_) | Value::Array(_)
                             );
-                        let account = (self.account.is_match(k) && !matches!(x, Value::Bool(_)))
+                        // Booleans too (`isUsingOverage`), except `tier: true`, which is a capability flag.
+                        let account = (self.account.is_match(k)
+                            && !(k == "tier" && x.is_boolean()))
                             || (k == "plan" && x.is_string());
                         let out = if secret || account {
                             Value::String("<redacted>".into())
@@ -201,9 +206,16 @@ fn entry_name(v: &Value) -> Option<&str> {
 }
 
 fn is_own(name: &str) -> bool {
-    OWN.iter().any(|o| {
-        name == *o || name.contains(&format!("mcp__{o}__")) || name.contains(&format!("mcp_{o}_"))
-    })
+    // Check servers the spike names per session start with `spk` (letters and digits only, so no prefix of theirs
+    // can be a person's server joined with an underscore).
+    name.starts_with("spk")
+        || name.starts_with("mcp__spk")
+        || name.starts_with("mcp_spk")
+        || OWN.iter().any(|o| {
+            name == *o
+                || name.contains(&format!("mcp__{o}__"))
+                || name.contains(&format!("mcp_{o}_"))
+        })
 }
 
 /// The person's tools, connectors, plugins, skills and MCP servers, as listed by `init` and its kin, cut down to
@@ -519,15 +531,21 @@ mod tests {
         let r = Redactor::new(&[]);
         let v = json!({
             "p": "$HOME/Code/someone/repo/file", "q": "$HOME/.claude/plugins", "d": "-Users-someone-Code-repo",
-            "s": "claude.ai Gmail", "t": "mcp__claude_ai_Some_Gateway__crm_tool",
+            "s": "claude.ai Quillmark", "t": "mcp__claude_ai_Zorbit_Hub__widget_tool",
             "account": {"subscriptionType": "Ultra"}, "rate_limit_info": {"utilization": 0.2}, "tier": {"name": "Pro"},
-            "dashed": "-Users-<user>-Code-someone-repo", "label": "ChatGPT Plus", "x": {"plan": "plus"}
+            "dashed": "-Users-<user>-Code-someone-repo", "label": "ChatGPT Plus", "x": {"plan": "plus"},
+            "_meta": {"_claude/rateLimit": {"status": "allowed", "isUsingOverage": false}}, "overageEnabled": true,
+            "tmp": "/private/tmp/claude-987/x"
         });
         let out = r.value(&v).to_string();
         for bad in [
             "someone",
-            "Gmail",
-            "Some_Gateway",
+            "Quillmark",
+            "Zorbit_Hub",
+            "allowed",
+            "false",
+            "true",
+            "987",
             "Ultra",
             "0.2",
             "Pro",
@@ -585,10 +603,28 @@ mod tests {
         {
             words.push(u.to_lowercase());
         }
+        if let Ok(o) = std::process::Command::new("hostname").output() {
+            let h = String::from_utf8_lossy(&o.stdout).trim().to_lowercase();
+            for w in [
+                h.clone(),
+                h.trim_end_matches(".local").to_string(),
+                h.split('.').next().unwrap_or("").to_string(),
+            ] {
+                if w.len() >= 3 {
+                    words.push(w);
+                }
+            }
+        }
         let forbidden = Regex::new(
-            r#"(?i)/Users/[^<]|-Users-[^<]|\$HOME/[^.<]|claude\.ai [^<]|mcp__claude_ai_|[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.(com|io|org|net|dev|app)\b|spk_[0-9a-f]{16}|sk-ant-[a-z0-9]|ya29\.|subscriptionType"\s*:\s*"[^<]"#,
+            r#"(?i)/Users/[^<]|-Users-[^<]|\$HOME/[^.<]|claude\.ai [^<]|mcp__claude_ai_|spk_[0-9a-f]{16}|sk-ant-[a-z0-9]|ya29\.|/tmp/claude-[0-9]|"[^"]*(subscription|plan_?type|rate_?limit|overage|utilization)[^"]*"\s*:\s*([^"\s]|"[^<])"#,
         )
         .unwrap();
+        // Any email address, except the spike's own commit identity and the attribution address.
+        let email =
+            Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}")
+                .unwrap();
+        let allowed_email =
+            |m: &str| m.ends_with("@example.invalid") || m == "noreply@anthropic.com";
         let mut files = Vec::new();
         let mut stack = vec![root];
         while let Some(d) = stack.pop() {
@@ -611,6 +647,13 @@ mod tests {
             let lower = all.to_lowercase();
             if let Some(m) = forbidden.find(&all) {
                 bad.push(format!("{}: {}", f.display(), m.as_str()));
+            }
+            if let Some(m) = email.find_iter(&all).find(|m| !allowed_email(m.as_str())) {
+                bad.push(format!(
+                    "{}: an email address {}",
+                    f.display(),
+                    m.as_str().len()
+                ));
             }
             for w in &words {
                 if lower.contains(w.as_str()) {

@@ -27,19 +27,21 @@ pub fn run(o: &Common) {
     let init = control(&mut a, json!({ "subtype": "initialize" }));
     await_control(&mut a, &init, o);
     // The SDK's setMcpServers(): the tools endpoint with its header and timeout, over stdin.
-    if o.mcp_via_control
-        && let Some(url) = &o.mcp_url
-    {
-        let mut server = json!({ "type": "http", "url": url });
-        if let Some(tok) = o.mcp_token() {
-            server["headers"] = json!({ "Authorization": format!("Bearer {tok}") });
-        }
-        if let Some(s) = o.mcp_tool_timeout {
-            server["timeout"] = json!(s * 1000);
+    if o.mcp_via_control && !o.servers().is_empty() {
+        let mut servers = serde_json::Map::new();
+        for (name, url) in o.servers() {
+            let mut server = json!({ "type": "http", "url": url });
+            if let Some(tok) = o.mcp_token() {
+                server["headers"] = json!({ "Authorization": format!("Bearer {tok}") });
+            }
+            if let Some(s) = o.mcp_tool_timeout {
+                server["timeout"] = json!(s * 1000);
+            }
+            servers.insert(name, server);
         }
         let id = control(
             &mut a,
-            json!({ "subtype": "mcp_set_servers", "servers": { "spike": server } }),
+            json!({ "subtype": "mcp_set_servers", "servers": servers }),
         );
         await_control(&mut a, &id, o);
     }

@@ -90,6 +90,12 @@ pub struct Common {
     /// The variable that holds the MCP bearer token. Its value is masked in the transcript.
     #[arg(long)]
     pub mcp_token_env: Option<String>,
+    /// More MCP servers, `NAME=URL`, each with the same token. `--mcp-url` is the server named `spike`.
+    #[arg(long)]
+    pub mcp_server: Vec<String>,
+    /// The server the driver treats as the session's own endpoint (Codex `default_tools_approval_mode`).
+    #[arg(long, default_value = "spike")]
+    pub own_server: String,
     /// claude: give the MCP server by the `mcp_set_servers` control request on stdin instead of `--mcp-config`.
     #[arg(long)]
     pub mcp_via_control: bool,
@@ -157,6 +163,18 @@ impl Common {
             .expect("pid file");
         }
         a
+    }
+
+    /// Every MCP server to give the session, by name.
+    pub fn servers(&self) -> Vec<(String, String)> {
+        self.mcp_url
+            .iter()
+            .map(|u| ("spike".to_string(), u.clone()))
+            .chain(self.mcp_server.iter().filter_map(|s| {
+                s.split_once('=')
+                    .map(|(n, u)| (n.to_string(), u.to_string()))
+            }))
+            .collect()
     }
 
     pub fn mcp_token(&self) -> Option<String> {

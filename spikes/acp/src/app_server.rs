@@ -33,8 +33,13 @@ pub fn run(o: &Common) {
     }
 
     let mut config = Map::new();
-    if let Some(url) = &o.mcp_url {
-        let mut server = json!({ "url": url, "default_tools_approval_mode": "approve" });
+    let mut servers = Map::new();
+    for (name, url) in o.servers() {
+        let mut server = json!({ "url": url });
+        // Only the session's own endpoint is pre-approved; any other server's tools ask.
+        if name == o.own_server {
+            server["default_tools_approval_mode"] = json!("approve");
+        }
         // A token variable the driver does not pass on (MCP_*) goes over stdin as a header, so the agent's
         // environment never holds it; any other name is handed to codex by name.
         match (&o.mcp_token_env, o.mcp_token()) {
@@ -47,7 +52,10 @@ pub fn run(o: &Common) {
         if let Some(s) = o.mcp_tool_timeout {
             server["tool_timeout_sec"] = json!(s);
         }
-        config.insert("mcp_servers".into(), json!({ "spike": server }));
+        servers.insert(name, server);
+    }
+    if !servers.is_empty() {
+        config.insert("mcp_servers".into(), Value::Object(servers));
     }
     // `thread.KEY=json` and `turn.KEY=json` go into the thread/start (or resume) and turn/start parameters;
     // anything else is a config override. A `sandbox_mode` override makes app-server write project trust to
@@ -168,6 +176,28 @@ fn side(rpc: &mut Rpc, m: Option<&Value>, o: &Common, turn: Option<&mut Turn>) {
     }
     let id = m["id"].clone();
     let method = m["method"].as_str().unwrap_or("").to_string();
+    // An MCP tool that is not pre-approved asks through an elicitation: accept, decline or cancel.
+    if method == "mcpServer/elicitation/request" {
+        let allow = match turn {
+            Some(turn) => turn.decide(o.permission),
+            None => Some(false),
+        };
+        let Some(allow) = allow else {
+            rpc.a.t.note("permission_left_open", json!({ "id": id }));
+            return;
+        };
+        rpc.a.t.note(
+            "permission_answer",
+            json!({ "method": method, "allow": allow }),
+        );
+        let answer = if allow {
+            json!({ "action": "accept", "content": {} })
+        } else {
+            json!({ "action": "decline" })
+        };
+        rpc.respond(&id, answer);
+        return;
+    }
     let approval = method.ends_with("requestApproval")
         || method == "applyPatchApproval"
         || method == "execCommandApproval";

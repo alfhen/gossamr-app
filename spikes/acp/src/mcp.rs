@@ -21,6 +21,12 @@ pub struct Opts {
     /// The bound port is written here.
     #[arg(long)]
     port_file: Option<PathBuf>,
+    /// More tools, by name, each answering "pong from <name>" (for names that collide across servers).
+    #[arg(long)]
+    extra_tool: Vec<String>,
+    /// Seconds the `ask` tool waits before it answers that the question is pending.
+    #[arg(long, default_value_t = 20.0)]
+    ask_after: f64,
 }
 
 struct Log {
@@ -51,16 +57,26 @@ pub fn serve(o: &Opts) {
     log.lock()
         .unwrap()
         .write(json!({ "event": "listening", "port": port, "pid": std::process::id() }));
+    let opts = Arc::new(o.clone());
     for stream in listener.incoming().flatten() {
         let token = token.clone();
         let log = log.clone();
+        let opts = opts.clone();
         std::thread::spawn(move || {
-            let _ = handle(stream, &token, &log);
+            let _ = handle(stream, &token, &log, &opts);
         });
     }
 }
 
-fn handle(mut stream: TcpStream, token: &str, log: &Arc<Mutex<Log>>) -> std::io::Result<()> {
+/// The answer the `ask` tool gives once its wait is over: what a harness `ask` returns before a provider's limit.
+pub const PENDING: &str = "Question pending: the person has not answered yet. End your turn now; the answer will come as the person's next message.";
+
+fn handle(
+    mut stream: TcpStream,
+    token: &str,
+    log: &Arc<Mutex<Log>>,
+    o: &Opts,
+) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     loop {
         let mut request_line = String::new();
@@ -119,10 +135,17 @@ fn handle(mut stream: TcpStream, token: &str, log: &Arc<Mutex<Log>>) -> std::io:
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "spike", "version": "0.1.0" }
             }),
-            "tools/list" => json!({ "tools": [
-                { "name": "ping", "description": "Answers pong.", "inputSchema": { "type": "object", "properties": {} } },
-                { "name": "hold", "description": "Waits the given number of seconds, then answers.", "inputSchema": { "type": "object", "properties": { "seconds": { "type": "number" } }, "required": ["seconds"] } }
-            ] }),
+            "tools/list" => {
+                let mut tools = vec![
+                    json!({ "name": "ping", "description": "Answers pong.", "inputSchema": { "type": "object", "properties": {} } }),
+                    json!({ "name": "hold", "description": "Waits the given number of seconds, then answers.", "inputSchema": { "type": "object", "properties": { "seconds": { "type": "number" } }, "required": ["seconds"] } }),
+                    json!({ "name": "ask", "description": "Asks the person a question and waits for the answer.", "inputSchema": { "type": "object", "properties": { "question": { "type": "string" } }, "required": ["question"] } }),
+                ];
+                for t in &o.extra_tool {
+                    tools.push(json!({ "name": t, "description": "Answers pong with its own name.", "inputSchema": { "type": "object", "properties": {} } }));
+                }
+                json!({ "tools": tools })
+            }
             "tools/call" => match rpc["params"]["name"].as_str() {
                 Some("ping") => json!({ "content": [{ "type": "text", "text": "pong" }] }),
                 Some("hold") => {
@@ -134,6 +157,14 @@ fn handle(mut stream: TcpStream, token: &str, log: &Arc<Mutex<Log>>) -> std::io:
                         .write(json!({ "event": "hold_start", "seconds": secs }));
                     std::thread::sleep(Duration::from_secs_f64(secs));
                     json!({ "content": [{ "type": "text", "text": format!("held {secs} s") }] })
+                }
+                Some("ask") => {
+                    log.lock().unwrap().write(json!({ "event": "ask_start", "question": rpc["params"]["arguments"]["question"] }));
+                    std::thread::sleep(Duration::from_secs_f64(o.ask_after));
+                    json!({ "content": [{ "type": "text", "text": PENDING }] })
+                }
+                Some(t) if o.extra_tool.iter().any(|x| x == t) => {
+                    json!({ "content": [{ "type": "text", "text": format!("pong from {t}") }] })
                 }
                 _ => {
                     json!({ "content": [{ "type": "text", "text": "no such tool" }], "isError": true })

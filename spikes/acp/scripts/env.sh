@@ -61,14 +61,17 @@ fixture() {
   printf '%s\n' "$FIX/$1/$2/$3" >> "$SPIKE_WRITTEN"
 }
 
-# mcp_start NAME: a spike MCP server on a free loopback port; sets MCP_URL and MCP_PID.
+# mcp_start NAME [SERVER OPTIONS]: a spike MCP server on a free loopback port; sets MCP_URL, MCP_PID and MCP_LOG,
+# and remembers the pid for the exit trap.
+MCP_PIDS=""
 mcp_start() {
-  local log="$SPIKE_SCRATCH/mcp-$1.log"
-  rm -f "$SPIKE_SCRATCH/mcp-$1.port"
-  "$SPIKE" mcp --token-env SPIKE_MCP_TOKEN --log "$log" --port-file "$SPIKE_SCRATCH/mcp-$1.port" &
-  MCP_PID=$!
-  for _ in $(seq 50); do [ -s "$SPIKE_SCRATCH/mcp-$1.port" ] && break; sleep 0.1; done
-  MCP_URL="http://127.0.0.1:$(cat "$SPIKE_SCRATCH/mcp-$1.port")/mcp"
+  local name=$1; shift
+  local log="$SPIKE_SCRATCH/mcp-$name.log"
+  rm -f "$SPIKE_SCRATCH/mcp-$name.port"
+  "$SPIKE" mcp --token-env SPIKE_MCP_TOKEN --log "$log" --port-file "$SPIKE_SCRATCH/mcp-$name.port" "$@" &
+  MCP_PID=$!; MCP_PIDS="$MCP_PIDS $MCP_PID"
+  for _ in $(seq 50); do [ -s "$SPIKE_SCRATCH/mcp-$name.port" ] && break; sleep 0.1; done
+  MCP_URL="http://127.0.0.1:$(cat "$SPIKE_SCRATCH/mcp-$name.port")/mcp"
   MCP_LOG="$log"
 }
 
@@ -136,22 +139,79 @@ for l in open(sys.argv[1]):
 PY
 }
 
+# permission_requests TRANSCRIPT: one line per permission request, any provider: what asked, for which tool, and
+# what the driver answered.
+permission_requests() {
+  python3 - "$1" <<'PY'
+import json, sys
+for l in open(sys.argv[1]):
+    e = json.loads(l); d = e["data"]
+    if not isinstance(d, dict): continue
+    if e["dir"] == "driver" and d.get("note") == "permission_answer":
+        print("  answered:", json.dumps(d["detail"])); continue
+    if e["dir"] != "from_agent": continue
+    if d.get("type") == "control_request" and d["request"].get("subtype") == "can_use_tool":
+        print("claude can_use_tool:", d["request"].get("tool_name"))
+    m = d.get("method", "")
+    p = d.get("params") or {}
+    if m == "session/request_permission":
+        tc = p.get("toolCall") or {}
+        print("acp request_permission: name=%s title=%s kind=%s" % (tc.get("name"), tc.get("title"), tc.get("kind")))
+    elif m == "mcpServer/elicitation/request":
+        print("codex elicitation: server=%s message=%s" % (p.get("serverName"), (p.get("message") or "")[:120]))
+    elif m.endswith("requestApproval"):
+        print("codex %s: %s" % (m, (p.get("command") or p.get("reason") or "")[:120]))
+PY
+}
+
+# rand_name: 8 lowercase hex letters and digits, for a per-session endpoint name.
+rand_name() { openssl rand -hex 4; }
+
+# The R2 prompts, and what came of them: whether the turn ended after "question pending", and whether the answer
+# sent as the next prompt was used.
+ASK_PROMPT="Ask the person which colour to use by calling the ask tool of the spike MCP server with the question 'Which colour?'. Then write the colour the person chose into colour.txt."
+ANSWER_PROMPT="The answer to your question 'Which colour?' is: BLUE."
+ask_report() {
+  python3 - "$1" <<'PY'
+import json, sys
+turn = 0
+for l in open(sys.argv[1]):
+    e = json.loads(l); d = e["data"]
+    if e["dir"] == "driver" and isinstance(d, dict) and d.get("note") == "turn_end":
+        print("turn %d ended at %d ms: %s" % (turn, e["ms"], json.dumps(d["detail"])[:140])); turn += 1
+    s = json.dumps(d)
+    if "Question pending" in s and e["dir"] == "from_agent":
+        print("ask answered 'question pending' at %d ms (turn %d)" % (e["ms"], turn)); 
+PY
+  echo "colour.txt: $(cat "$2/colour.txt" 2>/dev/null || echo absent)"
+}
+
 # token_files DIR: how many files under DIR hold the spike's MCP token. A count only; credential files are skipped.
 token_files() {
   grep -rlF --exclude=auth.json --exclude='*creds*' --exclude='*credential*' --exclude=google_accounts.json \
     --exclude='*.lock' -- "$SPIKE_MCP_TOKEN" "$1" 2>/dev/null | wc -l | tr -d ' '
 }
 
-# The login folders' own config, recorded when a script starts and compared when it ends. A change fails the
-# script loudly. Credential files are compared by size and modification time only, never read.
-LOGIN_CONFIG=("$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" "$HOME/.codex/config.toml"
-  "$HOME/.gemini/antigravity-cli/settings.json" "$HOME/.gemini/config/mcp_config.json" "$HOME/.gemini/config/hooks.json"
-  "$HOME/.gemini/settings.json" "$HOME/.gemini/trustedFolders.json")
+# The login folders' own config, recorded when a script starts, watched every 2 s while it runs (so a write that is
+# undone before the end is still seen), and compared when it ends. A change fails the script with exit 9 and names
+# the file. Credential files are compared by size and modification time only, never read.
+login_files() {
+  local d
+  echo "$HOME/.claude/settings.json" "$HOME/.claude/settings.local.json" "$HOME/.codex/config.toml" \
+    "$HOME/.gemini/antigravity-cli/settings.json" "$HOME/.gemini/config/mcp_config.json" "$HOME/.gemini/config/hooks.json" \
+    "$HOME/.gemini/config/config.json" "$HOME/.gemini/settings.json" "$HOME/.gemini/trustedFolders.json" \
+    "$HOME/.gemini/projects.json" "$HOME/.gemini/state.json"
+  for d in "$HOME"/.gemini/config/projects/*; do [ -e "$d" ] && echo "$d"; done
+  # Another login folder named in the environment counts too, unless it is one of the spike's own scratch folders.
+  for d in "${CLAUDE_CONFIG_DIR:-}" "${CODEX_HOME:-}"; do
+    case "$d" in ""|"$SPIKE_SCRATCH"*) ;; *) echo "$d/settings.json" "$d/config.toml" ;; esac
+  done
+}
 LOGIN_CREDENTIALS=("$HOME/.codex/auth.json" "$HOME/.gemini/oauth_creds.json" "$HOME/.gemini/google_accounts.json")
 login_snapshot() {
   local f
-  for f in "${LOGIN_CONFIG[@]}"; do
-    if [ -e "$f" ]; then echo "$f $(shasum -a 256 < "$f" | cut -c1-16)"; else echo "$f absent"; fi
+  for f in $(login_files); do
+    if [ -f "$f" ]; then echo "$f $(shasum -a 256 < "$f" | cut -c1-16)"; else echo "$f absent"; fi
   done
   for f in "${LOGIN_CREDENTIALS[@]}"; do
     if [ -e "$f" ]; then echo "$f $(stat -f '%z %m' "$f")"; else echo "$f absent"; fi
@@ -164,16 +224,27 @@ print(sum(1 for k in d.get("projects",{}) if k.startswith(sys.argv[1])))' "$SPIK
 }
 SPIKE_WRITTEN="$SPIKE_SCRATCH/.written.$$"; : > "$SPIKE_WRITTEN"
 SPIKE_LOGIN_BEFORE="$(login_snapshot)"
+SPIKE_LOGIN_SEEN="$SPIKE_SCRATCH/.login-changed.$$"; rm -f "$SPIKE_LOGIN_SEEN"
+( while sleep 2; do
+    now="$(login_snapshot)"
+    [ "$now" != "$SPIKE_LOGIN_BEFORE" ] && [ ! -s "$SPIKE_LOGIN_SEEN" ] && printf '%s\n' "$now" > "$SPIKE_LOGIN_SEEN"
+  done ) >/dev/null 2>&1 &
+SPIKE_WATCHER=$!; disown "$SPIKE_WATCHER" 2>/dev/null || true
 spike_exit() {
   local rc=$?
+  # Nothing in the trap may end it early: every step runs, whatever failed before.
+  set +e
+  kill "$SPIKE_WATCHER" 2>/dev/null
+  for p in $MCP_PIDS; do kill "$p" 2>/dev/null; done
   # A driver killed on purpose did not redact its whole transcript; do it for every file this script wrote
-  # (the transcript and the files beside it), once its own drivers have ended.
-  [ -n "${MCP_PID:-}" ] && kill "$MCP_PID" 2>/dev/null
+  # (the transcript and the files beside it).
   sort -u "$SPIKE_WRITTEN" | while read -r base; do
     for f in "$base".jsonl "$base".observed.txt "$base".mcp-log.jsonl; do [ -f "$f" ] && "$SPIKE" redact "$f"; done
-  done || true
+  done
   rm -f "$SPIKE_WRITTEN"
   local after; after="$(login_snapshot)"
+  [ "$after" = "$SPIKE_LOGIN_BEFORE" ] && [ -s "$SPIKE_LOGIN_SEEN" ] && after="$(cat "$SPIKE_LOGIN_SEEN")"
+  rm -f "$SPIKE_LOGIN_SEEN"
   if [ "$after" != "$SPIKE_LOGIN_BEFORE" ]; then
     echo "LOGIN CONFIG CHANGED during this check:" >&2
     diff <(echo "$SPIKE_LOGIN_BEFORE") <(echo "$after") | sed "s#$HOME#\$HOME#g" >&2

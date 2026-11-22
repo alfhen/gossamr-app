@@ -138,12 +138,13 @@ for l in open(sys.argv[1]):
     tr2=$(fixture $P acp 4-resume-mcp)
     acp --cwd "$wt" --transcript "$tr2" --permission allow --resume "$sid" --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN \
       --redact-env OLD_SPIKE_TOKEN --prompt "Call the ping tool of the spike MCP server and tell me what it answered." -- agy acp
+    before_curl=$(grep -c '"event":"request"' "$MCP_LOG"); ok_before=$(grep -c '"auth":"ok"' "$MCP_LOG"); wrong_before=$(grep -c '"auth":"wrong"' "$MCP_LOG" || true)
     code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $old_token" -H 'Content-Type: application/json' \
       --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$MCP_URL")
     { echo "old server stopped after the kill"
-      echo "new server, requests after resume: $(grep -c '"event":"request"' "$MCP_LOG"), with the new token: $(grep -c '"auth":"ok"' "$MCP_LOG"), with another token: $(grep -c '"auth":"wrong"' "$MCP_LOG"), with none: $(grep -c '"auth":"missing"' "$MCP_LOG")"
+      echo "new server, requests after resume and before the script's own curl: $before_curl, with the new token: $ok_before, with another token: $wrong_before"
       echo "tools/call ping after resume: $(grep -c '"tool":"ping"' "$MCP_LOG")"
-      echo "the old token sent to the new server: HTTP $code"; } | tee -a "$obs"
+      echo "the old token, sent by the script's own curl to the new server: HTTP $code (the spike server knows only the new token)"; } | tee -a "$obs"
     keep_mcp_log "$tr2"; mcp_stop ;;
 
   10-push-signing)
@@ -290,6 +291,57 @@ print(len(d), "in all,", sum(1 for k in d if sys.argv[1] in json.dumps(k)), "for
     { echo "ran for about $(( $(date +%s) - start )) s; still running at the end: $alive"
       echo "stdout: $(head -c 300 "$SPIKE_SCRATCH/agy-15s.out")"
       echo "stderr: $(head -c 300 "$SPIKE_SCRATCH/agy-15s.err")"; } | sed "s#$HOME#\$HOME#g" | tee "$obs" ;;
+
+
+  r1-two-servers|r1-collision)
+    # R1: a per-session endpoint name of letters and digits only, a second server, and a pair of names that collide
+    # once joined with underscores (server a_b with tool c, server a with tool b_c).
+    wt=$(new_worktree "gemini-acp-$1"); tr=$(fixture $P acp "$1"); obs="${tr%.jsonl}.observed.txt"
+    if [ "$1" = r1-two-servers ]; then
+      own="spk$(rand_name)"; other="spkx$(rand_name)"
+      mcp_start "ga-$1-own"; own_url=$MCP_URL; mcp_start "ga-$1-other"; other_url=$MCP_URL
+      prompt="Call the ping tool of the $own MCP server, then the ping tool of the $other MCP server. Report both answers."
+    else
+      own="spka_b"; other="spka"
+      mcp_start "ga-$1-own" --extra-tool c; own_url=$MCP_URL; mcp_start "ga-$1-other" --extra-tool b_c; other_url=$MCP_URL
+      prompt="Call the tool c of the spka_b server and the tool b_c of the spka server, and report both answers."
+    fi
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --mcp-token-env SPIKE_MCP_TOKEN \
+      --mcp-server "$own=$own_url" --mcp-server "$other=$other_url" --prompt "$prompt" -- agy acp
+    { echo "own endpoint: $own; other server: $other"
+      echo "permission requests (the driver allowed each):"; permission_requests "$tr"
+      echo "tool_call names: $(python3 -c 'import json,sys
+seen=[]
+for l in open(sys.argv[1]):
+    d=json.loads(l)["data"]
+    u=((d.get("params") or {}).get("update") or {}) if isinstance(d,dict) else {}
+    if u.get("sessionUpdate")=="tool_call": seen.append(str(u.get("name")))
+print(" ".join(seen))' "$tr")"; } | tee "$obs" ;;
+
+  r2-ask)
+    # R2: ask returns "question pending, end your turn" after 20 s; the answer comes as the next prompt.
+    wt=$(new_worktree gemini-acp-r2); mcp_start ga-r2 --ask-after 20
+    tr=$(fixture $P acp r2-ask)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN \
+      --prompt "$ASK_PROMPT" --prompt "$ANSWER_PROMPT" -- agy acp
+    ask_report "$tr" "$wt" | tee "${tr%.jsonl}.observed.txt"; keep_mcp_log "$tr"; mcp_stop ;;
+
+  r7-background)
+    # Verify major 3: a turn that ends while its command still runs, then 60 s idle: does agy start a turn by itself?
+    wt=$(new_worktree gemini-acp-r7); tr=$(fixture $P acp r7-background)
+    acp --cwd "$wt" --transcript "$tr" --permission allow "${ACPM[@]}" --keep-open 60 \
+      --prompt "Run the shell command 'ping -c 30 127.0.0.1 > ping.txt'." -- agy acp
+    python3 -c 'import json,sys
+end=None
+for l in open(sys.argv[1]):
+    e=json.loads(l); d=e["data"]
+    if not isinstance(d,dict): continue
+    if e["dir"]=="driver" and d.get("note")=="turn_end": end=e["ms"]; print("turn end at %d ms: %s" % (e["ms"], json.dumps(d["detail"]["answer"])[:80]))
+    if e["dir"]=="driver" and d.get("note")=="processes": print("%d ms %s: %s" % (e["ms"], d["detail"]["when"], [x["comm"].split("/")[-1] for x in d["detail"]["descendants"]]))
+    if end and e["dir"]=="from_agent" and d.get("method")=="session/update":
+        u=d["params"]["update"] if isinstance(d.get("params"),dict) and isinstance(d["params"].get("update"),dict) else {}
+        if u.get("sessionUpdate") in ("agent_message_chunk","tool_call","tool_call_update"): print("%d ms after the turn: %s %s" % (e["ms"], u["sessionUpdate"], (u.get("content") or {}).get("text") or u.get("status") or ""))' "$tr" | tee "${tr%.jsonl}.observed.txt"
+    echo "ping.txt lines: $(wc -l < "$wt/ping.txt" 2>/dev/null || echo none)" | tee -a "${tr%.jsonl}.observed.txt" ;;
 
   *)
     if ! signed_in; then echo "blocked: agy is not signed in (run agy once to sign in)"; exit 3; fi

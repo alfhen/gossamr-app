@@ -18,16 +18,16 @@ fn check<T: DeserializeOwned>(rpc: &Rpc, what: &str, v: &Value) {
 }
 
 fn mcp_servers(o: &Common) -> Value {
-    match &o.mcp_url {
+    let headers = match o.mcp_token() {
+        Some(tok) => json!([{ "name": "Authorization", "value": format!("Bearer {tok}") }]),
         None => json!([]),
-        Some(url) => {
-            let headers = match o.mcp_token() {
-                Some(tok) => json!([{ "name": "Authorization", "value": format!("Bearer {tok}") }]),
-                None => json!([]),
-            };
-            json!([{ "type": "http", "name": "spike", "url": url, "headers": headers }])
-        }
-    }
+    };
+    Value::Array(
+        o.servers()
+            .into_iter()
+            .map(|(name, url)| json!({ "type": "http", "name": name, "url": url, "headers": headers }))
+            .collect(),
+    )
 }
 
 pub fn run(o: &Common) {
@@ -171,7 +171,13 @@ pub fn run(o: &Common) {
     }
 
     if o.keep_open > 0.0 {
+        // While idle: what the agent sends unprompted, and its process tree every 5 s.
+        let mut last = std::time::Instant::now();
         rpc.pump(Duration::from_secs_f64(o.keep_open), &mut |r, m| {
+            if last.elapsed() >= Duration::from_secs(5) {
+                last = std::time::Instant::now();
+                r.a.note_processes("idle");
+            }
             side(r, m, o, None);
             false
         });

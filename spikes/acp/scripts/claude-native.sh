@@ -233,7 +233,8 @@ MD
     wait $dpid || true
     { echo "argv samples holding the token (20 samples, 1 s apart, minus the grep itself): $hits"
       echo "files under ~/.claude/projects holding the token: $(token_files "$HOME/.claude/projects")"
-      echo "can_use_tool requests for mcp__spike__ping: $(grep -c '"tool_name":"mcp__spike__ping"' "$tr" || true)"; } | tee "$obs"
+      echo "can_use_tool requests for mcp__spike__ping: $(python3 -c 'import json,sys
+print(sum(1 for l in open(sys.argv[1]) if (d:=json.loads(l)["data"]) and isinstance(d,dict) and d.get("type")=="control_request" and d["request"].get("subtype")=="can_use_tool" and d["request"].get("tool_name")=="mcp__spike__ping"))' "$tr")"; } | tee "$obs"
     keep_mcp_log "$tr"; mcp_stop ;;
 
   5-hold-control)
@@ -268,12 +269,13 @@ for l in open(sys.argv[1]):
       --mcp-via-control --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN --mcp-tool-timeout 600 \
       --prompt "Call the ping tool of the spike MCP server and tell me what it answered." \
       -- "${BASE[@]}" --permission-mode manual --allowedTools mcp__spike__ping --resume "$sid"
+    before_curl=$(grep -c '"event":"request"' "$MCP_LOG"); ok_before=$(grep -c '"auth":"ok"' "$MCP_LOG"); wrong_before=$(grep -c '"auth":"wrong"' "$MCP_LOG" || true)
     code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $old_token" -H 'Content-Type: application/json' \
       --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$MCP_URL")
     { echo "old server stopped after the kill; requests it got: $(grep -c '"event":"request"' "${tr%.jsonl}.mcp-log.jsonl")"
-      echo "new server, requests after resume: $(grep -c '"event":"request"' "$MCP_LOG"), with the new token: $(grep -c '"auth":"ok"' "$MCP_LOG"), with another token: $(grep -c '"auth":"wrong"' "$MCP_LOG")"
+      echo "new server, requests after resume and before the script's own curl: $before_curl, with the new token: $ok_before, with another token: $wrong_before"
       echo "tools/call ping after resume: $(grep -c '"tool":"ping"' "$MCP_LOG")"
-      echo "the old token sent to the new server: HTTP $code"; } | tee -a "$obs"
+      echo "the old token, sent by the script's own curl to the new server: HTTP $code (the spike server knows only the new token)"; } | tee -a "$obs"
     keep_mcp_log "$tr2"; mcp_stop ;;
 
   8-settings-rules)
@@ -323,6 +325,60 @@ for l in open(sys.argv[1]):
     drive --cwd "$wt" --transcript "$tr" --permission allow --turn-timeout 300 --keep-open 120 --exit-wait 60 \
       --prompt "Run a workflow with the Workflow tool: a script with one agent() call whose prompt is 'Reply with the single word pong.' and that returns the agent's answer. Then tell me what it returned." \
       -- "${BASE[@]}" --permission-mode manual ;;
+
+
+  r1-two-servers|r1-collision)
+    # R1: a per-session endpoint name of letters and digits only, a second server, and a pair of names that collide
+    # once joined with underscores (server a_b with tool c, server a with tool b_c).
+    wt=$(new_worktree "claude-native-$1"); tr=$(fixture $P $W "$1"); obs="${tr%.jsonl}.observed.txt"
+    if [ "$1" = r1-two-servers ]; then
+      own="spk$(rand_name)"; other="spkx$(rand_name)"
+      mcp_start "cn-$1-own"; own_url=$MCP_URL; mcp_start "cn-$1-other"; other_url=$MCP_URL
+      prompt="Call the ping tool of the $own MCP server, then the ping tool of the $other MCP server. Report both answers."
+      allowed="mcp__${own}__ping"
+    else
+      own="spka_b"; other="spka"
+      mcp_start "cn-$1-own" --extra-tool c; own_url=$MCP_URL; mcp_start "cn-$1-other" --extra-tool b_c; other_url=$MCP_URL
+      prompt="Call the tool c of the spka_b server and the tool b_c of the spka server, and report both answers."
+      allowed="mcp__spka_b__c"
+    fi
+    drive --cwd "$wt" --transcript "$tr" --permission allow --mcp-via-control --mcp-token-env SPIKE_MCP_TOKEN \
+      --mcp-server "$own=$own_url" --mcp-server "$other=$other_url" --prompt "$prompt" \
+      -- "${BASE[@]}" --permission-mode manual --allowedTools "$allowed"
+    { echo "own endpoint: $own (pre-allowed: $allowed); other server: $other"
+      echo "init tools from MCP servers: $(python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    d=json.loads(l)["data"]
+    if isinstance(d,dict) and d.get("subtype")=="init": print(" ".join(t for t in d["tools"] if t.startswith("mcp__"))); break' "$tr")"
+      echo "permission requests:"; permission_requests "$tr"; } | tee "$obs" ;;
+
+  r2-ask)
+    # R2: the endpoint's ask returns "question pending, end your turn" after 20 s; the answer comes as the next prompt.
+    wt=$(new_worktree claude-native-r2); mcp_start cn-r2 --ask-after 20
+    tr=$(fixture $P $W r2-ask); obs="${tr%.jsonl}.observed.txt"
+    drive --cwd "$wt" --transcript "$tr" --permission allow --mcp-via-control --mcp-url "$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN --mcp-tool-timeout 600 \
+      --prompt "$ASK_PROMPT" --prompt "$ANSWER_PROMPT" \
+      -- "${BASE[@]}" --permission-mode manual --allowedTools mcp__spike__ask
+    ask_report "$tr" "$wt" | tee "$obs"; keep_mcp_log "$tr"; mcp_stop ;;
+
+  r4-locked-control)
+    # R4: the locked flags with the endpoint added by the control request instead of --mcp-config.
+    wt=$(new_worktree claude-native-r4); mcp_start cn-r4
+    tr=$(fixture $P $W r4-locked-control)
+    drive --cwd "$wt" --transcript "$tr" --permission allow --env CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 \
+      --mcp-via-control --mcp-server "gossamr=$MCP_URL" --mcp-token-env SPIKE_MCP_TOKEN --mcp-tool-timeout 600 \
+      --prompt "Run the shell command 'echo hi > ran.txt' and tell me the result." \
+      --prompt "List every tool you have, by exact name, one per line." \
+      -- claude -p --output-format stream-json --verbose --input-format stream-json --permission-prompt-tool stdio \
+         --model "$MODEL" --permission-mode dontAsk --tools "" --allowedTools mcp__gossamr \
+         --setting-sources "" --disable-slash-commands --strict-mcp-config \
+         --append-system-prompt "You are a test assistant."
+    { echo "init tools: $(python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    d=json.loads(l)["data"]
+    if isinstance(d,dict) and d.get("subtype")=="init": print(d["tools"]); break' "$tr")"
+      echo "ran.txt: $(test -e "$wt/ran.txt" && echo present || echo absent)"; } | tee "${tr%.jsonl}.observed.txt"
+    keep_mcp_log "$tr"; mcp_stop ;;
 
   *) echo "unknown check $1" >&2; exit 2 ;;
 esac

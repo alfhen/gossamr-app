@@ -238,5 +238,42 @@ case "${1:?check}" in
     } | tee -a "$obs"
     cp "$old_log" "${f%.jsonl}.mcp-log.jsonl"; keep_mcp_log "$(fixture $P $W 4-resume-mcp)"; mcp_stop ;;
 
+
+  r1-two-servers|r1-collision)
+    # R1: a per-session endpoint name of letters and digits only, a second server, and a pair of names that collide
+    # once joined with underscores (server a_b with tool c, server a with tool b_c).
+    # Chosen flags; only the own endpoint carries default_tools_approval_mode.
+    export MCP_SPIKE_TOKEN="$SPIKE_MCP_TOKEN"
+    wt=$(new_worktree "codex-r2-$1"); f=$(fixture $P $W "$1"); obs="${f%.jsonl}.observed.txt"
+    if [ "$1" = r1-two-servers ]; then
+      own="spk$(rand_name)"; other="spkx$(rand_name)"
+      mcp_start "cx-$1-own"; own_url=$MCP_URL; mcp_start "cx-$1-other"; other_url=$MCP_URL
+      prompt="Call the ping tool of the $own MCP server, then the ping tool of the $other MCP server. Report both answers."
+    else
+      own="spka_b"; other="spka"
+      mcp_start "cx-$1-own" --extra-tool c; own_url=$MCP_URL; mcp_start "cx-$1-other" --extra-tool b_c; other_url=$MCP_URL
+      prompt="Call the tool c of the spka_b server and the tool b_c of the spka server, and report both answers."
+    fi
+    drive --cwd "$wt" --transcript "$f" --permission allow --mcp-token-env MCP_SPIKE_TOKEN --mcp-tool-timeout 600 \
+      --mcp-server "$own=$own_url" --mcp-server "$other=$other_url" --own-server "$own" --prompt "$prompt" \
+      -- env -u SPIKE_MCP_TOKEN "${BASE[@]}"
+    { echo "own endpoint: $own (default_tools_approval_mode approve); other server: $other"
+      echo "MCP tool calls (server/tool): $(python3 -c 'import json,sys
+seen=[]
+for l in open(sys.argv[1]):
+    d=json.loads(l)["data"]
+    it=(d.get("params") or {}).get("item") or {} if isinstance(d,dict) else {}
+    if isinstance(d,dict) and d.get("method")=="item/started" and it.get("type")=="mcpToolCall": seen.append("%s/%s" % (it.get("server"), it.get("tool")))
+print(" ".join(seen))' "$f")"
+      echo "permission requests:"; permission_requests "$f"; } | tee "$obs" ;;
+
+  r2-ask)
+    # R2: ask returns "question pending, end your turn" after 20 s; the answer comes as the next prompt.
+    export MCP_SPIKE_TOKEN="$SPIKE_MCP_TOKEN"
+    wt=$(new_worktree codex-r2-ask); mcp_start cx-r2 --ask-after 20; f=$(fixture $P $W r2-ask)
+    drive --cwd "$wt" --transcript "$f" --permission allow --mcp-url "$MCP_URL" --mcp-token-env MCP_SPIKE_TOKEN --mcp-tool-timeout 600 \
+      --prompt "$ASK_PROMPT" --prompt "$ANSWER_PROMPT" -- env -u SPIKE_MCP_TOKEN "${BASE[@]}"
+    ask_report "$f" "$wt" | tee "${f%.jsonl}.observed.txt"; keep_mcp_log "$f"; mcp_stop ;;
+
   *) echo "unknown check $1" >&2; exit 2 ;;
 esac

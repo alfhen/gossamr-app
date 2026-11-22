@@ -6,10 +6,12 @@ Step H0 of [docs/plan-harness.md](../../docs/plan-harness.md). This folder drive
 
 | Path | What it is |
 | --- | --- |
-| `src/` | `acp-spike`, a Rust program. Subcommands: `acp` (an ACP client), `claude` (`claude -p` with stream-json both ways and the control protocol), `app-server` (`codex app-server` over stdio), `agy-stream` (`agy` with stream-json both ways), `raw` (a one-shot command such as `codex exec --json`), `mcp` (a loopback MCP server with a bearer token and the tools `ping` and `hold`), `redact` (redacts transcripts again, in place). `claude --mcp-via-control` gives the tools endpoint by the `mcp_set_servers` control request instead of `--mcp-config`; `acp --session-meta` sends `_meta` with `session/new`. |
+| `src/` | `acp-spike`, a Rust program. Subcommands: `acp` (an ACP client), `claude` (`claude -p` with stream-json both ways and the control protocol), `app-server` (`codex app-server` over stdio), `agy-stream` (`agy` with stream-json both ways), `raw` (a one-shot command such as `codex exec --json`), `mcp` (a loopback MCP server with a bearer token and the tools `ping` and `hold`), `redact` (redacts transcripts again, in place). `claude --mcp-via-control` gives the tools endpoint by the `mcp_set_servers` control request instead of `--mcp-config`; `acp --session-meta` sends `_meta` with `session/new`. `--mcp-server NAME=URL` (repeatable) gives a session more servers, and `--own-server` names the one Codex pre-approves. `mcp --extra-tool NAME` adds a tool, and its `ask` tool answers "question pending" after `--ask-after` seconds. |
 | `scripts/env.sh` | Sourced by every script: the scratch repo with a local bare remote, worktrees, fixture paths, the MCP server, `kill_watch` (follows the agent's own descendants by pid), `token_files` (a count; credential files skipped), `agent_commands`, the login-config snapshot and the exit trap. |
 | `scripts/claude-native.sh`, `claude-acp.sh` | Claude: native stream-json, and ACP through `@agentclientprotocol/claude-agent-acp`. |
 | `scripts/codex-exec.sh`, `codex-app-server.sh`, `codex-acp.sh`, `codex-common.sh` | Codex: `codex exec --json`, `codex app-server`, and ACP through `@agentclientprotocol/codex-acp`. |
+| `scripts/codex-recheck.sh` | Reruns the Codex checks the app-server driver rests on against whatever `codex` is installed; `--shape-only` checks the protocol's v2 names from the binary's own schema, with no model. |
+| `scripts/selfcheck.sh` | Checks `env.sh`'s exit trap against a scratch `HOME` with stand-in files: a planted change must fail the script with exit 9. |
 | `scripts/codex-trust-probe.sh`, `codex-app-server-two-threads.py` | Which app-server call writes project trust (in empty scratch homes); two threads in one app-server. |
 | `scripts/agy.sh` | Gemini through `agy acp` and `agy` stream-json. |
 | `fixtures/<provider>/<path>/<check>.jsonl` | One transcript per check. |
@@ -59,12 +61,16 @@ Each script takes one check name: the case labels at the top level of its `case`
 | 13 | Tool limits per session (`claude --agent`) |
 | 14 | The Workflow tool and the agent-pr-pipeline plugin in a `claude -p` session |
 | 15 | `agy -p` with stdout piped and no terminal |
+| r1 | Two MCP servers per session, the endpoint named `spk` + 8 hex, and a pair whose names collide with underscores |
+| r2 | `ask` answers "question pending" after 20 s, and the answer comes as the next prompt |
+| r4 | The locked profile with the endpoint by control request (Claude) |
+| r7 | A turn that ends while its command still runs, then 60 s idle (agy) |
 
 `CLAUDE_MODEL` (default `haiku`) and `AGY_MODEL` pick cheap models. `CLAUDE_ACP_CLI=own bash scripts/claude-acp.sh <check>` points the Claude adapter at your own `claude` instead of its bundled copy and writes to `fixtures/claude/acp-own-cli/`. The `agy` checks that need a model exit 3 with "blocked: agy is not signed in" until you run `agy` once and sign in.
 
 ### Rules the scripts keep
 
-- Each script records the login folders' config files when it starts (a hash; size and modification time only for a credential file) and compares them when it ends. A change fails the script with exit 9 and names the file.
+- Each script records the login folders' config files when it starts (a hash; size and modification time only for a credential file), checks them every 2 s while it runs, and compares them when it ends. A change, even one undone before the end, fails the script with exit 9 and names the file. `bash scripts/selfcheck.sh` proves this against a scratch `HOME`.
 - They write only under `$SPIKE_SCRATCH` and `fixtures/`. `env.sh` refuses a scratch folder inside `~/.claude*`, `~/.codex*`, `~/.gemini*` or `~/Gossamr`. A second login folder is always an empty scratch folder.
 - The only remote is `$SPIKE_SCRATCH/remote.git`.
 - Agents start without the variables of a Claude Code session that runs the scripts (`CLAUDE*`, `ANTHROPIC_*`, `MCP_*`, `AI_AGENT`, `CODEX_*`, `OPENAI_*`); a check passes what it needs with `--env`.
