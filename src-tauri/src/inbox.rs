@@ -194,6 +194,18 @@ struct JiraSync {
     syncing: bool,
 }
 
+/// The person's login shell in the app. A test build gets a fixed environment instead, so a test that gives no shell
+/// of its own (`with_shell`) reads no PATH of the machine's.
+#[cfg(not(test))]
+fn shell_for_this_build() -> ShellCapture {
+    ShellCapture::default()
+}
+
+#[cfg(test)]
+fn shell_for_this_build() -> ShellCapture {
+    ShellCapture::with_env(crate::runs::env::RunEnv::from_pairs([("PATH", "/usr/bin:/bin")]))
+}
+
 pub struct Core {
     pub auth: Arc<Auth>,
     registry: Registry,
@@ -254,7 +266,7 @@ impl Core {
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
             provider_probes: Default::default(),
-            shell: Arc::default(),
+            shell: Arc::new(shell_for_this_build()),
             codex_models: Default::default(),
             schedules: Mutex::new(HashMap::new()),
             radar: Mutex::new(HashMap::new()),
@@ -1060,6 +1072,19 @@ mod tests {
 
         fx.core.close_workstream(&fx.scope, &ws.id).await.unwrap();
         assert!(!fx.core.is_pip_session("ws-session", "claude", &fx.scope.connection_id).await.unwrap(), "closing the workstream lets it go");
+    }
+
+    #[tokio::test]
+    async fn a_core_built_in_a_test_looks_in_no_folder_of_the_machine_and_reads_no_shell_of_its_own() {
+        let dir = std::env::temp_dir().join(format!("gossamr-core-places-{}", std::process::id()));
+        let core = Core::new(Arc::new(Auth::signed_out(reqwest::Client::new())), Registry::new(|_| unreachable!("no tracker is asked")), dir.clone());
+        let shell = core.shell().get().await.unwrap();
+        assert_eq!(shell.get("PATH"), Some(std::ffi::OsStr::new("/usr/bin:/bin")), "not the person's login shell");
+        for driver in [Driver::Claude, Driver::Codex] {
+            assert_eq!(core.places.find(driver, &shell), None, "{driver:?}");
+        }
+        assert!(core.code.auth.gh_dirs().is_empty(), "{:?}", core.code.auth.gh_dirs());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
@@ -2085,7 +2110,7 @@ pub(crate) mod testing {
         let data_dir = if shell.is_some() { home.join("data") } else { dir.clone() };
         std::fs::create_dir_all(&data_dir).unwrap();
         let connections: Vec<Connection> = sessions.iter().map(Credentials::connection).collect();
-        let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::new(http)));
+        let authenticator = authenticator.unwrap_or_else(|| Arc::new(crate::auth::Atlassian::nowhere(http)));
         let mut core = Core::new(Arc::new(Auth::with_sessions(authenticator, sessions)), registry, data_dir).with_home(home.clone());
         core = core.with_shell(shell.unwrap_or_else(|| ShellCapture::with_env(crate::runs::env::RunEnv::from_pairs([("PATH", "/usr/bin:/bin")]))));
         if let Some(code) = code {
