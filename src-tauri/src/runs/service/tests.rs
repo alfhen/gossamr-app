@@ -815,23 +815,30 @@ mod through_the_real_spawner {
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        let out = std::process::Command::new("git").args(args).current_dir(dir).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
 
     async fn real() -> Real {
         let fx = fixture_watching(&["acme/webshop"]).await;
+        // A local bare repository whose path still reads as GitHub's, so the clone passes the origin check while git
+        // never reaches the network or a credential helper.
+        let origin = fx.dir.join("github.com/acme/webshop.git");
+        std::fs::create_dir_all(&origin).unwrap();
+        git(&origin, &["init", "-q", "--bare"]);
         let clone = fx.home.join("Gossamr/agents/acme/webshop");
         std::fs::create_dir_all(&clone).unwrap();
         git(&clone, &["init", "-q"]);
-        git(&clone, &["remote", "add", "origin", ORIGIN]);
+        git(&clone, &["remote", "add", "origin", &format!("file://{}", origin.display())]);
 
         let scenario_dir = fx.dir.join("claude");
         std::fs::create_dir_all(&scenario_dir).unwrap();
         std::fs::write(scenario_dir.join("scenario"), "service_line=1\n").unwrap();
         let env = Arc::new(RunEnv::from_pairs([
-            ("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin".to_string()),
+            ("PATH", "/usr/bin:/bin".to_string()),
             ("HOME", fx.dir.to_string_lossy().into_owned()),
+            ("GIT_CONFIG_NOSYSTEM", "1".to_string()),
+            ("GIT_ALLOW_PROTOCOL", "file".to_string()),
             ("FAKE_CLAUDE_SCENARIO", scenario_dir.join("scenario").to_string_lossy().into_owned()),
         ]));
         let cli = Arc::new(SystemCli::new(PathBuf::from(FAKE), env.clone()));
@@ -871,7 +878,7 @@ mod through_the_real_spawner {
         assert!(!RESTRICTING_FLAGS.iter().any(|flag| launch.lines().any(|l| l == *flag)), "the person's own settings apply: {launch}");
 
         let seen: BTreeSet<String> = std::fs::read_to_string(real.scenario_dir.join("env.last")).unwrap().lines().map(String::from).collect();
-        let captured: BTreeSet<String> = ["PATH", "HOME", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
+        let captured: BTreeSet<String> = ["PATH", "HOME", "GIT_CONFIG_NOSYSTEM", "GIT_ALLOW_PROTOCOL", "FAKE_CLAUDE_SCENARIO"].map(String::from).into();
         let shell_added: BTreeSet<String> = ["PWD", "SHLVL", "_", "OLDPWD"].map(String::from).into();
         assert!(seen.difference(&captured).all(|k| shell_added.contains(k)), "nothing is added per launch: {seen:?}");
 
