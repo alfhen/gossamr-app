@@ -10,7 +10,6 @@ use super::{Core, Probe};
 use crate::connections::ProviderInstance;
 use crate::probe::{Snapshot, State};
 use crate::provider_probe::{self, Folder, Timeouts};
-use crate::runs::binary::find_binary_from;
 use crate::runs::env::RunEnv;
 use crate::runs::provider_env::ProviderState;
 use crate::runs::provider_folder;
@@ -143,7 +142,7 @@ impl Core {
         // environment could have supplied.
         let base = shell.cloned().unwrap_or_else(|| RunEnv::from_pairs(std::env::vars_os()));
         let env = login.over(&base);
-        let binary = find_binary_from(self.home.as_deref(), instance.driver, &env);
+        let binary = self.places.find(instance.driver, &env);
         let typed = instance.config.config_dir.as_deref();
         let path = typed.map(|t| provider_folder::expand(t, self.home.as_deref().unwrap_or(Path::new(""))));
         let folder = typed.zip(path.as_deref()).map(|(typed, path)| Folder { typed, path });
@@ -172,13 +171,20 @@ mod tests {
     use crate::connections::{self, Driver, ProviderConfig};
     use crate::inbox::testing::{fixture_with_shell, Fixture};
     use crate::runs::env::ShellCapture;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
+    const RUN_BODY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/run-body.sh");
+
+    /// A fake at `path` that runs `body`. Some tests here time their probes, so the fake is a link to one script that has
+    /// run before rather than a new executable, whose first run macOS stops to check.
     fn script(path: &Path, body: &str) -> String {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut body_path = path.as_os_str().to_owned();
+        body_path.push(".body");
+        std::fs::write(&body_path, format!("{body}\n")).unwrap();
+        if path.symlink_metadata().is_err() {
+            std::os::unix::fs::symlink(RUN_BODY, path).unwrap();
+        }
         path.display().to_string()
     }
 
