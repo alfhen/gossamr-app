@@ -144,7 +144,8 @@ async fn replay_agys_message_after_a_background_command_is_a_turn_of_its_own_tha
 
 #[tokio::test]
 async fn replay_agys_unprompted_turn_with_two_usage_updates_stays_one_turn() {
-    // r7-background's unprompted message, sent twice half a second apart, as agy does for a tool call and a message.
+    // r7-background's unprompted message, sent twice 7 s apart: agy sends a `usage_update` per message, and pauses up
+    // to 6.6 s between messages in H0's recordings (`4-resume-mcp`).
     let text = std::fs::read_to_string(fixtures().join("gemini/acp/r7-background.jsonl")).unwrap();
     let lines: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let message: Vec<&serde_json::Value> = lines.iter().filter(|line| (43..=50).contains(&line["seq"].as_u64().unwrap())).collect();
@@ -155,7 +156,7 @@ async fn replay_agys_unprompted_turn_with_two_usage_updates_stays_one_turn() {
         if line["seq"] == 50 {
             for again in &message {
                 let mut again = (*again).clone();
-                again["ms"] = serde_json::json!(again["ms"].as_u64().unwrap() + 1_000);
+                again["ms"] = serde_json::json!(again["ms"].as_u64().unwrap() + 7_000);
                 twice.push(again);
             }
         }
@@ -170,4 +171,31 @@ async fn replay_agys_unprompted_turn_with_two_usage_updates_stays_one_turn() {
     let unprompted = kinds.iter().rposition(|kind| kind == "turn_started").unwrap();
     let texts = kinds[unprompted..].iter().filter(|kind| *kind == "text").count();
     assert_eq!(texts, 2, "both messages are in the one unprompted turn: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_agys_unprompted_turn_does_not_end_while_its_held_ask_is_open() {
+    // r2-ask's first turn with its prompt and its `end_turn` left out, so agy runs it by itself: it calls `ask`, which
+    // is held 20 s with no process running, then writes its message.
+    let text = std::fs::read_to_string(fixtures().join("gemini/acp/r2-ask.jsonl")).unwrap();
+    let lines: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let turn = |line: &serde_json::Value| (1_159..26_560).contains(&line["ms"].as_u64().unwrap_or_default());
+    let unprompted: Vec<&serde_json::Value> = lines
+        .iter()
+        .filter(|line| !turn(line) || (line["data"]["method"] != "session/prompt" && line["data"]["result"]["stopReason"].is_null()))
+        .take_while(|line| line["ms"].as_u64().unwrap_or_default() < 26_560)
+        .collect();
+    let held = unprompted.windows(2).map(|pair| pair[1]["ms"].as_u64().unwrap() - pair[0]["ms"].as_u64().unwrap()).max().unwrap();
+    assert!(held >= 15_000, "the recording holds the call {held} ms");
+    let (tmp, _) = data_dir();
+    let fixture = tmp.path().join("r2-unprompted.jsonl");
+    std::fs::write(&fixture, unprompted.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+    let events = replay(&fixture, vec![]).await;
+    let kinds: Vec<String> = events.iter().map(|event| event.body.type_name()).collect();
+    let count = |kind: &str| kinds.iter().filter(|seen| *seen == kind).count();
+    assert_eq!((count("prompted"), count("turn_started"), count("turn_ended")), (0, 1, 1), "one unprompted turn: {kinds:?}");
+    let ended = kinds.iter().position(|kind| kind == "turn_ended").unwrap();
+    let said = kinds.iter().position(|kind| kind == "text").unwrap();
+    let result = kinds.iter().position(|kind| kind == "tool_result").unwrap();
+    assert!(result < said && said < ended, "the call's result and the message come before the turn ends: {kinds:?}");
 }

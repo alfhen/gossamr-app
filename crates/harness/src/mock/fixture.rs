@@ -101,6 +101,9 @@ struct Converter {
     /// The id of an ACP `session/load` not yet answered: the updates before its answer replay old history.
     loading: Option<Value>,
     finished: HashSet<String>,
+    /// The running turn's tool calls with no `completed` or `failed` update yet, a call held on the session's own
+    /// endpoint among them.
+    open_calls: HashSet<String>,
 }
 
 impl Converter {
@@ -114,6 +117,9 @@ impl Converter {
             Step::End(_) | Step::Fail(_) => false,
             _ => self.in_turn,
         };
+        if !self.in_turn {
+            self.open_calls.clear();
+        }
         self.unprompted &= self.in_turn && !matches!(step, Step::Prompt(_));
         self.steps.push(step);
     }
@@ -296,7 +302,9 @@ impl Converter {
                 match update["sessionUpdate"].as_str() {
                     Some("agent_message_chunk") => self.text.push_str(update["content"]["text"].as_str().unwrap_or_default()),
                     Some("tool_call") => {
-                        self.push(Step::Tool { id: update["toolCallId"].as_str().map(str::to_owned), name: acp_tool(update), input: acp_input(update) });
+                        let id = update["toolCallId"].as_str().map(str::to_owned);
+                        self.push(Step::Tool { id: id.clone(), name: acp_tool(update), input: acp_input(update) });
+                        self.open_calls.extend(id);
                         self.acp_finished(update);
                     }
                     Some("tool_call_update") => self.acp_finished(update),
@@ -332,8 +340,8 @@ impl Converter {
     }
 
     /// agy ends a turn it started by itself with no marker: it sends a `usage_update` per message or step, not per
-    /// turn. So the turn ends late, never early: after `line` only when no agent line comes for `QUIET_MS` and no
-    /// process of the agent's runs then.
+    /// turn. So the turn ends late, never early: after `line` only when no agent line comes for `QUIET_MS`, no
+    /// process of the agent's runs then, and no tool call of the turn is open (agy holds an MCP call with no process).
     fn end_when_quiet(&mut self, line: &Value, after: &[Value]) {
         let ms = line["ms"].as_u64().unwrap_or_default();
         let until = after.iter().position(|next| next["dir"] == "from_agent").unwrap_or(after.len());
@@ -348,13 +356,16 @@ impl Converter {
         }
         let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms + QUIET_MS));
         let running = notes.next_back().map_or(self.descendants, |note| descendants(&note["data"]));
-        if running == 0 {
+        if running == 0 && self.open_calls.is_empty() {
             self.push(Step::End(TurnEnd::Done));
         }
     }
 
     fn acp_finished(&mut self, update: &Value) {
         if let Some(status @ ("completed" | "failed")) = update["status"].as_str() {
+            if let Some(id) = update["toolCallId"].as_str() {
+                self.open_calls.remove(id);
+            }
             let output = [&update["rawOutput"], &update["content"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default();
             self.tool_result(&update["toolCallId"], output, status == "failed");
         }
@@ -378,8 +389,9 @@ fn texts(content: &Value) -> String {
     }
 }
 
-/// How long agy must say nothing, with no process running, before a turn it started by itself counts as ended.
-const QUIET_MS: u64 = 5_000;
+/// How long agy must say nothing, with no process running and no tool call open, before a turn it started by itself
+/// counts as ended. H0's recordings pause up to 6.6 s between messages while agy thinks.
+const QUIET_MS: u64 = 15_000;
 
 fn descendants(note: &Value) -> usize {
     note["detail"]["descendants"].as_array().map_or(0, Vec::len)
