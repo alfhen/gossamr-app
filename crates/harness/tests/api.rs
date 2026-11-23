@@ -20,6 +20,10 @@ use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
 use tokio_tungstenite::tungstenite::Message;
 
+/// How long a test waits for what must come. Only a failure waits this long; a big event's redaction under load can
+/// take seconds.
+const WAIT: Duration = Duration::from_secs(60);
+
 /// Waits at a permission request, then plays a client tool call, a cancel and a second turn.
 const SCRIPT: &str = r#"{"prompt": null}
 {"say": "one"}
@@ -76,7 +80,7 @@ async fn open_as(client: &mut Client, locked: bool) -> String {
 }
 
 async fn next_event(client: &mut Client) -> Event {
-    match tokio::time::timeout(Duration::from_secs(10), client.push()).await.expect("a push within 10 s").unwrap() {
+    match tokio::time::timeout(WAIT, client.push()).await.expect("a push within the wait").unwrap() {
         Some(Push::Event { event, .. }) => event,
         other => panic!("expected an event, got {other:?}"),
     }
@@ -112,7 +116,7 @@ async fn after_first(mut ws: tokio_tungstenite::WebSocketStream<UnixStream>, fir
     // A call sent after a refused proof must not be served either.
     let _ = ws.send(Message::text(json!({ "id": 2, "op": "sessions" }).to_string())).await;
     let mut said = vec![];
-    while let Ok(Some(Ok(message))) = tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
+    while let Ok(Some(Ok(message))) = tokio::time::timeout(WAIT, ws.next()).await {
         match message {
             Message::Text(text) => said.push(serde_json::from_str(text.as_str()).unwrap()),
             Message::Close(_) => break,
@@ -227,7 +231,7 @@ async fn events_a_client_that_reconnects_after_n_gets_exactly_what_it_missed() {
     let ended = events_until(&mut second, |body| matches!(body, Body::TurnEnded { .. })).await;
     second.call(Op::Close { session: id.clone() }).await.unwrap();
     let rest = events_until(&mut second, |body| *body == Body::Closed).await;
-    assert_eq!(tokio::time::timeout(Duration::from_secs(10), second.push()).await.unwrap().unwrap(), Some(Push::End { session: id.clone() }));
+    assert_eq!(tokio::time::timeout(WAIT, second.push()).await.unwrap().unwrap(), Some(Push::End { session: id.clone() }));
 
     let got: Vec<Event> = [request, call, ended, rest].concat();
     let missed = served.harness.events(&id, after).unwrap();
@@ -374,7 +378,7 @@ async fn events_a_client_that_stops_reading_falls_behind_and_reads_what_it_misse
         }
     }
     let mut got = vec![];
-    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(10), slow.push()).await.unwrap().unwrap() {
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(WAIT, slow.push()).await.unwrap().unwrap() {
         got.push(event);
     }
     let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
@@ -395,7 +399,7 @@ async fn events_a_watch_from_past_the_end_pushes_nothing_at_or_below_its_number(
     let mut watcher = connect(&served).await;
     watcher.call(Op::Watch { session: id.clone(), after: 1_000 }).await.unwrap();
     client.call(Op::Close { session: id.clone() }).await.unwrap();
-    let pushed = tokio::time::timeout(Duration::from_secs(10), watcher.push()).await.unwrap().unwrap();
+    let pushed = tokio::time::timeout(WAIT, watcher.push()).await.unwrap().unwrap();
     assert_eq!(pushed, Some(Push::End { session: id }), "no event numbered 1000 or less, then the end");
 }
 
@@ -407,7 +411,7 @@ async fn events_one_connection_watches_a_session_once_at_a_time() {
     let again = client.call(Op::Watch { session: id.clone(), after: 0 }).await;
     assert!(matches!(again, Err(Error::Said(ref why)) if why.contains("already watches")), "{again:?}");
     client.call(Op::Close { session: id.clone() }).await.unwrap();
-    while let Some(push) = tokio::time::timeout(Duration::from_secs(10), client.push()).await.unwrap().unwrap() {
+    while let Some(push) = tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap() {
         if push == (Push::End { session: id.clone() }) {
             break;
         }
@@ -543,7 +547,7 @@ async fn limits_events_come_in_pages_and_the_client_reads_them_all() {
     let mut watcher = connect(&served).await;
     watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
     let mut watched = vec![];
-    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(10), watcher.push()).await.unwrap().unwrap() {
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(WAIT, watcher.push()).await.unwrap().unwrap() {
         watched.push(event);
     }
     assert!(watched == served.harness.events(&id, 0).unwrap(), "a watch pages through the store too");
@@ -594,7 +598,7 @@ async fn serve_a_call_sent_with_the_proof_is_answered() {
     ws.flush().await.unwrap();
     let mut said = vec![];
     while said.len() < 2 {
-        let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap() else { panic!("closed") };
+        let Some(Ok(Message::Text(text))) = tokio::time::timeout(WAIT, ws.next()).await.unwrap() else { panic!("closed") };
         said.push(serde_json::from_str::<Value>(text.as_str()).unwrap());
     }
     assert_eq!((&said[0]["ok"], &said[1]["id"], &said[1]["ok"]), (&json!(true), &json!(1), &json!([])));
@@ -607,7 +611,7 @@ async fn serve_a_binary_frame_after_the_proof_gets_an_error() {
     ws.send(Message::text(json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) }).to_string())).await.unwrap();
     ws.next().await;
     ws.send(Message::binary(b"{\"id\":1,\"op\":\"sessions\"}".to_vec())).await.unwrap();
-    let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap() else { panic!("no answer") };
+    let Some(Ok(Message::Text(text))) = tokio::time::timeout(WAIT, ws.next()).await.unwrap() else { panic!("no answer") };
     let said: Value = serde_json::from_str(text.as_str()).unwrap();
     assert!(said["error"].as_str().is_some_and(|error| error.contains("text")), "{said}");
 }
@@ -621,6 +625,6 @@ async fn auth_a_client_gives_up_on_a_harness_that_never_says_hello() {
         let _ws = tokio_tungstenite::accept_async(stream).await.unwrap();
         std::future::pending::<()>().await;
     });
-    let gave_up = tokio::time::timeout(Duration::from_secs(10), Client::connect_within(tmp.path(), &Token::random(), Duration::from_millis(200))).await;
+    let gave_up = tokio::time::timeout(WAIT, Client::connect_within(tmp.path(), &Token::random(), Duration::from_millis(200))).await;
     assert!(matches!(gave_up, Ok(Err(Error::Protocol(ref why))) if why.contains("did not answer")), "{:?}", gave_up.map(|r| r.err()));
 }
