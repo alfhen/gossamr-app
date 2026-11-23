@@ -245,4 +245,26 @@ mod tests {
             assert!(kept.keys().all(|field| KEPT_FIELDS.contains(&field.as_str())), "{kept:?}");
         }
     }
+
+    #[test]
+    fn limits_a_body_over_the_cap_is_cut_in_its_private_fields_and_says_by_how_much() {
+        let small = Body::Text { text: "short".into() };
+        assert_eq!(cut(small.clone(), 100), (small, 0), "under the cap, nothing changes");
+
+        let (text, dropped) = cut(Body::Text { text: "a".repeat(1000) }, 100);
+        let Body::Text { text } = text else { unreachable!() };
+        assert!(serde_json::to_string(&Body::Text { text: text.clone() }).unwrap().len() <= 100);
+        assert_eq!(dropped as usize, 1000 - text.len());
+
+        // Control characters take six bytes each as JSON.
+        let (escaped, _) = cut(Body::Text { text: "\u{1}".repeat(1000) }, 100);
+        assert!(serde_json::to_string(&escaped).unwrap().len() <= 100, "escapes are counted");
+
+        let input = json!({ "file": "b".repeat(1000) });
+        let (call, dropped) = cut(Body::ToolCall { id: "t1".into(), name: "Read".into(), input }, 200);
+        let Body::ToolCall { id, name, input } = call else { unreachable!() };
+        assert_eq!((id.as_str(), name.as_str()), ("t1", "Read"), "kept fields stay whole");
+        assert!(input.as_str().is_some_and(|text| text.starts_with("{\"file\":\"bbb")), "JSON becomes the start of its text");
+        assert!(dropped > 0);
+    }
 }
