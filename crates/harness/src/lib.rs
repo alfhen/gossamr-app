@@ -39,7 +39,7 @@ pub enum Request {
     Version,
     Run(RunArgs),
     Serve { data: Option<PathBuf>, mock_script: Option<PathBuf> },
-    Client { command: cli::Command, data: Option<PathBuf>, token: cli::TokenFrom },
+    Client { command: cli::Command, data: Option<PathBuf>, token_stdin: bool },
     /// Anything else, which gets the usage line and a failing exit code.
     Usage,
 }
@@ -47,7 +47,7 @@ pub enum Request {
 pub const USAGE: &str = "usage: harness --version
        harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]
        harness serve [--data <folder>] [--mock-script <file>]   (the first client token on stdin)
-  against the harness serving --data <folder>, with a client token on stdin (--token-stdin) or asked for:
+  against the harness serving --data <folder>, with the client token on stdin (--token-stdin):
        harness run --provider <name> [--answer allow|deny]... <prompt>
        harness sessions
        harness events <session> [--after <seq>] [--follow]
@@ -66,8 +66,8 @@ pub fn request(args: &[OsString]) -> Request {
         [first, rest @ ..] if first == "serve" => serve_args(rest).unwrap_or(Request::Usage),
         [first, rest @ ..] => {
             let (Some(first), Some(rest)) = (first.to_str(), rest.iter().map(|arg| arg.to_str()).collect::<Option<Vec<_>>>()) else { return Request::Usage };
-            let (mut data, mut token) = (None, cli::TokenFrom::Terminal);
-            cli::parse(first, &rest, &mut data, &mut token).map_or(Request::Usage, |command| Request::Client { command, data, token })
+            let (mut data, mut token_stdin) = (None, false);
+            cli::parse(first, &rest, &mut data, &mut token_stdin).map_or(Request::Usage, |command| Request::Client { command, data, token_stdin })
         }
         _ => Request::Usage,
     }

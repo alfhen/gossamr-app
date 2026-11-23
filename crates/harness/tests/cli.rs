@@ -319,47 +319,31 @@ fn serve_with_a_client_token_in_its_environment_does_not_start() {
 }
 
 #[test]
-fn client_a_signal_at_the_token_prompt_leaves_the_terminal_echoing() {
-    use std::io::Read;
+fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting() {
     use std::os::fd::{FromRawFd, OwnedFd};
     let (mut main, mut side) = (0, 0);
     // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
     assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
-    let (main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
-    let echoing = |fd: &OwnedFd| {
-        use std::os::fd::AsRawFd;
-        // SAFETY: `termios` is plain data that tcgetattr fills in.
-        let mut flags: libc::termios = unsafe { std::mem::zeroed() };
-        assert_eq!(unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut flags) }, 0);
-        flags.c_lflag & libc::ECHO != 0
-    };
-    assert!(echoing(&side), "a new terminal echoes");
+    let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
     let tmp = tempfile::tempdir().unwrap();
-    for signal in [libc::SIGINT, libc::SIGTERM] {
-        let mut child = Command::new(HARNESS)
-            .args(["sessions", "--data"])
-            .arg(tmp.path())
-            .stdin(side.try_clone().unwrap())
-            .stderr(side.try_clone().unwrap())
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        let mut said = vec![];
-        let mut main_read = std::fs::File::from(main.try_clone().unwrap());
-        while !String::from_utf8_lossy(&said).contains("client token:") {
-            let mut buf = [0u8; 256];
-            let n = main_read.read(&mut buf).unwrap();
-            said.extend_from_slice(&buf[..n]);
+    let mut child = Command::new(HARNESS)
+        .args(["sessions", "--data"])
+        .arg(tmp.path())
+        .stdin(side)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let done = loop {
+        if let Some(done) = child.try_wait().unwrap() {
+            break done;
         }
-        // The prompt is written before echo goes off; this waits until it has.
-        let asked = std::time::Instant::now();
-        while echoing(&side) {
-            assert!(asked.elapsed() < std::time::Duration::from_secs(10), "echo never went off");
-            std::thread::yield_now();
-        }
-        // SAFETY: kill has no memory preconditions; the pid is our child's, which has not been waited on.
-        assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
-        child.wait().unwrap();
-        assert!(echoing(&side), "echo is back after signal {signal}");
-    }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for input");
+        std::thread::yield_now();
+    };
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(done.code(), Some(1));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");
 }

@@ -19,7 +19,7 @@ fn main() -> ExitCode {
             }
             block_on(serve(data, mock_script))
         }
-        Request::Client { command, data, token } => block_on(harness::cli::execute(command, data, token)),
+        Request::Client { command, data, token_stdin } => block_on(harness::cli::execute(command, data, token_stdin)),
         Request::Usage => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
