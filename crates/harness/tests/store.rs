@@ -99,12 +99,12 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
     store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
-    assert_eq!(user_version(&dir), 1, "user_version counts the steps");
+    assert_eq!(user_version(&dir), 2, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
     let row = store.session("a").unwrap();
     assert_eq!((row.provider.as_str(), row.locked, row.model.as_deref(), row.provider_session.as_deref()), ("mock", true, Some("haiku"), Some("p-1")));
     drop(store);
-    assert_eq!(user_version(&dir), 1);
+    assert_eq!(user_version(&dir), 2);
 
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().pragma_update(None, "user_version", 9).unwrap();
     assert!(matches!(Store::open(&dir), Err(Error::NewerStore(9))), "a store from a newer harness is not opened");

@@ -2,13 +2,19 @@
 //! `docs/harness-proposal.md`. So far it runs sessions in-process, on the mock provider only.
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 
+pub mod api;
+pub mod auth;
+pub mod cli;
+pub mod client;
 pub mod driver;
 pub mod error;
 pub mod event;
 pub mod mock;
 pub mod redact;
 pub mod run;
+pub mod server;
 pub mod session;
 pub mod store;
 pub mod tools;
@@ -28,24 +34,55 @@ pub fn version_line() -> String {
 }
 
 /// What the command line asks for.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub enum Request {
     Version,
     Run(RunArgs),
+    Serve { data: Option<PathBuf>, mock_script: Option<PathBuf> },
+    Client { command: cli::Command, data: Option<PathBuf> },
     /// Anything else, which gets the usage line and a failing exit code.
     Usage,
 }
 
 pub const USAGE: &str = "usage: harness --version
-       harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]";
+       harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]
+       harness serve [--data <folder>] [--mock-script <file>]   (the first client token on stdin)
+  with HARNESS_TOKEN set, against the harness serving --data <folder>:
+       harness run --provider <name> [--answer allow|deny]... [--ends-with-client] <prompt>
+       harness sessions | providers | shutdown | token new
+       harness events <session> [--after <seq>] [--follow]
+       harness send <session> <text>
+       harness answer <session> <request> allow|deny [--message <text>]
+       harness answer-question <session> <question> <text>
+       harness tool-result <session> <call> <json> [--error]
+       harness cancel | close | hand-over | clean-up <session>";
 
 /// An argument that is not UTF-8 is never one the harness knows, so it gets the usage line like any other.
 pub fn request(args: &[OsString]) -> Request {
     match args {
         [only] if only == "--version" || only == "-V" => Request::Version,
-        [first, rest @ ..] if first == "run" => run_args(rest).map_or(Request::Usage, Request::Run),
+        [first, rest @ ..] if first == "run" && rest.iter().any(|arg| arg == "--script") => run_args(rest).map_or(Request::Usage, Request::Run),
+        [first, rest @ ..] if first == "serve" => serve_args(rest).unwrap_or(Request::Usage),
+        [first, rest @ ..] => {
+            let (Some(first), Some(rest)) = (first.to_str(), rest.iter().map(|arg| arg.to_str()).collect::<Option<Vec<_>>>()) else { return Request::Usage };
+            let mut data = None;
+            cli::parse(first, &rest, &mut data).map_or(Request::Usage, |command| Request::Client { command, data })
+        }
         _ => Request::Usage,
     }
+}
+
+fn serve_args(args: &[OsString]) -> Option<Request> {
+    let (mut data, mut mock_script) = (None, None);
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.to_str()? {
+            "--data" => data = Some(args.next()?.into()),
+            "--mock-script" => mock_script = Some(args.next()?.into()),
+            _ => return None,
+        }
+    }
+    Some(Request::Serve { data, mock_script })
 }
 
 fn run_args(args: &[OsString]) -> Option<RunArgs> {
@@ -81,7 +118,7 @@ mod tests {
     fn version_and_its_short_form_ask_for_the_version_and_nothing_else_does() {
         assert_eq!(request(&args(&["--version"])), Request::Version);
         assert_eq!(request(&args(&["-V"])), Request::Version);
-        for other in [&[][..], &["serve"], &["--version", "extra"], &["--help"]] {
+        for other in [&[][..], &["serve", "extra"], &["--version", "extra"], &["--help"]] {
             assert_eq!(request(&args(other)), Request::Usage, "{other:?}");
         }
     }

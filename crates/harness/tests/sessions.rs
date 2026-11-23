@@ -473,7 +473,7 @@ async fn redact_a_drivers_error_is_masked_keeps_its_kind_and_frees_the_session()
     let (_tmp, dir) = data_dir();
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("refuser".into(), Arc::new(Refuser))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
-    let spec = harness::session::Open { provider: "refuser".into(), locked: false, cwd: "/nowhere".into(), model: None };
+    let spec = harness::session::Open { provider: "refuser".into(), locked: false, cwd: "/nowhere".into(), ..Default::default() };
     match harness.open(spec).await {
         Err(Error::Open { kind, message }) => {
             assert_eq!(kind, FailKind::SignedOut, "the kind reaches the client");
@@ -780,15 +780,21 @@ impl Driver for Stopper {
 }
 
 #[tokio::test]
-async fn retention_a_running_harness_withholds_payload_once_it_is_30_days_old() {
+async fn retention_a_catch_up_read_writes_nothing() {
     let (_tmp, dir) = data_dir();
     let harness = harness(&dir, &mock(LIFE), 4);
     let (id, mut events) = open(&harness, false).await;
     next(&mut events).await;
     let old = harness::store::now_ms() - harness::store::KEEP_MS - 1;
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE events SET ms = ?1 WHERE seq = 1", [old]).unwrap();
+    let before = std::fs::read(dir.join("harness.sqlite")).unwrap();
     let stored = harness.events(&id, 0).unwrap();
-    assert!(matches!(&stored[0].body, Body::Withheld { of, .. } if of == "started"), "a read sweeps first: {stored:?}");
+    let (watched, _live) = harness.watch(&id, 0).unwrap();
+    assert!(std::fs::read(dir.join("harness.sqlite")).unwrap() == before, "the store file is unchanged by the reads");
+    assert!(matches!(&stored[0].body, Body::Started { .. }), "a read does not sweep: {stored:?}");
+    assert_eq!(stored, watched);
+    assert_eq!(harness.sweep().unwrap(), 1, "the sweep, run on its own, withholds the old event");
+    assert!(matches!(&harness.events(&id, 0).unwrap()[0].body, Body::Withheld { of, .. } if of == "started"));
 }
 
 #[tokio::test]
@@ -1069,7 +1075,7 @@ async fn resume_a_driver_that_panics_as_it_opens_leaves_the_session_free() {
     says.panics = true;
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("panics".into(), Arc::new(says))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
-    let spec = harness::session::Open { provider: "panics".into(), locked: false, cwd: "/nowhere".into(), model: None };
+    let spec = harness::session::Open { provider: "panics".into(), locked: false, cwd: "/nowhere".into(), ..Default::default() };
     let opening = harness.clone();
     let opened = tokio::spawn(async move { opening.open(spec).await.map(|(id, _)| id) }).await;
     assert!(opened.unwrap_err().is_panic());
@@ -1197,7 +1203,7 @@ async fn stop_a_prompt_queued_behind_a_turn_does_not_reach_the_agent_after_close
     puppet.say(0, Body::TurnEnded { how: TurnEnd::Done });
     harness.close(&id).unwrap();
     let rest = until(&mut events, |body| *body == Body::Closed).await;
-    assert_eq!(types(&rest), ["turn_ended", "closed"]);
+    assert_eq!(types(&rest), ["turn_ended", "prompts_dropped", "closed"], "the client hears the queued prompt was dropped");
     assert_eq!(puppet.prompts(), ["one"], "the queued prompt never reached the agent");
     assert_eq!(*puppet.commands.lock().unwrap(), [Command::Prompt("one".into()), Command::Stop], "Stop is the last command");
 }
@@ -1239,6 +1245,7 @@ async fn stop_a_turn_open_at_close_gets_exactly_one_end_before_closed() {
     let harness = on_puppet(&dir, &puppet, 4);
     let (id, mut events) = open_on(&harness, "puppet", false).await;
     harness.send(&id, "one").unwrap();
+    until(&mut events, |body| matches!(body, Body::Prompted { .. })).await;
     puppet.say(0, Body::TurnStarted);
     until(&mut events, |body| *body == Body::TurnStarted).await;
     harness.close(&id).unwrap();
@@ -1252,6 +1259,7 @@ async fn stop_a_turn_open_at_close_gets_exactly_one_end_before_closed() {
     let harness = on_puppet(&dir, &puppet, 4);
     let (id, mut events) = open_on(&harness, "puppet", false).await;
     harness.send(&id, "one").unwrap();
+    until(&mut events, |body| matches!(body, Body::Prompted { .. })).await;
     puppet.say(0, Body::TurnStarted);
     until(&mut events, |body| *body == Body::TurnStarted).await;
     harness.close(&id).unwrap();

@@ -40,7 +40,7 @@ pub async fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiv
 }
 
 pub async fn open_on(harness: &Harness, provider: &str, locked: bool) -> (String, broadcast::Receiver<Event>) {
-    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), model: None }).await.unwrap()
+    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), ..Default::default() }).await.unwrap()
 }
 
 pub async fn next(events: &mut broadcast::Receiver<Event>) -> Event {
