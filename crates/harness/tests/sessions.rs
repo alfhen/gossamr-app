@@ -1,5 +1,6 @@
 mod common;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -298,7 +299,7 @@ async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
     assert!(matches!(harness.resume(&slow).await, Err(Error::Running(_))), "no resume while the old agent runs");
     assert!(matches!(harness.clean_up(&slow), Err(Error::Running(_))), "no clean-up while it runs");
     let gone = until(&mut slow_events, |body| *body == Body::Closed).await;
-    assert_eq!(types(&gone), ["text", "closed"], "what the agent says while it stops is kept");
+    assert_eq!(types(&gone), ["text", "failed", "closed"], "what the agent says while it stops is kept, and its open turn ends");
     until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
     assert!(stopped.elapsed() >= Duration::from_millis(200), "the slot was held until the agent had gone");
 }
@@ -436,19 +437,20 @@ async fn redact_a_secret_in_agent_text_never_reaches_the_store_or_a_client() {
     let token = token.lock().unwrap().clone();
     assert_eq!(token.len(), 64);
     let shown = serde_json::to_string(&live).unwrap();
-    assert!(shown.contains("my token is <redacted> and my key is <redacted>"), "{shown}");
-    let leaks = [token.as_str(), "sk-ant-api03-", "ghp_", "yyyyyyyy"];
-    for leak in leaks {
-        assert!(!shown.contains(leak), "{leak} reached the client: {shown}");
+    // A failure names the case and where it showed, never the token or the payload.
+    assert!(shown.contains("my token is <redacted> and my key is <redacted>"), "the text is not masked as expected");
+    let leaks = [("the session's token", token.as_str()), ("an Anthropic key", "sk-ant-api03-"), ("a GitHub token", "ghp_"), ("the end of a key", "yyyyyyyy")];
+    for (label, leak) in leaks {
+        assert!(!shown.contains(leak), "{label} reached the client");
     }
-    assert!(shown.contains("last: <redacted> and done"), "{shown}");
+    assert!(shown.contains("last: <redacted> and done"), "the last text is not masked as expected");
 
     let stored = harness.events(&id, 0).unwrap();
     assert_eq!(stored, live, "the store holds the masked events");
     let (rows, disk) = (every_row(&dir), bytes_on_disk(&dir));
-    for leak in leaks {
-        assert!(!rows.contains(leak), "{leak} is in a table");
-        assert!(!contains(&disk, leak), "{leak} is in the store's files");
+    for (label, leak) in leaks {
+        assert!(!rows.contains(leak), "{label} is in a table");
+        assert!(!contains(&disk, leak), "{label} is in the store's files");
     }
 }
 
@@ -1019,60 +1021,27 @@ async fn turn_a_driver_that_starts_a_turn_inside_a_turn_or_ends_one_it_never_sta
     until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
 }
 
-/// Asks, then ends its turn when the test lets it, without waiting for the answer.
-struct EndsWhenLet(Arc<tokio::sync::Notify>);
-
-impl Driver for EndsWhenLet {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
-    }
-
-    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
-        let (commands, mut commands_rx) = mpsc::unbounded_channel();
-        let (output, receiver) = mpsc::unbounded_channel();
-        output.send(Body::Started { provider_session: "ends".into(), resumed: false }).unwrap();
-        let let_go = self.0.clone();
-        tokio::spawn(async move {
-            while let Some(command) = commands_rx.recv().await {
-                match command {
-                    Command::Prompt(_) => {
-                        let _ = output.send(Body::TurnStarted);
-                        let request = Body::Permission { id: "d1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({}) };
-                        let _ = output.send(request);
-                        let let_go = let_go.clone();
-                        let output = output.clone();
-                        tokio::spawn(async move {
-                            let_go.notified().await;
-                            let _ = output.send(Body::TurnEnded { how: TurnEnd::Done });
-                        });
-                    }
-                    Command::Answer { .. } => panic!("an answer reached the driver after its turn ended"),
-                    Command::Stop => return,
-                    _ => {}
-                }
-            }
-        });
-        Ok(Link { commands, output: receiver })
-    }
-}
-
 #[tokio::test]
 async fn answer_an_answer_that_races_its_turns_end_is_never_recorded_or_sent() {
     let (_tmp, dir) = data_dir();
-    let let_go = Arc::new(tokio::sync::Notify::new());
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("ends".into(), Arc::new(EndsWhenLet(let_go.clone())))];
-    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
-    let (id, mut events) = open_on(&harness, "ends", false).await;
+    let puppet = Puppet::default();
+    let harness = on_puppet(&dir, &puppet, 4);
+    let (id, mut events) = open_on(&harness, "puppet", false).await;
     harness.send(&id, "go").unwrap();
+    until(&mut events, |body| matches!(body, Body::Prompted { .. })).await;
+    puppet.say(0, Body::TurnStarted);
+    puppet.say(0, Body::Permission { id: "d1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({}) });
     let request = ask(&mut events).await;
-    // The turn ends first, then the answer arrives: one thread, and the driver is woken before the session.
-    let_go.notify_one();
+    // With no yield between them, the turn's end is in the session's input before the answer is.
+    puppet.say(0, Body::TurnEnded { how: TurnEnd::Done });
     harness.answer(&id, &request, Decision::Allow, None).expect("the request was still open when answered");
     let ended = until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
     quiet(&mut events, 200).await;
     assert_eq!(types(&ended), ["turn_ended"]);
     let stored = types(&harness.events(&id, 0).unwrap());
     assert!(!stored.contains(&"answered".to_owned()), "an answer was recorded after its turn ended: {stored:?}");
+    let answers = puppet.commands.lock().unwrap().iter().filter(|command| matches!(command, Command::Answer { .. })).count();
+    assert_eq!(answers, 0, "an answer reached the driver after its turn ended");
 }
 
 #[tokio::test]
@@ -1107,7 +1076,9 @@ async fn hold_a_client_tool_call_ended_by_a_close_gets_its_end() {
     let rest = until(&mut events, |body| *body == Body::Closed).await;
     let ended = Body::ToolResult { id: call.clone(), output: json!("the session has ended"), error: true };
     assert_eq!(rest[0].body, ended, "{rest:?}");
-    assert!(mock.replies(&ps).iter().all(|reply| reply.is_err()));
+    // The mock takes a reply that is ready before a stop (`biased`), and the session sends the reply before the stop.
+    let replies: Vec<Result<(), String>> = mock.replies(&ps).into_iter().map(|reply| reply.map(|_| ())).collect();
+    assert_eq!(replies, [Err("the session has ended".to_owned())]);
 }
 
 #[tokio::test]
@@ -1133,3 +1104,294 @@ async fn hold_a_tool_result_or_a_cut_that_cannot_be_recorded_does_not_reach_the_
     }
 }
 
+/// A driver the test plays by hand: it writes the agent's events straight into each start's output, with no task
+/// between, so the session sees them in the order the test chose. Every command is recorded; a stop closes the
+/// output, or with `kill_ends` only a kill does, after sending those events.
+#[derive(Clone, Default)]
+struct Puppet {
+    outputs: Arc<Mutex<Vec<Option<mpsc::UnboundedSender<Body>>>>>,
+    commands: Arc<Mutex<Vec<Command>>>,
+    kill_ends: Option<Vec<Body>>,
+    stop_ms: Option<u64>,
+}
+
+impl Puppet {
+    fn say(&self, start: usize, body: Body) {
+        self.outputs.lock().unwrap()[start].as_ref().expect("the start's output is open").send(body).unwrap();
+    }
+
+    fn prompts(&self) -> Vec<String> {
+        self.commands.lock().unwrap().iter().filter_map(|command| if let Command::Prompt(text) = command { Some(text.clone()) } else { None }).collect()
+    }
+}
+
+impl Driver for Puppet {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { stop_takes_up_to_ms: self.stop_ms, ..Capabilities::default() }
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+        let (output, receiver) = mpsc::unbounded_channel();
+        let start = {
+            let mut outputs = self.outputs.lock().unwrap();
+            outputs.push(Some(output));
+            outputs.len() - 1
+        };
+        self.say(start, Body::Started { provider_session: format!("puppet-{start}"), resumed: start > 0 });
+        let puppet = self.clone();
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                puppet.commands.lock().unwrap().push(command.clone());
+                let ends = match (&command, &puppet.kill_ends) {
+                    (Command::Stop, None) => Some(vec![]),
+                    (Command::Kill, Some(last)) => Some(last.clone()),
+                    _ => None,
+                };
+                if let Some(last) = ends {
+                    last.into_iter().for_each(|body| puppet.say(start, body));
+                    puppet.outputs.lock().unwrap()[start] = None;
+                    return;
+                }
+            }
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+fn on_puppet(dir: &std::path::Path, puppet: &Puppet, limit: usize) -> Harness {
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("puppet".into(), Arc::new(puppet.clone()))];
+    Harness::new(Store::open(dir).unwrap(), drivers, settings(limit))
+}
+
+#[tokio::test]
+async fn stop_a_prompt_queued_behind_a_turn_does_not_reach_the_agent_after_close() {
+    let (_tmp, dir) = data_dir();
+    let puppet = Puppet::default();
+    let harness = on_puppet(&dir, &puppet, 4);
+    let (id, mut events) = open_on(&harness, "puppet", false).await;
+    harness.send(&id, "one").unwrap();
+    until(&mut events, |body| matches!(body, Body::Prompted { .. })).await;
+    puppet.say(0, Body::TurnStarted);
+    until(&mut events, |body| *body == Body::TurnStarted).await;
+    // With no yield between them: "two" waits behind the turn, the turn ends, and the session is closed.
+    harness.send(&id, "two").unwrap();
+    puppet.say(0, Body::TurnEnded { how: TurnEnd::Done });
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&rest), ["turn_ended", "closed"]);
+    assert_eq!(puppet.prompts(), ["one"], "the queued prompt never reached the agent");
+}
+
+#[tokio::test]
+async fn stop_a_slot_granted_after_close_sends_no_prompt() {
+    let (_tmp, dir) = data_dir();
+    let puppet = Puppet::default();
+    let harness = on_puppet(&dir, &puppet, 1);
+    let (first, mut first_events) = open_on(&harness, "puppet", false).await;
+    let (second, mut second_events) = open_on(&harness, "puppet", false).await;
+    harness.send(&first, "one").unwrap();
+    until(&mut first_events, |body| matches!(body, Body::Prompted { .. })).await;
+    puppet.say(0, Body::TurnStarted);
+    harness.send(&second, "two").unwrap();
+    until(&mut second_events, |body| *body == Body::Waiting).await;
+    // The first turn ends, which grants the second its slot, and the second is closed before it runs.
+    puppet.say(0, Body::TurnEnded { how: TurnEnd::Done });
+    harness.close(&second).unwrap();
+    until(&mut second_events, |body| *body == Body::Closed).await;
+    assert_eq!(puppet.prompts(), ["one"], "the granted prompt never reached the agent");
+}
+
+#[tokio::test]
+async fn stop_a_turn_open_at_close_gets_exactly_one_end_before_closed() {
+    let (_tmp, dir) = data_dir();
+    // The agent goes at once, with its turn open.
+    let puppet = Puppet::default();
+    let harness = on_puppet(&dir, &puppet, 4);
+    let (id, mut events) = open_on(&harness, "puppet", false).await;
+    harness.send(&id, "one").unwrap();
+    puppet.say(0, Body::TurnStarted);
+    until(&mut events, |body| *body == Body::TurnStarted).await;
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&rest), ["failed", "closed"], "the open turn ends once");
+    assert!(matches!(&rest[0].body, Body::Failed { kind: FailKind::AgentStopped, .. }));
+
+    // The agent goes only when killed, and ends its turn as it does: the kill diagnostic already ended it.
+    let (_tmp, dir) = data_dir();
+    let puppet = Puppet { kill_ends: Some(vec![Body::TurnEnded { how: TurnEnd::Done }]), stop_ms: Some(100), ..Puppet::default() };
+    let harness = on_puppet(&dir, &puppet, 4);
+    let (id, mut events) = open_on(&harness, "puppet", false).await;
+    harness.send(&id, "one").unwrap();
+    puppet.say(0, Body::TurnStarted);
+    until(&mut events, |body| *body == Body::TurnStarted).await;
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&rest), ["failed", "closed"], "one end, not the diagnostic and the agent's own: {rest:?}");
+}
+
+#[tokio::test]
+async fn stop_a_prompt_the_driver_does_not_take_fails_the_session_where_the_store_can_say_so() {
+    let (_tmp, dir) = data_dir();
+    // A driver that stops reading commands at once and closes its output a moment later.
+    struct Deaf;
+    impl Driver for Deaf {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+            let (commands, commands_rx) = mpsc::unbounded_channel::<Command>();
+            drop(commands_rx);
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "deaf".into(), resumed: false }).unwrap();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                drop(output);
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("deaf".into(), Arc::new(Deaf))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "deaf", false).await;
+    harness.send(&id, "one").unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&rest), ["started", "prompted", "failed", "closed"]);
+    assert!(rest.iter().all(|event| event.seq > 0), "every event is recorded: {rest:?}");
+    let stored = types(&harness.events(&id, 0).unwrap());
+    assert_eq!(stored, ["started", "prompted", "failed", "closed"]);
+}
+
+#[tokio::test]
+async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and_goes() {
+    let (_tmp, dir) = data_dir();
+    let heard = Arc::new(Mutex::new(None));
+    // On Stop it calls the session's tools endpoint and goes only once the call returns.
+    struct Caller(Arc<Mutex<Option<std::result::Result<harness::tools::Reply, String>>>>);
+    impl Driver for Caller {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities { stop_takes_up_to_ms: Some(10_000), ..Capabilities::default() }
+        }
+        fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "caller".into(), resumed: false }).unwrap();
+            let heard = self.0.clone();
+            tokio::spawn(async move {
+                let _output = output;
+                while let Some(command) = commands_rx.recv().await {
+                    if command == Command::Stop {
+                        let reply = launch.tools.call(launch.tools_token.expose(), "ask", json!({})).await;
+                        *heard.lock().unwrap() = Some(reply);
+                        return;
+                    }
+                }
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("caller".into(), Arc::new(Caller(heard.clone())))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "caller", false).await;
+    let stopped = Instant::now();
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert!(stopped.elapsed() < Duration::from_secs(5), "the agent was not held until the grace ran out");
+    assert_eq!(types(&rest), ["started", "closed"]);
+    assert_eq!(heard.lock().unwrap().clone().map(|reply| reply.map(|_| ())), Some(Err("the session has ended".into())));
+}
+
+#[tokio::test]
+async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept() {
+    let (_tmp, dir) = data_dir();
+    let secret = example("GitHub token");
+    struct Leaky(String);
+    impl Driver for Leaky {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: format!("session-{}", self.0), resumed: false }).unwrap();
+            tokio::spawn(async move {
+                let _output = output;
+                while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("leaky".into(), Arc::new(Leaky(secret.clone())))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "leaky", false).await;
+    let first = until(&mut events, |body| matches!(body, Body::Failed { .. })).await;
+    assert_eq!(types(&first), ["started", "failed"]);
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
+    assert!(matches!(harness.resume(&id).await, Err(Error::Driver(_))), "a session with no kept id cannot be resumed");
+}
+
+
+/// Takes the store's lock again and again on another thread, so a step that needs it waits, as under load. It
+/// pauses between reads, or an unfair lock would starve the sessions.
+fn hammer(harness: &Harness, id: &str, pause: Duration) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (harness, id, done) = (harness.clone(), id.to_owned(), stop.clone());
+    let thread = std::thread::spawn(move || {
+        while !done.load(Ordering::Relaxed) {
+            let _ = harness.events(&id, 0);
+            std::thread::sleep(pause);
+        }
+    });
+    (stop, thread)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn race_clean_up_and_resume_of_one_session_are_never_both_taken() {
+    let (_tmp, dir) = data_dir();
+    let puppet = Puppet::default();
+    let harness = on_puppet(&dir, &puppet, 4);
+    let (first, _) = open_on(&harness, "puppet", false).await;
+    let (stop, thread) = hammer(&harness, &first, Duration::from_micros(300));
+    let mut both = 0;
+    for _ in 0..300 {
+        let (id, mut events) = open_on(&harness, "puppet", false).await;
+        harness.close(&id).unwrap();
+        until(&mut events, |body| *body == Body::Closed).await;
+        let (a, b, id_a, id_b) = (harness.clone(), harness.clone(), id.clone(), id.clone());
+        let cleaning = tokio::spawn(async move { a.clean_up(&id_a).is_ok() });
+        let resuming = tokio::spawn(async move { b.resume(&id_b).await.ok() });
+        let (cleaned, resumed) = (cleaning.await.unwrap(), resuming.await.unwrap());
+        if let Some(mut events) = resumed {
+            both += usize::from(cleaned);
+            harness.close(&id).unwrap();
+            until(&mut events, |body| *body == Body::Closed).await;
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    thread.join().unwrap();
+    assert_eq!(both, 0, "a resume started from a session that clean-up took, {both} times in 300");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn race_a_slot_given_back_while_a_prompt_starts_to_wait_reaches_that_prompt() {
+    let (_tmp, dir) = data_dir();
+    let script = "{\"prompt\": null}\n{\"end\": \"done\"}\n".repeat(400);
+    let mock = mock(&script);
+    let harness = harness(&dir, &mock, 1);
+    let (a, mut a_events) = open(&harness, false).await;
+    let (b, mut b_events) = open(&harness, false).await;
+    let (stop, thread) = hammer(&harness, &a, Duration::from_micros(300));
+    for _ in 0..300 {
+        harness.send(&a, "a").unwrap();
+        harness.send(&b, "b").unwrap();
+        for events in [&mut a_events, &mut b_events] {
+            tokio::time::timeout(Duration::from_secs(5), until(events, |body| matches!(body, Body::TurnEnded { .. })))
+                .await
+                .expect("a prompt waited with a slot free");
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    thread.join().unwrap();
+}

@@ -108,23 +108,23 @@ impl Harness {
             store.sweep(now_ms())?;
             store.create_session(&id, &spec.provider, spec.locked, &spec.cwd, spec.model.as_deref())?;
         }
-        let events = self.start(&id, driver, spec.cwd, spec.locked, spec.model, None)?;
+        let plan = Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None };
+        let events = self.start(&id, |_| Ok(plan))?;
         Ok((id, events))
     }
 
     /// Starts a session again by its provider's session id, with a new tools token. A running or cleaned-up session
     /// is refused.
     pub async fn resume(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
-        if self.inner.live().contains_key(id) {
-            return Err(Error::Running(id.to_owned()));
-        }
-        let row = self.inner.store().session(id)?;
-        if row.cleaned {
-            return Err(Error::CleanedUp(id.to_owned()));
-        }
-        let provider_session =
-            row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} never started at its provider")))?;
-        self.start(id, self.driver(&row.provider)?, row.cwd, row.locked, row.model, Some(provider_session))
+        self.start(id, |store| {
+            let row = store.session(id)?;
+            if row.cleaned {
+                return Err(Error::CleanedUp(id.to_owned()));
+            }
+            let provider_session =
+                row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} never started at its provider")))?;
+            Ok(Plan { driver: self.driver(&row.provider)?, cwd: row.cwd, locked: row.locked, model: row.model, resume: Some(provider_session) })
+        })
     }
 
     /// Sends a prompt. One sent while a turn runs waits for that turn to end.
@@ -168,7 +168,9 @@ impl Harness {
 
     /// Drops a closed session's payload from the store. A session that still runs is refused: close it first.
     pub fn clean_up(&self, id: &str) -> Result<()> {
-        if self.inner.live().contains_key(id) {
+        // Under the lock a start takes the session by, so a resume cannot start from a row being cleaned up.
+        let live = self.inner.live();
+        if live.contains_key(id) {
             return Err(Error::Running(id.to_owned()));
         }
         self.inner.store().clean_up(id)
@@ -206,15 +208,9 @@ impl Harness {
     }
 
     /// Takes the session's id before the driver opens, so one session never runs two agents; a failed open frees it.
-    fn start(
-        &self,
-        id: &str,
-        driver: Arc<dyn Driver>,
-        cwd: PathBuf,
-        locked: bool,
-        model: Option<String>,
-        resume: Option<String>,
-    ) -> Result<broadcast::Receiver<Event>> {
+    /// `plan` reads the session's row under the same lock that clean-up and a task's close take, so a start never
+    /// begins from a row being cleaned up, or before the last start's `closed`.
+    fn start(&self, id: &str, plan: impl FnOnce(&Store) -> Result<Plan>) -> Result<broadcast::Receiver<Event>> {
         let token = Secret::random();
         let secrets = vec![token.expose().to_owned()];
         let (events, receiver) = broadcast::channel(1024);
@@ -223,14 +219,16 @@ impl Harness {
         let start = self.inner.starts.fetch_add(1, Ordering::Relaxed);
         let open = Arc::new(Mutex::new(HashMap::new()));
         let stopping = Arc::new(AtomicBool::new(false));
-        {
+        let Plan { driver, cwd, locked, model, resume } = {
             let mut live = self.inner.live();
             if live.contains_key(id) {
                 return Err(Error::Running(id.to_owned()));
             }
+            let plan = plan(&self.inner.store())?;
             let entry = Live { requests, events: events.clone(), start, open: open.clone(), stopping: stopping.clone() };
             live.insert(id.to_owned(), entry);
-        }
+            plan
+        };
         // Freed again if the driver fails to open, or panics.
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = Arc::new(Endpoint::new(token.expose(), calls));
@@ -253,6 +251,15 @@ impl Harness {
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         Ok(receiver)
     }
+}
+
+/// What a start opens.
+struct Plan {
+    driver: Arc<dyn Driver>,
+    cwd: PathBuf,
+    locked: bool,
+    model: Option<String>,
+    resume: Option<String>,
 }
 
 /// A session's live entry from the moment it is taken until the driver has opened.
@@ -312,22 +319,22 @@ impl Turns {
         self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn try_take(&self) -> bool {
+    /// Takes a slot if one is free and no one waits, or else joins the queue, in one step: a slot given back between
+    /// the two would otherwise go to no one.
+    fn take_or_wait(&self) -> Option<oneshot::Receiver<()>> {
         let mut state = self.state();
-        let free = state.running < self.limit && state.waiting.is_empty();
-        state.running += usize::from(free);
-        free
+        if state.running < self.limit && state.waiting.is_empty() {
+            state.running += 1;
+            return None;
+        }
+        let (grant, granted) = oneshot::channel();
+        state.waiting.push_back(grant);
+        Some(granted)
     }
 
     /// Counts a turn that has already begun, past the limit if need be.
     fn force(&self) {
         self.state().running += 1;
-    }
-
-    fn wait(&self) -> oneshot::Receiver<()> {
-        let (grant, granted) = oneshot::channel();
-        self.state().waiting.push_back(grant);
-        granted
     }
 
     fn give(&self) {
@@ -356,6 +363,13 @@ enum Turn {
     /// A prompt was sent and the driver has not started its turn yet.
     Prompted,
     Running,
+}
+
+/// The turn of an agent that is going after a stop.
+struct Going {
+    turn: Turn,
+    /// A stop diagnostic ended the turn, so the agent's own end of it is passed over.
+    ended_by_harness: bool,
 }
 
 /// A slot of the turn limit, given back when dropped.
@@ -399,13 +413,21 @@ impl Task {
             if self.broken.load(Ordering::Relaxed) {
                 break true;
             }
-            if turn == Turn::Idle && waiting.is_none() && !queued.is_empty() {
-                if turns.try_take() {
-                    slot = Some(Slot(turns.clone()));
-                    turn = self.prompt(&link, &mut queued);
-                } else {
-                    self.emit(Body::Waiting);
-                    waiting = Some(turns.wait());
+            // Once Stop is taken, no prompt reaches the agent.
+            let stopping = self.stopping.load(Ordering::Relaxed);
+            if turn == Turn::Idle && waiting.is_none() && !queued.is_empty() && !stopping {
+                match turns.take_or_wait() {
+                    None => {
+                        slot = Some(Slot(turns.clone()));
+                        match self.prompt(&link, &mut queued) {
+                            Some(next) => turn = next,
+                            None => break true,
+                        }
+                    }
+                    Some(granted) => {
+                        self.emit(Body::Waiting);
+                        waiting = Some(granted);
+                    }
                 }
             }
             if self.broken.load(Ordering::Relaxed) {
@@ -448,12 +470,18 @@ impl Task {
                             slot = None;
                             self.open_requests().clear();
                         }
-                        if let Body::Started { provider_session, .. } = &body
-                            && let Err(e) = self.inner.store().set_provider_session(&self.id, provider_session)
-                        {
-                            eprintln!("harness: session {}: {e}", self.id);
+                        // The row keeps the id as it is, for a resume, so an id that holds a secret is not kept.
+                        let mut secret_id = false;
+                        if let Body::Started { provider_session, .. } = &body {
+                            secret_id = redact::text(provider_session, &self.secrets) != *provider_session;
+                            if !secret_id && let Err(e) = self.inner.store().set_provider_session(&self.id, provider_session) {
+                                eprintln!("harness: session {}: {e}", self.id);
+                            }
                         }
                         self.emit(body);
+                        if secret_id {
+                            self.fail(FailKind::Driver, "the provider's session id looks like a secret, so it is not kept and the session cannot be resumed");
+                        }
                     }
                     None => {
                         if turn != Turn::Idle {
@@ -467,7 +495,12 @@ impl Task {
                     waiting = None;
                     if granted.is_ok() {
                         slot = Some(Slot(turns.clone()));
-                        turn = self.prompt(&link, &mut queued);
+                        if !self.stopping.load(Ordering::Relaxed) {
+                            match self.prompt(&link, &mut queued) {
+                                Some(next) => turn = next,
+                                None => break 'run true,
+                            }
+                        }
                     }
                 }
                 call = calls.recv(), if calls_open => match call {
@@ -529,6 +562,11 @@ impl Task {
         };
         self.stopping.store(true, Ordering::Relaxed);
         self.open_requests().clear();
+        // No new call reaches the session now: an agent that waits for one while it stops hears that it ended.
+        calls.close();
+        while let Ok(ToolCall { reply, .. }) = calls.try_recv() {
+            let _ = reply.send(Err("the session has ended".to_owned()));
+        }
         for (id, reply) in held_calls {
             let reason = "the session has ended".to_owned();
             self.emit(Body::ToolResult { id, output: json!(reason), error: true });
@@ -538,40 +576,69 @@ impl Task {
             turns.give_up(granted);
         }
         if stopped {
-            self.wait_until_gone(&mut link, caps).await;
+            self.wait_until_gone(&mut link, caps, turn).await;
         }
         drop(slot);
-        self.inner.forget(&self.id, self.start);
+        // `closed` is recorded under the lock a start takes the session by, so a resume's `started` comes after it.
+        let mut live = self.inner.live();
+        #[cfg(test)]
+        tests::before_closed();
         self.emit(Body::Closed);
+        if live.get(&self.id).is_some_and(|entry| entry.start == self.start) {
+            live.remove(&self.id);
+        }
     }
 
     /// Stops the agent and waits for it to go, keeping what it says. Past the driver's grace it is told to kill; past
     /// a second grace the session says it is stuck. It is never freed on a timer: until the agent's output closes,
     /// its slot and its id stay taken, and resume and clean-up are refused.
-    async fn wait_until_gone(&self, link: &mut Link, caps: Capabilities) {
+    /// A turn still open gets exactly one end: the agent's own, the first stop diagnostic, or, if its output closes
+    /// with the turn open, a `failed`.
+    async fn wait_until_gone(&self, link: &mut Link, caps: Capabilities, turn: Turn) {
+        let mut going = Going { turn, ended_by_harness: false };
         let _ = link.commands.send(Command::Stop);
         let grace = caps.stop_takes_up_to_ms.map_or(DEFAULT_STOP_GRACE, Duration::from_millis);
-        if self.drain(link, Some(grace)).await {
-            return;
+        let mut gone = self.drain(link, Some(grace), &mut going).await;
+        if !gone {
+            let _ = link.commands.send(Command::Kill);
+            let reason = format!("the agent was still running {} ms after the stop, so the driver was told to kill it", grace.as_millis());
+            self.diagnose(&mut going, FailKind::AgentStopped, &reason);
+            gone = self.drain(link, Some(grace), &mut going).await;
         }
-        let _ = link.commands.send(Command::Kill);
-        let reason = format!("the agent was still running {} ms after the stop, so the driver was told to kill it", grace.as_millis());
-        self.fail(FailKind::AgentStopped, &reason);
-        if self.drain(link, Some(grace)).await {
-            return;
+        if !gone {
+            self.diagnose(&mut going, FailKind::Stuck, "the agent has not gone though it was killed; the session stays running until it does");
+            self.drain(link, None, &mut going).await;
         }
-        self.fail(FailKind::Stuck, "the agent has not gone though it was killed; the session stays running until it does");
-        self.drain(link, None).await;
+        if going.turn != Turn::Idle {
+            self.fail(FailKind::AgentStopped, "the agent stopped in the middle of a turn");
+        }
+    }
+
+    /// Says what went wrong while the agent goes; it ends a turn still open, and only that once.
+    fn diagnose(&self, going: &mut Going, kind: FailKind, reason: &str) {
+        self.fail(kind, reason);
+        if going.turn != Turn::Idle {
+            *going = Going { turn: Turn::Idle, ended_by_harness: true };
+        }
     }
 
     /// Keeps what the going agent says, but its requests, until its output closes or `limit` passes. True when it
-    /// closed.
-    async fn drain(&self, link: &mut Link, limit: Option<Duration>) -> bool {
+    /// closed. The agent's own end of a turn a diagnostic already ended is passed over.
+    async fn drain(&self, link: &mut Link, limit: Option<Duration>, going: &mut Going) -> bool {
         let gone = async {
             while let Some(body) = link.output.recv().await {
-                if !matches!(body, Body::Permission { .. }) {
-                    self.emit(body);
+                match &body {
+                    Body::Permission { .. } => continue,
+                    Body::TurnStarted => *going = Going { turn: Turn::Running, ended_by_harness: false },
+                    body if body.ends_turn() => {
+                        if going.turn == Turn::Idle && going.ended_by_harness {
+                            continue;
+                        }
+                        going.turn = Turn::Idle;
+                    }
+                    _ => {}
                 }
+                self.emit(body);
             }
         };
         match limit {
@@ -587,15 +654,19 @@ impl Task {
         self.open.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Sends the next queued prompt once it is recorded; the turn is then prompted until the driver starts it.
-    fn prompt(&self, link: &Link, queued: &mut VecDeque<String>) -> Turn {
+    /// Sends the next queued prompt once it is recorded; the turn is then prompted until the driver starts it. A prompt
+    /// the store would not take is not sent, and the session stops on its broken store. None when the driver no longer
+    /// takes commands: the session says so and stops.
+    fn prompt(&self, link: &Link, queued: &mut VecDeque<String>) -> Option<Turn> {
         let text = queued.pop_front().expect("a prompt is queued");
-        let sent = self.emit(Body::Prompted { text: text.clone() }) && link.commands.send(Command::Prompt(text)).is_ok();
-        if !sent {
-            self.broken.store(true, Ordering::Relaxed);
-            return Turn::Idle;
+        if !self.emit(Body::Prompted { text: text.clone() }) {
+            return Some(Turn::Idle);
         }
-        Turn::Prompted
+        if link.commands.send(Command::Prompt(text)).is_err() {
+            self.fail(FailKind::AgentStopped, "the agent did not take the prompt: its driver no longer reads commands");
+            return None;
+        }
+        Some(Turn::Prompted)
     }
 
     fn fail(&self, kind: FailKind, reason: &str) {
@@ -634,3 +705,61 @@ impl Task {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::{Mock, Script};
+
+    type Hook = Box<dyn FnOnce() + Send>;
+
+    /// Runs once, just before a task records its `closed`.
+    static BEFORE_CLOSED: Mutex<Option<Hook>> = Mutex::new(None);
+
+    pub(super) fn before_closed() {
+        let hook = BEFORE_CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    fn starts_and_closes(harness: &Harness, id: &str) -> Vec<String> {
+        let events = harness.events(id, 0).unwrap_or_default();
+        events.into_iter().map(|event| event.body.type_name()).filter(|kind| kind == "started" || kind == "closed").collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn race_a_resume_tried_just_before_closed_is_recorded_after_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let spec = Open { provider: "mock".into(), locked: false, cwd: "/nowhere".into(), model: None };
+        let (id, mut events) = harness.open(spec).await.unwrap();
+        let (resuming, resumed_id) = (harness.clone(), id.clone());
+        *BEFORE_CLOSED.lock().unwrap() = Some(Box::new(move || {
+            // A client resumes from another thread at this moment, and its start records what it can.
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                runtime.block_on(async {
+                    if resuming.resume(&resumed_id).await.is_ok() {
+                        while starts_and_closes(&resuming, &resumed_id).iter().filter(|kind| *kind == "started").count() < 2 {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                    }
+                });
+            });
+            std::thread::sleep(Duration::from_millis(300));
+        }));
+        harness.close(&id).unwrap();
+        while events.recv().await.is_ok_and(|event| event.body != Body::Closed) {}
+        for _ in 0..200 {
+            if starts_and_closes(&harness, &id).len() == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(starts_and_closes(&harness, &id), ["started", "closed", "started"]);
+    }
+}
+

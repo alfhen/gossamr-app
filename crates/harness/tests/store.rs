@@ -184,3 +184,34 @@ fn store_a_link_to_nothing_is_named_and_a_file_others_could_read_is_made_private
     drop(Store::open(&dir).unwrap());
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
 }
+
+#[test]
+fn retention_a_withheld_event_keeps_its_fields_with_their_json_types_at_clean_up_and_in_the_sweep() {
+    use harness::event::{Decision, FailKind, PermissionKind, TurnEnd};
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let bodies = [
+        Body::Started { provider_session: "p1".into(), resumed: true },
+        Body::Started { provider_session: "p2".into(), resumed: false },
+        Body::ToolResult { id: "t1".into(), output: serde_json::json!("private"), error: true },
+        Body::ToolResult { id: "t2".into(), output: serde_json::json!("private"), error: false },
+        Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: serde_json::json!({}) },
+        Body::Answered { id: "p1".into(), decision: Decision::Allow, message: None },
+        Body::TurnEnded { how: TurnEnd::Done },
+        Body::Failed { kind: FailKind::Provider, reason: "private".into() },
+    ];
+    let old = now_ms() - KEEP_MS - 60_000;
+    for (session, ms) in [("cleaned", now_ms()), ("aged", old)] {
+        store.create_session(session, "mock", false, Path::new("/a"), None).unwrap();
+        for body in &bodies {
+            store.append(session, body, ms).unwrap();
+        }
+    }
+    store.clean_up("cleaned").unwrap();
+    assert_eq!(store.sweep(now_ms()).unwrap(), bodies.len());
+    let expected: Vec<Body> = bodies.iter().map(Body::withheld).collect();
+    for session in ["cleaned", "aged"] {
+        let got: Vec<Body> = store.events(session, 0).unwrap().into_iter().map(|event| event.body).collect();
+        assert_eq!(got, expected, "{session}: booleans stay booleans and strings stay strings");
+    }
+}

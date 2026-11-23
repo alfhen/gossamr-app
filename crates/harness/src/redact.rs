@@ -294,14 +294,21 @@ pub fn each_string(value: &mut Value, f: &mut impl FnMut(&mut String)) {
         Value::String(s) => f(s),
         Value::Array(items) => items.iter_mut().for_each(|item| each_string(item, f)),
         Value::Object(fields) => {
-            *fields = std::mem::take(fields)
-                .into_iter()
-                .map(|(mut key, mut field)| {
-                    f(&mut key);
-                    each_string(&mut field, f);
-                    (key, field)
-                })
-                .collect();
+            let mut masked = serde_json::Map::new();
+            for (mut key, mut field) in std::mem::take(fields) {
+                f(&mut key);
+                each_string(&mut field, f);
+                // Two keys masked alike both stay: the later one is numbered.
+                let mut free = key.clone();
+                for n in 2.. {
+                    if !masked.contains_key(&free) {
+                        break;
+                    }
+                    free = format!("{key} {n}");
+                }
+                masked.insert(free, field);
+            }
+            *fields = masked;
         }
         _ => {}
     }
@@ -353,5 +360,19 @@ mod tests {
         assert_eq!(text(path, &[]), path);
         let key = (SHAPES[1].example)();
         assert_eq!(text(&format!("key={key}, {key}"), &[]), format!("key={MASK}, {MASK}"), "after punctuation or a space it counts");
+    }
+
+    #[test]
+    fn redact_keys_that_mask_alike_keep_every_entry() {
+        let (one, two) = ((SHAPES[2].example)(), format!("ghp_{}", &(SHAPES[2].example)()[4..]));
+        let input = serde_json::json!({ one.clone(): 1, two.clone(): 2, MASK: 3, "plain": 4 });
+        let Body::ToolCall { input, .. } = super::body(Body::ToolCall { id: "t1".into(), name: "x".into(), input }, &[]) else { unreachable!() };
+        let fields = input.as_object().unwrap();
+        assert_eq!(fields.len(), 4, "{fields:?}");
+        let mut values: Vec<i64> = fields.values().map(|value| value.as_i64().unwrap()).collect();
+        values.sort();
+        assert_eq!(values, [1, 2, 3, 4]);
+        assert_eq!(fields["plain"], 4);
+        assert!(fields.keys().all(|key| !key.contains(&one[4..])), "{fields:?}");
     }
 }
