@@ -1,8 +1,9 @@
 //! Client tokens. A token is 32 random bytes the client keeps; the harness keeps only its stored key, a SHA-256 of
-//! it. A client proves its token by answering a challenge, so the token never crosses the socket: the answer is the
-//! token masked with an HMAC of the challenge under the stored key. The harness unmasks it with each stored key and
-//! checks the hash. A program posing as the harness, without the stored key, learns nothing from the answer, and the
-//! stored key alone cannot answer.
+//! it. A client proves its token by answering the harness's hello, which holds a fresh challenge, so the token never
+//! crosses the socket. This is SCRAM's client proof (RFC 5802, section 3) without the salt, which only a guessable
+//! password needs: the answer is the token masked with an HMAC of the hello under the stored key. The harness unmasks
+//! it with each stored key and checks the hash. A program posing as the harness, without the stored key, learns
+//! nothing from the answer, and the stored key alone cannot answer.
 
 use std::fmt;
 
@@ -37,9 +38,9 @@ impl Token {
         Sha256::digest(self.0).into()
     }
 
-    /// The answer to `challenge`.
-    pub fn answer(&self, challenge: &[u8; 32]) -> [u8; 32] {
-        xor(&self.0, &signature(&self.stored_key(), challenge))
+    /// The answer to `hello`, the harness's first message as it was sent.
+    pub fn answer(&self, hello: &[u8]) -> [u8; 32] {
+        xor(&self.0, &signature(&self.stored_key(), hello))
     }
 }
 
@@ -50,18 +51,18 @@ impl fmt::Debug for Token {
 }
 
 /// True when `answer` proves a token whose stored key is in `stored`. Every key is tried, each in constant time.
-pub fn verify(stored: &[[u8; 32]], challenge: &[u8; 32], answer: &[u8; 32]) -> bool {
+pub fn verify(stored: &[[u8; 32]], hello: &[u8], answer: &[u8; 32]) -> bool {
     stored.iter().fold(false, |found, key| {
-        let token: [u8; 32] = xor(answer, &signature(key, challenge));
+        let token: [u8; 32] = xor(answer, &signature(key, hello));
         let hash: [u8; 32] = Sha256::digest(token).into();
         found | bool::from(hash.ct_eq(key))
     })
 }
 
-fn signature(stored_key: &[u8; 32], challenge: &[u8; 32]) -> [u8; 32] {
+fn signature(stored_key: &[u8; 32], hello: &[u8]) -> [u8; 32] {
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(stored_key).expect("HMAC takes a key of any length");
     mac.update(DOMAIN);
-    mac.update(challenge);
+    mac.update(hello);
     mac.finalize().into_bytes().into()
 }
 
@@ -92,11 +93,12 @@ mod tests {
     #[test]
     fn auth_an_answer_proves_its_own_token_and_no_other() {
         let (token, other) = (Token::random(), Token::random());
-        let challenge = Token::random().0;
-        let answer = token.answer(&challenge);
-        assert!(verify(&[other.stored_key(), token.stored_key()], &challenge, &answer), "its own token");
-        assert!(!verify(&[other.stored_key()], &challenge, &answer), "another token");
-        assert!(!verify(&[token.stored_key()], &Token::random().0, &answer), "another challenge");
+        let hello = br#"{"protocol":1,"build":"b","challenge":"00"}"#;
+        let answer = token.answer(hello);
+        assert!(verify(&[other.stored_key(), token.stored_key()], hello, &answer), "its own token");
+        assert!(!verify(&[other.stored_key()], hello, &answer), "another token");
+        assert!(!verify(&[token.stored_key()], br#"{"protocol":1,"build":"b","challenge":"01"}"#, &answer), "another challenge");
+        assert!(!verify(&[token.stored_key()], br#"{"protocol":1,"build":"c","challenge":"00"}"#, &answer), "another build");
         assert!(answer != token.0 && encode(&answer) != token.hex(), "the answer is not the token");
     }
 

@@ -87,13 +87,14 @@ async fn events_until(client: &mut Client, last: impl Fn(&Body) -> bool) -> Vec<
     }
 }
 
-/// A raw WebSocket on the harness's socket, before any proof, and the challenge it was given.
-async fn raw(served: &Served) -> (tokio_tungstenite::WebSocketStream<UnixStream>, [u8; 32]) {
+/// A raw WebSocket on the harness's socket, before any proof, and the hello it was given.
+async fn raw(served: &Served) -> (tokio_tungstenite::WebSocketStream<UnixStream>, String) {
     let stream = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
     let (mut ws, _) = tokio_tungstenite::client_async("ws://harness/", stream).await.unwrap();
-    let Some(Ok(Message::Text(hello))) = ws.next().await else { panic!("no hello") };
-    let hello: Hello = serde_json::from_str(hello.as_str()).unwrap();
-    (ws, decode(&hello.challenge).unwrap())
+    let Some(Ok(Message::Text(hello_text))) = ws.next().await else { panic!("no hello") };
+    let hello: Hello = serde_json::from_str(hello_text.as_str()).unwrap();
+    assert!(decode(&hello.challenge).is_some(), "a challenge is 32 bytes in hex");
+    (ws, hello_text.as_str().to_owned())
 }
 
 /// What the harness says after a first message, until it closes the connection.
@@ -129,15 +130,15 @@ async fn auth_no_token_a_wrong_token_and_a_sessions_tools_token_are_refused() {
     assert!(refused(&after_first(ws, open_call).await), "a call with no proof");
     let (ws, _) = raw(&served).await;
     assert!(refused(&after_first(ws, json!({ "proof": "" })).await), "an empty proof");
-    let (ws, challenge) = raw(&served).await;
-    let wrong = json!(Proof { proof: encode(&Token::random().answer(&challenge)) });
+    let (ws, hello) = raw(&served).await;
+    let wrong = json!(Proof { proof: encode(&Token::random().answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, wrong).await), "a wrong token");
-    let (ws, challenge) = raw(&served).await;
-    let of_tools = json!(Proof { proof: encode(&tools.answer(&challenge)) });
+    let (ws, hello) = raw(&served).await;
+    let of_tools = json!(Proof { proof: encode(&tools.answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, of_tools).await), "the session's tools token");
     let (ws, _) = raw(&served).await;
-    let replayed = json!(Proof { proof: encode(&served.token.answer(&challenge)) });
-    assert!(refused(&after_first(ws, replayed).await), "a right answer to another connection's challenge");
+    let replayed = json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) });
+    assert!(refused(&after_first(ws, replayed).await), "a right answer to another connection's hello");
 
     match Client::connect(&served.dir, &tools).await {
         Err(Error::Refused(_)) => {}
@@ -155,8 +156,8 @@ async fn auth_token_new_without_a_valid_token_is_refused_and_adds_none() {
     let new = Token::random();
     let call = json!({ "id": 1, "op": "token_new", "stored_key": encode(&new.stored_key()) });
     assert!(refused(&after_first(ws, call).await), "`token new` as the first message");
-    let (ws, challenge) = raw(&served).await;
-    let wrong = json!(Proof { proof: encode(&Token::random().answer(&challenge)) });
+    let (ws, hello) = raw(&served).await;
+    let wrong = json!(Proof { proof: encode(&Token::random().answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, wrong).await), "`token new` after a wrong proof");
     assert_eq!(served.harness.client_tokens().unwrap(), [served.token.stored_key()], "only the first token");
     assert!(Client::connect(&served.dir, &new).await.is_err(), "the new token opens nothing");
@@ -170,12 +171,12 @@ async fn auth_token_new_without_a_valid_token_is_refused_and_adds_none() {
 async fn auth_the_token_never_crosses_the_socket_a_fake_server_sees_only_the_answer() {
     let tmp = tempfile::tempdir().unwrap();
     let listener = UnixListener::bind(tmp.path().join(SOCKET)).unwrap();
-    let challenge = Token::random().stored_key();
+    let hello = serde_json::to_string(&Hello { protocol: PROTOCOL, build: "fake".into(), challenge: encode(&Token::random().stored_key()) }).unwrap();
+    let sent = hello.clone();
     let fake = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-        let hello = Hello { protocol: PROTOCOL, build: "fake".into(), challenge: encode(&challenge) };
-        ws.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+        ws.send(Message::text(sent)).await.unwrap();
         let mut seen = vec![];
         if let Some(Ok(Message::Text(text))) = ws.next().await {
             seen.push(text.as_str().to_owned());
@@ -191,7 +192,7 @@ async fn auth_the_token_never_crosses_the_socket_a_fake_server_sees_only_the_ans
     let token = Token::random();
     assert!(Client::connect(tmp.path(), &token).await.is_err(), "a server that refuses is refused");
     let seen = fake.await.unwrap();
-    let answer = json!(Proof { proof: encode(&token.answer(&challenge)) }).to_string();
+    let answer = json!(Proof { proof: encode(&token.answer(hello.as_bytes())) }).to_string();
     assert!(seen == [answer], "the fake server got the challenge answer and nothing else");
     assert!(!seen.iter().any(|text| text.contains(&token.hex()) || text.contains(&encode(&token.stored_key()))), "no token or stored key");
 }

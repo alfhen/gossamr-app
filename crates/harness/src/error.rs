@@ -21,6 +21,8 @@ pub enum Error {
     NotOpen(String),
     /// The session was cleaned up, so it cannot be resumed.
     CleanedUp(String),
+    /// A Unix socket path this platform cannot take.
+    SocketPathTooLong { path: PathBuf, len: usize, max: usize },
     /// The client's token was not proven, or the request is not one a client may make.
     Refused(String),
     /// The other side broke the protocol, or the connection failed.
@@ -48,6 +50,9 @@ impl fmt::Display for Error {
             Error::NotRunning(id) => write!(f, "session {id} is not running"),
             Error::NotOpen(id) => write!(f, "no open permission request {id}: it was answered, its turn ended, or it never was"),
             Error::CleanedUp(id) => write!(f, "session {id} was cleaned up"),
+            Error::SocketPathTooLong { path, len, max } => {
+                write!(f, "the socket path {} is {len} bytes, and this platform takes at most {max}: use a shorter data folder", path.display())
+            }
             Error::Refused(why) => write!(f, "refused: {why}"),
             Error::Protocol(why) => write!(f, "the connection failed: {why}"),
             Error::Driver(message) => write!(f, "the driver failed: {message}"),

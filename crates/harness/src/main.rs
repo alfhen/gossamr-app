@@ -12,12 +12,14 @@ fn main() -> ExitCode {
         }
         Request::Run(args) => block_on(harness::run::run(args)),
         Request::Serve { data, mock_script } => {
-            // SAFETY: no other thread runs yet. The harness's agents inherit its environment, and a client token in it
-            // would open the client API to them.
-            unsafe { std::env::remove_var(harness::cli::TOKEN_VARIABLE) };
+            if std::env::var_os(harness::cli::TOKEN_VARIABLE).is_some() {
+                let variable = harness::cli::TOKEN_VARIABLE;
+                eprintln!("harness: {variable} is set, so serve does not start: any program of yours, an agent too, can read the environment a process started with. Unset it and give the first token on stdin.");
+                return ExitCode::FAILURE;
+            }
             block_on(serve(data, mock_script))
         }
-        Request::Client { command, data } => block_on(harness::cli::execute(command, data)),
+        Request::Client { command, data, token } => block_on(harness::cli::execute(command, data, token)),
         Request::Usage => {
             eprintln!("{USAGE}");
             ExitCode::from(2)

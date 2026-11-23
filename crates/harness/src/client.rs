@@ -10,8 +10,8 @@ use tokio::net::UnixStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{WebSocketStream, client_async};
 
-use crate::api::{Call, Hello, Op, PROTOCOL, Proof, Reply, SOCKET};
-use crate::auth::{Token, decode, encode};
+use crate::api::{Call, Hello, Op, PROTOCOL, Proof, Reply, socket_path};
+use crate::auth::{Token, encode};
 use crate::error::{Error, Result};
 use crate::event::Event;
 
@@ -30,17 +30,17 @@ pub struct Client {
 }
 
 impl Client {
-    /// Connects to the harness serving the data folder `dir` and proves `token` by answering its challenge.
+    /// Connects to the harness serving the data folder `dir` and proves `token` by answering its hello.
     pub async fn connect(dir: &Path, token: &Token) -> Result<Client> {
-        let stream = UnixStream::connect(dir.join(SOCKET)).await?;
+        let stream = UnixStream::connect(socket_path(dir)?).await?;
         let (ws, _) = client_async("ws://harness/", stream).await.map_err(|e| Error::Protocol(e.to_string()))?;
         let mut client = Client { ws, next_id: 0, pushes: VecDeque::new(), hello: Hello { protocol: 0, build: String::new(), challenge: String::new() } };
-        client.hello = client.read().await?;
+        let hello = client.read_text().await?;
+        client.hello = serde_json::from_str(&hello)?;
         if client.hello.protocol != PROTOCOL {
             return Err(Error::Protocol(format!("the harness speaks protocol {}, this client {PROTOCOL}", client.hello.protocol)));
         }
-        let challenge = decode(&client.hello.challenge).ok_or_else(|| Error::Protocol("the challenge is not 32 bytes in hex".into()))?;
-        client.write(&Proof { proof: encode(&token.answer(&challenge)) }).await?;
+        client.write(&Proof { proof: encode(&token.answer(hello.as_bytes())) }).await?;
         let reply: Reply = client.read().await?;
         match reply.error {
             None => Ok(client),
@@ -87,9 +87,13 @@ impl Client {
     }
 
     async fn read<T: DeserializeOwned>(&mut self) -> Result<T> {
+        Ok(serde_json::from_str(&self.read_text().await?)?)
+    }
+
+    async fn read_text(&mut self) -> Result<String> {
         loop {
             match self.ws.next().await {
-                Some(Ok(Message::Text(text))) => return Ok(serde_json::from_str(text.as_str())?),
+                Some(Ok(Message::Text(text))) => return Ok(text.as_str().to_owned()),
                 Some(Ok(Message::Close(_))) | None => return Err(Error::Protocol(CLOSED.into())),
                 Some(Err(e)) => return Err(Error::Protocol(e.to_string())),
                 Some(Ok(_)) => {}
