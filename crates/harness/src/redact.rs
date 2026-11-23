@@ -23,15 +23,17 @@ pub const WORD_MARKER: &str = "sk-";
 /// How much of a key's body [`key_starts`] reads, so a long run is not read again from each `sk-` in it.
 const KEY_LOOK: usize = 64;
 
-/// Whether bare `sk-` at `at` starts a key. Where a word starts (at the start, or after anything but a letter or
-/// digit) it does. After a letter or digit it does when the key's body holds an upper-case letter and a digit, as the
-/// random characters of a real key almost always do and a readable word such as
-/// `task-list-rendering-in-the-sidebar-panel` does not. The key decides, not what comes before it: a list of escapes
-/// (`%3D`, `\n`, `=3D`, `ESC[32m`) cannot be complete. A later edit could break this property either way: a looser
-/// test masks readable paths, and an escape list in its place stores a key raw after any escape it leaves out.
+/// Whether bare `sk-` at `at` starts a key. Where a word starts it does: at the start, after anything but a letter or
+/// digit, or after a `%XX` escape or a `\n`, `\t` or `\r` escape. Anywhere else it does when the key's body holds an
+/// upper-case letter and a digit, as the random characters of a real key almost always do and a readable word such as
+/// `task-list-rendering-in-the-sidebar-panel` does not. The list of escapes cannot be complete (`=3D`, `\x3d`,
+/// `ESC[32m`), which is why the body decides after any other letter or digit. A later edit could break this property
+/// either way: a looser body test masks readable paths, and dropping it stores a key raw after an escape not listed.
 fn key_starts(s: &str, at: usize) -> bool {
-    if s.as_bytes()[..at].last().is_none_or(|last| !last.is_ascii_alphanumeric()) {
-        return true;
+    match s.as_bytes()[..at] {
+        [] | [.., b'%', b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f', b'0'..=b'9' | b'A'..=b'F' | b'a'..=b'f'] | [.., b'\\', b'n' | b't' | b'r'] => return true,
+        [.., last] if !last.is_ascii_alphanumeric() => return true,
+        _ => {}
     }
     let rest = &s[at + WORD_MARKER.len()..];
     let body = rest.strip_prefix("proj-").unwrap_or(rest).bytes().take(KEY_LOOK).take_while(|b| b.is_ascii_alphanumeric() || b"_-".contains(b));
@@ -379,9 +381,9 @@ mod tests {
     fn redact_masks_each_token_shape_and_the_sessions_own_secrets_and_leaves_plain_text_alone() {
         for shape in SHAPES {
             let secret = (shape.example)();
-            assert_eq!(text(&format!("x {secret} y"), &[]), format!("x {MASK} y"), "{}", shape.name);
+            assert!(text(&format!("x {secret} y"), &[]) == format!("x {MASK} y"), "{} is not masked as expected", shape.name);
         }
-        assert_eq!(text("the token is 0123abcd here", &["0123abcd".into()]), format!("the token is {MASK} here"));
+        assert!(text("the token is 0123abcd here", &["0123abcd".into()]) == format!("the token is {MASK} here"), "the session's secret");
         let plain = "Ran `ls -la` in /tmp; sk-short and ghp_ and Bearer x are not tokens. The id is toolu_01KX85.";
         assert_eq!(text(plain, &["".into()]), plain, "an empty secret masks nothing");
     }
@@ -389,11 +391,11 @@ mod tests {
     #[test]
     fn redact_a_partial_copy_of_the_sessions_token_is_masked_and_two_glued_secrets_are_masked_whole() {
         let token = "0123456789abcdef".repeat(4);
-        assert_eq!(text(&format!("a {} b", &token[10..40]), std::slice::from_ref(&token)), format!("a {MASK} b"));
+        assert!(text(&format!("a {} b", &token[10..40]), std::slice::from_ref(&token)) == format!("a {MASK} b"), "30 is a copy");
         let short = &token[10..25];
-        assert_eq!(text(&format!("a {short} b"), std::slice::from_ref(&token)), format!("a {short} b"), "15 is not a copy");
+        assert!(text(&format!("a {short} b"), std::slice::from_ref(&token)) == format!("a {short} b"), "15 is not a copy");
         let glued = format!("{}{}", (SHAPES[2].example)(), (SHAPES[6].example)());
-        assert_eq!(text(&format!("x {glued} y"), &[]), format!("x {MASK} y"));
+        assert!(text(&format!("x {glued} y"), &[]) == format!("x {MASK} y"), "{} then {} is not masked whole", SHAPES[2].name, SHAPES[6].name);
     }
 
     #[test]
@@ -402,7 +404,7 @@ mod tests {
         let input = serde_json::json!({ "args": ["-H", "x s3cr3t-value"], "n": 3, "s3cr3t-value": true });
         let masked = super::body(Body::ToolCall { id: "t1".into(), name: "curl".into(), input }, &[secret]);
         let expected = serde_json::json!({ "args": ["-H", format!("x {MASK}")], "n": 3, MASK: true });
-        assert_eq!(masked, Body::ToolCall { id: "t1".into(), name: "curl".into(), input: expected });
+        assert!(masked == Body::ToolCall { id: "t1".into(), name: "curl".into(), input: expected }, "the input is not masked as expected");
     }
 
     #[test]
@@ -413,10 +415,10 @@ mod tests {
             "Whisk-Together-The-Eggs-And-Flour-In-A-Large-Bowl-Until-Smooth",
             "git switch claude/ask-for-a-review-of-the-pull-request-before-merging-it",
         ] {
-            assert_eq!(text(path, &[]), path);
+            assert_eq!(text(path, &[]), path, "a readable path holds no secret");
         }
         let key = (SHAPES[1].example)();
-        assert_eq!(text(&format!("key={key}, {key}"), &[]), format!("key={MASK}, {MASK}"), "after punctuation or a space it counts");
+        assert!(text(&format!("key={key}, {key}"), &[]) == format!("key={MASK}, {MASK}"), "{} after punctuation or a space is not masked", SHAPES[1].name);
     }
 
     #[test]
@@ -425,37 +427,47 @@ mod tests {
         let input = serde_json::json!({ one.clone(): 1, two.clone(): 2, MASK: 3, "plain": 4 });
         let Body::ToolCall { input, .. } = super::body(Body::ToolCall { id: "t1".into(), name: "x".into(), input }, &[]) else { unreachable!() };
         let fields = input.as_object().unwrap();
-        assert_eq!(fields.len(), 4, "{fields:?}");
+        assert_eq!(fields.len(), 4, "an entry is lost");
         let mut values: Vec<i64> = fields.values().map(|value| value.as_i64().unwrap()).collect();
         values.sort();
         assert_eq!(values, [1, 2, 3, 4]);
         assert_eq!(fields["plain"], 4);
-        assert!(fields.keys().all(|key| !key.contains(&one[4..])), "{fields:?}");
+        assert!(fields.keys().all(|key| !key.contains(&one[4..])), "{} is in a key", SHAPES[2].name);
     }
 
     #[test]
     fn redact_a_long_token_run_a_key_header_with_no_footer_or_a_run_of_jwt_starts_masks_in_time_that_grows_about_linearly() {
-        let time = |text_of: &dyn Fn(usize) -> String, check: &dyn Fn(&str, String), small: usize| {
+        // Each size's best of three, so a busy machine slows a run without failing it.
+        let time = |name: &str, text_of: &dyn Fn(usize) -> String, check: &dyn Fn(&str, &str) -> bool, small: usize| {
             let took = [small, small * 10].map(|len| {
                 let s = text_of(len);
-                let started = std::time::Instant::now();
-                let masked = text(&s, &[]);
-                let took = started.elapsed();
-                check(&s, masked);
-                took
+                (0..3)
+                    .map(|_| {
+                        let started = std::time::Instant::now();
+                        let masked = text(&s, &[]);
+                        let took = started.elapsed();
+                        assert!(check(&s, &masked), "{name} is not masked as expected");
+                        took
+                    })
+                    .min()
+                    .unwrap()
             });
             // Ten times the text may take ten times as long, and much more for a slow machine, but not a hundred.
-            assert!(took[1] < took[0] * 40 + std::time::Duration::from_millis(500), "{small} in {:?}, ten times that in {:?}", took[0], took[1]);
-            assert!(took[1] < std::time::Duration::from_secs(30), "ten times {small} in {:?}", took[1]);
+            assert!(took[1] < took[0] * 40 + std::time::Duration::from_millis(500), "{name}: {small} in {:?}, ten times that in {:?}", took[0], took[1]);
+            assert!(took[1] < std::time::Duration::from_secs(30), "{name}: ten times {small} in {:?}", took[1]);
         };
-        let run = |len: usize| format!("x {} y", "sk-".repeat(len / 3));
-        time(&run, &|_, masked| assert_eq!(masked, format!("x {MASK} y")), 300_000);
+        let whole = |_: &str, masked: &str| masked == format!("x {MASK} y");
+        time("a run of `sk-`", &|len| format!("x {} y", "sk-".repeat(len / 3)), &whole, 300_000);
         // `grep -r` over keys, with no footer.
         let headers = |lines: usize| (0..lines).map(|n| format!("keys/{n}.pem:-----BEGIN RSA PRIVATE KEY-----\n")).collect::<String>();
-        time(&headers, &|s, masked| assert!(masked == s, "a header alone is no key"), 2_000);
-        // base64url JSON with `eyJ` all through it and no dots.
-        let blob = |len: usize| (0..len / 96).map(|n| format!("eyJ{}", noise(40 + n as u64, 93, B64URL))).collect::<String>();
-        time(&blob, &|_, _| (), 150_000);
+        time("key headers", &headers, &|s, masked| masked == s, 2_000);
+        // base64url JSON with `eyJ` all through it and no dots. A key at its start masks it whole at both sizes, so both
+        // take the same path: the mask's end is looked for from every character of the run.
+        let blob = |len: usize| {
+            let eyjs: String = (0..len / 96).map(|n| format!("eyJ{}", noise(40 + n as u64, 93, B64URL))).collect();
+            format!("x {}{eyjs} y", (SHAPES[1].example)())
+        };
+        time("a run of `eyJ`", &blob, &whole, 150_000);
     }
 
     #[test]
@@ -464,7 +476,7 @@ mod tests {
         let secret = "0123456789abcdef0123".to_owned();
         let input = serde_json::json!({ secret.clone(): "secret's", MASK: "literal" });
         let Body::ToolCall { input, .. } = super::body(Body::ToolCall { id: "t1".into(), name: "x".into(), input }, &[secret]) else { unreachable!() };
-        assert_eq!(input[MASK], "literal", "{input}");
-        assert_eq!(input[format!("{MASK} 2")], "secret's", "{input}");
+        assert!(input[MASK] == "literal", "the literal key lost its value");
+        assert!(input[format!("{MASK} 2")] == "secret's", "the masked key is not numbered");
     }
 }

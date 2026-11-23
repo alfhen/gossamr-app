@@ -971,6 +971,16 @@ async fn redact_every_secret_after_any_escape_encoding_letter_or_digit_is_masked
             cases.push((format!("{} after {before:?}", shape.name), format!("v {before}{secret} end"), vec![(secret.clone(), public)]));
         }
     }
+    // Verify, round 6: a bare `sk-` key whose body has no digit, or no upper-case letter, after an escape the body
+    // rule alone would not count.
+    let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let lower = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let pick = |from: &str, n: usize| (0..48).map(|i| from.as_bytes()[(i * n + 5) % from.len()] as char).collect::<String>();
+    for (what, key) in [("no digit", format!("sk-{}", pick(letters, 7))), ("no upper case", format!("sk-{}", pick(lower, 11)))] {
+        for before in [r"\n", "%3D"] {
+            cases.push((format!("an OpenAI key with {what} after {before:?}"), format!("v {before}{key} end"), vec![(key.clone(), 3)]));
+        }
+    }
     // Bare `sk-` inside a readable word is no key.
     let readable = [
         "Edited .claude/worktrees/fix-task-list-rendering-in-the-sidebar-panel/src/main.rs today",
@@ -1402,6 +1412,24 @@ async fn redact_a_resumed_session_whose_agent_names_a_secret_id_drops_the_earlie
         "the earlier id no longer names the agent's session, so it is not resumed by"
     );
     assert_eq!(*opens.lock().unwrap(), [None, Some("plain-first".to_owned())], "the refused resume reached no driver");
+}
+
+#[tokio::test]
+async fn resume_a_provider_session_id_the_store_will_not_write_breaks_the_session_and_it_cannot_be_resumed() {
+    let (_tmp, dir) = data_dir();
+    let puppet = Puppet::default();
+    let harness = on_puppet(&dir, &puppet, 4);
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("CREATE TRIGGER refuse_id BEFORE UPDATE OF provider_session ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;")
+        .unwrap();
+    let (id, mut events) = open_on(&harness, "puppet", false).await;
+    let all = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&all), ["failed", "closed"], "the session stops on its broken store");
+    assert!(matches!(all[0].body, Body::Failed { kind: FailKind::Harness, .. }));
+    assert!(all.iter().all(|event| event.seq == 0), "nothing is stored after the failed write");
+    raw.execute_batch("DROP TRIGGER refuse_id").unwrap();
+    let again = harness.resume(&id).await;
+    assert!(matches!(&again, Err(Error::Driver(reason)) if reason.contains("no provider session id")), "no id was kept");
 }
 
 #[tokio::test]
