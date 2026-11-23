@@ -49,7 +49,7 @@ pub const USAGE: &str = "usage: harness --version
        harness serve [--data <folder>] [--mock-script <file>]   (the first client token on stdin)
   against the harness serving --data <folder>, with a client token on stdin (--token-stdin) or asked for:
        harness run --provider <name> [--answer allow|deny]... [--ends-with-client] <prompt>
-       harness sessions | shutdown
+       harness sessions | shutdown | token list | token revoke <id>
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
        harness answer <session> <request> allow|deny [--message <text>]

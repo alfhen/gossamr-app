@@ -280,8 +280,12 @@ impl Harness {
     }
 
     /// The stored keys of the client tokens.
-    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
+    pub fn client_tokens(&self) -> Result<Vec<crate::store::ClientToken>> {
         self.inner.with_store(Store::client_tokens)
+    }
+
+    pub fn revoke_client_token(&self, id: i64) -> Result<()> {
+        self.inner.with_store(|store| store.revoke_client_token(id))
     }
 
     pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {

@@ -42,6 +42,16 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     ALTER TABLE sessions ADD COLUMN ends_with_client INTEGER NOT NULL DEFAULT 0;"];
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// The most client tokens the harness keeps; each connection's proof tries every one.
+pub const MAX_CLIENT_TOKENS: usize = 16;
+
+/// A client token as the store keeps it: never the token, only its stored key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientToken {
+    pub id: i64,
+    pub created_ms: i64,
+    pub stored_key: [u8; 32],
+}
 /// How long a session's event rows stay after its clean-up.
 pub const ROWS_AFTER_CLEAN_UP_MS: i64 = KEEP_MS;
 /// How long the event rows of a session never cleaned up stay after its last event.
@@ -166,15 +176,33 @@ impl Store {
         Ok(self.events(session, seq as u64 - 1)?.pop())
     }
 
+    /// Adds a token by its stored key, unless there are `MAX_CLIENT_TOKENS` already. The count and the insert are one
+    /// statement, so two adds at once cannot pass the cap.
     pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
-        self.conn.execute("INSERT OR IGNORE INTO client_tokens (stored_key, created_ms) VALUES (?1, ?2)", params![&stored_key[..], now_ms()])?;
+        let added = self.conn.execute(
+            "INSERT OR IGNORE INTO client_tokens (stored_key, created_ms) SELECT ?1, ?2 WHERE (SELECT COUNT(*) FROM client_tokens) < ?3",
+            params![&stored_key[..], now_ms(), MAX_CLIENT_TOKENS as i64],
+        )?;
+        if added == 0 && !self.client_tokens()?.iter().any(|token| token.stored_key == *stored_key) {
+            return Err(Error::Refused(format!("there are {MAX_CLIENT_TOKENS} client tokens already: revoke one first")));
+        }
         Ok(())
     }
 
-    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
-        let mut stmt = self.conn.prepare("SELECT stored_key FROM client_tokens")?;
-        let keys = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-        Ok(keys.filter_map(|key| key.ok().and_then(|key| key.try_into().ok())).collect())
+    pub fn client_tokens(&self) -> Result<Vec<ClientToken>> {
+        let mut stmt = self.conn.prepare("SELECT rowid, created_ms, stored_key FROM client_tokens ORDER BY rowid")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, Vec<u8>>(2)?)))?;
+        let rows = rows.collect::<rusqlite::Result<Vec<(i64, i64, Vec<u8>)>>>()?;
+        Ok(rows.into_iter().filter_map(|(id, created_ms, key)| Some(ClientToken { id, created_ms, stored_key: key.try_into().ok()? })).collect())
+    }
+
+    /// Revokes a token, unless it is the last: with none, no client could reach the harness again. One statement.
+    pub fn revoke_client_token(&self, id: i64) -> Result<()> {
+        let revoked = self.conn.execute("DELETE FROM client_tokens WHERE rowid = ?1 AND (SELECT COUNT(*) FROM client_tokens) > 1", [id])?;
+        if revoked == 0 {
+            return Err(Error::Refused(format!("no client token {id} to revoke, or it is the last one")));
+        }
+        Ok(())
     }
 
     /// None clears the id, so the session cannot be resumed.

@@ -223,7 +223,7 @@ fn tokens_the_store_keeps_stored_keys_once_each_and_never_a_token() {
     let token = harness::auth::Token::random();
     store.add_client_token(&token.stored_key()).unwrap();
     store.add_client_token(&token.stored_key()).unwrap();
-    assert_eq!(store.client_tokens().unwrap(), [token.stored_key()]);
+    assert_eq!(store.client_tokens().unwrap().iter().map(|token| token.stored_key).collect::<Vec<_>>(), [token.stored_key()]);
     drop(store);
     let disk = bytes_on_disk(&dir);
     assert!(!disk.windows(32).any(|window| window == harness::auth::decode(&token.hex()).unwrap()), "the token's bytes are nowhere on disk");
@@ -271,4 +271,24 @@ fn sweep_deletes_the_rows_of_old_cleaned_and_old_idle_sessions() {
     assert_eq!((rows("a"), rows("b"), rows("c"), rows("d")), (0, 0, 2, 2));
     assert_eq!(store.append("b", &text("three"), now).unwrap().seq, 3, "the numbers go on after the rows are gone");
     assert_eq!(store.sessions().unwrap().iter().map(|row| row.last_seq).collect::<Vec<_>>(), [2, 3, 2, 2]);
+}
+
+#[test]
+fn tokens_past_the_cap_are_refused_and_the_last_one_cannot_be_revoked() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let max = harness::store::MAX_CLIENT_TOKENS;
+    for _ in 0..max {
+        store.add_client_token(&harness::auth::Token::random().stored_key()).unwrap();
+    }
+    let kept = store.client_tokens().unwrap();
+    assert!(matches!(store.add_client_token(&harness::auth::Token::random().stored_key()), Err(Error::Refused(_))), "one past the cap");
+    store.add_client_token(&kept[0].stored_key).expect("adding one it has is not a new one");
+    assert_eq!(store.client_tokens().unwrap().len(), max);
+    for token in &kept[1..] {
+        store.revoke_client_token(token.id).unwrap();
+    }
+    assert!(matches!(store.revoke_client_token(kept[0].id), Err(Error::Refused(_))), "the last one stays");
+    assert!(matches!(store.revoke_client_token(9_999), Err(Error::Refused(_))), "no such token");
+    assert_eq!(store.client_tokens().unwrap(), kept[..1]);
 }

@@ -101,6 +101,10 @@ pub enum Op {
     Watch { session: String, #[serde(default)] after: u64 },
     /// Adds a token by its stored key, in hex. The client keeps the token; it never crosses the socket.
     TokenNew { stored_key: String },
+    /// Answers each token's id and when it was made, and which one this connection proved: never a key.
+    TokenList,
+    /// Revokes a token; its connections are closed at their next call. The last token cannot be revoked.
+    TokenRevoke { id: i64 },
     /// Stops every session and the harness, and frees the data folder; answers once that is done.
     Shutdown,
 }

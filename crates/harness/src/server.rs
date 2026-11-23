@@ -157,8 +157,8 @@ async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration
         let proof = prove(&harness, &mut ws).await;
         Some((ws, proof))
     });
-    let mut ws = match proven.await {
-        Ok(Some((ws, Ok(())))) => ws,
+    let (mut ws, key) = match proven.await {
+        Ok(Some((ws, Ok(key)))) => (ws, key),
         Ok(Some((mut ws, Err(e)))) => {
             let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
             let _ = ws.close(None).await;
@@ -173,11 +173,16 @@ async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration
         return;
     }
     let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
-    let mut client = Client { harness: harness.clone(), out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![] };
+    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![] };
     loop {
         tokio::select! {
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => {
+                    // A revoked token's connections end at their next call.
+                    if !client.harness.client_tokens().is_ok_and(|tokens| tokens.iter().any(|token| token.stored_key == client.key)) {
+                        let _ = send(&mut ws, &Reply { error: Some("this connection's token was revoked".into()), ..Reply::default() }).await;
+                        break;
+                    }
                     let (reply, shut) = client.call(text.as_str()).await;
                     if send(&mut ws, &reply).await.is_err() {
                         break;
@@ -204,7 +209,7 @@ async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration
 
 /// The client's answer to a fresh challenge, over the whole hello, must prove a stored token. Nothing else is read
 /// before it. The hello lives only in this call, so an answer is good for this connection once.
-async fn prove(harness: &Harness, ws: &mut Ws) -> Result<()> {
+async fn prove(harness: &Harness, ws: &mut Ws) -> Result<[u8; 32]> {
     let mut challenge = [0u8; 32];
     getrandom::fill(&mut challenge).expect("the operating system has a secure random source");
     let hello = serde_json::to_string(&Hello { protocol: PROTOCOL, build: crate::BUILD_ID.into(), challenge: encode(&challenge) })?;
@@ -213,11 +218,14 @@ async fn prove(harness: &Harness, ws: &mut Ws) -> Result<()> {
     let Some(Ok(Message::Text(text))) = ws.next().await else { return Err(refused()) };
     let proof: Proof = serde_json::from_str(text.as_str()).map_err(|_| refused())?;
     let answer = decode(&proof.proof).ok_or_else(refused)?;
-    if verify(&harness.client_tokens()?, hello.as_bytes(), &answer) { Ok(()) } else { Err(refused()) }
+    let keys: Vec<[u8; 32]> = harness.client_tokens()?.into_iter().map(|token| token.stored_key).collect();
+    verify(&keys, hello.as_bytes(), &answer).map(|at| keys[at]).ok_or_else(refused)
 }
 
 struct Client {
     harness: Harness,
+    /// The stored key of the token this connection proved.
+    key: [u8; 32],
     out: Sender<Reply>,
     /// Ends every watch when the connection ends.
     watches: JoinSet<()>,
@@ -284,6 +292,12 @@ impl Client {
                 let key = decode(&stored_key).ok_or_else(|| Error::Refused("a stored key is 64 hex digits".into()))?;
                 done(harness.add_client_token(&key))
             }
+            Op::TokenList => {
+                let tokens = harness.client_tokens()?.into_iter();
+                let listed = tokens.map(|token| json!({ "id": token.id, "created_ms": token.created_ms, "yours": token.stored_key == self.key }));
+                Ok(Value::Array(listed.collect()))
+            }
+            Op::TokenRevoke { id } => done(harness.revoke_client_token(id)),
             Op::Shutdown => {
                 harness.shutdown().await;
                 Ok(Value::Null)

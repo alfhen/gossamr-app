@@ -66,6 +66,8 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token: &m
         ("sessions", []) if known(&[]) => call(Op::Sessions),
         ("shutdown", []) if known(&[]) => call(Op::Shutdown),
         ("token", [new]) if new == "new" && known(&[]) => Some(Command::TokenNew),
+        ("token", [list]) if list == "list" && known(&[]) => call(Op::TokenList),
+        ("token", [revoke, id]) if revoke == "revoke" && known(&[]) => call(Op::TokenRevoke { id: id.parse().ok()? }),
         ("events", [session]) if known(&["--after", "--follow"]) => {
             let after = flag("--after").flatten().map_or(Some(0), |after| after.parse().ok())?;
             Some(Command::Events { session: session.clone(), after, follow: flag("--follow").is_some() })

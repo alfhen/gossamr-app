@@ -168,7 +168,8 @@ async fn auth_token_new_without_a_valid_token_is_refused_and_adds_none() {
     let (ws, hello) = raw(&served).await;
     let wrong = json!(Proof { proof: encode(&Token::random().answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, wrong).await), "`token new` after a wrong proof");
-    assert_eq!(served.harness.client_tokens().unwrap(), [served.token.stored_key()], "only the first token");
+    let keys: Vec<[u8; 32]> = served.harness.client_tokens().unwrap().into_iter().map(|token| token.stored_key).collect();
+    assert_eq!(keys, [served.token.stored_key()], "only the first token");
     assert!(Client::connect(&served.dir, &new).await.is_err(), "the new token opens nothing");
 
     let mut client = connect(&served).await;
@@ -549,4 +550,42 @@ async fn serve_a_socket_path_the_platform_cannot_take_says_its_length_and_the_li
     assert!(said.contains(&len.to_string()) && said.contains(&(harness::api::SOCKET_PATH_MAX - 1).to_string()), "{said}");
     assert!(!dir.exists(), "nothing was made");
     assert!(matches!(Client::connect(&dir, &Token::random()).await, Err(Error::SocketPathTooLong { .. })), "the client says so too");
+}
+
+#[tokio::test]
+async fn tokens_a_list_shows_ids_and_times_marks_yours_and_holds_no_key() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let other = Token::random();
+    client.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
+    let listed = client.call(Op::TokenList).await.unwrap();
+    let rows = listed.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.iter().map(|row| row["yours"].clone()).collect::<Vec<_>>(), [json!(true), json!(false)]);
+    for row in rows {
+        let mut fields: Vec<&String> = row.as_object().unwrap().keys().collect();
+        fields.sort();
+        assert_eq!(fields, ["created_ms", "id", "yours"], "only these, never a key");
+    }
+    let printed = listed.to_string();
+    for key in [served.token.stored_key(), other.stored_key()] {
+        assert!(!printed.contains(&encode(&key)), "no stored key in the list");
+    }
+}
+
+#[tokio::test]
+async fn tokens_a_revoked_token_is_refused_and_its_open_connection_ends_at_its_next_call() {
+    let served = serve(SCRIPT);
+    let mut first = connect(&served).await;
+    let other = Token::random();
+    first.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
+    let mut second = Client::connect(&served.dir, &other).await.unwrap();
+    let listed = first.call(Op::TokenList).await.unwrap();
+    let id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
+    first.call(Op::TokenRevoke { id }).await.unwrap();
+    assert!(second.call(Op::Sessions).await.is_err(), "the open connection of a revoked token ends");
+    assert!(Client::connect(&served.dir, &other).await.is_err(), "and the token opens nothing again");
+    let own = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(true)).unwrap()["id"].as_i64().unwrap();
+    assert!(matches!(first.call(Op::TokenRevoke { id: own }).await, Err(Error::Refused(_))), "the last token stays");
+    first.call(Op::Sessions).await.expect("the first token still works");
 }

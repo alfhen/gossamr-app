@@ -50,13 +50,17 @@ impl fmt::Debug for Token {
     }
 }
 
-/// True when `answer` proves a token whose stored key is in `stored`. Every key is tried, each in constant time.
-pub fn verify(stored: &[[u8; 32]], hello: &[u8], answer: &[u8; 32]) -> bool {
-    stored.iter().fold(false, |found, key| {
+/// Which of `stored` the answer proves, if any. Every key is tried, each compared in constant time, with no early exit.
+pub fn verify(stored: &[[u8; 32]], hello: &[u8], answer: &[u8; 32]) -> Option<usize> {
+    let mut proven = None;
+    for (at, key) in stored.iter().enumerate() {
         let token: [u8; 32] = xor(answer, &signature(key, hello));
         let hash: [u8; 32] = Sha256::digest(token).into();
-        found | bool::from(hash.ct_eq(key))
-    })
+        if bool::from(hash.ct_eq(key)) {
+            proven = Some(at);
+        }
+    }
+    proven
 }
 
 fn signature(stored_key: &[u8; 32], hello: &[u8]) -> [u8; 32] {
@@ -95,10 +99,10 @@ mod tests {
         let (token, other) = (Token::random(), Token::random());
         let hello = br#"{"protocol":1,"build":"b","challenge":"00"}"#;
         let answer = token.answer(hello);
-        assert!(verify(&[other.stored_key(), token.stored_key()], hello, &answer), "its own token");
-        assert!(!verify(&[other.stored_key()], hello, &answer), "another token");
-        assert!(!verify(&[token.stored_key()], br#"{"protocol":1,"build":"b","challenge":"01"}"#, &answer), "another challenge");
-        assert!(!verify(&[token.stored_key()], br#"{"protocol":1,"build":"c","challenge":"00"}"#, &answer), "another build");
+        assert_eq!(verify(&[other.stored_key(), token.stored_key()], hello, &answer), Some(1), "its own token");
+        assert_eq!(verify(&[other.stored_key()], hello, &answer), None, "another token");
+        assert_eq!(verify(&[token.stored_key()], br#"{"protocol":1,"build":"b","challenge":"01"}"#, &answer), None, "another challenge");
+        assert_eq!(verify(&[token.stored_key()], br#"{"protocol":1,"build":"c","challenge":"00"}"#, &answer), None, "another build");
         assert!(answer != token.0 && encode(&answer) != token.hex(), "the answer is not the token");
     }
 
