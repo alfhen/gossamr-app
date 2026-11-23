@@ -1583,6 +1583,16 @@ dependencies = [
 [[package]]
 name = "harness"
 version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "hashbrown"
