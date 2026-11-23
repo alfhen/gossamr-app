@@ -233,17 +233,36 @@ fn client_serve_stops_on_sigterm_and_takes_its_socket_and_descriptor_with_it() {
 }
 
 #[test]
-fn client_a_run_whose_harness_goes_before_its_turn_ends_fails() {
-    use std::io::BufRead;
-    let mut serving = serve(WAITS);
-    let mut run = client(&serving, &["run", "--provider", "mock", "hi"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
-    for line in std::io::BufReader::new(run.stdout.take().unwrap()).lines() {
-        if line.unwrap().contains("\"permission\"") {
-            break;
+fn client_a_run_whose_harness_closes_before_its_turn_ends_fails() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let tmp = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    let listener = runtime.block_on(async { tokio::net::UnixListener::bind(tmp.path().join(harness::api::SOCKET)) }).unwrap();
+    // A harness that takes any proof, opens and sends, tells of one event, then closes the connection cleanly.
+    let fake = runtime.spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = harness::api::Hello { protocol: harness::api::PROTOCOL, build: "fake".into(), challenge: "00".repeat(32) };
+        ws.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+        ws.next().await;
+        ws.send(Message::text(r#"{"ok":true}"#)).await.unwrap();
+        for answer in [r#"{"id":1,"ok":{"session":"s"}}"#, r#"{"id":2,"ok":null}"#] {
+            ws.next().await;
+            ws.send(Message::text(answer)).await.unwrap();
         }
-    }
-    // SAFETY: kill has no memory preconditions; the pid is our child's, which has not been waited on.
-    assert_eq!(unsafe { libc::kill(serving.child.id() as i32, libc::SIGTERM) }, 0);
-    serving.child.wait().unwrap();
-    assert_eq!(run.wait().unwrap().code(), Some(1), "no turn ended, so the run did not succeed");
+        let started = r#"{"session":"s","event":{"seq":1,"ms":0,"type":"started","provider_session":"p","resumed":false}}"#;
+        ws.send(Message::text(started)).await.unwrap();
+        ws.close(None).await.unwrap();
+    });
+    let out = Command::new(HARNESS)
+        .args(["run", "--provider", "mock", "hi", "--data"])
+        .arg(tmp.path())
+        .env_remove("HARNESS_DATA")
+        .env(harness::cli::TOKEN_VARIABLE, harness::auth::Token::random().hex())
+        .output()
+        .unwrap();
+    runtime.block_on(fake).unwrap();
+    assert_eq!(out.status.code(), Some(1), "no turn ended, so the run did not succeed");
+    assert_eq!(printed(&out).len(), 1, "it printed the one event");
 }
