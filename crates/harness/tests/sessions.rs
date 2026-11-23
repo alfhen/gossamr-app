@@ -930,6 +930,70 @@ async fn redact_a_secret_glued_straight_onto_an_open_ended_token_is_masked_with_
     assert!(pairs.len() > 140, "{} pairs", pairs.len());
 }
 
+fn example(name: &str) -> String {
+    (harness::redact::SHAPES.iter().find(|shape| shape.name == name).expect("a shape of that name").example)()
+}
+
+#[tokio::test]
+async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_masked_but_bare_sk_after_a_letter_or_digit() {
+    let (_tmp, dir) = data_dir();
+    let (ghs, slack, anthropic) = (example("GitHub token"), example("Slack token"), example("Anthropic key"));
+    let ghp = format!("ghp_{}", &ghs[4..]);
+    // (text, the secrets in it, each with how many of its first characters are public)
+    let mut cases: Vec<(String, Vec<(String, usize)>)> = vec![
+        // Review, round 5.
+        (format!("GET /cb?next=%3Faccess_token%3D{} 302", example("Google OAuth token")), vec![(example("Google OAuth token"), 5)]),
+        (format!("Authorization%3A%20Bearer%20{}", example("JWT")), vec![(example("JWT"), 3)]),
+        (format!(r#"{{"keys":"first\n{anthropic}"}}"#), vec![(anthropic.clone(), 7)]),
+        (format!(r"GITHUB\t{ghs}"), vec![(ghs.clone(), 4)]),
+        (format!("token{ghs}"), vec![(ghs.clone(), 4)]),
+        (format!("v2{ghs}"), vec![(ghs.clone(), 4)]),
+        // Verify, round 5.
+        (format!(r#"$ cat tokens.json {{"tokens": "{ghp}\n{ghs}"}}"#), vec![(ghp.clone(), 4), (ghs.clone(), 4)]),
+        (format!("GET /cb?redirect=https%3A%2F%2Fapp.example.com%2F%3Fkey%3D{anthropic} 302"), vec![(anthropic.clone(), 7)]),
+        (format!(r"{{'SLACK': 'x\n{slack}'}}"), vec![(slack.clone(), 5)]),
+    ];
+    // Every shape after each escape, encoding, letter and digit. Only bare `sk-` after a letter or digit stays as
+    // written: there it is the end of a word such as `task-list`. Those are checked here and kept out of the store,
+    // whose bytes must hold no other copy of the same example.
+    let mut kept = 0;
+    for shape in harness::redact::SHAPES {
+        let secret = (shape.example)();
+        let public = shape.markers.iter().map(|marker| marker.len()).min().unwrap();
+        for before in [r"\n", r"\t", r"\r", "%3D", "%20", "x", "9"] {
+            let text = format!("v {before}{secret} end");
+            if shape.markers == [harness::redact::WORD_MARKER] && matches!(before, "x" | "9") {
+                assert_eq!(harness::redact::text(&text, &[]), text, "bare `sk-` after a letter or digit is kept as written");
+                kept += 1;
+                continue;
+            }
+            cases.push((text, vec![(secret.clone(), public)]));
+        }
+    }
+    assert_eq!(kept, 2, "only the OpenAI shape has bare `sk-` alone");
+    let says: Vec<Body> = cases.iter().map(|(text, _)| Body::Text { text: text.clone() }).collect();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("says".into(), Arc::new(Says::new(vec![says], false)))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "says", false).await;
+    let mut shown = vec![];
+    while shown.len() < cases.len() {
+        if let Body::Text { text } = next(&mut events).await.body {
+            shown.push(text);
+        }
+    }
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let disk = bytes_on_disk(&dir);
+    let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
+    for ((text, secrets), shown) in cases.iter().zip(&shown) {
+        let seen: std::collections::HashSet<&[u8]> = shown.as_bytes().windows(8).collect();
+        for (secret, public) in secrets {
+            assert_eq!(leaks(&seen, *public, secret), None, "{text} reached the client as {shown}");
+            assert_eq!(leaks(&disk, *public, secret), None, "{text} is in the store's files");
+        }
+    }
+}
+
 #[tokio::test]
 async fn turn_a_driver_that_starts_a_turn_inside_a_turn_or_ends_one_it_never_started_fails_it() {
     let (_tmp, dir) = data_dir();

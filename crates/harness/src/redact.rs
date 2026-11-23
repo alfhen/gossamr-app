@@ -16,11 +16,28 @@ fn in_run(c: char) -> bool {
     c.is_ascii_alphanumeric() || "._~+/=-".contains(c)
 }
 
+/// The one marker that is common inside words (`task-list`, `disk-image`). It counts only where a word starts: after
+/// anything but a letter or digit, or after an escape that ends in one (`%3D`, `\n`). Every other marker counts
+/// wherever it stands, since a secret is often escaped, encoded or glued on. When in doubt the redactor masks.
+pub const WORD_MARKER: &str = "sk-";
+
+/// Whether a word starts at `at`: nothing comes before it but a character other than a letter or digit, or the end
+/// of a `%XX` escape or of a `\n`, `\t` or `\r` escape.
+fn word_starts(s: &str, at: usize) -> bool {
+    let before = &s.as_bytes()[..at];
+    match before {
+        [] => true,
+        [.., b'%', high, low] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => true,
+        [.., b'\\', b'n' | b't' | b'r'] => true,
+        [.., last] => !last.is_ascii_alphanumeric(),
+    }
+}
+
 /// One kind of secret.
 pub struct Shape {
     pub name: &'static str,
-    /// What the secret starts with. A shape is only looked for from one of these, where no letter or digit comes right
-    /// before it: a real key starts at a boundary, and a word such as `task-list` is no key.
+    /// What the secret starts with. A shape is only looked for from one of these, wherever it stands, except
+    /// [`WORD_MARKER`].
     pub markers: &'static [&'static str],
     /// The markers match in any case.
     pub any_case: bool,
@@ -194,8 +211,7 @@ pub fn text(s: &str, secrets: &[String]) -> String {
     let mut masked = String::with_capacity(out.len());
     let (mut last, mut from) = (0, 0);
     while let Some(start) = MARKERS.find_at(&out, from).map(|found| found.start()) {
-        let at_boundary = out[..start].chars().next_back().is_none_or(|c| !c.is_ascii_alphanumeric());
-        match match_at(&out, start).filter(|_| at_boundary) {
+        match match_at(&out, start, true) {
             Some(end) => {
                 let end = mask_end(&out, start, end);
                 masked.push_str(&out[last..start]);
@@ -234,14 +250,16 @@ fn mask_partial(s: &str, secret: &str) -> String {
     out
 }
 
-/// The end of the longest secret that starts at `at`.
-fn match_at(s: &str, at: usize) -> Option<usize> {
+/// The end of the longest secret that starts at `at`. With `words`, [`WORD_MARKER`] counts only where a word starts;
+/// inside a mask, where secrets are glued, it counts anywhere.
+fn match_at(s: &str, at: usize, words: bool) -> Option<usize> {
     let rest = &s[at..];
     COMPILED
         .iter()
         .filter(|shape| {
             shape.markers.iter().any(|marker| {
-                rest.get(..marker.len()).is_some_and(|head| if shape.any_case { head.eq_ignore_ascii_case(marker) } else { head == *marker })
+                let here = rest.get(..marker.len()).is_some_and(|head| if shape.any_case { head.eq_ignore_ascii_case(marker) } else { head == *marker });
+                here && !(words && *marker == WORD_MARKER && !word_starts(s, at))
             })
         })
         .filter_map(|shape| shape.pattern.find(rest).map(|found| at + found.end()))
@@ -259,7 +277,7 @@ fn mask_end(s: &str, start: usize, mut end: usize) -> usize {
     let mut at = start + 1;
     while at < end {
         if s.is_char_boundary(at)
-            && let Some(inner) = match_at(s, at)
+            && let Some(inner) = match_at(s, at, false)
             && inner > end
         {
             end = after_run(s, inner, at);
