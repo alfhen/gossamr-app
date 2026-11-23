@@ -1539,3 +1539,56 @@ async fn race_a_slot_given_back_while_a_prompt_starts_to_wait_reaches_that_promp
     stop.store(true, Ordering::Relaxed);
     thread.join().unwrap();
 }
+
+#[tokio::test]
+async fn locked_a_client_that_falls_behind_misses_no_event() {
+    let (_tmp, dir) = data_dir();
+    let says = 3_000;
+    let script: String = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"line {n}\"}}")))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let harness = harness(&dir, &mock(&script), 4);
+    let (watcher, mut watched) = tokio::sync::mpsc::unbounded_channel();
+    let spec = harness::session::Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), ..Default::default() };
+    let (id, mut events) = harness.open_watched(spec, Some(watcher)).unwrap();
+    harness.send(&id, "go").unwrap();
+    // The watcher is not read until the session has closed, far more events than the live channel holds.
+    loop {
+        match events.recv().await {
+            Ok(event) if event.body == Body::Closed => break,
+            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    let mut got = vec![];
+    while let Ok(event) = watched.try_recv() {
+        got.push(event);
+    }
+    let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
+    assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "every event, in order");
+    let texts: Vec<&Body> = got.iter().map(|event| &event.body).filter(|body| matches!(body, Body::Text { .. })).collect();
+    assert_eq!(texts.len(), says);
+    assert_eq!(*texts[says - 1], Body::Text { text: format!("line {}", says - 1) }, "whole, not withheld");
+    assert!(harness.events(&id, 0).unwrap().iter().all(|event| matches!(event.body, Body::Withheld { .. })), "and none of it stored");
+}
+
+#[tokio::test]
+async fn resume_a_session_whose_last_event_says_it_cannot_be_resumed_is_refused() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock(LIFE), 4);
+    let (id, mut events) = open(&harness, false).await;
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    // As if the write that cleared the provider id had failed after the `failed` that says so was stored.
+    let failed = Body::Failed { kind: FailKind::Driver, reason: harness::session::CANNOT_RESUME.into() };
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute(
+        "INSERT INTO events (session, seq, ms, type, payload, withheld) VALUES (?1, 100, 0, 'failed', ?2, 0)",
+        [&id, &serde_json::to_string(&failed).unwrap()],
+    )
+    .unwrap();
+    assert!(harness.events(&id, 0).unwrap().last().is_some_and(|last| last.body == failed));
+    assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "refused though the row keeps the id");
+}

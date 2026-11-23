@@ -63,7 +63,11 @@ async fn connect(served: &Served) -> Client {
 }
 
 async fn open(client: &mut Client) -> String {
-    let opened = client.call(Op::Open { provider: "mock".into(), cwd: "/nowhere".into(), locked: false, model: None, ends_with_client: false }).await.unwrap();
+    open_as(client, false, false).await
+}
+
+async fn open_as(client: &mut Client, locked: bool, ends_with_client: bool) -> String {
+    let opened = client.call(Op::Open { provider: "mock".into(), cwd: "/nowhere".into(), locked, model: None, ends_with_client }).await.unwrap();
     opened["session"].as_str().unwrap().to_owned()
 }
 
@@ -294,4 +298,102 @@ async fn serve_a_harness_with_no_token_and_none_handed_over_does_not_start() {
     let refused = Server::bind(&dir, || None, vec![], settings(4));
     assert!(matches!(refused, Err(Error::Refused(_))), "no first token");
     assert!(!dir.join(SOCKET).exists());
+}
+
+#[tokio::test]
+async fn locked_a_reconnecting_client_gets_kept_fields_and_not_the_text() {
+    let served = serve(SCRIPT);
+    let mut first = connect(&served).await;
+    let id = open_as(&mut first, true, false).await;
+    first.call(Op::Send { session: id.clone(), text: "a private prompt".into() }).await.unwrap();
+    let live = events_until(&mut first, |body| matches!(body, Body::Permission { .. })).await;
+    assert!(live.iter().any(|event| event.body == Body::Text { text: "two".into() }), "the connected client gets the text");
+    drop(first);
+
+    let mut second = connect(&served).await;
+    second.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    let mut read = vec![];
+    for _ in 0..live.len() {
+        read.push(next_event(&mut second).await);
+    }
+    assert_eq!(read.iter().map(|event| event.seq).collect::<Vec<_>>(), live.iter().map(|event| event.seq).collect::<Vec<_>>());
+    for (stored, seen) in read.iter().zip(&live) {
+        assert!(stored.body == seen.body.withheld(), "seq {}: only the kept fields come back", stored.seq);
+    }
+    let printed = serde_json::to_string(&read).unwrap();
+    assert!(!printed.contains("a private prompt") && !printed.contains("\"two\""), "no text after a reconnect");
+}
+
+#[tokio::test]
+async fn leave_a_session_that_ends_with_its_client_closes_when_it_leaves_and_is_not_resumed() {
+    let served = serve(SCRIPT);
+    let mut first = connect(&served).await;
+    let ends = open_as(&mut first, false, true).await;
+    let stays = open_as(&mut first, false, false).await;
+    let mut watcher = connect(&served).await;
+    watcher.call(Op::Watch { session: ends.clone(), after: 0 }).await.unwrap();
+    next_event(&mut watcher).await;
+    drop(first);
+    events_until(&mut watcher, |body| *body == Body::Closed).await;
+    assert!(matches!(served.harness.resume(&ends).await, Err(Error::EndedWithClient(_))), "never resumed");
+    let sessions = watcher.call(Op::Sessions).await.unwrap();
+    let row = |id: &str| sessions.as_array().unwrap().iter().find(|row| row["id"] == id).unwrap().clone();
+    assert_eq!((&row(&ends)["ends_with_client"], &row(&ends)["running"]), (&json!(true), &json!(false)));
+    assert_eq!(row(&stays)["running"], json!(true), "a session opened without the option goes on");
+}
+
+#[tokio::test]
+async fn shutdown_stops_every_session_and_frees_the_data_folder() {
+    let mut served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let (idle, asking) = (open(&mut client).await, open(&mut client).await);
+    client.call(Op::Send { session: asking.clone(), text: "go".into() }).await.unwrap();
+    loop {
+        match next_event(&mut client).await.body {
+            Body::Permission { .. } => break,
+            _ => continue,
+        }
+    }
+    client.call(Op::Shutdown).await.unwrap();
+    let store = harness::store::Store::open(&served.dir).expect("the data folder is free once shutdown answers");
+    for id in [&idle, &asking] {
+        let last = store.events(id, 0).unwrap().pop().unwrap();
+        assert_eq!(last.body, Body::Closed, "{id} recorded its close");
+    }
+    drop(store);
+    assert!(matches!(served.harness.open(harness::session::Open { provider: "mock".into(), ..Default::default() }).await, Err(Error::ShutDown)));
+    tokio::time::timeout(Duration::from_secs(10), &mut served.task).await.expect("serve ends").unwrap().unwrap();
+    assert!(!served.dir.join(SOCKET).exists() && !served.dir.join(DESCRIPTOR).exists());
+}
+
+/// Asks a question, then thanks for the answer in the next turn.
+const QUESTION: &str = r#"{"prompt": null}
+{"question": "which one?"}
+{"end": "done"}
+{"prompt": null}
+{"say": "thanks"}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn requests_a_question_is_answered_as_the_next_prompt_and_hand_over_keeps_the_provider_id() {
+    let served = serve(QUESTION);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    let asked = events_until(&mut client, |body| matches!(body, Body::Question { .. })).await;
+    let Body::Question { id: question, .. } = &asked.last().unwrap().body else { unreachable!() };
+    client.call(Op::AnswerQuestion { session: id.clone(), question: question.clone(), text: "this one".into() }).await.unwrap();
+    let again = client.call(Op::AnswerQuestion { session: id.clone(), question: question.clone(), text: "twice".into() }).await;
+    assert!(matches!(again, Err(Error::Refused(_))), "a question is answered once: {again:?}");
+    let answered = events_until(&mut client, |body| *body == Body::Text { text: "thanks".into() }).await;
+    assert!(answered.iter().any(|event| event.body == Body::Prompted { text: "this one".into() }), "the answer went as the next prompt");
+    events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
+
+    client.call(Op::HandOver { session: id.clone() }).await.unwrap();
+    let rest = events_until(&mut client, |body| *body == Body::Closed).await;
+    assert_eq!(rest.iter().map(|event| event.body.type_name()).collect::<Vec<_>>(), ["handed_over", "closed"]);
+    let provider = provider_session(&served, &id);
+    let mut resumed = served.harness.resume(&id).await.expect("a session handed over can be resumed");
+    assert_eq!(resumed.recv().await.unwrap().body, Body::Started { provider_session: provider, resumed: true });
 }

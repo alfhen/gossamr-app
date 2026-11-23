@@ -229,3 +229,46 @@ fn tokens_the_store_keeps_stored_keys_once_each_and_never_a_token() {
     assert!(!disk.windows(32).any(|window| window == harness::auth::decode(&token.hex()).unwrap()), "the token's bytes are nowhere on disk");
     assert!(!String::from_utf8_lossy(&disk).contains(&token.hex()), "nor its hex");
 }
+
+#[tokio::test(start_paused = true)]
+async fn sweep_runs_on_its_timer_with_no_read_or_open() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    store.append("a", &text("old"), now_ms() - KEEP_MS - 1).unwrap();
+    let harness = harness::session::Harness::new(store, vec![], settings(4));
+    let payload = || -> String {
+        let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+        raw.query_row("SELECT payload FROM events WHERE session = 'a'", [], |row| row.get(0)).unwrap()
+    };
+    assert!(payload().contains("old"), "nothing has swept yet");
+    let (task, mut swept) = harness.sweep_on_timer(std::time::Duration::from_secs(3600));
+    // The clock is paused and moves on only when every task waits, so this returns once the timer has fired.
+    swept.changed().await.unwrap();
+    assert!(!payload().contains("old"), "the timer's sweep dropped the payload with no read or open");
+    task.abort();
+}
+
+#[test]
+fn sweep_deletes_the_rows_of_old_cleaned_and_old_idle_sessions() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let day = 24 * 60 * 60 * 1000;
+    let now = now_ms();
+    // a: cleaned 31 days ago. b: never cleaned, last event 91 days ago. c and d: a day short of each.
+    for (id, last_event) in [("a", now - day), ("b", now - 91 * day), ("c", now - day), ("d", now - 89 * day)] {
+        store.create_session(id, "mock", false, Path::new("/x"), None).unwrap();
+        store.append(id, &text("one"), last_event - 1).unwrap();
+        store.append(id, &text("two"), last_event).unwrap();
+    }
+    store.clean_up("a").unwrap();
+    store.clean_up("c").unwrap();
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET cleaned_ms = ?1 WHERE id = 'a'", [now - 31 * day]).unwrap();
+    raw.execute("UPDATE sessions SET cleaned_ms = ?1 WHERE id = 'c'", [now - 29 * day]).unwrap();
+    store.sweep(now).unwrap();
+    let rows = |id: &str| -> i64 { raw.query_row("SELECT COUNT(*) FROM events WHERE session = ?1", [id], |row| row.get(0)).unwrap() };
+    assert_eq!((rows("a"), rows("b"), rows("c"), rows("d")), (0, 0, 2, 2));
+    assert_eq!(store.append("b", &text("three"), now).unwrap().seq, 3, "the numbers go on after the rows are gone");
+    assert_eq!(store.sessions().unwrap().iter().map(|row| row.last_seq).collect::<Vec<_>>(), [2, 3, 2, 2]);
+}
