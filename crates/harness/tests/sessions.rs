@@ -416,10 +416,7 @@ impl Driver for Tattler {
             token.clone(): "a secret can be a key",
         });
         output.send(Body::ToolCall { id: "t1".into(), name: "curl".into(), input }).unwrap();
-        // A token cut between two pieces of streamed text.
-        output.send(Body::TextDelta { text: "streamed: sk-ant-api03-".into() }).unwrap();
-        output.send(Body::TextDelta { text: format!("{} and done", "y".repeat(40)) }).unwrap();
-        output.send(Body::Text { text: format!("streamed: sk-ant-api03-{} and done", "y".repeat(40)) }).unwrap();
+        output.send(Body::Text { text: format!("last: sk-ant-api03-{} and done", "y".repeat(40)) }).unwrap();
         tokio::spawn(async move {
             let _output = output;
             while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
@@ -435,7 +432,7 @@ async fn redact_a_secret_in_agent_text_never_reaches_the_store_or_a_client() {
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("tattler".into(), Arc::new(Tattler(token.clone())))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "tattler", false).await;
-    let live = until(&mut events, |body| matches!(body, Body::Text { text } if text.starts_with("streamed"))).await;
+    let live = until(&mut events, |body| matches!(body, Body::Text { text } if text.starts_with("last"))).await;
     let token = token.lock().unwrap().clone();
     assert_eq!(token.len(), 64);
     let shown = serde_json::to_string(&live).unwrap();
@@ -444,14 +441,10 @@ async fn redact_a_secret_in_agent_text_never_reaches_the_store_or_a_client() {
     for leak in leaks {
         assert!(!shown.contains(leak), "{leak} reached the client: {shown}");
     }
-    let deltas: String = live.iter().filter_map(|event| match &event.body { Body::TextDelta { text } => Some(text.as_str()), _ => None }).collect();
-    assert_eq!(deltas, "streamed: <redacted> and done", "the cut token is masked whole in what the client sees");
-    assert!(live.iter().all(|event| !matches!(event.body, Body::TextDelta { .. }) || event.seq == 0), "deltas are not numbered");
+    assert!(shown.contains("last: <redacted> and done"), "{shown}");
 
     let stored = harness.events(&id, 0).unwrap();
-    assert!(stored.iter().all(|event| !matches!(event.body, Body::TextDelta { .. })), "deltas are never stored");
-    let stored_whole: Vec<_> = live.iter().filter(|event| event.seq != 0).cloned().collect();
-    assert_eq!(stored, stored_whole, "the store holds the masked events");
+    assert_eq!(stored, live, "the store holds the masked events");
     let (rows, disk) = (every_row(&dir), bytes_on_disk(&dir));
     for leak in leaks {
         assert!(!rows.contains(leak), "{leak} is in a table");
@@ -885,243 +878,56 @@ impl Driver for Says {
     }
 }
 
-/// Every secret the exhaustive test cuts: one of each shape the redactor knows (so a shape added there is covered
-/// here), two written with nothing between them, a key and a bearer header glued to a token, a bearer header whose
-/// white space outgrows the hold, a 3,000-character JWT, and the session's own token, written `{token}`, whole and as
-/// a 32-character copy from inside it, `{part}`. Each comes with its public marker: what the secret starts with and
-/// may show.
-fn secrets() -> Vec<(String, String)> {
-    let mut all: Vec<(String, String)> = harness::redact::SHAPES
+/// The example of each shape whose secret has no fixed end, so that a secret written straight after it can look like
+/// more of it.
+fn open_ended() -> Vec<&'static harness::redact::Shape> {
+    harness::redact::SHAPES
         .iter()
-        .map(|shape| {
-            let secret = (shape.example)();
-            let marker = shape.markers.iter().find(|marker| secret.to_ascii_lowercase().starts_with(&marker.to_ascii_lowercase())).expect("an example starts with its marker");
-            (secret[..marker.len()].to_owned(), secret)
+        .filter(|shape| {
+            let example = (shape.example)();
+            let pattern = regex::Regex::new(&format!("^(?:{})", shape.pattern)).unwrap();
+            pattern.find(&format!("{example}Ab3")).is_some_and(|found| found.end() > example.len())
         })
-        .collect();
-    let glued = format!("{}{}", (harness::redact::SHAPES[2].example)(), (harness::redact::SHAPES[6].example)());
-    all.push(("ghs_".into(), glued));
-    let example = |name: &str| (harness::redact::SHAPES.iter().find(|shape| shape.name == name).expect("a shape of that name").example)();
-    all.push(("npm_".into(), format!("{}{}", example("npm token"), example("Private key"))));
-    all.push(("npm_".into(), format!("{}{}", example("npm token"), example("Bearer header"))));
-    let credential = example("Bearer header").split_off("Bearer ".len());
-    let spaced = format!("Bearer{}", " ".repeat(harness::redact::HOLD_BACK + 8));
-    all.push((spaced.clone(), format!("{spaced}{credential}")));
-    all.push(("eyJ".into(), harness::redact::jwt(3000)));
-    all.push(("{token}".into(), "{token}".into()));
-    all.push(("".into(), "{part}".into()));
-    all
+        .collect()
 }
 
-/// Every 8-character stretch of `secret` after its marker that shows in `seen`.
-fn leaks(seen: &str, marker: &str, secret: &str) -> Vec<String> {
-    let body = &secret[marker.len()..];
-    (0..body.len().saturating_sub(7)).map(|at| &body[at..at + 8]).filter(|window| seen.contains(*window)).map(str::to_owned).collect()
-}
-
-fn with_token(text: &str, token: &str) -> String {
-    let part = token.get(16..48).unwrap_or_default();
-    text.replace("{token}", token).replace("{part}", part)
-}
-
-/// Whether the secret is the session's own token or a copy of part of it, known only once the session opens.
-fn tokened(secret: &str) -> bool {
-    secret.starts_with('{')
-}
-
-#[test]
-fn redact_live_text_shows_no_secret_cut_anywhere_into_two_or_three_pieces() {
-    let token = harness::driver::random_hex(32);
-    let secrets_for = vec![token.clone()];
-    let mut cases = 0;
-    for (marker, secret) in secrets() {
-        let (marker, secret) = (with_token(&marker, &token[..harness::redact::TOKEN_MARKER]), with_token(&secret, &token));
-        let whole = format!("here: {secret} done");
-        let mut cuts: Vec<Vec<usize>> = (1..whole.len()).map(|at| vec![at]).collect();
-        // Three pieces: every pair of cuts up to 200 bytes. Past that every pair would take minutes in a debug build, so
-        // every first cut (every 61st in the 3,000-character JWT) with second cuts near it, near the end, and spread.
-        let len = whole.len();
-        let pairs: Box<dyn Iterator<Item = (usize, usize)>> = if len <= 200 {
-            Box::new((1..len).flat_map(move |i| (i + 1..len).map(move |j| (i, j))))
-        } else {
-            let step = if len > 1000 { 61 } else { 1 };
-            Box::new((1..len).step_by(step).flat_map(move |i| {
-                let near = (i + 1..(i + 17).min(len)).chain(len.saturating_sub(16).max(i + 1)..len).chain((i + 1..len).step_by(61));
-                near.map(move |j| (i, j))
-            }))
-        };
-        cuts.extend(pairs.map(|(i, j)| vec![i, j]));
-        for cut in cuts {
-            let mut live = harness::redact::LiveText::new(&secrets_for);
-            let mut seen = String::new();
-            let mut last = 0;
-            for at in cut.iter().copied().chain([whole.len()]) {
-                seen.push_str(&live.push(&whole[last..at]));
-                last = at;
-            }
-            seen.push_str(&live.end());
-            let leaked = leaks(&seen, &marker, &secret);
-            assert!(leaked.is_empty(), "{marker}… cut at {cut:?} shows {leaked:?} in {seen:?}");
-            cases += 1;
-        }
-    }
-    assert!(cases > 50_000, "{cases} cases");
-}
-
-/// How a test block ends.
-#[derive(Clone, Copy, Debug)]
-enum BlockEnd {
-    Text,
-    TurnEnded,
-    Failed,
-    Close,
-}
-
-/// One case for `Pieces`: the text (with `{token}`), where to cut it, whether an unrelated event comes between the
-/// pieces, and how the block ends.
-#[derive(Clone)]
-struct Case {
-    whole: String,
-    cuts: Vec<usize>,
-    between: bool,
-    end: BlockEnd,
-}
-
-/// Plays one case per prompt: its pieces as deltas, and its end. For a case that ends by a close it plays a
-/// `sent` tool call instead, after which the test closes the session.
-struct Pieces(Mutex<std::collections::VecDeque<Vec<Case>>>, Mutex<Vec<String>>);
-
-impl Driver for Pieces {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
-    }
-
-    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
-        let cases = self.0.lock().unwrap().pop_front().expect("cases for each open");
-        let token = launch.tools_token.expose().to_owned();
-        self.1.lock().unwrap().push(token.clone());
-        let (commands, mut commands_rx) = mpsc::unbounded_channel();
-        let (output, receiver) = mpsc::unbounded_channel();
-        output.send(Body::Started { provider_session: "pieces".into(), resumed: false }).unwrap();
-        tokio::spawn(async move {
-            let mut cases = cases.into_iter();
-            while let Some(command) = commands_rx.recv().await {
-                let Command::Prompt(_) = command else {
-                    if command == Command::Stop {
-                        return;
-                    }
-                    continue;
-                };
-                let Some(case) = cases.next() else { continue };
-                let whole = with_token(&case.whole, &token);
-                let _ = output.send(Body::TurnStarted);
-                let mut last = 0;
-                for (n, at) in case.cuts.iter().copied().chain([whole.len()]).enumerate() {
-                    if n == 1 && case.between {
-                        let _ = output.send(Body::ToolCall { id: "u1".into(), name: "unrelated".into(), input: json!({}) });
-                    }
-                    let _ = output.send(Body::TextDelta { text: whole[last..at].to_owned() });
-                    last = at;
-                }
-                let _ = match case.end {
-                    BlockEnd::Text => output.send(Body::Text { text: whole }).and(output.send(Body::TurnEnded { how: TurnEnd::Done })),
-                    BlockEnd::TurnEnded => output.send(Body::TurnEnded { how: TurnEnd::Done }),
-                    BlockEnd::Failed => output.send(Body::Failed { kind: FailKind::Provider, reason: "the block ends".into() }),
-                    BlockEnd::Close => output.send(Body::ToolCall { id: "s1".into(), name: "sent".into(), input: json!({}) }),
-                };
-            }
-        });
-        Ok(Link { commands, output: receiver })
-    }
-}
-
-/// One pattern that finds any 8-character stretch of any of `secrets` after its marker, for one pass over a lot of text.
-fn stretches(secrets: &[(String, String)]) -> regex::bytes::Regex {
-    let mut windows: Vec<String> = secrets
-        .iter()
-        .flat_map(|(marker, secret)| {
-            let body = &secret[marker.len()..];
-            (0..body.len().saturating_sub(7)).map(move |at| regex::escape(&body[at..at + 8]))
-        })
-        .collect();
-    windows.sort();
-    windows.dedup();
-    regex::bytes::RegexBuilder::new(&windows.join("|")).size_limit(1 << 28).dfa_size_limit(1 << 28).build().unwrap()
+/// An 8-character stretch of `secret` after its first `public` characters that is among `seen`'s stretches.
+fn leaks(seen: &std::collections::HashSet<&[u8]>, public: usize, secret: &str) -> Option<String> {
+    secret.as_bytes()[public..].windows(8).find(|window| seen.contains(window)).map(|window| String::from_utf8_lossy(window).into_owned())
 }
 
 #[tokio::test]
-async fn redact_a_secret_cut_anywhere_reaches_no_subscriber_and_no_store_byte_whatever_comes_between_or_ends_the_block() {
+async fn redact_a_secret_glued_straight_onto_an_open_ended_token_is_masked_with_it_in_the_store_and_for_every_client() {
     let (_tmp, dir) = data_dir();
-    let combinations: Vec<(bool, BlockEnd)> = [false, true]
-        .into_iter()
-        .flat_map(|between| [BlockEnd::Text, BlockEnd::TurnEnded, BlockEnd::Failed, BlockEnd::Close].map(|end| (between, end)))
-        .collect();
-    // (the secret each session plays, its cases)
-    let mut sessions: Vec<(usize, Vec<Case>)> = vec![];
-    let all = secrets();
-    for (n, (_, secret)) in all.iter().enumerate() {
-        let whole = format!("here: {secret} done");
-        // The session's token is 64 characters at open; the long texts are cut every 7 bytes here, every byte above.
-        let len = with_token(&whole, &"0".repeat(64)).len();
-        let step = if len > 1000 { 7 } else { 1 };
-        let mut turns = vec![];
-        for (k, at) in (1..len).step_by(step).enumerate() {
-            // Each cut gets one way of coming between and ending, in turn; every 11th gets all eight.
-            let ways: Vec<(bool, BlockEnd)> = if k % 11 == 0 { combinations.clone() } else { vec![combinations[k % combinations.len()]] };
-            for (between, end) in ways {
-                let case = Case { whole: whole.clone(), cuts: vec![at], between, end };
-                match end {
-                    BlockEnd::Close => sessions.push((n, vec![case])),
-                    _ => turns.push(case),
-                }
-            }
+    let open_ended = open_ended();
+    assert!(open_ended.len() >= 10, "most shapes have no fixed end");
+    let mut pairs = vec![];
+    for first in &open_ended {
+        for second in harness::redact::SHAPES.iter().filter(|shape| shape.name != first.name) {
+            pairs.push((first.name, second.name, format!("{}{}", (first.example)(), (second.example)())));
         }
-        sessions.push((n, turns));
     }
-    let driver = Arc::new(Pieces(Mutex::new(sessions.iter().map(|(_, cases)| cases.clone()).collect()), Mutex::new(vec![])));
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("pieces".into(), driver.clone())];
+    let says: Vec<Body> = pairs.iter().map(|(_, _, glued)| Body::Text { text: format!("note: {glued} end") }).collect();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("says".into(), Arc::new(Says::new(vec![says], false)))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
-    let mut seen: Vec<Vec<String>> = vec![vec![]; all.len()];
-    for (n, cases) in &sessions {
-        let (id, mut events) = open_on(&harness, "pieces", false).await;
-        for case in cases {
-            harness.send(&id, "go").unwrap();
-            let sent = |body: &Body| matches!(body, Body::ToolCall { name, .. } if name == "sent");
-            let ended = until(&mut events, |body| matches!(body, Body::TurnEnded { .. } | Body::Failed { .. }) || sent(body)).await;
-            seen[*n].push(serde_json::to_string(&ended).unwrap());
-            if let BlockEnd::Close = case.end {
-                harness.close(&id).unwrap();
-            }
+    let (id, mut events) = open_on(&harness, "says", false).await;
+    let mut shown = vec![];
+    while shown.len() < pairs.len() {
+        let body = next(&mut events).await.body;
+        if let Body::Text { .. } = body {
+            shown.push(body);
         }
-        if !matches!(cases.last().map(|case| case.end), Some(BlockEnd::Close)) {
-            harness.close(&id).unwrap();
-        }
-        seen[*n].push(serde_json::to_string(&until(&mut events, |body| *body == Body::Closed).await).unwrap());
     }
-    // A session's own token is known only to the driver, which was given one per open, in order.
-    let given = driver.1.lock().unwrap().clone();
-    let mut every = vec![];
-    for ((n, _), token) in sessions.iter().zip(&given) {
-        let (marker, secret) = &all[*n];
-        every.push((with_token(marker, &token[..harness::redact::TOKEN_MARKER]), with_token(secret, token)));
-    }
-    for (n, (marker, secret)) in all.iter().enumerate().filter(|(_, (_, secret))| !tokened(secret)) {
-        let found = stretches(&[(marker.clone(), secret.clone())]);
-        let shown = seen[n].iter().find_map(|events| found.find(events.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned()));
-        assert!(shown.is_none(), "{marker}… reached a subscriber: {shown:?}");
-    }
-    let tokens: Vec<(String, String)> = sessions.iter().zip(every).filter(|((n, _), _)| tokened(&all[*n].1)).map(|(_, secret)| secret).collect();
-    let found = stretches(&tokens);
-    for n in (0..all.len()).filter(|n| tokened(&all[*n].1)) {
-        let shown = seen[n].iter().find_map(|events| found.find(events.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned()));
-        assert!(shown.is_none(), "{}: a session's token reached a subscriber: {shown:?}", all[n].1);
-    }
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
     let disk = bytes_on_disk(&dir);
-    let mut checked: Vec<(String, String)> = all.iter().filter(|(_, secret)| !tokened(secret)).cloned().collect();
-    checked.extend(tokens);
-    let stored = stretches(&checked).find(&disk).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned());
-    assert!(stored.is_none(), "a secret is in the store's files: {stored:?}");
-    assert!(sessions.iter().map(|(_, cases)| cases.len()).sum::<usize>() > 4000);
+    let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
+    for ((first, second, glued), body) in pairs.iter().zip(&shown) {
+        assert_eq!(*body, Body::Text { text: "note: <redacted> end".into() }, "{first} then {second}");
+        let public = harness::redact::SHAPES.iter().find(|shape| shape.name == *first).unwrap().markers.iter().map(|marker| marker.len()).min().unwrap();
+        assert_eq!(leaks(&disk, public, glued), None, "{first} then {second}: in the store's files");
+    }
+    assert!(pairs.len() > 140, "{} pairs", pairs.len());
 }
 
 #[tokio::test]
@@ -1263,46 +1069,3 @@ async fn hold_a_tool_result_or_a_cut_that_cannot_be_recorded_does_not_reach_the_
     }
 }
 
-/// Sends the start of a private key, ignores the stop, and sends the rest of the key only once told to kill.
-struct LateKey(String);
-
-impl Driver for LateKey {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities { stop_takes_up_to_ms: Some(100), ..Capabilities::default() }
-    }
-
-    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
-        let (commands, mut commands_rx) = mpsc::unbounded_channel();
-        let (output, receiver) = mpsc::unbounded_channel();
-        output.send(Body::Started { provider_session: "late".into(), resumed: false }).unwrap();
-        let (first, rest) = self.0.split_at(self.0.len() / 2);
-        output.send(Body::TurnStarted).unwrap();
-        output.send(Body::TextDelta { text: format!("here: {first}") }).unwrap();
-        let rest = format!("{rest} done");
-        tokio::spawn(async move {
-            while let Some(command) = commands_rx.recv().await {
-                if command == Command::Kill {
-                    let _ = output.send(Body::TextDelta { text: rest });
-                    return;
-                }
-            }
-        });
-        Ok(Link { commands, output: receiver })
-    }
-}
-
-#[tokio::test]
-async fn redact_the_harnesss_own_stop_diagnostic_does_not_release_a_key_the_agent_is_still_sending() {
-    let (_tmp, dir) = data_dir();
-    let key = (harness::redact::SHAPES.iter().find(|shape| shape.name == "Private key").unwrap().example)();
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("late".into(), Arc::new(LateKey(key.clone())))];
-    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
-    let (id, mut events) = open_on(&harness, "late", false).await;
-    harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
-    assert!(rest.iter().any(|event| matches!(event.body, Body::Failed { kind: FailKind::AgentStopped, .. })), "the harness said it killed the agent");
-    let shown = serde_json::to_string(&rest).unwrap();
-    let leaked = leaks(&shown, "-----BEGIN", &key);
-    assert!(leaked.is_empty(), "the key reached a subscriber: {leaked:?} in {shown}");
-    assert!(stretches(&[("-----BEGIN".into(), key)]).find(&bytes_on_disk(&dir)).is_none(), "the key is in the store's files");
-}

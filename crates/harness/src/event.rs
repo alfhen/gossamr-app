@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// One event of a session. `seq` starts at 1 for each session and never repeats. An event numbered 0 was not stored:
-/// a `text_delta`, or what the session says when its store fails.
+/// what the session says when its store fails.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub seq: u64,
@@ -26,13 +26,8 @@ pub enum Body {
     /// A turn began, prompted or not. A driver sends it once per turn, before anything the turn says, and ends every
     /// turn it starts with exactly one `turn_ended` or `failed`.
     TurnStarted,
-    /// A piece of text as it streams, for live output only: it is never stored, and is numbered 0. A driver that
-    /// streams sends the whole block as one `Text` after its pieces. Live text fails closed: from anything that could
-    /// start a secret it is held until it is decided, and what is undecided when the block ends (a `text`,
-    /// `turn_ended`, `failed` or `closed`) is sent as the mask. So live text may trail other events of the turn, by
-    /// what it holds from a marker on, up to `redact::HOLD_BACK` bytes, or to the end of a private key.
-    TextDelta { text: String },
-    /// A whole block of the agent's text. This is what is stored: a driver joins its pieces before it sends one.
+    /// A whole block of the agent's text, masked before anyone sees it. A driver that reads text in pieces joins them
+    /// and sends the block once it ends; streamed pieces come with H15.
     Text { text: String },
     ToolCall { id: String, name: String, input: Value },
     /// A call to a tool the client declared. The client posts its result.
@@ -51,9 +46,10 @@ pub enum Body {
     /// The turn failed, or the session could not start or go on. Either way no turn is running after it.
     Failed { kind: FailKind, reason: String },
     Closed,
-    /// What the store gives back for an event whose private fields it does not keep: a locked session's, a text delta,
-    /// one dropped at clean-up or by age, or one of a type this build does not know. `of` is the event's type, and
-    /// `kept` its fields that are not private (ids, kinds, decisions, how a turn ended).
+    /// What the store gives back for an event whose private fields it does not keep: a locked session's, one dropped
+    /// at clean-up or by age, or one of a type this build does not know (so a later step can add an event without a
+    /// migration). `of` is the event's type, and `kept` its fields that are not private (ids, kinds, decisions, how
+    /// a turn ended).
     Withheld {
         of: String,
         #[serde(default, skip_serializing_if = "Map::is_empty")]
@@ -155,18 +151,17 @@ mod tests {
             Body::Waiting => 2,
             Body::PromptsDropped => 3,
             Body::TurnStarted => 4,
-            Body::TextDelta { .. } => 5,
-            Body::Text { .. } => 6,
-            Body::ToolCall { .. } => 7,
-            Body::ClientToolCall { .. } => 8,
-            Body::ToolResult { .. } => 9,
-            Body::Permission { .. } => 10,
-            Body::Answered { .. } => 11,
-            Body::Question { .. } => 12,
-            Body::TurnEnded { .. } => 13,
-            Body::Failed { .. } => 14,
-            Body::Closed => 15,
-            Body::Withheld { .. } => 16,
+            Body::Text { .. } => 5,
+            Body::ToolCall { .. } => 6,
+            Body::ClientToolCall { .. } => 7,
+            Body::ToolResult { .. } => 8,
+            Body::Permission { .. } => 9,
+            Body::Answered { .. } => 10,
+            Body::Question { .. } => 11,
+            Body::TurnEnded { .. } => 12,
+            Body::Failed { .. } => 13,
+            Body::Closed => 14,
+            Body::Withheld { .. } => 15,
         }
     }
 
@@ -179,7 +174,6 @@ mod tests {
             Body::Waiting,
             Body::PromptsDropped,
             Body::TurnStarted,
-            Body::TextDelta { text: "t".into() },
             Body::Text { text: "t".into() },
             Body::ToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
             Body::ClientToolCall { id: "i".into(), name: "n".into(), input: json!({}) },

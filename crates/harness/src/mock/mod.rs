@@ -31,8 +31,6 @@ pub enum Step {
     /// Starts a turn with no prompt, as an agent does after a background task ends.
     Turn,
     Say(String),
-    /// A piece of streamed text. A script sends the whole block with `say` after its pieces, as a driver must.
-    Delta(String),
     Tool { id: Option<String>, name: String, #[serde(default)] input: Value },
     ToolResult { id: Option<String>, #[serde(default)] output: Value, #[serde(default)] error: bool },
     /// Asks and waits for the answer. `answer` is the recorded one; a replay answered otherwise fails.
@@ -277,7 +275,6 @@ impl Player {
                 }
                 Step::Turn => self.send(Body::TurnStarted),
                 Step::Say(text) => self.send(Body::Text { text }),
-                Step::Delta(text) => self.send(Body::TextDelta { text }),
                 Step::Tool { id, name, input } => {
                     let id = id.map(|id| self.mapper.text(&id)).unwrap_or_else(|| self.fresh("t"));
                     self.last_tool = id.clone();

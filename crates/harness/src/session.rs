@@ -240,7 +240,6 @@ impl Harness {
             Error::Open { kind, message: redact::text(&message, &secrets) }
         })?;
         reserved.keep();
-        let secrets_for_live = secrets.clone();
         let task = Task {
             inner: self.inner.clone(),
             id: id.to_owned(),
@@ -250,7 +249,6 @@ impl Harness {
             open,
             stopping,
             broken: AtomicBool::new(false),
-            held: Mutex::new(redact::LiveText::new(&secrets_for_live)),
         };
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         Ok(receiver)
@@ -379,8 +377,6 @@ struct Task {
     stopping: Arc<AtomicBool>,
     /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
     broken: AtomicBool,
-    /// The streamed text not yet sent, held until it is decided whether it is a secret.
-    held: Mutex<redact::LiveText>,
 }
 
 impl Task {
@@ -602,47 +598,14 @@ impl Task {
         Turn::Prompted
     }
 
-    /// The harness's own diagnostic ends no block: the agent may go on with the text it was sending.
     fn fail(&self, kind: FailKind, reason: &str) {
-        self.record(Body::Failed { kind, reason: reason.to_owned() });
+        self.emit(Body::Failed { kind, reason: reason.to_owned() });
     }
 
-    /// Sends what of the streamed text is decided (see `redact::LiveText`).
-    fn delta(&self, text: &str) {
-        let out = self.live_text().push(text);
-        if !out.is_empty() {
-            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body: Body::TextDelta { text: out } });
-        }
-    }
-
-    /// The block ended: what live text held goes out, anything undecided masked.
-    fn end_text(&self) {
-        let out = self.live_text().end();
-        if !out.is_empty() {
-            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body: Body::TextDelta { text: out } });
-        }
-    }
-
-    fn live_text(&self) -> MutexGuard<'_, redact::LiveText> {
-        self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// Stores the event and sends it to the session's clients; a text delta is only sent. True when it was stored.
-    /// When the store fails, the clients get one `failed` event and the last `closed`, numbered 0 since no number
-    /// could be given, and the session stops; nothing is written after that, even if the store would take it again.
+    /// Stores the event and sends it to the session's clients. True when it was stored. When the store fails, the
+    /// clients get one `failed` event and the last `closed`, numbered 0 since no number could be given, and the
+    /// session stops; nothing is written after that, even if the store would take it again.
     fn emit(&self, body: Body) -> bool {
-        if let Body::TextDelta { text } = &body {
-            self.delta(text);
-            return true;
-        }
-        // An unrelated event between two pieces of text does not release what is held; the end of the block does.
-        if matches!(body, Body::Text { .. } | Body::TurnEnded { .. } | Body::Failed { .. } | Body::Closed) {
-            self.end_text();
-        }
-        self.record(body)
-    }
-
-    fn record(&self, body: Body) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
                 let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
