@@ -2,11 +2,12 @@
 //! first with a [`Hello`]; the client answers its challenge ([`Proof`]) and then sends [`Call`]s. The harness answers
 //! each call by its id, and pushes the events of the sessions the client opened or watches.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::error::{Error, Result};
 use crate::event::{Decision, Event};
 
 /// Changes when a client of the last protocol could no longer talk to this harness.
@@ -14,6 +15,18 @@ pub const PROTOCOL: u32 = 1;
 pub const SOCKET: &str = "harness.sock";
 /// The descriptor file beside the socket, while the harness serves.
 pub const DESCRIPTOR: &str = "harness.json";
+/// The bytes a Unix socket path may have, with its closing zero: `sun_path` is 104 bytes on macOS and 108 on Linux.
+pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
+
+/// The socket's path in the data folder `dir`, or why the platform cannot take it.
+pub fn socket_path(dir: &Path) -> Result<PathBuf> {
+    let path = dir.join(SOCKET);
+    let len = path.as_os_str().len();
+    if len >= SOCKET_PATH_MAX {
+        return Err(Error::SocketPathTooLong { path, len, max: SOCKET_PATH_MAX - 1 });
+    }
+    Ok(path)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {

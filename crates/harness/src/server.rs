@@ -2,6 +2,7 @@
 //! proves a client token first (see `auth`), then sends calls and gets the events of the sessions it opened or
 //! watches.
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -14,12 +15,13 @@ use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::Notify;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinSet;
+use tokio::sync::mpsc::{self, Sender, UnboundedReceiver};
+use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{WebSocketStream, accept_async};
+use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+use tokio_tungstenite::{WebSocketStream, accept_async_with_config};
 
-use crate::api::{Call, DESCRIPTOR, Descriptor, Hello, Op, PROTOCOL, Proof, Reply, SOCKET};
+use crate::api::{Call, DESCRIPTOR, Descriptor, Hello, Op, PROTOCOL, Proof, Reply, socket_path};
 use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
@@ -29,8 +31,25 @@ use crate::store::Store;
 
 /// How often the sweep runs while the harness serves.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
-/// How long a new connection has to prove its token.
-const PROOF_WITHIN: Duration = Duration::from_secs(10);
+/// Events waiting to be written to one client. Past it its watches wait, and their events wait on channels that drop
+/// none, because a locked session's events cannot be read back from the store.
+const PUSH_QUEUE: usize = 256;
+/// The largest message a connection may send before its proof holds. A proof is about 80 bytes.
+const BEFORE_PROOF_MAX: usize = 4096;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// How long a new connection has for the WebSocket handshake and its proof, together.
+    pub proof_within: Duration,
+    /// Connections at once, proven or not. One past it is closed at once.
+    pub connections: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits { proof_within: Duration::from_secs(10), connections: 64 }
+    }
+}
 
 pub struct Server {
     harness: Harness,
@@ -38,6 +57,7 @@ pub struct Server {
     dir: PathBuf,
     /// Taken at bind, so a stop that comes once the socket is there is never missed.
     stops: (Signal, Signal),
+    limits: Limits,
     sweep_every: Duration,
 }
 
@@ -45,22 +65,32 @@ impl Server {
     /// Takes the data folder and listens on its socket. A store with no client token yet takes `first_token`'s, the
     /// one the client that starts the harness hands over; with none, the harness does not start.
     pub fn bind(dir: &Path, first_token: impl FnOnce() -> Option<Token>, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings) -> Result<Server> {
+        let socket = socket_path(dir)?;
         let store = Store::open(dir)?;
         if store.client_tokens()?.is_empty() {
             let token = first_token().ok_or_else(|| Error::Refused("no client token yet: give the first one on stdin".into()))?;
             store.add_client_token(&token.stored_key())?;
         }
         let harness = Harness::new(store, drivers, settings);
-        let socket = dir.join(SOCKET);
-        // The store's lock is ours, so a socket left here is a dead harness's.
+        // The store's lock is ours, so a socket or a descriptor left here is a dead harness's.
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
         let descriptor = Descriptor { protocol: PROTOCOL, build: crate::BUILD_ID.into(), pid: std::process::id() };
-        let mut file = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(dir.join(DESCRIPTOR))?;
+        let path = dir.join(DESCRIPTOR);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+        let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(path)?;
         file.write_all(serde_json::to_string(&descriptor)?.as_bytes())?;
         let stops = (signal(SignalKind::terminate())?, signal(SignalKind::interrupt())?);
-        Ok(Server { harness, listener, dir: dir.to_owned(), stops, sweep_every: SWEEP_EVERY })
+        Ok(Server { harness, listener, dir: dir.to_owned(), stops, limits: Limits::default(), sweep_every: SWEEP_EVERY })
+    }
+
+    pub fn limits(mut self, limits: Limits) -> Server {
+        self.limits = limits;
+        self
     }
 
     pub fn sweep_every(mut self, every: Duration) -> Server {
@@ -75,15 +105,15 @@ impl Server {
     /// Serves until a client asks for `shutdown` or the process is told to stop; then every session has stopped, the
     /// data folder is free, and the socket and the descriptor are gone.
     pub async fn run(self) -> Result<()> {
-        let Server { harness, listener, dir, stops: (mut term, mut int), sweep_every } = self;
+        let Server { harness, listener, dir, stops: (mut term, mut int), limits, sweep_every } = self;
         let (sweeper, _) = harness.sweep_on_timer(sweep_every);
         let stop = Arc::new(Notify::new());
         let mut connections = JoinSet::new();
         loop {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
-                    Ok((stream, _)) if same_user(&stream) => {
-                        connections.spawn(connection(harness.clone(), stream, stop.clone()));
+                    Ok((stream, _)) if same_user(&stream) && connections.len() < limits.connections => {
+                        connections.spawn(connection(harness.clone(), stream, limits.proof_within, stop.clone()));
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("harness: accept failed: {e}"),
@@ -95,7 +125,7 @@ impl Server {
             }
         }
         drop(listener);
-        let _ = std::fs::remove_file(dir.join(SOCKET));
+        let _ = std::fs::remove_file(dir.join(crate::api::SOCKET));
         harness.shutdown().await;
         connections.shutdown().await;
         sweeper.abort();
@@ -109,6 +139,11 @@ fn same_user(stream: &UnixStream) -> bool {
     stream.peer_cred().is_ok_and(|cred| cred.uid() == unsafe { libc::geteuid() })
 }
 
+/// Until the proof holds a connection may send only small messages.
+fn before_proof() -> WebSocketConfig {
+    WebSocketConfig::default().max_message_size(Some(BEFORE_PROOF_MAX)).max_frame_size(Some(BEFORE_PROOF_MAX))
+}
+
 type Ws = WebSocketStream<UnixStream>;
 
 async fn send(ws: &mut Ws, reply: &impl serde::Serialize) -> Result<()> {
@@ -116,18 +151,29 @@ async fn send(ws: &mut Ws, reply: &impl serde::Serialize) -> Result<()> {
     ws.send(Message::text(text)).await.map_err(|e| Error::Protocol(e.to_string()))
 }
 
-async fn connection(harness: Harness, stream: UnixStream, stop: Arc<Notify>) {
-    let Ok(mut ws) = accept_async(stream).await else { return };
-    if let Err(e) = prove(&harness, &mut ws).await {
-        let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
-        let _ = ws.close(None).await;
-        return;
-    }
+async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration, stop: Arc<Notify>) {
+    let proven = tokio::time::timeout(proof_within, async {
+        let mut ws = accept_async_with_config(stream, Some(before_proof())).await.ok()?;
+        let proof = prove(&harness, &mut ws).await;
+        Some((ws, proof))
+    });
+    let mut ws = match proven.await {
+        Ok(Some((ws, Ok(())))) => ws,
+        Ok(Some((mut ws, Err(e)))) => {
+            let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
+            let _ = ws.close(None).await;
+            return;
+        }
+        Ok(None) | Err(_) => return,
+    };
+    // The default limits once the proof holds. A client sends nothing more until it has the answer to its proof, so
+    // the stream holds no bytes read ahead.
+    ws = WebSocketStream::from_raw_socket(ws.into_inner(), Role::Server, None).await;
     if send(&mut ws, &Reply { ok: Some(json!(true)), ..Reply::default() }).await.is_err() {
         return;
     }
-    let (out, mut pushes) = mpsc::unbounded_channel();
-    let mut client = Client { harness: harness.clone(), out, watches: JoinSet::new(), ends_with_it: vec![] };
+    let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
+    let mut client = Client { harness: harness.clone(), out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![] };
     loop {
         tokio::select! {
             message = ws.next() => match message {
@@ -148,6 +194,7 @@ async fn connection(harness: Harness, stream: UnixStream, stop: Arc<Notify>) {
                     break;
                 }
             }
+            Some(_) = client.watches.join_next(), if !client.watches.is_empty() => {}
         }
     }
     for id in &client.ends_with_it {
@@ -155,25 +202,27 @@ async fn connection(harness: Harness, stream: UnixStream, stop: Arc<Notify>) {
     }
 }
 
-/// The client's answer to a fresh challenge must prove a stored token. Nothing else is read before it. The challenge
-/// lives only in this call, so an answer is good for this connection once.
+/// The client's answer to a fresh challenge, over the whole hello, must prove a stored token. Nothing else is read
+/// before it. The hello lives only in this call, so an answer is good for this connection once.
 async fn prove(harness: &Harness, ws: &mut Ws) -> Result<()> {
     let mut challenge = [0u8; 32];
     getrandom::fill(&mut challenge).expect("the operating system has a secure random source");
-    send(ws, &Hello { protocol: PROTOCOL, build: crate::BUILD_ID.into(), challenge: encode(&challenge) }).await?;
+    let hello = serde_json::to_string(&Hello { protocol: PROTOCOL, build: crate::BUILD_ID.into(), challenge: encode(&challenge) })?;
+    ws.send(Message::text(hello.clone())).await.map_err(|e| Error::Protocol(e.to_string()))?;
     let refused = || Error::Refused("the client did not prove a token".into());
-    let first = tokio::time::timeout(PROOF_WITHIN, ws.next()).await.map_err(|_| refused())?;
-    let Some(Ok(Message::Text(text))) = first else { return Err(refused()) };
+    let Some(Ok(Message::Text(text))) = ws.next().await else { return Err(refused()) };
     let proof: Proof = serde_json::from_str(text.as_str()).map_err(|_| refused())?;
     let answer = decode(&proof.proof).ok_or_else(refused)?;
-    if verify(&harness.client_tokens()?, &challenge, &answer) { Ok(()) } else { Err(refused()) }
+    if verify(&harness.client_tokens()?, hello.as_bytes(), &answer) { Ok(()) } else { Err(refused()) }
 }
 
 struct Client {
     harness: Harness,
-    out: UnboundedSender<Reply>,
+    out: Sender<Reply>,
     /// Ends every watch when the connection ends.
     watches: JoinSet<()>,
+    /// The session each watch is of: one at a time per session.
+    watching: HashMap<String, AbortHandle>,
     /// Sessions this client opened as ending with it.
     ends_with_it: Vec<String>,
 }
@@ -197,7 +246,7 @@ impl Client {
     }
 
     async fn dispatch(&mut self, op: Op) -> Result<Value> {
-        let harness = &self.harness;
+        let harness = self.harness.clone();
         let done = |result: Result<()>| result.map(|()| Value::Null);
         match op {
             Op::Open { provider, cwd, locked, model, ends_with_client } => {
@@ -206,7 +255,7 @@ impl Client {
                 if ends_with_client {
                     self.ends_with_it.push(id.clone());
                 }
-                self.watches.spawn(forward(id.clone(), vec![], Some(events), self.out.clone()));
+                self.watch(id.clone(), vec![], Some(events), 0);
                 Ok(json!({ "session": id }))
             }
             Op::Send { session, text } => done(harness.send(&session, text)),
@@ -224,8 +273,11 @@ impl Client {
             }
             Op::Events { session, after } => Ok(serde_json::to_value(harness.events(&session, after)?)?),
             Op::Watch { session, after } => {
+                if self.watching.get(&session).is_some_and(|watch| !watch.is_finished()) {
+                    return Err(Error::Refused(format!("this connection already watches session {session}")));
+                }
                 let (stored, live) = harness.watch(&session, after)?;
-                self.watches.spawn(forward(session, stored, live, self.out.clone()));
+                self.watch(session, stored, live, after);
                 Ok(Value::Null)
             }
             Op::TokenNew { stored_key } => {
@@ -238,39 +290,48 @@ impl Client {
             }
         }
     }
+
+    fn watch(&mut self, session: String, stored: Vec<Event>, live: Option<UnboundedReceiver<Event>>, after: u64) {
+        let task = forward(session.clone(), stored, live, after, self.out.clone());
+        self.watching.insert(session, self.watches.spawn(task));
+    }
 }
 
-/// Pushes `stored`, then each live event not already pushed, until the session closes; then the end of the watch.
-/// The live events come on a channel that never drops one, so a client that falls behind misses nothing.
-async fn forward(session: String, stored: Vec<Event>, live: Option<UnboundedReceiver<Event>>, out: UnboundedSender<Reply>) {
-    let push = |event: Event| out.send(Reply { session: Some(session.clone()), event: Some(event), ..Reply::default() }).is_ok();
-    let mut last = 0;
+async fn push(out: &Sender<Reply>, session: &str, event: Event) -> bool {
+    out.send(Reply { session: Some(session.to_owned()), event: Some(event), ..Reply::default() }).await.is_ok()
+}
+
+/// Pushes `stored`, then each live event numbered past `after` and not already pushed, until the session closes; then
+/// the end of the watch. The live events come on a channel that drops none, so a client that falls behind misses nothing.
+async fn forward(session: String, stored: Vec<Event>, live: Option<UnboundedReceiver<Event>>, after: u64, out: Sender<Reply>) {
+    let mut last = after;
     for event in stored {
         last = event.seq;
-        if !push(event) {
-            return finish(&out, session);
+        if !push(&out, &session, event).await {
+            return;
         }
     }
     if let Some(mut live) = live {
         while let Some(event) = live.recv().await {
-            // An event numbered 0 was not stored, so it cannot have been pushed before.
-            if event.seq != 0 && event.seq <= last {
-                continue;
-            }
-            last = last.max(event.seq);
             let closed = event.body == Body::Closed;
-            if !push(event) || closed {
+            // An event numbered 0 was not stored, so it cannot have been pushed before.
+            if event.seq == 0 || event.seq > last {
+                last = last.max(event.seq);
+                if !push(&out, &session, event).await {
+                    return;
+                }
+            }
+            if closed {
                 break;
             }
         }
     }
-    finish(&out, session);
+    finish(&out, session).await;
 }
 
-fn finish(out: &UnboundedSender<Reply>, session: String) {
-    let _ = out.send(Reply { session: Some(session), end: true, ..Reply::default() });
+async fn finish(out: &Sender<Reply>, session: String) {
+    let _ = out.send(Reply { session: Some(session), end: true, ..Reply::default() }).await;
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,12 +345,12 @@ mod tests {
     async fn events_an_event_both_read_and_live_is_pushed_once_and_the_watch_ends_at_closed() {
         let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed }]).collect();
         let (live, receiver) = mpsc::unbounded_channel();
-        // The read got 1 to 3; the receiver, registered before it, has 2 onwards.
+        // The read got 1 to 3; the receiver has 2 onwards.
         for event in &all[1..] {
             live.send(event.clone()).unwrap();
         }
-        let (out, mut pushes) = mpsc::unbounded_channel();
-        forward("s".into(), all[..3].to_vec(), Some(receiver), out).await;
+        let (out, mut pushes) = mpsc::channel(64);
+        forward("s".into(), all[..3].to_vec(), Some(receiver), 0, out).await;
         let mut got = vec![];
         while let Ok(push) = pushes.try_recv() {
             got.push(push);
@@ -297,5 +358,12 @@ mod tests {
         let events: Vec<Event> = got.iter().filter_map(|push| push.event.clone()).collect();
         assert_eq!(events, all, "each once, in order");
         assert!(got.last().unwrap().end, "then the end");
+    }
+
+    #[test]
+    fn serve_before_the_proof_a_connection_may_send_only_small_messages() {
+        let limits = before_proof();
+        assert_eq!((limits.max_message_size, limits.max_frame_size), (Some(BEFORE_PROOF_MAX), Some(BEFORE_PROOF_MAX)));
+        assert!(limits.max_message_size.is_some_and(|max| max <= 4096), "a few KB at most");
     }
 }

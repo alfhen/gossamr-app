@@ -14,7 +14,7 @@ use harness::driver::Driver;
 use harness::error::Error;
 use harness::event::{Body, Decision, Event};
 use harness::mock::Mock;
-use harness::server::Server;
+use harness::server::{Limits, Server};
 use harness::session::Harness;
 use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
@@ -48,11 +48,15 @@ impl Drop for Served {
 }
 
 fn serve(script: &str) -> Served {
+    serve_with(script, Limits::default())
+}
+
+fn serve_with(script: &str, limits: Limits) -> Served {
     let (tmp, dir) = data_dir();
     let (token, mock) = (Token::random(), common::mock(script));
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
     let first = token.clone();
-    let server = Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap();
+    let server = Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap().limits(limits);
     let harness = server.harness().clone();
     let task = tokio::spawn(server.run());
     Served { _tmp: tmp, dir, token, mock, harness, task }
@@ -91,18 +95,20 @@ async fn events_until(client: &mut Client, last: impl Fn(&Body) -> bool) -> Vec<
     }
 }
 
-/// A raw WebSocket on the harness's socket, before any proof, and the challenge it was given.
-async fn raw(served: &Served) -> (tokio_tungstenite::WebSocketStream<UnixStream>, [u8; 32]) {
+/// A raw WebSocket on the harness's socket, before any proof, and the hello it was given.
+async fn raw(served: &Served) -> (tokio_tungstenite::WebSocketStream<UnixStream>, String) {
     let stream = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
     let (mut ws, _) = tokio_tungstenite::client_async("ws://harness/", stream).await.unwrap();
-    let Some(Ok(Message::Text(hello))) = ws.next().await else { panic!("no hello") };
-    let hello: Hello = serde_json::from_str(hello.as_str()).unwrap();
-    (ws, decode(&hello.challenge).unwrap())
+    let Some(Ok(Message::Text(hello_text))) = ws.next().await else { panic!("no hello") };
+    let hello: Hello = serde_json::from_str(hello_text.as_str()).unwrap();
+    assert!(decode(&hello.challenge).is_some(), "a challenge is 32 bytes in hex");
+    (ws, hello_text.as_str().to_owned())
 }
 
 /// What the harness says after a first message, until it closes the connection.
 async fn after_first(mut ws: tokio_tungstenite::WebSocketStream<UnixStream>, first: Value) -> Vec<Value> {
-    ws.send(Message::text(first.to_string())).await.unwrap();
+    // The harness may close the connection before a large message is all sent.
+    let _ = ws.send(Message::text(first.to_string())).await;
     // A call sent after a refused proof must not be served either.
     let _ = ws.send(Message::text(json!({ "id": 2, "op": "sessions" }).to_string())).await;
     let mut said = vec![];
@@ -133,15 +139,15 @@ async fn auth_no_token_a_wrong_token_and_a_sessions_tools_token_are_refused() {
     assert!(refused(&after_first(ws, open_call).await), "a call with no proof");
     let (ws, _) = raw(&served).await;
     assert!(refused(&after_first(ws, json!({ "proof": "" })).await), "an empty proof");
-    let (ws, challenge) = raw(&served).await;
-    let wrong = json!(Proof { proof: encode(&Token::random().answer(&challenge)) });
+    let (ws, hello) = raw(&served).await;
+    let wrong = json!(Proof { proof: encode(&Token::random().answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, wrong).await), "a wrong token");
-    let (ws, challenge) = raw(&served).await;
-    let of_tools = json!(Proof { proof: encode(&tools.answer(&challenge)) });
+    let (ws, hello) = raw(&served).await;
+    let of_tools = json!(Proof { proof: encode(&tools.answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, of_tools).await), "the session's tools token");
     let (ws, _) = raw(&served).await;
-    let replayed = json!(Proof { proof: encode(&served.token.answer(&challenge)) });
-    assert!(refused(&after_first(ws, replayed).await), "a right answer to another connection's challenge");
+    let replayed = json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) });
+    assert!(refused(&after_first(ws, replayed).await), "a right answer to another connection's hello");
 
     match Client::connect(&served.dir, &tools).await {
         Err(Error::Refused(_)) => {}
@@ -159,8 +165,8 @@ async fn auth_token_new_without_a_valid_token_is_refused_and_adds_none() {
     let new = Token::random();
     let call = json!({ "id": 1, "op": "token_new", "stored_key": encode(&new.stored_key()) });
     assert!(refused(&after_first(ws, call).await), "`token new` as the first message");
-    let (ws, challenge) = raw(&served).await;
-    let wrong = json!(Proof { proof: encode(&Token::random().answer(&challenge)) });
+    let (ws, hello) = raw(&served).await;
+    let wrong = json!(Proof { proof: encode(&Token::random().answer(hello.as_bytes())) });
     assert!(refused(&after_first(ws, wrong).await), "`token new` after a wrong proof");
     assert_eq!(served.harness.client_tokens().unwrap(), [served.token.stored_key()], "only the first token");
     assert!(Client::connect(&served.dir, &new).await.is_err(), "the new token opens nothing");
@@ -174,12 +180,12 @@ async fn auth_token_new_without_a_valid_token_is_refused_and_adds_none() {
 async fn auth_the_token_never_crosses_the_socket_a_fake_server_sees_only_the_answer() {
     let tmp = tempfile::tempdir().unwrap();
     let listener = UnixListener::bind(tmp.path().join(SOCKET)).unwrap();
-    let challenge = Token::random().stored_key();
+    let hello = serde_json::to_string(&Hello { protocol: PROTOCOL, build: "fake".into(), challenge: encode(&Token::random().stored_key()) }).unwrap();
+    let sent = hello.clone();
     let fake = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
-        let hello = Hello { protocol: PROTOCOL, build: "fake".into(), challenge: encode(&challenge) };
-        ws.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+        ws.send(Message::text(sent)).await.unwrap();
         let mut seen = vec![];
         if let Some(Ok(Message::Text(text))) = ws.next().await {
             seen.push(text.as_str().to_owned());
@@ -195,7 +201,7 @@ async fn auth_the_token_never_crosses_the_socket_a_fake_server_sees_only_the_ans
     let token = Token::random();
     assert!(Client::connect(tmp.path(), &token).await.is_err(), "a server that refuses is refused");
     let seen = fake.await.unwrap();
-    let answer = json!(Proof { proof: encode(&token.answer(&challenge)) }).to_string();
+    let answer = json!(Proof { proof: encode(&token.answer(hello.as_bytes())) }).to_string();
     assert!(seen == [answer], "the fake server got the challenge answer and nothing else");
     assert!(!seen.iter().any(|text| text.contains(&token.hex()) || text.contains(&encode(&token.stored_key()))), "no token or stored key");
 }
@@ -300,6 +306,119 @@ async fn serve_a_harness_with_no_token_and_none_handed_over_does_not_start() {
     assert!(!dir.join(SOCKET).exists());
 }
 
+/// True when the harness closes `stream` within 5 s without saying anything.
+async fn closed_by_the_harness(mut stream: UnixStream) -> bool {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 64];
+    matches!(tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await, Ok(Ok(0) | Err(_)))
+}
+
+#[tokio::test]
+async fn serve_a_connection_that_never_does_the_handshake_is_closed_at_the_proof_limit() {
+    let served = serve_with(SCRIPT, Limits { proof_within: Duration::from_millis(200), ..Limits::default() });
+    let idle = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    assert!(closed_by_the_harness(idle).await, "the time limit covers the handshake too");
+}
+
+#[tokio::test]
+async fn serve_a_connection_past_the_cap_is_closed_at_once() {
+    let served = serve_with(SCRIPT, Limits { connections: 2, ..Limits::default() });
+    let _kept = [UnixStream::connect(served.dir.join(SOCKET)).await.unwrap(), UnixStream::connect(served.dir.join(SOCKET)).await.unwrap()];
+    let third = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    assert!(closed_by_the_harness(third).await, "a third connection is one past the cap");
+}
+
+#[tokio::test]
+async fn serve_a_first_message_past_a_few_kb_is_refused_before_it_is_read() {
+    let served = serve(SCRIPT);
+    let (ws, hello) = raw(&served).await;
+    let padded = json!({ "proof": encode(&served.token.answer(hello.as_bytes())), "padding": "x".repeat(8 * 1024) });
+    let said = after_first(ws, padded).await;
+    assert!(said.iter().all(|reply| reply.get("ok").is_none()), "not taken as a proof, though it holds the right answer: {said:?}");
+}
+
+#[tokio::test]
+async fn locked_a_client_that_stops_reading_misses_no_event_and_gets_each_whole() {
+    // Many long lines of a locked session: far more than the socket, the pushes queue and a 1024-event channel hold.
+    let says = 3_000;
+    let script: String = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"{n} {}\"}}", "x".repeat(400))))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let served = serve(&script);
+    let mut slow = connect(&served).await;
+    let id = open_as(&mut slow, true, false).await;
+    let mut done = served.harness.subscribe(&id).unwrap();
+    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    // The client reads nothing until the session has closed.
+    loop {
+        match done.recv().await {
+            Ok(event) if event.body == Body::Closed => break,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    let mut got = vec![];
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(10), slow.push()).await.unwrap().unwrap() {
+        got.push(event);
+    }
+    let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
+    assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "every event once, in order");
+    assert!(got.last().unwrap().body.withheld() == Body::Closed.withheld(), "the last is `closed`");
+    // A locked session's text is not in the store, so a client that fell behind gets it only if nothing was dropped.
+    assert!(got.iter().all(|event| !matches!(event.body, Body::Withheld { .. })), "every event whole");
+    assert_eq!(got.iter().filter(|event| matches!(event.body, Body::Text { .. })).count(), says);
+}
+
+#[tokio::test]
+async fn events_a_watch_from_past_the_end_pushes_nothing_at_or_below_its_number() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
+    let mut watcher = connect(&served).await;
+    watcher.call(Op::Watch { session: id.clone(), after: 1_000 }).await.unwrap();
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    let pushed = tokio::time::timeout(Duration::from_secs(10), watcher.push()).await.unwrap().unwrap();
+    assert_eq!(pushed, Some(Push::End { session: id }), "no event numbered 1000 or less, then the end");
+}
+
+#[tokio::test]
+async fn events_one_connection_watches_a_session_once_at_a_time() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    let again = client.call(Op::Watch { session: id.clone(), after: 0 }).await;
+    assert!(matches!(again, Err(Error::Refused(ref why)) if why.contains("already watches")), "{again:?}");
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    while let Some(push) = tokio::time::timeout(Duration::from_secs(10), client.push()).await.unwrap().unwrap() {
+        if push == (Push::End { session: id.clone() }) {
+            break;
+        }
+    }
+    let mut ended = false;
+    for _ in 0..100 {
+        // The ended watch's task finishes just after it pushes its end.
+        match client.call(Op::Watch { session: id.clone(), after: 0 }).await {
+            Ok(_) => {
+                ended = true;
+                break;
+            }
+            Err(_) => tokio::task::yield_now().await,
+        }
+    }
+    assert!(ended, "once a watch has ended the session can be watched again");
+}
+
+#[tokio::test]
+async fn events_for_an_unknown_session_is_an_error() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    assert!(matches!(client.call(Op::Events { session: "nope".into(), after: 0 }).await, Err(Error::Refused(_))));
+}
+
 #[tokio::test]
 async fn locked_a_reconnecting_client_gets_kept_fields_and_not_the_text() {
     let served = serve(SCRIPT);
@@ -397,4 +516,37 @@ async fn requests_a_question_is_answered_as_the_next_prompt_and_hand_over_keeps_
     let provider = provider_session(&served, &id);
     let mut resumed = served.harness.resume(&id).await.expect("a session handed over can be resumed");
     assert_eq!(resumed.recv().await.unwrap().body, Body::Started { provider_session: provider, resumed: true });
+}
+
+#[tokio::test]
+async fn serve_the_descriptor_follows_no_link_and_is_made_private() {
+    let (_tmp, dir) = data_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let elsewhere = dir.parent().unwrap().join("elsewhere");
+    std::fs::write(&elsewhere, "untouched").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, dir.join(DESCRIPTOR)).unwrap();
+    let first = Token::random();
+    let server = Server::bind(&dir, move || Some(first), vec![], settings(4)).unwrap();
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "untouched", "the link was not followed");
+    let meta = std::fs::symlink_metadata(dir.join(DESCRIPTOR)).unwrap();
+    assert!(meta.is_file() && meta.permissions().mode() & 0o777 == 0o600, "a private file in its place");
+    drop(server);
+
+    std::fs::set_permissions(dir.join(DESCRIPTOR), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::remove_file(dir.join(SOCKET)).unwrap();
+    let _server = Server::bind(&dir, || None, vec![], settings(4)).unwrap();
+    assert_eq!(std::fs::metadata(dir.join(DESCRIPTOR)).unwrap().permissions().mode() & 0o777, 0o600, "an old file is replaced");
+}
+
+#[tokio::test]
+async fn serve_a_socket_path_the_platform_cannot_take_says_its_length_and_the_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("d".repeat(120));
+    let Err(e) = Server::bind(&dir, || Some(Token::random()), vec![], settings(4)) else { panic!("a path that long was taken") };
+    let said = e.to_string();
+    let len = dir.join(SOCKET).as_os_str().len();
+    assert!(said.contains(&len.to_string()) && said.contains(&(harness::api::SOCKET_PATH_MAX - 1).to_string()), "{said}");
+    assert!(!dir.exists(), "nothing was made");
+    assert!(matches!(Client::connect(&dir, &Token::random()).await, Err(Error::SocketPathTooLong { .. })), "the client says so too");
 }

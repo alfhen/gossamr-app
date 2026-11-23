@@ -142,10 +142,24 @@ fn serve(script: &str) -> Serving {
     Serving { _tmp: tmp, dir, token, child }
 }
 
+/// A client command that takes its token on stdin.
 fn client(serving: &Serving, args: &[&str]) -> Command {
     let mut command = Command::new(HARNESS);
-    command.args(args).arg("--data").arg(&serving.dir).env_remove("HARNESS_DATA").env(harness::cli::TOKEN_VARIABLE, &serving.token);
+    command.args(args).args(["--token-stdin", "--data"]).arg(&serving.dir).env_remove("HARNESS_DATA").env_remove(harness::cli::TOKEN_VARIABLE);
+    command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     command
+}
+
+/// Starts `command`, gives it `token` on stdin, and waits for it.
+fn with_token(command: &mut Command, token: &str) -> std::process::Output {
+    let mut child = command.spawn().unwrap();
+    give_token(&mut child, token);
+    child.wait_with_output().unwrap()
+}
+
+fn give_token(child: &mut std::process::Child, token: &str) {
+    use std::io::Write;
+    writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
 }
 
 fn lines(out: &std::process::Output) -> Vec<serde_json::Value> {
@@ -166,7 +180,8 @@ const WAITS: &str = r#"{"prompt": null}
 fn client_a_session_run_through_serve_goes_on_after_its_client_is_killed_and_the_cli_answers_it() {
     use std::io::BufRead;
     let serving = serve(WAITS);
-    let mut run = client(&serving, &["run", "--provider", "mock", "hi"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    let mut run = client(&serving, &["run", "--provider", "mock", "hi"]).spawn().unwrap();
+    give_token(&mut run, &serving.token);
     let mut said = String::new();
     std::io::BufReader::new(run.stderr.take().unwrap()).read_line(&mut said).unwrap();
     let session = said.trim().strip_prefix("harness: session ").expect("run names its session").to_owned();
@@ -184,14 +199,15 @@ fn client_a_session_run_through_serve_goes_on_after_its_client_is_killed_and_the
     run.kill().unwrap();
     run.wait().unwrap();
 
-    let sessions = lines(&client(&serving, &["sessions"]).output().unwrap());
+    let token = serving.token.clone();
+    let sessions = lines(&with_token(&mut client(&serving, &["sessions"]), &token));
     assert_eq!((sessions.len(), sessions[0]["id"].as_str(), &sessions[0]["running"]), (1, Some(session.as_str()), &serde_json::json!(true)));
-    let rest = lines(&client(&serving, &["events", &session, "--after", "2"]).output().unwrap());
+    let rest = lines(&with_token(&mut client(&serving, &["events", &session, "--after", "2"]), &token));
     assert!(rest == seen[2..], "events after 2 are the ones the killed client saw after 2");
     let request = seen[4]["id"].as_str().unwrap();
-    lines(&client(&serving, &["answer", &session, request, "allow"]).output().unwrap());
-    lines(&client(&serving, &["send", &session, "again"]).output().unwrap());
-    let all = lines(&client(&serving, &["events", &session, "--follow"]).output().unwrap());
+    lines(&with_token(&mut client(&serving, &["answer", &session, request, "allow"]), &token));
+    lines(&with_token(&mut client(&serving, &["send", &session, "again"]), &token));
+    let all = lines(&with_token(&mut client(&serving, &["events", &session, "--follow"]), &token));
     let types: Vec<&str> = all.iter().map(|event| event["type"].as_str().unwrap()).collect();
     assert_eq!(
         types,
@@ -204,18 +220,18 @@ fn client_a_session_run_through_serve_goes_on_after_its_client_is_killed_and_the
 #[test]
 fn client_token_new_needs_a_token_and_makes_one_that_works() {
     let serving = serve(WAITS);
-    let refused = client(&serving, &["sessions"]).env_remove(harness::cli::TOKEN_VARIABLE).output().unwrap();
+    let refused = with_token(&mut client(&serving, &["sessions"]), "");
     assert_eq!(refused.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&refused.stderr).contains(harness::cli::TOKEN_VARIABLE), "it says what is missing");
-    let wrong = client(&serving, &["token", "new"]).env(harness::cli::TOKEN_VARIABLE, harness::auth::Token::random().hex()).output().unwrap();
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("client token"), "it says what is missing");
+    let wrong = with_token(&mut client(&serving, &["token", "new"]), &harness::auth::Token::random().hex());
     assert_eq!(wrong.status.code(), Some(1), "`token new` with a wrong token");
     assert!(wrong.stdout.is_empty());
 
-    let made = client(&serving, &["token", "new"]).output().unwrap();
+    let made = with_token(&mut client(&serving, &["token", "new"]), &serving.token);
     assert!(made.status.success());
-    let new = String::from_utf8(made.stdout).unwrap().trim().to_owned();
+    let new = String::from_utf8(made.stdout.clone()).unwrap().trim().to_owned();
     assert!(harness::auth::Token::parse(&new).is_some() && new != serving.token, "a new token");
-    let listed = client(&serving, &["sessions"]).env(harness::cli::TOKEN_VARIABLE, &new).output().unwrap();
+    let listed = with_token(&mut client(&serving, &["sessions"]), &new);
     assert!(listed.status.success() && listed.stdout.is_empty(), "the new token opens the API");
     for out in [&refused, &wrong, &listed] {
         let all = [&out.stdout[..], &out.stderr[..]].concat();
@@ -255,14 +271,48 @@ fn client_a_run_whose_harness_closes_before_its_turn_ends_fails() {
         ws.send(Message::text(started)).await.unwrap();
         ws.close(None).await.unwrap();
     });
-    let out = Command::new(HARNESS)
-        .args(["run", "--provider", "mock", "hi", "--data"])
+    let mut out = Command::new(HARNESS);
+    out.args(["run", "--provider", "mock", "hi", "--data"])
         .arg(tmp.path())
+        .arg("--token-stdin")
         .env_remove("HARNESS_DATA")
-        .env(harness::cli::TOKEN_VARIABLE, harness::auth::Token::random().hex())
-        .output()
-        .unwrap();
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let out = with_token(&mut out, &harness::auth::Token::random().hex());
     runtime.block_on(fake).unwrap();
     assert_eq!(out.status.code(), Some(1), "no turn ended, so the run did not succeed");
     assert_eq!(printed(&out).len(), 1, "it printed the one event");
+}
+
+#[test]
+fn client_no_command_reads_a_token_from_the_environment_or_an_argument() {
+    let serving = serve(WAITS);
+    let with_variable = |args: &[&str]| {
+        let mut command = Command::new(HARNESS);
+        command.args(args).arg("--data").arg(&serving.dir).env_remove("HARNESS_DATA").env(harness::cli::TOKEN_VARIABLE, &serving.token);
+        command.stdin(std::process::Stdio::null()).output().unwrap()
+    };
+    for args in [&["sessions"][..], &["token", "new"], &["events", "x"], &["run", "--provider", "mock", "hi"]] {
+        let out = with_variable(args);
+        assert_eq!(out.status.code(), Some(1), "{args:?} with the variable set and no token on stdin is refused");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("--token-stdin"), "{args:?} says how to give the token");
+    }
+    let out = with_variable(&["sessions", "--token", &serving.token]);
+    assert_eq!(out.status.code(), Some(2), "a token is never an argument");
+}
+
+#[test]
+fn serve_with_a_client_token_in_its_environment_does_not_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("d");
+    let out = Command::new(HARNESS)
+        .args(["serve".as_ref(), "--data".as_ref(), dir.as_os_str()])
+        .env(harness::cli::TOKEN_VARIABLE, harness::auth::Token::random().hex())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains(harness::cli::TOKEN_VARIABLE), "it says why");
+    assert!(!dir.exists(), "nothing was made");
 }

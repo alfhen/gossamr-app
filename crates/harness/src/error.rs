@@ -28,6 +28,8 @@ pub enum Error {
     NoQuestion(String),
     /// The harness has shut down, or is shutting down.
     ShutDown,
+    /// A Unix socket path this platform cannot take.
+    SocketPathTooLong { path: PathBuf, len: usize, max: usize },
     /// The client's token was not proven, or the request is not one a client may make.
     Refused(String),
     /// The other side broke the protocol, or the connection failed.
@@ -59,6 +61,9 @@ impl fmt::Display for Error {
             Error::CannotResume(id) => write!(f, "session {id} said it cannot be resumed"),
             Error::NoQuestion(id) => write!(f, "no open question {id}"),
             Error::ShutDown => write!(f, "the harness has shut down"),
+            Error::SocketPathTooLong { path, len, max } => {
+                write!(f, "the socket path {} is {len} bytes, and this platform takes at most {max}: use a shorter data folder", path.display())
+            }
             Error::Refused(why) => write!(f, "refused: {why}"),
             Error::Protocol(why) => write!(f, "the connection failed: {why}"),
             Error::Driver(message) => write!(f, "the driver failed: {message}"),

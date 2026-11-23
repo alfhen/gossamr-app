@@ -307,7 +307,10 @@ impl Harness {
 
     /// The stored events after `after`. A read writes nothing: the sweep runs on its timer.
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
-        self.inner.with_store(|store| store.events(id, after))
+        self.inner.with_store(|store| {
+            store.session(id)?;
+            store.events(id, after)
+        })
     }
 
     /// The stored events after `after`, and, while the session runs, a receiver of every event from the moment of the
