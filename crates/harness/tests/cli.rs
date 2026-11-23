@@ -20,7 +20,7 @@ fn an_argument_that_is_not_utf8_prints_the_usage_and_exits_two() {
 
 #[test]
 fn anything_else_prints_the_usage_and_exits_two() {
-    for args in [&[][..], &["serve"]] {
+    for args in [&[][..], &["serve", "extra"]] {
         let out = Command::new(HARNESS).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(out.stdout.is_empty(), "{args:?}");

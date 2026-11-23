@@ -670,7 +670,7 @@ async fn mock_a_prompt_that_comes_while_the_mock_waits_is_kept_for_the_next_turn
         {"end": "done"}"#,
     );
     let tools = Arc::new(harness::tools::Endpoint::unattached("t"));
-    let launch = Launch { cwd: "/".into(), locked: false, model: None, resume: None, tools_token: harness::driver::Secret::random(), tools };
+    let launch = Launch { cwd: "/".into(), locked: false, model: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
     let mut link = mock.open(launch).unwrap();
     link.commands.send(Command::Prompt("first".into())).unwrap();
     link.commands.send(Command::Prompt("second, early".into())).unwrap();

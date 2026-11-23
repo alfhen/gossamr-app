@@ -34,7 +34,8 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
         withheld INTEGER NOT NULL,
         PRIMARY KEY (session, seq)
     );
-    CREATE INDEX events_kept_by_age ON events (ms) WHERE withheld = 0;"];
+    CREATE INDEX events_kept_by_age ON events (ms) WHERE withheld = 0;",
+    "CREATE TABLE client_tokens (stored_key BLOB PRIMARY KEY, created_ms INTEGER NOT NULL);"];
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -52,6 +53,20 @@ pub struct SessionRow {
     pub model: Option<String>,
     pub provider_session: Option<String>,
     pub cleaned: bool,
+}
+
+/// A session as `sessions` lists it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Listed {
+    pub id: String,
+    pub provider: String,
+    pub locked: bool,
+    pub model: Option<String>,
+    pub created_ms: i64,
+    pub cleaned: bool,
+    /// Set by the harness: the session's agent runs.
+    #[serde(default)]
+    pub running: bool,
 }
 
 impl Store {
@@ -112,6 +127,27 @@ impl Store {
             )
             .optional()?
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
+    }
+
+    pub fn sessions(&self) -> Result<Vec<Listed>> {
+        let mut stmt = self.conn.prepare("SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL FROM sessions ORDER BY created_ms, id")?;
+        let rows = stmt.query_map([], |row| {
+            let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, running: false })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO client_tokens (stored_key, created_ms) VALUES (?1, ?2)", params![&stored_key[..], now_ms()])?;
+        Ok(())
+    }
+
+    /// The stored keys of the client tokens.
+    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
+        let mut stmt = self.conn.prepare("SELECT stored_key FROM client_tokens")?;
+        let keys = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        Ok(keys.filter_map(|key| key.ok().and_then(|key| key.try_into().ok())).collect())
     }
 
     /// None clears the id, so the session cannot be resumed.

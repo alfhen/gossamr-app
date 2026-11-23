@@ -8,6 +8,7 @@
 //! prompted turn then waits.
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,7 +22,7 @@ use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secr
 use crate::error::{Error, Result};
 use crate::event::{Body, Decision, Event, FailKind};
 use crate::redact;
-use crate::store::{Store, now_ms};
+use crate::store::{Listed, Store, now_ms};
 use crate::tools::{Endpoint, Reply, ToolCall};
 
 #[derive(Debug, Clone, Copy)]
@@ -176,10 +177,43 @@ impl Harness {
         self.inner.store().clean_up(id)
     }
 
+    /// The stored events after `after`. A read writes nothing.
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
+        self.inner.store().events(id, after)
+    }
+
+    /// The stored events after `after` and, while the session runs, a receiver of its events from the moment of the
+    /// read. An event can come in both; a client drops those numbered up to the last stored one it read.
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, Option<broadcast::Receiver<Event>>)> {
+        let live = self.inner.live();
+        let receiver = live.get(id).map(|live| live.events.subscribe());
         let store = self.inner.store();
-        store.sweep(now_ms())?;
-        store.events(id, after)
+        store.session(id)?;
+        Ok((store.events(id, after)?, receiver))
+    }
+
+    pub fn sessions(&self) -> Result<Vec<Listed>> {
+        let live = self.inner.live();
+        let mut listed = self.inner.store().sessions()?;
+        for session in &mut listed {
+            session.running = live.contains_key(&session.id);
+        }
+        Ok(listed)
+    }
+
+    /// The providers, by name, with what each can do.
+    pub fn providers(&self) -> Vec<(String, Capabilities)> {
+        let mut providers: Vec<_> = self.inner.drivers.iter().map(|(name, driver)| (name.clone(), driver.capabilities())).collect();
+        providers.sort_by(|a, b| a.0.cmp(&b.0));
+        providers
+    }
+
+    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
+        self.inner.store().client_tokens()
+    }
+
+    pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
+        self.inner.store().add_client_token(stored_key)
     }
 
     pub fn subscribe(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
@@ -234,7 +268,7 @@ impl Harness {
         // Freed again if the driver fails to open, or panics.
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = Arc::new(Endpoint::new(token.expose(), calls));
-        let launch = Launch { cwd, locked, model, resume, tools_token: token, tools };
+        let launch = Launch { cwd, locked, model, resume, tools_token: token, tools, env: agent_env(std::env::vars_os()) };
         let caps = driver.capabilities();
         let link = driver.open(launch).map_err(|OpenError { kind, message }| {
             Error::Open { kind, message: redact::text(&message, &secrets) }
@@ -253,6 +287,11 @@ impl Harness {
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         Ok(receiver)
     }
+}
+
+/// The environment an agent gets: the harness's own, without a client token.
+pub fn agent_env(vars: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    vars.filter(|(name, _)| name != crate::cli::TOKEN_VARIABLE).collect()
 }
 
 /// What a start opens.

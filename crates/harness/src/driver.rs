@@ -1,6 +1,7 @@
 //! The one interface every provider sits behind. A driver starts an agent and turns what the agent says into
 //! [`Body`] events; what a provider cannot do is a capability flag, named by what it lets the client do or expect.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -69,6 +70,8 @@ pub struct Launch {
     pub tools_token: Secret,
     /// The session's tools endpoint. A real agent reaches it over HTTP at its URL; the mock calls it in-process.
     pub tools: Arc<Endpoint>,
+    /// The agent's whole environment. A driver starts its process with this and nothing else.
+    pub env: Vec<(OsString, OsString)>,
 }
 
 /// What the client asks of a running agent. Calls to the session's tools do not come this way: the agent makes them

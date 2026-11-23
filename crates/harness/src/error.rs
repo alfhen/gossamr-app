@@ -21,6 +21,10 @@ pub enum Error {
     NotOpen(String),
     /// The session was cleaned up, so it cannot be resumed.
     CleanedUp(String),
+    /// The client's token was not proven, or the request is not one a client may make.
+    Refused(String),
+    /// The other side broke the protocol, or the connection failed.
+    Protocol(String),
     Driver(String),
     /// The driver could not open the agent, and says why.
     Open { kind: crate::event::FailKind, message: String },
@@ -44,6 +48,8 @@ impl fmt::Display for Error {
             Error::NotRunning(id) => write!(f, "session {id} is not running"),
             Error::NotOpen(id) => write!(f, "no open permission request {id}: it was answered, its turn ended, or it never was"),
             Error::CleanedUp(id) => write!(f, "session {id} was cleaned up"),
+            Error::Refused(why) => write!(f, "refused: {why}"),
+            Error::Protocol(why) => write!(f, "the connection failed: {why}"),
             Error::Driver(message) => write!(f, "the driver failed: {message}"),
             Error::Open { kind, message } => write!(f, "the agent could not start ({kind:?}): {message}"),
             Error::Sqlite(e) => write!(f, "the store failed: {e}"),
