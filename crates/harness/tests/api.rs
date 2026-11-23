@@ -14,7 +14,7 @@ use harness::driver::Driver;
 use harness::error::Error;
 use harness::event::{Body, Decision, Event};
 use harness::mock::Mock;
-use harness::server::Server;
+use harness::server::{Limits, Server};
 use harness::session::Harness;
 use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
@@ -48,11 +48,15 @@ impl Drop for Served {
 }
 
 fn serve(script: &str) -> Served {
+    serve_with(script, Limits::default())
+}
+
+fn serve_with(script: &str, limits: Limits) -> Served {
     let (tmp, dir) = data_dir();
     let (token, mock) = (Token::random(), common::mock(script));
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
     let first = token.clone();
-    let server = Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap();
+    let server = Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap().limits(limits);
     let harness = server.harness().clone();
     let task = tokio::spawn(server.run());
     Served { _tmp: tmp, dir, token, mock, harness, task }
@@ -63,7 +67,11 @@ async fn connect(served: &Served) -> Client {
 }
 
 async fn open(client: &mut Client) -> String {
-    let opened = client.call(Op::Open { provider: "mock".into(), cwd: "/nowhere".into(), locked: false, model: None }).await.unwrap();
+    open_as(client, false).await
+}
+
+async fn open_as(client: &mut Client, locked: bool) -> String {
+    let opened = client.call(Op::Open { provider: "mock".into(), cwd: "/nowhere".into(), locked, model: None }).await.unwrap();
     opened["session"].as_str().unwrap().to_owned()
 }
 
@@ -99,7 +107,8 @@ async fn raw(served: &Served) -> (tokio_tungstenite::WebSocketStream<UnixStream>
 
 /// What the harness says after a first message, until it closes the connection.
 async fn after_first(mut ws: tokio_tungstenite::WebSocketStream<UnixStream>, first: Value) -> Vec<Value> {
-    ws.send(Message::text(first.to_string())).await.unwrap();
+    // The harness may close the connection before a large message is all sent.
+    let _ = ws.send(Message::text(first.to_string())).await;
     // A call sent after a refused proof must not be served either.
     let _ = ws.send(Message::text(json!({ "id": 2, "op": "sessions" }).to_string())).await;
     let mut said = vec![];
@@ -295,4 +304,174 @@ async fn serve_a_harness_with_no_token_and_none_handed_over_does_not_start() {
     let refused = Server::bind(&dir, || None, vec![], settings(4));
     assert!(matches!(refused, Err(Error::Refused(_))), "no first token");
     assert!(!dir.join(SOCKET).exists());
+}
+
+/// True when the harness closes `stream` within 5 s without saying anything.
+async fn closed_by_the_harness(mut stream: UnixStream) -> bool {
+    use tokio::io::AsyncReadExt;
+    let mut buf = [0u8; 64];
+    matches!(tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await, Ok(Ok(0) | Err(_)))
+}
+
+#[tokio::test]
+async fn serve_a_connection_that_never_does_the_handshake_is_closed_at_the_proof_limit() {
+    let served = serve_with(SCRIPT, Limits { proof_within: Duration::from_millis(200), ..Limits::default() });
+    let idle = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    assert!(closed_by_the_harness(idle).await, "the time limit covers the handshake too");
+}
+
+#[tokio::test]
+async fn serve_a_connection_past_the_cap_is_closed_at_once() {
+    let served = serve_with(SCRIPT, Limits { connections: 2, ..Limits::default() });
+    let _kept = [UnixStream::connect(served.dir.join(SOCKET)).await.unwrap(), UnixStream::connect(served.dir.join(SOCKET)).await.unwrap()];
+    let third = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    assert!(closed_by_the_harness(third).await, "a third connection is one past the cap");
+}
+
+#[tokio::test]
+async fn serve_a_first_message_past_a_few_kb_is_refused_before_it_is_read() {
+    let served = serve(SCRIPT);
+    let (ws, hello) = raw(&served).await;
+    let padded = json!({ "proof": encode(&served.token.answer(hello.as_bytes())), "padding": "x".repeat(8 * 1024) });
+    let said = after_first(ws, padded).await;
+    assert!(said.iter().all(|reply| reply.get("ok").is_none()), "not taken as a proof, though it holds the right answer: {said:?}");
+}
+
+#[tokio::test]
+async fn events_a_client_that_stops_reading_falls_behind_and_reads_what_it_missed_from_the_store() {
+    // Many long lines of a locked session: far more than the socket, the pushes queue and the live channel hold.
+    let says = 3_000;
+    let script: String = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"{n} {}\"}}", "x".repeat(400))))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let served = serve(&script);
+    let mut slow = connect(&served).await;
+    let id = open_as(&mut slow, true).await;
+    let mut done = served.harness.subscribe(&id).unwrap();
+    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    // The client reads nothing until the session has closed.
+    loop {
+        match done.recv().await {
+            Ok(event) if event.body == Body::Closed => break,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    let mut got = vec![];
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(10), slow.push()).await.unwrap().unwrap() {
+        got.push(event);
+    }
+    let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
+    assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "every event once, in order");
+    assert!(got.last().unwrap().body.withheld() == Body::Closed.withheld(), "the last is `closed`");
+    // A locked session's text is not in the store, so what came from it is withheld: the pushes were bounded.
+    assert!(got.iter().any(|event| matches!(&event.body, Body::Withheld { of, .. } if of == "text")), "the store path took over");
+    assert!(got.iter().any(|event| matches!(event.body, Body::Text { .. })), "the first ones came live");
+}
+
+#[tokio::test]
+async fn events_a_watch_from_past_the_end_pushes_nothing_at_or_below_its_number() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
+    let mut watcher = connect(&served).await;
+    watcher.call(Op::Watch { session: id.clone(), after: 1_000 }).await.unwrap();
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    let pushed = tokio::time::timeout(Duration::from_secs(10), watcher.push()).await.unwrap().unwrap();
+    assert_eq!(pushed, Some(Push::End { session: id }), "no event numbered 1000 or less, then the end");
+}
+
+#[tokio::test]
+async fn events_one_connection_watches_a_session_once_at_a_time() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    let again = client.call(Op::Watch { session: id.clone(), after: 0 }).await;
+    assert!(matches!(again, Err(Error::Refused(ref why)) if why.contains("already watches")), "{again:?}");
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    while let Some(push) = tokio::time::timeout(Duration::from_secs(10), client.push()).await.unwrap().unwrap() {
+        if push == (Push::End { session: id.clone() }) {
+            break;
+        }
+    }
+    let mut ended = false;
+    for _ in 0..100 {
+        // The ended watch's task finishes just after it pushes its end.
+        match client.call(Op::Watch { session: id.clone(), after: 0 }).await {
+            Ok(_) => {
+                ended = true;
+                break;
+            }
+            Err(_) => tokio::task::yield_now().await,
+        }
+    }
+    assert!(ended, "once a watch has ended the session can be watched again");
+}
+
+#[tokio::test]
+async fn events_for_an_unknown_session_is_an_error() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    assert!(matches!(client.call(Op::Events { session: "nope".into(), after: 0 }).await, Err(Error::Refused(_))));
+}
+
+#[tokio::test]
+async fn locked_a_reconnecting_client_gets_kept_fields_and_not_the_text() {
+    let served = serve(SCRIPT);
+    let mut first = connect(&served).await;
+    let id = open_as(&mut first, true).await;
+    first.call(Op::Send { session: id.clone(), text: "a private prompt".into() }).await.unwrap();
+    let live = events_until(&mut first, |body| matches!(body, Body::Permission { .. })).await;
+    assert!(live.iter().any(|event| event.body == Body::Text { text: "two".into() }), "the connected client gets the text");
+    drop(first);
+
+    let mut second = connect(&served).await;
+    second.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    let mut read = vec![];
+    for _ in 0..live.len() {
+        read.push(next_event(&mut second).await);
+    }
+    assert_eq!(read.iter().map(|event| event.seq).collect::<Vec<_>>(), live.iter().map(|event| event.seq).collect::<Vec<_>>());
+    for (stored, seen) in read.iter().zip(&live) {
+        assert!(stored.body == seen.body.withheld(), "seq {}: only the kept fields come back", stored.seq);
+    }
+    let printed = serde_json::to_string(&read).unwrap();
+    assert!(!printed.contains("a private prompt") && !printed.contains("\"two\""), "no text after a reconnect");
+}
+
+#[tokio::test]
+async fn serve_the_descriptor_follows_no_link_and_is_made_private() {
+    let (_tmp, dir) = data_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let elsewhere = dir.parent().unwrap().join("elsewhere");
+    std::fs::write(&elsewhere, "untouched").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, dir.join(DESCRIPTOR)).unwrap();
+    let first = Token::random();
+    let server = Server::bind(&dir, move || Some(first), vec![], settings(4)).unwrap();
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "untouched", "the link was not followed");
+    let meta = std::fs::symlink_metadata(dir.join(DESCRIPTOR)).unwrap();
+    assert!(meta.is_file() && meta.permissions().mode() & 0o777 == 0o600, "a private file in its place");
+    drop(server);
+
+    std::fs::set_permissions(dir.join(DESCRIPTOR), std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::remove_file(dir.join(SOCKET)).unwrap();
+    let _server = Server::bind(&dir, || None, vec![], settings(4)).unwrap();
+    assert_eq!(std::fs::metadata(dir.join(DESCRIPTOR)).unwrap().permissions().mode() & 0o777, 0o600, "an old file is replaced");
+}
+
+#[tokio::test]
+async fn serve_a_socket_path_the_platform_cannot_take_says_its_length_and_the_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("d".repeat(120));
+    let Err(e) = Server::bind(&dir, || Some(Token::random()), vec![], settings(4)) else { panic!("a path that long was taken") };
+    let said = e.to_string();
+    let len = dir.join(SOCKET).as_os_str().len();
+    assert!(said.contains(&len.to_string()) && said.contains(&(harness::api::SOCKET_PATH_MAX - 1).to_string()), "{said}");
+    assert!(!dir.exists(), "nothing was made");
+    assert!(matches!(Client::connect(&dir, &Token::random()).await, Err(Error::SocketPathTooLong { .. })), "the client says so too");
 }

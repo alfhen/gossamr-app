@@ -286,7 +286,8 @@ async fn forward(harness: Harness, session: String, stored: Vec<Event>, live: Op
                     let Ok(missed) = harness.events(&session, last) else { break };
                     for event in missed {
                         last = event.seq;
-                        let closed = event.body == Body::Closed;
+                        // A locked session's `closed` comes back from the store withheld.
+                        let closed = event.body.withheld() == Body::Closed.withheld();
                         if !push(&out, &session, event).await || closed {
                             return finish(&out, session).await;
                         }
