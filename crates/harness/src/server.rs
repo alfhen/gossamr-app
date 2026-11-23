@@ -27,6 +27,8 @@ use crate::event::{Body, Event};
 use crate::session::{Harness, Open, Settings};
 use crate::store::Store;
 
+/// How often the sweep runs while the harness serves.
+pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// How long a new connection has to prove its token.
 const PROOF_WITHIN: Duration = Duration::from_secs(10);
 
@@ -67,6 +69,7 @@ impl Server {
     /// Serves until the process is told to stop; then the socket and the descriptor are gone.
     pub async fn run(self) -> Result<()> {
         let Server { harness, listener, dir, stops: (mut term, mut int) } = self;
+        let (sweeper, _) = harness.sweep_on_timer(SWEEP_EVERY);
         let mut connections = JoinSet::new();
         loop {
             tokio::select! {
@@ -82,6 +85,7 @@ impl Server {
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
             }
         }
+        sweeper.abort();
         let _ = std::fs::remove_file(dir.join(SOCKET));
         let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
         Ok(())

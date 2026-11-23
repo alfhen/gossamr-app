@@ -229,3 +229,22 @@ fn tokens_the_store_keeps_stored_keys_once_each_and_never_a_token() {
     assert!(!disk.windows(32).any(|window| window == harness::auth::decode(&token.hex()).unwrap()), "the token's bytes are nowhere on disk");
     assert!(!String::from_utf8_lossy(&disk).contains(&token.hex()), "nor its hex");
 }
+
+#[tokio::test(start_paused = true)]
+async fn sweep_runs_on_its_timer_with_no_read_or_open() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    store.append("a", &text("old"), now_ms() - KEEP_MS - 1).unwrap();
+    let harness = harness::session::Harness::new(store, vec![], settings(4));
+    let payload = || -> String {
+        let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+        raw.query_row("SELECT payload FROM events WHERE session = 'a'", [], |row| row.get(0)).unwrap()
+    };
+    assert!(payload().contains("old"), "nothing has swept yet");
+    let (task, mut swept) = harness.sweep_on_timer(std::time::Duration::from_secs(3600));
+    // The clock is paused and moves on only when every task waits, so this returns once the timer has fired.
+    swept.changed().await.unwrap();
+    assert!(!payload().contains("old"), "the timer's sweep dropped the payload with no read or open");
+    task.abort();
+}

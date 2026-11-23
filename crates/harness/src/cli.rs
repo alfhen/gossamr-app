@@ -114,7 +114,8 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
     client.call(Op::Send { session: session.clone(), text: prompt }).await?;
-    let (mut answers, mut ok) = (answers.into_iter(), true);
+    // Done only once a turn has ended, and not in a failure: a connection that drops before then is not done.
+    let (mut answers, mut ok, mut ended) = (answers.into_iter(), true, false);
     while let Some(Push::Event { event, .. }) = client.push().await? {
         println!("{}", serde_json::to_string(&event)?);
         match event.body {
@@ -124,6 +125,7 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
                 }
             }
             body if body.ends_turn() => {
+                ended = true;
                 ok &= !matches!(body, Body::Failed { .. });
                 // A session that is already stopping refuses it, and its `closed` comes anyway.
                 let _ = client.call(Op::Close { session: session.clone() }).await;
@@ -131,5 +133,5 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
             _ => {}
         }
     }
-    Ok(ok)
+    Ok(ok && ended)
 }

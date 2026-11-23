@@ -183,13 +183,36 @@ impl Harness {
     }
 
     /// The stored events after `after` and, while the session runs, a receiver of its events from the moment of the
-    /// read. An event can come in both; a client drops those numbered up to the last stored one it read.
+    /// read: both under the store's lock, which a session holds while it stores and sends an event, so an event is in
+    /// one or the other and never both.
     pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, Option<broadcast::Receiver<Event>>)> {
         let live = self.inner.live();
-        let receiver = live.get(id).map(|live| live.events.subscribe());
         let store = self.inner.store();
         store.session(id)?;
+        let receiver = live.get(id).map(|live| live.events.subscribe());
         Ok((store.events(id, after)?, receiver))
+    }
+
+    /// Drops payload past 30 days; see `Store::sweep`.
+    pub fn sweep(&self) -> Result<usize> {
+        self.inner.store().sweep(now_ms())
+    }
+
+    /// Sweeps every `every`, the first one `every` from now. `swept` counts the sweeps.
+    pub fn sweep_on_timer(&self, every: Duration) -> (tokio::task::JoinHandle<()>, tokio::sync::watch::Receiver<u64>) {
+        let (count, swept) = tokio::sync::watch::channel(0);
+        let harness = self.clone();
+        let task = tokio::spawn(async move {
+            let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+            loop {
+                timer.tick().await;
+                if let Err(e) = harness.sweep() {
+                    eprintln!("harness: the sweep failed: {e}");
+                }
+                count.send_modify(|n| *n += 1);
+            }
+        });
+        (task, swept)
     }
 
     pub fn sessions(&self) -> Result<Vec<Listed>> {
@@ -745,13 +768,18 @@ impl Task {
             return false;
         }
         let body = redact::body(body, &self.secrets);
-        let stored = self.inner.store().append(&self.id, &body, now_ms());
-        match stored {
+        // Sent under the store's lock, as `watch` reads under it: a client's read and its live events never overlap,
+        // so a locked session's whole event is never taken for the withheld copy the read gave.
+        let store = self.inner.store();
+        match store.append(&self.id, &body, now_ms()) {
             Ok(event) => {
+                #[cfg(test)]
+                tests::before_publish();
                 let _ = self.events.send(event);
                 true
             }
             Err(e) => {
+                drop(store);
                 self.store_failed(&e);
                 if body == Body::Closed {
                     let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
@@ -791,6 +819,16 @@ mod tests {
 
     /// Told once when a start is about to take the session's lock to reserve it.
     static BEFORE_RESERVE: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
+
+    /// Runs once, just after an event is stored and before it is sent.
+    static BEFORE_PUBLISH: Mutex<Option<Hook>> = Mutex::new(None);
+
+    pub(super) fn before_publish() {
+        let hook = BEFORE_PUBLISH.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     pub(super) fn before_reserve() {
         if let Some(reached) = BEFORE_RESERVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
@@ -848,5 +886,37 @@ mod tests {
         assert_eq!(starts_and_closes(&harness, &id), ["started", "closed", "started"]);
         worker.lock().unwrap().take().expect("the hook ran").join().unwrap();
     }
-}
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn race_a_watch_between_an_events_store_and_send_gets_it_once_whole_or_withheld_never_both() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"x\"}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let spec = Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), model: None };
+        let (id, mut events) = harness.open(spec).await.unwrap();
+        events.recv().await.unwrap();
+        let (watching, id_for_hook) = (harness.clone(), id.clone());
+        let watched: Arc<Mutex<Option<std::thread::JoinHandle<_>>>> = Arc::default();
+        let kept = watched.clone();
+        *BEFORE_PUBLISH.lock().unwrap() = Some(Box::new(move || {
+            // A client watches from another thread at this moment. The hook gives it a bounded time to read: it can
+            // only if the session does not hold the store's lock while it sends.
+            let (done, finished) = std::sync::mpsc::channel();
+            *kept.lock().unwrap() = Some(std::thread::spawn(move || {
+                let watch = watching.watch(&id_for_hook, 0).unwrap();
+                let _ = done.send(());
+                watch
+            }));
+            let _ = finished.recv_timeout(Duration::from_millis(500));
+        }));
+        harness.send(&id, "go").unwrap();
+        while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
+        let handle = watched.lock().unwrap().take().expect("the hook ran");
+        let (stored, receiver) = handle.join().unwrap();
+        let mut receiver = receiver.expect("the session runs");
+        let last = stored.last().map_or(0, |event| event.seq);
+        let first_live = receiver.recv().await.unwrap();
+        assert!(first_live.seq == last + 1, "the read ends at {last}, the live events start at {}", first_live.seq);
+    }
+}

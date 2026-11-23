@@ -231,3 +231,19 @@ fn client_serve_stops_on_sigterm_and_takes_its_socket_and_descriptor_with_it() {
     assert!(serving.child.wait().unwrap().success());
     assert!(!serving.dir.join(harness::api::SOCKET).exists() && !serving.dir.join(harness::api::DESCRIPTOR).exists());
 }
+
+#[test]
+fn client_a_run_whose_harness_goes_before_its_turn_ends_fails() {
+    use std::io::BufRead;
+    let mut serving = serve(WAITS);
+    let mut run = client(&serving, &["run", "--provider", "mock", "hi"]).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap();
+    for line in std::io::BufReader::new(run.stdout.take().unwrap()).lines() {
+        if line.unwrap().contains("\"permission\"") {
+            break;
+        }
+    }
+    // SAFETY: kill has no memory preconditions; the pid is our child's, which has not been waited on.
+    assert_eq!(unsafe { libc::kill(serving.child.id() as i32, libc::SIGTERM) }, 0);
+    serving.child.wait().unwrap();
+    assert_eq!(run.wait().unwrap().code(), Some(1), "no turn ended, so the run did not succeed");
+}
