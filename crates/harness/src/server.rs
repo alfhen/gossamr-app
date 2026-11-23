@@ -250,3 +250,62 @@ async fn forward(harness: Harness, session: String, stored: Vec<Event>, live: Op
 fn finish(out: &UnboundedSender<Reply>, session: String) {
     let _ = out.send(Reply { session: Some(session), end: true, ..Reply::default() });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::Body;
+
+    fn text(seq: u64) -> Event {
+        Event { seq, ms: 0, body: Body::Text { text: format!("t{seq}") } }
+    }
+
+    /// A harness whose store holds session `s` with events 1 to `n`, as `text` makes them, then `closed`.
+    fn stored(dir: &Path, n: u64) -> (Harness, Vec<Event>) {
+        let store = Store::open(dir).unwrap();
+        store.create_session("s", "mock", false, Path::new("/"), None).unwrap();
+        let mut events: Vec<Event> = (1..=n).map(|seq| store.append("s", &text(seq).body, 0).unwrap()).collect();
+        events.push(store.append("s", &Body::Closed, 0).unwrap());
+        (Harness::new(store, vec![], Settings::default()), events)
+    }
+
+    async fn pushed(harness: Harness, stored: Vec<Event>, live: broadcast::Receiver<Event>) -> Vec<Reply> {
+        let (out, mut pushes) = mpsc::unbounded_channel();
+        forward(harness, "s".into(), stored, Some(live), out).await;
+        let mut all = vec![];
+        while let Ok(push) = pushes.try_recv() {
+            all.push(push);
+        }
+        all
+    }
+
+    fn events(pushes: &[Reply]) -> Vec<Event> {
+        pushes.iter().filter_map(|push| push.event.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn events_an_event_both_read_and_live_is_pushed_once_and_the_watch_ends_at_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (harness, all) = stored(&tmp.path().join("d"), 4);
+        let (live, receiver) = broadcast::channel(16);
+        // The read got 1 to 3; the receiver, subscribed before it, has 2 onwards.
+        for event in &all[1..] {
+            live.send(event.clone()).unwrap();
+        }
+        let pushes = pushed(harness, all[..3].to_vec(), receiver).await;
+        assert_eq!(events(&pushes), all, "each once, in order");
+        assert!(pushes.last().unwrap().end, "then the end");
+    }
+
+    #[tokio::test]
+    async fn events_a_client_that_falls_behind_the_live_events_reads_what_it_missed_from_the_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (harness, all) = stored(&tmp.path().join("d"), 6);
+        let (live, receiver) = broadcast::channel(2);
+        for event in &all {
+            let _ = live.send(event.clone());
+        }
+        let pushes = pushed(harness, vec![], receiver).await;
+        assert_eq!(events(&pushes), all, "none lost, none twice");
+    }
+}
