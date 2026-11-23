@@ -12,7 +12,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::signal::unix::{SignalKind, signal};
+use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::JoinSet;
@@ -24,7 +24,6 @@ use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
 use crate::event::{Body, Event};
-use crate::mock::{Mock, Script};
 use crate::session::{Harness, Open, Settings};
 use crate::store::Store;
 
@@ -35,19 +34,19 @@ pub struct Server {
     harness: Harness,
     listener: UnixListener,
     dir: PathBuf,
+    /// Taken at bind, so a stop that comes once the socket is there is never missed.
+    stops: (Signal, Signal),
 }
 
 impl Server {
     /// Takes the data folder and listens on its socket. A store with no client token yet takes `first_token`'s, the
-    /// one the client that starts the harness hands over; with none, the harness does not start. The mock provider is
-    /// there only when a script is given.
-    pub fn bind(dir: &Path, first_token: impl FnOnce() -> Option<Token>, mock: Option<Script>, settings: Settings) -> Result<Server> {
+    /// one the client that starts the harness hands over; with none, the harness does not start.
+    pub fn bind(dir: &Path, first_token: impl FnOnce() -> Option<Token>, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings) -> Result<Server> {
         let store = Store::open(dir)?;
         if store.client_tokens()?.is_empty() {
             let token = first_token().ok_or_else(|| Error::Refused("no client token yet: give the first one on stdin".into()))?;
             store.add_client_token(&token.stored_key())?;
         }
-        let drivers: Vec<(String, Arc<dyn Driver>)> = mock.map(|script| ("mock".to_owned(), Arc::new(Mock::new(script)) as Arc<dyn Driver>)).into_iter().collect();
         let harness = Harness::new(store, drivers, settings);
         let socket = dir.join(SOCKET);
         // The store's lock is ours, so a socket left here is a dead harness's.
@@ -57,7 +56,8 @@ impl Server {
         let descriptor = Descriptor { protocol: PROTOCOL, build: crate::BUILD_ID.into(), pid: std::process::id() };
         let mut file = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).open(dir.join(DESCRIPTOR))?;
         file.write_all(serde_json::to_string(&descriptor)?.as_bytes())?;
-        Ok(Server { harness, listener, dir: dir.to_owned() })
+        let stops = (signal(SignalKind::terminate())?, signal(SignalKind::interrupt())?);
+        Ok(Server { harness, listener, dir: dir.to_owned(), stops })
     }
 
     pub fn harness(&self) -> &Harness {
@@ -66,8 +66,7 @@ impl Server {
 
     /// Serves until the process is told to stop; then the socket and the descriptor are gone.
     pub async fn run(self) -> Result<()> {
-        let Server { harness, listener, dir } = self;
-        let (mut term, mut int) = (signal(SignalKind::terminate())?, signal(SignalKind::interrupt())?);
+        let Server { harness, listener, dir, stops: (mut term, mut int) } = self;
         let mut connections = JoinSet::new();
         loop {
             tokio::select! {

@@ -41,12 +41,15 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     use harness::error::Error;
     let dir = data.or_else(harness::store::default_dir).ok_or_else(|| Error::Refused("no data folder: set HARNESS_DATA".into()))?;
     let script = mock_script.map(|path| harness::mock::Script::load(&path)).transpose().map_err(Error::Driver)?;
+    // The mock provider is there only when a script is given.
+    let drivers: Vec<(String, std::sync::Arc<dyn harness::driver::Driver>)> =
+        script.map(|script| ("mock".to_owned(), std::sync::Arc::new(harness::mock::Mock::new(script)) as _)).into_iter().collect();
     let first_token = || {
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).ok()?;
         harness::auth::Token::parse(&line)
     };
-    let server = harness::server::Server::bind(&dir, first_token, script, harness::session::Settings::default())?;
+    let server = harness::server::Server::bind(&dir, first_token, drivers, harness::session::Settings::default())?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
     Ok(true)

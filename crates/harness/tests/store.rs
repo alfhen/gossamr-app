@@ -99,12 +99,12 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
     store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
-    assert_eq!(user_version(&dir), 1, "user_version counts the steps");
+    assert_eq!(user_version(&dir), 2, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
     let row = store.session("a").unwrap();
     assert_eq!((row.provider.as_str(), row.locked, row.model.as_deref(), row.provider_session.as_deref()), ("mock", true, Some("haiku"), Some("p-1")));
     drop(store);
-    assert_eq!(user_version(&dir), 1);
+    assert_eq!(user_version(&dir), 2);
 
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().pragma_update(None, "user_version", 9).unwrap();
     assert!(matches!(Store::open(&dir), Err(Error::NewerStore(9))), "a store from a newer harness is not opened");
@@ -214,4 +214,18 @@ fn retention_a_withheld_event_keeps_its_fields_with_their_json_types_at_clean_up
         let got: Vec<Body> = store.events(session, 0).unwrap().into_iter().map(|event| event.body).collect();
         assert_eq!(got, expected, "{session}: booleans stay booleans and strings stay strings");
     }
+}
+
+#[test]
+fn tokens_the_store_keeps_stored_keys_once_each_and_never_a_token() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let token = harness::auth::Token::random();
+    store.add_client_token(&token.stored_key()).unwrap();
+    store.add_client_token(&token.stored_key()).unwrap();
+    assert_eq!(store.client_tokens().unwrap(), [token.stored_key()]);
+    drop(store);
+    let disk = bytes_on_disk(&dir);
+    assert!(!disk.windows(32).any(|window| window == harness::auth::decode(&token.hex()).unwrap()), "the token's bytes are nowhere on disk");
+    assert!(!String::from_utf8_lossy(&disk).contains(&token.hex()), "nor its hex");
 }
