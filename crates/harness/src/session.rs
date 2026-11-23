@@ -219,6 +219,8 @@ impl Harness {
         let start = self.inner.starts.fetch_add(1, Ordering::Relaxed);
         let open = Arc::new(Mutex::new(HashMap::new()));
         let stopping = Arc::new(AtomicBool::new(false));
+        #[cfg(test)]
+        tests::before_reserve();
         let Plan { driver, cwd, locked, model, resume } = {
             let mut live = self.inner.live();
             if live.contains_key(id) {
@@ -464,24 +466,18 @@ impl Task {
                         self.open_requests().insert(id.clone(), OpenRequest { driver_id, answered: false });
                         self.emit(Body::Permission { id, kind, tool, input });
                     }
+                    Some(body @ Body::Started { .. }) => {
+                        if !self.started(body) {
+                            break 'run true;
+                        }
+                    }
                     Some(body) => {
                         if body.ends_turn() {
                             turn = Turn::Idle;
                             slot = None;
                             self.open_requests().clear();
                         }
-                        // The row keeps the id as it is, for a resume, so an id that holds a secret is not kept.
-                        let mut secret_id = false;
-                        if let Body::Started { provider_session, .. } = &body {
-                            secret_id = redact::text(provider_session, &self.secrets) != *provider_session;
-                            if !secret_id && let Err(e) = self.inner.store().set_provider_session(&self.id, provider_session) {
-                                eprintln!("harness: session {}: {e}", self.id);
-                            }
-                        }
                         self.emit(body);
-                        if secret_id {
-                            self.fail(FailKind::Driver, "the provider's session id looks like a secret, so it is not kept and the session cannot be resumed");
-                        }
                     }
                     None => {
                         if turn != Turn::Idle {
@@ -629,6 +625,10 @@ impl Task {
             while let Some(body) = link.output.recv().await {
                 match &body {
                     Body::Permission { .. } => continue,
+                    Body::Started { .. } => {
+                        self.started(body);
+                        continue;
+                    }
                     Body::TurnStarted => *going = Going { turn: Turn::Running, ended_by_harness: false },
                     body if body.ends_turn() => {
                         if going.turn == Turn::Idle && going.ended_by_harness {
@@ -648,6 +648,21 @@ impl Task {
                 true
             }
         }
+    }
+
+    /// Records a `started`, after keeping its provider session id for a resume. The row keeps the id as it is, so an
+    /// id that holds a secret is not kept: the session says so, and false says it must stop.
+    fn started(&self, body: Body) -> bool {
+        let Body::Started { provider_session, .. } = &body else { unreachable!("only a `started` is passed") };
+        let safe = redact::text(provider_session, &self.secrets) == *provider_session;
+        if safe && let Err(e) = self.inner.store().set_provider_session(&self.id, provider_session) {
+            eprintln!("harness: session {}: {e}", self.id);
+        }
+        self.emit(body);
+        if !safe {
+            self.fail(FailKind::Driver, "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops");
+        }
+        safe
     }
 
     fn open_requests(&self) -> MutexGuard<'_, HashMap<String, OpenRequest>> {
@@ -723,6 +738,15 @@ mod tests {
         }
     }
 
+    /// Told once when a start is about to take the session's lock to reserve it.
+    static BEFORE_RESERVE: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
+
+    pub(super) fn before_reserve() {
+        if let Some(reached) = BEFORE_RESERVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+            let _ = reached.send(());
+        }
+    }
+
     fn starts_and_closes(harness: &Harness, id: &str) -> Vec<String> {
         let events = harness.events(id, 0).unwrap_or_default();
         events.into_iter().map(|event| event.body.type_name()).filter(|kind| kind == "started" || kind == "closed").collect()
@@ -736,10 +760,17 @@ mod tests {
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
         let spec = Open { provider: "mock".into(), locked: false, cwd: "/nowhere".into(), model: None };
         let (id, mut events) = harness.open(spec).await.unwrap();
-        let (resuming, resumed_id) = (harness.clone(), id.clone());
+        let (resuming, resumed_id, id_for_hook) = (harness.clone(), id.clone(), id.clone());
+        let worker: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::default();
+        let kept = worker.clone();
         *BEFORE_CLOSED.lock().unwrap() = Some(Box::new(move || {
-            // A client resumes from another thread at this moment, and its start records what it can.
-            std::thread::spawn(move || {
+            // A client resumes from another thread at this moment. The hook waits until the resume has reached its
+            // reservation, then gives its start a bounded time to record `started`: it can only if the lock this
+            // task holds does not guard the reservation.
+            let (reached, reaches) = std::sync::mpsc::channel();
+            *BEFORE_RESERVE.lock().unwrap() = Some(reached);
+            let recorder = resuming.clone();
+            *kept.lock().unwrap() = Some(std::thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
                 runtime.block_on(async {
                     if resuming.resume(&resumed_id).await.is_ok() {
@@ -748,8 +779,12 @@ mod tests {
                         }
                     }
                 });
-            });
-            std::thread::sleep(Duration::from_millis(300));
+            }));
+            reaches.recv_timeout(Duration::from_secs(5)).expect("the resume reached its reservation");
+            let given = std::time::Instant::now() + Duration::from_secs(1);
+            while std::time::Instant::now() < given && starts_and_closes(&recorder, &id_for_hook).len() < 2 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
         }));
         harness.close(&id).unwrap();
         while events.recv().await.is_ok_and(|event| event.body != Body::Closed) {}
@@ -760,6 +795,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(starts_and_closes(&harness, &id), ["started", "closed", "started"]);
+        worker.lock().unwrap().take().expect("the hook ran").join().unwrap();
     }
 }
 

@@ -302,11 +302,20 @@ pub fn each_string(value: &mut Value, f: &mut impl FnMut(&mut String)) {
         Value::String(s) => f(s),
         Value::Array(items) => items.iter_mut().for_each(|item| each_string(item, f)),
         Value::Object(fields) => {
-            let mut masked = serde_json::Map::new();
-            for (mut key, mut field) in std::mem::take(fields) {
-                f(&mut key);
+            // Keys the mask leaves as they are keep their names; a key it changes takes its masked name if that is
+            // free, or a numbered one, so every entry stays and none is renamed.
+            let (mut masked, mut renamed) = (serde_json::Map::new(), vec![]);
+            for (key, mut field) in std::mem::take(fields) {
+                let mut new = key.clone();
+                f(&mut new);
                 each_string(&mut field, f);
-                // Two keys masked alike both stay: the later one is numbered.
+                if new == key {
+                    masked.insert(key, field);
+                } else {
+                    renamed.push((new, field));
+                }
+            }
+            for (key, field) in renamed {
                 let mut free = key.clone();
                 for n in 2.. {
                     if !masked.contains_key(&free) {
@@ -396,5 +405,15 @@ mod tests {
         // Ten times the text may take ten times as long, and much more for a slow machine, but not a hundred.
         assert!(large < small * 40 + std::time::Duration::from_millis(500), "300 KB in {small:?}, 3 MB in {large:?}");
         assert!(large < std::time::Duration::from_secs(30), "3 MB in {large:?}");
+    }
+
+    #[test]
+    fn redact_a_literal_mask_key_keeps_its_value_when_a_key_that_sorts_before_it_masks_to_it() {
+        // `0` sorts before `<`, so the session's own secret as a key is visited first.
+        let secret = "0123456789abcdef0123".to_owned();
+        let input = serde_json::json!({ secret.clone(): "secret's", MASK: "literal" });
+        let Body::ToolCall { input, .. } = super::body(Body::ToolCall { id: "t1".into(), name: "x".into(), input }, &[secret]) else { unreachable!() };
+        assert_eq!(input[MASK], "literal", "{input}");
+        assert_eq!(input[format!("{MASK} 2")], "secret's", "{input}");
     }
 }
