@@ -3,7 +3,7 @@
 //! client's lines become the points where the script waits; the agent's become what it says. Recorded ids, pids and
 //! ports are listed so the mock maps them as it plays.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -62,6 +62,7 @@ pub fn convert(lines: &[Value]) -> Script {
         if data["note"] == "processes" {
             c.descendants = descendants(data);
         }
+        c.now = line["ms"].as_u64().unwrap_or(c.now);
         let dir = line["dir"].as_str();
         if !data.is_object() || !matches!(dir, Some("to_agent" | "from_agent")) {
             continue;
@@ -101,9 +102,11 @@ struct Converter {
     /// The id of an ACP `session/load` not yet answered: the updates before its answer replay old history.
     loading: Option<Value>,
     finished: HashSet<String>,
-    /// The running turn's tool calls with no `completed` or `failed` update yet, a call held on the session's own
-    /// endpoint among them.
-    open_calls: HashSet<String>,
+    /// The running turn's tool calls that are not commands, with no `completed` or `failed` update yet, a call held on
+    /// the session's own endpoint among them, and when each began. A command counts through its descendant instead.
+    open_calls: HashMap<String, u64>,
+    /// When the line being read was recorded.
+    now: u64,
 }
 
 impl Converter {
@@ -304,7 +307,9 @@ impl Converter {
                     Some("tool_call") => {
                         let id = update["toolCallId"].as_str().map(str::to_owned);
                         self.push(Step::Tool { id: id.clone(), name: acp_tool(update), input: acp_input(update) });
-                        self.open_calls.extend(id);
+                        if update["kind"] != "execute" {
+                            self.open_calls.extend(id.map(|id| (id, self.now)));
+                        }
                         self.acp_finished(update);
                     }
                     Some("tool_call_update") => self.acp_finished(update),
@@ -341,7 +346,8 @@ impl Converter {
 
     /// agy ends a turn it started by itself with no marker: it sends a `usage_update` per message or step, not per
     /// turn. So the turn ends late, never early: after `line` only when no agent line comes for `QUIET_MS`, no
-    /// process of the agent's runs then, and no tool call of the turn is open (agy holds an MCP call with no process).
+    /// process of the agent's runs then, and no tool call of the turn is open (agy holds an MCP call with no process)
+    /// short of agy's own cut and a margin, by when agy's next line comes.
     fn end_when_quiet(&mut self, line: &Value, after: &[Value]) {
         let ms = line["ms"].as_u64().unwrap_or_default();
         let until = after.iter().position(|next| next["dir"] == "from_agent").unwrap_or(after.len());
@@ -356,7 +362,8 @@ impl Converter {
         }
         let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms + QUIET_MS));
         let running = notes.next_back().map_or(self.descendants, |note| descendants(&note["data"]));
-        if running == 0 && self.open_calls.is_empty() {
+        let held = self.open_calls.values().any(|began| next.is_some_and(|next| next < began + MCP_CUT_MS + CUT_MARGIN_MS));
+        if running == 0 && !held {
             self.push(Step::End(TurnEnd::Done));
         }
     }
@@ -388,6 +395,10 @@ fn texts(content: &Value) -> String {
         _ => String::new(),
     }
 }
+
+/// agy cuts an MCP call at 180 s (H0). Past that and the margin, a call with no update holds no turn open.
+const MCP_CUT_MS: u64 = 180_000;
+const CUT_MARGIN_MS: u64 = 10_000;
 
 /// How long agy must say nothing, with no process running and no tool call open, before a turn it started by itself
 /// counts as ended. H0's recordings pause up to 6.6 s between messages while agy thinks.

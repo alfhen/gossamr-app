@@ -173,29 +173,68 @@ async fn replay_agys_unprompted_turn_with_two_usage_updates_stays_one_turn() {
     assert_eq!(texts, 2, "both messages are in the one unprompted turn: {kinds:?}");
 }
 
-#[tokio::test]
-async fn replay_agys_unprompted_turn_does_not_end_while_its_held_ask_is_open() {
-    // r2-ask's first turn with its prompt and its `end_turn` left out, so agy runs it by itself: it calls `ask`, which
-    // is held 20 s with no process running, then writes its message.
+/// r2-ask's first turn with its prompt and its `end_turn` left out, so agy runs it by itself: it calls `ask`, which is
+/// held 20 s with no process running, then writes its message. `change` edits the lines before the replay.
+async fn r2_unprompted(change: impl FnOnce(&mut Vec<serde_json::Value>)) -> Vec<String> {
     let text = std::fs::read_to_string(fixtures().join("gemini/acp/r2-ask.jsonl")).unwrap();
     let lines: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let turn = |line: &serde_json::Value| (1_159..26_560).contains(&line["ms"].as_u64().unwrap_or_default());
-    let unprompted: Vec<&serde_json::Value> = lines
-        .iter()
+    let mut unprompted: Vec<serde_json::Value> = lines
+        .into_iter()
         .filter(|line| !turn(line) || (line["data"]["method"] != "session/prompt" && line["data"]["result"]["stopReason"].is_null()))
         .take_while(|line| line["ms"].as_u64().unwrap_or_default() < 26_560)
         .collect();
     let held = unprompted.windows(2).map(|pair| pair[1]["ms"].as_u64().unwrap() - pair[0]["ms"].as_u64().unwrap()).max().unwrap();
     assert!(held >= 15_000, "the recording holds the call {held} ms");
+    change(&mut unprompted);
     let (tmp, _) = data_dir();
     let fixture = tmp.path().join("r2-unprompted.jsonl");
     std::fs::write(&fixture, unprompted.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
-    let events = replay(&fixture, vec![]).await;
-    let kinds: Vec<String> = events.iter().map(|event| event.body.type_name()).collect();
+    replay(&fixture, vec![]).await.iter().map(|event| event.body.type_name()).collect()
+}
+
+fn update(line: &serde_json::Value) -> &serde_json::Value {
+    &line["data"]["params"]["update"]
+}
+
+#[tokio::test]
+async fn replay_agys_unprompted_turn_does_not_end_while_its_held_ask_is_open() {
+    let kinds = r2_unprompted(|_| {}).await;
     let count = |kind: &str| kinds.iter().filter(|seen| *seen == kind).count();
     assert_eq!((count("prompted"), count("turn_started"), count("turn_ended")), (0, 1, 1), "one unprompted turn: {kinds:?}");
     let ended = kinds.iter().position(|kind| kind == "turn_ended").unwrap();
     let said = kinds.iter().position(|kind| kind == "text").unwrap();
     let result = kinds.iter().position(|kind| kind == "tool_result").unwrap();
     assert!(result < said && said < ended, "the call's result and the message come before the turn ends: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_agys_held_call_with_no_update_holds_its_turn_only_to_agys_cut_and_a_margin() {
+    // The `ask` never gets its update, and agy's message comes 200 s after the call, past the 180 s cut.
+    let kinds = r2_unprompted(|lines| {
+        let asked = lines.iter().find(|line| update(line)["sessionUpdate"] == "tool_call" && update(line)["kind"] == "other").unwrap()["ms"].as_u64().unwrap();
+        lines.retain(|line| !(update(line)["sessionUpdate"] == "tool_call_update" && update(line)["status"] == "completed" && line["ms"].as_u64().unwrap() > asked + 1_000));
+        for line in lines.iter_mut().filter(|line| line["ms"].as_u64().is_some_and(|ms| ms > asked + 1_000)) {
+            line["ms"] = serde_json::json!(line["ms"].as_u64().unwrap() + 180_000);
+        }
+    })
+    .await;
+    let count = |kind: &str| kinds.iter().filter(|seen| *seen == kind).count();
+    assert_eq!((count("turn_started"), count("turn_ended")), (2, 2), "the held turn ends, and the message is a turn of its own: {kinds:?}");
+    let ended = kinds.iter().position(|kind| kind == "turn_ended").unwrap();
+    let said = kinds.iter().position(|kind| kind == "text").unwrap();
+    assert!(ended < said, "the first turn ends before the late message: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_agys_command_counts_through_its_process_not_its_open_call() {
+    // The same held call made a command, with no process of agy's running: the 20 s of quiet ends the turn.
+    let kinds = r2_unprompted(|lines| {
+        for line in lines.iter_mut().filter(|line| update(line)["sessionUpdate"] == "tool_call") {
+            line["data"]["params"]["update"]["kind"] = serde_json::json!("execute");
+        }
+    })
+    .await;
+    let count = |kind: &str| kinds.iter().filter(|seen| *seen == kind).count();
+    assert_eq!((count("turn_started"), count("turn_ended")), (2, 2), "the quiet ends the turn: {kinds:?}");
 }
