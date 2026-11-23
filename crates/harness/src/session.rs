@@ -132,8 +132,9 @@ impl Harness {
         self.request(id, Request::Prompt(text.into()))
     }
 
-    /// Answers an open permission request, once. A deny can say why. An id that is not open is refused, and one whose
-    /// turn ends before the answer is dispatched is neither recorded nor sent.
+    /// Answers an open permission request, once. A deny can say why. An id that is not open is refused. An answer that
+    /// loses the race with its turn's end (accepted here, but the turn ended before the session dispatched it) is
+    /// dropped: it is neither recorded nor sent, and the client hears nothing more of it than the turn's end.
     pub fn answer(&self, id: &str, request: &str, decision: Decision, message: Option<String>) -> Result<()> {
         let live = self.taking(id)?;
         {
@@ -239,6 +240,7 @@ impl Harness {
             Error::Open { kind, message: redact::text(&message, &secrets) }
         })?;
         reserved.keep();
+        let secrets_for_live = secrets.clone();
         let task = Task {
             inner: self.inner.clone(),
             id: id.to_owned(),
@@ -248,7 +250,7 @@ impl Harness {
             open,
             stopping,
             broken: AtomicBool::new(false),
-            held: Mutex::new(String::new()),
+            held: Mutex::new(redact::LiveText::new(&secrets_for_live)),
         };
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         Ok(receiver)
@@ -377,8 +379,8 @@ struct Task {
     stopping: Arc<AtomicBool>,
     /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
     broken: AtomicBool,
-    /// The end of the text stream, held back until a secret cut between two deltas can be masked whole.
-    held: Mutex<String>,
+    /// The streamed text not yet sent, held until it is decided whether it is a secret.
+    held: Mutex<redact::LiveText>,
 }
 
 impl Task {
@@ -543,7 +545,6 @@ impl Task {
             self.wait_until_gone(&mut link, caps).await;
         }
         drop(slot);
-        self.flush_delta();
         self.inner.forget(&self.id, self.start);
         self.emit(Body::Closed);
     }
@@ -605,24 +606,24 @@ impl Task {
         self.emit(Body::Failed { kind, reason: reason.to_owned() });
     }
 
-    /// Keeps the raw stream from the safe cut on (see `redact::safe_cut`), and sends what comes before it, masked.
+    /// Sends what of the streamed text is decided (see `redact::LiveText`).
     fn delta(&self, text: &str) {
-        let mut held = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        held.push_str(text);
-        let cut = redact::safe_cut(&held, &self.secrets);
-        if cut > 0 {
-            let out = redact::text(&held[..cut], &self.secrets);
+        let out = self.live_text().push(text);
+        if !out.is_empty() {
             let _ = self.events.send(Event { seq: 0, ms: now_ms(), body: Body::TextDelta { text: out } });
-            held.drain(..cut);
         }
     }
 
-    fn flush_delta(&self) {
-        let mut held = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !held.is_empty() {
-            let text = redact::text(&std::mem::take(&mut *held), &self.secrets);
-            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body: Body::TextDelta { text } });
+    /// The block ended: what live text held goes out, anything undecided masked.
+    fn end_text(&self) {
+        let out = self.live_text().end();
+        if !out.is_empty() {
+            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body: Body::TextDelta { text: out } });
         }
+    }
+
+    fn live_text(&self) -> MutexGuard<'_, redact::LiveText> {
+        self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Stores the event and sends it to the session's clients; a text delta is only sent. True when it was stored.
@@ -633,7 +634,10 @@ impl Task {
             self.delta(text);
             return true;
         }
-        self.flush_delta();
+        // An unrelated event between two pieces of text does not release what is held; the end of the block does.
+        if matches!(body, Body::Text { .. } | Body::TurnEnded { .. } | Body::Failed { .. } | Body::Closed) {
+            self.end_text();
+        }
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
                 let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });

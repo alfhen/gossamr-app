@@ -1,5 +1,9 @@
 //! Masks secrets in an event before it is stored or sent: the session's own secrets, and token shapes. It masks
 //! shapes, not private text, which is why a locked session stores no payload at all.
+//!
+//! Live text fails closed. Every shape starts with a marker; [`LiveText`] sends streamed text only up to the earliest
+//! marker, or the start of one, and holds the rest until it is decided: a secret is sent as the mask, anything else as
+//! it is. What is still undecided when the block ends is sent as the mask, never raw.
 
 use std::sync::LazyLock;
 
@@ -10,80 +14,465 @@ use crate::event::Body;
 
 pub const MASK: &str = "<redacted>";
 
-/// How far live text may lag the agent while one unbroken run of token characters is being written: the longest
-/// real token, a long JWT, fits. A longer run is let go but for its last `HOLD_BACK` bytes, so its start can show in
-/// live text; the stored text, which is whole, is masked whole. A private key that has not ended is held whole.
+/// How much text after a marker live output holds while it waits to decide. Past it, everything from the marker is
+/// sent as the mask, and the rest of that run (to the end of a private key) is dropped from live output.
 pub const HOLD_BACK: usize = 2048;
 
-const PRIVATE_KEY: &str = "-----BEGIN";
+/// The characters a token is made of. After a match, the rest of the run they form is masked with it, so two secrets
+/// written with nothing between them are masked whole.
+fn in_run(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "._~+/=-".contains(c)
+}
 
-static SHAPES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(concat!(
-        r"sk-ant-[A-Za-z0-9_-]{16,}",
-        r"|sk-(?:proj-)?[A-Za-z0-9_-]{32,}",
-        r"|gh[pousr]_[A-Za-z0-9]{30,}",
-        r"|github_pat_[A-Za-z0-9_]{30,}",
-        r"|ATATT[A-Za-z0-9_=-]{20,}",
-        r"|glpat-[A-Za-z0-9_-]{20,}",
-        r"|npm_[A-Za-z0-9]{36}",
-        r"|[sr]k_live_[A-Za-z0-9]{20,}",
-        r"|xox[abprs]-[A-Za-z0-9-]{10,}",
-        r"|AIza[0-9A-Za-z_-]{35}",
-        r"|ya29\.[0-9A-Za-z_-]{20,}",
-        r"|AKIA[0-9A-Z]{16}",
-        r"|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
-        r"|(?i:bearer\s+)[A-Za-z0-9._~+/=-]{20,}",
-        r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
-    ))
-    .expect("the shapes compile")
+/// One kind of secret.
+pub struct Shape {
+    pub name: &'static str,
+    /// What the secret starts with. A shape is only looked for from one of these.
+    pub markers: &'static [&'static str],
+    /// The markers match in any case.
+    pub any_case: bool,
+    /// The whole secret, from its marker.
+    pub pattern: &'static str,
+    /// The most text that can still belong to the secret, from its marker. While it reaches the end of the text, the
+    /// secret may still be growing.
+    pub run: &'static str,
+    /// Once the pattern matches the secret is complete: a private key ends with its footer.
+    pub closed: bool,
+    /// A realistic secret of this shape, for tests. Built, not written out, so no scanner mistakes it for a real one.
+    pub example: fn() -> String,
+}
+
+/// A deterministic string of `len` characters from `alphabet`, for examples.
+fn noise(seed: u64, len: usize, alphabet: &str) -> String {
+    let chars: Vec<char> = alphabet.chars().collect();
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    (0..len)
+        .map(|_| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            chars[(state >> 33) as usize % chars.len()]
+        })
+        .collect()
+}
+
+const B64URL: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const ALNUM: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+pub static SHAPES: &[Shape] = &[
+    Shape {
+        name: "Anthropic key",
+        markers: &["sk-ant-"],
+        any_case: false,
+        pattern: r"sk-ant-[A-Za-z0-9_-]{16,}",
+        run: r"sk-ant-[A-Za-z0-9_-]*",
+        closed: false,
+        example: || format!("sk-ant-api03-{}AA", noise(1, 93, B64URL)),
+    },
+    Shape {
+        name: "OpenAI key",
+        markers: &["sk-"],
+        any_case: false,
+        pattern: r"sk-(?:proj-)?[A-Za-z0-9_-]{32,}",
+        run: r"sk-[A-Za-z0-9_-]*",
+        closed: false,
+        example: || format!("sk-proj-{}", noise(2, 156, B64URL)),
+    },
+    Shape {
+        name: "GitHub token",
+        markers: &["ghp_", "gho_", "ghu_", "ghs_", "ghr_"],
+        any_case: false,
+        pattern: r"gh[pousr]_[A-Za-z0-9]{30,}",
+        run: r"gh[pousr]_[A-Za-z0-9]*",
+        closed: false,
+        example: || format!("ghs_{}", noise(3, 36, ALNUM)),
+    },
+    Shape {
+        name: "GitHub fine-grained token",
+        markers: &["github_pat_"],
+        any_case: false,
+        pattern: r"github_pat_[A-Za-z0-9_]{30,}",
+        run: r"github_pat_[A-Za-z0-9_]*",
+        closed: false,
+        example: || format!("github_pat_11{}_{}", noise(4, 20, ALNUM), noise(5, 59, ALNUM)),
+    },
+    Shape {
+        name: "Atlassian API token",
+        markers: &["ATATT"],
+        any_case: false,
+        pattern: r"ATATT[A-Za-z0-9_=-]{20,}",
+        run: r"ATATT[A-Za-z0-9_=-]*",
+        closed: false,
+        example: || format!("ATATT3xFfGF0{}={}", noise(6, 170, B64URL), noise(7, 8, "0123456789ABCDEF")),
+    },
+    Shape {
+        name: "GitLab token",
+        markers: &["glpat-"],
+        any_case: false,
+        pattern: r"glpat-[A-Za-z0-9_-]{20,}",
+        run: r"glpat-[A-Za-z0-9_-]*",
+        closed: false,
+        example: || format!("glpat-{}", noise(8, 20, B64URL)),
+    },
+    Shape {
+        name: "npm token",
+        markers: &["npm_"],
+        any_case: false,
+        pattern: r"npm_[A-Za-z0-9]{36}",
+        run: r"npm_[A-Za-z0-9]*",
+        closed: false,
+        example: || format!("npm_{}", noise(9, 36, ALNUM)),
+    },
+    Shape {
+        name: "Stripe key",
+        markers: &["sk_live_", "rk_live_"],
+        any_case: false,
+        pattern: r"[sr]k_live_[A-Za-z0-9]{20,}",
+        run: r"[sr]k_live_[A-Za-z0-9]*",
+        closed: false,
+        example: || format!("sk_live_{}", noise(10, 99, ALNUM)),
+    },
+    Shape {
+        name: "Slack token",
+        markers: &["xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-"],
+        any_case: false,
+        pattern: r"xox[abprs]-[A-Za-z0-9-]{10,}",
+        run: r"xox[abprs]-[A-Za-z0-9-]*",
+        closed: false,
+        example: || format!("xox{}-{}-{}-{}", "b", noise(11, 12, "0123456789"), noise(12, 13, "0123456789"), noise(13, 24, ALNUM)),
+    },
+    Shape {
+        name: "Google API key",
+        markers: &["AIza"],
+        any_case: false,
+        pattern: r"AIza[0-9A-Za-z_-]{35}",
+        run: r"AIza[0-9A-Za-z_-]*",
+        closed: false,
+        example: || format!("AIza{}", noise(14, 35, B64URL)),
+    },
+    Shape {
+        name: "Google OAuth token",
+        markers: &["ya29."],
+        any_case: false,
+        pattern: r"ya29\.[0-9A-Za-z_-]{20,}",
+        run: r"ya29\.[0-9A-Za-z_-]*",
+        closed: false,
+        example: || format!("ya29.{}", noise(15, 150, B64URL)),
+    },
+    Shape {
+        name: "AWS access key",
+        markers: &["AKIA"],
+        any_case: false,
+        pattern: r"AKIA[0-9A-Z]{16}",
+        run: r"AKIA[0-9A-Z]*",
+        closed: false,
+        example: || format!("AKIA{}", noise(16, 16, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")),
+    },
+    Shape {
+        name: "JWT",
+        markers: &["eyJ"],
+        any_case: false,
+        pattern: r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+        run: r"eyJ[A-Za-z0-9_.-]*",
+        closed: false,
+        example: || jwt(300),
+    },
+    Shape {
+        name: "Bearer header",
+        markers: &["bearer"],
+        any_case: true,
+        pattern: r"(?i:bearer)\s+[A-Za-z0-9._~+/=-]{20,}",
+        run: r"(?i:bearer)\s*[A-Za-z0-9._~+/=-]*",
+        closed: false,
+        example: || format!("Bearer {}", noise(17, 48, B64URL)),
+    },
+    Shape {
+        name: "Private key",
+        markers: &["-----BEGIN"],
+        any_case: false,
+        pattern: r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+        run: r"-----BEGIN[\s\S]*",
+        closed: true,
+        example: || {
+            let base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let lines: Vec<String> = (0..5).map(|n| noise(18 + n, 70, base64)).collect();
+            format!("-----BEGIN OPENSSH PRIVATE KEY-----\n{}\n-----END OPENSSH PRIVATE KEY-----", lines.join("\n"))
+        },
+    },
+];
+
+/// A JWT of about `len` characters, its parts in the shape the pattern wants.
+pub fn jwt(len: usize) -> String {
+    let body = len.saturating_sub(84).max(20);
+    format!("eyJ{}.eyJ{}.{}", noise(30, 33, B64URL), noise(31, body, B64URL), noise(32, 43, B64URL))
+}
+
+static ALL: LazyLock<Regex> = LazyLock::new(|| {
+    let alternation: Vec<String> = SHAPES.iter().map(|shape| format!("(?:{})", shape.pattern)).collect();
+    Regex::new(&alternation.join("|")).expect("the shapes compile")
 });
+
+/// How many characters of the session's own token, in a row, count as a copy of it.
+const PARTIAL: usize = 16;
 
 pub fn text(s: &str, secrets: &[String]) -> String {
     let mut out = s.to_owned();
     for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
         out = out.replace(secret.as_str(), MASK);
+        out = mask_partial(&out, secret);
     }
-    match SHAPES.replace_all(&out, MASK) {
-        std::borrow::Cow::Borrowed(_) => out,
-        std::borrow::Cow::Owned(masked) => masked,
+    let mut masked = String::with_capacity(out.len());
+    let mut last = 0;
+    for found in ALL.find_iter(&out) {
+        if found.start() < last {
+            continue;
+        }
+        masked.push_str(&out[last..found.start()]);
+        masked.push_str(MASK);
+        last = found.end();
+        if !found.as_str().starts_with("-----BEGIN") {
+            last += out[last..].find(|c| !in_run(c)).unwrap_or(out.len() - last);
+        }
+    }
+    masked.push_str(&out[last..]);
+    masked
+}
+
+/// Masks every stretch of `PARTIAL` or more characters that is part of `secret`.
+fn mask_partial(s: &str, secret: &str) -> String {
+    if secret.len() < PARTIAL {
+        return s.to_owned();
+    }
+    let bytes = s.as_bytes();
+    let (mut out, mut copied, mut at) = (String::with_capacity(s.len()), 0, 0);
+    while at + PARTIAL <= s.len() {
+        let window = &bytes[at..at + PARTIAL];
+        if window.is_ascii() && secret.contains(std::str::from_utf8(window).expect("ascii")) {
+            let mut end = at + PARTIAL;
+            while end < s.len() && bytes[end].is_ascii() && secret.contains(&s[at..=end]) {
+                end += 1;
+            }
+            out.push_str(&s[copied..at]);
+            out.push_str(MASK);
+            (copied, at) = (end, end);
+        } else {
+            at += 1;
+        }
+    }
+    out.push_str(&s[copied..]);
+    out
+}
+
+struct Compiled {
+    markers: Vec<String>,
+    any_case: bool,
+    pattern: Regex,
+    run: Regex,
+    closed: bool,
+}
+
+impl Compiled {
+    fn marker(&self, marker: &str) -> String {
+        if self.any_case { marker.to_ascii_lowercase() } else { marker.to_owned() }
     }
 }
 
-/// Every shape but a bearer header and a private key is one unbroken run of these characters, so the run at the end
-/// of streamed text, with a `bearer` before it, is the only place a secret can still be growing.
-static TRAILING: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)(?:bearer\s*)?[A-Za-z0-9._~+/=-]*\z").expect("the run compiles"));
+static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
+    SHAPES
+        .iter()
+        .map(|shape| Compiled {
+            markers: shape.markers.iter().map(|marker| marker.to_string()).collect(),
+            any_case: shape.any_case,
+            pattern: Regex::new(&format!("^(?:{})", shape.pattern)).expect("the shape compiles"),
+            run: Regex::new(&format!("^(?:{})", shape.run)).expect("the run compiles"),
+            closed: shape.closed,
+        })
+        .collect()
+});
 
-/// Where raw streamed text can be cut so that masking what comes before the cut masks it as the whole text would be
-/// masked: no later piece can complete or extend a secret that starts before the cut. It holds back the run of token
-/// characters still being written (at most `HOLD_BACK` bytes of it), any match or secret that reaches the held part,
-/// and a private key that has not ended.
-pub fn safe_cut(raw: &str, secrets: &[String]) -> usize {
-    let end = raw.len();
-    let run = TRAILING.find(raw).map_or(end, |run| run.start());
-    let mut cut = run.max(end.saturating_sub(HOLD_BACK));
-    for found in SHAPES.find_iter(raw) {
-        if found.end() > cut {
-            cut = cut.min(found.start());
-        }
+static KEY_FOOTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-----END [A-Z ]*PRIVATE KEY-----").expect("compiles"));
+
+/// How many characters of the session's own token mark it in live text.
+pub const TOKEN_MARKER: usize = 8;
+
+enum Masking {
+    /// The rest of a token run is dropped.
+    Run,
+    /// Everything up to the end of a private key is dropped.
+    Key,
+}
+
+enum Decision {
+    Secret { end: usize, closed: bool },
+    Not,
+    Undecided { key: bool },
+}
+
+/// One session's streamed text on its way to live clients. `push` takes each piece and gives what may be sent now;
+/// `end`, at the end of the block, gives the rest, with anything undecided masked.
+pub struct LiveText {
+    /// The session's own tokens, looked for from their first `TOKEN_MARKER` characters, beside the shapes.
+    secrets: Vec<String>,
+    held: String,
+    masking: Option<Masking>,
+}
+
+impl LiveText {
+    pub fn new(secrets: &[String]) -> LiveText {
+        LiveText { secrets: secrets.to_vec(), held: String::new(), masking: None }
     }
-    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
-        for (at, _) in raw.match_indices(secret.as_str()) {
-            if at + secret.len() > cut {
-                cut = cut.min(at);
+
+    fn tokens(&self) -> impl Iterator<Item = &str> {
+        self.secrets.iter().map(String::as_str).filter(|secret| secret.len() >= TOKEN_MARKER)
+    }
+
+    pub fn push(&mut self, piece: &str) -> String {
+        self.held.push_str(piece);
+        self.release(false)
+    }
+
+    /// The block ended: what was held goes out, decided now that no more of it can come.
+    pub fn end(&mut self) -> String {
+        let out = self.release(true);
+        self.held.clear();
+        self.masking = None;
+        out
+    }
+
+    fn release(&mut self, at_end: bool) -> String {
+        let mut out = String::new();
+        loop {
+            match self.masking {
+                Some(Masking::Run) => {
+                    let end = self.held.find(|c| !in_run(c)).unwrap_or(self.held.len());
+                    self.held.drain(..end);
+                    if self.held.is_empty() {
+                        break;
+                    }
+                    self.masking = None;
+                }
+                Some(Masking::Key) => match KEY_FOOTER.find(&self.held) {
+                    Some(footer) => {
+                        self.held.drain(..footer.end());
+                        self.masking = None;
+                    }
+                    None => {
+                        // Enough to find a footer that is cut between this piece and the next.
+                        let mut keep = self.held.len().saturating_sub(64);
+                        while !self.held.is_char_boundary(keep) {
+                            keep -= 1;
+                        }
+                        self.held.drain(..keep);
+                        break;
+                    }
+                },
+                None => {}
+            }
+            let Some((at, whole)) = self.earliest_marker() else {
+                out.push_str(&self.held);
+                self.held.clear();
+                break;
+            };
+            out.push_str(&self.held[..at]);
+            self.held.drain(..at);
+            if !whole {
+                // Only the start of a marker: at the end of the block it never became one.
+                if at_end {
+                    out.push_str(&self.held);
+                    self.held.clear();
+                }
+                break;
+            }
+            match self.decide(at_end) {
+                Decision::Secret { end, closed } => {
+                    out.push_str(MASK);
+                    self.held.drain(..end);
+                    if !closed {
+                        self.masking = Some(Masking::Run);
+                    }
+                }
+                Decision::Not => {
+                    let first = self.held.chars().next().expect("a marker is held").len_utf8();
+                    out.push_str(&self.held[..first]);
+                    self.held.drain(..first);
+                }
+                Decision::Undecided { .. } if at_end => {
+                    out.push_str(MASK);
+                    self.held.clear();
+                    break;
+                }
+                Decision::Undecided { key } if self.held.len() > HOLD_BACK => {
+                    out.push_str(MASK);
+                    self.masking = Some(if key { Masking::Key } else { Masking::Run });
+                }
+                Decision::Undecided { .. } => break,
             }
         }
-        if let Some(part) = (1..secret.len()).rev().find(|part| raw.ends_with(&secret[..*part])) {
-            cut = cut.min(end - part);
+        text(&out, &self.secrets)
+    }
+
+    /// The first place in what is held where a marker starts, and whether it is whole there or only begun at the end.
+    fn earliest_marker(&self) -> Option<(usize, bool)> {
+        let lower = self.held.to_ascii_lowercase();
+        let mut best: Option<(usize, bool)> = None;
+        let mut look = |haystack: &str, marker: &str| {
+            let found = haystack.find(marker).map(|at| (at, true)).or_else(|| {
+                (1..marker.len()).rev().find(|part| haystack.ends_with(&marker[..*part])).map(|part| (haystack.len() - part, false))
+            });
+            if let Some(found) = found
+                && best.is_none_or(|best| found.0 < best.0 || (found.0 == best.0 && found.1))
+            {
+                best = Some(found);
+            }
+        };
+        for shape in COMPILED.iter() {
+            let haystack = if shape.any_case { &lower } else { &self.held };
+            for marker in &shape.markers {
+                look(haystack, &shape.marker(marker));
+            }
+        }
+        for token in self.tokens() {
+            look(&self.held, &token[..TOKEN_MARKER]);
+        }
+        best
+    }
+
+    /// What the text held from a whole marker is: a secret, not one, or not known yet.
+    fn decide(&self, at_end: bool) -> Decision {
+        let lower = self.held.to_ascii_lowercase();
+        let (mut secret, mut undecided, mut key): (Option<(usize, bool)>, bool, bool) = (None, false, false);
+        let held = self.held.as_str();
+        let mut weigh = |found: Option<usize>, run_end: usize, closed: bool| {
+            let growing = run_end == held.len();
+            match found {
+                Some(end) if closed || !growing || at_end => {
+                    if secret.is_none_or(|(longest, _)| end > longest) {
+                        secret = Some((end, closed));
+                    }
+                }
+                _ if growing => {
+                    undecided = true;
+                    key |= closed;
+                }
+                _ => {}
+            }
+        };
+        for shape in COMPILED.iter() {
+            let haystack = if shape.any_case { &lower } else { held };
+            if shape.markers.iter().any(|marker| haystack.starts_with(&shape.marker(marker))) {
+                let run_end = shape.run.find(held).map_or(0, |run| run.end());
+                weigh(shape.pattern.find(held).map(|found| found.end()), run_end, shape.closed);
+            }
+        }
+        for token in self.tokens().filter(|token| held.starts_with(&token[..TOKEN_MARKER])) {
+            let rest = &held[TOKEN_MARKER..];
+            let run_end = TOKEN_MARKER + rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(rest.len());
+            weigh(held.starts_with(token).then_some(token.len()), run_end, false);
+        }
+        match (secret, undecided) {
+            (Some((end, closed)), _) => Decision::Secret { end, closed },
+            (None, true) => Decision::Undecided { key },
+            (None, false) => Decision::Not,
         }
     }
-    if let Some(key) = raw.rfind(PRIVATE_KEY).filter(|key| !raw[*key..].contains("-----END")) {
-        cut = cut.min(key);
-    }
-    while !raw.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    cut
 }
 
 /// Calls `f` on every string in `value`, object keys among them: an agent's tool input can hold a secret as a key.
@@ -118,30 +507,23 @@ mod tests {
 
     #[test]
     fn redact_masks_each_token_shape_and_the_sessions_own_secrets_and_leaves_plain_text_alone() {
-        let shapes = [
-            format!("sk-ant-api03-{}", "a".repeat(30)),
-            format!("sk-proj-{}", "b".repeat(40)),
-            format!("ghp_{}", "c".repeat(36)),
-            format!("github_pat_{}", "d".repeat(40)),
-            "xoxb-123456789012-abcdef".to_owned(),
-            format!("AIza{}", "e".repeat(35)),
-            format!("ya29.{}", "f".repeat(30)),
-            "AKIAABCDEFGHIJKLMNOP".to_owned(),
-            format!("eyJ{0}.eyJ{0}.{0}", "g".repeat(12)),
-            format!("bearer {}", "h".repeat(24)),
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----".to_owned(),
-            format!("ATATT3xFfGF0{}", "i".repeat(30)),
-            format!("glpat-{}", "j".repeat(20)),
-            format!("npm_{}", "k".repeat(36)),
-            format!("sk_live_{}", "l".repeat(24)),
-            format!("rk_live_{}", "m".repeat(24)),
-        ];
-        for shape in &shapes {
-            assert_eq!(text(&format!("x {shape} y"), &[]), format!("x {MASK} y"), "{shape}");
+        for shape in SHAPES {
+            let secret = (shape.example)();
+            assert_eq!(text(&format!("x {secret} y"), &[]), format!("x {MASK} y"), "{}", shape.name);
         }
         assert_eq!(text("the token is 0123abcd here", &["0123abcd".into()]), format!("the token is {MASK} here"));
         let plain = "Ran `ls -la` in /tmp; sk-short and ghp_ and Bearer x are not tokens. The id is toolu_01KX85.";
         assert_eq!(text(plain, &["".into()]), plain, "an empty secret masks nothing");
+    }
+
+    #[test]
+    fn redact_a_partial_copy_of_the_sessions_token_is_masked_and_two_glued_secrets_are_masked_whole() {
+        let token = "0123456789abcdef".repeat(4);
+        assert_eq!(text(&format!("a {} b", &token[10..40]), std::slice::from_ref(&token)), format!("a {MASK} b"));
+        let short = &token[10..25];
+        assert_eq!(text(&format!("a {short} b"), std::slice::from_ref(&token)), format!("a {short} b"), "15 is not a copy");
+        let glued = format!("{}{}", (SHAPES[2].example)(), (SHAPES[6].example)());
+        assert_eq!(text(&format!("x {glued} y"), &[]), format!("x {MASK} y"));
     }
 
     #[test]
@@ -152,23 +534,16 @@ mod tests {
         let expected = serde_json::json!({ "args": ["-H", format!("x {MASK}")], "n": 3, MASK: true });
         assert_eq!(masked, Body::ToolCall { id: "t1".into(), name: "curl".into(), input: expected });
     }
-}
-
-#[cfg(test)]
-mod cut_tests {
-    use super::*;
 
     #[test]
-    fn redact_a_cut_holds_back_the_word_being_written_and_an_unfinished_private_key() {
-        assert_eq!(safe_cut("ready to go", &[]), "ready to ".len(), "only the last word waits");
-        assert_eq!(safe_cut("ready ", &[]), "ready ".len());
-        assert_eq!(safe_cut("auth: Bearer ", &[]), "auth: ".len(), "a bearer header waits for its token");
-        let long = "a".repeat(5000);
-        assert_eq!(safe_cut(&long, &[]), 5000 - HOLD_BACK, "a run longer than the hold-back is let go");
-        let key = format!("{} -----BEGIN RSA PRIVATE KEY-----\n{}", "b".repeat(600), "c d ".repeat(900));
-        assert_eq!(safe_cut(&key, &[]), 601, "an unfinished key is held back whole");
-        assert_eq!(safe_cut("token 0123ab", &["0123abcd".into()]), "token ".len());
-        let wide = "é".repeat(3000);
-        assert!(wide.is_char_boundary(safe_cut(&wide, &[])));
+    fn redact_live_text_without_a_marker_goes_out_at_once_and_a_marker_waits() {
+        let mut live = LiveText::new(&[]);
+        assert_eq!(live.push("ready to go "), "ready to go ");
+        assert_eq!(live.push("see sk-"), "see ", "a marker waits");
+        assert_eq!(live.push("learn now"), "sk-learn now", "decided not a secret");
+        assert_eq!(live.push(" yes"), " ye", "a possible marker start (`s`) waits");
+        assert_eq!(live.end(), "s", "and goes out at the end, since it never became a marker");
+        assert_eq!(live.push("key sk-ant-api03-abc"), "key ");
+        assert_eq!(live.end(), MASK, "undecided at the end is masked, never sent raw");
     }
 }
