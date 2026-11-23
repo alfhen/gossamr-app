@@ -48,7 +48,8 @@ async fn replay_every_fixture_of_the_chosen_drivers_plays_to_its_end() {
         for file in files {
             let events = replay(&file, vec![]).await;
             assert_eq!(events.first().map(|event| event.body.type_name()).as_deref(), Some("started"), "{}", file.display());
-            assert_eq!(events.last().map(|event| &event.body), Some(&Body::Closed), "{}", file.display());
+            // A failure names the fixture, never an event's payload.
+            assert!(events.last().is_some_and(|event| event.body == Body::Closed), "{} does not end closed", file.display());
             let diverged = events.iter().any(|event| matches!(&event.body, Body::Failed { reason, .. } if reason.starts_with("the replay")));
             assert!(!diverged, "{} diverged from its recording", file.display());
             played += 1;
@@ -70,7 +71,7 @@ async fn replay_codex_app_server_gives_command_file_change_and_permissions_reque
     let other_server = replay(&codex.join("r1-two-servers.jsonl"), vec![]).await;
     assert_eq!(permissions(&other_server), [(Tool, Allow)], "another server's tool asks through an elicitation");
     for events in [&command, &file_change, &granted] {
-        assert_eq!(events.iter().rev().nth(1).map(|event| &event.body), Some(&Body::TurnEnded { how: TurnEnd::Done }));
+        assert!(events.iter().rev().nth(1).is_some_and(|event| event.body == Body::TurnEnded { how: TurnEnd::Done }), "the turn ends done");
     }
 }
 
@@ -82,7 +83,7 @@ async fn replay_the_other_chosen_drivers_give_their_permission_requests_and_turn
     assert_eq!(permissions(&gemini), [(PermissionKind::Command, Decision::Allow), (PermissionKind::Command, Decision::Deny)]);
     let cancelled = replay(&fixtures().join("claude/native/3-cancel.jsonl"), vec![]).await;
     let ends: Vec<&Body> = cancelled.iter().map(|event| &event.body).filter(|body| body.ends_turn()).collect();
-    assert_eq!(ends, [&Body::TurnEnded { how: TurnEnd::Cancelled }, &Body::TurnEnded { how: TurnEnd::Done }]);
+    assert!(ends == [&Body::TurnEnded { how: TurnEnd::Cancelled }, &Body::TurnEnded { how: TurnEnd::Done }], "cancelled, then done");
     let collision = replay(&fixtures().join("gemini/acp/r1-collision.jsonl"), vec![]).await;
     assert!(collision.iter().any(|event| matches!(&event.body, Body::Text { text } if text.contains("tool name conflict"))));
 }
@@ -92,8 +93,8 @@ async fn replay_maps_the_fixtures_ids_pids_and_ports_to_fresh_ones() {
     let events = replay(&fixtures().join("claude/native/2-permission.jsonl"), vec![]).await;
     let shown = serde_json::to_string(&events).unwrap();
     let recorded = ["3fea6374-c3ed-4254-8d20-6333b6edce26", "4b00fe4a-5e30-45fa-bc99-156e4df0bc3d", "toolu_01KX85KeVuBaHQoR3pzBhj2M", "spike-1"];
-    for id in recorded {
-        assert!(!shown.contains(id), "{id} reached an event");
+    for (n, id) in recorded.iter().enumerate() {
+        assert!(!shown.contains(id), "recorded id {n} reached an event");
     }
     assert!(!regex::Regex::new(r"\b7435\b").unwrap().is_match(&shown), "the recorded pid reached an event");
     assert!(shown.contains("\"provider_session\":\"mock-"), "the session is the mock's own");
@@ -111,15 +112,15 @@ async fn replay_maps_the_fixtures_ids_pids_and_ports_to_fresh_ones() {
     let fixture = tmp.path().join("made.jsonl");
     std::fs::write(&fixture, transcript.join("\n")).unwrap();
     let events = replay(&fixture, vec![]).await;
-    let Body::Started { provider_session, .. } = &events[0].body else { panic!("{events:?}") };
+    let Body::Started { provider_session, .. } = &events[0].body else { panic!("the first event is not `started`") };
     let Some(Body::ToolCall { id: call, input, .. }) = events.iter().map(|event| &event.body).find(|body| matches!(body, Body::ToolCall { .. })) else {
-        panic!("{events:?}")
+        panic!("no tool call")
     };
-    assert_eq!(input["url"], "http://127.0.0.1:0/mcp", "a session with no tools endpoint yet gets port 0");
+    assert!(input["url"] == "http://127.0.0.1:0/mcp", "a session with no tools endpoint yet gets port 0");
     let text = events.iter().find_map(|event| match &event.body { Body::Text { text } => Some(text.clone()), _ => None }).unwrap();
     let pid = std::process::id();
-    assert_eq!(text, format!("session {provider_session}, pid {pid}, call {call} on 127.0.0.1:0"), "the two chunks are one text");
-    assert_ne!(call, "call_123456789");
+    assert!(text == format!("session {provider_session}, pid {pid}, call {call} on 127.0.0.1:0"), "the two chunks are one mapped text");
+    assert!(call != "call_123456789", "the call id is mapped");
 }
 
 #[tokio::test]
