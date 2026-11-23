@@ -27,9 +27,10 @@ pub enum Body {
     /// turn it starts with exactly one `turn_ended` or `failed`.
     TurnStarted,
     /// A piece of text as it streams, for live output only: it is never stored, and is numbered 0. A driver that
-    /// streams sends the whole block as one `Text` after its pieces. Redaction holds back the word still being written
-    /// until a secret cut between two pieces can be masked whole, so live text may lag the agent by that word, by at
-    /// most `redact::HOLD_BACK` bytes of an unbroken run, or by a private key that has not ended.
+    /// streams sends the whole block as one `Text` after its pieces. Live text fails closed: from anything that could
+    /// start a secret it is held until it is decided, and what is undecided when the block ends (a `text`,
+    /// `turn_ended`, `failed` or `closed`) is sent as the mask. So live text may trail other events of the turn, by
+    /// what it holds from a marker on, up to `redact::HOLD_BACK` bytes, or to the end of a private key.
     TextDelta { text: String },
     /// A whole block of the agent's text. This is what is stored: a driver joins its pieces before it sends one.
     Text { text: String },
@@ -42,7 +43,7 @@ pub enum Body {
     Answered {
         id: String,
         decision: Decision,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         message: Option<String>,
     },
     Question { id: String, text: String },
@@ -62,6 +63,8 @@ pub enum Body {
 
 /// The fields a withheld event keeps, because they hold no text the agent or the person wrote. A field not on this
 /// list is dropped, so a new one stays private until someone adds it here; `PRIVATE_FIELDS` lists those that must be.
+/// `name` and `tool` are tool identifiers (`Bash`, `run_command`, `mcp__x__ask`), never a title or a command line: a
+/// driver puts those in `input`.
 pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
@@ -143,9 +146,34 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// One of each event. The match makes a new variant fail to compile here until it has a sample.
+    /// Where each variant's sample sits. The match is exhaustive, so a new variant needs an arm here, and the test
+    /// then fails until `samples` has one at that place.
+    fn place(body: &Body) -> usize {
+        match body {
+            Body::Started { .. } => 0,
+            Body::Prompted { .. } => 1,
+            Body::Waiting => 2,
+            Body::PromptsDropped => 3,
+            Body::TurnStarted => 4,
+            Body::TextDelta { .. } => 5,
+            Body::Text { .. } => 6,
+            Body::ToolCall { .. } => 7,
+            Body::ClientToolCall { .. } => 8,
+            Body::ToolResult { .. } => 9,
+            Body::Permission { .. } => 10,
+            Body::Answered { .. } => 11,
+            Body::Question { .. } => 12,
+            Body::TurnEnded { .. } => 13,
+            Body::Failed { .. } => 14,
+            Body::Closed => 15,
+            Body::Withheld { .. } => 16,
+        }
+    }
+
+    /// One of each event but `withheld`, which the store makes. Every field is set, and an `Option` field
+    /// serializes even when it is `None`, so the test sees every field.
     fn samples() -> Vec<Body> {
-        let all = vec![
+        vec![
             Body::Started { provider_session: "p".into(), resumed: false },
             Body::Prompted { text: "t".into() },
             Body::Waiting,
@@ -157,22 +185,21 @@ mod tests {
             Body::ClientToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
             Body::ToolResult { id: "i".into(), output: json!("o"), error: false },
             Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
-            Body::Answered { id: "i".into(), decision: Decision::Deny, message: Some("m".into()) },
+            Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
             Body::Closed,
-        ];
-        for body in &all {
-            match body {
-                Body::Started { .. } | Body::Prompted { .. } | Body::Waiting | Body::PromptsDropped | Body::TurnStarted => {}
-                Body::TextDelta { .. } | Body::Text { .. } | Body::ToolCall { .. } | Body::ClientToolCall { .. } => {}
-                Body::ToolResult { .. } | Body::Permission { .. } | Body::Answered { .. } | Body::Question { .. } => {}
-                Body::TurnEnded { .. } | Body::Failed { .. } | Body::Closed => {}
-                Body::Withheld { .. } => unreachable!("the store makes these"),
-            }
-        }
-        all
+        ]
+    }
+
+    #[test]
+    fn withheld_there_is_a_sample_of_every_event_and_each_serializes_every_field() {
+        let places: Vec<usize> = samples().iter().map(place).collect();
+        let withheld = place(&Body::Withheld { of: String::new(), kept: Map::new() });
+        assert_eq!(places, (0..withheld).collect::<Vec<_>>(), "one sample of each event, in place");
+        let answered = serde_json::to_value(Body::Answered { id: "i".into(), decision: Decision::Deny, message: None }).unwrap();
+        assert!(answered.get("message").is_some(), "an `Option` field that is `None` is still a field");
     }
 
     #[test]

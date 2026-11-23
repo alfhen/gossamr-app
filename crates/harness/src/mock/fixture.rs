@@ -59,6 +59,9 @@ pub fn convert(lines: &[Value]) -> Script {
     for (at, line) in lines.iter().enumerate() {
         let data = &line["data"];
         collect(data, &mut c.recorded);
+        if data["note"] == "processes" {
+            c.descendants = descendants(data);
+        }
         let dir = line["dir"].as_str();
         if !data.is_object() || !matches!(dir, Some("to_agent" | "from_agent")) {
             continue;
@@ -69,7 +72,10 @@ pub fn convert(lines: &[Value]) -> Script {
             (Some("to_agent"), _) => c.rpc_client(data),
             (Some("from_agent"), Wire::Claude) => c.claude_agent(data, &lines[at + 1..]),
             (Some("from_agent"), Wire::AppServer) => c.app_server_agent(data, &lines[at + 1..]),
-            (Some("from_agent"), Wire::Acp) => c.acp_agent(data, &lines[at + 1..]),
+            (Some("from_agent"), Wire::Acp) => {
+                c.acp_agent(data, &lines[at + 1..]);
+                c.end_when_quiet(line, &lines[at + 1..]);
+            }
             _ => {}
         }
     }
@@ -90,6 +96,8 @@ struct Converter {
     in_turn: bool,
     /// The running turn is one the agent started by itself.
     unprompted: bool,
+    /// How many processes the agent had running at the last note of the recording's driver.
+    descendants: usize,
     /// The id of an ACP `session/load` not yet answered: the updates before its answer replay old history.
     loading: Option<Value>,
     finished: HashSet<String>,
@@ -292,13 +300,8 @@ impl Converter {
                         self.acp_finished(update);
                     }
                     Some("tool_call_update") => self.acp_finished(update),
-                    // agy ends a message it sent by itself with its usage and nothing else: that ends the turn.
-                    Some("usage_update") => {
-                        self.flush();
-                        if self.in_turn && self.unprompted {
-                            self.push(Step::End(TurnEnd::Done));
-                        }
-                    }
+                    // A `usage_update` closes a message, not a turn.
+                    Some("usage_update") => self.flush(),
                     _ => {}
                 }
             }
@@ -328,6 +331,28 @@ impl Converter {
         }
     }
 
+    /// agy ends a turn it started by itself with no marker: it sends a `usage_update` per message or step, not per
+    /// turn. So the turn ends late, never early: after `line` only when no agent line comes for `QUIET_MS` and no
+    /// process of the agent's runs then.
+    fn end_when_quiet(&mut self, line: &Value, after: &[Value]) {
+        let ms = line["ms"].as_u64().unwrap_or_default();
+        let until = after.iter().position(|next| next["dir"] == "from_agent").unwrap_or(after.len());
+        let next = after.get(until).and_then(|next| next["ms"].as_u64());
+        if next.is_some_and(|next| next < ms + QUIET_MS) {
+            return;
+        }
+        // Quiet: a message streamed so far is whole, and may be what started the turn.
+        self.flush();
+        if !(self.in_turn && self.unprompted) {
+            return;
+        }
+        let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms + QUIET_MS));
+        let running = notes.next_back().map_or(self.descendants, |note| descendants(&note["data"]));
+        if running == 0 {
+            self.push(Step::End(TurnEnd::Done));
+        }
+    }
+
     fn acp_finished(&mut self, update: &Value) {
         if let Some(status @ ("completed" | "failed")) = update["status"].as_str() {
             let output = [&update["rawOutput"], &update["content"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default();
@@ -353,12 +378,31 @@ fn texts(content: &Value) -> String {
     }
 }
 
+/// How long agy must say nothing, with no process running, before a turn it started by itself counts as ended.
+const QUIET_MS: u64 = 5_000;
+
+fn descendants(note: &Value) -> usize {
+    note["detail"]["descendants"].as_array().map_or(0, Vec::len)
+}
+
+/// The tool's identifier. With none, a fixed word: ACP's title is often the command line, which must not be kept as
+/// a name after clean-up, so it goes into the input instead.
 fn acp_tool(call: &Value) -> String {
-    call["name"].as_str().or(call["title"].as_str()).unwrap_or_default().to_owned()
+    call["name"].as_str().unwrap_or("tool").to_owned()
 }
 
 fn acp_input(call: &Value) -> Value {
-    [&call["rawInput"], &call["args"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default()
+    let input = [&call["rawInput"], &call["args"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default();
+    match (call["name"].is_null(), call["title"].as_str()) {
+        (true, Some(title)) => match input {
+            Value::Object(mut fields) => {
+                fields.insert("title".into(), json!(title));
+                Value::Object(fields)
+            }
+            other => json!({ "title": title, "input": other }),
+        },
+        _ => input,
+    }
 }
 
 /// The result the recorded client gave to the agent's request `data`.

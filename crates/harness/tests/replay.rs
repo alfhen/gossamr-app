@@ -141,3 +141,33 @@ async fn replay_agys_message_after_a_background_command_is_a_turn_of_its_own_tha
     let unprompted = kinds.iter().rposition(|kind| kind == "turn_started").unwrap();
     assert_ne!(kinds[unprompted - 1], "prompted", "no prompt started the second turn: {kinds:?}");
 }
+
+#[tokio::test]
+async fn replay_agys_unprompted_turn_with_two_usage_updates_stays_one_turn() {
+    // r7-background's unprompted message, sent twice half a second apart, as agy does for a tool call and a message.
+    let text = std::fs::read_to_string(fixtures().join("gemini/acp/r7-background.jsonl")).unwrap();
+    let lines: Vec<serde_json::Value> = text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    let message: Vec<&serde_json::Value> = lines.iter().filter(|line| (43..=50).contains(&line["seq"].as_u64().unwrap())).collect();
+    assert_eq!(message.last().unwrap()["data"]["params"]["update"]["sessionUpdate"], "usage_update");
+    let mut twice = vec![];
+    for line in &lines {
+        twice.push((*line).clone());
+        if line["seq"] == 50 {
+            for again in &message {
+                let mut again = (*again).clone();
+                again["ms"] = serde_json::json!(again["ms"].as_u64().unwrap() + 1_000);
+                twice.push(again);
+            }
+        }
+    }
+    let (tmp, _) = data_dir();
+    let fixture = tmp.path().join("r7-twice.jsonl");
+    std::fs::write(&fixture, twice.iter().map(|line| line.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+    let events = replay(&fixture, vec![]).await;
+    let kinds: Vec<String> = events.iter().map(|event| event.body.type_name()).collect();
+    let pairs = |kind: &str| kinds.iter().filter(|seen| *seen == kind).count();
+    assert_eq!((pairs("turn_started"), pairs("turn_ended")), (2, 2), "the prompted turn and one unprompted turn: {kinds:?}");
+    let unprompted = kinds.iter().rposition(|kind| kind == "turn_started").unwrap();
+    let texts = kinds[unprompted..].iter().filter(|kind| *kind == "text").count();
+    assert_eq!(texts, 2, "both messages are in the one unprompted turn: {kinds:?}");
+}
