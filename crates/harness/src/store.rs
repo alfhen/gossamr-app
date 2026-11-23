@@ -35,9 +35,17 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
         PRIMARY KEY (session, seq)
     );
     CREATE INDEX events_kept_by_age ON events (ms) WHERE withheld = 0;",
-    "CREATE TABLE client_tokens (stored_key BLOB PRIMARY KEY, created_ms INTEGER NOT NULL);"];
+    "CREATE TABLE client_tokens (stored_key BLOB PRIMARY KEY, created_ms INTEGER NOT NULL);",
+    // `last_seq` keeps the numbers going once the sweep has deleted a session's rows.
+    "ALTER TABLE sessions ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;
+    UPDATE sessions SET last_seq = (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = sessions.id);
+    ALTER TABLE sessions ADD COLUMN ends_with_client INTEGER NOT NULL DEFAULT 0;"];
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// How long a session's event rows stay after its clean-up.
+pub const ROWS_AFTER_CLEAN_UP_MS: i64 = KEEP_MS;
+/// How long the event rows of a session never cleaned up stay after its last event.
+pub const ROWS_AFTER_LAST_EVENT_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
 pub struct Store {
     conn: Connection,
@@ -53,6 +61,7 @@ pub struct SessionRow {
     pub model: Option<String>,
     pub provider_session: Option<String>,
     pub cleaned: bool,
+    pub ends_with_client: bool,
 }
 
 /// A session as `sessions` lists it.
@@ -64,6 +73,8 @@ pub struct Listed {
     pub model: Option<String>,
     pub created_ms: i64,
     pub cleaned: bool,
+    pub ends_with_client: bool,
+    pub last_seq: u64,
     /// Set by the harness: the session's agent runs.
     #[serde(default)]
     pub running: bool,
@@ -112,7 +123,7 @@ impl Store {
     pub fn session(&self, id: &str) -> Result<SessionRow> {
         self.conn
             .query_row(
-                "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL FROM sessions WHERE id = ?1",
+                "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -122,6 +133,7 @@ impl Store {
                         model: row.get(3)?,
                         provider_session: row.get(4)?,
                         cleaned: row.get(5)?,
+                        ends_with_client: row.get(6)?,
                     })
                 },
             )
@@ -129,13 +141,29 @@ impl Store {
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
     }
 
+    /// The session ends when the client that opened it leaves, and is never resumed.
+    pub fn set_ends_with_client(&self, id: &str) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET ends_with_client = 1 WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn sessions(&self) -> Result<Vec<Listed>> {
-        let mut stmt = self.conn.prepare("SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL FROM sessions ORDER BY created_ms, id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq FROM sessions ORDER BY created_ms, id",
+        )?;
         let rows = stmt.query_map([], |row| {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, running: false })
+            let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The session's last stored event, if the sweep has left it one.
+    pub fn last_event(&self, session: &str) -> Result<Option<Event>> {
+        let mut stmt = self.conn.prepare("SELECT seq FROM events WHERE session = ?1 ORDER BY seq DESC LIMIT 1")?;
+        let Some(seq) = stmt.query_row([session], |row| row.get::<_, i64>(0)).optional()? else { return Ok(None) };
+        Ok(self.events(session, seq as u64 - 1)?.pop())
     }
 
     pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
@@ -143,7 +171,6 @@ impl Store {
         Ok(())
     }
 
-    /// The stored keys of the client tokens.
     pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
         let mut stmt = self.conn.prepare("SELECT stored_key FROM client_tokens")?;
         let keys = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
@@ -162,13 +189,16 @@ impl Store {
         let row = self.session(session)?;
         let withheld = row.locked || row.cleaned;
         let payload = serde_json::to_string(&if withheld { body.withheld() } else { body.clone() })?;
-        let seq = self.conn.query_row(
-            "INSERT INTO events (session, seq, ms, type, payload, withheld)
-             VALUES (?1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session = ?1), ?2, ?3, ?4, ?5)
-             RETURNING seq",
-            params![session, ms, body.type_name(), payload, withheld],
-            |row| row.get::<_, i64>(0),
+        let tx = self.conn.unchecked_transaction()?;
+        let seq = tx.query_row("UPDATE sessions SET last_seq = MAX(last_seq, (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = ?1)) + 1
+             WHERE id = ?1 RETURNING last_seq", [session], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        tx.execute(
+            "INSERT INTO events (session, seq, ms, type, payload, withheld) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![session, seq, ms, body.type_name(), payload, withheld],
         )?;
+        tx.commit()?;
         Ok(Event { seq: seq as u64, ms, body: body.clone() })
     }
 
@@ -199,9 +229,18 @@ impl Store {
         Ok(())
     }
 
-    /// Drops the private fields of every event older than 30 days at `now`.
+    /// Drops the private fields of every event older than 30 days at `now`, and deletes the event rows of a session
+    /// cleaned up more than 30 days ago, or never cleaned up and with no event in 90 days. Says how many rows changed.
     pub fn sweep(&self, now: i64) -> Result<usize> {
-        Ok(self.conn.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND ms < ?1", WITHHOLD.as_str()), [now - KEEP_MS])?)
+        let tx = self.conn.unchecked_transaction()?;
+        let withheld = tx.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND ms < ?1", WITHHOLD.as_str()), [now - KEEP_MS])?;
+        let deleted = tx.execute(
+            "DELETE FROM events WHERE session IN (SELECT id FROM sessions WHERE cleaned_ms < ?1
+                OR (cleaned_ms IS NULL AND (SELECT MAX(ms) FROM events e WHERE e.session = sessions.id) < ?2))",
+            params![now - ROWS_AFTER_CLEAN_UP_MS, now - ROWS_AFTER_LAST_EVENT_MS],
+        )?;
+        tx.commit()?;
+        Ok(withheld + deleted)
     }
 }
 

@@ -53,6 +53,9 @@ pub enum Op {
         locked: bool,
         #[serde(default)]
         model: Option<String>,
+        /// The session is closed when this connection ends, and is never resumed.
+        #[serde(default)]
+        ends_with_client: bool,
     },
     Send { session: String, text: String },
     Cancel { session: String },
@@ -70,7 +73,12 @@ pub enum Op {
         #[serde(default)]
         error: bool,
     },
+    /// Answers an open question. Until `ask` holds the agent's call (H5b), the answer reaches the agent as its next
+    /// prompt.
+    AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
+    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
+    HandOver { session: String },
     CleanUp { session: String },
     Sessions,
     Providers,
@@ -80,6 +88,8 @@ pub enum Op {
     Watch { session: String, #[serde(default)] after: u64 },
     /// Adds a token by its stored key, in hex. The client keeps the token; it never crosses the socket.
     TokenNew { stored_key: String },
+    /// Stops every session and the harness, and frees the data folder; answers once that is done.
+    Shutdown,
 }
 
 /// What the harness sends after the hello: an answer to a call (`id` with `ok` or `error`), an event of a session

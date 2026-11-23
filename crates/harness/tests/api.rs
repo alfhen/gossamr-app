@@ -63,7 +63,7 @@ async fn connect(served: &Served) -> Client {
 }
 
 async fn open(client: &mut Client) -> String {
-    let opened = client.call(Op::Open { provider: "mock".into(), cwd: "/nowhere".into(), locked: false, model: None }).await.unwrap();
+    let opened = client.call(Op::Open { provider: "mock".into(), cwd: "/nowhere".into(), locked: false, model: None, ends_with_client: false }).await.unwrap();
     opened["session"].as_str().unwrap().to_owned()
 }
 

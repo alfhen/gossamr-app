@@ -7,7 +7,7 @@
 //! starts by itself takes a slot too, even past the limit, since it has begun before the harness sees it; the next
 //! prompted turn then waits.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{Notify, broadcast, oneshot};
 
 use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secret, random_hex};
 use crate::error::{Error, Result};
@@ -36,6 +36,10 @@ impl Default for Settings {
     }
 }
 
+/// The reason of the `failed` a session records when it cannot be resumed. `resume` refuses a session whose last
+/// stored event is this, so a provider id the store failed to clear is never used.
+pub const CANNOT_RESUME: &str = "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops";
+
 /// How long a stopped agent may take to go when its driver does not say: above the 15 s `agy acp` was seen to take
 /// while a command ran.
 pub const DEFAULT_STOP_GRACE: Duration = Duration::from_secs(20);
@@ -45,12 +49,18 @@ pub struct Harness {
     inner: Arc<Inner>,
 }
 
+// Lock order: `live`, then `store`, then a session's `open`, `questions` or `watchers`.
 struct Inner {
-    store: Mutex<Store>,
+    /// None once the harness has shut down, which frees the data folder.
+    store: Mutex<Option<Store>>,
     drivers: HashMap<String, Arc<dyn Driver>>,
     turns: Arc<Turns>,
     live: Mutex<HashMap<String, Live>>,
     starts: AtomicU64,
+    /// Set under `live` by `shutdown`: no session starts after it.
+    closing: AtomicBool,
+    /// Told each time a session leaves `live`.
+    left: Notify,
 }
 
 #[derive(Clone)]
@@ -63,6 +73,11 @@ struct Live {
     open: Arc<Mutex<HashMap<String, OpenRequest>>>,
     /// Stop was taken: the session takes no more requests while its agent goes.
     stopping: Arc<AtomicBool>,
+    /// Questions the agent asked that no one has answered.
+    questions: Arc<Mutex<HashSet<String>>>,
+    /// Clients that get every event while they listen, however far behind they fall: a locked session's events are
+    /// not in the store, so a client that lost one could not read it back.
+    watchers: Arc<Mutex<Vec<UnboundedSender<Event>>>>,
 }
 
 struct OpenRequest {
@@ -77,50 +92,69 @@ enum Request {
     ToolResult { id: String, reply: Reply },
     Cancel,
     Stop,
+    HandOver,
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct Open {
     pub provider: String,
     /// Pip's profile. Its events reach the live client only; the store keeps their fields that are not private.
     pub locked: bool,
     pub cwd: PathBuf,
     pub model: Option<String>,
+    /// The session ends when the client that opened it leaves, and is never resumed. The API closes it.
+    pub ends_with_client: bool,
 }
 
 impl Harness {
     pub fn new(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings) -> Harness {
         Harness {
             inner: Arc::new(Inner {
-                store: Mutex::new(store),
+                store: Mutex::new(Some(store)),
                 drivers: drivers.into_iter().collect(),
                 turns: Arc::new(Turns { limit: settings.turn_limit, state: Mutex::new(TurnsState::default()) }),
                 live: Mutex::new(HashMap::new()),
                 starts: AtomicU64::new(0),
+                closing: AtomicBool::new(false),
+                left: Notify::new(),
             }),
         }
     }
 
     /// Starts a session. The receiver gets every event from the first.
     pub async fn open(&self, spec: Open) -> Result<(String, broadcast::Receiver<Event>)> {
+        self.open_watched(spec, None)
+    }
+
+    /// Starts a session; `watcher`, if any, gets every event from the first and never falls behind.
+    pub fn open_watched(&self, spec: Open, watcher: Option<UnboundedSender<Event>>) -> Result<(String, broadcast::Receiver<Event>)> {
         let driver = self.driver(&spec.provider)?;
         let id = random_hex(8);
-        {
-            let store = self.inner.store();
-            store.sweep(now_ms())?;
+        self.inner.with_store(|store| {
             store.create_session(&id, &spec.provider, spec.locked, &spec.cwd, spec.model.as_deref())?;
-        }
+            if spec.ends_with_client {
+                store.set_ends_with_client(&id)?;
+            }
+            Ok(())
+        })?;
         let plan = Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None };
-        let events = self.start(&id, |_| Ok(plan))?;
+        let events = self.start(&id, watcher, |_| Ok(plan))?;
         Ok((id, events))
     }
 
     /// Starts a session again by its provider's session id, with a new tools token. A running or cleaned-up session
-    /// is refused.
+    /// is refused, and so is one that ends with its client or whose last stored event says it cannot be resumed.
     pub async fn resume(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
-        self.start(id, |store| {
+        self.start(id, None, |store| {
             let row = store.session(id)?;
             if row.cleaned {
                 return Err(Error::CleanedUp(id.to_owned()));
+            }
+            if row.ends_with_client {
+                return Err(Error::EndedWithClient(id.to_owned()));
+            }
+            if store.last_event(id)?.is_some_and(|last| matches!(last.body, Body::Failed { reason, .. } if reason == CANNOT_RESUME)) {
+                return Err(Error::CannotResume(id.to_owned()));
             }
             let provider_session =
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
@@ -149,6 +183,16 @@ impl Harness {
         live.requests.send(answer).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
+    /// Answers an open question, once. Until `ask` holds the agent's call (H5b), the answer goes to the agent as the
+    /// next prompt.
+    pub fn answer_question(&self, id: &str, question: &str, text: String) -> Result<()> {
+        let live = self.taking(id)?;
+        if !live.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(question) {
+            return Err(Error::NoQuestion(question.to_owned()));
+        }
+        live.requests.send(Request::Prompt(text)).map_err(|_| Error::NotRunning(id.to_owned()))
+    }
+
     /// Posts the result of a client tool call. A call that was already cut is passed over.
     pub fn tool_result(&self, id: &str, call: &str, output: Value, error: bool) -> Result<()> {
         self.request(id, Request::ToolResult { id: call.to_owned(), reply: Reply { output, error } })
@@ -162,43 +206,86 @@ impl Harness {
     /// Stops the session. It is closed once its agent has gone, which its `closed` event says; until then it takes no
     /// more requests.
     pub fn close(&self, id: &str) -> Result<()> {
+        self.stop(id, Request::Stop)
+    }
+
+    /// Closes the session as handed over to Terminal, which its `handed_over` event says. Its provider id is kept,
+    /// so it can be resumed there or later.
+    pub fn hand_over(&self, id: &str) -> Result<()> {
+        self.stop(id, Request::HandOver)
+    }
+
+    fn stop(&self, id: &str, request: Request) -> Result<()> {
         let live = self.live(id)?;
         live.stopping.store(true, Ordering::Relaxed);
-        live.requests.send(Request::Stop).map_err(|_| Error::NotRunning(id.to_owned()))
+        live.requests.send(request).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
-    /// Drops a closed session's payload from the store. A session that still runs is refused: close it first.
-    pub fn clean_up(&self, id: &str) -> Result<()> {
-        // Under the lock a start takes the session by, so a resume cannot start from a row being cleaned up.
-        let live = self.inner.live();
-        if live.contains_key(id) {
-            return Err(Error::Running(id.to_owned()));
+    /// Stops every session, waits until each has recorded its `closed`, and frees the data folder. Nothing starts
+    /// after it. An agent that never goes keeps it waiting, as it keeps its session taken.
+    pub async fn shutdown(&self) {
+        let running: Vec<Live> = {
+            let live = self.inner.live();
+            self.inner.closing.store(true, Ordering::Relaxed);
+            live.values().cloned().collect()
+        };
+        for live in running {
+            live.stopping.store(true, Ordering::Relaxed);
+            let _ = live.requests.send(Request::Stop);
         }
-        self.inner.store().clean_up(id)
+        loop {
+            let left = self.inner.left.notified();
+            tokio::pin!(left);
+            left.as_mut().enable();
+            if self.inner.live().is_empty() {
+                break;
+            }
+            left.await;
+        }
+        *self.inner.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
-    /// The stored events after `after`. A read writes nothing.
-    pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
-        self.inner.store().events(id, after)
+    /// Drops payload past 30 days and deletes old sessions' event rows; see `Store::sweep`.
+    pub fn sweep(&self) -> Result<usize> {
+        self.inner.with_store(|store| store.sweep(now_ms()))
     }
 
-    /// The stored events after `after` and, while the session runs, a receiver of its events from the moment of the
-    /// read. An event can come in both; a client drops those numbered up to the last stored one it read.
-    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, Option<broadcast::Receiver<Event>>)> {
-        let live = self.inner.live();
-        let receiver = live.get(id).map(|live| live.events.subscribe());
-        let store = self.inner.store();
-        store.session(id)?;
-        Ok((store.events(id, after)?, receiver))
+    /// Sweeps every `every`, first one `every` from now, until the harness shuts down. `swept` counts the sweeps.
+    pub fn sweep_on_timer(&self, every: Duration) -> (tokio::task::JoinHandle<()>, tokio::sync::watch::Receiver<u64>) {
+        let (count, swept) = tokio::sync::watch::channel(0);
+        let harness = self.clone();
+        let task = tokio::spawn(async move {
+            let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+            loop {
+                timer.tick().await;
+                if let Err(e) = harness.sweep() {
+                    eprintln!("harness: the sweep failed: {e}");
+                    if matches!(e, Error::ShutDown) {
+                        return;
+                    }
+                }
+                count.send_modify(|n| *n += 1);
+            }
+        });
+        (task, swept)
     }
 
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let live = self.inner.live();
-        let mut listed = self.inner.store().sessions()?;
+        let mut listed = self.inner.with_store(Store::sessions)?;
         for session in &mut listed {
             session.running = live.contains_key(&session.id);
         }
         Ok(listed)
+    }
+
+    /// The stored keys of the client tokens.
+    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
+        self.inner.with_store(Store::client_tokens)
+    }
+
+    pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
+        self.inner.with_store(|store| store.add_client_token(stored_key))
     }
 
     /// The providers, by name, with what each can do.
@@ -208,12 +295,36 @@ impl Harness {
         providers
     }
 
-    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
-        self.inner.store().client_tokens()
+    /// Drops a closed session's payload from the store. A session that still runs is refused: close it first.
+    pub fn clean_up(&self, id: &str) -> Result<()> {
+        // Under the lock a start takes the session by, so a resume cannot start from a row being cleaned up.
+        let live = self.inner.live();
+        if live.contains_key(id) {
+            return Err(Error::Running(id.to_owned()));
+        }
+        self.inner.with_store(|store| store.clean_up(id))
     }
 
-    pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
-        self.inner.store().add_client_token(stored_key)
+    /// The stored events after `after`. A read writes nothing: the sweep runs on its timer.
+    pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
+        self.inner.with_store(|store| store.events(id, after))
+    }
+
+    /// The stored events after `after`, and, while the session runs, a receiver of every event from the moment of the
+    /// read, which never falls behind. Events in both come once in each; a client drops those numbered up to the last
+    /// stored one it read. A locked session's events come from the store withheld, and whole only to a receiver.
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, Option<UnboundedReceiver<Event>>)> {
+        let live = self.inner.live();
+        let receiver = live.get(id).map(|live| {
+            let (watcher, receiver) = mpsc::unbounded_channel();
+            live.watchers.lock().unwrap_or_else(|p| p.into_inner()).push(watcher);
+            receiver
+        });
+        let stored = self.inner.with_store(|store| {
+            store.session(id)?;
+            store.events(id, after)
+        })?;
+        Ok((stored, receiver))
     }
 
     pub fn subscribe(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
@@ -244,7 +355,7 @@ impl Harness {
     /// Takes the session's id before the driver opens, so one session never runs two agents; a failed open frees it.
     /// `plan` reads the session's row under the same lock that clean-up and a task's close take, so a start never
     /// begins from a row being cleaned up, or before the last start's `closed`.
-    fn start(&self, id: &str, plan: impl FnOnce(&Store) -> Result<Plan>) -> Result<broadcast::Receiver<Event>> {
+    fn start(&self, id: &str, watcher: Option<UnboundedSender<Event>>, plan: impl FnOnce(&Store) -> Result<Plan>) -> Result<broadcast::Receiver<Event>> {
         let token = Secret::random();
         let secrets = vec![token.expose().to_owned()];
         let (events, receiver) = broadcast::channel(1024);
@@ -253,15 +364,28 @@ impl Harness {
         let start = self.inner.starts.fetch_add(1, Ordering::Relaxed);
         let open = Arc::new(Mutex::new(HashMap::new()));
         let stopping = Arc::new(AtomicBool::new(false));
+        let questions = Arc::new(Mutex::new(HashSet::new()));
+        let watchers = Arc::new(Mutex::new(watcher.into_iter().collect()));
         #[cfg(test)]
         tests::before_reserve();
         let Plan { driver, cwd, locked, model, resume } = {
             let mut live = self.inner.live();
+            if self.inner.closing.load(Ordering::Relaxed) {
+                return Err(Error::ShutDown);
+            }
             if live.contains_key(id) {
                 return Err(Error::Running(id.to_owned()));
             }
-            let plan = plan(&self.inner.store())?;
-            let entry = Live { requests, events: events.clone(), start, open: open.clone(), stopping: stopping.clone() };
+            let plan = self.inner.with_store(plan)?;
+            let entry = Live {
+                requests,
+                events: events.clone(),
+                start,
+                open: open.clone(),
+                stopping: stopping.clone(),
+                questions: questions.clone(),
+                watchers: watchers.clone(),
+            };
             live.insert(id.to_owned(), entry);
             plan
         };
@@ -282,6 +406,8 @@ impl Harness {
             start,
             open,
             stopping,
+            questions,
+            watchers,
             broken: AtomicBool::new(false),
         };
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
@@ -326,8 +452,9 @@ impl Drop for Reserved<'_> {
 }
 
 impl Inner {
-    fn store(&self) -> MutexGuard<'_, Store> {
-        self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn with_store<T>(&self, f: impl FnOnce(&Store) -> Result<T>) -> Result<T> {
+        let store = self.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        f(store.as_ref().ok_or(Error::ShutDown)?)
     }
 
     fn live(&self) -> MutexGuard<'_, HashMap<String, Live>> {
@@ -339,6 +466,7 @@ impl Inner {
         let mut live = self.live();
         if live.get(id).is_some_and(|entry| entry.start == start) {
             live.remove(id);
+            self.left.notify_waiters();
         }
     }
 }
@@ -430,6 +558,8 @@ struct Task {
     start: u64,
     open: Arc<Mutex<HashMap<String, OpenRequest>>>,
     stopping: Arc<AtomicBool>,
+    questions: Arc<Mutex<HashSet<String>>>,
+    watchers: Arc<Mutex<Vec<UnboundedSender<Event>>>>,
     /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
     broken: AtomicBool,
 }
@@ -504,6 +634,10 @@ impl Task {
                         let id = format!("p{}", random_hex(8));
                         self.open_requests().insert(id.clone(), OpenRequest { driver_id, answered: false });
                         self.emit(Body::Permission { id, kind, tool, input });
+                    }
+                    Some(Body::Question { id, text }) => {
+                        self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone());
+                        self.emit(Body::Question { id, text });
                     }
                     Some(body @ Body::Started { .. }) => {
                         if !self.started(body) {
@@ -594,12 +728,20 @@ impl Task {
                             let _ = held.send(Ok(reply));
                         }
                     }
+                    Some(Request::HandOver) => {
+                        self.emit(Body::HandedOver);
+                        break 'run true;
+                    }
                     Some(Request::Stop) | None => break 'run true,
                 },
             }
         };
         self.stopping.store(true, Ordering::Relaxed);
         self.open_requests().clear();
+        // `send` took these, so the client hears they never reached the agent.
+        if !queued.is_empty() {
+            self.emit(Body::PromptsDropped);
+        }
         // No new call reaches the session now: an agent that waits for one while it stops hears that it ended.
         calls.close();
         while let Ok(ToolCall { reply, .. }) = calls.try_recv() {
@@ -624,6 +766,7 @@ impl Task {
         self.emit(Body::Closed);
         if live.get(&self.id).is_some_and(|entry| entry.start == self.start) {
             live.remove(&self.id);
+            self.inner.left.notify_waiters();
         }
     }
 
@@ -696,19 +839,24 @@ impl Task {
     /// id that holds a secret is not kept, and nor is an earlier one, which no longer names the agent's session: the
     /// session says so, and false says it must stop. A row the store would not change is a broken store: the session
     /// never goes on with an id it could not keep or clear.
+    /// An id that is not kept is cleared after the `failed` that says so is recorded, so if the clear fails, that
+    /// `failed` is the last stored event and `resume` still refuses the session.
     fn started(&self, body: Body) -> bool {
         let Body::Started { provider_session, .. } = &body else { unreachable!("only a `started` is passed") };
         let safe = redact::text(provider_session, &self.secrets) == *provider_session;
-        let kept = safe.then_some(provider_session.as_str());
-        if let Err(e) = self.inner.store().set_provider_session(&self.id, kept) {
-            self.store_failed(&e);
-            return false;
+        if safe {
+            if let Err(e) = self.inner.with_store(|store| store.set_provider_session(&self.id, Some(provider_session))) {
+                self.store_failed(&e);
+                return false;
+            }
+            return self.emit(body);
         }
         self.emit(body);
-        if !safe {
-            self.fail(FailKind::Driver, "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops");
+        self.fail(FailKind::Driver, CANNOT_RESUME);
+        if let Err(e) = self.inner.with_store(|store| store.set_provider_session(&self.id, None)) {
+            self.store_failed(&e);
         }
-        safe
+        false
     }
 
     fn open_requests(&self) -> MutexGuard<'_, HashMap<String, OpenRequest>> {
@@ -740,25 +888,31 @@ impl Task {
     fn emit(&self, body: Body) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
-                let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                self.publish(Event { seq: 0, ms: now_ms(), body });
             }
             return false;
         }
         let body = redact::body(body, &self.secrets);
-        let stored = self.inner.store().append(&self.id, &body, now_ms());
+        let stored = self.inner.with_store(|store| store.append(&self.id, &body, now_ms()));
         match stored {
             Ok(event) => {
-                let _ = self.events.send(event);
+                self.publish(event);
                 true
             }
             Err(e) => {
                 self.store_failed(&e);
                 if body == Body::Closed {
-                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                    self.publish(Event { seq: 0, ms: now_ms(), body });
                 }
                 false
             }
         }
+    }
+
+    /// Sends the event to the session's clients. A watcher that has gone is dropped.
+    fn publish(&self, event: Event) {
+        self.watchers.lock().unwrap_or_else(|p| p.into_inner()).retain(|watcher| watcher.send(event.clone()).is_ok());
+        let _ = self.events.send(event);
     }
 
     /// Breaks the session on a store that failed: its clients get one `failed`, numbered 0, and it stops.
@@ -767,7 +921,7 @@ impl Task {
         if !self.broken.swap(true, Ordering::Relaxed) {
             let reason = format!("the store could not keep this session's events, so it stops: {e}");
             let body = Body::Failed { kind: FailKind::Harness, reason };
-            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+            self.publish(Event { seq: 0, ms: now_ms(), body });
         }
     }
 }
@@ -809,7 +963,7 @@ mod tests {
         let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
-        let spec = Open { provider: "mock".into(), locked: false, cwd: "/nowhere".into(), model: None };
+        let spec = Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() };
         let (id, mut events) = harness.open(spec).await.unwrap();
         let (resuming, resumed_id, id_for_hook) = (harness.clone(), id.clone(), id.clone());
         let worker: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::default();

@@ -22,7 +22,7 @@ pub enum Command {
     Events { session: String, after: u64, follow: bool },
     /// Opens a session on the harness, sends the prompt, prints its events, answers its permission requests as
     /// `answers` say (and leaves the rest for `harness answer`), and closes it when its turn ends.
-    Run { provider: String, answers: Vec<Decision>, prompt: String },
+    Run { provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool },
     /// Makes a token, adds it with a valid one, and prints it.
     TokenNew,
 }
@@ -33,7 +33,7 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>) -> Option
     let mut args = args.iter().copied();
     while let Some(arg) = args.next() {
         match arg {
-            "--follow" => flags.push((arg, None)),
+            "--follow" | "--ends-with-client" => flags.push((arg, None)),
             "--data" => *data = Some(args.next()?.into()),
             flag if flag.starts_with("--") => flags.push((flag, Some(args.next()?))),
             word => words.push(word.to_owned()),
@@ -50,6 +50,7 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>) -> Option
     let call = |op: Op| Some(Command::Call(op));
     match (command, words.as_slice()) {
         ("sessions", []) if known(&[]) => call(Op::Sessions),
+        ("shutdown", []) if known(&[]) => call(Op::Shutdown),
         ("token", [new]) if new == "new" && known(&[]) => Some(Command::TokenNew),
         ("events", [session]) if known(&["--after", "--follow"]) => {
             let after = flag("--after").flatten().map_or(Some(0), |after| after.parse().ok())?;
@@ -60,10 +61,10 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>) -> Option
             let message = flag("--message").flatten().map(str::to_owned);
             call(Op::Answer { session: session.clone(), request: request.clone(), decision: decision(word)?, message })
         }
-        ("run", [prompt]) if known(&["--provider", "--answer"]) => {
+        ("run", [prompt]) if known(&["--provider", "--answer", "--ends-with-client"]) => {
             let answers = flags.iter().filter(|(flag, _)| *flag == "--answer").map(|(_, word)| decision((*word)?)).collect::<Option<_>>()?;
             let provider = flag("--provider")??.to_owned();
-            Some(Command::Run { provider, answers, prompt: prompt.clone() })
+            Some(Command::Run { provider, answers, prompt: prompt.clone(), ends_with_client: flag("--ends-with-client").is_some() })
         }
         _ => None,
     }
@@ -104,13 +105,13 @@ pub async fn execute(command: Command, data: Option<PathBuf>) -> Result<bool> {
             }
             Ok(true)
         }
-        Command::Run { provider, answers, prompt } => run(&mut client, provider, answers, prompt).await,
+        Command::Run { provider, answers, prompt, ends_with_client } => run(&mut client, provider, answers, prompt, ends_with_client).await,
     }
 }
 
-async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String) -> Result<bool> {
+async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool) -> Result<bool> {
     let cwd = std::env::current_dir()?;
-    let opened = client.call(Op::Open { provider, cwd, locked: false, model: None }).await?;
+    let opened = client.call(Op::Open { provider, cwd, locked: false, model: None, ends_with_client }).await?;
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
     client.call(Op::Send { session: session.clone(), text: prompt }).await?;
