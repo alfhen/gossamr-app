@@ -354,7 +354,8 @@ async fn shutdown_stops_every_session_and_frees_the_data_folder() {
             _ => continue,
         }
     }
-    client.call(Op::Shutdown).await.unwrap();
+    let shut = tokio::time::timeout(Duration::from_secs(10), client.call(Op::Shutdown)).await;
+    shut.expect("shutdown answers once every session has stopped").unwrap();
     let store = harness::store::Store::open(&served.dir).expect("the data folder is free once shutdown answers");
     for id in [&idle, &asking] {
         let last = store.events(id, 0).unwrap().pop().unwrap();
