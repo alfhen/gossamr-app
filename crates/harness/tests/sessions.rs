@@ -886,8 +886,10 @@ impl Driver for Says {
 }
 
 /// Every secret the exhaustive test cuts: one of each shape the redactor knows (so a shape added there is covered
-/// here), two written with nothing between them, a 3,000-character JWT, and the session's own token, written
-/// `{token}`. Each comes with its public marker: what the secret starts with and may show.
+/// here), two written with nothing between them, a key and a bearer header glued to a token, a bearer header whose
+/// white space outgrows the hold, a 3,000-character JWT, and the session's own token, written `{token}`, whole and as
+/// a 32-character copy from inside it, `{part}`. Each comes with its public marker: what the secret starts with and
+/// may show.
 fn secrets() -> Vec<(String, String)> {
     let mut all: Vec<(String, String)> = harness::redact::SHAPES
         .iter()
@@ -899,8 +901,15 @@ fn secrets() -> Vec<(String, String)> {
         .collect();
     let glued = format!("{}{}", (harness::redact::SHAPES[2].example)(), (harness::redact::SHAPES[6].example)());
     all.push(("ghs_".into(), glued));
+    let example = |name: &str| (harness::redact::SHAPES.iter().find(|shape| shape.name == name).expect("a shape of that name").example)();
+    all.push(("npm_".into(), format!("{}{}", example("npm token"), example("Private key"))));
+    all.push(("npm_".into(), format!("{}{}", example("npm token"), example("Bearer header"))));
+    let credential = example("Bearer header").split_off("Bearer ".len());
+    let spaced = format!("Bearer{}", " ".repeat(harness::redact::HOLD_BACK + 8));
+    all.push((spaced.clone(), format!("{spaced}{credential}")));
     all.push(("eyJ".into(), harness::redact::jwt(3000)));
     all.push(("{token}".into(), "{token}".into()));
+    all.push(("".into(), "{part}".into()));
     all
 }
 
@@ -911,7 +920,13 @@ fn leaks(seen: &str, marker: &str, secret: &str) -> Vec<String> {
 }
 
 fn with_token(text: &str, token: &str) -> String {
-    text.replace("{token}", token)
+    let part = token.get(16..48).unwrap_or_default();
+    text.replace("{token}", token).replace("{part}", part)
+}
+
+/// Whether the secret is the session's own token or a copy of part of it, known only once the session opens.
+fn tokened(secret: &str) -> bool {
+    secret.starts_with('{')
 }
 
 #[test]
@@ -1046,8 +1061,8 @@ async fn redact_a_secret_cut_anywhere_reaches_no_subscriber_and_no_store_byte_wh
     let all = secrets();
     for (n, (_, secret)) in all.iter().enumerate() {
         let whole = format!("here: {secret} done");
-        // The session's token is 64 characters at open; the long JWT is cut every 7 bytes here, every byte above.
-        let len = if secret == "{token}" { whole.len() - "{token}".len() + 64 } else { whole.len() };
+        // The session's token is 64 characters at open; the long texts are cut every 7 bytes here, every byte above.
+        let len = with_token(&whole, &"0".repeat(64)).len();
         let step = if len > 1000 { 7 } else { 1 };
         let mut turns = vec![];
         for (k, at) in (1..len).step_by(step).enumerate() {
@@ -1090,17 +1105,19 @@ async fn redact_a_secret_cut_anywhere_reaches_no_subscriber_and_no_store_byte_wh
         let (marker, secret) = &all[*n];
         every.push((with_token(marker, &token[..harness::redact::TOKEN_MARKER]), with_token(secret, token)));
     }
-    for (n, (marker, secret)) in all.iter().enumerate().filter(|(_, (_, secret))| secret != "{token}") {
+    for (n, (marker, secret)) in all.iter().enumerate().filter(|(_, (_, secret))| !tokened(secret)) {
         let found = stretches(&[(marker.clone(), secret.clone())]);
         let shown = seen[n].iter().find_map(|events| found.find(events.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned()));
         assert!(shown.is_none(), "{marker}… reached a subscriber: {shown:?}");
     }
-    let tokens: Vec<(String, String)> = every.iter().filter(|(_, secret)| secret.len() == 64).cloned().collect();
+    let tokens: Vec<(String, String)> = sessions.iter().zip(every).filter(|((n, _), _)| tokened(&all[*n].1)).map(|(_, secret)| secret).collect();
     let found = stretches(&tokens);
-    let token_session = all.iter().position(|(_, secret)| secret == "{token}").unwrap();
-    assert!(seen[token_session].iter().all(|events| !found.is_match(events.as_bytes())), "a session's token reached a subscriber");
+    for n in (0..all.len()).filter(|n| tokened(&all[*n].1)) {
+        let shown = seen[n].iter().find_map(|events| found.find(events.as_bytes()).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned()));
+        assert!(shown.is_none(), "{}: a session's token reached a subscriber: {shown:?}", all[n].1);
+    }
     let disk = bytes_on_disk(&dir);
-    let mut checked: Vec<(String, String)> = all.iter().filter(|(_, secret)| secret != "{token}").cloned().collect();
+    let mut checked: Vec<(String, String)> = all.iter().filter(|(_, secret)| !tokened(secret)).cloned().collect();
     checked.extend(tokens);
     let stored = stretches(&checked).find(&disk).map(|m| String::from_utf8_lossy(m.as_bytes()).into_owned());
     assert!(stored.is_none(), "a secret is in the store's files: {stored:?}");
@@ -1244,4 +1261,48 @@ async fn hold_a_tool_result_or_a_cut_that_cannot_be_recorded_does_not_reach_the_
         let ended = Err("the session has ended".to_owned());
         assert!(replies.iter().all(|reply| *reply == ended), "cut {cut}: nothing unrecorded reached the agent: {replies:?}");
     }
+}
+
+/// Sends the start of a private key, ignores the stop, and sends the rest of the key only once told to kill.
+struct LateKey(String);
+
+impl Driver for LateKey {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { stop_takes_up_to_ms: Some(100), ..Capabilities::default() }
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: "late".into(), resumed: false }).unwrap();
+        let (first, rest) = self.0.split_at(self.0.len() / 2);
+        output.send(Body::TurnStarted).unwrap();
+        output.send(Body::TextDelta { text: format!("here: {first}") }).unwrap();
+        let rest = format!("{rest} done");
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                if command == Command::Kill {
+                    let _ = output.send(Body::TextDelta { text: rest });
+                    return;
+                }
+            }
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+#[tokio::test]
+async fn redact_the_harnesss_own_stop_diagnostic_does_not_release_a_key_the_agent_is_still_sending() {
+    let (_tmp, dir) = data_dir();
+    let key = (harness::redact::SHAPES.iter().find(|shape| shape.name == "Private key").unwrap().example)();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("late".into(), Arc::new(LateKey(key.clone())))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
+    let (id, mut events) = open_on(&harness, "late", false).await;
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert!(rest.iter().any(|event| matches!(event.body, Body::Failed { kind: FailKind::AgentStopped, .. })), "the harness said it killed the agent");
+    let shown = serde_json::to_string(&rest).unwrap();
+    let leaked = leaks(&shown, "-----BEGIN", &key);
+    assert!(leaked.is_empty(), "the key reached a subscriber: {leaked:?} in {shown}");
+    assert!(stretches(&[("-----BEGIN".into(), key)]).find(&bytes_on_disk(&dir)).is_none(), "the key is in the store's files");
 }

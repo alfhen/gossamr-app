@@ -602,8 +602,9 @@ impl Task {
         Turn::Prompted
     }
 
+    /// The harness's own diagnostic ends no block: the agent may go on with the text it was sending.
     fn fail(&self, kind: FailKind, reason: &str) {
-        self.emit(Body::Failed { kind, reason: reason.to_owned() });
+        self.record(Body::Failed { kind, reason: reason.to_owned() });
     }
 
     /// Sends what of the streamed text is decided (see `redact::LiveText`).
@@ -638,6 +639,10 @@ impl Task {
         if matches!(body, Body::Text { .. } | Body::TurnEnded { .. } | Body::Failed { .. } | Body::Closed) {
             self.end_text();
         }
+        self.record(body)
+    }
+
+    fn record(&self, body: Body) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
                 let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
