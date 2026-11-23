@@ -16,21 +16,27 @@ fn in_run(c: char) -> bool {
     c.is_ascii_alphanumeric() || "._~+/=-".contains(c)
 }
 
-/// The one marker that is common inside words (`task-list`, `disk-image`). It counts only where a word starts: after
-/// anything but a letter or digit, or after an escape that ends in one (`%3D`, `\n`). Every other marker counts
-/// wherever it stands, since a secret is often escaped, encoded or glued on. When in doubt the redactor masks.
+/// The one marker that is common inside words (`task-list`, `disk-image`). Every other marker counts wherever it
+/// stands, since a secret is often escaped, encoded or glued on. When in doubt the redactor masks.
 pub const WORD_MARKER: &str = "sk-";
 
-/// Whether a word starts at `at`: nothing comes before it but a character other than a letter or digit, or the end
-/// of a `%XX` escape or of a `\n`, `\t` or `\r` escape.
-fn word_starts(s: &str, at: usize) -> bool {
-    let before = &s.as_bytes()[..at];
-    match before {
-        [] => true,
-        [.., b'%', high, low] if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() => true,
-        [.., b'\\', b'n' | b't' | b'r'] => true,
-        [.., last] => !last.is_ascii_alphanumeric(),
+/// How much of a key's body [`key_starts`] reads, so a long run is not read again from each `sk-` in it.
+const KEY_LOOK: usize = 64;
+
+/// Whether bare `sk-` at `at` starts a key. Where a word starts (at the start, or after anything but a letter or
+/// digit) it does. After a letter or digit it does when the key's body holds an upper-case letter and a digit, as the
+/// random characters of a real key almost always do and a readable word such as
+/// `task-list-rendering-in-the-sidebar-panel` does not. The key decides, not what comes before it: a list of escapes
+/// (`%3D`, `\n`, `=3D`, `ESC[32m`) cannot be complete. A later edit could break this property either way: a looser
+/// test masks readable paths, and an escape list in its place stores a key raw after any escape it leaves out.
+fn key_starts(s: &str, at: usize) -> bool {
+    if s.as_bytes()[..at].last().is_none_or(|last| !last.is_ascii_alphanumeric()) {
+        return true;
     }
+    let rest = &s[at + WORD_MARKER.len()..];
+    let body = rest.strip_prefix("proj-").unwrap_or(rest).bytes().take(KEY_LOOK).take_while(|b| b.is_ascii_alphanumeric() || b"_-".contains(b));
+    let (upper, digit) = body.fold((false, false), |(upper, digit), b| (upper || b.is_ascii_uppercase(), digit || b.is_ascii_digit()));
+    upper && digit
 }
 
 /// One kind of secret.
@@ -189,7 +195,7 @@ static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
         .map(|shape| Compiled {
             markers: shape.markers,
             any_case: shape.any_case,
-            pattern: Regex::new(&format!("^(?:{})", shape.pattern)).expect("the shape compiles"),
+            pattern: Regex::new(shape.pattern).expect("the shape compiles"),
             crosses: (shape.example)().chars().any(|c| !in_run(c)),
         })
         .collect()
@@ -206,6 +212,33 @@ static MARKERS: LazyLock<Regex> = LazyLock::new(|| {
 /// How many characters of the session's own token, in a row, count as a copy of it.
 const PARTIAL: usize = 16;
 
+/// Where each shape's last search found its next secret, from where. A secret that is not there is then not looked
+/// for again from every later marker: a key header with no footer, or `eyJ` all through a run with no dots, would
+/// otherwise be read to the end of the text from each of its markers, in time that grows with the square of the text.
+struct Scans(Vec<Option<Scan>>);
+
+/// Where a search started, and the start and end of the secret it found next, if any.
+type Scan = (usize, Option<(usize, usize)>);
+
+impl Scans {
+    fn new() -> Self {
+        Scans(vec![None; COMPILED.len()])
+    }
+
+    /// The end of the secret of shape `n` that starts at `at`, if one does.
+    fn at(&mut self, s: &str, n: usize, at: usize) -> Option<usize> {
+        let next = match self.0[n] {
+            Some((from, next)) if from <= at && next.is_none_or(|(start, _)| start >= at) => next,
+            _ => {
+                let next = COMPILED[n].pattern.find_at(s, at).map(|found| (found.start(), found.end()));
+                self.0[n] = Some((at, next));
+                next
+            }
+        };
+        next.filter(|(start, _)| *start == at).map(|(_, end)| end)
+    }
+}
+
 pub fn text(s: &str, secrets: &[String]) -> String {
     let mut out = s.to_owned();
     for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
@@ -214,10 +247,11 @@ pub fn text(s: &str, secrets: &[String]) -> String {
     }
     let mut masked = String::with_capacity(out.len());
     let (mut last, mut from) = (0, 0);
+    let scans = &mut Scans::new();
     while let Some(start) = MARKERS.find_at(&out, from).map(|found| found.start()) {
-        match match_at(&out, start, false) {
+        match match_at(&out, start, false, scans) {
             Some(end) => {
-                let end = mask_end(&out, start, end);
+                let end = mask_end(&out, start, end, scans);
                 masked.push_str(&out[last..start]);
                 masked.push_str(MASK);
                 (last, from) = (end, end);
@@ -254,30 +288,30 @@ fn mask_partial(s: &str, secret: &str) -> String {
     out
 }
 
-/// The end of the longest secret that starts at `at`. Outside a mask, [`WORD_MARKER`] counts only where a word starts.
-/// `inside` a mask, where secrets are glued, it counts anywhere, and only shapes that cross white space are looked
-/// for: the mask already runs to the end of the token run, so a shape of run characters alone ends inside it, and
-/// matching each of them against the rest would take time that grows with the square of a long run.
-fn match_at(s: &str, at: usize, inside: bool) -> Option<usize> {
+/// The end of the longest secret that starts at `at`. Outside a mask, [`WORD_MARKER`] counts only where
+/// [`key_starts`] says. `inside` a mask, where secrets are glued, it counts anywhere, and only shapes that cross white
+/// space are looked for: the mask already runs to the end of the token run, so a shape of run characters alone ends
+/// inside it, and matching each of them against the rest would take time that grows with the square of a long run.
+fn match_at(s: &str, at: usize, inside: bool, scans: &mut Scans) -> Option<usize> {
     let rest = &s[at..];
-    let words = !inside;
     COMPILED
         .iter()
-        .filter(|shape| !inside || shape.crosses)
-        .filter(|shape| {
+        .enumerate()
+        .filter(|(_, shape)| !inside || shape.crosses)
+        .filter(|(_, shape)| {
             shape.markers.iter().any(|marker| {
                 let here = rest.get(..marker.len()).is_some_and(|head| if shape.any_case { head.eq_ignore_ascii_case(marker) } else { head == *marker });
-                here && !(words && *marker == WORD_MARKER && !word_starts(s, at))
+                here && (inside || *marker != WORD_MARKER || key_starts(s, at))
             })
         })
-        .filter_map(|shape| shape.pattern.find(rest).map(|found| at + found.end()))
+        .filter_map(|(n, _)| scans.at(s, n, at))
         .max()
 }
 
 /// Where the mask over a secret from `start` to `end` ends: past the rest of its token run, so two secrets written
 /// with nothing between them are masked whole, but not past a key's footer. A secret that starts inside the mask and
 /// reaches past it (a bearer header or a key run straight onto a token) takes the mask on to its own end.
-fn mask_end(s: &str, start: usize, mut end: usize) -> usize {
+fn mask_end(s: &str, start: usize, mut end: usize, scans: &mut Scans) -> usize {
     let after_run = |s: &str, end: usize, from: usize| {
         if s[from..].starts_with("-----BEGIN") { end } else { end + s[end..].find(|c| !in_run(c)).unwrap_or(s.len() - end) }
     };
@@ -285,7 +319,7 @@ fn mask_end(s: &str, start: usize, mut end: usize) -> usize {
     let mut at = start + 1;
     while at < end {
         if s.is_char_boundary(at)
-            && let Some(inner) = match_at(s, at, true)
+            && let Some(inner) = match_at(s, at, true, scans)
             && inner > end
         {
             end = after_run(s, inner, at);
@@ -373,8 +407,14 @@ mod tests {
 
     #[test]
     fn redact_a_marker_inside_a_word_is_no_key_so_a_path_is_stored_as_it_is() {
-        let path = "Edited .claude/worktrees/fix-task-list-rendering-in-the-sidebar-panel/src/main.rs today";
-        assert_eq!(text(path, &[]), path);
+        for path in [
+            "Edited .claude/worktrees/fix-task-list-rendering-in-the-sidebar-panel/src/main.rs today",
+            "docs/risk-assessment-for-the-billing-migration-2024-q3-final.md",
+            "Whisk-Together-The-Eggs-And-Flour-In-A-Large-Bowl-Until-Smooth",
+            "git switch claude/ask-for-a-review-of-the-pull-request-before-merging-it",
+        ] {
+            assert_eq!(text(path, &[]), path);
+        }
         let key = (SHAPES[1].example)();
         assert_eq!(text(&format!("key={key}, {key}"), &[]), format!("key={MASK}, {MASK}"), "after punctuation or a space it counts");
     }
@@ -394,17 +434,28 @@ mod tests {
     }
 
     #[test]
-    fn redact_a_long_token_run_masks_in_time_that_grows_about_linearly() {
-        let time = |len: usize| {
-            let run = "sk-".repeat(len / 3);
-            let started = std::time::Instant::now();
-            assert_eq!(text(&format!("x {run} y"), &[]), format!("x {MASK} y"));
-            started.elapsed()
+    fn redact_a_long_token_run_a_key_header_with_no_footer_or_a_run_of_jwt_starts_masks_in_time_that_grows_about_linearly() {
+        let time = |text_of: &dyn Fn(usize) -> String, check: &dyn Fn(&str, String), small: usize| {
+            let took = [small, small * 10].map(|len| {
+                let s = text_of(len);
+                let started = std::time::Instant::now();
+                let masked = text(&s, &[]);
+                let took = started.elapsed();
+                check(&s, masked);
+                took
+            });
+            // Ten times the text may take ten times as long, and much more for a slow machine, but not a hundred.
+            assert!(took[1] < took[0] * 40 + std::time::Duration::from_millis(500), "{small} in {:?}, ten times that in {:?}", took[0], took[1]);
+            assert!(took[1] < std::time::Duration::from_secs(30), "ten times {small} in {:?}", took[1]);
         };
-        let (small, large) = (time(300_000), time(3_000_000));
-        // Ten times the text may take ten times as long, and much more for a slow machine, but not a hundred.
-        assert!(large < small * 40 + std::time::Duration::from_millis(500), "300 KB in {small:?}, 3 MB in {large:?}");
-        assert!(large < std::time::Duration::from_secs(30), "3 MB in {large:?}");
+        let run = |len: usize| format!("x {} y", "sk-".repeat(len / 3));
+        time(&run, &|_, masked| assert_eq!(masked, format!("x {MASK} y")), 300_000);
+        // `grep -r` over keys, with no footer.
+        let headers = |lines: usize| (0..lines).map(|n| format!("keys/{n}.pem:-----BEGIN RSA PRIVATE KEY-----\n")).collect::<String>();
+        time(&headers, &|s, masked| assert!(masked == s, "a header alone is no key"), 2_000);
+        // base64url JSON with `eyJ` all through it and no dots.
+        let blob = |len: usize| (0..len / 96).map(|n| format!("eyJ{}", noise(40 + n as u64, 93, B64URL))).collect::<String>();
+        time(&blob, &|_, _| (), 150_000);
     }
 
     #[test]
