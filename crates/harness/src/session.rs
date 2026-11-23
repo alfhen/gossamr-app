@@ -490,8 +490,11 @@ impl Task {
                     if waiting.is_some() && turn == Turn::Idle => {
                     waiting = None;
                     if granted.is_ok() {
-                        slot = Some(Slot(turns.clone()));
+                        // Once stopping, the slot goes back at once: an agent that is slow to go, or never goes,
+                        // must not hold it.
+                        let granted = Slot(turns.clone());
                         if !self.stopping.load(Ordering::Relaxed) {
+                            slot = Some(granted);
                             match self.prompt(&link, &mut queued) {
                                 Some(next) => turn = next,
                                 None => break 'run true,
@@ -652,13 +655,15 @@ impl Task {
 
     /// Records a `started`, after keeping its provider session id for a resume. The row keeps the id as it is, so an
     /// id that holds a secret is not kept, and nor is an earlier one, which no longer names the agent's session: the
-    /// session says so, and false says it must stop.
+    /// session says so, and false says it must stop. A row the store would not change is a broken store: the session
+    /// never goes on with an id it could not keep or clear.
     fn started(&self, body: Body) -> bool {
         let Body::Started { provider_session, .. } = &body else { unreachable!("only a `started` is passed") };
         let safe = redact::text(provider_session, &self.secrets) == *provider_session;
         let kept = safe.then_some(provider_session.as_str());
         if let Err(e) = self.inner.store().set_provider_session(&self.id, kept) {
-            eprintln!("harness: session {}: {e}", self.id);
+            self.store_failed(&e);
+            return false;
         }
         self.emit(body);
         if !safe {
@@ -708,17 +713,22 @@ impl Task {
                 true
             }
             Err(e) => {
-                eprintln!("harness: session {}: {e}", self.id);
-                if !self.broken.swap(true, Ordering::Relaxed) {
-                    let reason = format!("the store could not keep this session's events, so it stops: {e}");
-                    let body = Body::Failed { kind: FailKind::Harness, reason };
-                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
-                }
+                self.store_failed(&e);
                 if body == Body::Closed {
                     let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
                 }
                 false
             }
+        }
+    }
+
+    /// Breaks the session on a store that failed: its clients get one `failed`, numbered 0, and it stops.
+    fn store_failed(&self, e: &Error) {
+        eprintln!("harness: session {}: {e}", self.id);
+        if !self.broken.swap(true, Ordering::Relaxed) {
+            let reason = format!("the store could not keep this session's events, so it stops: {e}");
+            let body = Body::Failed { kind: FailKind::Harness, reason };
+            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
         }
     }
 }

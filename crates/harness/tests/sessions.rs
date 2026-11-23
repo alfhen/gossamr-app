@@ -941,7 +941,7 @@ fn example(name: &str) -> String {
 type Case = (String, String, Vec<(String, usize)>);
 
 #[tokio::test]
-async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_masked_but_bare_sk_after_a_letter_or_digit() {
+async fn redact_every_secret_after_any_escape_encoding_letter_or_digit_is_masked_and_a_readable_path_is_not() {
     let (_tmp, dir) = data_dir();
     let (ghs, slack, anthropic) = (example("GitHub token"), example("Slack token"), example("Anthropic key"));
     let ghp = format!("ghp_{}", &ghs[4..]);
@@ -958,30 +958,31 @@ async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_
         ("an Anthropic key in a doubly encoded query".into(), format!("GET /cb?redirect=https%3A%2F%2Fapp.example.com%2F%3Fkey%3D{anthropic} 302"), vec![(anthropic.clone(), 7)]),
         ("a Slack token after an escaped newline".into(), format!(r"{{'SLACK': 'x\n{slack}'}}"), vec![(slack.clone(), 5)]),
     ];
-    // Every shape after each escape, encoding, letter and digit. Only bare `sk-` after a letter or digit stays as
-    // written: there it is the end of a word such as `task-list`. Those are checked here and kept out of the store,
-    // whose bytes must hold no other copy of the same example.
-    let mut kept = 0;
+    // Every shape after each escape, encoding, letter and digit, review round 6's among them: coloured output raw and
+    // JSON-escaped, JSON `\u` escapes, a URL encoded twice, quoted-printable, and C, shell and Python escapes.
+    let befores = [
+        r"\n", r"\t", r"\r", "%3D", "%20", "%253D", "=3D", r"\x3d", r"\0", "\x1b[32m", r"\u001b[32m", r"\u003c", r"\u003d", "<", "=", "x",
+        "9",
+    ];
     for shape in harness::redact::SHAPES {
         let secret = (shape.example)();
         let public = shape.markers.iter().map(|marker| marker.len()).min().unwrap();
-        for before in [r"\n", r"\t", r"\r", "%3D", "%20", "x", "9"] {
-            let text = format!("v {before}{secret} end");
-            if shape.markers == [harness::redact::WORD_MARKER] && matches!(before, "x" | "9") {
-                assert!(harness::redact::text(&text, &[]) == text, "bare `sk-` after {before} is not kept as written");
-                kept += 1;
-                continue;
-            }
-            cases.push((format!("{} after {before}", shape.name), text, vec![(secret.clone(), public)]));
+        for before in befores {
+            cases.push((format!("{} after {before:?}", shape.name), format!("v {before}{secret} end"), vec![(secret.clone(), public)]));
         }
     }
-    assert_eq!(kept, 2, "only the OpenAI shape has bare `sk-` alone");
-    let says: Vec<Body> = cases.iter().map(|(_, text, _)| Body::Text { text: text.clone() }).collect();
+    // Bare `sk-` inside a readable word is no key.
+    let readable = [
+        "Edited .claude/worktrees/fix-task-list-rendering-in-the-sidebar-panel/src/main.rs today",
+        "docs/risk-assessment-for-the-billing-migration-2024-q3-final.md",
+        "Whisk-Together-The-Eggs-And-Flour-In-A-Large-Bowl-Until-Smooth",
+    ];
+    let says: Vec<Body> = cases.iter().map(|(_, text, _)| text.as_str()).chain(readable).map(|text| Body::Text { text: text.into() }).collect();
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("says".into(), Arc::new(Says::new(vec![says], false)))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "says", false).await;
     let mut shown = vec![];
-    while shown.len() < cases.len() {
+    while shown.len() < cases.len() + readable.len() {
         if let Body::Text { text } = next(&mut events).await.body {
             shown.push(text);
         }
@@ -990,13 +991,16 @@ async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_
     until(&mut events, |body| *body == Body::Closed).await;
     let disk = bytes_on_disk(&dir);
     let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
-    // A failure names the case, never the text or what the client was shown.
-    for ((label, _, secrets), shown) in cases.iter().zip(&shown) {
+    // A failure names the case by its number and shape, never the text or what the client was shown.
+    for (n, ((label, _, secrets), shown)) in cases.iter().zip(&shown).enumerate() {
         let seen: std::collections::HashSet<&[u8]> = shown.as_bytes().windows(8).collect();
         for (secret, public) in secrets {
-            assert!(!leaks(&seen, *public, secret), "{label}: reached the client");
-            assert!(!leaks(&disk, *public, secret), "{label}: in the store's files");
+            assert!(!leaks(&seen, *public, secret), "case {n}, {label}: reached the client");
+            assert!(!leaks(&disk, *public, secret), "case {n}, {label}: in the store's files");
         }
+    }
+    for (text, shown) in readable.iter().zip(&shown[cases.len()..]) {
+        assert_eq!(text, shown, "a readable path is stored as it is");
     }
 }
 
@@ -1189,9 +1193,10 @@ async fn stop_a_prompt_queued_behind_a_turn_does_not_reach_the_agent_after_close
 }
 
 #[tokio::test]
-async fn stop_a_slot_granted_after_close_sends_no_prompt() {
+async fn stop_a_slot_granted_after_close_sends_no_prompt_and_is_given_back_while_the_agent_stops() {
     let (_tmp, dir) = data_dir();
-    let puppet = Puppet::default();
+    // The agent goes only when killed, a second after the stop, so the second session is still stopping below.
+    let puppet = Puppet { kill_ends: Some(vec![]), stop_ms: Some(1_000), ..Puppet::default() };
     let harness = on_puppet(&dir, &puppet, 1);
     let (first, mut first_events) = open_on(&harness, "puppet", false).await;
     let (second, mut second_events) = open_on(&harness, "puppet", false).await;
@@ -1203,8 +1208,17 @@ async fn stop_a_slot_granted_after_close_sends_no_prompt() {
     // The first turn ends, which grants the second its slot, and the second is closed before it runs.
     puppet.say(0, Body::TurnEnded { how: TurnEnd::Done });
     harness.close(&second).unwrap();
+    let asked = Instant::now();
+    while !puppet.commands.lock().unwrap().contains(&Command::Stop) {
+        assert!(asked.elapsed() < Duration::from_secs(5), "the second session never told its agent to stop");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    harness.send(&first, "again").unwrap();
+    let asked = until(&mut first_events, |body| matches!(body, Body::Prompted { .. } | Body::Waiting)).await;
+    assert!(matches!(asked.last().unwrap().body, Body::Prompted { .. }), "the only slot is free while the second agent stops");
+    assert!(!puppet.commands.lock().unwrap().contains(&Command::Kill), "the second agent was still stopping");
     until(&mut second_events, |body| *body == Body::Closed).await;
-    assert_eq!(puppet.prompts(), ["one"], "the granted prompt never reached the agent");
+    assert_eq!(puppet.prompts(), ["one", "again"], "the granted prompt never reached the agent");
 }
 
 #[tokio::test]
@@ -1238,8 +1252,8 @@ async fn stop_a_turn_open_at_close_gets_exactly_one_end_before_closed() {
 #[tokio::test]
 async fn stop_a_prompt_the_driver_does_not_take_fails_the_session_where_the_store_can_say_so() {
     let (_tmp, dir) = data_dir();
-    // A driver that stops reading commands at once and closes its output a moment later.
-    struct Deaf;
+    // A driver that stops reading commands at once and closes its output once the test has seen the prompt.
+    struct Deaf(Arc<tokio::sync::Notify>);
     impl Driver for Deaf {
         fn capabilities(&self) -> Capabilities {
             Capabilities::default()
@@ -1249,18 +1263,22 @@ async fn stop_a_prompt_the_driver_does_not_take_fails_the_session_where_the_stor
             drop(commands_rx);
             let (output, receiver) = mpsc::unbounded_channel();
             output.send(Body::Started { provider_session: "deaf".into(), resumed: false }).unwrap();
+            let close = self.0.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                close.notified().await;
                 drop(output);
             });
             Ok(Link { commands, output: receiver })
         }
     }
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("deaf".into(), Arc::new(Deaf))];
+    let close = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("deaf".into(), Arc::new(Deaf(close.clone())))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "deaf", false).await;
     harness.send(&id, "one").unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let mut rest = until(&mut events, |body| matches!(body, Body::Prompted { .. })).await;
+    close.notify_one();
+    rest.extend(until(&mut events, |body| *body == Body::Closed).await);
     assert_eq!(types(&rest), ["started", "prompted", "failed", "closed"]);
     assert!(rest.iter().all(|event| event.seq > 0), "every event is recorded: {rest:?}");
     let stored = types(&harness.events(&id, 0).unwrap());
