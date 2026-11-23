@@ -178,6 +178,9 @@ struct Compiled {
     markers: &'static [&'static str],
     any_case: bool,
     pattern: Regex,
+    /// The secret can hold characters a token run does not (a bearer header's space, a key's lines), so it can reach
+    /// past the end of a run it starts inside.
+    crosses: bool,
 }
 
 static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
@@ -187,6 +190,7 @@ static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
             markers: shape.markers,
             any_case: shape.any_case,
             pattern: Regex::new(&format!("^(?:{})", shape.pattern)).expect("the shape compiles"),
+            crosses: (shape.example)().chars().any(|c| !in_run(c)),
         })
         .collect()
 });
@@ -211,7 +215,7 @@ pub fn text(s: &str, secrets: &[String]) -> String {
     let mut masked = String::with_capacity(out.len());
     let (mut last, mut from) = (0, 0);
     while let Some(start) = MARKERS.find_at(&out, from).map(|found| found.start()) {
-        match match_at(&out, start, true) {
+        match match_at(&out, start, false) {
             Some(end) => {
                 let end = mask_end(&out, start, end);
                 masked.push_str(&out[last..start]);
@@ -250,12 +254,16 @@ fn mask_partial(s: &str, secret: &str) -> String {
     out
 }
 
-/// The end of the longest secret that starts at `at`. With `words`, [`WORD_MARKER`] counts only where a word starts;
-/// inside a mask, where secrets are glued, it counts anywhere.
-fn match_at(s: &str, at: usize, words: bool) -> Option<usize> {
+/// The end of the longest secret that starts at `at`. Outside a mask, [`WORD_MARKER`] counts only where a word starts.
+/// `inside` a mask, where secrets are glued, it counts anywhere, and only shapes that cross white space are looked
+/// for: the mask already runs to the end of the token run, so a shape of run characters alone ends inside it, and
+/// matching each of them against the rest would take time that grows with the square of a long run.
+fn match_at(s: &str, at: usize, inside: bool) -> Option<usize> {
     let rest = &s[at..];
+    let words = !inside;
     COMPILED
         .iter()
+        .filter(|shape| !inside || shape.crosses)
         .filter(|shape| {
             shape.markers.iter().any(|marker| {
                 let here = rest.get(..marker.len()).is_some_and(|head| if shape.any_case { head.eq_ignore_ascii_case(marker) } else { head == *marker });
@@ -277,7 +285,7 @@ fn mask_end(s: &str, start: usize, mut end: usize) -> usize {
     let mut at = start + 1;
     while at < end {
         if s.is_char_boundary(at)
-            && let Some(inner) = match_at(s, at, false)
+            && let Some(inner) = match_at(s, at, true)
             && inner > end
         {
             end = after_run(s, inner, at);
@@ -374,5 +382,19 @@ mod tests {
         assert_eq!(values, [1, 2, 3, 4]);
         assert_eq!(fields["plain"], 4);
         assert!(fields.keys().all(|key| !key.contains(&one[4..])), "{fields:?}");
+    }
+
+    #[test]
+    fn redact_a_long_token_run_masks_in_time_that_grows_about_linearly() {
+        let time = |len: usize| {
+            let run = "sk-".repeat(len / 3);
+            let started = std::time::Instant::now();
+            assert_eq!(text(&format!("x {run} y"), &[]), format!("x {MASK} y"));
+            started.elapsed()
+        };
+        let (small, large) = (time(300_000), time(3_000_000));
+        // Ten times the text may take ten times as long, and much more for a slow machine, but not a hundred.
+        assert!(large < small * 40 + std::time::Duration::from_millis(500), "300 KB in {small:?}, 3 MB in {large:?}");
+        assert!(large < std::time::Duration::from_secs(30), "3 MB in {large:?}");
     }
 }
