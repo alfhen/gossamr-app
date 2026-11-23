@@ -97,7 +97,7 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     let (_tmp, dir) = data_dir();
     let store = Store::open(&dir).unwrap();
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
-    store.set_provider_session("a", "p-1").unwrap();
+    store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
     assert_eq!(user_version(&dir), 1, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
