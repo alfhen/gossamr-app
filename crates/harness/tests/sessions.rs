@@ -1302,10 +1302,11 @@ async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and
 }
 
 #[tokio::test]
-async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept() {
+async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_session_stops() {
     let (_tmp, dir) = data_dir();
     let secret = example("GitHub token");
-    struct Leaky(String);
+    let received: Arc<Mutex<Vec<Command>>> = Arc::default();
+    struct Leaky(String, Arc<Mutex<Vec<Command>>>);
     impl Driver for Leaky {
         fn capabilities(&self) -> Capabilities {
             Capabilities::default()
@@ -1314,22 +1315,63 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept() {
             let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
             let (output, receiver) = mpsc::unbounded_channel();
             output.send(Body::Started { provider_session: format!("session-{}", self.0), resumed: false }).unwrap();
+            let received = self.1.clone();
             tokio::spawn(async move {
                 let _output = output;
-                while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+                while let Some(command) = commands_rx.recv().await {
+                    received.lock().unwrap().push(command.clone());
+                    if command == Command::Stop {
+                        return;
+                    }
+                }
             });
             Ok(Link { commands, output: receiver })
         }
     }
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("leaky".into(), Arc::new(Leaky(secret.clone())))];
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("leaky".into(), Arc::new(Leaky(secret.clone(), received.clone())))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "leaky", false).await;
-    let first = until(&mut events, |body| matches!(body, Body::Failed { .. })).await;
-    assert_eq!(types(&first), ["started", "failed"]);
-    harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    // A prompt is waiting when the session reads the agent's `started`.
+    harness.send(&id, "one").unwrap();
+    let all = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(types(&all), ["started", "failed", "closed"], "the session stopped, with no prompt");
+    assert_eq!(*received.lock().unwrap(), [Command::Stop], "no prompt reached the agent");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     assert!(matches!(harness.resume(&id).await, Err(Error::Driver(_))), "a session with no kept id cannot be resumed");
+}
+
+#[tokio::test]
+async fn resume_a_session_closed_before_its_agent_said_it_started_keeps_the_id_and_resumes() {
+    let (_tmp, dir) = data_dir();
+    // Says it started only once it is told to stop, then goes; a resume goes at once.
+    struct Late;
+    impl Driver for Late {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+            let (output, receiver) = mpsc::unbounded_channel();
+            let resumed = launch.resume.is_some();
+            tokio::spawn(async move {
+                while let Some(command) = commands_rx.recv().await {
+                    if command == Command::Stop {
+                        let _ = output.send(Body::Started { provider_session: "late".into(), resumed });
+                        return;
+                    }
+                }
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("late".into(), Arc::new(Late))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "late", false).await;
+    harness.close(&id).unwrap();
+    assert_eq!(types(&until(&mut events, |body| *body == Body::Closed).await), ["started", "closed"]);
+    let mut resumed = harness.resume(&id).await.expect("the id the agent gave as it went was kept");
+    harness.close(&id).unwrap();
+    assert_eq!(types(&until(&mut resumed, |body| *body == Body::Closed).await), ["started", "closed"]);
 }
 
 
