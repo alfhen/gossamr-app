@@ -269,7 +269,7 @@ impl Client {
         match op {
             Op::Open { provider, cwd, locked, model } => {
                 let (id, events) = harness.open(Open { provider, cwd, locked, model }).await?;
-                self.watch(id.clone(), vec![], Some(events), 0);
+                self.watch(id.clone(), vec![], false, Some(events), 0);
                 Ok(json!({ "session": id }))
             }
             Op::Send { session, text } => done(harness.send(&session, text)),
@@ -291,8 +291,8 @@ impl Client {
                 if self.watching.get(&session).is_some_and(|watch| !watch.is_finished()) {
                     return Err(Error::Refused(format!("this connection already watches session {session}")));
                 }
-                let (stored, live) = harness.watch(&session, after)?;
-                self.watch(session, stored, live, after);
+                let (stored, more, live) = harness.watch(&session, after)?;
+                self.watch(session, stored, more, live, after);
                 Ok(Value::Null)
             }
             Op::TokenNew { stored_key } => {
@@ -302,8 +302,8 @@ impl Client {
         }
     }
 
-    fn watch(&mut self, session: String, stored: Vec<Event>, live: Option<broadcast::Receiver<Event>>, after: u64) {
-        let task = forward(self.harness.clone(), session.clone(), stored, live, after, self.out.clone());
+    fn watch(&mut self, session: String, stored: Vec<Event>, more: bool, live: Option<broadcast::Receiver<Event>>, after: u64) {
+        let task = forward(self.harness.clone(), session.clone(), stored, more, live, after, self.out.clone());
         self.watching.insert(session, self.watches.spawn(task));
     }
 }
@@ -312,31 +312,25 @@ async fn push(out: &Sender<Reply>, session: &str, event: Event) -> bool {
     out.send(Reply { session: Some(session.to_owned()), event: Some(event), ..Reply::default() }).await.is_ok()
 }
 
-/// Pushes `stored`, then each live event numbered past `after` and not already pushed, until the session closes; then
-/// the end of the watch. A client that falls behind its live events reads what it missed back from the store.
-async fn forward(harness: Harness, session: String, stored: Vec<Event>, live: Option<broadcast::Receiver<Event>>, after: u64, out: Sender<Reply>) {
+/// Pushes `stored`, the pages of the store that follow it while `more`, then each live event numbered past `after` and
+/// not already pushed, until the session closes; then the end of the watch. A client that falls behind its live events
+/// reads what it missed back from the store, a page at a time.
+async fn forward(harness: Harness, session: String, stored: Vec<Event>, more: bool, live: Option<broadcast::Receiver<Event>>, after: u64, out: Sender<Reply>) {
     let mut last = after;
-    for event in stored {
-        last = event.seq;
-        if !push(&out, &session, event).await {
-            return;
-        }
+    match pages(&harness, &session, stored, more, &mut last, &out).await {
+        Some(false) => {}
+        Some(true) => return finish(&out, session).await,
+        None => return,
     }
     if let Some(mut live) = live {
         loop {
             let event = match live.recv().await {
                 Ok(event) => event,
-                Err(RecvError::Lagged(_)) => {
-                    let Ok(missed) = harness.events(&session, last) else { break };
-                    for event in missed {
-                        last = event.seq;
-                        let closed = event.body == Body::Closed;
-                        if !push(&out, &session, event).await || closed {
-                            return finish(&out, session).await;
-                        }
-                    }
-                    continue;
-                }
+                Err(RecvError::Lagged(_)) => match pages(&harness, &session, vec![], true, &mut last, &out).await {
+                    Some(false) => continue,
+                    Some(true) => break,
+                    None => return,
+                },
                 Err(RecvError::Closed) => break,
             };
             let closed = event.body == Body::Closed;
@@ -353,6 +347,27 @@ async fn forward(harness: Harness, session: String, stored: Vec<Event>, live: Op
         }
     }
     finish(&out, session).await;
+}
+
+/// Pushes `page`, then, while `more`, the store's next pages after `last`. Some(true) once it has pushed `closed`,
+/// Some(false) when the store has no more, None when the client has gone.
+async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more: bool, last: &mut u64, out: &Sender<Reply>) -> Option<bool> {
+    loop {
+        for event in page {
+            *last = event.seq;
+            let closed = event.body == Body::Closed;
+            if !push(out, session, event).await {
+                return None;
+            }
+            if closed {
+                return Some(true);
+            }
+        }
+        if !more {
+            return Some(false);
+        }
+        (page, more) = harness.events_page(session, *last, PAGE_BYTES).ok()?;
+    }
 }
 
 async fn finish(out: &Sender<Reply>, session: String) {
@@ -378,7 +393,7 @@ mod tests {
 
     async fn pushed(harness: Harness, stored: Vec<Event>, live: broadcast::Receiver<Event>) -> Vec<Reply> {
         let (out, mut pushes) = mpsc::channel(64);
-        forward(harness, "s".into(), stored, Some(live), 0, out).await;
+        forward(harness, "s".into(), stored, false, Some(live), 0, out).await;
         let mut all = vec![];
         while let Ok(push) = pushes.try_recv() {
             all.push(push);

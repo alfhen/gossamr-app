@@ -537,6 +537,37 @@ async fn limits_events_come_in_pages_and_the_client_reads_them_all() {
     client.events(&id, 0, |event| read.push(event)).await.unwrap();
     assert!(read == served.harness.events(&id, 0).unwrap(), "every page, each event once, in order");
     assert_eq!(read.iter().filter(|event| matches!(event.body, Body::Text { .. })).count(), says);
+
+    // A watch from the start reads the same backlog page by page, then ends at `closed`. The script has ended.
+    events_until(&mut client, |body| *body == Body::Closed).await;
+    let mut watcher = connect(&served).await;
+    watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    let mut watched = vec![];
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(10), watcher.push()).await.unwrap().unwrap() {
+        watched.push(event);
+    }
+    assert!(watched == served.harness.events(&id, 0).unwrap(), "a watch pages through the store too");
+}
+
+#[tokio::test]
+async fn limits_a_page_of_many_small_events_fits_in_a_message() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    events_until(&mut client, |body| *body == Body::Closed).await;
+    // Small events whose payload fits a page several times over as stored, but not once as sent.
+    let small = 240_000;
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+         INSERT INTO events (session, seq, ms, type, payload, withheld) SELECT ?1, 1000 + i, 0, 'waiting', '{\"type\":\"waiting\"}', 0 FROM n",
+        rusqlite::params![id, small],
+    )
+    .unwrap();
+    let mut read = 0;
+    client.events(&id, 999, |_| read += 1).await.expect("every page fits in a message");
+    assert_eq!(read, small);
 }
 
 #[tokio::test]

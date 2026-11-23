@@ -54,7 +54,7 @@ pub enum Body {
     Failed { kind: FailKind, reason: String },
     Closed,
     /// What the store gives back for an event whose private fields it does not keep: a locked session's, one dropped
-    /// at clean-up or by age, or one of a type this build does not know (so a later step can add an event without a
+    /// at clean-up or by age, one too large to keep even when cut, or one of a type this build does not know (so a later step can add an event without a
     /// migration). `of` is the event's type, and `kept` its fields that are not private (ids, kinds, decisions, how
     /// a turn ended).
     Withheld {
@@ -73,9 +73,21 @@ pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
 pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message"];
 
-/// The body within `max` bytes of JSON, and how many bytes were cut to get there. Only private fields are cut, the
-/// largest first, from their end; a field that held JSON then holds the start of its text.
-pub fn cut(body: Body, max: usize) -> (Body, u64) {
+/// The body within `max` bytes of JSON, and how many bytes were cut to get there, if any. Only private fields are cut,
+/// the largest first, from their end; a field that held JSON then holds the start of its text. A body that is still
+/// over `max` with its private fields empty, because its kept fields are, becomes `withheld` with nothing kept, and
+/// says its whole size was cut.
+pub fn fit(body: Body, max: usize) -> (Body, Option<u64>) {
+    let (cut, dropped) = cut(body, max);
+    let size = serde_json::to_string(&cut).map_or(usize::MAX, |text| text.len());
+    match (size > max, dropped) {
+        (true, _) => (Body::Withheld { of: cut.type_name(), kept: Map::new() }, Some((size as u64).saturating_add(dropped))),
+        (false, 0) => (cut, None),
+        (false, dropped) => (cut, Some(dropped)),
+    }
+}
+
+fn cut(body: Body, max: usize) -> (Body, u64) {
     let size = |value: &Value| serde_json::to_string(value).map_or(0, |text| text.len());
     let mut value = serde_json::to_value(&body).expect("a body always serializes");
     let mut dropped = 0;
@@ -83,7 +95,8 @@ pub fn cut(body: Body, max: usize) -> (Body, u64) {
         let over = size(&value) - max;
         let Value::Object(fields) = &mut value else { unreachable!("a body is an object") };
         let largest = PRIVATE_FIELDS.iter().filter(|name| fields.contains_key(**name)).max_by_key(|name| size(&fields[**name]));
-        let Some(field) = largest.and_then(|name| fields.get_mut(*name)) else { break };
+        // Nothing left to cut when the largest private field is empty: the kept fields are over by themselves.
+        let Some(field) = largest.and_then(|name| fields.get_mut(*name)).filter(|field| size(field) > 2) else { break };
         let text = match field.take() {
             Value::String(text) => text,
             other => other.to_string(),
@@ -249,22 +262,31 @@ mod tests {
     #[test]
     fn limits_a_body_over_the_cap_is_cut_in_its_private_fields_and_says_by_how_much() {
         let small = Body::Text { text: "short".into() };
-        assert_eq!(cut(small.clone(), 100), (small, 0), "under the cap, nothing changes");
+        assert_eq!(fit(small.clone(), 100), (small, None), "under the cap, nothing changes");
 
-        let (text, dropped) = cut(Body::Text { text: "a".repeat(1000) }, 100);
+        let (text, dropped) = fit(Body::Text { text: "a".repeat(1000) }, 100);
         let Body::Text { text } = text else { unreachable!() };
         assert!(serde_json::to_string(&Body::Text { text: text.clone() }).unwrap().len() <= 100);
-        assert_eq!(dropped as usize, 1000 - text.len());
+        assert_eq!(dropped, Some((1000 - text.len()) as u64));
 
         // Control characters take six bytes each as JSON.
-        let (escaped, _) = cut(Body::Text { text: "\u{1}".repeat(1000) }, 100);
+        let (escaped, _) = fit(Body::Text { text: "\u{1}".repeat(1000) }, 100);
         assert!(serde_json::to_string(&escaped).unwrap().len() <= 100, "escapes are counted");
 
         let input = json!({ "file": "b".repeat(1000) });
-        let (call, dropped) = cut(Body::ToolCall { id: "t1".into(), name: "Read".into(), input }, 200);
+        let (call, dropped) = fit(Body::ToolCall { id: "t1".into(), name: "Read".into(), input }, 200);
         let Body::ToolCall { id, name, input } = call else { unreachable!() };
         assert_eq!((id.as_str(), name.as_str()), ("t1", "Read"), "kept fields stay whole");
         assert!(input.as_str().is_some_and(|text| text.starts_with("{\"file\":\"bbb")), "JSON becomes the start of its text");
-        assert!(dropped > 0);
+        assert!(dropped.is_some_and(|dropped| dropped > 0));
+
+        // Kept fields over the cap by themselves: nothing to cut, so the event is kept as `withheld`, and ends.
+        let call = Body::ToolCall { id: "t1".into(), name: "n".repeat(1000), input: json!("") };
+        let (call, dropped) = fit(call, 100);
+        assert_eq!(call, Body::Withheld { of: "tool_call".into(), kept: Map::new() });
+        assert!(dropped.is_some_and(|dropped| dropped > 1000), "it says its whole size was cut");
+        let started = Body::Started { provider_session: "p".repeat(1000), resumed: false };
+        let (started, dropped) = fit(started, 100);
+        assert!(matches!(started, Body::Withheld { ref of, .. } if of == "started") && dropped.is_some(), "no private field to cut");
     }
 }

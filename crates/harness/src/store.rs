@@ -39,6 +39,8 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     ALTER TABLE events ADD COLUMN cut INTEGER;"];
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// The most an event adds to its payload as JSON: `"seq"`, `"ms"`, `"cut"` and their separators.
+pub const EVENT_FRAME: usize = 96;
 
 pub struct Store {
     conn: Connection,
@@ -183,8 +185,8 @@ impl Store {
         Ok(self.events_page(session, after, usize::MAX)?.0)
     }
 
-    /// The session's events after `after`, in order, until their payload passes `budget` bytes (at least one), and
-    /// whether more follow.
+    /// The session's events after `after`, in order, until they would pass `budget` bytes as JSON (at least one), and
+    /// whether more follow. Each counts its payload and `EVENT_FRAME` for its number, time and cut.
     pub fn events_page(&self, session: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
         let mut stmt =
             self.conn.prepare("SELECT seq, ms, type, payload, cut FROM events WHERE session = ?1 AND seq > ?2 ORDER BY seq")?;
@@ -193,10 +195,10 @@ impl Store {
         let (mut page, mut bytes) = (vec![], 0);
         while let Some(row) = rows.next()? {
             let (seq, ms, of, payload, cut): (i64, i64, String, String, Option<i64>) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
-            if !page.is_empty() && bytes + payload.len() > budget {
+            if !page.is_empty() && bytes + payload.len() + EVENT_FRAME > budget {
                 return Ok((page, true));
             }
-            bytes += payload.len();
+            bytes += payload.len() + EVENT_FRAME;
             let body = serde_json::from_str(&payload).unwrap_or_else(|_| Body::Withheld { of, kept: Default::default() });
             page.push(Event { seq: seq as u64, ms, body, cut: cut.map(|cut| cut as u64) });
         }

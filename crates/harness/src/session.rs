@@ -192,12 +192,14 @@ impl Harness {
     /// The stored events after `after` and, while the session runs, a receiver of its events from the moment of the
     /// read: both under the store's lock, which a session holds while it stores and sends an event, so an event is in
     /// one or the other and never both.
-    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, Option<broadcast::Receiver<Event>>)> {
+    /// The first page of them comes here, with whether more follow; the rest are for `events_page`.
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, Option<broadcast::Receiver<Event>>)> {
         let live = self.inner.live();
         let store = self.inner.store();
         store.session(id)?;
         let receiver = live.get(id).map(|live| live.events.subscribe());
-        Ok((store.events(id, after)?, receiver))
+        let (page, more) = store.events_page(id, after, crate::api::PAGE_BYTES)?;
+        Ok((page, more, receiver))
     }
 
     /// Drops payload past 30 days; see `Store::sweep`.
@@ -775,11 +777,11 @@ impl Task {
             return false;
         }
         // Cut after redaction, so a secret cut in half is masked whole first.
-        let (body, dropped) = crate::event::cut(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
+        let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
         // Sent under the store's lock, as `watch` reads under it: a client's read and its live events never overlap,
         // so a locked session's whole event is never taken for the withheld copy the read gave.
         let store = self.inner.store();
-        match store.append_cut(&self.id, &body, now_ms(), (dropped > 0).then_some(dropped)) {
+        match store.append_cut(&self.id, &body, now_ms(), cut) {
             Ok(event) => {
                 #[cfg(test)]
                 tests::before_publish();
@@ -898,7 +900,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn race_a_watch_between_an_events_store_and_send_gets_it_once_whole_or_withheld_never_both() {
         let tmp = tempfile::tempdir().unwrap();
-        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"x\"}").unwrap());
+        // The script waits for a second prompt, so the test can make a live event after the watch's read.
+        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"x\"}\n{\"end\": \"done\"}\n{\"prompt\": null}").unwrap());
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
         let spec = Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), model: None };
@@ -921,10 +924,11 @@ mod tests {
         harness.send(&id, "go").unwrap();
         while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
         let handle = watched.lock().unwrap().take().expect("the hook ran");
-        let (stored, receiver) = handle.join().unwrap();
-        let mut receiver = receiver.expect("the session runs");
+        let (stored, _, receiver) = handle.join().unwrap();
+        let mut receiver = receiver.expect("the session waits for a prompt");
         let last = stored.last().map_or(0, |event| event.seq);
-        let first_live = receiver.recv().await.unwrap();
+        harness.send(&id, "again").unwrap();
+        let first_live = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();
         assert!(first_live.seq == last + 1, "the read ends at {last}, the live events start at {}", first_live.seq);
     }
 }
