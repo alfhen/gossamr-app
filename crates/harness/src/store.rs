@@ -35,7 +35,8 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
         PRIMARY KEY (session, seq)
     );
     CREATE INDEX events_kept_by_age ON events (ms) WHERE withheld = 0;",
-    "CREATE TABLE client_tokens (stored_key BLOB PRIMARY KEY, created_ms INTEGER NOT NULL);"];
+    "CREATE TABLE client_tokens (stored_key BLOB PRIMARY KEY, created_ms INTEGER NOT NULL);
+    ALTER TABLE events ADD COLUMN cut INTEGER;"];
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -159,33 +160,47 @@ impl Store {
     /// Stores `body` as the session's next event, without its private fields for a locked or cleaned-up session.
     /// Redaction is the caller's: this stores what it is given.
     pub fn append(&self, session: &str, body: &Body, ms: i64) -> Result<Event> {
+        self.append_cut(session, body, ms, None)
+    }
+
+    /// As `append`, for a body that was cut by `cut` bytes.
+    pub fn append_cut(&self, session: &str, body: &Body, ms: i64, cut: Option<u64>) -> Result<Event> {
         let row = self.session(session)?;
         let withheld = row.locked || row.cleaned;
         let payload = serde_json::to_string(&if withheld { body.withheld() } else { body.clone() })?;
         let seq = self.conn.query_row(
-            "INSERT INTO events (session, seq, ms, type, payload, withheld)
-             VALUES (?1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session = ?1), ?2, ?3, ?4, ?5)
+            "INSERT INTO events (session, seq, ms, type, payload, withheld, cut)
+             VALUES (?1, (SELECT COALESCE(MAX(seq), 0) + 1 FROM events WHERE session = ?1), ?2, ?3, ?4, ?5, ?6)
              RETURNING seq",
-            params![session, ms, body.type_name(), payload, withheld],
+            params![session, ms, body.type_name(), payload, withheld, cut.map(|cut| cut as i64)],
             |row| row.get::<_, i64>(0),
         )?;
-        Ok(Event { seq: seq as u64, ms, body: body.clone() })
+        Ok(Event { seq: seq as u64, ms, body: body.clone(), cut })
     }
 
     /// The session's events after `after`, in order. An event of a type this build does not know reads as withheld.
     pub fn events(&self, session: &str, after: u64) -> Result<Vec<Event>> {
+        Ok(self.events_page(session, after, usize::MAX)?.0)
+    }
+
+    /// The session's events after `after`, in order, until their payload passes `budget` bytes (at least one), and
+    /// whether more follow.
+    pub fn events_page(&self, session: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
         let mut stmt =
-            self.conn.prepare("SELECT seq, ms, type, payload FROM events WHERE session = ?1 AND seq > ?2 ORDER BY seq")?;
+            self.conn.prepare("SELECT seq, ms, type, payload, cut FROM events WHERE session = ?1 AND seq > ?2 ORDER BY seq")?;
         let after = i64::try_from(after).unwrap_or(i64::MAX);
-        let rows = stmt.query_map(params![session, after], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?))
-        })?;
-        rows.map(|row| {
-            let (seq, ms, of, payload) = row?;
+        let mut rows = stmt.query(params![session, after])?;
+        let (mut page, mut bytes) = (vec![], 0);
+        while let Some(row) = rows.next()? {
+            let (seq, ms, of, payload, cut): (i64, i64, String, String, Option<i64>) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
+            if !page.is_empty() && bytes + payload.len() > budget {
+                return Ok((page, true));
+            }
+            bytes += payload.len();
             let body = serde_json::from_str(&payload).unwrap_or_else(|_| Body::Withheld { of, kept: Default::default() });
-            Ok(Event { seq: seq as u64, ms, body })
-        })
-        .collect()
+            page.push(Event { seq: seq as u64, ms, body, cut: cut.map(|cut| cut as u64) });
+        }
+        Ok((page, false))
     }
 
     /// Drops the session's payload, now and for any event it has later.

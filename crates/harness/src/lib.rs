@@ -53,7 +53,10 @@ pub const USAGE: &str = "usage: harness --version
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
        harness answer <session> <request> allow|deny [--message <text>]
-       harness token new";
+       harness token new
+  A safe place for the token is a Keychain item that trusts no app, so each read asks you:
+       security add-generic-password -s gossamr-harness -a client -T \"\" -w     (paste the token when asked)
+       security find-generic-password -s gossamr-harness -a client -w | harness sessions --token-stdin";
 
 /// An argument that is not UTF-8 is never one the harness knows, so it gets the usage line like any other.
 pub fn request(args: &[OsString]) -> Request {

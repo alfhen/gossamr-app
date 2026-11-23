@@ -1,6 +1,10 @@
 //! The client API: JSON text messages on a WebSocket, over a Unix socket in the data folder. The harness speaks
-//! first with a [`Hello`]; the client answers its challenge ([`Proof`]) and then sends [`Call`]s. The harness answers
-//! each call by its id, and pushes the events of the sessions the client opened or watches.
+//! first with a [`Hello`]; the client answers it ([`Proof`]) and then sends [`Call`]s. The harness answers each call
+//! by its id, and pushes the events of the sessions the client opened or watches.
+//!
+//! Limits: a message is at most [`MAX_MESSAGE`] each way, and at most [`BEFORE_PROOF_MAX`] until the proof holds. An
+//! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
+//! about [`PAGE_BYTES`].
 
 use std::path::{Path, PathBuf};
 
@@ -9,6 +13,13 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 use crate::event::{Decision, Event};
+
+/// The largest message either side sends or takes. A client's call over it is refused before it is sent.
+pub const MAX_MESSAGE: usize = 8 << 20;
+/// The largest message a connection may send before its proof holds. A proof is about 80 bytes.
+pub const BEFORE_PROOF_MAX: usize = 4096;
+/// About how much one `events` answer holds: the stored payload of its events.
+pub const PAGE_BYTES: usize = 4 << 20;
 
 /// Changes when a client of the last protocol could no longer talk to this harness.
 pub const PROTOCOL: u32 = 1;
@@ -87,7 +98,8 @@ pub enum Op {
     CleanUp { session: String },
     Sessions,
     Providers,
-    /// Answers the stored events after `after`.
+    /// Answers `{"events": [...], "more": bool}`: the stored events after `after`, about `PAGE_BYTES` of them. With
+    /// `more`, ask again after the last one.
     Events { session: String, #[serde(default)] after: u64 },
     /// Pushes the stored events after `after`, then every live one until the session closes, then an end.
     Watch { session: String, #[serde(default)] after: u64 },

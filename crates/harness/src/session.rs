@@ -179,9 +179,14 @@ impl Harness {
 
     /// The stored events after `after`. A read writes nothing.
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
+        Ok(self.events_page(id, after, usize::MAX)?.0)
+    }
+
+    /// The stored events after `after`, until their payload passes `budget` bytes, and whether more follow.
+    pub fn events_page(&self, id: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
         let store = self.inner.store();
         store.session(id)?;
-        store.events(id, after)
+        store.events_page(id, after, budget)
     }
 
     /// The stored events after `after` and, while the session runs, a receiver of its events from the moment of the
@@ -765,15 +770,16 @@ impl Task {
     fn emit(&self, body: Body) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
-                let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                let _ = self.events.send(Event { seq: 0, ms: now_ms(), body, cut: None });
             }
             return false;
         }
-        let body = redact::body(body, &self.secrets);
+        // Cut after redaction, so a secret cut in half is masked whole first.
+        let (body, dropped) = crate::event::cut(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
         // Sent under the store's lock, as `watch` reads under it: a client's read and its live events never overlap,
         // so a locked session's whole event is never taken for the withheld copy the read gave.
         let store = self.inner.store();
-        match store.append(&self.id, &body, now_ms()) {
+        match store.append_cut(&self.id, &body, now_ms(), (dropped > 0).then_some(dropped)) {
             Ok(event) => {
                 #[cfg(test)]
                 tests::before_publish();
@@ -784,7 +790,7 @@ impl Task {
                 drop(store);
                 self.store_failed(&e);
                 if body == Body::Closed {
-                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body, cut: None });
                 }
                 false
             }
@@ -797,7 +803,7 @@ impl Task {
         if !self.broken.swap(true, Ordering::Relaxed) {
             let reason = format!("the store could not keep this session's events, so it stops: {e}");
             let body = Body::Failed { kind: FailKind::Harness, reason };
-            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body, cut: None });
         }
     }
 }

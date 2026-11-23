@@ -3,6 +3,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+/// The most an event's body may hold, as JSON, after redaction. A larger one is cut before it is stored or sent.
+pub const EVENT_MAX: usize = 1 << 20;
+
 /// One event of a session. `seq` starts at 1 for each session and never repeats. An event numbered 0 was not stored:
 /// what the session says when its store fails.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -11,6 +14,10 @@ pub struct Event {
     pub ms: i64,
     #[serde(flatten)]
     pub body: Body,
+    /// The event was over `EVENT_MAX`: this many bytes were cut from the end of its private fields, which then hold
+    /// text where they held JSON. Kept for a locked session too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +72,35 @@ pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", 
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
 pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message"];
+
+/// The body within `max` bytes of JSON, and how many bytes were cut to get there. Only private fields are cut, the
+/// largest first, from their end; a field that held JSON then holds the start of its text.
+pub fn cut(body: Body, max: usize) -> (Body, u64) {
+    let size = |value: &Value| serde_json::to_string(value).map_or(0, |text| text.len());
+    let mut value = serde_json::to_value(&body).expect("a body always serializes");
+    let mut dropped = 0;
+    while size(&value) > max {
+        let over = size(&value) - max;
+        let Value::Object(fields) = &mut value else { unreachable!("a body is an object") };
+        let largest = PRIVATE_FIELDS.iter().filter(|name| fields.contains_key(**name)).max_by_key(|name| size(&fields[**name]));
+        let Some(field) = largest.and_then(|name| fields.get_mut(*name)) else { break };
+        let text = match field.take() {
+            Value::String(text) => text,
+            other => other.to_string(),
+        };
+        // Escapes make the JSON longer than the text, so cut at least what is over and loop until it fits.
+        let mut keep = text.len().saturating_sub(over.max(text.len() / 8));
+        while !text.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        dropped += (text.len() - keep) as u64;
+        *field = Value::String(text[..keep].to_owned());
+    }
+    match dropped {
+        0 => (body, 0),
+        _ => (serde_json::from_value(value).expect("a cut body is the same body"), dropped),
+    }
+}
 
 impl Body {
     pub fn type_name(&self) -> String {

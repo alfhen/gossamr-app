@@ -104,10 +104,7 @@ pub async fn execute(command: Command, data: Option<PathBuf>, from: TokenFrom) -
             Ok(true)
         }
         Command::Events { session, after, follow: false } => {
-            let events: Vec<crate::event::Event> = serde_json::from_value(client.call(Op::Events { session, after }).await?)?;
-            for event in events {
-                println!("{}", serde_json::to_string(&event)?);
-            }
+            client.events(&session, after, |event| println!("{}", serde_json::to_string(&event).expect("an event always serializes"))).await?;
             Ok(true)
         }
         Command::Events { session, after, follow: true } => {
@@ -168,30 +165,57 @@ fn read_token(from: TokenFrom) -> Result<Token> {
     Token::parse(&line).ok_or_else(|| Error::Refused("that is not a client token, which is 64 hex digits".into()))
 }
 
-/// The terminal's echo, off until this is dropped.
-struct Quiet(Option<libc::termios>);
+/// The terminal's flags as they were before the prompt, for the signal handler to put back.
+static KEPT: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
+/// The signals that can end the process at the prompt.
+const ENDING: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+/// Puts the terminal's flags back, then ends the process as the signal would have.
+extern "C" fn put_back_and_end(signal: libc::c_int) {
+    // SAFETY: tcsetattr, signal and raise are async-signal-safe, and KEPT is set before this handler is.
+    unsafe {
+        if let Some(kept) = KEPT.get() {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, kept);
+        }
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
+    }
+}
+
+/// The terminal's echo, off until this is dropped or a signal ends the process.
+struct Quiet(bool);
 
 impl Quiet {
     fn new() -> Quiet {
-        // SAFETY: `termios` is plain data that tcgetattr fills in; both calls only read and set stdin's terminal flags.
+        // SAFETY: `termios` is plain data that tcgetattr fills in; the calls only read and set stdin's terminal flags
+        // and the handlers of signals that end the process.
         unsafe {
             let mut flags: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(libc::STDIN_FILENO, &mut flags) != 0 {
-                return Quiet(None);
+                return Quiet(false);
             }
-            let kept = flags;
+            let _ = KEPT.set(flags);
+            for signal in ENDING {
+                libc::signal(signal, put_back_and_end as *const () as libc::sighandler_t);
+            }
             flags.c_lflag &= !libc::ECHO;
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &flags);
-            Quiet(Some(kept))
+            Quiet(true)
         }
     }
 }
 
 impl Drop for Quiet {
     fn drop(&mut self) {
-        if let Some(kept) = &self.0 {
-            // SAFETY: puts back the flags tcgetattr gave.
-            unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, kept) };
+        if let (true, Some(kept)) = (self.0, KEPT.get()) {
+            // SAFETY: puts back the flags tcgetattr gave, then the default handlers.
+            unsafe {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, kept);
+                for signal in ENDING {
+                    libc::signal(signal, libc::SIG_DFL);
+                }
+            }
         }
     }
 }

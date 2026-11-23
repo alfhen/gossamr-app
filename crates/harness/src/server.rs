@@ -8,6 +8,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -18,10 +19,10 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{WebSocketStream, accept_async_with_config};
 
-use crate::api::{Call, DESCRIPTOR, Descriptor, Hello, Op, PROTOCOL, Proof, Reply, socket_path};
+use crate::api::{BEFORE_PROOF_MAX, Call, DESCRIPTOR, Descriptor, Hello, MAX_MESSAGE, Op, PAGE_BYTES, PROTOCOL, Proof, Reply, socket_path};
 use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
@@ -34,20 +35,43 @@ pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Events waiting to be written to one client. Past it the client falls behind its live events, and what it missed is
 /// read back from the store.
 const PUSH_QUEUE: usize = 256;
-/// The largest message a connection may send before its proof holds. A proof is about 80 bytes.
-const BEFORE_PROOF_MAX: usize = 4096;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// How long a new connection has for the WebSocket handshake and its proof, together.
     pub proof_within: Duration,
-    /// Connections at once, proven or not. One past it is closed at once.
-    pub connections: usize,
+    /// Connections that have not proven a token yet. One past it is closed at once.
+    pub proving: usize,
+    /// Proven connections. One past it is told so and closed.
+    pub proven: usize,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { proof_within: Duration::from_secs(10), connections: 64 }
+        Limits { proof_within: Duration::from_secs(10), proving: 8, proven: 64 }
+    }
+}
+
+/// Counts a connection in one of the two caps while it holds this.
+struct Counted(Arc<AtomicUsize>);
+
+impl Counted {
+    /// Counts one more unless `cap` are counted; one step, so two at once cannot pass it.
+    fn take(count: &Arc<AtomicUsize>, cap: usize) -> Option<Counted> {
+        let mut now = count.load(Ordering::Acquire);
+        while now < cap {
+            match count.compare_exchange_weak(now, now + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(Counted(count.clone())),
+                Err(seen) => now = seen,
+            }
+        }
+        None
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -101,11 +125,14 @@ impl Server {
         let Server { harness, listener, dir, stops: (mut term, mut int), limits } = self;
         let (sweeper, _) = harness.sweep_on_timer(SWEEP_EVERY);
         let mut connections = JoinSet::new();
+        let (proving, proven) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         loop {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
-                    Ok((stream, _)) if same_user(&stream) && connections.len() < limits.connections => {
-                        connections.spawn(connection(harness.clone(), stream, limits.proof_within));
+                    Ok((stream, _)) if same_user(&stream) => {
+                        if let Some(slot) = Counted::take(&proving, limits.proving) {
+                            connections.spawn(connection(harness.clone(), stream, limits, slot, proven.clone()));
+                        }
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("harness: accept failed: {e}"),
@@ -127,36 +154,42 @@ fn same_user(stream: &UnixStream) -> bool {
     stream.peer_cred().is_ok_and(|cred| cred.uid() == unsafe { libc::geteuid() })
 }
 
-/// Until the proof holds a connection may send only small messages.
-fn before_proof() -> WebSocketConfig {
-    WebSocketConfig::default().max_message_size(Some(BEFORE_PROOF_MAX)).max_frame_size(Some(BEFORE_PROOF_MAX))
+/// The limits of a connection, both ways, from its start.
+pub(crate) fn config() -> WebSocketConfig {
+    WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE))
 }
 
 type Ws = WebSocketStream<UnixStream>;
 
-async fn send(ws: &mut Ws, reply: &impl serde::Serialize) -> Result<()> {
-    let text = serde_json::to_string(reply)?;
+async fn send(ws: &mut Ws, reply: &Reply) -> Result<()> {
+    let mut text = serde_json::to_string(reply)?;
+    if text.len() > MAX_MESSAGE {
+        let error = format!("the answer is over the {MAX_MESSAGE}-byte limit of a message");
+        text = serde_json::to_string(&Reply { id: reply.id, session: reply.session.clone(), error: Some(error), ..Reply::default() })?;
+    }
     ws.send(Message::text(text)).await.map_err(|e| Error::Protocol(e.to_string()))
 }
 
-async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration) {
-    let proven = tokio::time::timeout(proof_within, async {
-        let mut ws = accept_async_with_config(stream, Some(before_proof())).await.ok()?;
+async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>) {
+    let checked = tokio::time::timeout(limits.proof_within, async {
+        let mut ws = accept_async_with_config(stream, Some(config())).await.ok()?;
         let proof = prove(&harness, &mut ws).await;
         Some((ws, proof))
     });
-    let mut ws = match proven.await {
-        Ok(Some((ws, Ok(())))) => ws,
-        Ok(Some((mut ws, Err(e)))) => {
-            let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
-            let _ = ws.close(None).await;
-            return;
-        }
+    let checked = checked.await;
+    drop(proving);
+    let (mut ws, slot) = match checked {
+        Ok(Some((mut ws, proof))) => match proof.and_then(|()| Counted::take(&proven, limits.proven).ok_or(Error::Refused(format!("the harness has {} clients already", limits.proven)))) {
+            Ok(slot) => (ws, slot),
+            Err(e) => {
+                let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
+                let _ = ws.close(None).await;
+                return;
+            }
+        },
         Ok(None) | Err(_) => return,
     };
-    // The default limits once the proof holds. A client sends nothing more until it has the answer to its proof, so
-    // the stream holds no bytes read ahead.
-    ws = WebSocketStream::from_raw_socket(ws.into_inner(), Role::Server, None).await;
+    let _slot = slot;
     if send(&mut ws, &Reply { ok: Some(json!(true)), ..Reply::default() }).await.is_err() {
         return;
     }
@@ -168,6 +201,11 @@ async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration
                 Some(Ok(Message::Text(text))) => {
                     let reply = client.call(text.as_str()).await;
                     if send(&mut ws, &reply).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Binary(_))) => {
+                    if send(&mut ws, &Reply { error: Some("a call is a JSON text message".into()), ..Reply::default() }).await.is_err() {
                         break;
                     }
                 }
@@ -193,6 +231,9 @@ async fn prove(harness: &Harness, ws: &mut Ws) -> Result<()> {
     ws.send(Message::text(hello.clone())).await.map_err(|e| Error::Protocol(e.to_string()))?;
     let refused = || Error::Refused("the client did not prove a token".into());
     let Some(Ok(Message::Text(text))) = ws.next().await else { return Err(refused()) };
+    if text.len() > BEFORE_PROOF_MAX {
+        return Err(refused());
+    }
     let proof: Proof = serde_json::from_str(text.as_str()).map_err(|_| refused())?;
     let answer = decode(&proof.proof).ok_or_else(refused)?;
     if verify(&harness.client_tokens()?, hello.as_bytes(), &answer) { Ok(()) } else { Err(refused()) }
@@ -242,7 +283,10 @@ impl Client {
                 let providers = harness.providers().into_iter().map(|(name, capabilities)| json!({ "name": name, "capabilities": capabilities }));
                 Ok(Value::Array(providers.collect()))
             }
-            Op::Events { session, after } => Ok(serde_json::to_value(harness.events(&session, after)?)?),
+            Op::Events { session, after } => {
+                let (events, more) = harness.events_page(&session, after, PAGE_BYTES)?;
+                Ok(json!({ "events": events, "more": more }))
+            }
             Op::Watch { session, after } => {
                 if self.watching.get(&session).is_some_and(|watch| !watch.is_finished()) {
                     return Err(Error::Refused(format!("this connection already watches session {session}")));
@@ -286,8 +330,7 @@ async fn forward(harness: Harness, session: String, stored: Vec<Event>, live: Op
                     let Ok(missed) = harness.events(&session, last) else { break };
                     for event in missed {
                         last = event.seq;
-                        // A locked session's `closed` comes back from the store withheld.
-                        let closed = event.body.withheld() == Body::Closed.withheld();
+                        let closed = event.body == Body::Closed;
                         if !push(&out, &session, event).await || closed {
                             return finish(&out, session).await;
                         }
@@ -321,7 +364,7 @@ mod tests {
     use crate::event::Body;
 
     fn text(seq: u64) -> Event {
-        Event { seq, ms: 0, body: Body::Text { text: format!("t{seq}") } }
+        Event { seq, ms: 0, body: Body::Text { text: format!("t{seq}") }, cut: None }
     }
 
     /// A harness whose store holds session `s` with events 1 to `n`, as `text` makes them, then `closed`.
@@ -373,10 +416,4 @@ mod tests {
         assert_eq!(events(&pushes), all, "none lost, none twice");
     }
 
-    #[test]
-    fn serve_before_the_proof_a_connection_may_send_only_small_messages() {
-        let limits = before_proof();
-        assert_eq!((limits.max_message_size, limits.max_frame_size), (Some(BEFORE_PROOF_MAX), Some(BEFORE_PROOF_MAX)));
-        assert!(limits.max_message_size.is_some_and(|max| max <= 4096), "a few KB at most");
-    }
 }
