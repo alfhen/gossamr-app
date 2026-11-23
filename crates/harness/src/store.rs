@@ -114,7 +114,8 @@ impl Store {
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
     }
 
-    pub fn set_provider_session(&self, id: &str, provider_session: &str) -> Result<()> {
+    /// None clears the id, so the session cannot be resumed.
+    pub fn set_provider_session(&self, id: &str, provider_session: Option<&str>) -> Result<()> {
         self.conn.execute("UPDATE sessions SET provider_session = ?2 WHERE id = ?1", params![id, provider_session])?;
         Ok(())
     }

@@ -122,7 +122,7 @@ impl Harness {
                 return Err(Error::CleanedUp(id.to_owned()));
             }
             let provider_session =
-                row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} never started at its provider")))?;
+                row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
             Ok(Plan { driver: self.driver(&row.provider)?, cwd: row.cwd, locked: row.locked, model: row.model, resume: Some(provider_session) })
         })
     }
@@ -651,11 +651,13 @@ impl Task {
     }
 
     /// Records a `started`, after keeping its provider session id for a resume. The row keeps the id as it is, so an
-    /// id that holds a secret is not kept: the session says so, and false says it must stop.
+    /// id that holds a secret is not kept, and nor is an earlier one, which no longer names the agent's session: the
+    /// session says so, and false says it must stop.
     fn started(&self, body: Body) -> bool {
         let Body::Started { provider_session, .. } = &body else { unreachable!("only a `started` is passed") };
         let safe = redact::text(provider_session, &self.secrets) == *provider_session;
-        if safe && let Err(e) = self.inner.store().set_provider_session(&self.id, provider_session) {
+        let kept = safe.then_some(provider_session.as_str());
+        if let Err(e) = self.inner.store().set_provider_session(&self.id, kept) {
             eprintln!("harness: session {}: {e}", self.id);
         }
         self.emit(body);

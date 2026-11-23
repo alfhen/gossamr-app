@@ -385,7 +385,7 @@ async fn locked_a_locked_sessions_text_is_in_no_table_and_its_other_fields_are_k
         .iter()
         .map(|event| match &event.body {
             Body::Withheld { of, kept } => (of.clone(), serde_json::Value::Object(kept.clone())),
-            other => panic!("a locked session's event was stored whole: {other:?}"),
+            other => panic!("a locked session's `{}` event was stored whole", other.type_name()),
         })
         .collect();
     assert!(kept.contains(&("permission".into(), json!({"id": request, "kind": "tool", "tool": "read_ticket"}))), "{kept:?}");
@@ -446,7 +446,7 @@ async fn redact_a_secret_in_agent_text_never_reaches_the_store_or_a_client() {
     assert!(shown.contains("last: <redacted> and done"), "the last text is not masked as expected");
 
     let stored = harness.events(&id, 0).unwrap();
-    assert_eq!(stored, live, "the store holds the masked events");
+    assert!(stored == live, "the store holds the masked events");
     let (rows, disk) = (every_row(&dir), bytes_on_disk(&dir));
     for (label, leak) in leaks {
         assert!(!rows.contains(leak), "{label} is in a table");
@@ -477,9 +477,10 @@ async fn redact_a_drivers_error_is_masked_keeps_its_kind_and_frees_the_session()
     match harness.open(spec).await {
         Err(Error::Open { kind, message }) => {
             assert_eq!(kind, FailKind::SignedOut, "the kind reaches the client");
-            assert_eq!(message, "not signed in; tried token <redacted>");
+            assert!(message == "not signed in; tried token <redacted>", "the error is not masked as expected");
         }
-        other => panic!("{:?}", other.map(|(id, _)| id)),
+        Ok(_) => panic!("the open did not fail"),
+        Err(_) => panic!("the open failed some other way"),
     }
 }
 
@@ -893,9 +894,9 @@ fn open_ended() -> Vec<&'static harness::redact::Shape> {
         .collect()
 }
 
-/// An 8-character stretch of `secret` after its first `public` characters that is among `seen`'s stretches.
-fn leaks(seen: &std::collections::HashSet<&[u8]>, public: usize, secret: &str) -> Option<String> {
-    secret.as_bytes()[public..].windows(8).find(|window| seen.contains(window)).map(|window| String::from_utf8_lossy(window).into_owned())
+/// Whether an 8-character stretch of `secret` after its first `public` characters is among `seen`'s stretches.
+fn leaks(seen: &std::collections::HashSet<&[u8]>, public: usize, secret: &str) -> bool {
+    secret.as_bytes()[public..].windows(8).any(|window| seen.contains(window))
 }
 
 #[tokio::test]
@@ -925,9 +926,9 @@ async fn redact_a_secret_glued_straight_onto_an_open_ended_token_is_masked_with_
     let disk = bytes_on_disk(&dir);
     let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
     for ((first, second, glued), body) in pairs.iter().zip(&shown) {
-        assert_eq!(*body, Body::Text { text: "note: <redacted> end".into() }, "{first} then {second}");
+        assert!(*body == Body::Text { text: "note: <redacted> end".into() }, "{first} then {second}: not masked as expected");
         let public = harness::redact::SHAPES.iter().find(|shape| shape.name == *first).unwrap().markers.iter().map(|marker| marker.len()).min().unwrap();
-        assert_eq!(leaks(&disk, public, glued), None, "{first} then {second}: in the store's files");
+        assert!(!leaks(&disk, public, glued), "{first} then {second}: in the store's files");
     }
     assert!(pairs.len() > 140, "{} pairs", pairs.len());
 }
@@ -936,24 +937,26 @@ fn example(name: &str) -> String {
     (harness::redact::SHAPES.iter().find(|shape| shape.name == name).expect("a shape of that name").example)()
 }
 
+/// A case's label, its text, and the secrets in it, each with how many of its first characters are public.
+type Case = (String, String, Vec<(String, usize)>);
+
 #[tokio::test]
 async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_masked_but_bare_sk_after_a_letter_or_digit() {
     let (_tmp, dir) = data_dir();
     let (ghs, slack, anthropic) = (example("GitHub token"), example("Slack token"), example("Anthropic key"));
     let ghp = format!("ghp_{}", &ghs[4..]);
-    // (text, the secrets in it, each with how many of its first characters are public)
-    let mut cases: Vec<(String, Vec<(String, usize)>)> = vec![
+    let mut cases: Vec<Case> = vec![
         // Review, round 5.
-        (format!("GET /cb?next=%3Faccess_token%3D{} 302", example("Google OAuth token")), vec![(example("Google OAuth token"), 5)]),
-        (format!("Authorization%3A%20Bearer%20{}", example("JWT")), vec![(example("JWT"), 3)]),
-        (format!(r#"{{"keys":"first\n{anthropic}"}}"#), vec![(anthropic.clone(), 7)]),
-        (format!(r"GITHUB\t{ghs}"), vec![(ghs.clone(), 4)]),
-        (format!("token{ghs}"), vec![(ghs.clone(), 4)]),
-        (format!("v2{ghs}"), vec![(ghs.clone(), 4)]),
+        ("a Google OAuth token in an encoded query".into(), format!("GET /cb?next=%3Faccess_token%3D{} 302", example("Google OAuth token")), vec![(example("Google OAuth token"), 5)]),
+        ("an encoded bearer JWT".into(), format!("Authorization%3A%20Bearer%20{}", example("JWT")), vec![(example("JWT"), 3)]),
+        ("an Anthropic key after an escaped newline".into(), format!(r#"{{"keys":"first\n{anthropic}"}}"#), vec![(anthropic.clone(), 7)]),
+        ("a GitHub token after an escaped tab".into(), format!(r"GITHUB\t{ghs}"), vec![(ghs.clone(), 4)]),
+        ("a GitHub token after a word".into(), format!("token{ghs}"), vec![(ghs.clone(), 4)]),
+        ("a GitHub token after a digit".into(), format!("v2{ghs}"), vec![(ghs.clone(), 4)]),
         // Verify, round 5.
-        (format!(r#"$ cat tokens.json {{"tokens": "{ghp}\n{ghs}"}}"#), vec![(ghp.clone(), 4), (ghs.clone(), 4)]),
-        (format!("GET /cb?redirect=https%3A%2F%2Fapp.example.com%2F%3Fkey%3D{anthropic} 302"), vec![(anthropic.clone(), 7)]),
-        (format!(r"{{'SLACK': 'x\n{slack}'}}"), vec![(slack.clone(), 5)]),
+        ("two GitHub tokens split by an escaped newline".into(), format!(r#"$ cat tokens.json {{"tokens": "{ghp}\n{ghs}"}}"#), vec![(ghp.clone(), 4), (ghs.clone(), 4)]),
+        ("an Anthropic key in a doubly encoded query".into(), format!("GET /cb?redirect=https%3A%2F%2Fapp.example.com%2F%3Fkey%3D{anthropic} 302"), vec![(anthropic.clone(), 7)]),
+        ("a Slack token after an escaped newline".into(), format!(r"{{'SLACK': 'x\n{slack}'}}"), vec![(slack.clone(), 5)]),
     ];
     // Every shape after each escape, encoding, letter and digit. Only bare `sk-` after a letter or digit stays as
     // written: there it is the end of a word such as `task-list`. Those are checked here and kept out of the store,
@@ -965,15 +968,15 @@ async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_
         for before in [r"\n", r"\t", r"\r", "%3D", "%20", "x", "9"] {
             let text = format!("v {before}{secret} end");
             if shape.markers == [harness::redact::WORD_MARKER] && matches!(before, "x" | "9") {
-                assert_eq!(harness::redact::text(&text, &[]), text, "bare `sk-` after a letter or digit is kept as written");
+                assert!(harness::redact::text(&text, &[]) == text, "bare `sk-` after {before} is not kept as written");
                 kept += 1;
                 continue;
             }
-            cases.push((text, vec![(secret.clone(), public)]));
+            cases.push((format!("{} after {before}", shape.name), text, vec![(secret.clone(), public)]));
         }
     }
     assert_eq!(kept, 2, "only the OpenAI shape has bare `sk-` alone");
-    let says: Vec<Body> = cases.iter().map(|(text, _)| Body::Text { text: text.clone() }).collect();
+    let says: Vec<Body> = cases.iter().map(|(_, text, _)| Body::Text { text: text.clone() }).collect();
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("says".into(), Arc::new(Says::new(vec![says], false)))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "says", false).await;
@@ -987,11 +990,12 @@ async fn redact_every_secret_after_an_escape_an_encoding_a_letter_or_a_digit_is_
     until(&mut events, |body| *body == Body::Closed).await;
     let disk = bytes_on_disk(&dir);
     let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
-    for ((text, secrets), shown) in cases.iter().zip(&shown) {
+    // A failure names the case, never the text or what the client was shown.
+    for ((label, _, secrets), shown) in cases.iter().zip(&shown) {
         let seen: std::collections::HashSet<&[u8]> = shown.as_bytes().windows(8).collect();
         for (secret, public) in secrets {
-            assert_eq!(leaks(&seen, *public, secret), None, "{text} reached the client as {shown}");
-            assert_eq!(leaks(&disk, *public, secret), None, "{text} is in the store's files");
+            assert!(!leaks(&seen, *public, secret), "{label}: reached the client");
+            assert!(!leaks(&disk, *public, secret), "{label}: in the store's files");
         }
     }
 }
@@ -1181,6 +1185,7 @@ async fn stop_a_prompt_queued_behind_a_turn_does_not_reach_the_agent_after_close
     let rest = until(&mut events, |body| *body == Body::Closed).await;
     assert_eq!(types(&rest), ["turn_ended", "closed"]);
     assert_eq!(puppet.prompts(), ["one"], "the queued prompt never reached the agent");
+    assert_eq!(*puppet.commands.lock().unwrap(), [Command::Prompt("one".into()), Command::Stop], "Stop is the last command");
 }
 
 #[tokio::test]
@@ -1338,6 +1343,47 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
     assert_eq!(*received.lock().unwrap(), [Command::Stop], "no prompt reached the agent");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     assert!(matches!(harness.resume(&id).await, Err(Error::Driver(_))), "a session with no kept id cannot be resumed");
+}
+
+#[tokio::test]
+async fn redact_a_resumed_session_whose_agent_names_a_secret_id_drops_the_earlier_id_and_cannot_be_resumed_again() {
+    let (_tmp, dir) = data_dir();
+    let secret = example("GitHub token");
+    // Starts under a plain id; a resume says it now goes by an id that holds a secret.
+    struct Renamed(String, Arc<Mutex<Vec<Option<String>>>>);
+    impl Driver for Renamed {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+            let (output, receiver) = mpsc::unbounded_channel();
+            let provider_session = if launch.resume.is_some() { format!("session-{}", self.0) } else { "plain-first".to_owned() };
+            self.1.lock().unwrap().push(launch.resume.clone());
+            output.send(Body::Started { provider_session, resumed: launch.resume.is_some() }).unwrap();
+            tokio::spawn(async move {
+                let _output = output;
+                while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let opens: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("renamed".into(), Arc::new(Renamed(secret.clone(), opens.clone())))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "renamed", false).await;
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let mut resumed = harness.resume(&id).await.unwrap();
+    let all = until(&mut resumed, |body| *body == Body::Closed).await;
+    assert_eq!(types(&all), ["started", "failed", "closed"], "the resumed session stopped");
+    assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
+    let again = harness.resume(&id).await;
+    assert!(
+        matches!(&again, Err(Error::Driver(reason)) if reason.contains("no provider session id")),
+        "the earlier id no longer names the agent's session, so it is not resumed by"
+    );
+    assert_eq!(*opens.lock().unwrap(), [None, Some("plain-first".to_owned())], "the refused resume reached no driver");
 }
 
 #[tokio::test]
