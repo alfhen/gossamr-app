@@ -371,7 +371,10 @@ impl Player {
     async fn wait(&mut self, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
         loop {
             let Some(command) = self.commands.recv().await else { return Got::Stopped };
-            self.mock.play(&self.key, self.run, |play, _| play.received.push(command.clone()));
+            // A start that was resumed over is stopped: what it is sent is not its own any more.
+            if self.mock.play(&self.key, self.run, |play, _| play.received.push(command.clone())).is_none() {
+                return Got::Stopped;
+            }
             match command {
                 Command::Stop | Command::Kill => return Got::Stopped,
                 command if accept(&command) => return Got::Matched(command),
@@ -484,5 +487,20 @@ mod tests {
         old.commands.send(Command::Stop).unwrap();
         assert_eq!(old.output.recv().await, None, "the old start ends");
         assert_eq!(mock.plays()[&provider_session].at, at, "its stop did not move the new start's place");
+    }
+
+    #[tokio::test]
+    async fn mock_a_start_resumed_over_while_it_waits_for_a_prompt_takes_no_command() {
+        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"one\"}").unwrap());
+        let mut old = mock.open(launch(None)).unwrap();
+        let Some(Body::Started { provider_session, .. }) = old.output.recv().await else { panic!() };
+        // The old start has taken its prompt step and waits in it.
+        while mock.plays()[&provider_session].at < 1 {
+            tokio::task::yield_now().await;
+        }
+        let _new = mock.open(launch(Some(provider_session.clone()))).unwrap();
+        old.commands.send(Command::Prompt("stale".into())).unwrap();
+        assert_eq!(old.output.recv().await, None, "the old start went, and played nothing");
+        assert!(mock.received(&provider_session).is_empty(), "the stale prompt is not the new start's");
     }
 }

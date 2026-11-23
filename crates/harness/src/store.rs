@@ -169,12 +169,14 @@ impl Store {
 }
 
 /// Turns a stored event into `Body::Withheld`: its type in `of`, and only its fields on `KEPT_FIELDS` in `kept`.
+/// `json_each` gives `true` and `false` as the numbers 1 and 0, so they are made JSON again.
 static WITHHOLD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     let kept: Vec<String> = KEPT_FIELDS.iter().map(|field| format!("'{field}'")).collect();
     let kept = kept.join(", ");
     format!(
         "withheld = 1, payload = json_object('type', 'withheld', 'of', type, 'kept', \
-         (SELECT json_group_object(key, value) FROM json_each(payload) WHERE key IN ({kept})))"
+         (SELECT json_group_object(key, CASE type WHEN 'true' THEN json('true') WHEN 'false' THEN json('false') ELSE value END) \
+         FROM json_each(payload) WHERE key IN ({kept})))"
     )
 });
 
