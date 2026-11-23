@@ -3,7 +3,8 @@
 //!
 //! Live text fails closed. Every shape starts with a marker; [`LiveText`] sends streamed text only up to the earliest
 //! marker, or the start of one, and holds the rest until it is decided: a secret is sent as the mask, anything else as
-//! it is. What is still undecided when the block ends is sent as the mask, never raw.
+//! it is. What is still undecided when the block ends is sent as the mask, never raw. The end of a piece that could
+//! begin a copy of the session's token waits for the next piece too, so a copy cut between them is masked whole.
 
 use std::sync::LazyLock;
 
@@ -222,11 +223,14 @@ pub fn text(s: &str, secrets: &[String]) -> String {
     let mut masked = String::with_capacity(out.len());
     let mut last = 0;
     for found in ALL.find_iter(&out) {
-        if found.start() < last {
+        if found.end() <= last {
             continue;
         }
-        masked.push_str(&out[last..found.start()]);
-        masked.push_str(MASK);
+        // One that begins inside the mask before it (a key or a bearer header glued to a token) extends that mask.
+        if found.start() >= last {
+            masked.push_str(&out[last..found.start()]);
+            masked.push_str(MASK);
+        }
         last = found.end();
         if !found.as_str().starts_with("-----BEGIN") {
             last += out[last..].find(|c| !in_run(c)).unwrap_or(out.len() - last);
@@ -267,6 +271,8 @@ struct Compiled {
     pattern: Regex,
     run: Regex,
     closed: bool,
+    /// White space can follow the marker inside the secret, so a token run ends before the secret does.
+    spaced: bool,
 }
 
 impl Compiled {
@@ -278,12 +284,17 @@ impl Compiled {
 static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
     SHAPES
         .iter()
-        .map(|shape| Compiled {
-            markers: shape.markers.iter().map(|marker| marker.to_string()).collect(),
-            any_case: shape.any_case,
-            pattern: Regex::new(&format!("^(?:{})", shape.pattern)).expect("the shape compiles"),
-            run: Regex::new(&format!("^(?:{})", shape.run)).expect("the run compiles"),
-            closed: shape.closed,
+        .map(|shape| {
+            let run = Regex::new(&format!("^(?:{})", shape.run)).expect("the run compiles");
+            let spaced = shape.markers.iter().any(|marker| run.find(&format!("{marker} x")).is_some_and(|found| found.end() > marker.len()));
+            Compiled {
+                markers: shape.markers.iter().map(|marker| marker.to_string()).collect(),
+                any_case: shape.any_case,
+                pattern: Regex::new(&format!("^(?:{})", shape.pattern)).expect("the shape compiles"),
+                run,
+                closed: shape.closed,
+                spaced,
+            }
         })
         .collect()
 });
@@ -294,8 +305,8 @@ static KEY_FOOTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-----END [A-Z
 pub const TOKEN_MARKER: usize = 8;
 
 enum Masking {
-    /// The rest of a token run is dropped.
-    Run,
+    /// The rest of a token run is dropped, and first any white space when `spaces` (a bearer header held too long).
+    Run { spaces: bool },
     /// Everything up to the end of a private key is dropped.
     Key,
 }
@@ -341,10 +352,21 @@ impl LiveText {
         let mut out = String::new();
         loop {
             match self.masking {
-                Some(Masking::Run) => {
+                Some(Masking::Run { spaces }) => {
+                    if spaces {
+                        let start = self.held.find(|c: char| !c.is_whitespace()).unwrap_or(self.held.len());
+                        self.held.drain(..start);
+                        if self.held.is_empty() {
+                            break;
+                        }
+                        self.masking = Some(Masking::Run { spaces: false });
+                    }
                     let end = self.held.find(|c| !in_run(c)).unwrap_or(self.held.len());
-                    self.held.drain(..end);
-                    if self.held.is_empty() {
+                    let growing = end == self.held.len();
+                    let spaced = self.held[end..].starts_with(char::is_whitespace);
+                    let keep = spaced_marker_at_end(&self.held[..end], growing, spaced);
+                    self.held.drain(..end - keep);
+                    if growing {
                         break;
                     }
                     self.masking = None;
@@ -367,10 +389,12 @@ impl LiveText {
                 None => {}
             }
             let Some((at, whole)) = self.earliest_marker() else {
-                out.push_str(&self.held);
-                self.held.clear();
+                let cut = if at_end { self.held.len() } else { self.held.len() - self.token_tail() };
+                out.push_str(&self.held[..cut]);
+                self.held.drain(..cut);
                 break;
             };
+            let at = if whole || at_end { at } else { at.min(self.held.len() - self.token_tail()) };
             out.push_str(&self.held[..at]);
             self.held.drain(..at);
             if !whole {
@@ -386,7 +410,7 @@ impl LiveText {
                     out.push_str(MASK);
                     self.held.drain(..end);
                     if !closed {
-                        self.masking = Some(Masking::Run);
+                        self.masking = Some(Masking::Run { spaces: false });
                     }
                 }
                 Decision::Not => {
@@ -399,14 +423,34 @@ impl LiveText {
                     self.held.clear();
                     break;
                 }
-                Decision::Undecided { key } if self.held.len() > HOLD_BACK => {
+                Decision::Undecided { key: true } if self.held.len() > HOLD_BACK => {
                     out.push_str(MASK);
-                    self.masking = Some(if key { Masking::Key } else { Masking::Run });
+                    self.masking = Some(Masking::Key);
+                }
+                Decision::Undecided { key: false } if self.held.len() > HOLD_BACK => {
+                    // All that is held belongs to the run still growing; what comes next goes on with it.
+                    out.push_str(MASK);
+                    let spaces = self.held.ends_with(char::is_whitespace);
+                    self.held.clear();
+                    self.masking = Some(Masking::Run { spaces });
+                    break;
                 }
                 Decision::Undecided { .. } => break,
             }
         }
         text(&out, &self.secrets)
+    }
+
+    /// How much of the end of what is held could be the start of a copy of one of the session's tokens: it waits, so a
+    /// copy cut between two pieces is masked whole, as in stored text.
+    fn token_tail(&self) -> usize {
+        let held = self.held.as_str();
+        self.secrets
+            .iter()
+            .filter(|secret| secret.len() >= PARTIAL)
+            .filter_map(|secret| (1..=held.len().min(secret.len())).rev().find(|n| held.is_char_boundary(held.len() - n) && secret.contains(&held[held.len() - n..])))
+            .max()
+            .unwrap_or(0)
     }
 
     /// The first place in what is held where a marker starts, and whether it is whole there or only begun at the end.
@@ -473,6 +517,27 @@ impl LiveText {
             (None, false) => Decision::Not,
         }
     }
+}
+
+/// How many bytes at the end of a dropped token run must stay held: a marker there whose secret goes on past white
+/// space (a key or a bearer header glued to a token) is looked at on its own. While the run grows, so may a marker.
+fn spaced_marker_at_end(run: &str, growing: bool, spaced: bool) -> usize {
+    let lower = run.to_ascii_lowercase();
+    let mut keep = 0;
+    for shape in COMPILED.iter().filter(|shape| shape.spaced) {
+        let haystack = if shape.any_case { &lower } else { run };
+        for marker in shape.markers.iter().map(|marker| shape.marker(marker)) {
+            let found = if growing {
+                (1..=marker.len()).rev().find(|n| haystack.ends_with(&marker[..*n])).unwrap_or(0)
+            } else if spaced && haystack.ends_with(&marker) {
+                marker.len()
+            } else {
+                0
+            };
+            keep = keep.max(found);
+        }
+    }
+    keep
 }
 
 /// Calls `f` on every string in `value`, object keys among them: an agent's tool input can hold a secret as a key.
