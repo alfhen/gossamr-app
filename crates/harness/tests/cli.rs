@@ -46,7 +46,8 @@ fn run_prints_a_fixtures_events_in_order_and_exits_zero() {
     for path in ["claude/native/2-permission.jsonl", "codex/app-server/2-permission.jsonl", "gemini/acp/2-permission.jsonl"] {
         let data = tmp.path().join(path.replace('/', "-"));
         let out = run(&data, &["--script".as_ref(), fixture(path).as_os_str()]);
-        assert!(out.status.success(), "{path}: {out:?}");
+        // A failure names the fixture and the exit, never what the run printed.
+        assert!(out.status.success(), "{path}: exit {}", out.status);
         let events = printed(&out);
         let seqs: Vec<u64> = events.iter().map(|event| event["seq"].as_u64().unwrap()).collect();
         assert_eq!(seqs, (1..=events.len() as u64).collect::<Vec<_>>(), "{path}: in order, none missing");
@@ -69,13 +70,13 @@ fn run_plays_a_harness_script_with_the_command_lines_prompt_and_answers() {
         "{\"end\": \"done\"}\n",
     )).unwrap();
     let out = run(&tmp.path().join("data"), &["--script".as_ref(), script.as_os_str(), "--answer".as_ref(), "allow".as_ref(), "write it".as_ref()]);
-    assert!(out.status.success(), "{out:?}");
+    assert!(out.status.success(), "exit {}", out.status);
     let events = printed(&out);
-    assert_eq!(events[1]["text"], "write it", "the command line's prompt comes before the recorded one");
+    assert!(events[1]["text"] == "write it", "the command line's prompt comes before the recorded one");
     assert_eq!(events.iter().map(|event| event["type"].as_str().unwrap()).collect::<Vec<_>>(), ["started", "prompted", "turn_started", "permission", "answered", "text", "turn_ended", "closed"]);
 
     let out = run(&tmp.path().join("data"), &["--script".as_ref(), script.as_os_str(), "--answer".as_ref(), "deny".as_ref()]);
-    assert_eq!(out.status.code(), Some(1), "a failure exits 1: {out:?}");
+    assert_eq!(out.status.code(), Some(1), "a failure exits 1");
     assert!(printed(&out).iter().any(|event| event["type"] == "failed"));
 }
 
@@ -96,7 +97,7 @@ fn lock_a_second_harness_process_on_a_locked_data_folder_is_refused() {
     let data = tmp.path().join("data");
     let held = harness::store::Store::open(&data).unwrap();
     let out = run(&data, &["--script".as_ref(), fixture("claude/native/2-permission.jsonl").as_os_str()]);
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(out.status.code(), Some(1), "a locked folder exits 1");
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert_eq!(stderr, format!("harness: another harness is using the data folder {}\n", data.display()));
