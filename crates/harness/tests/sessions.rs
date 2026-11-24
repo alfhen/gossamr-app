@@ -1901,3 +1901,25 @@ async fn login_the_work_root_is_refused_and_no_agent_starts_before_the_shell_was
     }
     assert!(m.seer.starts().is_empty(), "not even on the harness's own environment");
 }
+
+#[tokio::test]
+async fn resume_refuses_a_session_whose_worktree_another_session_holds_now() {
+    let m = machine();
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    let spec = || harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) };
+    let (old, mut events) = harness.open(spec()).await.unwrap();
+    next(&mut events).await;
+    harness.close(&old).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let mut events = harness.resume(&old).await.unwrap();
+    next(&mut events).await;
+    harness.close(&old).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+
+    let (_later, mut events) = harness.open(spec()).await.unwrap();
+    next(&mut events).await;
+    assert!(matches!(harness.resume(&old).await, Err(Error::Refused(_))), "the old session doesn't take the later one's worktree");
+}

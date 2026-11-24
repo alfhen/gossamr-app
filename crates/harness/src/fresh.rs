@@ -310,7 +310,7 @@ async fn holds_nothing(git: &Git, temp: &Path) -> bool {
     if temp.join(".git").symlink_metadata().is_err() {
         return true;
     }
-    !temp.join(".git/worktrees").exists() && git.out(temp, &["rev-list", "--branches", "--tags", "--not", "--remotes"]).await.is_some_and(|only| only.is_empty())
+    !temp.join(".git/worktrees").exists() && git.out(temp, &["rev-list", "--branches", "--tags", "HEAD", "--not", "--remotes"]).await.is_some_and(|only| only.is_empty())
 }
 
 /// Gossamr's clone of `repo`, made now if it isn't there. A missing clone is cloned into a new folder beside it and

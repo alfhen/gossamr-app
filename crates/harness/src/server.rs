@@ -439,10 +439,10 @@ impl Client {
                 let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), notices, tools, result_schema };
                 // A clone can take minutes, and the token may have been revoked meanwhile. The clone stays, as the
                 // harness's own, for the next session; the worktree goes, and no session is made.
-                let revoked = !harness.client_tokens()?.iter().any(|token| token.stored_key == self.key);
-                let opened = match revoked {
-                    true => Err(Error::Refused("this connection's token was revoked".into())),
-                    false => harness.open_watched(spec),
+                let opened = match harness.client_tokens().map(|tokens| tokens.iter().any(|token| token.stored_key == self.key)) {
+                    Ok(true) => harness.open_watched(spec),
+                    Ok(false) => Err(Error::Refused("this connection's token was revoked".into())),
+                    Err(e) => Err(e),
                 };
                 let (id, _, events) = match opened {
                     Ok(opened) => opened,
