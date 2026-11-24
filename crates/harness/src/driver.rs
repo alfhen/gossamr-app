@@ -64,6 +64,9 @@ pub struct Launch {
     pub cwd: PathBuf,
     pub locked: bool,
     pub model: Option<String>,
+    /// The login folder as the client typed it; None is the provider's usual setup. `env` already runs as it.
+    pub login: Option<String>,
+    pub effort: Option<String>,
     /// The provider's own session id, to resume it.
     pub resume: Option<String>,
     /// The session's tools token. Every start and every resume gets a new one, and the endpoint refuses the old.

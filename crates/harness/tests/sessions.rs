@@ -297,7 +297,7 @@ async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
     let stopped = Instant::now();
     harness.close(&slow).unwrap();
     assert!(matches!(harness.resume(&slow).await, Err(Error::Running(_))), "no resume while the old agent runs");
-    assert!(matches!(harness.clean_up(&slow), Err(Error::Running(_))), "no clean-up while it runs");
+    assert!(matches!(harness.clean_up(&slow).await, Err(Error::Running(_))), "no clean-up while it runs");
     let gone = until(&mut slow_events, |body| *body == Body::Closed).await;
     assert_eq!(types(&gone), ["text", "failed", "closed"], "what the agent says while it stops is kept, and its open turn ends");
     until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
@@ -337,7 +337,7 @@ async fn limit_an_agent_that_ignores_stop_and_kill_keeps_its_session_taken_until
     assert_eq!(types(&stuck), ["failed", "failed"], "told to kill, then stuck: {stuck:?}");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(matches!(harness.resume(&id).await, Err(Error::Running(_))), "never freed on a timer");
-    assert!(matches!(harness.clean_up(&id), Err(Error::Running(_))));
+    assert!(matches!(harness.clean_up(&id).await, Err(Error::Running(_))));
     quiet(&mut other_events, 100).await;
     assert!(!harness.events(&other, 0).unwrap().iter().any(|event| matches!(event.body, Body::Prompted { .. })), "its slot is still taken");
 
@@ -639,7 +639,7 @@ async fn resume_a_cleaned_up_session_is_refused() {
     next(&mut events).await;
     harness.close(&id).unwrap();
     until(&mut events, |body| *body == Body::Closed).await;
-    harness.clean_up(&id).unwrap();
+    harness.clean_up(&id).await.unwrap();
     assert!(matches!(harness.resume(&id).await, Err(Error::CleanedUp(_))));
 }
 
@@ -670,7 +670,7 @@ async fn mock_a_prompt_that_comes_while_the_mock_waits_is_kept_for_the_next_turn
         {"end": "done"}"#,
     );
     let tools = Arc::new(harness::tools::Endpoint::unattached("t"));
-    let launch = Launch { cwd: "/".into(), locked: false, model: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
+    let launch = Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
     let mut link = mock.open(launch).unwrap();
     link.commands.send(Command::Prompt("first".into())).unwrap();
     link.commands.send(Command::Prompt("second, early".into())).unwrap();
@@ -1034,7 +1034,7 @@ async fn resume_a_driver_that_panics_as_it_opens_leaves_the_session_free() {
         .unwrap()
         .query_row("SELECT id FROM sessions", [], |row| row.get(0))
         .unwrap();
-    assert!(matches!(harness.clean_up(&row), Ok(())), "no reservation is left behind");
+    assert!(matches!(harness.clean_up(&row).await, Ok(())), "no reservation is left behind");
 }
 
 #[tokio::test]
@@ -1453,7 +1453,7 @@ async fn race_clean_up_and_resume_of_one_session_are_never_both_taken() {
         harness.close(&id).unwrap();
         until(&mut events, |body| *body == Body::Closed).await;
         let (a, b, id_a, id_b) = (harness.clone(), harness.clone(), id.clone(), id.clone());
-        let cleaning = tokio::spawn(async move { a.clean_up(&id_a).is_ok() });
+        let cleaning = tokio::spawn(async move { a.clean_up(&id_a).await.is_ok() });
         let resuming = tokio::spawn(async move { b.resume(&id_b).await.ok() });
         let (cleaned, resumed) = (cleaning.await.unwrap(), resuming.await.unwrap());
         if let Some(mut events) = resumed {

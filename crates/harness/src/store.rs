@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::event::{Body, Event, KEPT_FIELDS};
+use crate::work::Work;
 
 /// The migration steps, in order. `PRAGMA user_version` counts the steps applied, so a step that has shipped is never
 /// edited: a change is a new step at the end.
@@ -49,7 +50,15 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     CREATE TABLE tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, stored_key BLOB NOT NULL UNIQUE, created_ms INTEGER NOT NULL);
     INSERT INTO tokens (id, stored_key, created_ms) SELECT rowid, stored_key, created_ms FROM client_tokens ORDER BY rowid;
     DROP TABLE client_tokens;
-    ALTER TABLE tokens RENAME TO client_tokens;"];
+    ALTER TABLE tokens RENAME TO client_tokens;",
+    // The login folder as typed and the effort a session runs with, and the repo, base, branch and clone of one that
+    // named a repo (its `cwd` is the worktree), so a resume starts it the same way and clean-up finds its worktree.
+    "ALTER TABLE sessions ADD COLUMN login TEXT;
+    ALTER TABLE sessions ADD COLUMN effort TEXT;
+    ALTER TABLE sessions ADD COLUMN repo TEXT;
+    ALTER TABLE sessions ADD COLUMN base TEXT;
+    ALTER TABLE sessions ADD COLUMN branch TEXT;
+    ALTER TABLE sessions ADD COLUMN clone BLOB;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -93,6 +102,21 @@ pub struct SessionRow {
     pub cannot_resume: bool,
     /// Its last stop was a hand over to Terminal.
     pub handed_over: bool,
+    pub login: Option<String>,
+    pub effort: Option<String>,
+    pub work: Option<Work>,
+}
+
+/// What a new session's row holds besides its id.
+#[derive(Debug, Clone)]
+pub struct NewSession<'a> {
+    pub provider: &'a str,
+    pub locked: bool,
+    pub cwd: &'a Path,
+    pub model: Option<&'a str>,
+    pub login: Option<&'a str>,
+    pub effort: Option<&'a str>,
+    pub work: Option<&'a Work>,
 }
 
 /// A session as `sessions` lists it.
@@ -143,10 +167,29 @@ impl Store {
     }
 
     pub fn create_session(&self, id: &str, provider: &str, locked: bool, cwd: &Path, model: Option<&str>) -> Result<()> {
+        self.insert_session(id, &NewSession { provider, locked, cwd, model, login: None, effort: None, work: None })
+    }
+
+    pub fn insert_session(&self, id: &str, new: &NewSession) -> Result<()> {
+        let work = new.work;
         self.conn.execute(
-            "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            // The folder's bytes, as they are: a path need not be UTF-8.
-            params![id, provider, locked, cwd.as_os_str().as_bytes(), model, now_ms()],
+            "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms, login, effort, repo, base, branch, clone)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            // The folders' bytes, as they are: a path need not be UTF-8.
+            params![
+                id,
+                new.provider,
+                new.locked,
+                new.cwd.as_os_str().as_bytes(),
+                new.model,
+                now_ms(),
+                new.login,
+                new.effort,
+                work.map(|w| &w.repo),
+                work.map(|w| &w.base),
+                work.map(|w| &w.branch),
+                work.map(|w| w.clone.as_os_str().as_bytes())
+            ],
         )?;
         Ok(())
     }
@@ -154,8 +197,8 @@ impl Store {
     pub fn session(&self, id: &str) -> Result<SessionRow> {
         self.conn
             .query_row(
-                "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over
-                 FROM sessions WHERE id = ?1",
+                "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over,
+                 login, effort, repo, base, branch, clone FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -168,6 +211,12 @@ impl Store {
                         ends_with_client: row.get(6)?,
                         cannot_resume: row.get(7)?,
                         handed_over: row.get(8)?,
+                        login: row.get(9)?,
+                        effort: row.get(10)?,
+                        work: match (row.get::<_, Option<String>>(11)?, row.get(12)?, row.get(13)?, row.get::<_, Option<Vec<u8>>>(14)?) {
+                            (Some(repo), Some(base), Some(branch), Some(clone)) => Some(Work { repo, base, branch, clone: PathBuf::from(OsString::from_vec(clone)) }),
+                            _ => None,
+                        },
                     })
                 },
             )

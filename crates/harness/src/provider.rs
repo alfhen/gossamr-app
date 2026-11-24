@@ -1,6 +1,6 @@
 //! The provider table: the coding CLIs the harness can run, each a row of code reviewed like code, and a login of one.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A coding CLI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -11,7 +11,7 @@ pub enum Provider {
 }
 
 /// What a model choice offers: the id passed to the CLI and the name shown.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelOption {
     pub id: String,
     pub label: String,

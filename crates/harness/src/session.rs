@@ -22,8 +22,9 @@ use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secr
 use crate::error::{Error, Result};
 use crate::event::{Body, Decision, Event, FailKind};
 use crate::redact;
-use crate::store::{Listed, Store, now_ms};
+use crate::store::{Listed, NewSession, Store, now_ms};
 use crate::tools::{Endpoint, Reply, ToolCall};
+use crate::work::{Setup, Work, valid_effort};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
@@ -65,6 +66,9 @@ struct Inner {
     drivers: HashMap<String, Arc<dyn Driver>>,
     turns: Arc<Turns>,
     live: Mutex<HashMap<String, Live>>,
+    /// Sessions whose clean-up is removing their worktree: none of them starts meanwhile. Taken under `live`.
+    cleaning: Mutex<HashSet<String>>,
+    setup: Arc<Setup>,
     starts: AtomicU64,
     /// Set under `live` by `shutdown`: no session starts after it.
     closing: AtomicBool,
@@ -149,16 +153,28 @@ pub struct Open {
     pub model: Option<String>,
     /// The session ends when the client that opened it leaves, and is never resumed. The API closes it.
     pub ends_with_client: bool,
+    /// The login folder as typed; None is the provider's usual setup. See `Setup::agent_env`.
+    pub login: Option<String>,
+    pub effort: Option<String>,
+    /// The clone and branch of a session that named a repo; `cwd` is then its worktree, which clean-up removes.
+    pub work: Option<Work>,
 }
 
 impl Harness {
     pub fn new(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings) -> Harness {
+        Harness::with_setup(store, drivers, settings, Arc::new(Setup::default()))
+    }
+
+    /// A harness whose sessions take their environment, logins and clones from `setup`.
+    pub fn with_setup(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings, setup: Arc<Setup>) -> Harness {
         Harness {
             inner: Arc::new(Inner {
                 store: Mutex::new(Some(store)),
                 drivers: drivers.into_iter().collect(),
                 turns: Arc::new(Turns { limit: settings.turn_limit, state: Mutex::new(TurnsState::default()) }),
                 live: Mutex::new(HashMap::new()),
+                cleaning: Mutex::new(HashSet::new()),
+                setup,
                 starts: AtomicU64::new(0),
                 closing: AtomicBool::new(false),
                 left: Notify::new(),
@@ -187,17 +203,37 @@ impl Harness {
             }
             false => (None, None),
         };
-        let driver = self.driver(&spec.provider)?;
+        let driver = self.check_open(&spec.provider, spec.login.as_deref(), spec.effort.as_deref())?;
         let id = random_hex(8);
         // The row is made where the start checks for a shutdown, so a refused open leaves none.
         let (events, second) = self.start(&id, watcher, false, |store| {
-            store.create_session(&id, &spec.provider, spec.locked, &spec.cwd, spec.model.as_deref())?;
+            let new = NewSession {
+                provider: &spec.provider,
+                locked: spec.locked,
+                cwd: &spec.cwd,
+                model: spec.model.as_deref(),
+                login: spec.login.as_deref(),
+                effort: spec.effort.as_deref(),
+                work: spec.work.as_ref(),
+            };
+            store.insert_session(&id, &new)?;
             if spec.ends_with_client {
                 store.set_ends_with_client(&id)?;
             }
-            Ok(Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None })
+            let Open { provider, cwd, locked, model, login, effort, .. } = spec;
+            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume: None })
         })?;
         Ok((id, events, feed.unwrap_or(Feed::Stored(second))))
+    }
+
+    /// What `open` refuses of a provider, a login and an effort, before any row is made or anything is cloned.
+    pub fn check_open(&self, provider: &str, login: Option<&str>, effort: Option<&str>) -> Result<Arc<dyn Driver>> {
+        let driver = self.driver(provider)?;
+        if effort.is_some_and(|effort| !valid_effort(effort)) {
+            return Err(Error::Refused("an effort is a lowercase word of at most 16 letters".into()));
+        }
+        self.inner.setup.agent_env(provider, login)?;
+        Ok(driver)
     }
 
     /// Starts a session again by its provider's session id, with a new tools token. A running or cleaned-up session
@@ -229,7 +265,9 @@ impl Harness {
             }
             let provider_session =
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
-            Ok(Plan { driver: self.driver(&row.provider)?, cwd: row.cwd, locked: row.locked, model: row.model, resume: Some(provider_session) })
+            let driver = self.driver(&row.provider)?;
+            let (provider, cwd, locked, model, login, effort) = (row.provider, row.cwd, row.locked, row.model, row.login, row.effort);
+            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume: Some(provider_session) })
         })
         .map(|(events, _)| events)
     }
@@ -417,12 +455,25 @@ impl Harness {
         providers
     }
 
-    /// Drops a closed session's payload from the store. A session that still runs is refused: close it first.
-    pub fn clean_up(&self, id: &str) -> Result<()> {
+    /// Removes a session that named a repo's worktree and branch, never forcing: what git keeps, the session keeps,
+    /// and clean-up is refused. Then drops the session's payload. A running session is refused.
+    pub async fn clean_up(&self, id: &str) -> Result<()> {
         // Under the lock a start takes the session by, so a resume cannot start from a row being cleaned up.
-        let live = self.inner.live();
-        if live.contains_key(id) {
-            return Err(Error::Running(id.to_owned()));
+        let work = {
+            let live = self.inner.live();
+            if live.contains_key(id) {
+                return Err(Error::Running(id.to_owned()));
+            }
+            let row = self.inner.with_store(|store| store.session(id))?;
+            let mut cleaning = self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner());
+            if !cleaning.insert(id.to_owned()) {
+                return Err(Error::Running(id.to_owned()));
+            }
+            row.work.filter(|_| !row.cleaned).map(|work| (work, row.cwd))
+        };
+        let _cleaning = Cleaning { inner: &self.inner, id };
+        if let Some((work, worktree)) = work {
+            self.inner.setup.remove(&work, &worktree).await?;
         }
         self.inner.with_store(|store| store.clean_up(id))
     }
@@ -466,6 +517,11 @@ impl Harness {
 
     pub fn subscribe(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
         Ok(self.live(id)?.events.subscribe())
+    }
+
+    /// Where sessions take their environment, logins and clones from.
+    pub fn setup(&self) -> &Arc<Setup> {
+        &self.inner.setup
     }
 
     fn driver(&self, provider: &str) -> Result<Arc<dyn Driver>> {
@@ -515,12 +571,12 @@ impl Harness {
         let stuck = Arc::new(AtomicBool::new(false));
         #[cfg(test)]
         self.inner.hooks.before_reserve();
-        let Plan { driver, cwd, locked, model, resume } = {
+        let Plan { driver, provider, cwd, locked, model, login, effort, resume } = {
             let mut live = self.inner.live();
             if self.inner.closing.load(Ordering::Relaxed) {
                 return Err(Error::ShutDown);
             }
-            if live.contains_key(id) {
+            if live.contains_key(id) || self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner()).contains(id) {
                 return Err(Error::Running(id.to_owned()));
             }
             let plan = self.inner.with_store(plan)?;
@@ -541,7 +597,8 @@ impl Harness {
         // Freed again if the driver fails to open, or panics.
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = Arc::new(Endpoint::new(token.expose(), calls));
-        let launch = Launch { cwd, locked, model, resume, tools_token: token, tools, env: agent_env(std::env::vars_os()) };
+        let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
+        let launch = Launch { cwd, locked, model, login, effort, resume, tools_token: token, tools, env };
         let caps = driver.capabilities();
         let link = driver.open(launch).map_err(|OpenError { kind, message }| {
             Error::Open { kind, message: redact::text(&message, &secrets) }
@@ -580,10 +637,25 @@ pub fn agent_env(vars: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsStr
 /// What a start opens.
 struct Plan {
     driver: Arc<dyn Driver>,
+    provider: String,
     cwd: PathBuf,
     locked: bool,
     model: Option<String>,
+    login: Option<String>,
+    effort: Option<String>,
     resume: Option<String>,
+}
+
+/// A session's place in `cleaning`, given up however its clean-up ends.
+struct Cleaning<'a> {
+    inner: &'a Inner,
+    id: &'a str,
+}
+
+impl Drop for Cleaning<'_> {
+    fn drop(&mut self) {
+        self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner()).remove(self.id);
+    }
 }
 
 /// A session's live entry from the moment it is taken until the driver has opened.

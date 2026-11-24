@@ -51,7 +51,8 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
         std::io::stdin().read_line(&mut line).ok()?;
         harness::auth::Token::parse(&line)
     };
-    let server = harness::server::Server::bind(&dir, first_token, drivers, harness::session::Settings::default())?;
+    let setup = harness::work::Setup::of_this_machine(dir.clone());
+    let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings::default(), setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
     Ok(true)

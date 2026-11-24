@@ -73,14 +73,39 @@ pub struct Call {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
-    /// Answers `{"session": id}`. The client gets the session's events from the first.
+    /// Answers `{"session": id}` once the agent has opened. The client gets the session's events from the first.
+    /// Every field but `provider` may be left out. Before any agent starts, and before anything is cloned, the
+    /// harness refuses with the reason: a provider it has no driver for; both `cwd` and `repo`, or neither; `base` or
+    /// `branch` without `repo`; a `repo` that is not `owner/name` of letters, digits, `.`, `_` and `-` (`valid_repo`);
+    /// a `base` or `branch` that is not one plain folder name (`work::valid_ref`: no slash, no `..`, not starting with
+    /// `-` or `.`); a `login` its provider has no folder for, that breaks the folder rules of `provider_folder`, or
+    /// that is not there; an `effort` that is not a lowercase word of at most 16 letters.
     Open {
         provider: String,
-        cwd: PathBuf,
+        /// The folder the agent works in, used as it is. Give this or `repo`.
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+        /// `owner/name` on GitHub. The harness clones it into its work root (`~/Gossamr/agents`), or fetches the clone
+        /// there, and the agent works in a new worktree beside it. Give this or `cwd`.
+        #[serde(default)]
+        repo: Option<String>,
+        /// With `repo`: the remote branch the worktree starts from. Left out, the remote's default branch.
+        #[serde(default)]
+        base: Option<String>,
+        /// With `repo`: the new branch of the worktree. Left out, `harness-` and 8 hex digits. A branch or folder that
+        /// is already there is refused. Clean-up removes both, never forcing: unpushed work stays, and so does the session.
+        #[serde(default)]
+        branch: Option<String>,
         #[serde(default)]
         locked: bool,
         #[serde(default)]
         model: Option<String>,
+        /// The login folder, as typed (`~` allowed). Left out, the provider's usual setup, as the person's shell has it.
+        #[serde(default)]
+        login: Option<String>,
+        /// Left out, the provider's own.
+        #[serde(default)]
+        effort: Option<String>,
         /// The session is closed when this connection ends, and is never resumed.
         #[serde(default)]
         ends_with_client: bool,
@@ -109,7 +134,13 @@ pub enum Op {
     HandOver { session: String },
     CleanUp { session: String },
     Sessions,
-    Providers,
+    /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
+    /// (`providers::Standing`): the usual setup of every provider of the table, then each of `logins`. A login is
+    /// checked with its CLI's own status command and the shell this connection captured.
+    Providers {
+        #[serde(default)]
+        logins: Vec<crate::providers::Asked>,
+    },
     /// Answers `{"events": [...], "more": bool}`: the stored events after `after`, about `PAGE_BYTES` of them. With
     /// `more`, ask again after the last one.
     Events { session: String, #[serde(default)] after: u64 },

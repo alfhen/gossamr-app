@@ -20,6 +20,7 @@ pub mod provider;
 pub mod provider_env;
 pub mod provider_folder;
 pub mod provider_probe;
+pub mod providers;
 pub mod redact;
 pub mod repo;
 pub mod run;
@@ -29,6 +30,7 @@ pub mod store;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod tools;
+pub mod work;
 
 use event::Decision;
 use run::RunArgs;
@@ -61,6 +63,7 @@ pub const USAGE: &str = "usage: harness --version
   against the harness serving --data <folder>, with the client token on stdin (--token-stdin):
        harness run --provider <name> [--answer allow|deny]... [--ends-with-client] <prompt>
        harness sessions | shutdown | token list | token revoke <id>
+       harness providers [--login <provider>=<folder>]...   (without --token-stdin it asks the CLIs itself)
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
        harness answer <session> <request> allow|deny [--message <text>]

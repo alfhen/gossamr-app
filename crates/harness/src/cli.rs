@@ -11,6 +11,7 @@ use crate::auth::{Token, encode};
 use crate::client::{Client, Push};
 use crate::error::{Error, Result};
 use crate::event::{Body, Decision};
+use crate::providers::{Asked, Standing, check, line, with_usual};
 use crate::store::default_dir;
 
 /// The variable a client token must never be in. `serve` refuses to start while it is set: on macOS any program of
@@ -28,6 +29,9 @@ pub enum Command {
     Run { provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool },
     /// Makes a token, adds it with a valid one, and prints it.
     TokenNew,
+    /// Prints how each login stands, one line each: the usual setup of every provider, then each of `logins`. With
+    /// a token it asks the harness serving the data folder; without one it asks the CLIs itself.
+    Providers { logins: Vec<Asked> },
 }
 
 /// A suggested place for the client token: a Keychain item that trusts no app. Whether reading it asks the person each
@@ -60,6 +64,13 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
     let call = |op: Op| Some(Command::Call(op));
     match (command, words.as_slice()) {
         ("sessions", []) if known(&[]) => call(Op::Sessions),
+        ("providers", []) if known(&["--login"]) => {
+            let logins = flags.iter().map(|(_, value)| {
+                let (provider, folder) = (*value)?.split_once('=')?;
+                Some(Asked { provider: provider.into(), folder: Some(folder.into()).filter(|f: &String| !f.is_empty()) })
+            });
+            Some(Command::Providers { logins: logins.collect::<Option<_>>()? })
+        }
         ("shutdown", []) if known(&[]) => call(Op::Shutdown),
         ("token", [new]) if new == "new" && known(&[]) => Some(Command::TokenNew),
         ("token", [list]) if list == "list" && known(&[]) => call(Op::TokenList),
@@ -85,6 +96,15 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
 /// Runs the command. True when it did what it was asked; a session's failure makes `run` false.
 pub async fn execute(command: Command, data: Option<PathBuf>, token_stdin: bool) -> Result<bool> {
     let dir = data.or_else(default_dir).ok_or_else(|| Error::Refused("no data folder: set HARNESS_DATA".into()))?;
+    if let (Command::Providers { logins }, false) = (&command, token_stdin) {
+        let setup = crate::work::Setup::of_this_machine(dir);
+        if let Err(why) = setup.capture().await {
+            eprintln!("harness: {why}");
+        }
+        let places = crate::binary::CliPlaces::of_this_mac(setup.home().map(std::path::Path::to_path_buf));
+        check(&setup, &places, &with_usual(logins.clone())).await.iter().for_each(|standing| println!("{}", line(standing)));
+        return Ok(true);
+    }
     let token = read_token(token_stdin)?;
     let mut client = Client::connect(&dir, &token).await?;
     match command {
@@ -114,6 +134,12 @@ pub async fn execute(command: Command, data: Option<PathBuf>, token_stdin: bool)
             Ok(true)
         }
         Command::Run { provider, answers, prompt, ends_with_client } => run(&mut client, provider, answers, prompt, ends_with_client).await,
+        Command::Providers { logins } => {
+            let answer = client.call(Op::Providers { logins }).await?;
+            let logins: Vec<Standing> = serde_json::from_value(answer["logins"].clone())?;
+            logins.iter().for_each(|standing| println!("{}", line(standing)));
+            Ok(true)
+        }
     }
 }
 
@@ -128,7 +154,8 @@ async fn next_event(client: &mut Client) -> Result<Option<crate::event::Event>> 
 
 async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool) -> Result<bool> {
     let cwd = std::env::current_dir()?;
-    let opened = client.call(Op::Open { provider, cwd, locked: false, model: None, ends_with_client }).await?;
+    let open = Op::Open { provider, cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client };
+    let opened = client.call(open).await?;
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
     client.call(Op::Send { session: session.clone(), text: prompt }).await?;
