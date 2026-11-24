@@ -273,7 +273,7 @@ impl Harness {
             }
             // A later session may have the same branch, and so the same folder, again: it is that session's now.
             if let Some(work) = &row.work
-                && store.another_holds(id, work)?
+                && store.worktree_owner(work)?.as_deref() != Some(id)
             {
                 return Err(Error::Refused(format!("another session works in session {id}'s worktree now, so it can't be resumed")));
             }
@@ -477,10 +477,10 @@ impl Harness {
                 return Err(Error::Running(id.to_owned()));
             }
             let row = self.inner.with_store(|store| store.session(id))?;
-            // The worktree is this session's only while no other session that is not cleaned up names it. Asked
-            // before the reservation, so a failed read leaves none behind.
+            // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
+            // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.
             let owned = match &row.work {
-                Some(work) if !row.cleaned => !self.inner.with_store(|store| store.another_holds(id, work))?,
+                Some(work) if !row.cleaned => self.inner.with_store(|store| store.worktree_owner(work))?.as_deref() == Some(id),
                 _ => false,
             };
             let mut cleaning = self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner());
@@ -617,16 +617,11 @@ impl Harness {
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = Arc::new(Endpoint::new(token.expose(), calls));
         let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
-        let fresh = resume.is_none();
         let launch = Launch { cwd, locked, model, login, effort, resume, tools_token: token, tools, env };
         let caps = driver.capabilities();
-        let link = driver.open(launch).map_err(|OpenError { kind, message }| {
-            // A first start that failed gives up its worktree, which the caller removes: its row must not name it.
-            if fresh && let Err(e) = self.inner.with_store(|store| store.set_work(id, None)) {
-                eprintln!("harness: session {id} keeps the name of a worktree it never used: {e}");
-            }
-            Error::Open { kind, message: redact::text(&message, &secrets) }
-        })?;
+        // A first start that fails keeps its row's work: the caller discards the worktree, and if that fails, the
+        // failed session's own clean-up removes it, as the owner while no session that ran names it.
+        let link = driver.open(launch).map_err(|OpenError { kind, message }| Error::Open { kind, message: redact::text(&message, &secrets) })?;
         // While the session is still taken: a take-back that failed to open keeps the mark, and a later hand over's
         // mark is never cleared by this one.
         if taken_back {

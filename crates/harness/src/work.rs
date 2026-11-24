@@ -120,15 +120,16 @@ impl Setup {
     /// the same way; until a capture has worked it is refused, never run in the harness's own environment.
     pub fn agent_env(&self, provider: &str, login: Option<&str>) -> Result<RunEnv> {
         let refused = |why: String| Error::Refused(format!("this login can't be used: {why}"));
-        if self.shell_program.is_some() && self.shell().is_none() {
-            return Err(Error::Refused("the shell's environment hasn't been read yet, so no agent starts: connect a client, or fix the shell's startup files".into()));
-        }
+        // A provider outside the table, the mock, runs on no login and needs no shell.
         let Some(row) = Provider::named(provider) else {
             return match login {
                 Some(_) => Err(refused(format!("{provider} has no logins"))),
                 None => Ok(self.base()),
             };
         };
+        if self.shell_program.is_some() && self.shell().is_none() {
+            return Err(Error::Refused("the shell's environment hasn't been read yet, so no agent starts: connect a client, or fix the shell's startup files".into()));
+        }
         let shell = self.shell();
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
         let asked = Login { id: String::new(), provider: row, name: String::new(), enabled: true, folder: login.map(str::to_owned) };

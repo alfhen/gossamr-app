@@ -126,6 +126,18 @@ fn usual_owner(folder: &Located, home: &Path, shell: Option<&RunEnv>) -> Option<
     DRIVERS.into_iter().find(|&driver| usual_folders(driver, home, shell).iter().filter_map(|f| resolve(f).ok()).map(Located::of).any(|u| u.is(folder)))
 }
 
+/// The driver whose usual folder `folder` is inside, or holds: a CLI in it would share files with that login, as agy
+/// keeps its own in `~/.gemini/antigravity-cli`. Paths compare by part and without case.
+fn nested_owner(folder: &Located, home: &Path, shell: Option<&RunEnv>) -> Option<Provider> {
+    let mine = lower(&folder.real);
+    DRIVERS.into_iter().find(|&driver| {
+        usual_folders(driver, home, shell).iter().filter_map(|f| resolve(f).ok()).any(|usual| {
+            let usual = lower(&usual);
+            usual != mine && (mine.starts_with(&usual) || usual.starts_with(&mine))
+        })
+    })
+}
+
 /// The problem with each provider instance whose folder can't be used, by instance id. The first instance to claim a
 /// folder or the no-folder place keeps it; a later one is the problem. A folder is claimed for every driver, not only
 /// the one that took it.
@@ -141,6 +153,9 @@ pub fn problems(providers: &[Login], places: &Places, shell: Option<&RunEnv>) ->
                 Ok(folder) => match places.home.and_then(|home| usual_owner(&folder, home, shell)) {
                     Some(owner) if owner == p.provider => Some("That's your usual setup. Choose My usual setup instead.".into()),
                     Some(owner) => Some(format!("That's the usual folder of {}. Choose another folder.", owner.label())),
+                    None if let Some(owner) = places.home.and_then(|home| nested_owner(&folder, home, shell)) => {
+                        Some(format!("It is inside, or holds, the usual folder of {}. Choose a folder of its own.", owner.label()))
+                    }
                     None => match taken.iter().find(|(_, other)| other.is(&folder)) {
                         Some((owner, _)) => Some(format!("Another {} already uses this folder.", owner.label())),
                         None => {
@@ -351,6 +366,21 @@ mod tests {
         for (driver, folder) in [(Provider::Claude, "~/.gemini"), (Provider::Codex, "~/.gemini"), (Provider::Claude, "~/.GEMINI")] {
             assert_eq!(rig.problem(driver, folder).as_deref(), Some("That's the usual folder of Gemini. Choose another folder."), "{driver:?} {folder}");
         }
+    }
+
+    #[test]
+    fn a_folder_inside_or_holding_a_usual_folder_is_refused() {
+        let rig = Rig::new("nested");
+        for folder in [".gemini/antigravity-cli", ".claude/projects", ".codex/sessions"] {
+            std::fs::create_dir_all(rig.home.join(folder)).unwrap();
+        }
+        let nested = |owner: &str| format!("It is inside, or holds, the usual folder of {owner}. Choose a folder of its own.");
+        assert_eq!(rig.problem(Provider::Codex, "~/.gemini/antigravity-cli"), Some(nested("Gemini")));
+        assert_eq!(rig.problem(Provider::Codex, "~/.claude/projects"), Some(nested("Claude")));
+        assert_eq!(rig.problem(Provider::Claude, "~/.codex/sessions"), Some(nested("Codex")));
+        assert_eq!(rig.problem(Provider::Claude, "~/.CLAUDE/projects"), Some(nested("Claude")), "case doesn't hide it");
+        assert!(rig.problem(Provider::Claude, "~").is_some(), "the home folder holds every usual folder");
+        assert_eq!(rig.problem(Provider::Claude, "~/.claude-work"), None, "a name that only starts the same is fine");
     }
 
     #[test]

@@ -233,26 +233,19 @@ impl Store {
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
     }
 
-    /// Sets or clears the clone and branch the session's row names.
-    pub fn set_work(&self, id: &str, work: Option<&Work>) -> Result<()> {
-        self.conn.execute(
-            "UPDATE sessions SET repo = ?2, base = ?3, branch = ?4, clone = ?5 WHERE id = ?1",
-            params![id, work.map(|w| &w.repo), work.map(|w| &w.base), work.map(|w| &w.branch), work.map(|w| w.clone.as_os_str().as_bytes())],
-        )?;
-        Ok(())
-    }
-
-    /// Whether a session other than `id`, not cleaned up, names the same clone and branch.
-    pub fn another_holds(&self, id: &str, work: &Work) -> Result<bool> {
-        let found: Option<String> = self
+    /// Which session owns the worktree of this clone and branch, among those not cleaned up that name it: the latest
+    /// whose agent ran, else the latest. A later session can only take a branch once an earlier one's worktree is gone,
+    /// so the latest is the one working there; one that ran outranks a start that failed.
+    pub fn worktree_owner(&self, work: &Work) -> Result<Option<String>> {
+        Ok(self
             .conn
             .query_row(
-                "SELECT id FROM sessions WHERE id != ?1 AND clone = ?2 AND branch = ?3 AND cleaned_ms IS NULL LIMIT 1",
-                params![id, work.clone.as_os_str().as_bytes(), work.branch],
+                "SELECT id FROM sessions WHERE clone = ?1 AND branch = ?2 AND cleaned_ms IS NULL
+                 ORDER BY provider_session IS NOT NULL DESC, created_ms DESC, rowid DESC LIMIT 1",
+                params![work.clone.as_os_str().as_bytes(), work.branch],
                 |row| row.get(0),
             )
-            .optional()?;
-        Ok(found.is_some())
+            .optional()?)
     }
 
     /// The session ends when the client that opened it leaves, and is never resumed.

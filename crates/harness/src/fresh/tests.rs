@@ -17,9 +17,9 @@ if [ "$1" = -C ]; then
   dir=$2; shift 2
   [ "$1" = --no-optional-locks ] && shift
   case "$1" in
-    remote) cat "$dir/.fake-origin" 2>/dev/null || exit 2 ;;
     config)
       case "$*" in
+        "config --get remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
         *--name-only*) sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
         *--get-all*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null ;;
       esac ;;
