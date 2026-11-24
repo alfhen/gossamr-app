@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use regex::Regex;
+use aho_corasick::{AhoCorasick, MatchKind};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -47,7 +47,7 @@ pub enum Step {
 }
 
 /// A value in a recording that belongs to the recorded run, and what it is mapped to as the script plays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Recorded {
     Session,
     Id,
@@ -64,30 +64,45 @@ pub struct Script {
     pub recorded: Vec<(String, Recorded)>,
 }
 
+/// The largest script or recording read. H0's largest recording is 200 KB.
+pub const MAX_SCRIPT_BYTES: u64 = 16 << 20;
+
 impl Script {
-    /// Reads a harness script, or an H0 transcript (lines with `seq` and `dir`).
+    /// Reads a harness script, or an H0 transcript (lines with `seq` and `dir`). An error names the file and the
+    /// line, never what the line holds.
     pub fn load(path: &Path) -> Result<Script, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Script::parse(&text).map_err(|e| format!("{}:{e}", path.display()))
+        let at = |e: String| format!("{}:{}{e}", path.display(), if e.starts_with(|c: char| c.is_ascii_digit()) { "" } else { " " });
+        let size = std::fs::metadata(path).map_err(|e| at(e.to_string()))?.len();
+        if size > MAX_SCRIPT_BYTES {
+            return Err(at(format!("too big: {size} bytes, over the {MAX_SCRIPT_BYTES} a script may have")));
+        }
+        Script::parse(&std::fs::read_to_string(path).map_err(|e| at(e.to_string()))?).map_err(at)
     }
 
     /// A harness script has one step per line, and may start with a `{"capabilities": ...}` line.
     pub fn parse(text: &str) -> Result<Script, String> {
+        // A data error quotes the value it could not take, so only its kind is told.
+        let bad = |n: usize, e: serde_json::Error| match e.classify() {
+            serde_json::error::Category::Data => format!("{n}: not a step this harness knows"),
+            _ => format!("{n}: not JSON, {e}"),
+        };
         let lines = text
             .lines()
             .enumerate()
             .filter(|(_, line)| !line.trim().is_empty())
-            .map(|(n, line)| serde_json::from_str(line).map(|value: Value| (n + 1, value)).map_err(|e| format!("{}: {e}", n + 1)))
+            .map(|(n, line)| serde_json::from_str(line).map(|value: Value| (n + 1, value)).map_err(|e| bad(n + 1, e)))
             .collect::<Result<Vec<_>, String>>()?;
+        if lines.is_empty() {
+            return Err("no steps".into());
+        }
         if lines.first().is_some_and(|(_, first)| first.get("seq").is_some() && first.get("dir").is_some()) {
-            return Ok(fixture::convert(&lines.into_iter().map(|(_, line)| line).collect::<Vec<_>>()));
+            return fixture::convert(&lines);
         }
         let mut script = Script::default();
         for (n, line) in lines {
-            let bad = |e: serde_json::Error| format!("{n}: {e}");
             match line.get("capabilities") {
-                Some(caps) => script.capabilities = serde_json::from_value(caps.clone()).map_err(bad)?,
-                None => script.steps.push(serde_json::from_value(line).map_err(bad)?),
+                Some(caps) => script.capabilities = serde_json::from_value(caps.clone()).map_err(|e| bad(n, e))?,
+                None => script.steps.push(serde_json::from_value(line).map_err(|e| bad(n, e))?),
             }
         }
         Ok(script)
@@ -218,12 +233,13 @@ impl Driver for Mock {
                 (key, 0)
             }
         };
+        let mapper = Mapper::new(&self.inner.script.recorded, &key).map_err(|message| OpenError { kind: FailKind::Provider, message })?;
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let (output_tx, output) = mpsc::unbounded_channel();
         let _ = output_tx.send(Body::Started { provider_session: key.clone(), resumed });
         let player = Player {
             mock: self.clone(),
-            mapper: Mapper::new(&self.inner.script.recorded, &key),
+            mapper,
             key,
             run,
             token,
@@ -244,7 +260,12 @@ enum Got {
     Matched(Command),
     Cancelled,
     Stopped,
+    /// A replay's client did what the recording does not have, or not what it has; the replay ends, failed.
+    Diverged(String),
 }
+
+/// How long a replay waits for its client to do what the recording's client did.
+const CLIENT_LIMIT: Duration = Duration::from_secs(30);
 
 struct Player {
     mock: Mock,
@@ -308,9 +329,7 @@ impl Player {
                     let accept = |c: &Command| matches!(c, Command::Answer { id: got, .. } if *got == id);
                     match self.wait_for(ClientAction::Answer(answer), accept, true).await {
                         Got::Matched(Command::Answer { decision, .. }) if answer.is_some_and(|recorded| recorded != decision) => {
-                            self.mock.finish(&self.key, self.run);
-                            let reason = format!("the replay was answered {decision:?} where the recording has {answer:?}");
-                            self.send(Body::Failed { kind: FailKind::Provider, reason })
+                            Got::Diverged(format!("the replay was answered {decision:?} where the recording has {answer:?}"))
                         }
                         Got::Matched(Command::Answer { decision: Decision::Deny, .. }) if caps.deny_ends_turn && !replay => {
                             self.mock.skip_turn(&self.key, self.run);
@@ -343,6 +362,10 @@ impl Player {
                     self.mock.skip_turn(&self.key, self.run);
                     self.send(Body::TurnEnded { how: TurnEnd::Cancelled });
                 }
+                Got::Diverged(reason) => {
+                    self.mock.finish(&self.key, self.run);
+                    self.send(Body::Failed { kind: FailKind::Provider, reason });
+                }
                 Got::Stopped => {
                     // A resume starts again at the step that was waiting, or past the turn it was in.
                     self.mock.play(&self.key, self.run, |play, _| play.at -= 1);
@@ -366,15 +389,28 @@ impl Player {
     }
 
     /// Publishes what the recorded client did here, then waits for the command `accept` takes.
+    /// A replay waits at most `CLIENT_LIMIT`.
     async fn wait_for(&mut self, action: ClientAction, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
+        let what = match action {
+            ClientAction::Prompt(_) => "prompt",
+            ClientAction::Answer(_) => "answer",
+            ClientAction::ToolResult(_) => "tool result",
+            ClientAction::Cancel => "cancel",
+        };
         let _ = self.mock.inner.client.send(Some(action));
-        let got = self.wait(accept, in_turn).await;
+        let got = match self.mock.inner.script.replay {
+            true => tokio::time::timeout(CLIENT_LIMIT, self.wait(accept, in_turn)).await.unwrap_or_else(|_| {
+                Got::Diverged(format!("the recorded client's {what} did not come within {} s", CLIENT_LIMIT.as_secs()))
+            }),
+            false => self.wait(accept, in_turn).await,
+        };
         let _ = self.mock.inner.client.send(None);
         got
     }
 
     /// Waits for the command `accept` takes. A prompt that comes meanwhile is kept for the next prompt step; a cancel
-    /// outside a turn and any other command are received and passed over.
+    /// outside a turn and any other command are received and passed over. In a replay, a cancel or a prompt the
+    /// recording does not have here is a divergence.
     async fn wait(&mut self, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
         loop {
             let Some(command) = self.commands.recv().await else { return Got::Stopped };
@@ -385,6 +421,8 @@ impl Player {
             match command {
                 Command::Stop | Command::Kill => return Got::Stopped,
                 command if accept(&command) => return Got::Matched(command),
+                Command::Cancel if self.mock.inner.script.replay => return Got::Diverged("the replay was cancelled where the recording was not".into()),
+                Command::Prompt(_) if self.mock.inner.script.replay => return Got::Diverged("the replay was prompted where the recording was not".into()),
                 Command::Cancel if in_turn => return Got::Cancelled,
                 Command::Prompt(text) => self.prompts.push_back(text),
                 _ => {}
@@ -393,46 +431,89 @@ impl Player {
     }
 }
 
-/// Maps the recorded run's values to this play's: its session id, a fresh id per recorded id, this process's pid, and
-/// port 0 until the session has a tools endpoint with a port.
+/// Maps the recorded run's values to this play's: a session id per recorded session (this play's for the first), a
+/// fresh id per recorded id, a port per recorded loopback port (port 0 for the first, until the session has a tools
+/// endpoint with a port), and this process's pid. Sessions, ids and ports are mapped as whole words wherever they
+/// stand; a pid only in a field that names one, since the same number in free text may be anything.
 struct Mapper {
     to: HashMap<String, String>,
-    pattern: Option<Regex>,
+    words: Option<(AhoCorasick, Vec<String>)>,
+    pids: HashMap<String, u32>,
 }
 
 impl Mapper {
-    fn new(recorded: &[(String, Recorded)], session: &str) -> Mapper {
-        let mut to = HashMap::new();
-        for (n, (value, kind)) in recorded.iter().enumerate() {
+    fn new(recorded: &[(String, Recorded)], session: &str) -> Result<Mapper, String> {
+        let (mut to, mut pids, mut counts) = (HashMap::new(), HashMap::new(), HashMap::new());
+        for (value, kind) in recorded {
+            if to.contains_key(value) || pids.contains_key(value) {
+                continue;
+            }
+            let n = *counts.entry(*kind).and_modify(|n| *n += 1).or_insert(0);
             let live = match kind {
-                Recorded::Session => session.to_owned(),
+                Recorded::Pid => {
+                    pids.insert(value.clone(), std::process::id());
+                    continue;
+                }
+                Recorded::Session if n == 0 => session.to_owned(),
+                Recorded::Session => format!("{session}-{n}"),
                 Recorded::Id => format!("id{n}"),
-                Recorded::Pid => std::process::id().to_string(),
-                Recorded::Port => format!("{}:0", value.rsplit_once(':').map_or("", |(host, _)| host)),
+                Recorded::Port => format!("{}:{n}", value.rsplit_once(':').map_or("", |(host, _)| host)),
             };
-            to.entry(value.clone()).or_insert(live);
+            to.insert(value.clone(), live);
         }
-        let mut keys: Vec<&String> = to.keys().collect();
-        keys.sort_by_key(|key| std::cmp::Reverse(key.len()));
-        let alternation = keys.iter().map(|key| regex::escape(key)).collect::<Vec<_>>().join("|");
-        let pattern = (!keys.is_empty()).then(|| Regex::new(&format!(r"\b(?:{alternation})\b")).expect("escaped keys compile"));
-        Mapper { to, pattern }
+        let keys: Vec<String> = to.keys().cloned().collect();
+        let words = match keys.is_empty() {
+            true => None,
+            false => Some((AhoCorasick::builder().match_kind(MatchKind::LeftmostLongest).build(&keys).map_err(|e| e.to_string())?, keys)),
+        };
+        Ok(Mapper { to, words, pids })
     }
 
     fn text(&self, s: &str) -> String {
-        match &self.pattern {
-            Some(pattern) => pattern.replace_all(s, |caps: &regex::Captures<'_>| self.to[&caps[0]].clone()).into_owned(),
-            None => s.to_owned(),
+        let Some((finder, keys)) = &self.words else { return s.to_owned() };
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let (mut out, mut last) = (String::with_capacity(s.len()), 0);
+        for found in finder.find_iter(s) {
+            if word(s[..found.start()].chars().next_back()) || word(s[found.end()..].chars().next()) {
+                continue;
+            }
+            out.push_str(&s[last..found.start()]);
+            out.push_str(&self.to[&keys[found.pattern().as_usize()]]);
+            last = found.end();
+        }
+        out.push_str(&s[last..]);
+        out
+    }
+
+    fn pids_in(&self, value: &mut Value) {
+        match value {
+            Value::Object(fields) => {
+                for (key, field) in fields.iter_mut() {
+                    let recorded = match &*field {
+                        Value::Number(n) => Some(n.to_string()),
+                        Value::String(s) => Some(s.clone()),
+                        _ => None,
+                    };
+                    match recorded.and_then(|r| self.pids.get(&r)).filter(|_| fixture::field_kind(key) == Some(Recorded::Pid)) {
+                        Some(pid) if field.is_number() => *field = Value::from(*pid),
+                        Some(pid) => *field = Value::from(pid.to_string()),
+                        None => self.pids_in(field),
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| self.pids_in(item)),
+            _ => {}
         }
     }
 
     fn body(&self, body: &mut Body) {
-        if self.pattern.is_none() {
+        if self.to.is_empty() && self.pids.is_empty() {
             return;
         }
         let mut value = serde_json::to_value(&*body).expect("a body always serializes");
+        self.pids_in(&mut value);
         each_string(&mut value, &mut |s| *s = self.text(s));
-        *body = serde_json::from_value(value).expect("mapping a string keeps the body's shape");
+        *body = serde_json::from_value(value).expect("mapping an id-shaped word or a pid keeps the body's shape");
     }
 }
 

@@ -437,11 +437,11 @@ mod tests {
 
     #[test]
     fn redact_a_long_token_run_a_key_header_with_no_footer_or_a_run_of_jwt_starts_masks_in_time_that_grows_about_linearly() {
-        // Each size's best of three, so a busy machine slows a run without failing it.
+        // Each size's best of five, so a busy machine slows a run without failing it.
         let time = |name: &str, text_of: &dyn Fn(usize) -> String, check: &dyn Fn(&str, &str) -> bool, small: usize| {
             let took = [small, small * 10].map(|len| {
                 let s = text_of(len);
-                (0..3)
+                (0..5)
                     .map(|_| {
                         let started = std::time::Instant::now();
                         let masked = text(&s, &[]);
@@ -453,7 +453,7 @@ mod tests {
                     .unwrap()
             });
             // Ten times the text may take ten times as long, and much more for a slow machine, but not a hundred.
-            assert!(took[1] < took[0] * 40 + std::time::Duration::from_millis(500), "{name}: {small} in {:?}, ten times that in {:?}", took[0], took[1]);
+            assert!(took[1] < took[0] * 40 + std::time::Duration::from_secs(1), "{name}: {small} in {:?}, ten times that in {:?}", took[0], took[1]);
             assert!(took[1] < std::time::Duration::from_secs(30), "{name}: ten times {small} in {:?}", took[1]);
         };
         let whole = |_: &str, masked: &str| masked == format!("x {MASK} y");

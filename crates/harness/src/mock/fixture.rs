@@ -3,7 +3,7 @@
 //! client's lines become the points where the script waits; the agent's become what it says. Recorded ids, pids and
 //! ports are listed so the mock maps them as it plays.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -20,14 +20,16 @@ enum Wire {
     Acp,
 }
 
-/// The line's wire, by its shape: ACP is JSON-RPC with `jsonrpc`, Claude has `type`, app-server has neither.
-fn wire(data: &Value) -> Wire {
+/// The line's wire, by its shape: ACP is JSON-RPC with `jsonrpc`, app-server is JSON-RPC without it, and Claude's
+/// lines have a `type` of its own. Any other shape (`codex exec --json`, agy's print mode) is none of them.
+fn wire(data: &Value) -> Option<Wire> {
+    const CLAUDE: &[&str] = &["system", "assistant", "user", "result", "control_request", "control_response", "stream_event"];
     if data.get("jsonrpc").is_some() {
-        Wire::Acp
-    } else if data.get("type").is_some_and(Value::is_string) {
-        Wire::Claude
+        Some(Wire::Acp)
+    } else if data.get("method").is_some() || data.get("id").is_some() && (data.get("result").is_some() || data.get("error").is_some()) {
+        Some(Wire::AppServer)
     } else {
-        Wire::AppServer
+        data["type"].as_str().filter(|kind| CLAUDE.contains(kind)).map(|_| Wire::Claude)
     }
 }
 
@@ -54,20 +56,28 @@ fn capabilities(wire: Option<Wire>) -> Capabilities {
     }
 }
 
-pub fn convert(lines: &[Value]) -> Script {
+/// Converts the transcript's `(line number, line)`s. A recording that cannot be replayed faithfully is refused with
+/// the line that shows it, never played in part.
+pub fn convert(numbered: &[(usize, Value)]) -> Result<Script, String> {
+    let lines: Vec<Value> = numbered.iter().map(|(_, line)| line.clone()).collect();
     let mut c = Converter::default();
     for (at, line) in lines.iter().enumerate() {
+        c.line = numbered[at].0;
         let data = &line["data"];
-        collect(data, &mut c.recorded);
+        let dir = line["dir"].as_str();
+        collect(data, "", dir == Some("driver"), &mut c.recorded);
         if data["note"] == "processes" {
             c.descendants = descendants(data);
         }
         c.now = line["ms"].as_u64().unwrap_or(c.now);
-        let dir = line["dir"].as_str();
         if !data.is_object() || !matches!(dir, Some("to_agent" | "from_agent")) {
             continue;
         }
-        let wire = *c.wire.get_or_insert(wire(data));
+        let wire = match c.wire {
+            Some(wire) => wire,
+            None => *c.wire.insert(wire(data).ok_or_else(|| format!("{}: unknown transcript format", c.line))?),
+        };
+        c.pair(dir == Some("to_agent"), wire, data);
         match (dir, wire) {
             (Some("to_agent"), Wire::Claude) => c.claude_client(data),
             (Some("to_agent"), _) => c.rpc_client(data),
@@ -79,11 +89,20 @@ pub fn convert(lines: &[Value]) -> Script {
             }
             _ => {}
         }
+        if let Some(error) = c.error.take() {
+            return Err(error);
+        }
     }
     c.flush();
+    if !c.held.is_empty() {
+        return Err("a prompt was sent while a turn ran, and the recording never ends that turn".into());
+    }
+    if !c.steps.iter().any(|step| matches!(step, Step::Prompt(_) | Step::Turn)) {
+        return Err("no turn in this recording".into());
+    }
     let mut seen = HashSet::new();
     let recorded = c.recorded.into_iter().filter(|(value, _)| seen.insert(value.clone())).collect();
-    Script { capabilities: capabilities(c.wire), steps: c.steps, replay: true, recorded }
+    Ok(Script { capabilities: capabilities(c.wire), steps: c.steps, replay: true, recorded })
 }
 
 #[derive(Default)]
@@ -107,6 +126,14 @@ struct Converter {
     open_calls: HashMap<String, u64>,
     /// When the line being read was recorded.
     now: u64,
+    /// The line being read, for errors.
+    line: usize,
+    error: Option<String>,
+    /// The agent's requests the client has not answered yet, and its tool calls.
+    asked: HashSet<String>,
+    called: HashSet<String>,
+    /// Prompts sent while a turn ran: a provider plays each once the turn before it has ended.
+    held: VecDeque<String>,
 }
 
 impl Converter {
@@ -115,6 +142,7 @@ impl Converter {
     fn push(&mut self, step: Step) {
         self.flush();
         self.turn_for(&step);
+        let ends = matches!(step, Step::End(_) | Step::Fail(_));
         self.in_turn = match step {
             Step::Prompt(_) => true,
             Step::End(_) | Step::Fail(_) => false,
@@ -124,7 +152,13 @@ impl Converter {
             self.open_calls.clear();
         }
         self.unprompted &= self.in_turn && !matches!(step, Step::Prompt(_));
+        if let Step::Tool { id: Some(id), .. } = &step {
+            self.called.insert(id.clone());
+        }
         self.steps.push(step);
+        if let Some(text) = self.held.pop_front().filter(|_| ends) {
+            self.prompt(text);
+        }
     }
 
     fn turn_for(&mut self, step: &Step) {
@@ -143,9 +177,40 @@ impl Converter {
         }
     }
 
+    /// A prompt sent while a turn runs waits for that turn's end in the recording. agy ends a turn it started by
+    /// itself with no marker, and holds the prompt (H8), so that turn ends where the prompt was sent.
     fn prompt(&mut self, text: String) {
+        self.flush();
+        if self.in_turn && self.unprompted && self.wire == Some(Wire::Acp) {
+            self.push(Step::End(TurnEnd::Done));
+        }
+        if self.in_turn {
+            self.held.push_back(text);
+            return;
+        }
         self.cancelled = false;
         self.push(Step::Prompt(Some(text)));
+    }
+
+    /// Checks that each reply of the client answers a request of the agent's, by its id.
+    fn pair(&mut self, client: bool, wire: Wire, data: &Value) {
+        let (request, reply) = match wire {
+            Wire::Claude if data["type"] == "control_request" => (data["request_id"].clone(), Value::Null),
+            Wire::Claude if data["type"] == "control_response" => (Value::Null, data["response"]["request_id"].clone()),
+            Wire::Claude => return,
+            _ if data.get("method").is_some() => (data["id"].clone(), Value::Null),
+            _ => (Value::Null, data["id"].clone()),
+        };
+        if !client && !request.is_null() {
+            self.asked.insert(request.to_string());
+        }
+        if client && !reply.is_null() && !self.asked.remove(&reply.to_string()) {
+            self.fail_at("a reply to no request");
+        }
+    }
+
+    fn fail_at(&mut self, what: &str) {
+        self.error.get_or_insert_with(|| format!("{}: {what}", self.line));
     }
 
     fn cancel(&mut self) {
@@ -154,6 +219,9 @@ impl Converter {
     }
 
     fn tool_result(&mut self, id: &Value, output: Value, error: bool) {
+        if id.as_str().is_some_and(|id| !self.called.contains(id)) {
+            return self.fail_at("a result for no tool call");
+        }
         if let Some(id) = id.as_str().filter(|id| self.finished.insert((*id).to_owned())) {
             self.push(Step::ToolResult { id: Some(id.to_owned()), output, error });
         }
@@ -355,15 +423,18 @@ impl Converter {
         if next.is_some_and(|next| next < ms + QUIET_MS) {
             return;
         }
-        // Quiet: a message streamed so far is whole, and may be what started the turn.
-        self.flush();
-        if !(self.in_turn && self.unprompted) {
+        // Quiet: a message streamed so far is whole where it starts a turn of agy's own or ends one. Inside a prompted
+        // turn it goes on, so a secret split by the pause is masked whole.
+        if self.in_turn && !self.unprompted {
             return;
         }
         let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms + QUIET_MS));
         let running = notes.next_back().map_or(self.descendants, |note| descendants(&note["data"]));
         let held = self.open_calls.values().any(|began| next.is_some_and(|next| next < began + MCP_CUT_MS + CUT_MARGIN_MS));
-        if running == 0 && !held {
+        if !self.in_turn || running == 0 && !held {
+            self.flush();
+        }
+        if self.in_turn && self.unprompted && running == 0 && !held {
             self.push(Step::End(TurnEnd::Done));
         }
     }
@@ -444,26 +515,27 @@ static ID: LazyLock<Regex> = LazyLock::new(|| {
 });
 static PORT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:127\.0\.0\.1|localhost):\d{2,5}\b").expect("compiles"));
 
-/// Lists the recorded run's own values found in `value`: session ids, request and item ids, pids, loopback ports.
-fn collect(value: &Value, out: &mut Vec<(String, Recorded)>) {
-    match value {
-        Value::Object(fields) => {
-            for (key, field) in fields {
-                let kind = match key.as_str() {
-                    "session_id" | "sessionId" | "threadId" => Some(Recorded::Session),
-                    "pid" | "agent_pid" | "driver_pid" | "processId" => Some(Recorded::Pid),
-                    _ => None,
-                };
-                match (kind, field) {
-                    (Some(kind), Value::String(s)) if !s.is_empty() => out.push((s.clone(), kind)),
-                    (Some(Recorded::Pid), Value::Number(n)) => out.push((n.to_string(), Recorded::Pid)),
-                    _ => collect(field, out),
-                }
-            }
-        }
-        Value::Array(items) => items.iter().for_each(|item| collect(item, out)),
-        Value::String(s) if ID.is_match(s) => out.push((s.clone(), Recorded::Id)),
-        Value::String(s) => out.extend(PORT.find_iter(s).map(|port| (port.as_str().to_owned(), Recorded::Port))),
+/// What a field named `key` holds, if it is one of the recorded run's own values.
+pub(super) fn field_kind(key: &str) -> Option<Recorded> {
+    match key {
+        "session_id" | "sessionId" | "threadId" => Some(Recorded::Session),
+        "pid" | "agent_pid" | "driver_pid" | "processId" => Some(Recorded::Pid),
+        "id" | "uuid" => Some(Recorded::Id),
+        key if key.ends_with("Id") || key.ends_with("_id") => Some(Recorded::Id),
+        _ => None,
+    }
+}
+
+/// Lists the recorded run's own values in `value`, each from a field that names it: session ids, id-shaped ids, pids,
+/// and loopback ports in a `url` or the driver's own notes. The same number or word in free text is not one.
+fn collect(value: &Value, key: &str, driver: bool, out: &mut Vec<(String, Recorded)>) {
+    match (value, field_kind(key)) {
+        (Value::Object(fields), _) => fields.iter().for_each(|(key, field)| collect(field, key, driver, out)),
+        (Value::Array(items), _) => items.iter().for_each(|item| collect(item, key, driver, out)),
+        (Value::String(s), Some(kind @ (Recorded::Session | Recorded::Id))) if ID.is_match(s) => out.push((s.clone(), kind)),
+        (Value::String(s), Some(Recorded::Pid)) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => out.push((s.clone(), Recorded::Pid)),
+        (Value::Number(n), Some(Recorded::Pid)) => out.push((n.to_string(), Recorded::Pid)),
+        (Value::String(s), _) if driver || key == "url" => out.extend(PORT.find_iter(s).map(|port| (port.as_str().to_owned(), Recorded::Port))),
         _ => {}
     }
 }

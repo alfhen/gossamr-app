@@ -32,6 +32,8 @@ pub enum Error {
     /// The other side broke the protocol, or the connection failed.
     Protocol(String),
     Driver(String),
+    /// A script or recording that cannot be read or replayed: the file and line, and why.
+    Script(String),
     /// The driver could not open the agent, and says why.
     Open { kind: crate::event::FailKind, message: String },
     Sqlite(rusqlite::Error),
@@ -62,6 +64,7 @@ impl fmt::Display for Error {
             Error::TooLarge { len, max } => write!(f, "the message is {len} bytes, over the {max}-byte limit of the client API"),
             Error::Protocol(why) => write!(f, "the connection failed: {why}"),
             Error::Driver(message) => write!(f, "the driver failed: {message}"),
+            Error::Script(message) => write!(f, "{message}"),
             Error::Open { kind, message } => write!(f, "the agent could not start ({kind:?}): {message}"),
             Error::Sqlite(e) => write!(f, "the store failed: {e}"),
             Error::Io(e) => write!(f, "{e}"),

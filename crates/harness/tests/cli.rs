@@ -84,9 +84,10 @@ fn run_plays_a_harness_script_with_the_command_lines_prompt_and_answers() {
 fn run_without_a_provider_a_script_or_with_an_unknown_provider_prints_the_usage_and_exits_two() {
     let script = fixture("claude/native/2-permission.jsonl");
     let script = script.to_str().unwrap();
-    for args in [&["run", "--script", script][..], &["run", "--provider", "mock"], &["run", "--provider", "codex", "--script", script], &["run", "--provider", "mock", "--script", script, "--answer", "always"]] {
-        let out = Command::new(HARNESS).args(args).output().unwrap();
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
+    let cases = [&["run", "--script", script][..], &["run", "--provider", "mock"], &["run", "--provider", "codex", "--script", script], &["run", "--provider", "mock", "--script", script, "--answer", "always"]];
+    for (n, args) in cases.iter().enumerate() {
+        let out = Command::new(HARNESS).args(*args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "case {n}");
         assert_eq!(String::from_utf8(out.stderr).unwrap(), format!("{}\n", harness::USAGE));
     }
 }
@@ -346,4 +347,39 @@ fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting
     assert_eq!(done.code(), Some(1));
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");
+}
+
+#[test]
+fn run_a_script_that_does_not_parse_names_its_line_and_never_its_payload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("script.jsonl");
+    std::fs::write(&script, "{\"prompt\": null}\n{\"sleep\": \"a-private-value-1234\"}\n").unwrap();
+    let out = run(&tmp.path().join("data"), &["--script".as_ref(), script.as_os_str()]);
+    assert_eq!(out.status.code(), Some(1), "a script that does not parse exits 1");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr == format!("harness: {}:2: not a step this harness knows\n", script.display()), "the file and the line, and why");
+}
+
+#[test]
+fn run_without_a_data_folder_uses_a_temporary_one_and_removes_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (temp, default) = (tmp.path().join("tmp"), tmp.path().join("default"));
+    std::fs::create_dir(&temp).unwrap();
+    let script = fixture("claude/native/2-permission.jsonl");
+    let out = Command::new(HARNESS).args(["run", "--provider", "mock", "--script"]).arg(&script).env("TMPDIR", &temp).env("HARNESS_DATA", &default).output().unwrap();
+    assert!(out.status.success(), "exit {}", out.status);
+    assert!(std::fs::read_dir(&temp).unwrap().next().is_none(), "the temporary folder is removed");
+    assert!(!default.exists(), "the default data folder is not touched");
+}
+
+#[test]
+fn run_a_request_with_no_recorded_answer_and_none_given_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("script.jsonl");
+    std::fs::write(&script, "{\"prompt\": \"go\"}\n{\"permission\": {\"kind\": \"command\", \"tool\": \"Bash\", \"answer\": null}}\n{\"end\": \"done\"}\n").unwrap();
+    let out = run(&tmp.path().join("data"), &["--script".as_ref(), script.as_os_str()]);
+    assert_eq!(out.status.code(), Some(1), "a request nobody can answer fails");
+    let stderr = String::from_utf8(out.stderr.clone()).unwrap();
+    assert!(stderr.contains("the recording has no answer to this request; give one with --answer"), "and says why");
+    assert!(!printed(&out).iter().any(|event| event["type"] == "answered"), "nothing answered it");
 }
