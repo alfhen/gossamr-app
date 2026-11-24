@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dk.alfhen.gossamr",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "cargo build -p harness && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build && sh scripts/stage-harness.sh",
     "frontendDist": "../dist"
   },
   "app": {
@@ -42,6 +42,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "files": {
+        "MacOS/harness": "../target/sidecar/harness"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

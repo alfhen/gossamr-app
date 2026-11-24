@@ -28,6 +28,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # The app's bundle carries the harness, so it is built first, as `tauri build` does (scripts/stage-harness.sh).
+      - run: TAURI_ENV_DEBUG=true sh scripts/stage-harness.sh && test -x target/sidecar/harness
       # generate_context! embeds the frontend dist, so it has to exist for the app crate to compile.
       - run: mkdir -p dist
       - run: cargo clippy --workspace --all-targets -- -D warnings

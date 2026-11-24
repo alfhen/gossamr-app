@@ -18,6 +18,8 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  HarnessAction,
+  HarnessStatus,
   WorkFolderGit,
   ModelChoice,
   ModelDefaults,
@@ -283,4 +285,8 @@ export interface Backend {
    */
   jiraConnect(input: TokenSignIn, instanceId?: string): Promise<AuthStatus>;
   openUrl(url: string): Promise<void>;
+  /** Starts or adopts the harness unless it was stopped here, and says how it stands; or starts, restarts or stops it. */
+  harnessStatus(action?: HarnessAction): Promise<HarnessStatus>;
+  /** Called when how the harness stands changed by itself, as when the app's start of it finished. */
+  onHarnessChanged(listener: () => void): () => void;
 }

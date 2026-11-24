@@ -31,6 +31,7 @@ import type {
   RunQuery,
   RunsChanged,
   AgentSettings,
+  HarnessAction,
   ModelChoice,
   ModelDefaults,
   Snapshot,
@@ -89,6 +90,7 @@ import { GITHUB_CONNECTION, MockGithub } from "./mockGithub";
 import { isJira } from "../workspace/domains";
 import { jiraSnapshot, mockCloudId, mockJiraHost, mockJiraStatus } from "./mockProbes";
 import { MockProviders } from "./mockProviders";
+import { MockHarness } from "./mockHarness";
 import type { Driver } from "../lib/models";
 import type { AuthStatus, TokenSignIn } from "./auth";
 import type { Backend, ReadScope } from "./types";
@@ -1565,5 +1567,19 @@ export class MockBackend implements Backend {
   async openUrl(url: string) {
     if (isTauri()) await openUrl(url);
     else window.open(url, "_blank", "noopener");
+  }
+
+  private harnessMock: MockHarness | null = null;
+
+  private get harness() {
+    return (this.harnessMock ??= new MockHarness(this.options.harness));
+  }
+
+  async harnessStatus(action?: HarnessAction) {
+    return this.harness.act(action);
+  }
+
+  onHarnessChanged(listener: () => void) {
+    return this.harness.onChanged(listener);
   }
 }

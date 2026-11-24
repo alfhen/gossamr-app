@@ -34,6 +34,8 @@ pub enum Error {
     SocketPathTooLong { path: PathBuf, len: usize, max: usize },
     /// The client's token was not proven, or the request is not one a client may make.
     Refused(String),
+    /// The harness holds no token that the client's proof proves.
+    NotProven,
     /// What the harness answered when it refused a call or a proof, as it said it.
     Said(String),
     /// A message over the limit of the client API, which the client did not send.
@@ -74,6 +76,7 @@ impl fmt::Display for Error {
                 write!(f, "the socket path {} is {len} bytes, and this platform takes at most {max}: use a shorter data folder", path.display())
             }
             Error::Refused(why) => write!(f, "refused: {why}"),
+            Error::NotProven => write!(f, "refused: {}", crate::server::NOT_PROVEN),
             Error::Said(what) => write!(f, "{what}"),
             Error::TooLarge { len, max } => write!(f, "the message is {len} bytes, over the {max}-byte limit of the client API"),
             Error::Protocol(why) => write!(f, "the connection failed: {why}"),

@@ -249,10 +249,71 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
     Ok(())
 }
 
+/// The variable that makes a debug build keep its vault in a file instead of the Keychain, for tests and hand runs.
+/// A release build has no such code.
+#[cfg(all(debug_assertions, not(test)))]
+pub const TEST_VAULT_VARIABLE: &str = "GOSSAMR_TEST_VAULT";
+
 #[cfg(not(test))]
 fn with_global<R>(f: impl FnOnce(&Vault) -> R) -> R {
     static VAULT: std::sync::OnceLock<Vault> = std::sync::OnceLock::new();
-    f(VAULT.get_or_init(|| Vault::new(Box::new(Keychain))))
+    f(VAULT.get_or_init(|| {
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os(TEST_VAULT_VARIABLE).filter(|path| !path.is_empty()) {
+            return Vault::new(Box::new(FileVault::new(path.into())));
+        }
+        Vault::new(Box::new(Keychain))
+    }))
+}
+
+/// A vault in a JSON file only you can read: a test's stand-in for the Keychain. Never in a release build.
+#[cfg(any(test, debug_assertions))]
+pub struct FileVault(std::path::PathBuf);
+
+#[cfg(any(test, debug_assertions))]
+impl FileVault {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn items(&self) -> Result<BTreeMap<String, String>> {
+        match std::fs::read(&self.0) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn store(&self, items: &BTreeMap<String, String>) -> Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut next = self.0.as_os_str().to_owned();
+        next.push(".next");
+        let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&next)?;
+        file.write_all(&serde_json::to_vec(items)?)?;
+        Ok(std::fs::rename(next, &self.0)?)
+    }
+}
+
+#[cfg(any(test, debug_assertions))]
+impl Backend for FileVault {
+    fn read(&self, account: &str) -> Result<Option<String>> {
+        Ok(self.items()?.remove(account))
+    }
+
+    fn write(&self, account: &str, value: &str) -> Result<()> {
+        let mut items = self.items()?;
+        items.insert(account.into(), value.into());
+        self.store(&items)
+    }
+
+    fn remove(&self, account: &str) -> Result<()> {
+        let mut items = self.items()?;
+        if items.remove(account).is_some() {
+            self.store(&items)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

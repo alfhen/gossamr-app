@@ -40,10 +40,18 @@ impl Client {
 
     pub async fn connect_within(dir: &Path, token: &Token, limit: Duration) -> Result<Client> {
         let silent = || Error::Protocol(format!("the harness did not answer within {} s", limit.as_secs_f32()));
-        tokio::time::timeout(limit, Client::prove(dir, token)).await.map_err(|_| silent())?
+        tokio::time::timeout(limit, Client::prove(dir, token, false)).await.map_err(|_| silent())?
     }
 
-    async fn prove(dir: &Path, token: &Token) -> Result<Client> {
+    /// Like `connect_within`, but proves `token` to a harness of any protocol, so that one of another protocol can be
+    /// told to shut down: `hello.protocol` says which it speaks, and to one that is not `PROTOCOL` only `shutdown` is
+    /// sent (see `api::PROTOCOL`).
+    pub async fn connect_any_protocol(dir: &Path, token: &Token, limit: Duration) -> Result<Client> {
+        let silent = || Error::Protocol(format!("the harness did not answer within {} s", limit.as_secs_f32()));
+        tokio::time::timeout(limit, Client::prove(dir, token, true)).await.map_err(|_| silent())?
+    }
+
+    async fn prove(dir: &Path, token: &Token, any_protocol: bool) -> Result<Client> {
         let stream = UnixStream::connect(socket_path(dir)?).await?;
         let config = crate::server::config();
         let (ws, _) = client_async_with_config("ws://harness/", stream, Some(config)).await.map_err(|e| Error::Protocol(e.to_string()))?;
@@ -54,13 +62,14 @@ impl Client {
             return Err(Error::Said(error));
         }
         client.hello = serde_json::from_str(&hello)?;
-        if client.hello.protocol != PROTOCOL {
+        if client.hello.protocol != PROTOCOL && !any_protocol {
             return Err(Error::Protocol(format!("the harness speaks protocol {}, this client {PROTOCOL}", client.hello.protocol)));
         }
         client.write(&Proof { proof: encode(&token.answer(hello.as_bytes())) }).await?;
         let reply: Reply = client.read().await?;
         match reply.error {
             None => Ok(client),
+            Some(error) if error == Error::Refused(crate::server::NOT_PROVEN.into()).to_string() => Err(Error::NotProven),
             Some(error) => Err(Error::Said(error)),
         }
     }
@@ -81,6 +90,9 @@ impl Client {
 
     /// Makes a call and waits for its answer. Pushes that come meanwhile are kept for `push`.
     pub async fn call(&mut self, op: Op) -> Result<Value> {
+        if self.hello.protocol != PROTOCOL && !matches!(op, Op::Shutdown) {
+            return Err(Error::Protocol(format!("the harness speaks protocol {}, this client {PROTOCOL}: only `shutdown` is sent to it", self.hello.protocol)));
+        }
         self.next_id += 1;
         let id = self.next_id;
         self.write(&Call { id, op }).await?;
