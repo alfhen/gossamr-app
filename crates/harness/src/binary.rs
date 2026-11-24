@@ -228,8 +228,10 @@ mod tests {
     #[test]
     fn a_node_launcher_codex_is_found_on_the_captured_path_and_runs_with_it() {
         let dir = scratch("node");
-        tool(&dir.join("node/bin"), "node", "#!/bin/sh\necho codex-cli 9.9.9\n");
-        let codex = tool(&dir.join("nvm/bin"), "codex", "#!/usr/bin/env node\nconsole.log('unused');\n");
+        crate::testing::fake_cli(&dir.join("node/bin/node"), "echo codex-cli 9.9.9");
+        std::fs::create_dir_all(dir.join("nvm/bin")).unwrap();
+        let codex = dir.join("nvm/bin/codex");
+        std::os::unix::fs::symlink(crate::testing::NODE_LAUNCHER, &codex).unwrap();
         let path = format!("{}:{}", dir.join("nvm/bin").display(), dir.join("node/bin").display());
         let shell = RunEnv::from_pairs([("PATH", path.as_str())]);
 

@@ -446,8 +446,7 @@ mod tests {
         std::fs::create_dir_all(&nvm).unwrap();
         cli(&node, "node", "case \"$3\" in status) echo 'Logged in using ChatGPT' >&2; exit 0;; esac\necho 'codex-cli 9.9.9'");
         let launcher = nvm.join("codex");
-        std::fs::write(&launcher, "#!/usr/bin/env node\nlogin\n").unwrap();
-        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(crate::testing::NODE_LAUNCHER, &launcher).unwrap();
         let path = format!("{}:/usr/bin:/bin", node.display());
         let seen = probe(Provider::Codex, Some(&launcher), None, &RunEnv::from_pairs([("PATH", path.as_str())]), Timeouts::default()).await;
         assert_eq!((seen.state, seen.version.as_deref()), (State::Ready, Some("9.9.9")));
