@@ -63,6 +63,9 @@ pub fn convert(numbered: &[(usize, Value)]) -> Result<Script, String> {
     let mut c = Converter::default();
     for (at, line) in lines.iter().enumerate() {
         c.line = numbered[at].0;
+        if c.ends_at.is_some_and(|end| line["ms"].as_u64().is_some_and(|ms| ms >= end)) {
+            c.end_quietly();
+        }
         let data = &line["data"];
         let dir = line["dir"].as_str();
         collect(data, "", dir == Some("driver"), &mut c.recorded);
@@ -92,6 +95,9 @@ pub fn convert(numbered: &[(usize, Value)]) -> Result<Script, String> {
         if let Some(error) = c.error.take() {
             return Err(error);
         }
+    }
+    if c.ends_at.is_some() {
+        c.end_quietly();
     }
     c.flush();
     if !c.held.is_empty() {
@@ -134,6 +140,8 @@ struct Converter {
     called: HashSet<String>,
     /// Prompts sent while a turn ran: a provider plays each once the turn before it has ended.
     held: VecDeque<String>,
+    /// When agy's unprompted turn ends, once the client lines recorded before then are read.
+    ends_at: Option<u64>,
 }
 
 impl Converter {
@@ -156,8 +164,11 @@ impl Converter {
             self.called.insert(id.clone());
         }
         self.steps.push(step);
-        if let Some(text) = self.held.pop_front().filter(|_| ends) {
-            self.prompt(text);
+        if ends {
+            self.ends_at = None;
+            if let Some(text) = self.held.pop_front() {
+                self.prompt(text);
+            }
         }
     }
 
@@ -166,6 +177,7 @@ impl Converter {
             self.steps.push(Step::Turn);
             self.in_turn = true;
             self.unprompted = true;
+            self.cancelled = false;
         }
     }
 
@@ -177,19 +189,30 @@ impl Converter {
         }
     }
 
-    /// A prompt sent while a turn runs waits for that turn's end in the recording. agy ends a turn it started by
-    /// itself with no marker, and holds the prompt (H8), so that turn ends where the prompt was sent.
+    /// A prompt sent while a turn runs waits for that turn's end in the recording.
     fn prompt(&mut self, text: String) {
         self.flush();
-        if self.in_turn && self.unprompted && self.wire == Some(Wire::Acp) {
-            self.push(Step::End(TurnEnd::Done));
-        }
         if self.in_turn {
             self.held.push_back(text);
-            return;
+            return self.end_for_held();
         }
         self.cancelled = false;
         self.push(Step::Prompt(Some(text)));
+    }
+
+    /// agy ends a turn it started by itself with no marker, and holds a prompt sent meanwhile (H8): that turn ends
+    /// where the prompt was sent, or later, once no tool call of it is open.
+    fn end_for_held(&mut self) {
+        if self.wire == Some(Wire::Acp) && self.in_turn && self.unprompted && !self.held.is_empty() && self.open_calls.is_empty() {
+            self.end_quietly();
+        }
+    }
+
+    fn end_quietly(&mut self) {
+        self.ends_at = None;
+        if self.in_turn && self.unprompted {
+            self.push(Step::End(if self.cancelled { TurnEnd::Cancelled } else { TurnEnd::Done }));
+        }
     }
 
     /// Checks that each reply of the client answers a request of the agent's, by its id.
@@ -219,11 +242,11 @@ impl Converter {
     }
 
     fn tool_result(&mut self, id: &Value, output: Value, error: bool) {
-        if id.as_str().is_some_and(|id| !self.called.contains(id)) {
-            return self.fail_at("a result for no tool call");
-        }
-        if let Some(id) = id.as_str().filter(|id| self.finished.insert((*id).to_owned())) {
-            self.push(Step::ToolResult { id: Some(id.to_owned()), output, error });
+        match id.as_str() {
+            Some(id) if !self.called.contains(id) => self.fail_at("a result for no tool call"),
+            Some(id) if self.finished.insert(id.to_owned()) => self.push(Step::ToolResult { id: Some(id.to_owned()), output, error }),
+            Some(_) => {}
+            None => self.fail_at("a tool result with no call id"),
         }
     }
 
@@ -420,7 +443,7 @@ impl Converter {
         let ms = line["ms"].as_u64().unwrap_or_default();
         let until = after.iter().position(|next| next["dir"] == "from_agent").unwrap_or(after.len());
         let next = after.get(until).and_then(|next| next["ms"].as_u64());
-        if next.is_some_and(|next| next < ms + QUIET_MS) {
+        if next.is_some_and(|next| next < ms.saturating_add(QUIET_MS)) {
             return;
         }
         // Quiet: a message streamed so far is whole where it starts a turn of agy's own or ends one. Inside a prompted
@@ -428,14 +451,21 @@ impl Converter {
         if self.in_turn && !self.unprompted {
             return;
         }
-        let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms + QUIET_MS));
+        let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms.saturating_add(QUIET_MS)));
         let running = notes.next_back().map_or(self.descendants, |note| descendants(&note["data"]));
-        let held = self.open_calls.values().any(|began| next.is_some_and(|next| next < began + MCP_CUT_MS + CUT_MARGIN_MS));
-        if !self.in_turn || running == 0 && !held {
+        // The turn ends once the quiet and each open call's cut have passed, if agy says nothing before then.
+        let end = self.open_calls.values().map(|began| began.saturating_add(MCP_CUT_MS + CUT_MARGIN_MS)).fold(ms.saturating_add(QUIET_MS), u64::max);
+        let ends = running == 0 && next.is_none_or(|next| end <= next);
+        if !self.in_turn || ends {
             self.flush();
         }
-        if self.in_turn && self.unprompted && running == 0 && !held {
-            self.push(Step::End(TurnEnd::Done));
+        if self.in_turn && self.unprompted && ends {
+            // A client line recorded before the end comes first in the turn.
+            let before = |line: &Value| line["dir"] == "to_agent" && line["ms"].as_u64().is_some_and(|at| at < end);
+            match after[..until].iter().any(before) {
+                true => self.ends_at = Some(end),
+                false => self.end_quietly(),
+            }
         }
     }
 
@@ -446,6 +476,7 @@ impl Converter {
             }
             let output = [&update["rawOutput"], &update["content"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default();
             self.tool_result(&update["toolCallId"], output, status == "failed");
+            self.end_for_held();
         }
     }
 }

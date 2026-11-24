@@ -53,10 +53,10 @@ fn run_args(args: &[OsString]) -> Option<RunArgs> {
     let (mut provider, mut script, mut data, mut answers, mut prompt) = (None, None, None, vec![], None);
     while let Some(arg) = args.next() {
         match arg? {
-            "--provider" => provider = Some(args.next()??),
-            "--script" => script = Some(args.next()??.into()),
-            "--data" => data = Some(args.next()??.into()),
-            "--answer" => answers.push(match args.next()?? {
+            "--provider" => provider = Some(value(&mut args)?),
+            "--script" => script = Some(value(&mut args)?.into()),
+            "--data" => data = Some(value(&mut args)?.into()),
+            "--answer" => answers.push(match value(&mut args)? {
                 "allow" => Decision::Allow,
                 "deny" => Decision::Deny,
                 _ => return None,
@@ -67,6 +67,11 @@ fn run_args(args: &[OsString]) -> Option<RunArgs> {
         }
     }
     (provider? == "mock").then_some(RunArgs { script: script?, data, answers, prompt })
+}
+
+/// A flag's value, which is never another flag: a path that starts with `-` is given as `./-…`.
+fn value<'a>(args: &mut impl Iterator<Item = Option<&'a str>>) -> Option<&'a str> {
+    args.next().flatten().filter(|value| !value.starts_with('-'))
 }
 
 #[cfg(test)]
@@ -91,7 +96,8 @@ mod tests {
         let parsed = request(&args(&["run", "hello", "--answer", "deny", "--script", "s.jsonl", "--provider", "mock", "--answer", "allow"]));
         let expected = RunArgs { script: "s.jsonl".into(), data: None, answers: vec![Decision::Deny, Decision::Allow], prompt: Some("hello".into()) };
         assert_eq!(parsed, Request::Run(expected));
-        for wrong in [&["run", "--provider", "mock", "--script", "s", "one", "two"][..], &["run", "--provider", "mock", "--script"], &["run", "--provider", "mock", "--script", "s", "--model", "x"]] {
+        let missing_values = [&["run", "--provider", "mock", "--script", "--data", "d"][..], &["run", "--provider", "mock", "--script", "s", "--data", "--answer", "allow"]];
+        for wrong in [&["run", "--provider", "mock", "--script", "s", "one", "two"][..], &["run", "--provider", "mock", "--script"], &["run", "--provider", "mock", "--script", "s", "--model", "x"]].into_iter().chain(missing_values) {
             assert_eq!(request(&args(wrong)), Request::Usage, "{wrong:?}");
         }
     }

@@ -45,7 +45,8 @@ async fn replay(fixture: &Path, answers: Vec<Decision>) -> Vec<Event> {
     let (id, events) = open(&harness, false).await;
     let mut seen = vec![];
     let play = drive(&harness, &id, events, client, answers, None, |event| seen.push(event.clone()));
-    tokio::time::timeout(Duration::from_secs(60), play).await.unwrap_or_else(|_| panic!("{} did not end", name(fixture)));
+    let followed = tokio::time::timeout(Duration::from_secs(60), play).await.unwrap_or_else(|_| panic!("{} did not end", name(fixture)));
+    assert!(followed, "the client of {} missed events or could not act as recorded", name(fixture));
     seen
 }
 
@@ -541,4 +542,135 @@ async fn replay_a_client_that_missed_events_says_it_did_not_follow_the_recording
         sender.send(Event { seq: 0, ms: 0, body }).unwrap();
     }
     assert!(!drive(&harness, &id, lagging, mock.client(), vec![], None, |_| {}).await, "a lagged client did not follow");
+}
+
+fn acp(seq: u64, ms: u64, dir: &str, data: Value) -> Value {
+    let mut data = data;
+    data["jsonrpc"] = json!("2.0");
+    json!({"seq": seq, "ms": ms, "dir": dir, "data": data})
+}
+
+fn acp_update(seq: u64, ms: u64, update: Value) -> Value {
+    acp(seq, ms, "from_agent", json!({"method": "session/update", "params": {"update": update}}))
+}
+
+fn acp_prompt(seq: u64, ms: u64, id: u64) -> Value {
+    acp(seq, ms, "to_agent", json!({"id": id, "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": "go"}]}}))
+}
+
+fn acp_end(seq: u64, ms: u64, id: u64) -> Value {
+    acp(seq, ms, "from_agent", json!({"id": id, "result": {"stopReason": "end_turn"}}))
+}
+
+/// A prompted turn, then a turn agy starts by itself with a call that stays open.
+fn acp_unprompted_with_open_call() -> Vec<Value> {
+    vec![
+        acp_prompt(1, 0, 1),
+        acp_end(2, 100, 1),
+        acp_update(3, 20_000, json!({"sessionUpdate": "tool_call", "toolCallId": "call_aaaaaaaa", "name": "ask", "kind": "other"})),
+    ]
+}
+
+#[tokio::test]
+async fn replay_a_prompt_sent_while_agys_unprompted_turn_has_a_call_open_runs_after_the_call_completes() {
+    let mut lines = acp_unprompted_with_open_call();
+    lines.extend([
+        acp_prompt(4, 21_000, 2),
+        acp_update(5, 22_000, json!({"sessionUpdate": "tool_call_update", "toolCallId": "call_aaaaaaaa", "status": "completed", "rawOutput": "blue"})),
+        acp_update(6, 22_100, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after"}})),
+        acp_end(7, 23_000, 2),
+    ]);
+    let (_tmp, path) = written(&lines);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    let result = kinds.iter().position(|kind| kind == "tool_result").unwrap();
+    let prompted = kinds.iter().rposition(|kind| kind == "prompted").unwrap();
+    assert!(result < prompted && kinds[prompted - 1] == "turn_ended", "the call's result is in agy's own turn: {kinds:?}");
+    assert_eq!(kinds[prompted..], ["prompted", "turn_started", "text", "turn_ended", "closed"], "{kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_a_cancel_sent_while_agys_unprompted_turn_waits_out_a_call_comes_before_its_end() {
+    let mut lines = acp_unprompted_with_open_call();
+    lines.push(acp(4, 21_000, "to_agent", json!({"method": "session/cancel", "params": {}})));
+    // agy's next line comes after the call's cut and margin, so the turn ended before it.
+    lines.push(acp_update(5, 215_000, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "later"}})));
+    let (_tmp, path) = written(&lines);
+    let events = replay(&path, vec![]).await;
+    let ends: Vec<&Body> = events.iter().map(|event| &event.body).filter(|body| matches!(body, Body::TurnEnded { .. })).collect();
+    assert!(ends[1] == &Body::TurnEnded { how: TurnEnd::Cancelled }, "the cancel ends agy's own turn: {:?}", kinds(&events));
+}
+
+#[tokio::test]
+async fn replay_an_acp_tool_result_with_no_call_id_is_refused() {
+    let mut lines = acp_unprompted_with_open_call();
+    lines.push(acp_update(4, 20_100, json!({"sessionUpdate": "tool_call_update", "status": "completed"})));
+    let (_tmp, path) = written(&lines);
+    assert!(refused(&path) == ":4: a tool result with no call id");
+}
+
+#[tokio::test]
+async fn replay_a_recording_with_timestamps_near_the_largest_number_plays() {
+    let near = u64::MAX - 10;
+    let (_tmp, path) = written(&[acp_prompt(1, near, 1), acp_update(2, near + 1, json!({"sessionUpdate": "tool_call", "toolCallId": "call_bbbbbbbb", "name": "ask"})), acp_end(3, near + 2, 1)]);
+    assert_eq!(kinds(&replay(&path, vec![]).await), ["started", "prompted", "turn_started", "tool_call", "turn_ended", "closed"]);
+}
+
+#[tokio::test]
+async fn replay_a_prompt_held_behind_a_running_turn_survives_the_steps_that_follow_it() {
+    // 14-workflow-run with a prompt sent during the first turn, after its first tool call and before its result.
+    let mut lines = vec![];
+    for line in lines_of("claude/native/14-workflow-run.jsonl") {
+        let seq = line["seq"].as_u64().unwrap();
+        lines.push(line);
+        if seq == 22 {
+            lines.push(json!({"seq": 1022, "ms": 1_700, "dir": "to_agent", "data": {"type": "user", "message": {"role": "user", "content": "and now?"}}}));
+        }
+    }
+    let (_tmp, path) = written(&lines);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    assert_eq!(kinds.iter().filter(|kind| *kind == "prompted").count(), 2, "the held prompt is played: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_a_recorded_prompt_names_the_play_s_session_not_the_recorded_one() {
+    let session = "2f2e2d2c-2b2a-4929-8827-262524232221";
+    let prompt = acp(1, 0, "to_agent", json!({"id": 1, "method": "session/prompt", "params": {"sessionId": session, "prompt": [{"type": "text", "text": format!("resume {session}")}]}}));
+    let (_tmp, path) = written(&[prompt, acp_end(2, 10, 1)]);
+    let events = replay(&path, vec![]).await;
+    let Body::Started { provider_session, .. } = &events[0].body else { panic!("the first event is not `started`") };
+    let prompted = events.iter().find_map(|event| match &event.body { Body::Prompted { text } => Some(text.clone()), _ => None }).unwrap();
+    assert!(prompted == format!("resume {provider_session}"), "the prompt names the play's session");
+}
+
+#[tokio::test]
+async fn replay_a_script_of_capabilities_alone_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("caps.jsonl");
+    std::fs::write(&path, "{\"capabilities\": {}}\n").unwrap();
+    assert!(refused(&path) == ": no steps");
+}
+
+#[tokio::test]
+async fn replay_a_file_that_grows_past_the_limit_as_it_is_read_is_refused() {
+    // A pipe has no size to read beforehand, as a file still being written has the wrong one.
+    let tmp = tempfile::tempdir().unwrap();
+    let pipe = tmp.path().join("pipe.jsonl");
+    let name = std::ffi::CString::new(pipe.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let writer = std::thread::spawn({
+        let pipe = pipe.clone();
+        move || {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().write(true).open(pipe).unwrap();
+            let chunk = vec![b' '; 1 << 20];
+            for _ in 0..=MAX_SCRIPT_BYTES >> 20 {
+                if file.write_all(&chunk).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    let refusal = refused(&pipe);
+    writer.join().unwrap();
+    assert!(refusal == format!(": too big: {} bytes, over the {MAX_SCRIPT_BYTES} a script may have", MAX_SCRIPT_BYTES + 1));
 }
