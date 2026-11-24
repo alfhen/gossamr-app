@@ -150,3 +150,17 @@ fn run_a_script_that_waits_for_a_first_prompt_with_none_given_fails() {
     assert_eq!(out.status.code(), Some(1), "nothing was played");
     assert!(String::from_utf8(out.stderr).unwrap().contains("the script waits for a prompt; give one on the command line"));
 }
+
+#[test]
+fn run_a_script_that_waits_for_a_prompt_with_steps_left_fails_and_one_that_waits_at_its_end_closes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (waiting, trailing) = (tmp.path().join("waiting.jsonl"), tmp.path().join("trailing.jsonl"));
+    let turn = "{\"prompt\": \"go\"}\n{\"say\": \"first\"}\n{\"end\": \"done\"}\n{\"prompt\": null}\n";
+    std::fs::write(&waiting, format!("{turn}{{\"say\": \"second\"}}\n{{\"end\": \"done\"}}\n")).unwrap();
+    std::fs::write(&trailing, turn).unwrap();
+    let out = run(&tmp.path().join("one"), &["--script".as_ref(), waiting.as_os_str()]);
+    assert_eq!(out.status.code(), Some(1), "the second turn was never played");
+    assert!(String::from_utf8(out.stderr).unwrap().contains("the script waits for a prompt; give one on the command line"));
+    let out = run(&tmp.path().join("two"), &["--script".as_ref(), trailing.as_os_str()]);
+    assert!(out.status.success(), "a script that waits for one more prompt at its end has played to its end");
+}

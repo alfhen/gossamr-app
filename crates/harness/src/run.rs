@@ -70,7 +70,7 @@ pub async fn drive(
     // What the recorded client is to do, and the request or call it is for, which may come in either order.
     let (mut asked, mut called): (Option<String>, Option<String>) = (None, None);
     let (mut answer, mut result): (Option<Decision>, Option<Value>) = (None, None);
-    let (mut followed, mut ended) = (true, false);
+    let mut followed = true;
     loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -78,7 +78,6 @@ pub async fn drive(
                     seen(&event);
                     match &event.body {
                         Body::Closed => return followed,
-                        Body::TurnEnded { .. } | Body::Failed { .. } => ended = true,
                         Body::Permission { id, .. } => asked = Some(id.clone()),
                         Body::ClientToolCall { id, .. } => called = Some(id.clone()),
                         _ => {}
@@ -95,15 +94,13 @@ pub async fn drive(
                 let done = match action {
                     Some(ClientAction::Prompt(recorded)) => match prompt.take().or(recorded) {
                         Some(text) => harness.send(id, text),
-                        // After a turn, a script that waits for one more prompt has played to its end.
                         None => {
-                            if !ended {
-                                eprintln!("harness: the script waits for a prompt; give one on the command line");
-                                followed = false;
-                            }
+                            eprintln!("harness: the script waits for a prompt; give one on the command line");
+                            followed = false;
                             harness.close(id)
                         }
                     },
+                    Some(ClientAction::Close) => harness.close(id),
                     Some(ClientAction::Answer(recorded)) => match answers.next().or(recorded) {
                         Some(decision) => {
                             answer = Some(decision);
