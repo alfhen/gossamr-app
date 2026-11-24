@@ -84,6 +84,8 @@ struct OpenRequest {
     driver_id: String,
     /// An answer is on its way to the task, which checks the request is still open before it records or sends it.
     answered: bool,
+    /// What it asks was cut to fit an event, so the person has not seen all of it: it can only be denied.
+    cut: bool,
 }
 
 enum Request {
@@ -175,7 +177,12 @@ impl Harness {
         {
             let mut open = live.open.lock().unwrap_or_else(|p| p.into_inner());
             match open.get_mut(request) {
-                Some(entry) if !entry.answered => entry.answered = true,
+                Some(entry) if !entry.answered => {
+                    if entry.cut && decision == Decision::Allow {
+                        return Err(Error::Refused(format!("{request} was cut to fit, so not all it asks is shown: it can only be denied")));
+                    }
+                    entry.answered = true;
+                }
                 _ => return Err(Error::NotOpen(request.to_owned())),
             }
         }
@@ -311,23 +318,25 @@ impl Harness {
 
     /// The stored events after `after`. A read writes nothing: the sweep runs on its timer.
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
-        Ok(self.events_page(id, after, usize::MAX)?.0)
+        Ok(self.events_page(id, after, u64::MAX, usize::MAX)?.0)
     }
 
     /// The stored events after `after`, until they would pass `budget` bytes as JSON, and whether more follow.
-    pub fn events_page(&self, id: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
+    pub fn events_page(&self, id: &str, after: u64, upto: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
         self.inner.with_store(|store| {
             store.session(id)?;
-            store.events_page(id, after, budget)
+            store.events_page(id, after, upto, budget)
         })
     }
 
     /// The stored events after `after`, and, while the session runs, a receiver of every event from the moment of the
     /// read, which never falls behind. Both under the store's lock, which a session holds while it stores and sends an
     /// event, so an event is in one or the other and never both. A locked session's events come from the store
-    /// withheld, and whole only to a receiver. The first page of them comes here, with whether more follow; the rest
-    /// are for `events_page`.
-    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, Option<UnboundedReceiver<Event>>)> {
+    /// withheld, and whole only to a receiver. The first page of them comes here, with whether more follow and the
+    /// number of the last stored at that moment: the rest are for `events_page` up to that number, and every later
+    /// event comes to the receiver, whole.
+    #[allow(clippy::type_complexity)]
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, u64, Option<UnboundedReceiver<Event>>)> {
         let live = self.inner.live();
         self.inner.with_store(|store| {
             store.session(id)?;
@@ -336,8 +345,9 @@ impl Harness {
                 live.watchers.lock().unwrap_or_else(|p| p.into_inner()).push(watcher);
                 receiver
             });
-            let (page, more) = store.events_page(id, after, crate::api::PAGE_BYTES)?;
-            Ok((page, more, receiver))
+            let upto = store.last_seq(id)?;
+            let (page, more) = store.events_page(id, after, upto, crate::api::PAGE_BYTES)?;
+            Ok((page, more, upto, receiver))
         })
     }
 
@@ -646,8 +656,20 @@ impl Task {
                     }
                     Some(Body::Permission { id: driver_id, kind, tool, input }) => {
                         let id = format!("p{}", random_hex(8));
-                        self.open_requests().insert(id.clone(), OpenRequest { driver_id, answered: false });
-                        self.emit(Body::Permission { id, kind, tool, input });
+                        let asked = redact::body(Body::Permission { id: id.clone(), kind, tool, input }, &self.secrets);
+                        match crate::event::fit(asked, crate::event::EVENT_MAX) {
+                            (body @ Body::Withheld { .. }, cut) => {
+                                // Too large to show even cut, so no one could answer it: denied at once, and said so.
+                                let message = Some("the request was too large for the harness to show, so it was denied".to_owned());
+                                if self.keep(body, cut) && self.emit(Body::Answered { id, decision: Decision::Deny, message: message.clone() }) {
+                                    let _ = link.commands.send(Command::Answer { id: driver_id, decision: Decision::Deny, message });
+                                }
+                            }
+                            (body, cut) => {
+                                self.open_requests().insert(id, OpenRequest { driver_id, answered: false, cut: cut.is_some() });
+                                self.keep(body, cut);
+                            }
+                        }
                     }
                     Some(Body::Question { id, text }) => {
                         self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone());
@@ -900,14 +922,19 @@ impl Task {
     /// clients get one `failed` event and the last `closed`, numbered 0 since no number could be given, and the
     /// session stops; nothing is written after that, even if the store would take it again.
     fn emit(&self, body: Body) -> bool {
+        // Cut after redaction, so a secret cut in half is masked whole first.
+        let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
+        self.keep(body, cut)
+    }
+
+    /// `emit` for a body already redacted and fitted.
+    fn keep(&self, body: Body, cut: Option<u64>) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
                 self.publish(Event { seq: 0, ms: now_ms(), body, cut: None });
             }
             return false;
         }
-        // Cut after redaction, so a secret cut in half is masked whole first.
-        let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
         // Stored and sent under the store's lock, as `watch` reads and registers under it: a client's read and its live
         // events never overlap, so a locked session's whole event is never taken for the withheld copy the read gave.
         let store = self.inner.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1060,7 +1087,7 @@ mod tests {
         harness.send(&id, "go").unwrap();
         while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
         let handle = watched.lock().unwrap().take().expect("the hook ran");
-        let (stored, _, receiver) = handle.join().unwrap();
+        let (stored, _, _, receiver) = handle.join().unwrap();
         let mut receiver = receiver.expect("the session waits for a prompt");
         let last = stored.last().map_or(0, |event| event.seq);
         harness.send(&id, "again").unwrap();

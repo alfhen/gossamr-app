@@ -30,7 +30,8 @@ pub enum Command {
     TokenNew,
 }
 
-/// A place for the client token that asks the person on each read: a Keychain item that trusts no app.
+/// A suggested place for the client token: a Keychain item that trusts no app. Whether reading it asks the person each
+/// time is for them to check.
 pub const KEYCHAIN_ADD: &str = r#"security add-generic-password -s gossamr-harness -a client -T "" -w"#;
 pub const KEYCHAIN_READ: &str = "security find-generic-password -s gossamr-harness -a client -w";
 
@@ -146,8 +147,10 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
 
 /// The client token, from the first line of stdin, which `--token-stdin` says holds it.
 fn read_token(from_stdin: bool) -> Result<Token> {
-    if !from_stdin {
-        return Err(Error::Refused(format!("give the client token on stdin with --token-stdin, for example: {KEYCHAIN_READ} | harness sessions --token-stdin")));
+    // SAFETY: isatty has no preconditions.
+    let terminal = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
+    if !from_stdin || terminal {
+        return Err(Error::Refused(format!("give the client token on stdin with --token-stdin, piped from where you keep it, for example: {KEYCHAIN_READ} | harness sessions --token-stdin")));
     }
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;

@@ -738,3 +738,64 @@ async fn auth_a_client_gives_up_on_a_harness_that_never_says_hello() {
     let gave_up = tokio::time::timeout(Duration::from_secs(10), Client::connect_within(tmp.path(), &Token::random(), Duration::from_millis(200))).await;
     assert!(matches!(gave_up, Ok(Err(Error::Protocol(ref why))) if why.contains("did not answer")), "{:?}", gave_up.map(|r| r.err()));
 }
+
+/// A permission request whose input is over the event cap, then one whose tool name is.
+fn big_permissions() -> String {
+    let big = "q".repeat(2 << 20);
+    format!(
+        "{{\"prompt\": null}}\n{{\"permission\": {{\"kind\": \"command\", \"tool\": \"Bash\", \"input\": {{\"command\": \"{big}\"}}}}}}\n{{\"permission\": {{\"kind\": \"tool\", \"tool\": \"{big}\"}}}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}"
+    )
+}
+
+#[tokio::test]
+async fn limits_a_cut_permission_request_can_only_be_denied_and_one_too_large_to_show_is_denied_at_once() {
+    let served = serve(&big_permissions());
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    let asked = events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
+    let event = asked.last().unwrap();
+    assert!(event.cut.is_some(), "its input was cut");
+    let Body::Permission { id: request, .. } = &event.body else { unreachable!() };
+    let allow = client.call(Op::Answer { session: id.clone(), request: request.clone(), decision: Decision::Allow, message: None }).await;
+    assert!(matches!(allow, Err(Error::Said(ref why)) if why.contains("only be denied")), "{allow:?}");
+    client.call(Op::Answer { session: id.clone(), request: request.clone(), decision: Decision::Deny, message: None }).await.unwrap();
+
+    // The second request's kept fields alone are over the cap: no one could answer it, so it is denied at once.
+    let rest = events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
+    let kinds: Vec<String> = rest.iter().map(|event| event.body.type_name()).collect();
+    assert_eq!(kinds, ["answered", "withheld", "answered", "turn_ended"], "{kinds:?}");
+    assert!(matches!(&rest[1].body, Body::Withheld { of, .. } if of == "permission") && rest[1].cut.is_some());
+    assert!(matches!(&rest[2].body, Body::Answered { decision: Decision::Deny, message: Some(why), .. } if why.contains("too large")));
+    let started = provider_session(&served, &id);
+    let denied = served.mock.received(&started).iter().filter(|command| matches!(command, harness::driver::Command::Answer { decision: Decision::Deny, .. })).count();
+    assert_eq!(denied, 2, "the agent heard both denials");
+}
+
+#[tokio::test]
+async fn serve_a_client_turned_away_because_too_many_are_proving_is_told_why() {
+    let served = serve_with(SCRIPT, Limits { proving: 1, ..Limits::default() });
+    let _held = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    match Client::connect(&served.dir, &served.token).await {
+        Err(Error::Said(why)) => assert!(why.contains("still proving"), "{why}"),
+        other => panic!("expected a refusal that says why, got {:?}", other.err()),
+    }
+}
+
+#[tokio::test]
+async fn limits_a_message_over_the_limit_from_another_client_closes_its_connection_with_1009() {
+    let served = serve(SCRIPT);
+    let (mut ws, hello) = raw(&served).await;
+    ws.send(Message::text(json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) }).to_string())).await.unwrap();
+    ws.next().await;
+    let big = json!({ "id": 1, "op": "send", "session": "s", "text": "v".repeat(harness::api::MAX_MESSAGE) });
+    let _ = ws.send(Message::text(big.to_string())).await;
+    let mut code = None;
+    while let Ok(Some(Ok(message))) = tokio::time::timeout(Duration::from_secs(60), ws.next()).await {
+        if let Message::Close(frame) = message {
+            code = frame.map(|frame| u16::from(frame.code));
+            break;
+        }
+    }
+    assert_eq!(code, Some(1009), "closed as too big");
+}

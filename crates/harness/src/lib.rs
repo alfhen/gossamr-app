@@ -54,7 +54,7 @@ pub const USAGE: &str = "usage: harness --version
        harness send <session> <text>
        harness answer <session> <request> allow|deny [--message <text>]
        harness token new
-  A safe place for the token is a Keychain item that trusts no app, so each read asks you:
+  One place to keep the token is a Keychain item that trusts no app; check that reading it asks you first:
        security add-generic-password -s gossamr-harness -a client -T \"\" -w     (paste the token when asked)
        security find-generic-password -s gossamr-harness -a client -w | harness sessions --token-stdin";
 

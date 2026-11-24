@@ -2,7 +2,9 @@
 //! first with a [`Hello`]; the client answers it ([`Proof`]) and then sends [`Call`]s. The harness answers each call
 //! by its id, and pushes the events of the sessions the client opened or watches.
 //!
-//! Limits: a message is at most [`MAX_MESSAGE`] each way, and at most [`BEFORE_PROOF_MAX`] until the proof holds. An
+//! Limits: a message is at most [`MAX_MESSAGE`] each way, and at most [`BEFORE_PROOF_MAX`] until the proof holds. The
+//! client module refuses to send a larger call and the connection goes on; a larger message from another client closes
+//! its connection with code 1009. An
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 

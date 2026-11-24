@@ -172,6 +172,12 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The number of the session's last event, even when the sweep has deleted it.
+    pub fn last_seq(&self, session: &str) -> Result<u64> {
+        let seq: i64 = self.conn.query_row("SELECT last_seq FROM sessions WHERE id = ?1", [session], |row| row.get(0))?;
+        Ok(seq as u64)
+    }
+
     /// The session's last stored event, if the sweep has left it one.
     pub fn last_event(&self, session: &str) -> Result<Option<Event>> {
         let mut stmt = self.conn.prepare("SELECT seq FROM events WHERE session = ?1 ORDER BY seq DESC LIMIT 1")?;
@@ -240,16 +246,18 @@ impl Store {
 
     /// The session's events after `after`, in order. An event of a type this build does not know reads as withheld.
     pub fn events(&self, session: &str, after: u64) -> Result<Vec<Event>> {
-        Ok(self.events_page(session, after, usize::MAX)?.0)
+        Ok(self.events_page(session, after, u64::MAX, usize::MAX)?.0)
     }
 
     /// The session's events after `after`, in order, until they would pass `budget` bytes as JSON (at least one), and
     /// whether more follow. Each counts its payload and `EVENT_FRAME` for its number, time and cut.
-    pub fn events_page(&self, session: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
-        let mut stmt =
-            self.conn.prepare("SELECT seq, ms, type, payload, cut FROM events WHERE session = ?1 AND seq > ?2 ORDER BY seq")?;
-        let after = i64::try_from(after).unwrap_or(i64::MAX);
-        let mut rows = stmt.query(params![session, after])?;
+    /// No event past `upto` is read.
+    pub fn events_page(&self, session: &str, after: u64, upto: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT seq, ms, type, payload, cut FROM events WHERE session = ?1 AND seq > ?2 AND seq <= ?3 ORDER BY seq")?;
+        let (after, upto) = (i64::try_from(after).unwrap_or(i64::MAX), i64::try_from(upto).unwrap_or(i64::MAX));
+        let mut rows = stmt.query(params![session, after, upto])?;
         let (mut page, mut bytes) = (vec![], 0);
         while let Some(row) = rows.next()? {
             let (seq, ms, of, payload, cut): (i64, i64, String, String, Option<i64>) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);

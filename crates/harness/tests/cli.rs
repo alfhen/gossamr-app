@@ -319,7 +319,13 @@ fn serve_with_a_client_token_in_its_environment_does_not_start() {
 }
 
 #[test]
-fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting() {
+fn client_with_a_terminal_on_stdin_is_refused_without_waiting_with_or_without_token_stdin() {
+    for flag in [&[][..], &["--token-stdin"]] {
+        terminal_on_stdin_is_refused(flag);
+    }
+}
+
+fn terminal_on_stdin_is_refused(flag: &[&str]) {
     use std::os::fd::{FromRawFd, OwnedFd};
     let (mut main, mut side) = (0, 0);
     // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
@@ -329,6 +335,7 @@ fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting
     let mut child = Command::new(HARNESS)
         .args(["sessions", "--data"])
         .arg(tmp.path())
+        .args(flag)
         .stdin(side)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -339,7 +346,7 @@ fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting
         if let Some(done) = child.try_wait().unwrap() {
             break done;
         }
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for input");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{flag:?}: it waited for input");
         std::thread::yield_now();
     };
     let out = child.wait_with_output().unwrap();

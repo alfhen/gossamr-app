@@ -789,7 +789,7 @@ async fn retention_a_catch_up_read_writes_nothing() {
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE events SET ms = ?1 WHERE seq = 1", [old]).unwrap();
     let before = std::fs::read(dir.join("harness.sqlite")).unwrap();
     let stored = harness.events(&id, 0).unwrap();
-    let (watched, more, _live) = harness.watch(&id, 0).unwrap();
+    let (watched, more, _, _live) = harness.watch(&id, 0).unwrap();
     assert!(!more);
     assert!(std::fs::read(dir.join("harness.sqlite")).unwrap() == before, "the store file is unchanged by the reads");
     assert!(matches!(&stored[0].body, Body::Started { .. }), "a read does not sweep: {stored:?}");
@@ -1592,4 +1592,19 @@ async fn resume_a_session_whose_last_event_says_it_cannot_be_resumed_is_refused(
     .unwrap();
     assert!(harness.events(&id, 0).unwrap().last().is_some_and(|last| last.body == failed));
     assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "refused though the row keeps the id");
+}
+
+#[tokio::test]
+async fn locked_a_watch_reads_its_backlog_a_page_at_a_time() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, std::path::Path::new("/a"), None).unwrap();
+    for n in 0..12 {
+        store.append("a", &Body::Text { text: format!("{n} {}", "b".repeat(500_000)) }, 0).unwrap();
+    }
+    let harness = harness_on(store, &mock(LIFE), 4);
+    let (page, more, upto, _live) = harness.watch("a", 0).unwrap();
+    assert!(more, "6 MB of backlog is more than a page");
+    assert!(serde_json::to_string(&page).unwrap().len() <= harness::api::PAGE_BYTES, "one page at most");
+    assert_eq!(upto, 12, "the read stops where the session was when the watch began");
 }

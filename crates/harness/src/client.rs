@@ -48,6 +48,10 @@ impl Client {
         let (ws, _) = client_async_with_config("ws://harness/", stream, Some(config)).await.map_err(|e| Error::Protocol(e.to_string()))?;
         let mut client = Client { ws, next_id: 0, pushes: VecDeque::new(), hello: Hello { protocol: 0, build: String::new(), challenge: String::new() } };
         let hello = client.read_text().await?;
+        // A harness that turns the connection away says why instead of hello.
+        if let Ok(Reply { error: Some(error), .. }) = serde_json::from_str::<Reply>(&hello) {
+            return Err(Error::Said(error));
+        }
         client.hello = serde_json::from_str(&hello)?;
         if client.hello.protocol != PROTOCOL {
             return Err(Error::Protocol(format!("the harness speaks protocol {}, this client {PROTOCOL}", client.hello.protocol)));
