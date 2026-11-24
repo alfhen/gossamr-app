@@ -28,16 +28,22 @@ use crate::tools::{Endpoint, Reply, ToolCall};
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
     pub turn_limit: usize,
+    /// How far a client of a locked session may fall behind; see `LOCKED_BACKLOG`.
+    pub locked_backlog: usize,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { turn_limit: 4 }
+        Settings { turn_limit: 4, locked_backlog: LOCKED_BACKLOG }
     }
 }
 
-/// The reason of the `failed` a session records when it cannot be resumed. `resume` refuses a session whose last
-/// stored event is this, so a provider id the store failed to clear is never used.
+/// How many events a client of a locked session may fall behind before its watch ends with "events were lost". A locked
+/// session's events are not in the store, so within this a client misses none; past it, the harness holds no more for
+/// it.
+pub const LOCKED_BACKLOG: usize = 1 << 16;
+
+/// The reason of the `failed` a session records when it cannot be resumed; the session's row is marked with it.
 pub const CANNOT_RESUME: &str = "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops";
 
 /// How long a stopped agent may take to go when its driver does not say: above the 15 s `agy acp` was seen to take
@@ -59,8 +65,32 @@ struct Inner {
     starts: AtomicU64,
     /// Set under `live` by `shutdown`: no session starts after it.
     closing: AtomicBool,
-    /// Told each time a session leaves `live`.
+    /// Told each time a session leaves `live`, or says it is stuck.
     left: Notify,
+    locked_backlog: usize,
+    /// The stored key of each token revoked, for the connections that proved it.
+    revoked: broadcast::Sender<[u8; 32]>,
+}
+
+/// A client of a locked session: every event while it keeps up within the backlog, and `lost` once it has not.
+pub(crate) struct Watcher {
+    events: mpsc::Sender<Event>,
+    lost: Arc<AtomicBool>,
+}
+
+/// Where a client's live events come from. A locked session's events are not in the store, so its client gets them on
+/// a channel of its own and is told if it fell too far behind; any other client reads what it missed from the store.
+pub enum Feed {
+    Locked { events: mpsc::Receiver<Event>, lost: Arc<AtomicBool> },
+    Stored(broadcast::Receiver<Event>),
+}
+
+impl Feed {
+    fn locked(backlog: usize) -> (Watcher, Feed) {
+        let (events, receiver) = mpsc::channel(backlog);
+        let lost = Arc::new(AtomicBool::new(false));
+        (Watcher { events, lost: lost.clone() }, Feed::Locked { events: receiver, lost })
+    }
 }
 
 #[derive(Clone)]
@@ -75,9 +105,11 @@ struct Live {
     stopping: Arc<AtomicBool>,
     /// Questions the agent asked that no one has answered.
     questions: Arc<Mutex<HashSet<String>>>,
-    /// Clients that get every event while they listen, however far behind they fall: a locked session's events are
-    /// not in the store, so a client that lost one could not read it back.
-    watchers: Arc<Mutex<Vec<UnboundedSender<Event>>>>,
+    /// A locked session's clients; see `Feed`.
+    watchers: Arc<Mutex<Vec<Watcher>>>,
+    locked: bool,
+    /// The agent has not gone though it was killed: `shutdown` stops waiting for it.
+    stuck: Arc<AtomicBool>,
 }
 
 struct OpenRequest {
@@ -119,17 +151,27 @@ impl Harness {
                 starts: AtomicU64::new(0),
                 closing: AtomicBool::new(false),
                 left: Notify::new(),
+                locked_backlog: settings.locked_backlog,
+                revoked: broadcast::channel(16).0,
             }),
         }
     }
 
     /// Starts a session. The receiver gets every event from the first.
     pub async fn open(&self, spec: Open) -> Result<(String, broadcast::Receiver<Event>)> {
-        self.open_watched(spec, None)
+        let (id, events, _) = self.open_watched(spec)?;
+        Ok((id, events))
     }
 
-    /// Starts a session; `watcher`, if any, gets every event from the first and never falls behind.
-    pub fn open_watched(&self, spec: Open, watcher: Option<UnboundedSender<Event>>) -> Result<(String, broadcast::Receiver<Event>)> {
+    /// Starts a session, with a client's feed of its events from the first.
+    pub fn open_watched(&self, spec: Open) -> Result<(String, broadcast::Receiver<Event>, Feed)> {
+        let (watcher, feed) = match spec.locked {
+            true => {
+                let (watcher, feed) = Feed::locked(self.inner.locked_backlog);
+                (Some(watcher), Some(feed))
+            }
+            false => (None, None),
+        };
         let driver = self.driver(&spec.provider)?;
         let id = random_hex(8);
         self.inner.with_store(|store| {
@@ -141,12 +183,23 @@ impl Harness {
         })?;
         let plan = Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None };
         let events = self.start(&id, watcher, |_| Ok(plan))?;
-        Ok((id, events))
+        let feed = feed.unwrap_or_else(|| Feed::Stored(events.resubscribe()));
+        Ok((id, events, feed))
     }
 
     /// Starts a session again by its provider's session id, with a new tools token. A running or cleaned-up session
-    /// is refused, and so is one that ends with its client or whose last stored event says it cannot be resumed.
+    /// is refused, and so is one that ends with its client, one marked as one that cannot be resumed, and one handed
+    /// over to Terminal: that one only through `take_back`.
     pub async fn resume(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
+        self.resume_from(id, false)
+    }
+
+    /// Resumes a session handed over to Terminal, once the person has said they took it back from there.
+    pub async fn take_back(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
+        self.resume_from(id, true)
+    }
+
+    fn resume_from(&self, id: &str, taken_back: bool) -> Result<broadcast::Receiver<Event>> {
         self.start(id, None, |store| {
             let row = store.session(id)?;
             if row.cleaned {
@@ -155,9 +208,13 @@ impl Harness {
             if row.ends_with_client {
                 return Err(Error::EndedWithClient(id.to_owned()));
             }
-            if store.last_event(id)?.is_some_and(|last| matches!(last.body, Body::Failed { reason, .. } if reason == CANNOT_RESUME)) {
+            if row.cannot_resume {
                 return Err(Error::CannotResume(id.to_owned()));
             }
+            if row.handed_over && !taken_back {
+                return Err(Error::HandedOver(id.to_owned()));
+            }
+            store.set_handed_over(id, false)?;
             let provider_session =
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
             Ok(Plan { driver: self.driver(&row.provider)?, cwd: row.cwd, locked: row.locked, model: row.model, resume: Some(provider_session) })
@@ -228,9 +285,10 @@ impl Harness {
         live.requests.send(request).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
-    /// Stops every session, waits until each has recorded its `closed`, and frees the data folder. Nothing starts
-    /// after it. An agent that never goes keeps it waiting, as it keeps its session taken.
-    pub async fn shutdown(&self) {
+    /// Stops every session, waits until each has recorded its `closed` or said its agent is stuck, and frees the data
+    /// folder. Nothing starts after it. A stuck session gets a last `failed` that says the harness gave up on it, and
+    /// is named in what this returns; its agent may still run, for the next start to find.
+    pub async fn shutdown(&self) -> Vec<String> {
         let running: Vec<Live> = {
             let live = self.inner.live();
             self.inner.closing.store(true, Ordering::Relaxed);
@@ -244,17 +302,30 @@ impl Harness {
             let left = self.inner.left.notified();
             tokio::pin!(left);
             left.as_mut().enable();
-            if self.inner.live().is_empty() {
+            if self.inner.live().values().all(|live| live.stuck.load(Ordering::Relaxed)) {
                 break;
             }
             left.await;
         }
-        *self.inner.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        let live = self.inner.live();
+        let mut store = self.inner.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let stuck: Vec<String> = live.keys().cloned().collect();
+        if let Some(store) = store.as_ref() {
+            for id in &stuck {
+                let reason = "the harness shut down without waiting longer for this agent, which may still run".to_owned();
+                let _ = store.append(id, &Body::Failed { kind: FailKind::Stuck, reason }, now_ms());
+            }
+        }
+        *store = None;
+        stuck
     }
 
-    /// Drops payload past 30 days and deletes old sessions' event rows; see `Store::sweep`.
+    /// Drops payload past 30 days and deletes old sessions' event rows, but never a running session's; see
+    /// `Store::sweep`.
     pub fn sweep(&self) -> Result<usize> {
-        self.inner.with_store(|store| store.sweep(now_ms()))
+        let live = self.inner.live();
+        let running: Vec<String> = live.keys().cloned().collect();
+        self.inner.with_store(|store| store.sweep_except(now_ms(), &running))
     }
 
     /// Sweeps every `every`, first one `every` from now, until the harness shuts down. `swept` counts the sweeps.
@@ -291,8 +362,21 @@ impl Harness {
         self.inner.with_store(Store::client_tokens)
     }
 
+    /// Revokes a token and tells the connections that proved it, which end.
     pub fn revoke_client_token(&self, id: i64) -> Result<()> {
-        self.inner.with_store(|store| store.revoke_client_token(id))
+        let key = self.inner.with_store(|store| store.revoke_client_token(id))?;
+        let _ = self.inner.revoked.send(key);
+        Ok(())
+    }
+
+    /// How far a client of a locked session may fall behind.
+    pub fn locked_backlog(&self) -> usize {
+        self.inner.locked_backlog
+    }
+
+    /// The stored keys of tokens as they are revoked.
+    pub fn revocations(&self) -> broadcast::Receiver<[u8; 32]> {
+        self.inner.revoked.subscribe()
     }
 
     pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
@@ -335,15 +419,17 @@ impl Harness {
     /// withheld, and whole only to a receiver. The first page of them comes here, with whether more follow and the
     /// number of the last stored at that moment: the rest are for `events_page` up to that number, and every later
     /// event comes to the receiver, whole.
-    #[allow(clippy::type_complexity)]
-    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, u64, Option<UnboundedReceiver<Event>>)> {
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, u64, Option<Feed>)> {
         let live = self.inner.live();
         self.inner.with_store(|store| {
             store.session(id)?;
-            let receiver = live.get(id).map(|live| {
-                let (watcher, receiver) = mpsc::unbounded_channel();
-                live.watchers.lock().unwrap_or_else(|p| p.into_inner()).push(watcher);
-                receiver
+            let receiver = live.get(id).map(|live| match live.locked {
+                true => {
+                    let (watcher, feed) = Feed::locked(self.inner.locked_backlog);
+                    live.watchers.lock().unwrap_or_else(|p| p.into_inner()).push(watcher);
+                    feed
+                }
+                false => Feed::Stored(live.events.subscribe()),
             });
             let upto = store.last_seq(id)?;
             let (page, more) = store.events_page(id, after, upto, crate::api::PAGE_BYTES)?;
@@ -379,7 +465,7 @@ impl Harness {
     /// Takes the session's id before the driver opens, so one session never runs two agents; a failed open frees it.
     /// `plan` reads the session's row under the same lock that clean-up and a task's close take, so a start never
     /// begins from a row being cleaned up, or before the last start's `closed`.
-    fn start(&self, id: &str, watcher: Option<UnboundedSender<Event>>, plan: impl FnOnce(&Store) -> Result<Plan>) -> Result<broadcast::Receiver<Event>> {
+    fn start(&self, id: &str, watcher: Option<Watcher>, plan: impl FnOnce(&Store) -> Result<Plan>) -> Result<broadcast::Receiver<Event>> {
         let token = Secret::random();
         let secrets = vec![token.expose().to_owned()];
         let (events, receiver) = broadcast::channel(1024);
@@ -390,6 +476,7 @@ impl Harness {
         let stopping = Arc::new(AtomicBool::new(false));
         let questions = Arc::new(Mutex::new(HashSet::new()));
         let watchers = Arc::new(Mutex::new(watcher.into_iter().collect()));
+        let stuck = Arc::new(AtomicBool::new(false));
         #[cfg(test)]
         tests::before_reserve();
         let Plan { driver, cwd, locked, model, resume } = {
@@ -409,6 +496,8 @@ impl Harness {
                 stopping: stopping.clone(),
                 questions: questions.clone(),
                 watchers: watchers.clone(),
+                locked: plan.locked,
+                stuck: stuck.clone(),
             };
             live.insert(id.to_owned(), entry);
             plan
@@ -432,6 +521,7 @@ impl Harness {
             stopping,
             questions,
             watchers,
+            stuck,
             broken: AtomicBool::new(false),
         };
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
@@ -583,7 +673,8 @@ struct Task {
     open: Arc<Mutex<HashMap<String, OpenRequest>>>,
     stopping: Arc<AtomicBool>,
     questions: Arc<Mutex<HashSet<String>>>,
-    watchers: Arc<Mutex<Vec<UnboundedSender<Event>>>>,
+    watchers: Arc<Mutex<Vec<Watcher>>>,
+    stuck: Arc<AtomicBool>,
     /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
     broken: AtomicBool,
 }
@@ -765,7 +856,13 @@ impl Task {
                         }
                     }
                     Some(Request::HandOver) => {
-                        self.emit(Body::HandedOver);
+                        // Marked before it is said, so a resume never starts a session Terminal now holds.
+                        match self.inner.with_store(|store| store.set_handed_over(&self.id, true)) {
+                            Ok(()) => {
+                                self.emit(Body::HandedOver);
+                            }
+                            Err(e) => self.store_failed(&e),
+                        }
                         break 'run true;
                     }
                     Some(Request::Stop) | None => break 'run true,
@@ -824,6 +921,8 @@ impl Task {
         }
         if !gone {
             self.diagnose(&mut going, FailKind::Stuck, "the agent has not gone though it was killed; the session stays running until it does");
+            self.stuck.store(true, Ordering::Relaxed);
+            self.inner.left.notify_waiters();
             self.drain(link, None, &mut going).await;
         }
         if going.turn != Turn::Idle {
@@ -875,8 +974,8 @@ impl Task {
     /// id that holds a secret is not kept, and nor is an earlier one, which no longer names the agent's session: the
     /// session says so, and false says it must stop. A row the store would not change is a broken store: the session
     /// never goes on with an id it could not keep or clear.
-    /// An id that is not kept is cleared after the `failed` that says so is recorded, so if the clear fails, that
-    /// `failed` is the last stored event and `resume` still refuses the session.
+    /// An id that is not kept is cleared in the same transaction that marks the row and records the `failed` that says
+    /// so: `resume` reads the mark, which a locked session's withheld events or the sweep cannot take away.
     fn started(&self, body: Body) -> bool {
         let Body::Started { provider_session, .. } = &body else { unreachable!("only a `started` is passed") };
         let safe = redact::text(provider_session, &self.secrets) == *provider_session;
@@ -888,9 +987,14 @@ impl Task {
             return self.emit(body);
         }
         self.emit(body);
-        self.fail(FailKind::Driver, CANNOT_RESUME);
-        if let Err(e) = self.inner.with_store(|store| store.set_provider_session(&self.id, None)) {
-            self.store_failed(&e);
+        let failed = Body::Failed { kind: FailKind::Driver, reason: CANNOT_RESUME.to_owned() };
+        let store = self.inner.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match store.as_ref().ok_or(Error::ShutDown).and_then(|store| store.refuse_resume(&self.id, &failed, now_ms())) {
+            Ok(event) => self.publish(event),
+            Err(e) => {
+                drop(store);
+                self.store_failed(&e);
+            }
         }
         false
     }
@@ -956,9 +1060,17 @@ impl Task {
         }
     }
 
-    /// Sends the event to the session's clients. A watcher that has gone is dropped.
+    /// Sends the event to the session's clients. A watcher that has gone is dropped, and so is one past its backlog,
+    /// which is marked as having lost events.
     fn publish(&self, event: Event) {
-        self.watchers.lock().unwrap_or_else(|p| p.into_inner()).retain(|watcher| watcher.send(event.clone()).is_ok());
+        self.watchers.lock().unwrap_or_else(|p| p.into_inner()).retain(|watcher| match watcher.events.try_send(event.clone()) {
+            Ok(()) => true,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                watcher.lost.store(true, Ordering::Relaxed);
+                false
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        });
         let _ = self.events.send(event);
     }
 
@@ -1088,7 +1200,7 @@ mod tests {
         while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
         let handle = watched.lock().unwrap().take().expect("the hook ran");
         let (stored, _, _, receiver) = handle.join().unwrap();
-        let mut receiver = receiver.expect("the session waits for a prompt");
+        let Some(Feed::Locked { events: mut receiver, .. }) = receiver else { panic!("a locked session's feed") };
         let last = stored.last().map_or(0, |event| event.seq);
         harness.send(&id, "again").unwrap();
         let first_live = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();

@@ -16,11 +16,12 @@ use crate::auth::{Token, encode};
 use crate::error::{Error, Result};
 use crate::event::Event;
 
-/// What the harness pushes: an event of a session, or the end of a watch.
+/// What the harness pushes: an event of a session, the end of a watch, or the end of one that lost events, with why.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Push {
     Event { session: String, event: Event },
     End { session: String },
+    Lost { session: String, reason: String },
 }
 
 pub struct Client {
@@ -140,8 +141,9 @@ const CLOSED: &str = "the harness closed the connection";
 
 fn into_push(reply: Reply) -> Option<Push> {
     let session = reply.session?;
-    match reply.event {
-        Some(event) => Some(Push::Event { session, event }),
-        None => reply.end.then_some(Push::End { session }),
+    match (reply.event, reply.error) {
+        (Some(event), _) => Some(Push::Event { session, event }),
+        (None, Some(reason)) if reply.end => Some(Push::Lost { session, reason }),
+        (None, _) => reply.end.then_some(Push::End { session }),
     }
 }

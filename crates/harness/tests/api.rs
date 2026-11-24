@@ -533,7 +533,8 @@ async fn requests_a_question_is_answered_as_the_next_prompt_and_hand_over_keeps_
     let rest = events_until(&mut client, |body| *body == Body::Closed).await;
     assert_eq!(rest.iter().map(|event| event.body.type_name()).collect::<Vec<_>>(), ["handed_over", "closed"]);
     let provider = provider_session(&served, &id);
-    let mut resumed = served.harness.resume(&id).await.expect("a session handed over can be resumed");
+    assert!(matches!(served.harness.resume(&id).await, Err(Error::HandedOver(_))), "not resumed while Terminal may hold it");
+    let mut resumed = served.harness.take_back(&id).await.expect("taken back, it resumes from the kept id");
     assert_eq!(resumed.recv().await.unwrap().body, Body::Started { provider_session: provider, resumed: true });
 }
 

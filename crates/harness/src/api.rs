@@ -7,6 +7,8 @@
 //! its connection with code 1009. An
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
+//!
+//! No call resumes a session yet: H10 adds resuming after a restart, and H14 adds taking a handed-over session back.
 
 use std::path::{Path, PathBuf};
 

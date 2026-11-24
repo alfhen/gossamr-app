@@ -26,6 +26,8 @@ pub enum Error {
     /// The session said it cannot be resumed.
     CannotResume(String),
     NoQuestion(String),
+    /// The session was handed over to Terminal; only taking it back resumes it.
+    HandedOver(String),
     /// The harness has shut down, or is shutting down.
     ShutDown,
     /// A Unix socket path this platform cannot take.
@@ -66,6 +68,7 @@ impl fmt::Display for Error {
             Error::EndedWithClient(id) => write!(f, "session {id} ended with its client and is not resumed"),
             Error::CannotResume(id) => write!(f, "session {id} said it cannot be resumed"),
             Error::NoQuestion(id) => write!(f, "no open question {id}"),
+            Error::HandedOver(id) => write!(f, "session {id} was handed over to Terminal: resume it only once you have taken it back"),
             Error::ShutDown => write!(f, "the harness has shut down"),
             Error::SocketPathTooLong { path, len, max } => {
                 write!(f, "the socket path {} is {len} bytes, and this platform takes at most {max}: use a shorter data folder", path.display())

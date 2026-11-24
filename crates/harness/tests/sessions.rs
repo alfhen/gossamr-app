@@ -1381,7 +1381,7 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
     assert_eq!(types(&all), ["started", "failed", "closed"], "the session stopped, with no prompt");
     assert_eq!(*received.lock().unwrap(), [Command::Stop], "no prompt reached the agent");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
-    assert!(matches!(harness.resume(&id).await, Err(Error::Driver(_))), "a session with no kept id cannot be resumed");
+    assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "a session with no kept id cannot be resumed");
 }
 
 #[tokio::test]
@@ -1419,7 +1419,7 @@ async fn redact_a_resumed_session_whose_agent_names_a_secret_id_drops_the_earlie
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     let again = harness.resume(&id).await;
     assert!(
-        matches!(&again, Err(Error::Driver(reason)) if reason.contains("no provider session id")),
+        matches!(&again, Err(Error::CannotResume(_))),
         "the earlier id no longer names the agent's session, so it is not resumed by"
     );
     assert_eq!(*opens.lock().unwrap(), [None, Some("plain-first".to_owned())], "the refused resume reached no driver");
@@ -1551,9 +1551,9 @@ async fn locked_a_client_that_falls_behind_misses_no_event() {
         .collect::<Vec<_>>()
         .join("\n");
     let harness = harness(&dir, &mock(&script), 4);
-    let (watcher, mut watched) = tokio::sync::mpsc::unbounded_channel();
     let spec = harness::session::Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), ..Default::default() };
-    let (id, mut events) = harness.open_watched(spec, Some(watcher)).unwrap();
+    let (id, mut events, feed) = harness.open_watched(spec).unwrap();
+    let harness::session::Feed::Locked { events: mut watched, .. } = feed else { panic!("a locked session's feed drops none") };
     harness.send(&id, "go").unwrap();
     // The watcher is not read until the session has closed, far more events than the live channel holds.
     loop {
@@ -1576,22 +1576,34 @@ async fn locked_a_client_that_falls_behind_misses_no_event() {
 }
 
 #[tokio::test]
-async fn resume_a_session_whose_last_event_says_it_cannot_be_resumed_is_refused() {
+async fn resume_a_locked_session_that_said_it_cannot_be_resumed_stays_refused_after_a_reopen_and_with_its_rows_gone() {
     let (_tmp, dir) = data_dir();
-    let harness = harness(&dir, &mock(LIFE), 4);
-    let (id, mut events) = open(&harness, false).await;
-    harness.close(&id).unwrap();
+    struct Secretive(String);
+    impl Driver for Secretive {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: format!("session-{}", self.0), resumed: false }).unwrap();
+            tokio::spawn(async move {
+                let _output = output;
+                while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("secretive".into(), Arc::new(Secretive(example("GitHub token"))))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers.clone(), settings(4));
+    let (id, mut events) = open_on(&harness, "secretive", true).await;
     until(&mut events, |body| *body == Body::Closed).await;
-    // As if the write that cleared the provider id had failed after the `failed` that says so was stored.
-    let failed = Body::Failed { kind: FailKind::Driver, reason: harness::session::CANNOT_RESUME.into() };
-    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
-    raw.execute(
-        "INSERT INTO events (session, seq, ms, type, payload, withheld) VALUES (?1, 100, 0, 'failed', ?2, 0)",
-        [&id, &serde_json::to_string(&failed).unwrap()],
-    )
-    .unwrap();
-    assert!(harness.events(&id, 0).unwrap().last().is_some_and(|last| last.body == failed));
-    assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "refused though the row keeps the id");
+    harness.shutdown().await;
+    drop(harness);
+    // A locked session's `failed` keeps no reason, and the sweep can delete the rows: the mark is on the session.
+    rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("DELETE FROM events WHERE session = ?1", [&id]).unwrap();
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "refused after a reopen, with no event left");
 }
 
 #[tokio::test]

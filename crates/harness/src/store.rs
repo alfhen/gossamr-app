@@ -37,10 +37,24 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     CREATE INDEX events_kept_by_age ON events (ms) WHERE withheld = 0;",
     "CREATE TABLE client_tokens (stored_key BLOB PRIMARY KEY, created_ms INTEGER NOT NULL);
     ALTER TABLE events ADD COLUMN cut INTEGER;",
-    // `last_seq` keeps the numbers going once the sweep has deleted a session's rows.
+    // `last_seq` keeps the numbers going once the sweep has deleted a session's rows; `last_ms` lets the sweep find an
+    // idle session without reading its events. Token ids come from AUTOINCREMENT, so a revoked one is never reused.
     "ALTER TABLE sessions ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;
     UPDATE sessions SET last_seq = (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = sessions.id);
-    ALTER TABLE sessions ADD COLUMN ends_with_client INTEGER NOT NULL DEFAULT 0;"];
+    ALTER TABLE sessions ADD COLUMN last_ms INTEGER NOT NULL DEFAULT 0;
+    UPDATE sessions SET last_ms = COALESCE((SELECT MAX(ms) FROM events WHERE session = sessions.id), created_ms);
+    ALTER TABLE sessions ADD COLUMN ends_with_client INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN cannot_resume INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE sessions ADD COLUMN handed_over INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, stored_key BLOB NOT NULL UNIQUE, created_ms INTEGER NOT NULL);
+    INSERT INTO tokens (id, stored_key, created_ms) SELECT rowid, stored_key, created_ms FROM client_tokens ORDER BY rowid;
+    DROP TABLE client_tokens;
+    ALTER TABLE tokens RENAME TO client_tokens;"];
+
+/// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
+/// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
+pub const SWEEP_ROWS: &str = "DELETE FROM events WHERE session IN (SELECT id FROM sessions
+    WHERE (cleaned_ms < ?1 OR (cleaned_ms IS NULL AND last_ms < ?2)) AND id NOT IN (SELECT value FROM json_each(?3)))";
 
 pub const KEEP_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// The most an event adds to its payload as JSON: `"seq"`, `"ms"`, `"cut"` and their separators.
@@ -75,6 +89,10 @@ pub struct SessionRow {
     pub provider_session: Option<String>,
     pub cleaned: bool,
     pub ends_with_client: bool,
+    /// The session said it cannot be resumed: its provider id was not kept.
+    pub cannot_resume: bool,
+    /// Its last stop was a hand over to Terminal.
+    pub handed_over: bool,
 }
 
 /// A session as `sessions` lists it.
@@ -136,7 +154,8 @@ impl Store {
     pub fn session(&self, id: &str) -> Result<SessionRow> {
         self.conn
             .query_row(
-                "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client FROM sessions WHERE id = ?1",
+                "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over
+                 FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -147,6 +166,8 @@ impl Store {
                         provider_session: row.get(4)?,
                         cleaned: row.get(5)?,
                         ends_with_client: row.get(6)?,
+                        cannot_resume: row.get(7)?,
+                        handed_over: row.get(8)?,
                     })
                 },
             )
@@ -178,13 +199,6 @@ impl Store {
         Ok(seq as u64)
     }
 
-    /// The session's last stored event, if the sweep has left it one.
-    pub fn last_event(&self, session: &str) -> Result<Option<Event>> {
-        let mut stmt = self.conn.prepare("SELECT seq FROM events WHERE session = ?1 ORDER BY seq DESC LIMIT 1")?;
-        let Some(seq) = stmt.query_row([session], |row| row.get::<_, i64>(0)).optional()? else { return Ok(None) };
-        Ok(self.events(session, seq as u64 - 1)?.pop())
-    }
-
     /// Adds a token by its stored key, unless there are `MAX_CLIENT_TOKENS` already. The count and the insert are one
     /// statement, so two adds at once cannot pass the cap.
     pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
@@ -199,18 +213,38 @@ impl Store {
     }
 
     pub fn client_tokens(&self) -> Result<Vec<ClientToken>> {
-        let mut stmt = self.conn.prepare("SELECT rowid, created_ms, stored_key FROM client_tokens ORDER BY rowid")?;
+        let mut stmt = self.conn.prepare("SELECT id, created_ms, stored_key FROM client_tokens ORDER BY id")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, Vec<u8>>(2)?)))?;
         let rows = rows.collect::<rusqlite::Result<Vec<(i64, i64, Vec<u8>)>>>()?;
         Ok(rows.into_iter().filter_map(|(id, created_ms, key)| Some(ClientToken { id, created_ms, stored_key: key.try_into().ok()? })).collect())
     }
 
-    /// Revokes a token, unless it is the last: with none, no client could reach the harness again. One statement.
-    pub fn revoke_client_token(&self, id: i64) -> Result<()> {
-        let revoked = self.conn.execute("DELETE FROM client_tokens WHERE rowid = ?1 AND (SELECT COUNT(*) FROM client_tokens) > 1", [id])?;
-        if revoked == 0 {
-            return Err(Error::Refused(format!("no client token {id} to revoke, or it is the last one")));
+    /// Revokes a token, unless it is the last: with none, no client could reach the harness again. Gives its stored key.
+    pub fn revoke_client_token(&self, id: i64) -> Result<[u8; 32]> {
+        let tx = self.conn.unchecked_transaction()?;
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM client_tokens", [], |row| row.get(0))?;
+        let key: Option<Vec<u8>> = tx.query_row("SELECT stored_key FROM client_tokens WHERE id = ?1", [id], |row| row.get(0)).optional()?;
+        let key = key.and_then(|key| <[u8; 32]>::try_from(key).ok()).ok_or_else(|| Error::Refused(format!("no client token {id}")))?;
+        if count <= 1 {
+            return Err(Error::Refused("the last client token cannot be revoked: add another first".into()));
         }
+        tx.execute("DELETE FROM client_tokens WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(key)
+    }
+
+    /// Clears the session's provider id and marks it as one that cannot be resumed, with the `failed` that says so, in
+    /// one transaction: no stale id is ever left without the mark.
+    pub fn refuse_resume(&self, session: &str, failed: &Body, ms: i64) -> Result<Event> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE sessions SET provider_session = NULL, cannot_resume = 1 WHERE id = ?1", [session])?;
+        let event = self.insert_event(session, failed, ms, None)?;
+        tx.commit()?;
+        Ok(event)
+    }
+
+    pub fn set_handed_over(&self, session: &str, handed_over: bool) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET handed_over = ?2 WHERE id = ?1", params![session, handed_over])?;
         Ok(())
     }
 
@@ -228,19 +262,27 @@ impl Store {
 
     /// As `append`, for a body that was cut by `cut` bytes.
     pub fn append_cut(&self, session: &str, body: &Body, ms: i64, cut: Option<u64>) -> Result<Event> {
+        let tx = self.conn.unchecked_transaction()?;
+        let event = self.insert_event(session, body, ms, cut)?;
+        tx.commit()?;
+        Ok(event)
+    }
+
+    /// Numbers and stores an event; the caller holds the transaction.
+    fn insert_event(&self, session: &str, body: &Body, ms: i64, cut: Option<u64>) -> Result<Event> {
         let row = self.session(session)?;
         let withheld = row.locked || row.cleaned;
         let payload = serde_json::to_string(&if withheld { body.withheld() } else { body.clone() })?;
-        let tx = self.conn.unchecked_transaction()?;
-        let seq = tx.query_row("UPDATE sessions SET last_seq = MAX(last_seq, (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = ?1)) + 1
-             WHERE id = ?1 RETURNING last_seq", [session], |row| {
-            row.get::<_, i64>(0)
-        })?;
-        tx.execute(
+        let seq = self.conn.query_row(
+            "UPDATE sessions SET last_seq = MAX(last_seq, (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = ?1)) + 1, last_ms = ?2
+             WHERE id = ?1 RETURNING last_seq",
+            params![session, ms],
+            |row| row.get::<_, i64>(0),
+        )?;
+        self.conn.execute(
             "INSERT INTO events (session, seq, ms, type, payload, withheld, cut) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![session, seq, ms, body.type_name(), payload, withheld, cut.map(|cut| cut as i64)],
         )?;
-        tx.commit()?;
         Ok(Event { seq: seq as u64, ms, body: body.clone(), cut })
     }
 
@@ -285,13 +327,15 @@ impl Store {
     /// Drops the private fields of every event older than 30 days at `now`, and deletes the event rows of a session
     /// cleaned up more than 30 days ago, or never cleaned up and with no event in 90 days. Says how many rows changed.
     pub fn sweep(&self, now: i64) -> Result<usize> {
+        self.sweep_except(now, &[])
+    }
+
+    /// As `sweep`, but the rows of the sessions in `running` stay.
+    pub fn sweep_except(&self, now: i64, running: &[String]) -> Result<usize> {
         let tx = self.conn.unchecked_transaction()?;
         let withheld = tx.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND ms < ?1", WITHHOLD.as_str()), [now - KEEP_MS])?;
-        let deleted = tx.execute(
-            "DELETE FROM events WHERE session IN (SELECT id FROM sessions WHERE cleaned_ms < ?1
-                OR (cleaned_ms IS NULL AND (SELECT MAX(ms) FROM events e WHERE e.session = sessions.id) < ?2))",
-            params![now - ROWS_AFTER_CLEAN_UP_MS, now - ROWS_AFTER_LAST_EVENT_MS],
-        )?;
+        let running = serde_json::to_string(running)?;
+        let deleted = tx.execute(SWEEP_ROWS, params![now - ROWS_AFTER_CLEAN_UP_MS, now - ROWS_AFTER_LAST_EVENT_MS, running])?;
         tx.commit()?;
         Ok(withheld + deleted)
     }

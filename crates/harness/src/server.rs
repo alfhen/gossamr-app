@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::Notify;
-use tokio::sync::mpsc::{self, Sender, UnboundedReceiver};
+use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::mpsc::{self, Sender};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -28,7 +29,7 @@ use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
 use crate::event::{Body, Event};
-use crate::session::{Harness, Open, Settings};
+use crate::session::{Feed, Harness, Open, Settings};
 use crate::store::Store;
 
 /// How often the sweep runs while the harness serves.
@@ -131,7 +132,8 @@ impl Server {
     /// data folder is free, and the socket and the descriptor are gone.
     pub async fn run(self) -> Result<()> {
         let Server { harness, listener, dir, stops: (mut term, mut int), limits, sweep_every } = self;
-        let (sweeper, _) = harness.sweep_on_timer(sweep_every);
+        // Aborted with `run` too, so a server dropped mid-run holds no harness, and no data folder, through it.
+        let _sweeper = AbortOnDrop(harness.sweep_on_timer(sweep_every).0);
         let stop = Arc::new(Notify::new());
         let mut connections = JoinSet::new();
         let (proving, proven) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
@@ -159,11 +161,21 @@ impl Server {
         }
         drop(listener);
         let _ = std::fs::remove_file(dir.join(crate::api::SOCKET));
-        harness.shutdown().await;
+        let left = harness.shutdown().await;
+        if !left.is_empty() {
+            eprintln!("harness: shut down without waiting longer for the stuck agents of sessions {}", left.join(", "));
+        }
         connections.shutdown().await;
-        sweeper.abort();
         let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
         Ok(())
+    }
+}
+
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -200,6 +212,8 @@ async fn send(ws: &mut Ws, reply: &Reply) -> Result<()> {
 }
 
 async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>, stop: Arc<Notify>) {
+    // Before the proof, so a revoke during it is heard too.
+    let mut revoked = harness.revocations();
     let checked = tokio::time::timeout(limits.proof_within, async {
         let mut ws = accept_async_with_config(stream, Some(config())).await.ok()?;
         let proof = prove(&harness, &mut ws).await;
@@ -225,14 +239,23 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
     let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
     let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![] };
     loop {
+        // A revoke is heard before anything else, so nothing reaches this client after its token's revoke has answered.
         tokio::select! {
+            biased;
+            heard = revoked.recv() => {
+                let gone = match heard {
+                    Ok(gone) => gone == client.key,
+                    Err(broadcast::error::RecvError::Lagged(_)) => !client.harness.client_tokens().is_ok_and(|tokens| tokens.iter().any(|token| token.stored_key == client.key)),
+                    Err(broadcast::error::RecvError::Closed) => false,
+                };
+                if gone {
+                    let reason = "this connection's token was revoked";
+                    let _ = ws.close(Some(CloseFrame { code: CloseCode::Policy, reason: reason.into() })).await;
+                    break;
+                }
+            }
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    // A revoked token's connections end at their next call.
-                    if !client.harness.client_tokens().is_ok_and(|tokens| tokens.iter().any(|token| token.stored_key == client.key)) {
-                        let _ = send(&mut ws, &Reply { error: Some("this connection's token was revoked".into()), ..Reply::default() }).await;
-                        break;
-                    }
                     let (reply, shut) = client.call(text.as_str()).await;
                     if send(&mut ws, &reply).await.is_err() {
                         break;
@@ -321,8 +344,7 @@ impl Client {
         let done = |result: Result<()>| result.map(|()| Value::Null);
         match op {
             Op::Open { provider, cwd, locked, model, ends_with_client } => {
-                let (watcher, events) = mpsc::unbounded_channel();
-                let (id, _) = harness.open_watched(Open { provider, cwd, locked, model, ends_with_client }, Some(watcher))?;
+                let (id, _, events) = harness.open_watched(Open { provider, cwd, locked, model, ends_with_client })?;
                 if ends_with_client {
                     self.ends_with_it.push(id.clone());
                 }
@@ -365,14 +387,14 @@ impl Client {
             }
             Op::TokenRevoke { token } => done(harness.revoke_client_token(token)),
             Op::Shutdown => {
-                harness.shutdown().await;
-                Ok(Value::Null)
+                let left = harness.shutdown().await;
+                Ok(json!({ "left": left }))
             }
         }
     }
 
     /// `stored` is the first page of the backlog, whether more follow, and the last number it reaches.
-    fn watch(&mut self, session: String, stored: (Vec<Event>, bool, u64), live: Option<UnboundedReceiver<Event>>, after: u64) {
+    fn watch(&mut self, session: String, stored: (Vec<Event>, bool, u64), live: Option<Feed>, after: u64) {
         let task = forward(self.harness.clone(), session.clone(), stored, live, after, self.out.clone());
         self.watching.insert(session, self.watches.spawn(task));
     }
@@ -385,31 +407,52 @@ async fn push(out: &Sender<Reply>, session: &str, event: Event) -> bool {
 /// Pushes `stored`, the pages of the store that follow it while `more`, then each live event numbered past `after` and
 /// not already pushed, until the session closes; then the end of the watch. The live events come on a channel that
 /// drops none, so a client that falls behind misses nothing.
-async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u64), live: Option<UnboundedReceiver<Event>>, after: u64, out: Sender<Reply>) {
+async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u64), mut live: Option<Feed>, after: u64, out: Sender<Reply>) {
     let mut last = after;
-    // The store is read only up to where the receiver begins: an event stored after that comes to it whole.
+    // The store is read only up to where the feed begins: an event stored after that comes on the feed.
     let (page, more, upto) = stored;
     match pages(&harness, &session, page, more, upto, &mut last, &out).await {
         Some(false) => {}
         Some(true) => return finish(&out, session).await,
         None => return,
     }
-    if let Some(mut live) = live {
-        while let Some(event) = live.recv().await {
-            let closed = event.body == Body::Closed;
-            // An event numbered 0 was not stored, so it cannot have been pushed before.
-            if event.seq == 0 || event.seq > last {
-                last = last.max(event.seq);
-                if !push(&out, &session, event).await {
-                    return;
+    let mut lost = None;
+    loop {
+        let event = match &mut live {
+            None => break,
+            Some(Feed::Locked { events, lost: behind }) => match events.recv().await {
+                Some(event) => event,
+                None => {
+                    if behind.load(Ordering::Relaxed) {
+                        lost = Some(format!("events were lost: this client fell more than {} events behind a locked session, whose events are not stored", harness.locked_backlog()));
+                    }
+                    break;
                 }
-            }
-            if closed {
-                break;
+            },
+            Some(Feed::Stored(events)) => match events.recv().await {
+                Ok(event) => event,
+                // What it missed is in the store.
+                Err(RecvError::Lagged(_)) => match pages(&harness, &session, vec![], true, u64::MAX, &mut last, &out).await {
+                    Some(false) => continue,
+                    Some(true) => break,
+                    None => return,
+                },
+                Err(RecvError::Closed) => break,
+            },
+        };
+        let closed = event.body == Body::Closed;
+        // An event numbered 0 was not stored, so it cannot have been pushed before.
+        if event.seq == 0 || event.seq > last {
+            last = last.max(event.seq);
+            if !push(&out, &session, event).await {
+                return;
             }
         }
+        if closed {
+            break;
+        }
     }
-    finish(&out, session).await;
+    let _ = out.send(Reply { session: Some(session), end: true, error: lost, ..Reply::default() }).await;
 }
 
 /// Pushes `page`, then, while `more`, the store's next pages after `last` and up to `upto`. Some(true) once it has
@@ -450,10 +493,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let harness = Harness::new(Store::open(&tmp.path().join("d")).unwrap(), vec![], Settings::default());
         let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]).collect();
-        let (live, receiver) = mpsc::unbounded_channel();
+        let (live, receiver) = mpsc::channel(64);
+        let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
         // The read got 1 to 3; the receiver has 2 onwards.
         for event in &all[1..] {
-            live.send(event.clone()).unwrap();
+            live.try_send(event.clone()).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
         forward(harness, "s".into(), (all[..3].to_vec(), false, 3), Some(receiver), 0, out).await;
@@ -479,9 +523,10 @@ mod tests {
         }
         let harness = Harness::new(store, vec![], Settings::default());
         let stored = harness.events("s", 0).unwrap();
-        let (live, receiver) = mpsc::unbounded_channel();
+        let (live, receiver) = mpsc::channel(64);
+        let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
         for event in &whole[5..] {
-            live.send(event.clone()).unwrap();
+            live.try_send(event.clone()).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
         // The first page held 1 and 2, more follow, and the store is read up to 5.
