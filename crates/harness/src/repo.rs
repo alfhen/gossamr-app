@@ -701,6 +701,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removing_a_worktree_keeps_unpushed_commits_and_uncommitted_work_and_never_forces() {
+        let dir = scratch("unpushed");
+        let git = fake_git(&dir);
+        let home = dir.join("home");
+        let clone = agents_root(&home).join("acme/webshop");
+        clone_with_origin(&clone, "https://github.com/acme/webshop.git");
+        let path = agents_root(&home).join("acme/webshop-w1");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(clone.join(".fake-branches"), "worktree-w1\n").unwrap();
+        let worktree = Worktree { repo: "acme/webshop", clone: &clone, path: &path, branch: "worktree-w1" };
+
+        std::fs::write(clone.join(".fake-branch-unmerged"), "").unwrap();
+        let kept = remove_with_git(&git, Some(&home), worktree).await.unwrap();
+        assert_eq!(kept.as_deref(), Some("git: the branch 'worktree-w1' is not fully merged"));
+        assert!(path.exists(), "a branch git won't delete keeps its worktree too");
+
+        std::fs::remove_file(clone.join(".fake-branch-unmerged")).unwrap();
+        std::fs::write(clone.join(".fake-worktree-dirty"), "").unwrap();
+        let kept = remove_with_git(&git, Some(&home), worktree).await.unwrap().unwrap_or_default();
+        assert!(kept.contains("contains modified or untracked files"), "git's refusal of the changed worktree was not passed on");
+        assert!(path.exists());
+
+        std::fs::remove_file(clone.join(".fake-worktree-dirty")).unwrap();
+        assert_eq!(remove_with_git(&git, Some(&home), worktree).await, Ok(None));
+        assert!(!path.exists());
+        let log = std::fs::read_to_string(dir.join("git.log")).unwrap();
+        let forced: Vec<&str> = log.split_whitespace().filter(|word| ["--force", "-f", "-D"].contains(word)).collect();
+        assert!(forced.is_empty(), "git was told {forced:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn existing_names_come_from_worktrees_and_leftover_branches() {
         let dir = scratch("names");
         let git = fake_git(&dir);

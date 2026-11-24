@@ -1027,6 +1027,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_default_fixture_never_reaches_atlassian() {
+        let fx = super::testing::fixture().await;
+        let asked = fx.core.auth.whoami(&fx.scope.connection_id, std::time::Duration::from_secs(10)).await;
+        let Some(Err(Error::Http(refused))) = asked else { panic!("the fixture's Jira login was not refused at a closed port") };
+        let url = refused.url().expect("a refused request has its URL");
+        assert_eq!((url.host_str(), url.port(), refused.is_connect()), (Some("127.0.0.1"), Some(1), true));
+    }
+
+    #[tokio::test]
     async fn only_sessions_started_in_the_sandbox_can_be_resumed() {
         let fx = super::testing::fixture().await;
         fx.core
