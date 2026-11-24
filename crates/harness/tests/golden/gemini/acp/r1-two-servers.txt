@@ -1,0 +1,14 @@
+started
+prompted 121
+turn_started
+tool_call mcp_spk050101c6_ping 0 {toolSummary} 1
+permission tool mcp_spk050101c6_ping {toolSummary} 1
+answered allow
+tool_result 0 ok {} 0
+tool_call mcp_spkx58aa38f4_ping 1 {toolSummary} 1
+permission tool mcp_spkx58aa38f4_ping {toolSummary} 1
+answered allow
+tool_result 1 ok {} 0
+text 130
+turn_ended done
+closed

@@ -1,0 +1,8 @@
+started
+prompted 59
+turn_started
+tool_call Bash 0 {command,description} 2
+tool_result 0 ok {} 27
+text 27
+turn_ended done
+closed

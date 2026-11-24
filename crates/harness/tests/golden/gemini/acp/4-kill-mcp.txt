@@ -1,0 +1,12 @@
+started
+prompted 151
+turn_started
+tool_call mcp_spike_ping 0 {toolSummary} 1
+permission tool mcp_spike_ping {toolSummary} 1
+answered allow
+tool_result 0 ok {} 0
+tool_call run_command 1 {CommandLine,IsDaemon,WaitMsBeforeAsync,toolSummary} 4
+permission command run_command {CommandLine,IsDaemon,WaitMsBeforeAsync,toolSummary} 4
+answered allow
+failed agent_stopped the agent stopped in the middle of a turn
+closed

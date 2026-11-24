@@ -1,0 +1,16 @@
+started
+prompted 203
+turn_started
+tool_call ToolSearch 0 {max_results,query} 2
+tool_result 0 ok {} 1
+tool_call mcp__spike__ping 1 {} 0
+permission tool mcp__spike__ping {} 0
+answered allow
+tool_result 1 ok {} 1
+tool_call Bash 2 {command,description} 2
+permission command Bash {command,description} 2
+answered allow
+tool_result 2 ok {} 8
+text 159
+turn_ended done
+closed

@@ -1,0 +1,8 @@
+started
+prompted 78
+turn_started
+tool_call spike/ping 0 {} 0
+tool_result 0 ok {_meta,content,structuredContent} 3
+text 34
+turn_ended done
+closed

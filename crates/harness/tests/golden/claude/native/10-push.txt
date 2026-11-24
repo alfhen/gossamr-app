@@ -1,0 +1,10 @@
+started
+prompted 149
+turn_started
+tool_call Bash 0 {command,description} 2
+permission command Bash {command,description} 2
+answered allow
+tool_result 0 ok {} 81
+text 269
+turn_ended done
+closed

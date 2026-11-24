@@ -1,0 +1,19 @@
+started
+prompted 180
+turn_started
+text 80
+tool_call command 0 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment} 6
+answered allow
+tool_result 0 ok {} 9
+tool_call command 1 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment} 6
+answered deny
+tool_result 1 error {} 8
+tool_call command 2 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment} 6
+answered allow
+tool_result 2 ok {} 19
+text 170
+turn_ended done
+closed

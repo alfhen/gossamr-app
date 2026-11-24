@@ -1,0 +1,8 @@
+started
+prompted 114
+turn_started
+tool_call spike/ping 0 {} 0
+tool_result 0 ok {_meta,content,structuredContent} 3
+tool_call command 1 {command} 1
+failed agent_stopped the agent stopped in the middle of a turn
+closed

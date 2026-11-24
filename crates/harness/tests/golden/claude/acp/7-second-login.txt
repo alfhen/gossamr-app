@@ -1,0 +1,5 @@
+started
+prompted 30
+turn_started
+failed provider Authentication required
+closed

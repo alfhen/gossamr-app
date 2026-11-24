@@ -1,0 +1,6 @@
+started
+prompted 99
+turn_started
+tool_call command 0 {command} 1
+failed agent_stopped the agent stopped in the middle of a turn
+closed

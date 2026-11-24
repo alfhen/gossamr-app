@@ -1,0 +1,12 @@
+started
+prompted 222
+turn_started
+permission permissions permissions {cwd,permissions,reason} 3
+answered allow
+tool_call command 0 {command} 1
+tool_result 0 ok {} 9
+permission permissions permissions {cwd,permissions,reason} 3
+answered deny
+text 208
+turn_ended done
+closed

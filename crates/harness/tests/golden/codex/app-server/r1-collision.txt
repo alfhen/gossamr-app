@@ -1,0 +1,12 @@
+started
+prompted 98
+turn_started
+tool_call spka_b/c 0 {} 0
+tool_result 0 ok {_meta,content,structuredContent} 3
+tool_call spka/b_c 1 {} 0
+permission tool spka {_meta,message,mode,requestedSchema,serverName} 5
+answered allow
+tool_result 1 ok {_meta,content,structuredContent} 3
+text 71
+turn_ended done
+closed

@@ -1,0 +1,14 @@
+started
+prompted 300
+turn_started
+text 179
+tool_call command 0 {command} 1
+tool_result 0 ok {} 62
+text 134
+tool_call command 1 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment,reason} 7
+answered allow
+tool_result 1 error {} 86
+text 247
+turn_ended done
+closed

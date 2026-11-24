@@ -1,0 +1,8 @@
+started
+prompted 128
+turn_started
+tool_call spike/hold 0 {seconds} 1
+tool_result 0 error {message} 1
+text 155
+turn_ended done
+closed

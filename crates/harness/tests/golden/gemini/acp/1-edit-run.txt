@@ -1,0 +1,14 @@
+started
+prompted 140
+turn_started
+tool_call write_file 0 {Content,Path} 2
+permission file_change write_file {Content,Path} 2
+answered allow
+tool_result 0 ok {} 0
+tool_call run_command 1 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+answered allow
+tool_result 1 ok {exit_code,output} 2
+text 105
+turn_ended done
+closed

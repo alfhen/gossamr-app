@@ -1,0 +1,16 @@
+started
+prompted 298
+turn_started
+tool_call ToolSearch 0 {max_results,query} 2
+tool_result 0 ok {} 1
+tool_call Bash 1 {command,description} 2
+permission command Bash {command,description} 2
+answered deny
+tool_result 1 error {} 23
+tool_call mcp__projspike__ping 2 {} 0
+permission tool mcp__projspike__ping {} 0
+answered deny
+tool_result 2 error {} 23
+text 245
+turn_ended done
+closed

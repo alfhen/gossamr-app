@@ -1,5 +1,5 @@
 //! Gossamr's agent harness: a program beside the app that starts, watches and stops agent sessions. See
-//! `docs/harness-proposal.md`. So far it has a store, sessions and a mock provider, and says which build it is.
+//! `docs/harness-proposal.md`. So far it runs sessions in-process, on the mock provider only.
 
 use std::ffi::OsString;
 
@@ -8,9 +8,13 @@ pub mod error;
 pub mod event;
 pub mod mock;
 pub mod redact;
+pub mod run;
 pub mod session;
 pub mod store;
 pub mod tools;
+
+use event::Decision;
+use run::RunArgs;
 
 /// The crate's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -27,18 +31,47 @@ pub fn version_line() -> String {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Request {
     Version,
+    Run(RunArgs),
     /// Anything else, which gets the usage line and a failing exit code.
     Usage,
 }
 
-pub const USAGE: &str = "usage: harness --version";
+pub const USAGE: &str = "usage: harness --version
+       harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]";
 
 /// An argument that is not UTF-8 is never one the harness knows, so it gets the usage line like any other.
 pub fn request(args: &[OsString]) -> Request {
     match args {
         [only] if only == "--version" || only == "-V" => Request::Version,
+        [first, rest @ ..] if first == "run" => run_args(rest).map_or(Request::Usage, Request::Run),
         _ => Request::Usage,
     }
+}
+
+fn run_args(args: &[OsString]) -> Option<RunArgs> {
+    let mut args = args.iter().map(|arg| arg.to_str());
+    let (mut provider, mut script, mut data, mut answers, mut prompt) = (None, None, None, vec![], None);
+    while let Some(arg) = args.next() {
+        match arg? {
+            "--provider" => provider = Some(value(&mut args)?),
+            "--script" => script = Some(value(&mut args)?.into()),
+            "--data" => data = Some(value(&mut args)?.into()),
+            "--answer" => answers.push(match value(&mut args)? {
+                "allow" => Decision::Allow,
+                "deny" => Decision::Deny,
+                _ => return None,
+            }),
+            flag if flag.starts_with('-') => return None,
+            text if prompt.is_none() => prompt = Some(text.to_owned()),
+            _ => return None,
+        }
+    }
+    (provider? == "mock").then_some(RunArgs { script: script?, data, answers, prompt })
+}
+
+/// A flag's value, which is never another flag: a path that starts with `-` is given as `./-…`.
+fn value<'a>(args: &mut impl Iterator<Item = Option<&'a str>>) -> Option<&'a str> {
+    args.next().flatten().filter(|value| !value.starts_with('-'))
 }
 
 #[cfg(test)]
@@ -55,6 +88,17 @@ mod tests {
         assert_eq!(request(&args(&["-V"])), Request::Version);
         for other in [&[][..], &["serve"], &["--version", "extra"], &["--help"]] {
             assert_eq!(request(&args(other)), Request::Usage, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn run_takes_its_flags_in_any_order_and_one_prompt() {
+        let parsed = request(&args(&["run", "hello", "--answer", "deny", "--script", "s.jsonl", "--provider", "mock", "--answer", "allow"]));
+        let expected = RunArgs { script: "s.jsonl".into(), data: None, answers: vec![Decision::Deny, Decision::Allow], prompt: Some("hello".into()) };
+        assert_eq!(parsed, Request::Run(expected));
+        let missing_values = [&["run", "--provider", "mock", "--script", "--data", "d"][..], &["run", "--provider", "mock", "--script", "s", "--data", "--answer", "allow"]];
+        for wrong in [&["run", "--provider", "mock", "--script", "s", "one", "two"][..], &["run", "--provider", "mock", "--script"], &["run", "--provider", "mock", "--script", "s", "--model", "x"]].into_iter().chain(missing_values) {
+            assert_eq!(request(&args(wrong)), Request::Usage, "{wrong:?}");
         }
     }
 

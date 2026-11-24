@@ -1,0 +1,17 @@
+started
+prompted 201
+turn_started
+tool_call command 0 {command} 1
+tool_result 0 ok {} 129
+tool_call command 1 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment,reason} 7
+answered allow
+tool_result 1 ok {} 9
+tool_call command 2 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment,reason} 7
+answered allow
+tool_call command 3 {command} 1
+tool_result 3 error {} 295
+text 253
+turn_ended done
+closed

@@ -1,0 +1,20 @@
+started
+prompted 37
+turn_started
+tool_call Read 0 {} 0
+tool_result 0 error {} 134
+text 280
+turn_ended done
+prompted 65
+turn_started
+text 268
+turn_ended done
+prompted 48
+turn_started
+text 341
+turn_ended done
+prompted 54
+turn_started
+text 228
+turn_ended done
+closed

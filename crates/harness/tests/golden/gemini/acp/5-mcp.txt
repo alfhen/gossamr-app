@@ -1,0 +1,14 @@
+started
+prompted 243
+turn_started
+tool_call mcp_spike_ping 0 {toolSummary} 1
+permission tool mcp_spike_ping {toolSummary} 1
+answered allow
+tool_result 0 ok {} 0
+tool_call run_command 1 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+answered allow
+tool_result 1 ok {exit_code,output} 2
+text 137
+turn_ended done
+closed

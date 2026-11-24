@@ -1,0 +1,15 @@
+started
+prompted 180
+turn_started
+tool_call run_command 0 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+answered allow
+tool_result 0 ok {exit_code,output} 2
+tool_call run_command 1 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+answered deny
+tool_result 1 error {output} 1
+tool_call read_file 2 {Path} 1
+tool_result 2 error {} 0
+turn_ended done
+closed

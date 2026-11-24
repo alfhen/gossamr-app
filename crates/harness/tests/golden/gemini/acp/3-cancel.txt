@@ -1,0 +1,13 @@
+started
+prompted 100
+turn_started
+tool_call run_command 0 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+answered allow
+turn_ended cancelled
+tool_result 0 error {output} 1
+prompted 33
+turn_started
+text 5
+turn_ended done
+closed

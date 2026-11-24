@@ -1,0 +1,12 @@
+started
+prompted 201
+turn_started
+tool_call exec_command 0 {command,cwd} 2
+tool_result 0 ok {} 0
+tool_call exec_command 1 {command,cwd} 2
+tool_result 1 ok {} 0
+tool_call exec_command 2 {command,cwd} 2
+tool_result 2 ok {} 0
+text 171
+turn_ended done
+closed

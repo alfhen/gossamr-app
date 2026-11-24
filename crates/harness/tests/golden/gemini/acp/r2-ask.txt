@@ -1,0 +1,18 @@
+started
+prompted 173
+turn_started
+tool_call mcp_spike_ask 0 {question,toolSummary} 2
+permission tool mcp_spike_ask {question,toolSummary} 2
+answered allow
+tool_result 0 ok {} 0
+text 85
+turn_ended done
+prompted 53
+turn_started
+tool_call write_file 1 {Content,Path} 2
+permission file_change write_file {Content,Path} 2
+answered allow
+tool_result 1 ok {} 0
+text 64
+turn_ended done
+closed

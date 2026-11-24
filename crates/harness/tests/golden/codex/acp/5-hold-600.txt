@@ -1,0 +1,8 @@
+started
+prompted 128
+turn_started
+tool_call tool 0 {arguments,server,title,tool} 4
+tool_result 0 ok {error,result} 2
+text 36
+turn_ended done
+closed

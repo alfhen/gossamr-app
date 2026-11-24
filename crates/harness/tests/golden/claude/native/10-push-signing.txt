@@ -1,0 +1,15 @@
+started
+prompted 143
+turn_started
+tool_call Bash 0 {command,description} 2
+permission command Bash {command,description} 2
+answered allow
+tool_result 0 ok {} 101
+text 177
+tool_call Bash 1 {command,description} 2
+permission command Bash {command,description} 2
+answered allow
+tool_result 1 ok {} 139
+text 674
+turn_ended done
+closed

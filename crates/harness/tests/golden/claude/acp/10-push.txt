@@ -1,0 +1,8 @@
+started
+prompted 149
+turn_started
+tool_call Bash 0 {} 0
+tool_result 0 ok {} 205
+text 302
+turn_ended done
+closed
