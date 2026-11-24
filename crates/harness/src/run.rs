@@ -15,7 +15,8 @@ use crate::error::{Error, Result};
 use crate::event::{Body, Decision, Event};
 use crate::mock::{ClientAction, Mock, Script};
 use crate::session::{Harness, Open, Settings};
-use crate::store::{Store, default_dir};
+use crate::driver::random_hex;
+use crate::store::Store;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunArgs {
@@ -25,26 +26,37 @@ pub struct RunArgs {
     pub prompt: Option<String>,
 }
 
-/// Runs the session to its end. True when no event was a failure.
+/// Runs the session to its end. True when no event was a failure and its client did what the recording's did. With no
+/// data folder given, the session's store is a temporary folder, removed after.
 pub async fn run(args: RunArgs) -> Result<bool> {
-    let script = Script::load(&args.script).map_err(Error::Driver)?;
-    let dir = args.data.or_else(default_dir).ok_or_else(|| Error::Driver("no data folder: set HARNESS_DATA".into()))?;
+    let script = Script::load(&args.script).map_err(Error::Script)?;
+    let Some(dir) = args.data.clone() else {
+        let dir = std::env::temp_dir().join(format!("harness-run-{}", random_hex(8)));
+        let ran = play(script, &dir, args).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        return ran;
+    };
+    play(script, &dir, args).await
+}
+
+async fn play(script: Script, dir: &std::path::Path, args: RunArgs) -> Result<bool> {
     let mock = Mock::new(script);
-    let harness = Harness::new(Store::open(&dir)?, vec![("mock".into(), Arc::new(mock.clone()))], Settings::default());
+    let harness = Harness::new(Store::open(dir)?, vec![("mock".into(), Arc::new(mock.clone()))], Settings::default());
     let client = mock.client();
     let cwd = std::env::current_dir()?;
     let (id, events) = harness.open(Open { provider: "mock".into(), locked: false, cwd, model: None }).await?;
     let mut ok = true;
-    drive(&harness, &id, events, client, args.answers, args.prompt, |event| {
+    let followed = drive(&harness, &id, events, client, args.answers, args.prompt, |event| {
         println!("{}", serde_json::to_string(event).expect("an event always serializes"));
         ok &= !matches!(event.body, Body::Failed { .. });
     })
     .await;
-    Ok(ok)
+    Ok(ok && followed)
 }
 
 /// Acts as the mock's recorded client until the session closes, and hands every event to `seen`. `answers` come
-/// before the recorded ones, and `prompt` before the first recorded prompt.
+/// before the recorded ones, and `prompt` before the first recorded prompt. False when it could not: a request with no
+/// answer to give, which closes the session, or events it missed.
 pub async fn drive(
     harness: &Harness,
     id: &str,
@@ -53,25 +65,29 @@ pub async fn drive(
     answers: Vec<Decision>,
     mut prompt: Option<String>,
     mut seen: impl FnMut(&Event),
-) {
+) -> bool {
     let mut answers = answers.into_iter();
     // What the recorded client is to do, and the request or call it is for, which may come in either order.
     let (mut asked, mut called): (Option<String>, Option<String>) = (None, None);
     let (mut answer, mut result): (Option<Decision>, Option<Value>) = (None, None);
+    let mut followed = true;
     loop {
         tokio::select! {
             event = events.recv() => match event {
                 Ok(event) => {
                     seen(&event);
                     match &event.body {
-                        Body::Closed => return,
+                        Body::Closed => return followed,
                         Body::Permission { id, .. } => asked = Some(id.clone()),
                         Body::ClientToolCall { id, .. } => called = Some(id.clone()),
                         _ => {}
                     }
                 }
-                Err(RecvError::Lagged(missed)) => eprintln!("harness: {missed} events missed"),
-                Err(RecvError::Closed) => return,
+                Err(RecvError::Lagged(missed)) => {
+                    eprintln!("harness: {missed} events missed");
+                    followed = false;
+                }
+                Err(RecvError::Closed) => return followed,
             },
             Ok(()) = client.changed() => {
                 let action = client.borrow_and_update().clone();
@@ -80,10 +96,17 @@ pub async fn drive(
                         Some(text) => harness.send(id, text),
                         None => harness.close(id),
                     },
-                    Some(ClientAction::Answer(recorded)) => {
-                        answer = Some(answers.next().or(recorded).unwrap_or(Decision::Deny));
-                        Ok(())
-                    }
+                    Some(ClientAction::Answer(recorded)) => match answers.next().or(recorded) {
+                        Some(decision) => {
+                            answer = Some(decision);
+                            Ok(())
+                        }
+                        None => {
+                            eprintln!("harness: the recording has no answer to this request; give one with --answer");
+                            followed = false;
+                            harness.close(id)
+                        }
+                    },
                     Some(ClientAction::ToolResult(recorded)) => {
                         result = Some(recorded.unwrap_or(Value::Null));
                         Ok(())

@@ -1584,6 +1584,7 @@ dependencies = [
 name = "harness"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "getrandom 0.4.3",
  "libc",
  "regex",
