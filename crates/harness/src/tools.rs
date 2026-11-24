@@ -47,6 +47,11 @@ pub const RESERVED: &[&str] = &["result", "ask"];
 /// The most bytes of a request body. A call's input over `event::EVENT_MAX` but under this reaches the client cut, and
 /// fails with the reason; one over this is refused with 413.
 pub const MAX_BODY: usize = 4 << 20;
+/// How much of a body the harness reads, and throws away, before it refuses a caller that has not proven its token.
+/// Closing a socket with data unread resets it, and the caller would not see the answer.
+pub const REFUSED_BODY: usize = 64 << 10;
+/// How long it reads a body it throws away.
+const DISCARD_WITHIN: Duration = Duration::from_secs(1);
 /// Headers, all together. hyper takes no less than 8 KiB.
 const MAX_HEADERS: usize = 16 << 10;
 /// How long a connection has to send its headers, and then its body.
@@ -344,41 +349,67 @@ fn cut(status: StatusCode, reason: String) -> Answered {
 }
 
 async fn handle(state: Arc<State>, request: Request<Incoming>) -> std::result::Result<Answered, Infallible> {
-    if request.method() != Method::POST {
+    let (head, body) = request.into_parts();
+    let answered = answer_to(&state, &head, body).await;
+    Ok(answered)
+}
+
+async fn answer_to(state: &Arc<State>, head: &http::request::Parts, body: Incoming) -> Answered {
+    if head.method != Method::POST {
         // No event stream is offered, on any path, so this says nothing of a session.
         let mut refused = answer(StatusCode::METHOD_NOT_ALLOWED, None);
         refused.headers_mut().insert("allow", http::HeaderValue::from_static("POST"));
-        return Ok(refused);
+        discard(body, REFUSED_BODY).await;
+        return refused;
     }
-    if !local_request(request.headers(), state.port) {
-        return Ok(answer(StatusCode::FORBIDDEN, None));
+    if !local_request(&head.headers, state.port) {
+        discard(body, REFUSED_BODY).await;
+        return answer(StatusCode::FORBIDDEN, None);
     }
-    let Some(entry) = request.uri().path().strip_prefix("/mcp/").and_then(|name| opened(&state, name, request.headers())) else {
-        return Ok(answer(StatusCode::NOT_FOUND, None));
+    let Some(entry) = head.uri.path().strip_prefix("/mcp/").and_then(|name| opened(state, name, &head.headers)) else {
+        discard(body, REFUSED_BODY).await;
+        return answer(StatusCode::NOT_FOUND, None);
     };
     let Ok(_held) = entry.in_flight.clone().try_acquire_owned() else {
-        return Ok(cut(StatusCode::TOO_MANY_REQUESTS, format!("this session has {IN_FLIGHT} calls in flight already: wait for one")));
+        discard(body, REFUSED_BODY).await;
+        return cut(StatusCode::TOO_MANY_REQUESTS, format!("this session has {IN_FLIGHT} calls in flight already: wait for one"));
     };
-    let body = match tokio::time::timeout(BODY_WITHIN, Limited::new(request.into_body(), MAX_BODY).collect()).await {
-        Ok(Ok(body)) => body.to_bytes(),
-        Ok(Err(e)) if e.is::<http_body_util::LengthLimitError>() => {
-            return Ok(cut(StatusCode::PAYLOAD_TOO_LARGE, format!("the request is over the {MAX_BODY}-byte limit of a call")));
-        }
-        Ok(Err(_)) => return Ok(answer(StatusCode::BAD_REQUEST, None)),
-        Err(_) => return Ok(cut(StatusCode::REQUEST_TIMEOUT, format!("the request's body did not come within {} s", BODY_WITHIN.as_secs()))),
+    let body = match tokio::time::timeout(BODY_WITHIN, read(body)).await {
+        Ok(Some(body)) => body,
+        Ok(None) => return cut(StatusCode::PAYLOAD_TOO_LARGE, format!("the request is over the {MAX_BODY}-byte limit of a call")),
+        Err(_) => return cut(StatusCode::REQUEST_TIMEOUT, format!("the request's body did not come within {} s", BODY_WITHIN.as_secs())),
     };
     let msg = match message(&body) {
         Ok(msg) => msg,
-        Err(status) => return Ok(answer(status, None)),
+        Err(status) => return answer(status, None),
     };
     let params = msg["params"].clone();
     let tools = entry.tools.clone();
     let listed = move || tools.iter().map(ToolSpec::listed).collect();
-    let answered = rpc(msg, SERVER, listed, call(&state, &entry, &params)).await;
-    Ok(match answered {
+    match rpc(msg, SERVER, listed, call(state, &entry, &params)).await {
         Answer::Accepted => answer(StatusCode::ACCEPTED, None),
         Answer::Reply(reply) => answer(StatusCode::OK, Some(reply)),
-    })
+    }
+}
+
+/// The body, or None when it is over `MAX_BODY`; then up to `MAX_BODY` more is read and thrown away, so the caller
+/// gets the answer.
+async fn read(mut body: Incoming) -> Option<Bytes> {
+    let mut read = bytes::BytesMut::new();
+    while let Some(frame) = body.frame().await {
+        let Ok(data) = frame.map(|frame| frame.into_data().unwrap_or_default()) else { return Some(Bytes::new()) };
+        if read.len() + data.len() > MAX_BODY {
+            discard(body, MAX_BODY).await;
+            return None;
+        }
+        read.extend_from_slice(&data);
+    }
+    Some(read.freeze())
+}
+
+/// Reads and drops up to `most` bytes of a body, for a second at most.
+async fn discard(body: Incoming, most: usize) {
+    let _ = tokio::time::timeout(DISCARD_WITHIN, Limited::new(body, most).collect()).await;
 }
 
 /// What a running session's endpoint needs for a request, if `name` is one and the request's token is its start's.
@@ -419,4 +450,60 @@ async fn call(state: &State, entry: &Opened, params: &Value) -> std::result::Res
         Err(_) => ended(),
     };
     Ok(reply.result())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bits a name of `NAME_LEN` characters carries when each is drawn evenly.
+    fn bits() -> f64 {
+        (NAME_FIRST.len() as f64).log2() + (NAME_LEN - 1) as f64 * (NAME_REST.len() as f64).log2()
+    }
+
+    #[test]
+    fn tools_endpoint_a_name_is_letters_and_digits_with_at_least_64_bits() {
+        assert!(bits() >= 64.0, "{} bits", bits());
+        for _ in 0..200 {
+            let name = endpoint_name();
+            assert_eq!(name.len(), NAME_LEN);
+            assert!(name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()), "letters and digits only, no `_` or `-`");
+            assert!(name.as_bytes()[0].is_ascii_lowercase(), "it starts with a letter");
+        }
+    }
+
+    #[test]
+    fn tools_endpoint_a_name_is_drawn_at_random_so_no_counter_or_fixed_prefix_passes() {
+        let names: Vec<String> = (0..2000).map(|_| endpoint_name()).collect();
+        assert_eq!(names.iter().collect::<HashSet<_>>().len(), names.len(), "every name is new");
+        // A counter or a fixed prefix keeps its first characters; drawn names spread every position over its alphabet.
+        for at in 0..NAME_LEN {
+            let seen: HashSet<u8> = names.iter().map(|name| name.as_bytes()[at]).collect();
+            let alphabet = if at == 0 { NAME_FIRST.len() } else { NAME_REST.len() };
+            assert!(seen.len() >= alphabet * 3 / 4, "position {at} took only {} of {alphabet} characters", seen.len());
+        }
+    }
+
+    #[test]
+    fn tools_endpoint_a_name_comes_from_its_random_source_evenly() {
+        let zeros = name_from(|bytes| bytes.fill(0));
+        assert_eq!(zeros, "a".to_owned() + &"a".repeat(NAME_LEN - 1));
+        let mut n = 0u8;
+        let counting = name_from(|bytes| bytes.iter_mut().for_each(|b| (*b, n) = (n, n.wrapping_add(1))));
+        assert_eq!(&counting[..3], "abc", "each character is the source's byte, taken modulo its alphabet");
+        // A byte at or past the largest multiple of the alphabet's size is passed over, so no character is likelier.
+        let mut first = true;
+        let skipped = name_from(|bytes| {
+            bytes.fill(if first { 255 } else { 1 });
+            first = false;
+        });
+        assert_eq!(skipped, "b".repeat(NAME_LEN));
+    }
+
+    #[test]
+    fn tools_endpoint_a_reply_reads_back_as_the_agent_sees_it() {
+        for reply in [Reply { output: json!({"title": "T"}), error: false }, Reply::failed("timed out after 200 ms"), Reply { output: json!("blue"), error: false }] {
+            assert_eq!(Reply::read(&reply.result()), Some(reply));
+        }
+    }
 }
