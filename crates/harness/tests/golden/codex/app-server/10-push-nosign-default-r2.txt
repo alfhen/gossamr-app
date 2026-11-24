@@ -1,12 +1,12 @@
 started
 prompted 201
 turn_started
-tool_call command 0
-tool_result 0 ok
-tool_call command 1
-permission command command
+tool_call command 0 {command} 1
+tool_result 0 ok {} 157
+tool_call command 1 {command} 1
+permission command command {availableDecisions,command,commandActions,cwd,kind,proposedExecpolicyAmendment,reason} 7
 answered allow
-tool_result 1 ok
+tool_result 1 ok {} 263
 text 211
 turn_ended done
 closed

@@ -1,16 +1,16 @@
 started
 prompted 180
 turn_started
-tool_call Bash 0
-tool_call Bash 1
-permission command Bash
+tool_call Bash 0 {} 0
+tool_call Bash 1 {} 0
+permission command Bash {command,description} 2
 answered allow
-tool_call Read 2
-tool_result 0 ok
-permission command Bash
+tool_call Read 2 {} 0
+tool_result 0 ok {} 31
+permission command Bash {command,description} 2
 answered deny
-tool_result 1 error
-tool_result 2 ok
+tool_result 1 error {} 35
+tool_result 2 ok {} 35
 text 327
 turn_ended done
 closed

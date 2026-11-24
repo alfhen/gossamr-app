@@ -130,6 +130,8 @@ struct Converter {
     /// The running turn's tool calls that are not commands, with no `completed` or `failed` update yet, a call held on
     /// the session's own endpoint among them, and when each began. A command counts through its descendant instead.
     open_calls: HashMap<String, u64>,
+    /// The running turn's commands with no result yet. They hold no quiet end, but a prompt waits for them.
+    open_commands: HashSet<String>,
     /// When the line being read was recorded.
     now: u64,
     /// The line being read, for errors.
@@ -160,6 +162,7 @@ impl Converter {
         };
         if !self.in_turn {
             self.open_calls.clear();
+            self.open_commands.clear();
         }
         self.unprompted &= self.in_turn && !matches!(step, Step::Prompt(_));
         if let Step::Tool { id: Some(id), .. } = &step {
@@ -205,7 +208,7 @@ impl Converter {
     /// agy ends a turn it started by itself with no marker, and holds a prompt sent meanwhile (H8): that turn ends
     /// where the prompt was sent, or later, once no tool call of it is open.
     fn end_for_held(&mut self) {
-        if self.wire == Some(Wire::Acp) && self.in_turn && self.unprompted && !self.held.is_empty() && self.open_calls.is_empty() {
+        if self.wire == Some(Wire::Acp) && self.in_turn && self.unprompted && !self.held.is_empty() && self.open_calls.is_empty() && self.open_commands.is_empty() {
             self.end_quietly();
         }
     }
@@ -419,8 +422,9 @@ impl Converter {
                     Some("tool_call") => {
                         let id = update["toolCallId"].as_str().map(str::to_owned);
                         self.push(Step::Tool { id: id.clone(), name: acp_tool(update), input: acp_input(update) });
-                        if update["kind"] != "execute" {
-                            self.open_calls.extend(id.map(|id| (id, self.now)));
+                        match update["kind"] == "execute" {
+                            true => self.open_commands.extend(id),
+                            false => self.open_calls.extend(id.map(|id| (id, self.now))),
                         }
                         self.acp_finished(update);
                     }
@@ -464,7 +468,8 @@ impl Converter {
         let ms = line["ms"].as_u64().unwrap_or_default();
         let until = after.iter().position(|next| next["dir"] == "from_agent").unwrap_or(after.len());
         let next = after.get(until).and_then(|next| next["ms"].as_u64());
-        if next.is_some_and(|next| next < ms.saturating_add(QUIET_MS)) {
+        // Elapsed time is compared, so a timestamp near the largest number cannot reach a deadline early.
+        if next.is_some_and(|next| next.saturating_sub(ms) < QUIET_MS) {
             return;
         }
         // Quiet: a message streamed so far is whole where it starts a turn of agy's own or ends one. Inside a prompted
@@ -472,11 +477,12 @@ impl Converter {
         if self.in_turn && !self.unprompted {
             return;
         }
-        let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at <= ms.saturating_add(QUIET_MS)));
+        let mut notes = after[..until].iter().filter(|note| note["data"]["note"] == "processes" && note["ms"].as_u64().is_some_and(|at| at.saturating_sub(ms) <= QUIET_MS));
         let running = notes.next_back().map_or(self.descendants, |note| descendants(&note["data"]));
         // The turn ends once the quiet and each open call's cut have passed, if agy says nothing before then.
         let end = self.open_calls.values().map(|began| began.saturating_add(MCP_CUT_MS + CUT_MARGIN_MS)).fold(ms.saturating_add(QUIET_MS), u64::max);
-        let ends = running == 0 && next.is_none_or(|next| end <= next);
+        let cut = |next: u64| self.open_calls.values().all(|began| next.saturating_sub(*began) >= MCP_CUT_MS + CUT_MARGIN_MS);
+        let ends = running == 0 && next.is_none_or(cut);
         if !self.in_turn || ends {
             self.flush();
         }
@@ -494,6 +500,7 @@ impl Converter {
         if let Some(status @ ("completed" | "failed")) = update["status"].as_str() {
             if let Some(id) = update["toolCallId"].as_str() {
                 self.open_calls.remove(id);
+                self.open_commands.remove(id);
             }
             let output = [&update["rawOutput"], &update["content"]].into_iter().find(|v| !v.is_null()).cloned().unwrap_or_default();
             self.tool_result(&update["toolCallId"], output, status == "failed");

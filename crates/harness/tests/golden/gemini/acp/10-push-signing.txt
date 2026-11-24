@@ -1,16 +1,16 @@
 started
 prompted 143
 turn_started
-tool_call run_command 0
-permission command run_command
+tool_call run_command 0 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
 answered allow
-tool_result 0 ok
-tool_call write_file 1
-permission file_change write_file
+tool_result 0 ok {exit_code,output} 2
+tool_call write_file 1 {Content,Path} 2
+permission file_change write_file {Content,Path} 2
 answered allow
-tool_result 1 ok
-tool_call run_command 2
-permission command run_command
+tool_result 1 ok {} 0
+tool_call run_command 2 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
 answered allow
 text 191
 turn_ended done

@@ -516,7 +516,7 @@ async fn replay_acting(fixture: &Path, mut act: impl FnMut(&harness::session::Ha
             }
             Ok(()) = client.changed() => match client.borrow_and_update().clone() {
                 Some(ClientAction::Prompt(Some(text))) => harness.send(&id, text).unwrap(),
-                Some(ClientAction::Prompt(None)) => {
+                Some(ClientAction::Prompt(None) | ClientAction::Close) => {
                     let _ = harness.close(&id);
                 }
                 Some(ClientAction::Answer(recorded)) => answer = recorded,
@@ -837,7 +837,8 @@ fn golden_of(fixture: &Path) -> PathBuf {
 
 /// What a replay of `fixture` gives, as the golden files hold it: each event's type in order, with a permission's
 /// kind and tool, an answer's decision, a tool's name, a call id by the order it first came in, a turn's end, a
-/// failure's kind and reason, and a text's length, never the text. A recording that is refused gives its refusal.
+/// failure's kind and reason, and a text's length, never the text. A tool call's and a permission's input and a tool
+/// result's output give their shape (`shape`), never a value. A recording that is refused gives its refusal.
 async fn projection(fixture: &Path) -> String {
     if Script::load(fixture).is_err() {
         return format!("refused{}\n", refused(fixture));
@@ -857,9 +858,9 @@ async fn projection(fixture: &Path) -> String {
         .map(|event| match &event.body {
             Body::Prompted { text } => format!("prompted {}", text.chars().count()),
             Body::Text { text } => format!("text {}", text.chars().count()),
-            Body::ToolCall { id, name, .. } => format!("tool_call {name} {}", call(id)),
-            Body::ToolResult { id, error, .. } => format!("tool_result {} {}", call(id), if *error { "error" } else { "ok" }),
-            Body::Permission { kind, tool, .. } => format!("permission {} {tool}", word(kind)),
+            Body::ToolCall { id, name, input } => format!("tool_call {name} {} {}", call(id), shape(input)),
+            Body::ToolResult { id, error, output } => format!("tool_result {} {} {}", call(id), if *error { "error" } else { "ok" }, shape(output)),
+            Body::Permission { kind, tool, input, .. } => format!("permission {} {tool} {}", word(kind), shape(input)),
             Body::Answered { decision, .. } => format!("answered {}", word(decision)),
             Body::TurnEnded { how } => format!("turn_ended {}", word(how)),
             Body::Failed { kind, reason } => format!("failed {} {reason}", word(kind)),
@@ -870,6 +871,22 @@ async fn projection(fixture: &Path) -> String {
         lines.push("the client did not follow".into());
     }
     lines.join("\n") + "\n"
+}
+
+/// A payload's shape with none of its values: an object's sorted top-level keys, and how many entries an object or
+/// array has, or how many characters a string has.
+fn shape(value: &Value) -> String {
+    let (keys, len) = match value {
+        Value::Object(fields) => {
+            let mut keys: Vec<&str> = fields.keys().map(String::as_str).collect();
+            keys.sort();
+            (keys.join(","), fields.len())
+        }
+        Value::Array(items) => (String::new(), items.len()),
+        Value::String(text) => (String::new(), text.chars().count()),
+        _ => (String::new(), 0),
+    };
+    format!("{{{keys}}} {len}")
 }
 
 mod erased {
@@ -917,4 +934,75 @@ async fn replay_every_fixture_has_a_golden_file_and_every_golden_file_a_fixture(
     let relative = |paths: Vec<&PathBuf>| paths.into_iter().map(|path| path.strip_prefix(goldens()).unwrap().display().to_string()).collect::<Vec<_>>();
     assert!(want.difference(&have).next().is_none(), "fixtures with no golden file: {:?}", relative(want.difference(&have).collect()));
     assert!(have.difference(&want).next().is_none(), "golden files with no fixture: {:?}", relative(have.difference(&want).collect()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn replay_driven_by_another_client_waits_for_it_as_a_provider_does() {
+    // As `serve` drives a session: nobody takes the recorded client, so a person may answer late and leave it open.
+    let (_tmp, dir) = data_dir();
+    let mock = Mock::new(Script::load(&fixtures().join("claude/native/2-permission.jsonl")).unwrap());
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false).await;
+    harness.send(&id, String::from("go")).unwrap();
+    let mut seen = vec![];
+    for decision in [Decision::Allow, Decision::Deny] {
+        let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+        let Some(Body::Permission { id: request, .. }) = asked.last().map(|event| &event.body) else { unreachable!() };
+        tokio::time::sleep(Duration::from_secs(31)).await;
+        harness.answer(&id, request, decision, None).unwrap();
+        seen.extend(asked);
+    }
+    seen.extend(until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await);
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert!(events.try_recv().is_err(), "nothing comes after the last turn: the session stays open");
+    assert!(!seen.iter().any(|event| matches!(event.body, Body::Failed { .. })), "a late answer fails nothing: {:?}", kinds(&seen));
+    harness.close(&id).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(kinds(&rest), ["closed"], "it closes when told to, with no failure");
+}
+
+#[tokio::test(start_paused = true)]
+async fn replay_a_divergence_gives_exactly_one_failure_though_its_recorded_client_never_closes() {
+    let (_tmp, dir) = data_dir();
+    let mock = Mock::new(Script::load(&fixtures().join("claude/native/2-permission.jsonl")).unwrap());
+    let _recorded = mock.client();
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false).await;
+    harness.send(&id, String::from("go")).unwrap();
+    let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+    let Some(Body::Permission { id: request, .. }) = asked.last().map(|event| &event.body) else { unreachable!() };
+    harness.answer(&id, request, Decision::Deny, None).unwrap();
+    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(rest.iter().filter(|event| matches!(event.body, Body::Failed { .. })).count(), 1, "{:?}", kinds(&rest));
+}
+
+#[tokio::test]
+async fn replay_a_prompt_sent_while_a_command_runs_in_agys_unprompted_turn_waits_for_its_result() {
+    let (_tmp, path) = written(&[
+        acp_prompt(1, 0, 1),
+        acp_end(2, 100, 1),
+        acp_update(3, 20_000, json!({"sessionUpdate": "tool_call", "toolCallId": "call_cccccccc", "name": "run_command", "kind": "execute"})),
+        acp_prompt(4, 21_000, 2),
+        acp_update(5, 22_000, json!({"sessionUpdate": "tool_call_update", "toolCallId": "call_cccccccc", "status": "completed", "rawOutput": "done"})),
+        acp_update(6, 22_100, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "after"}})),
+        acp_end(7, 23_000, 2),
+    ]);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    let result = kinds.iter().position(|kind| kind == "tool_result").unwrap();
+    let prompted = kinds.iter().rposition(|kind| kind == "prompted").unwrap();
+    assert!(result < prompted && kinds[prompted - 1] == "turn_ended", "the command's result is in agy's own turn: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_two_lines_at_the_largest_timestamps_stay_in_one_turn() {
+    let top = u64::MAX;
+    let (_tmp, path) = written(&[
+        acp_prompt(1, 0, 1),
+        acp_end(2, 100, 1),
+        acp_update(3, top - 10, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "one"}})),
+        acp_update(4, top - 9, json!({"sessionUpdate": "usage_update"})),
+        acp_update(5, top, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "two"}})),
+    ]);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    assert_eq!(kinds.iter().filter(|kind| *kind == "turn_started").count(), 2, "10 ms is no quiet: {kinds:?}");
 }

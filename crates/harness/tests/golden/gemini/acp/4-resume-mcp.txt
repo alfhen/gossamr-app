@@ -1,10 +1,10 @@
 started
 prompted 72
 turn_started
-tool_call mcp_spike_ping 0
-permission tool mcp_spike_ping
+tool_call mcp_spike_ping 0 {toolSummary} 1
+permission tool mcp_spike_ping {toolSummary} 1
 answered allow
-tool_result 0 ok
+tool_result 0 ok {} 0
 text 59
 turn_ended done
 closed
