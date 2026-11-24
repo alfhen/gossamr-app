@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::AsyncReadExt;
 
-use super::env::RunEnv;
-use crate::model_choice::{valid_model_id, ModelOption};
+use crate::env::RunEnv;
+use crate::provider::{ModelOption, valid_model_id};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 const OUTPUT_LIMIT: u64 = 8 * 1024 * 1024;

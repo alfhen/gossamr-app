@@ -9,6 +9,7 @@ pub mod auth;
 pub mod binary;
 pub mod cli;
 pub mod client;
+pub mod codex_models;
 pub mod driver;
 pub mod env;
 pub mod error;

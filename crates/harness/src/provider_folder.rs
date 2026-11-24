@@ -111,11 +111,12 @@ const DRIVERS: [Provider; 2] = [Provider::Claude, Provider::Codex];
 /// The folders the CLI uses when it is not told one, which only the instance without a folder may have. Without the
 /// shell its `CODEX_HOME` is unknown, so `~/.codex` is refused rather than risk the login the CLI would use.
 fn usual_folders(driver: Provider, home: &Path, shell: Option<&RunEnv>) -> Vec<PathBuf> {
-    let from_shell = shell.and_then(|s| s.get(driver.folder_variable())).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let from_shell = driver.folder_variable().and_then(|name| shell.and_then(|s| s.get(name))).filter(|v| !v.is_empty()).map(PathBuf::from);
     match (driver, from_shell) {
         (Provider::Claude, shell_folder) => [home.join(".claude")].into_iter().chain(shell_folder).collect(),
         (Provider::Codex, Some(shell_folder)) => vec![shell_folder],
         (Provider::Codex, None) => vec![home.join(".codex")],
+        (Provider::Gemini, _) => Vec::new(),
     }
 }
 
@@ -134,6 +135,7 @@ pub fn problems(providers: &[Login], places: &Places, shell: Option<&RunEnv>) ->
     for (at, p) in providers.iter().enumerate() {
         let problem = match p.folder.as_deref() {
             None => providers[..at].iter().find(|q| q.provider == p.provider && q.folder.is_none()).map(|q| format!("Your usual setup is already added as {}.", q.name)),
+            Some(_) if p.provider.folder_variable().is_none() => Some(format!("{} has one login, your usual setup, and no folder of its own.", p.provider.label())),
             Some(typed) => match locate(typed, places) {
                 Err(problem) => Some(problem),
                 Ok(folder) => match places.home.and_then(|home| usual_owner(&folder, home, shell)) {
@@ -332,6 +334,14 @@ mod tests {
         let found = problems(&list, &rig.places(), None);
         assert_eq!(found.len(), 1);
         assert_eq!(found["b"], "Your usual setup is already added as a name.");
+    }
+
+    #[test]
+    fn gemini_has_no_login_folder_and_a_folder_for_it_is_refused() {
+        let rig = Rig::new("gemini");
+        std::fs::create_dir_all(rig.home.join(".gemini-work")).unwrap();
+        assert_eq!(rig.problem(Provider::Gemini, "~/.gemini-work").as_deref(), Some("Gemini has one login, your usual setup, and no folder of its own."));
+        assert!(problems(&[provider("g", Provider::Gemini, None)], &rig.places(), None).is_empty());
     }
 
     #[test]
