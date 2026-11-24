@@ -12,22 +12,41 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use super::env::RunEnv;
-use super::archive::contained;
-use super::fresh::{agents_root, is_work_path, newest_clone_per_owner, real};
-use super::limits::{OwnerAddress, WorkFolderGit};
-use crate::domain::Run;
+use serde::Serialize;
 
-/// How long one git command may take. The app runs them one repository at a time, where 5 seconds is generous; the test
-/// suite runs hundreds of tests at once on a loaded CI runner, where a plain `git remote get-url` has taken longer, so tests wait
-/// longer rather than fail on the machine's load.
-const GIT_TIMEOUT: Duration = if cfg!(test) { Duration::from_secs(30) } else { Duration::from_secs(5) };
+use crate::env::RunEnv;
+use crate::fresh::{agents_root, contained, is_work_path, newest_clone_per_owner, real};
+
+/// How long one git command that reads may take. Git runs one repository at a time, where 5 seconds is generous; a
+/// test suite runs hundreds of tests at once on a loaded runner, where a plain `git remote get-url` has taken longer,
+/// so tests give `Git::with_read_limit` a longer one rather than fail on the machine's load.
+pub const GIT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `git worktree remove` and `git branch -d` write. Killing one partway leaves a half-deleted worktree that git then refuses to remove.
 const GIT_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const WORD_LIMIT: usize = 16;
 const CONFIG_VALUE_LIMIT: usize = 200;
 /// How many owners' folders Settings reads an address in.
 const OWNERS_SHOWN: usize = 6;
+
+/// What git does in Gossamr's work folder, for Settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkFolderGit {
+    /// The address in the person's global git settings; none when there is none.
+    pub global_email: Option<String>,
+    /// The address git commits with inside the newest clone of each owner. Empty until Gossamr has made a clone.
+    pub owners: Vec<OwnerAddress>,
+    /// Their git settings choose an address by folder, and no clone in the work folder gets anything but the global one.
+    pub include_if: bool,
+}
+
+/// Who git commits as inside one owner's clones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerAddress {
+    pub owner: String,
+    pub commit_email: Option<String>,
+}
 
 /// Who git commits as in a folder. Either part is `None` when git has no setting for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -37,18 +56,24 @@ pub struct CommitIdentity {
 }
 
 /// Switches off what a repository's own config could use to run a program, on every call Gossamr makes in a clone.
-pub(super) const PINNED: [&str; 6] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
+pub const PINNED: [&str; 6] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
 
 #[derive(Clone)]
 pub struct Git {
     program: PathBuf,
     env: Arc<RunEnv>,
+    read_limit: Duration,
 }
 
 impl Git {
     pub fn new(env: Arc<RunEnv>) -> Self {
         let program = find_in_path(&env, "git").unwrap_or_else(|| PathBuf::from("/usr/bin/git"));
-        Self { program, env }
+        Self { program, env, read_limit: GIT_TIMEOUT }
+    }
+
+    /// The same git with `limit` for each command that reads, in place of `GIT_TIMEOUT`.
+    pub fn with_read_limit(self, limit: Duration) -> Self {
+        Self { read_limit: limit, ..self }
     }
 
     /// Trimmed stdout, or `None` when git fails, times out or can't start.
@@ -58,7 +83,7 @@ impl Git {
 
     /// Like `out`, but says why it failed: git couldn't start, ran past the limit, or exited with this last stderr line.
     async fn out_or_why(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
-        self.out_or_why_within(dir, args, GIT_TIMEOUT).await
+        self.out_or_why_within(dir, args, self.read_limit).await
     }
 
     async fn out_or_why_within(&self, dir: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
@@ -86,23 +111,23 @@ impl Git {
         self.out_or_why(dir, &["remote", "get-url", "origin"]).await
     }
 
-    pub(super) fn git_program(&self) -> &Path {
+    pub(crate) fn git_program(&self) -> &Path {
         &self.program
     }
 
     /// A program on the captured PATH, such as `gh`.
-    pub(super) fn tool(&self, name: &str) -> Option<PathBuf> {
+    pub(crate) fn tool(&self, name: &str) -> Option<PathBuf> {
         find_in_path(&self.env, name)
     }
 
     /// Runs `program` with the captured environment plus `extra` (for this process only) and a time limit. The error
     /// is the last line of stderr.
-    pub(super) async fn run(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<(), String> {
+    pub(crate) async fn run(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<(), String> {
         self.run_stdout(program, args, extra, limit).await.map(drop)
     }
 
     /// `run`, with what the program printed.
-    pub(super) async fn run_stdout(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<String, String> {
+    pub(crate) async fn run_stdout(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<String, String> {
         let mut cmd = Command::new(program);
         cmd.args(args);
         self.env.apply(cmd.as_std_mut());
@@ -144,7 +169,7 @@ impl Git {
     async fn is_untouched_worktree(&self, clone: &Path, worktree: &Path, branch: &str, start: &str) -> bool {
         let listed = self.out(clone, &["worktree", "list", "--porcelain"]).await.unwrap_or_default();
         let here = listed.split("\n\n").any(|entry| {
-            entry.lines().any(|l| l.strip_prefix("worktree ").is_some_and(|p| super::fresh::real(Path::new(p)) == super::fresh::real(worktree)))
+            entry.lines().any(|l| l.strip_prefix("worktree ").is_some_and(|p| real(Path::new(p)) == real(worktree)))
                 && entry.lines().any(|l| l.strip_prefix("branch ").is_some_and(|b| b == format!("refs/heads/{branch}")))
         });
         here && self.at_start(clone, branch, start).await && self.out(worktree, &["status", "--porcelain"]).await.is_some_and(|s| s.is_empty())
@@ -275,33 +300,41 @@ fn find_in_path(env: &RunEnv, program: &str) -> Option<PathBuf> {
         .find(|p| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
-/// Removes a run's worktree and branch through git alone. Anything git refuses stays, in git's own words, as `Ok(Some)`.
+/// A worktree of a clone of `repo`, and the branch it is on.
+#[derive(Debug, Clone, Copy)]
+pub struct Worktree<'a> {
+    pub repo: &'a str,
+    pub clone: &'a Path,
+    pub path: &'a Path,
+    pub branch: &'a str,
+}
+
+/// Removes a worktree and its branch through git alone. Anything git refuses stays, in git's own words, as `Ok(Some)`.
 /// The clone and the worktree must lie in `~/Gossamr/agents`; otherwise the refusal is the `Err`.
-pub async fn remove_with_git(git: &Git, home: Option<&Path>, run: &Run) -> Result<Option<String>, String> {
+pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<'_>) -> Result<Option<String>, String> {
     let home = home.ok_or("Gossamr doesn't know your home folder.")?;
-    let clone = &run.spec.clone_path;
-    let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, &run.spec.repo, clone);
+    let Worktree { repo, clone, path: expected, branch } = worktree;
+    let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, repo, clone);
     if !in_work_folder {
         return Err("Its clone isn't in ~/Gossamr/agents, so Gossamr leaves it where it is.".into());
     }
     let outside = || "Its worktree isn't in ~/Gossamr/agents, so Gossamr leaves it where it is.".to_owned();
-    let worktree = if run.expected_worktree.symlink_metadata().is_ok() {
-        contained(&agents_root(home), &run.expected_worktree).ok_or_else(outside)?
+    let worktree = if expected.symlink_metadata().is_ok() {
+        contained(&agents_root(home), expected).ok_or_else(outside)?
     } else {
-        let missing = real(&run.expected_worktree);
+        let missing = real(expected);
         if !missing.starts_with(real(&agents_root(home))) {
             return Err(outside());
         }
         missing
     };
-    let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
-    if let Err(message) = git.check_branch_deletable(clone, &branch).await {
+    if let Err(message) = git.check_branch_deletable(clone, branch).await {
         return Ok(Some(message));
     }
     if let Err(message) = git.remove_worktree(clone, &worktree).await {
         return Ok(Some(message));
     }
-    Ok(git.delete_branch(clone, &branch).await.err())
+    Ok(git.delete_branch(clone, branch).await.err())
 }
 
 /// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`.
@@ -349,7 +382,7 @@ fn words(text: &str, limit: usize) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn random_hex(digits: usize) -> String {
+pub fn random_hex(digits: usize) -> String {
     let mut bytes = vec![0u8; digits.div_ceil(2)];
     // Without randomness the name falls back to a clock-derived value; the collision check still applies.
     if getrandom::fill(&mut bytes).is_err() {
@@ -374,11 +407,14 @@ pub fn new_name(key: &str, title: &str, existing: &HashSet<String>) -> String {
     unreachable!("the loop only ends by returning")
 }
 
-#[cfg(test)]
-pub(crate) mod testing {
+#[cfg(any(test, feature = "testing"))]
+pub mod testing {
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
+
+    /// The read limit for git in tests, which run hundreds at once on a loaded machine.
+    pub const READ_LIMIT: Duration = Duration::from_secs(30);
 
     /// A `git` that answers from `.fake-*` files in the directory it is given with `-C`, and logs every call.
     pub const FAKE_GIT: &str = r#"#!/bin/sh
@@ -433,7 +469,7 @@ esac
 
     /// A thread that forks while the script is open for writing keeps that handle until it execs, and running the
     /// script meanwhile fails with ETXTBSY. Try it until it runs.
-    pub(crate) fn wait_until_executable(path: &Path) {
+    pub fn wait_until_executable(path: &Path) {
         for _ in 0..500 {
             match std::process::Command::new(path).arg("--version").output() {
                 Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(10)),
@@ -449,7 +485,7 @@ esac
             ("PATH", format!("{}:/usr/bin:/bin", bin.display())),
             ("FAKE_GIT_LOG", dir.join("git.log").to_string_lossy().into_owned()),
         ]);
-        Git::new(Arc::new(env))
+        Git::new(Arc::new(env)).with_read_limit(READ_LIMIT)
     }
 
     /// A folder with `.git` that the fake git reports as a clone of `origin`.
@@ -524,7 +560,7 @@ mod tests {
             ("GIT_CONFIG_GLOBAL", home.join(".gitconfig").display().to_string()),
             ("GIT_CONFIG_NOSYSTEM", "1".into()),
         ]);
-        Git::new(Arc::new(env))
+        Git::new(Arc::new(env)).with_read_limit(READ_LIMIT)
     }
 
     fn init(path: &Path) {
@@ -627,7 +663,7 @@ mod tests {
 
     #[tokio::test]
     async fn settings_read_nothing_when_git_cannot_run() {
-        let gone = Git { program: PathBuf::from("/nonexistent/git"), env: Arc::new(RunEnv::from_pairs([("PATH", "/nonexistent")])) };
+        let gone = Git { program: PathBuf::from("/nonexistent/git"), env: Arc::new(RunEnv::from_pairs([("PATH", "/nonexistent")])), read_limit: GIT_TIMEOUT };
         assert_eq!(gone.work_folder_git(Path::new("/")).await, None);
     }
 

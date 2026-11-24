@@ -125,7 +125,7 @@ impl ClaudeCodeProvider {
         if self.stand_in.is_some() {
             return Some(PathBuf::from("claude"));
         }
-        crate::runs::binary::find_binary(crate::connections::Driver::Claude, shell)
+        crate::runs::toolchain::find_binary(crate::connections::Driver::Claude, shell)
     }
 
     /// Starts a run. The stream ends with exactly one `Done`, including after a cancel or a crash, and once it has

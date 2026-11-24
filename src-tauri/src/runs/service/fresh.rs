@@ -93,7 +93,7 @@ impl RunService {
     /// git can't be asked.
     pub async fn work_folder_git(&self) -> Option<WorkFolderGit> {
         let (home, tools) = (self.fresh_home()?, self.tools.get().await.ok()?);
-        Git::new(tools.env).work_folder_git(&home).await
+        crate::runs::toolchain::git(tools.env).work_folder_git(&home).await
     }
 
     /// Makes Gossamr's clone of the run's repository, or fetches into it, before a launch. It takes the repository's
@@ -106,7 +106,7 @@ impl RunService {
         if work_path(&home, &spec.repo).ok() != Some(real(&spec.clone_path)) {
             return Ok(None);
         }
-        let git = Git::new(self.tools.get().await?.env);
+        let git = crate::runs::toolchain::git(self.tools.get().await?.env);
         let lock = self.repo_lock(&spec.repo);
         let _turn = lock.lock().await;
         let _other_process = lock_repo(&home, &spec.repo).await.map_err(clone_failure)?;

@@ -10,8 +10,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::repo::{origin_matches, random_hex, Git, PINNED};
-use crate::domain::valid_repo;
+use crate::repo::{origin_matches, random_hex, Git, PINNED};
 
 const CLONE_LIMIT: Duration = Duration::from_secs(600);
 const FETCH_LIMIT: Duration = Duration::from_secs(30);
@@ -47,6 +46,16 @@ pub fn tilde(path: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => path.display().to_string(),
     }
+}
+
+fn is_repo_part(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.starts_with('-') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// `owner/name`, each part made only of letters, digits, `.`, `_` and `-`, so a path built from it stays inside its folder.
+pub fn valid_repo(repo: &str) -> bool {
+    let parts: Vec<&str> = repo.split('/').collect();
+    parts.len() == 2 && parts.iter().all(|p| is_repo_part(p))
 }
 
 pub fn agents_root(home: &Path) -> PathBuf {
@@ -92,6 +101,12 @@ pub fn real(path: &Path) -> PathBuf {
             _ => return path.to_path_buf(),
         }
     }
+}
+
+/// `path` made real when it exists and lies strictly inside `root`; anything else, a symlink out or `..` included, is None.
+pub fn contained(root: &Path, path: &Path) -> Option<PathBuf> {
+    let (root, path) = (root.canonicalize().ok()?, path.canonicalize().ok()?);
+    (path != root && path.starts_with(&root)).then_some(path)
 }
 
 /// The only place the path of a repository's clone is worked out. Makes `~/Gossamr/agents` if it is missing and takes
