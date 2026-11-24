@@ -335,11 +335,17 @@ async fn the_sweep_takes_only_a_temp_clone_it_marked_and_never_one_with_work() {
     let unmarked = folder(".webshop+cloning-111111111111", false);
     let with_work = folder(".webshop+cloning-222222222222", true);
     let old_name = folder(".webshop.cloning-333333333333", true);
+    let detached = folder(".webshop+cloning-444444444444", true);
+    rig.git(&detached, &["init", "--quiet"]);
+    rig.git(&detached, &["commit", "--quiet", "--allow-empty", "-m", "first"]);
+    rig.git(&detached, &["checkout", "--quiet", "--detach"]);
+    rig.git(&detached, &["commit", "--quiet", "--allow-empty", "-m", "on a detached head"]);
+    rig.git(&detached, &["update-ref", "-d", "refs/heads/main"]);
     rig.git(&with_work, &["init", "--quiet"]);
     std::fs::write(with_work.join("work"), "not on any remote\n").unwrap();
     rig.git(&with_work, &["add", "work"]);
     rig.git(&with_work, &["commit", "--quiet", "-m", "work"]);
-    for path in [&empty, &unmarked, &with_work, &old_name] {
+    for path in [&empty, &unmarked, &with_work, &old_name, &detached] {
         std::fs::File::open(path).unwrap().set_modified(old).unwrap();
     }
     let served = serve(&rig.data, rig.setup());
@@ -347,6 +353,7 @@ async fn the_sweep_takes_only_a_temp_clone_it_marked_and_never_one_with_work() {
     let session = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-1"))).await.unwrap();
     assert!(!empty.exists(), "a temp clone this code marked, with nothing in it, goes");
     assert!(unmarked.exists() && with_work.join("work").exists() && old_name.exists(), "nothing else does");
+    assert!(detached.exists(), "nor one whose only commit is on a detached HEAD");
     assert!(!harness::fresh::valid_repo("acme/webshop+worktrees") && !harness::fresh::valid_repo("acme/.webshop+cloning-0"), "no repo can be named like the harness's own folders");
     close(&mut client, &session).await;
 }

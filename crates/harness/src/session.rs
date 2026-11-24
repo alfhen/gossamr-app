@@ -271,6 +271,12 @@ impl Harness {
             if row.work.is_some() && row.cwd.symlink_metadata().is_err() {
                 return Err(Error::Refused(format!("session {id}'s worktree is gone, so it can't be resumed: clean it up")));
             }
+            // A later session may have the same branch, and so the same folder, again: it is that session's now.
+            if let Some(work) = &row.work
+                && store.another_holds(id, work)?
+            {
+                return Err(Error::Refused(format!("another session works in session {id}'s worktree now, so it can't be resumed")));
+            }
             let driver = self.driver(&row.provider)?;
             let (provider, cwd, locked, model, login, effort) = (row.provider, row.cwd, row.locked, row.model, row.login, row.effort);
             Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume: Some(provider_session), notices: Vec::new() })
@@ -471,15 +477,16 @@ impl Harness {
                 return Err(Error::Running(id.to_owned()));
             }
             let row = self.inner.with_store(|store| store.session(id))?;
-            let mut cleaning = self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner());
-            if !cleaning.insert(id.to_owned()) {
-                return Err(Error::Running(id.to_owned()));
-            }
-            // The worktree is this session's only while no other session that is not cleaned up names it.
+            // The worktree is this session's only while no other session that is not cleaned up names it. Asked
+            // before the reservation, so a failed read leaves none behind.
             let owned = match &row.work {
                 Some(work) if !row.cleaned => !self.inner.with_store(|store| store.another_holds(id, work))?,
                 _ => false,
             };
+            let mut cleaning = self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner());
+            if !cleaning.insert(id.to_owned()) {
+                return Err(Error::Running(id.to_owned()));
+            }
             row.work.filter(|_| owned).map(|work| (work, row.cwd))
         };
         let _cleaning = Cleaning { inner: &self.inner, id };
