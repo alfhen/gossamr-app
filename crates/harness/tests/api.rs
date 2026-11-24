@@ -1186,18 +1186,23 @@ async fn tokens_watchers_in_the_middle_of_pushes_get_nothing_stored_after_the_re
     let feeding = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let feeds = feeding.clone();
     let session = id.clone();
+    // Why the feeder stopped, if it did, for the waits to report.
+    let failed: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+    let said = failed.clone();
     let feed = tokio::spawn(async move {
         while feeds.load(std::sync::atomic::Ordering::Relaxed) {
-            feeder.call(Op::Send { session: session.clone(), text: "go".into() }).await?;
+            if let Err(e) = feeder.call(Op::Send { session: session.clone(), text: "go".into() }).await {
+                *said.lock().unwrap() = Some(e.to_string());
+                return;
+            }
         }
-        Ok::<(), Error>(())
     });
     let stored = |harness: &Harness| harness.sessions().unwrap().into_iter().find(|row| row.id == id).map_or(0, |row| row.last_seq);
     // Each wait has a deadline, and ends early if the feeder stopped.
     let reach = async |seq: u64| {
         let deadline = std::time::Instant::now() + Duration::from_secs(60);
         while stored(&served.harness) < seq {
-            assert!(!feed.is_finished(), "the feeder stopped at event {}", stored(&served.harness));
+            assert!(!feed.is_finished(), "the feeder stopped at event {}: {:?}", stored(&served.harness), failed.lock().unwrap());
             assert!(std::time::Instant::now() < deadline, "the session reached only event {} of {seq}", stored(&served.harness));
             tokio::task::yield_now().await;
         }
@@ -1210,7 +1215,8 @@ async fn tokens_watchers_in_the_middle_of_pushes_get_nothing_stored_after_the_re
     // Events go on after the revoke, while each watcher's connection may still have pushes to write.
     reach(revoked_at + 300).await;
     feeding.store(false, std::sync::atomic::Ordering::Relaxed);
-    feed.await.unwrap().unwrap();
+    feed.await.unwrap();
+    assert!(failed.lock().unwrap().is_none(), "the feeder failed: {:?}", failed.lock().unwrap());
     while let Some(seen) = tokio::time::timeout(Duration::from_secs(60), watchers.join_next()).await.expect("each watcher ends") {
         let seen = seen.unwrap();
         assert!(seen <= revoked_at, "a watcher got event {seen}, stored after the revoke returned at {revoked_at}");
