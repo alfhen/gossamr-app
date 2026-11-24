@@ -292,3 +292,37 @@ fn tokens_past_the_cap_are_refused_and_the_last_one_cannot_be_revoked() {
     assert!(matches!(store.revoke_client_token(9_999), Err(Error::Refused(_))), "no such token");
     assert_eq!(store.client_tokens().unwrap(), kept[..1]);
 }
+
+#[test]
+fn sweep_finds_idle_sessions_without_reading_their_events() {
+    let (_tmp, dir) = data_dir();
+    drop(Store::open(&dir).unwrap());
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    let plan: Vec<String> = raw
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", harness::store::SWEEP_ROWS))
+        .unwrap()
+        .query_map(rusqlite::params![0, 0, "[]"], |row| row.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(!plan.iter().any(|step| step.contains("CORRELATED")), "no read of a session's events to choose it: {plan:?}");
+}
+
+#[test]
+fn tokens_an_id_is_never_used_again_and_a_refusal_says_which_it_is() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    for _ in 0..2 {
+        store.add_client_token(&harness::auth::Token::random().stored_key()).unwrap();
+    }
+    let ids: Vec<i64> = store.client_tokens().unwrap().iter().map(|token| token.id).collect();
+    store.revoke_client_token(ids[1]).unwrap();
+    store.add_client_token(&harness::auth::Token::random().stored_key()).unwrap();
+    let after: Vec<i64> = store.client_tokens().unwrap().iter().map(|token| token.id).collect();
+    assert_eq!(after, [ids[0], ids[1] + 1], "the revoked id is not handed out again");
+    let unknown = store.revoke_client_token(ids[1]).unwrap_err().to_string();
+    assert!(unknown.contains(&format!("no client token {}", ids[1])), "{unknown}");
+    store.revoke_client_token(after[1]).unwrap();
+    let last = store.revoke_client_token(after[0]).unwrap_err().to_string();
+    assert!(last.contains("last client token"), "{last}");
+}

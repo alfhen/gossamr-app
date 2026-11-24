@@ -1620,3 +1620,37 @@ async fn locked_a_watch_reads_its_backlog_a_page_at_a_time() {
     assert!(serde_json::to_string(&page).unwrap().len() <= harness::api::PAGE_BYTES, "one page at most");
     assert_eq!(upto, 12, "the read stops where the session was when the watch began");
 }
+
+#[tokio::test]
+async fn shutdown_stops_waiting_for_an_agent_that_ignores_stop_and_kill_and_frees_the_data_folder() {
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stuck".into(), Arc::new(Stopper { going: Going::WhenLet(let_go.clone()) })), ("mock".into(), Arc::new(mock(LIFE)))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (stuck, mut events) = open_on(&harness, "stuck", false).await;
+    harness.send(&stuck, "run").unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnStarted)).await;
+    let (gone, _) = open(&harness, false).await;
+    let left = tokio::time::timeout(Duration::from_secs(30), harness.shutdown()).await.expect("shutdown does not wait for ever");
+    assert_eq!(left, std::slice::from_ref(&stuck), "it names the session it gave up on");
+    let store = Store::open(&dir).expect("the data folder is free");
+    let last = store.events(&stuck, 0).unwrap().pop().unwrap();
+    assert!(matches!(&last.body, Body::Failed { kind: FailKind::Stuck, reason } if reason.contains("shut down")), "{last:?}");
+    assert_eq!(store.events(&gone, 0).unwrap().pop().unwrap().body, Body::Closed, "the others closed");
+    let_go.notify_one();
+}
+
+#[tokio::test]
+async fn sweep_leaves_the_rows_of_a_running_session() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock(LIFE), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    // As if its last event were 91 days old, while it still runs.
+    let old = harness::store::now_ms() - 91 * 24 * 60 * 60 * 1000;
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE events SET ms = ?1", [old]).unwrap();
+    raw.execute("UPDATE sessions SET last_ms = ?1", [old]).unwrap();
+    harness.sweep().unwrap();
+    assert!(!harness.events(&id, 0).unwrap().is_empty(), "a running session's rows stay");
+}

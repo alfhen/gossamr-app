@@ -56,11 +56,15 @@ fn serve(script: &str) -> Served {
 }
 
 fn serve_with(script: &str, limits: Limits) -> Served {
+    serve_set(script, limits, settings(4))
+}
+
+fn serve_set(script: &str, limits: Limits, settings: harness::session::Settings) -> Served {
     let (tmp, dir) = data_dir();
     let (token, mock) = (Token::random(), common::mock(script));
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
     let first = token.clone();
-    let server = Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap().limits(limits);
+    let server = Server::bind(&dir, move || Some(first), drivers, settings).unwrap().limits(limits);
     let harness = server.harness().clone();
     let task = tokio::spawn(server.run());
     Served { _tmp: tmp, dir, token, mock, harness, task }
@@ -803,4 +807,124 @@ async fn limits_a_message_over_the_limit_from_another_client_closes_its_connecti
         }
     }
     assert_eq!(code, Some(1009), "closed as too big");
+}
+
+/// Says one line per prompt, then waits for the next.
+const ONE_A_PROMPT: &str = r#"{"prompt": null}
+{"say": "one"}
+{"end": "done"}
+{"prompt": null}
+{"say": "two"}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn tokens_a_watching_connection_of_a_revoked_token_gets_nothing_after_the_revoke_answers() {
+    let served = serve(ONE_A_PROMPT);
+    let mut first = connect(&served).await;
+    let other = Token::random();
+    first.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
+    let id = open_as(&mut first, true, false).await;
+    first.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    events_until(&mut first, |body| matches!(body, Body::TurnEnded { .. })).await;
+    let mut watcher = Client::connect(&served.dir, &other).await.unwrap();
+    watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    let seen = served.harness.events(&id, 0).unwrap().len();
+    for _ in 0..seen {
+        next_event(&mut watcher).await;
+    }
+    let listed = first.call(Op::TokenList).await.unwrap();
+    let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
+    first.call(Op::TokenRevoke { token: other_id }).await.unwrap();
+    // A locked session's text, made after the revoke has answered.
+    first.call(Op::Send { session: id.clone(), text: "again".into() }).await.unwrap();
+    events_until(&mut first, |body| matches!(body, Body::TurnEnded { .. })).await;
+    match tokio::time::timeout(Duration::from_secs(60), watcher.push()).await.unwrap() {
+        Ok(None) | Err(_) => {}
+        Ok(Some(push)) => panic!("the revoked connection got {push:?}"),
+    }
+}
+
+#[tokio::test]
+async fn locked_a_client_past_the_backlog_is_told_events_were_lost() {
+    let says = 3_000;
+    let script: String = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"{n} {}\"}}", "x".repeat(400))))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let settings = harness::session::Settings { locked_backlog: 100, ..settings(4) };
+    let served = serve_set(&script, Limits::default(), settings);
+    let mut slow = connect(&served).await;
+    let id = open_as(&mut slow, true, false).await;
+    let mut done = served.harness.subscribe(&id).unwrap();
+    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    // The client reads nothing until the session has closed.
+    loop {
+        match done.recv().await {
+            Ok(event) if event.body == Body::Closed => break,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    let mut got = vec![];
+    let end = loop {
+        match tokio::time::timeout(Duration::from_secs(60), slow.push()).await.unwrap().unwrap() {
+            Some(Push::Event { event, .. }) => got.push(event),
+            other => break other,
+        }
+    };
+    assert!(matches!(&end, Some(Push::Lost { reason, .. }) if reason.contains("events were lost") && reason.contains("100")), "{end:?}");
+    let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
+    assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "what came, came in order and whole");
+    assert!(got.len() < says, "not all of it");
+}
+
+#[tokio::test]
+async fn events_an_unlocked_client_that_stops_reading_reads_what_it_missed_from_the_store() {
+    let says = 3_000;
+    let script: String = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"{n} {}\"}}", "x".repeat(400))))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let settings = harness::session::Settings { locked_backlog: 100, ..settings(4) };
+    let served = serve_set(&script, Limits::default(), settings);
+    let mut slow = connect(&served).await;
+    let id = open(&mut slow).await;
+    let mut done = served.harness.subscribe(&id).unwrap();
+    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    loop {
+        match done.recv().await {
+            Ok(event) if event.body == Body::Closed => break,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+    let mut got = vec![];
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(60), slow.push()).await.unwrap().unwrap() {
+        got.push(event);
+    }
+    assert!(got == served.harness.events(&id, 0).unwrap(), "every event once, in order, whole: the store has them");
+}
+
+#[tokio::test]
+async fn serve_aborting_the_server_stops_its_sweeper_and_frees_the_data_folder() {
+    let (_tmp, dir) = data_dir();
+    let first = Token::random();
+    let server = Server::bind(&dir, move || Some(first), vec![], settings(4)).unwrap();
+    let task = tokio::spawn(server.run());
+    tokio::task::yield_now().await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let mut opened = harness::store::Store::open(&dir);
+    for _ in 0..1000 {
+        if opened.is_ok() {
+            break;
+        }
+        // The sweeper's task ends on the runtime's next turn.
+        tokio::task::yield_now().await;
+        opened = harness::store::Store::open(&dir);
+    }
+    assert!(opened.is_ok(), "nothing holds the harness, so the folder is free");
 }
