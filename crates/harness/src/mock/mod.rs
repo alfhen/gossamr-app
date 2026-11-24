@@ -254,6 +254,7 @@ impl Driver for Mock {
             ids: 0,
             last_tool: String::new(),
             prompts: VecDeque::new(),
+            in_turn: false,
         };
         tokio::spawn(player.play());
         Ok(Link { commands, output })
@@ -285,6 +286,7 @@ struct Player {
     last_tool: String,
     /// Prompts that came while the mock was not waiting for one, kept for the next prompt step, as a provider would.
     prompts: VecDeque<String>,
+    in_turn: bool,
 }
 
 impl Player {
@@ -294,7 +296,17 @@ impl Player {
         loop {
             // A real agent's events come one at a time; so do the mock's.
             tokio::task::yield_now().await;
-            let Some(step) = self.mock.next_step(&self.key, self.run) else { return };
+            let Some(step) = self.mock.next_step(&self.key, self.run) else {
+                // A replayed agent stays up after its last turn, as a provider does, so a prompt or cancel the
+                // recording does not have still reaches it; its client is told the recording is over.
+                if replay
+                    && !self.in_turn
+                    && let Got::Diverged(reason) = self.wait_for(ClientAction::Prompt(None), |_| false, false).await
+                {
+                    self.send(Body::Failed { kind: FailKind::Provider, reason });
+                }
+                return;
+            };
             let got = match step {
                 Step::Prompt(recorded) => {
                     let got = match self.prompts.pop_front() {
@@ -384,6 +396,11 @@ impl Player {
     }
 
     fn send(&mut self, mut body: Body) -> Got {
+        match body {
+            Body::TurnStarted => self.in_turn = true,
+            Body::TurnEnded { .. } | Body::Failed { .. } => self.in_turn = false,
+            _ => {}
+        }
         self.mapper.body(&mut body);
         match self.output.send(body) {
             Ok(()) => Got::Go,
@@ -400,6 +417,7 @@ impl Player {
     /// A replay waits at most `CLIENT_LIMIT`.
     async fn wait_for(&mut self, action: ClientAction, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
         let what = match action {
+            ClientAction::Prompt(None) if self.mock.inner.script.replay => "close",
             ClientAction::Prompt(_) => "prompt",
             ClientAction::Answer(_) => "answer",
             ClientAction::ToolResult(_) => "tool result",
@@ -547,6 +565,10 @@ mod tests {
         let mapper = Mapper::new(&recorded, "s").unwrap();
         assert_eq!(mapper.text("xitem-aaaaaa-call-bbbbbb"), "xitem-aaaaaa-id1");
         assert_eq!(mapper.text("item-aaaaaa-call-bbbbbb and call-bbbbbb"), "id0 and id1", "the longest whole word wins");
+        // The review's case: a recorded uuid glued after a recorded call id.
+        let uuid = "0a0b0c0d-1111-4222-8333-444455556666";
+        let recorded = [(format!("call_x-{uuid}"), Recorded::Id), (uuid.to_owned(), Recorded::Id)];
+        assert_eq!(Mapper::new(&recorded, "s").unwrap().text(&format!("zcall_x-{uuid}")), "zcall_x-id1");
     }
 
     #[tokio::test]

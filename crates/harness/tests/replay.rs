@@ -38,6 +38,13 @@ fn refused(path: &Path) -> String {
 
 /// Plays `fixture` with its recorded client, `answers` first, and returns every event.
 async fn replay(fixture: &Path, answers: Vec<Decision>) -> Vec<Event> {
+    let (events, followed) = replay_following(fixture, answers).await;
+    assert!(followed, "the client of {} missed events or could not act as recorded", name(fixture));
+    events
+}
+
+/// Every event of `fixture`'s replay, and whether its client could act as the recording's did.
+async fn replay_following(fixture: &Path, answers: Vec<Decision>) -> (Vec<Event>, bool) {
     let (_tmp, dir) = data_dir();
     let mock = Mock::new(Script::load(fixture).unwrap_or_else(|_| panic!("{} does not load", name(fixture))));
     let harness = harness(&dir, &mock, 4);
@@ -46,8 +53,7 @@ async fn replay(fixture: &Path, answers: Vec<Decision>) -> Vec<Event> {
     let mut seen = vec![];
     let play = drive(&harness, &id, events, client, answers, None, |event| seen.push(event.clone()));
     let followed = tokio::time::timeout(Duration::from_secs(60), play).await.unwrap_or_else(|_| panic!("{} did not end", name(fixture)));
-    assert!(followed, "the client of {} missed events or could not act as recorded", name(fixture));
-    seen
+    (seen, followed)
 }
 
 fn permissions(events: &[Event]) -> Vec<(PermissionKind, Decision)> {
@@ -215,7 +221,7 @@ async fn replay_maps_a_recorded_value_only_from_a_field_that_names_it() {
         json!({"seq": 2, "ms": 1, "dir": "to_agent", "data": {"jsonrpc": "2.0", "id": 1, "method": "session/prompt", "params": {"sessionId": one, "prompt": [{"type": "text", "text": "go"}]}}}),
         json!({"seq": 3, "ms": 2, "dir": "from_agent", "data": {"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": two, "update": {"sessionUpdate": "available_commands_update"}}}}),
         update(4, json!({"sessionUpdate": "tool_call", "toolCallId": "call_123456789", "name": "ping", "rawInput": {
-            "pid": pid, "class": "item-container", "servers": [{"url": "http://127.0.0.1:54321/mcp"}, {"url": "http://127.0.0.1:54400/mcp"}]}})),
+            "pid": pid, "size": pid, "class": "item-container", "servers": [{"url": "http://127.0.0.1:54321/mcp"}, {"url": "http://127.0.0.1:54400/mcp"}]}})),
         update(5, json!({"sessionUpdate": "tool_call", "toolCallId": "call_987654321", "title": "ls -la", "rawInput": {"path": "."}})),
         update(6, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}})),
         json!({"seq": 7, "ms": 7, "dir": "from_agent", "data": {"jsonrpc": "2.0", "id": 1, "result": {"stopReason": "end_turn"}}}),
@@ -227,6 +233,7 @@ async fn replay_maps_a_recorded_value_only_from_a_field_that_names_it() {
     let (id, _, input) = calls[0];
     assert!(id != "call_123456789", "the call id is mapped");
     assert!(input["pid"] == json!(std::process::id()), "a pid in a pid field is this process's");
+    assert!(input["size"] == json!(pid), "the same number in a field that is no pid is kept");
     assert!(input["class"] == "item-container", "an id-shaped word in a field that is no id is kept");
     assert!(input["servers"][0]["url"] == "http://127.0.0.1:0/mcp", "the first port is 0, as the session has no tools endpoint yet");
     assert!(input["servers"][1]["url"] == "http://127.0.0.1:1/mcp", "two recorded ports stay two");
@@ -404,6 +411,8 @@ async fn replay_a_prompt_sent_during_claudes_unprompted_turn_runs_after_that_tur
 async fn replay_codex_acp_resume_load_plays_to_its_end() {
     let kinds = kinds(&replay(&fixtures().join("codex/acp/4-resume-load.jsonl"), vec![]).await);
     assert!(!kinds.iter().any(|kind| kind == "failed") && kinds.last().is_some_and(|kind| kind == "closed"), "{kinds:?}");
+    let prompted = kinds.iter().position(|kind| kind == "prompted").expect("the recorded prompt plays");
+    assert!(kinds[prompted + 1] == "turn_started" && kinds[prompted..].iter().any(|kind| kind == "turn_ended"), "and its turn runs to its end: {kinds:?}");
 }
 
 #[tokio::test]
@@ -489,22 +498,34 @@ async fn replay_acting(fixture: &Path, mut act: impl FnMut(&harness::session::Ha
     let harness = harness(&dir, &mock, 4);
     let mut client = mock.client();
     let (id, mut events) = open(&harness, false).await;
-    let mut seen = vec![];
+    let (mut seen, mut asked, mut answer) = (vec![], None, None);
     loop {
         tokio::select! {
+            // An event is seen before what the client is to do next, so `act` comes first.
+            biased;
             event = events.recv() => {
                 let event = event.unwrap();
                 act(&harness, &id, &event);
+                if let Body::Permission { id, .. } = &event.body {
+                    asked = Some(id.clone());
+                }
                 seen.push(event.clone());
                 if event.body == Body::Closed {
                     return seen;
                 }
             }
-            Ok(()) = client.changed() => {
-                if let Some(ClientAction::Prompt(Some(text))) = client.borrow_and_update().clone() {
-                    harness.send(&id, text).unwrap();
+            Ok(()) = client.changed() => match client.borrow_and_update().clone() {
+                Some(ClientAction::Prompt(Some(text))) => harness.send(&id, text).unwrap(),
+                Some(ClientAction::Prompt(None)) => {
+                    let _ = harness.close(&id);
                 }
-            }
+                Some(ClientAction::Answer(recorded)) => answer = recorded,
+                _ => {}
+            },
+        }
+        if let (Some(request), Some(decision)) = (&asked, answer) {
+            let _ = harness.answer(&id, request, decision, None);
+            (asked, answer) = (None, None);
         }
     }
 }
@@ -673,4 +694,227 @@ async fn replay_a_file_that_grows_past_the_limit_as_it_is_read_is_refused() {
     let refusal = refused(&pipe);
     writer.join().unwrap();
     assert!(refusal == format!(": too big: {} bytes, over the {MAX_SCRIPT_BYTES} a script may have", MAX_SCRIPT_BYTES + 1));
+}
+
+/// `fixture`'s lines with `extra` added after the line with `seq` `after`, and `tail` added at the end.
+fn with_lines(fixture: &str, after: u64, extra: Value, tail: Vec<Value>) -> Vec<Value> {
+    let mut lines = vec![];
+    for line in lines_of(fixture) {
+        let here = line["seq"] == after;
+        lines.push(line);
+        if here {
+            lines.push(extra.clone());
+        }
+    }
+    lines.extend(tail);
+    lines
+}
+
+fn claude_prompt(ms: u64) -> Value {
+    json!({"seq": 9001, "ms": ms, "dir": "to_agent", "data": {"type": "user", "message": {"role": "user", "content": "and then?"}}})
+}
+
+fn claude_answer(ms: u64) -> Vec<Value> {
+    vec![
+        json!({"seq": 9002, "ms": ms, "dir": "from_agent", "data": {"type": "assistant", "message": {"content": [{"type": "text", "text": "then this"}]}}}),
+        json!({"seq": 9003, "ms": ms + 1, "dir": "from_agent", "data": {"type": "result", "subtype": "success"}}),
+    ]
+}
+
+/// The replay of `lines` plays two prompted turns, each to its end, and fails nowhere.
+async fn two_prompted_turns(lines: &[Value]) {
+    let (_tmp, path) = written(lines);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    let prompted: Vec<usize> = kinds.iter().enumerate().filter(|(_, kind)| *kind == "prompted").map(|(at, _)| at).collect();
+    assert_eq!(prompted.len(), 2, "the held prompt is played: {kinds:?}");
+    assert!(kinds[prompted[1] - 1] == "turn_ended" && kinds[prompted[1] + 1] == "turn_started", "after the first turn: {kinds:?}");
+    assert!(!kinds.iter().any(|kind| kind == "failed"), "{kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_a_prompt_sent_after_claudes_first_tool_result_plays_after_the_turn() {
+    two_prompted_turns(&with_lines("claude/native/1-edit-run.jsonl", 40, claude_prompt(3_785), claude_answer(6_000))).await;
+}
+
+#[tokio::test]
+async fn replay_a_second_prompt_in_the_middle_of_claudes_turn_plays_after_the_turn() {
+    two_prompted_turns(&with_lines("claude/native/2-permission.jsonl", 36, claude_prompt(2_976), claude_answer(8_000))).await;
+}
+
+#[tokio::test]
+async fn replay_a_second_prompt_in_the_middle_of_a_codex_turn_plays_after_the_turn() {
+    let thread = "01a202c7-7b2a-7d62-9aea-d225555bac0b";
+    let prompt = json!({"seq": 9001, "ms": 4_601, "dir": "to_agent", "data": {"id": 99, "method": "turn/start", "params": {"threadId": thread, "input": [{"type": "text", "text": "and then?"}]}}});
+    let answer = vec![
+        json!({"seq": 9002, "ms": 10_000, "dir": "from_agent", "data": {"method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "msg_second00", "text": "then this"}}}}),
+        json!({"seq": 9003, "ms": 10_001, "dir": "from_agent", "data": {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}}),
+    ];
+    two_prompted_turns(&with_lines("codex/app-server/2-permission.jsonl", 48, prompt, answer)).await;
+}
+
+#[tokio::test]
+async fn replay_a_prompt_held_behind_a_turn_the_recording_never_ends_is_refused() {
+    let mut lines = with_lines("claude/native/2-permission.jsonl", 36, claude_prompt(2_976), vec![]);
+    lines.retain(|line| line["seq"] != 127);
+    let (_tmp, path) = written(&lines);
+    assert!(refused(&path) == ": a prompt was sent while a turn ran, and the recording never ends that turn");
+}
+
+#[tokio::test]
+async fn replay_a_prompt_the_recording_does_not_have_fails_the_replay_during_a_turn_or_after_the_last() {
+    // A recording with no permission request, which this client would not answer.
+    let fixture = fixtures().join("claude/native/1-edit-run.jsonl");
+    let during = replay_with(&fixture, |harness, id, event| {
+        if matches!(event.body, Body::ToolCall { .. }) {
+            let _ = harness.send(id, String::from("not recorded"));
+        }
+    })
+    .await;
+    assert_eq!(reason(&during).as_deref(), Some("the replay was prompted where the recording was not"), "during a turn");
+    let after = replay_with(&fixture, |harness, id, event| {
+        if matches!(event.body, Body::TurnEnded { .. }) {
+            let _ = harness.send(id, String::from("not recorded"));
+        }
+    })
+    .await;
+    assert_eq!(reason(&after).as_deref(), Some("the replay was prompted where the recording was not"), "after the last turn");
+}
+
+#[tokio::test]
+async fn replay_an_error_to_a_request_that_is_no_prompt_or_set_up_does_not_fail_the_session() {
+    let read = json!({"seq": 9001, "ms": 135, "dir": "to_agent", "data": {"id": 98, "method": "config/read", "params": {}}});
+    let mut lines = with_lines("codex/app-server/2-permission.jsonl", 7, read, vec![]);
+    let at = lines.iter().position(|line| line["seq"] == 9001).unwrap();
+    lines.insert(at + 1, json!({"seq": 9002, "ms": 136, "dir": "from_agent", "data": {"id": 98, "error": {"code": -32603, "message": "config unreadable"}}}));
+    let (_tmp, path) = written(&lines);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    assert!(!kinds.iter().any(|kind| kind == "failed"), "a failed `config/read` fails no turn: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_a_second_prompt_agy_refuses_while_a_turn_runs_is_not_played_and_fails_nothing() {
+    let prompt = acp(9001, 3_446, "to_agent", json!({"id": 99, "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": "and then?"}]}}));
+    let mut lines = with_lines("gemini/acp/2-permission.jsonl", 22, prompt, vec![]);
+    let at = lines.iter().position(|line| line["seq"] == 9001).unwrap();
+    lines.insert(at + 1, acp(9002, 3_446, "from_agent", json!({"id": 99, "error": {"code": -32000, "message": "a prompt is already running"}})));
+    let (_tmp, path) = written(&lines);
+    let kinds = kinds(&replay(&path, vec![]).await);
+    assert_eq!(kinds.iter().filter(|kind| *kind == "prompted").count(), 1, "the refused prompt is not played: {kinds:?}");
+    assert!(!kinds.iter().any(|kind| kind == "failed"), "the running turn is not failed: {kinds:?}");
+}
+
+#[tokio::test]
+async fn replay_agys_signed_out_recording_fails_with_its_own_reason() {
+    let events = replay(&fixtures().join("gemini/acp/7-acp-home.jsonl"), vec![]).await;
+    assert_eq!(reason(&events).as_deref(), Some("Authentication required"));
+}
+
+/// Every transcript under `fixtures()`, the MCP logs left out.
+fn every_fixture() -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "jsonl") && !path.to_string_lossy().ends_with(".mcp-log.jsonl") {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = vec![];
+    walk(&fixtures(), &mut out);
+    out.sort();
+    out
+}
+
+fn goldens() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
+}
+
+fn golden_of(fixture: &Path) -> PathBuf {
+    goldens().join(fixture.strip_prefix(fixtures()).unwrap()).with_extension("txt")
+}
+
+/// What a replay of `fixture` gives, as the golden files hold it: each event's type in order, with a permission's
+/// kind and tool, an answer's decision, a tool's name, a call id by the order it first came in, a turn's end, a
+/// failure's kind and reason, and a text's length, never the text. A recording that is refused gives its refusal.
+async fn projection(fixture: &Path) -> String {
+    if Script::load(fixture).is_err() {
+        return format!("refused{}\n", refused(fixture));
+    }
+    let (events, followed) = replay_following(fixture, vec![]).await;
+    let word = |value: &dyn erased::Word| value.word();
+    let mut calls: Vec<String> = vec![];
+    let mut call = |id: &str| match calls.iter().position(|seen| seen == id) {
+        Some(at) => at,
+        None => {
+            calls.push(id.to_owned());
+            calls.len() - 1
+        }
+    };
+    let mut lines: Vec<String> = events
+        .iter()
+        .map(|event| match &event.body {
+            Body::Prompted { text } => format!("prompted {}", text.chars().count()),
+            Body::Text { text } => format!("text {}", text.chars().count()),
+            Body::ToolCall { id, name, .. } => format!("tool_call {name} {}", call(id)),
+            Body::ToolResult { id, error, .. } => format!("tool_result {} {}", call(id), if *error { "error" } else { "ok" }),
+            Body::Permission { kind, tool, .. } => format!("permission {} {tool}", word(kind)),
+            Body::Answered { decision, .. } => format!("answered {}", word(decision)),
+            Body::TurnEnded { how } => format!("turn_ended {}", word(how)),
+            Body::Failed { kind, reason } => format!("failed {} {reason}", word(kind)),
+            other => other.type_name(),
+        })
+        .collect();
+    if !followed {
+        lines.push("the client did not follow".into());
+    }
+    lines.join("\n") + "\n"
+}
+
+mod erased {
+    /// An enum's own word on the wire, as `serde` writes it.
+    pub trait Word {
+        fn word(&self) -> String;
+    }
+
+    impl<T: serde::Serialize> Word for T {
+        fn word(&self) -> String {
+            serde_json::to_value(self).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
+        }
+    }
+}
+
+/// Run with `HARNESS_UPDATE_GOLDEN=1` to write the golden files from the converter as it is, then read the diff.
+#[tokio::test]
+async fn replay_every_fixture_gives_what_its_golden_file_holds() {
+    let update = std::env::var_os("HARNESS_UPDATE_GOLDEN").is_some();
+    let mut differ = vec![];
+    for fixture in every_fixture() {
+        let got = projection(&fixture).await;
+        let golden = golden_of(&fixture);
+        if update {
+            std::fs::create_dir_all(golden.parent().unwrap()).unwrap();
+            std::fs::write(&golden, &got).unwrap();
+        } else if std::fs::read_to_string(&golden).ok().as_deref() != Some(got.as_str()) {
+            differ.push(name(&fixture));
+        }
+    }
+    assert!(differ.is_empty(), "these replays differ from their golden files: {differ:?}");
+}
+
+#[tokio::test]
+async fn replay_every_fixture_has_a_golden_file_and_every_golden_file_a_fixture() {
+    let want: std::collections::BTreeSet<PathBuf> = every_fixture().iter().map(|fixture| golden_of(fixture)).collect();
+    fn walk(dir: &Path, out: &mut std::collections::BTreeSet<PathBuf>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten() {
+            let path = entry.unwrap().path();
+            if path.is_dir() { walk(&path, out) } else { out.insert(path); }
+        }
+    }
+    let mut have = std::collections::BTreeSet::new();
+    walk(&goldens(), &mut have);
+    let relative = |paths: Vec<&PathBuf>| paths.into_iter().map(|path| path.strip_prefix(goldens()).unwrap().display().to_string()).collect::<Vec<_>>();
+    assert!(want.difference(&have).next().is_none(), "fixtures with no golden file: {:?}", relative(want.difference(&have).collect()));
+    assert!(have.difference(&want).next().is_none(), "golden files with no fixture: {:?}", relative(have.difference(&want).collect()));
 }
