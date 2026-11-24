@@ -103,7 +103,7 @@ impl Core {
         let ProviderState::Ready(login) = self.provider_states().await.into_iter().find(|(id, _)| id == instance_id)?.1 else { return None };
         let shell = self.shell.get().await.ok()?;
         let (on, places) = (shell.clone(), self.places.clone());
-        let binary = tokio::task::spawn_blocking(move || places.find(Driver::Codex, &on)).await.ok().flatten()?;
+        let binary = tokio::task::spawn_blocking(move || places.find(Driver::Codex.into(), &on)).await.ok().flatten()?;
         codex_models::discover(&binary, &login.over(&shell)).await
     }
 

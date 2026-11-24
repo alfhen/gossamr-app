@@ -261,7 +261,7 @@ impl Core {
             code: CodeService::new(crate::net::client()),
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
-            places: CliPlaces::for_this_build(dirs::home_dir().and_then(|h| h.canonicalize().ok())),
+            places: crate::runs::toolchain::cli_places(dirs::home_dir().and_then(|h| h.canonicalize().ok())),
             db: Mutex::new(Open::default()),
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
@@ -1083,7 +1083,7 @@ mod tests {
         core.shell().forget().await;
         assert_eq!(core.shell().get().await.unwrap().get("PATH"), Some(std::ffi::OsStr::new("/usr/bin:/bin")), "a missing CLI forgets the capture, which keeps the test's");
         for driver in [Driver::Claude, Driver::Codex] {
-            assert_eq!(core.places.find(driver, &shell), None, "{driver:?}");
+            assert_eq!(core.places.find(driver.into(), &shell), None, "{driver:?}");
         }
         assert!(core.code.auth.gh_dirs().is_empty(), "{:?}", core.code.auth.gh_dirs());
         let _ = std::fs::remove_dir_all(dir);

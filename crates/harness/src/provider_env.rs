@@ -3,9 +3,9 @@
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-use super::env::RunEnv;
-use super::provider_folder::{self, Places};
-use crate::connections::ProviderInstance;
+use crate::env::RunEnv;
+use crate::provider::Login;
+use crate::provider_folder::{self, Places};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unavailable {
@@ -49,10 +49,10 @@ impl ProviderEnv {
     /// An instance with a folder runs as the login in it: the folder variable is set and every other login variable is
     /// removed, so a key the shell exports can't override it. Without a folder the login is the shell's, which has to be
     /// known. Private, so the folder rules in `states` can't be skipped.
-    fn resolve(instance: &ProviderInstance, shell: Option<&RunEnv>, home: &Path) -> std::result::Result<Self, Unavailable> {
-        let driver = instance.driver;
-        let from_folder = instance.config.config_dir.is_some();
-        let vars = match instance.config.config_dir.as_deref() {
+    fn resolve(instance: &Login, shell: Option<&RunEnv>, home: &Path) -> std::result::Result<Self, Unavailable> {
+        let driver = instance.provider;
+        let from_folder = instance.folder.is_some();
+        let vars = match instance.folder.as_deref() {
             Some(typed) => {
                 let folder = provider_folder::expand(typed, home).into_os_string();
                 driver.login_variables().iter().map(|&name| (name, (name == driver.folder_variable()).then(|| folder.clone()))).collect()
@@ -90,12 +90,12 @@ impl ProviderEnv {
         Some(TerminalLogin { unset, export: (name, folder) })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn none() -> Self {
         Self { vars: Vec::new(), from_folder: false }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn for_test(vars: &[(&'static str, Option<&str>)]) -> Self {
         Self { vars: vars.iter().map(|(name, value)| (*name, value.map(OsString::from))).collect(), from_folder: false }
     }
@@ -130,17 +130,17 @@ pub struct TerminalLogin<'a> {
 
 /// The state of every provider instance, in order. A folder that fails the rules in `provider_folder` is an error
 /// whatever the shell says, and an instance that is turned off is never ready.
-pub fn states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
+pub fn states(providers: &[Login], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
     resolve_all(providers, places, shell, false)
 }
 
 /// Like `states`, but for watching runs that already exist: an instance that is off still gets its login. A folder
 /// that fails the rules is still an error, so nothing is spawned in it.
-pub fn observing_states(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
+pub fn observing_states(providers: &[Login], places: &Places, shell: Option<&RunEnv>) -> Vec<(String, ProviderState)> {
     resolve_all(providers, places, shell, true)
 }
 
-fn resolve_all(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>, observing: bool) -> Vec<(String, ProviderState)> {
+fn resolve_all(providers: &[Login], places: &Places, shell: Option<&RunEnv>, observing: bool) -> Vec<(String, ProviderState)> {
     let problems = provider_folder::problems(providers, places, shell);
     let home = places.home.unwrap_or(Path::new(""));
     providers
@@ -148,7 +148,7 @@ fn resolve_all(providers: &[ProviderInstance], places: &Places, shell: Option<&R
         .map(|p| {
             let state = match problems.get(&p.id) {
                 _ if !p.enabled && !observing => ProviderState::Off,
-                Some(problem) => ProviderState::Error(provider_folder::describe(problem, p.config.config_dir.is_some())),
+                Some(problem) => ProviderState::Error(provider_folder::describe(problem, p.folder.is_some())),
                 None => ProviderEnv::resolve(p, shell, home).map_or_else(ProviderState::Unavailable, ProviderState::Ready),
             };
             (p.id.clone(), state)
@@ -159,10 +159,10 @@ fn resolve_all(providers: &[ProviderInstance], places: &Places, shell: Option<&R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connections::{Driver, ProviderConfig};
+    use crate::provider::Provider;
 
-    fn instance(id: &str, driver: Driver, folder: Option<&str>) -> ProviderInstance {
-        ProviderInstance { id: id.into(), driver, display_name: id.into(), enabled: true, config: ProviderConfig { config_dir: folder.map(Into::into), ..Default::default() }, extra: Default::default() }
+    fn instance(id: &str, provider: Provider, folder: Option<&str>) -> Login {
+        Login { id: id.into(), provider, name: id.into(), enabled: true, folder: folder.map(Into::into) }
     }
 
     fn shell() -> RunEnv {
@@ -175,14 +175,14 @@ mod tests {
         ])
     }
 
-    fn resolved(instance: &ProviderInstance, shell: Option<&RunEnv>) -> Option<RunEnv> {
+    fn resolved(instance: &Login, shell: Option<&RunEnv>) -> Option<RunEnv> {
         let base = RunEnv::from_pairs([("PATH", "/bin"), ("ANTHROPIC_AUTH_TOKEN", "from-the-app")]);
         ProviderEnv::resolve(instance, shell, Path::new("/Users/x")).ok().map(|e| e.over(&base))
     }
 
     #[test]
     fn with_no_folder_the_login_variables_are_the_shells_and_the_rest_of_the_base_is_kept() {
-        let env = resolved(&instance("claude", Driver::Claude, None), Some(&shell())).unwrap();
+        let env = resolved(&instance("claude", Provider::Claude, None), Some(&shell())).unwrap();
         assert_eq!(env.get("CLAUDE_CONFIG_DIR").unwrap(), "/Users/x/.claude-shell");
         assert_eq!(env.get("ANTHROPIC_API_KEY").unwrap(), "sk-shell");
         assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), None, "a login variable the shell lacks is not taken from the base");
@@ -193,30 +193,30 @@ mod tests {
     #[test]
     fn a_folder_names_the_shells_login_variables_it_ignores_and_no_folder_ignores_none() {
         let home = Path::new("/Users/x");
-        let with_folder = ProviderEnv::resolve(&instance("claude_2", Driver::Claude, Some("~/.claude-work")), Some(&shell()), home).unwrap();
+        let with_folder = ProviderEnv::resolve(&instance("claude_2", Provider::Claude, Some("~/.claude-work")), Some(&shell()), home).unwrap();
         assert_eq!(with_folder.ignored(&shell()), ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY"]);
         let same_folder = RunEnv::from_pairs([("CLAUDE_CONFIG_DIR", "/Users/x/.claude-work")]);
         assert!(with_folder.ignored(&same_folder).is_empty(), "a folder the shell already names is not ignored");
-        let usual = ProviderEnv::resolve(&instance("claude", Driver::Claude, None), Some(&shell()), home).unwrap();
+        let usual = ProviderEnv::resolve(&instance("claude", Provider::Claude, None), Some(&shell()), home).unwrap();
         assert!(usual.ignored(&shell()).is_empty());
     }
 
     #[test]
     fn a_folder_sets_its_variable_and_drops_every_other_login_variable() {
-        let env = resolved(&instance("claude_2", Driver::Claude, Some("~/.claude-work")), Some(&shell())).unwrap();
+        let env = resolved(&instance("claude_2", Provider::Claude, Some("~/.claude-work")), Some(&shell())).unwrap();
         assert_eq!(env.get("CLAUDE_CONFIG_DIR").unwrap(), "/Users/x/.claude-work");
         assert_eq!(env.get("ANTHROPIC_API_KEY"), None);
         assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), None);
         assert_eq!(env.get("PATH").unwrap(), "/bin");
 
-        let codex = resolved(&instance("codex", Driver::Codex, Some("/Users/x/.codex-work")), Some(&shell())).unwrap();
+        let codex = resolved(&instance("codex", Provider::Codex, Some("/Users/x/.codex-work")), Some(&shell())).unwrap();
         assert_eq!((codex.get("CODEX_HOME").unwrap(), codex.get("OPENAI_API_KEY")), ("/Users/x/.codex-work".as_ref(), None));
     }
 
     #[test]
     fn a_folder_needs_no_shell_but_no_folder_does() {
-        assert!(resolved(&instance("claude_2", Driver::Claude, Some("~/.claude-work")), None).is_some());
-        let none = ProviderEnv::resolve(&instance("claude", Driver::Claude, None), None, Path::new("/Users/x"));
+        assert!(resolved(&instance("claude_2", Provider::Claude, Some("~/.claude-work")), None).is_some());
+        let none = ProviderEnv::resolve(&instance("claude", Provider::Claude, None), None, Path::new("/Users/x"));
         assert_eq!(none, Err(Unavailable::NoShellSetup));
     }
 
@@ -225,7 +225,7 @@ mod tests {
         let places = Places { home: Some(Path::new("/Users/x")), data_dir: Path::new("/Users/x/data") };
         let shell = shell();
         for folder in ["/tmp/shared", "relative/dir", "~/it's", "~", "/Users/x/.claude"] {
-            let states = states(&[instance("a", Driver::Claude, Some(folder))], &places, Some(&shell));
+            let states = states(&[instance("a", Provider::Claude, Some(folder))], &places, Some(&shell));
             assert!(matches!(&states[0].1, ProviderState::Error(e) if e.starts_with("This folder can't be used: ")), "{folder}: {states:?}");
         }
     }
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn an_instance_that_is_off_is_never_ready() {
         let places = Places { home: Some(Path::new("/Users/x")), data_dir: Path::new("/Users/x/data") };
-        let mut off = instance("a", Driver::Claude, Some("~/.claude-work"));
+        let mut off = instance("a", Provider::Claude, Some("~/.claude-work"));
         off.enabled = false;
         assert_eq!(states(&[off], &places, Some(&shell()))[0].1, ProviderState::Off);
     }
@@ -241,13 +241,13 @@ mod tests {
     #[test]
     fn a_second_instance_without_a_folder_gets_the_problem_without_the_folder_prefix() {
         let places = Places { home: Some(Path::new("/Users/x")), data_dir: Path::new("/Users/x/data") };
-        let list = [instance("a", Driver::Claude, None), instance("b", Driver::Claude, None)];
+        let list = [instance("a", Provider::Claude, None), instance("b", Provider::Claude, None)];
         assert_eq!(states(&list, &places, Some(&shell()))[1].1, ProviderState::Error("Your usual setup is already added as a.".into()));
     }
 
     #[test]
     fn debug_never_prints_values() {
-        let env = ProviderEnv::resolve(&instance("claude", Driver::Claude, None), Some(&shell()), Path::new("/Users/x")).unwrap();
+        let env = ProviderEnv::resolve(&instance("claude", Provider::Claude, None), Some(&shell()), Path::new("/Users/x")).unwrap();
         assert!(!format!("{env:?}").contains("sk-shell"));
     }
 }

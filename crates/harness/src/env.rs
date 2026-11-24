@@ -12,7 +12,32 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use crate::error::{Error, Result};
+/// Why the shell environment could not be read.
+#[derive(Debug)]
+pub enum CaptureError {
+    /// The shell could not be started.
+    Spawn(std::io::Error),
+    Failed(&'static str),
+}
+
+impl std::fmt::Display for CaptureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(e) => e.fmt(f),
+            Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for CaptureError {}
+
+impl From<std::io::Error> for CaptureError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Spawn(e)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, CaptureError>;
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const FALLBACK_SHELL: &str = "/bin/zsh";
@@ -36,7 +61,7 @@ impl RunEnv {
         Self { vars: pairs.into_iter().map(|(k, v)| (k.into(), v.into())).collect() }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn with(mut self, key: &str, value: &str) -> Self {
         self.set(key, value);
         self
@@ -53,6 +78,10 @@ impl RunEnv {
 
     pub fn len(&self) -> usize {
         self.vars.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.vars.is_empty()
     }
 
     pub fn get(&self, key: &str) -> Option<&OsStr> {
@@ -98,13 +127,13 @@ pub async fn capture(shell: &str) -> Result<RunEnv> {
         .spawn()?;
     let out = tokio::time::timeout(CAPTURE_TIMEOUT, child.wait_with_output())
         .await
-        .map_err(|_| Error::Claude("Couldn't read your shell environment: your shell took too long to start.".into()))??;
+        .map_err(|_| CaptureError::Failed("Couldn't read your shell environment: your shell took too long to start."))??;
     if !out.status.success() {
-        return Err(Error::Claude("Couldn't read your shell environment: your shell exited with an error.".into()));
+        return Err(CaptureError::Failed("Couldn't read your shell environment: your shell exited with an error."));
     }
     RunEnv::parse(&out.stdout)
-        .filter(|e| e.len() > 0)
-        .ok_or_else(|| Error::Claude("Couldn't read your shell environment: it printed no variables.".into()))
+        .filter(|e| !e.is_empty())
+        .ok_or(CaptureError::Failed("Couldn't read your shell environment: it printed no variables."))
 }
 
 /// Captures the shell environment on first use and keeps it. A failure is tried again next time, so fixing the shell
@@ -115,18 +144,16 @@ pub struct ShellCapture {
     shell: Option<String>,
     found: tokio::sync::Mutex<Option<Arc<RunEnv>>>,
     /// What `with_env` gave. A forget goes back to it, so a test's capture never turns into the machine's shell.
-    #[cfg(test)]
     fixed: Option<Arc<RunEnv>>,
 }
 
 impl ShellCapture {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn with_shell(shell: &str) -> Self {
         Self { shell: Some(shell.into()), ..Default::default() }
     }
 
     /// A capture that already holds `env`, so a test never starts a shell.
-    #[cfg(test)]
     pub fn with_env(env: RunEnv) -> Self {
         let env = Arc::new(env);
         Self { shell: None, found: tokio::sync::Mutex::new(Some(env.clone())), fixed: Some(env) }
@@ -134,11 +161,7 @@ impl ShellCapture {
 
     /// Drops a kept capture, so the next `get` reads the shell again.
     pub async fn forget(&self) {
-        #[cfg(test)]
-        let kept = self.fixed.clone();
-        #[cfg(not(test))]
-        let kept = None;
-        *self.found.lock().await = kept;
+        *self.found.lock().await = self.fixed.clone();
     }
 
     pub async fn get(&self) -> Result<Arc<RunEnv>> {

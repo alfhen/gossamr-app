@@ -170,15 +170,7 @@ pub struct ClonePlan {
     pub name: String,
 }
 
-fn is_repo_part(s: &str) -> bool {
-    !s.is_empty() && s != "." && s != ".." && !s.starts_with('-') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-}
-
-/// `owner/name`, each part made only of letters, digits, `.`, `_` and `-`, so a path built from it stays inside its folder.
-pub fn valid_repo(repo: &str) -> bool {
-    let parts: Vec<&str> = repo.split('/').collect();
-    parts.len() == 2 && parts.iter().all(|p| is_repo_part(p))
-}
+pub use harness::fresh::valid_repo;
 
 fn refuse(message: impl Into<String>) -> Error {
     Error::Proposal(message.into())

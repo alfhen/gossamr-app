@@ -21,8 +21,8 @@ use super::env::RunEnv;
 use super::failure::Failure;
 use super::trust::Refusal;
 use crate::domain::Run;
-use crate::probe::State;
-use crate::provider_probe::{codex_account, ACCOUNT_TIMEOUT};
+use crate::probe::{Snapshot, State};
+use harness::provider_probe::{codex_account, ACCOUNT_TIMEOUT};
 
 /// Added to the guard of every Codex agent: its sandbox is the person's own and may stop git.
 pub const CODEX_GUARD: &str = "If your sandbox stops git from committing or pushing, stop and say so in your report.";
@@ -179,7 +179,7 @@ impl RunBackend for CodexBackend {
         if !self.binary.is_file() {
             return Err(BackendError::Spawn { program: PROGRAM, source: std::io::Error::from(std::io::ErrorKind::NotFound) });
         }
-        let seen = codex_account(&self.binary, None, &self.login_env, ACCOUNT_TIMEOUT).await;
+        let seen: Snapshot = codex_account(&self.binary, None, &self.login_env, ACCOUNT_TIMEOUT).await.into();
         match seen.state {
             State::Ready | State::ExpiresSoon => Ok(true),
             State::NotSignedIn => Ok(false),

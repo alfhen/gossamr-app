@@ -2,13 +2,13 @@ use std::ffi::OsStr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use super::env::RunEnv;
-use crate::connections::Driver;
+use crate::env::RunEnv;
+use crate::provider::Provider;
 
 /// GUI apps on macOS don't inherit the shell PATH, so look where installers put `claude` before asking a login shell.
 pub fn find_claude() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
-    if let Some(found) = CliPlaces::of_this_mac(Some(home)).installed(Driver::Claude).into_iter().find(|p| p.is_file()) {
+    if let Some(found) = CliPlaces::of_this_mac(Some(home)).installed(Provider::Claude).into_iter().find(|p| p.is_file()) {
         return Some(found);
     }
     let out = std::process::Command::new("/bin/zsh").args(["-lc", "command -v claude"]).output().ok()?;
@@ -16,17 +16,11 @@ pub fn find_claude() -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-/// The CLI of `driver` in this build's places: see `CliPlaces::find`.
-pub fn find_binary(driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
-    CliPlaces::for_this_build(dirs::home_dir()).find(driver, shell)
-}
-
 /// Where installers put the CLIs outside the home folder.
 const SYSTEM_BINS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 /// The folders a CLI is looked for in besides the shell's PATH: where installers put it, and the app folders whose apps
-/// may bundle one. A test build has none unless the test gives folders of its own, so the CLIs installed on the machine
-/// never answer a test.
+/// may bundle one. A test uses `none` or `only_under`, so the CLIs installed on the machine never answer it.
 #[derive(Clone, Debug)]
 pub struct CliPlaces {
     home: Option<PathBuf>,
@@ -35,25 +29,20 @@ pub struct CliPlaces {
 }
 
 impl CliPlaces {
-    /// This Mac's places in the app, and none in a test build.
-    pub fn for_this_build(home: Option<PathBuf>) -> Self {
-        if cfg!(test) {
-            Self { home: None, bins: Vec::new(), apps: Vec::new() }
-        } else {
-            Self::of_this_mac(home)
-        }
+    /// No folder at all: only the shell's PATH is searched.
+    pub fn none() -> Self {
+        Self { home: None, bins: Vec::new(), apps: Vec::new() }
     }
 
     /// The folders under `home`, then Homebrew's and `/usr/local`'s, then the app folders. Without a home folder no
     /// install folder is searched.
-    fn of_this_mac(home: Option<PathBuf>) -> Self {
+    pub fn of_this_mac(home: Option<PathBuf>) -> Self {
         let apps = [Some(PathBuf::from("/Applications")), home.as_ref().map(|h| h.join("Applications"))].into_iter().flatten().collect();
         let bins = if home.is_some() { SYSTEM_BINS.map(PathBuf::from).to_vec() } else { Vec::new() };
         Self { home, bins, apps }
     }
 
     /// Only `home` and its `Applications` folder.
-    #[cfg(test)]
     pub fn only_under(home: &Path) -> Self {
         Self { home: Some(home.to_path_buf()), bins: Vec::new(), apps: vec![home.join("Applications")] }
     }
@@ -61,20 +50,25 @@ impl CliPlaces {
     /// The CLI of `driver`: where installers put it, then the PATH of the captured shell environment, which holds what
     /// `.zshrc` adds (an npm `codex` under nvm), then the copy an app bundles. A copy on PATH wins over a bundled one
     /// because the person put it there.
-    pub fn find(&self, driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
+    pub fn find(&self, driver: Provider, shell: &RunEnv) -> Option<PathBuf> {
         self.find_on(driver, shell.get("PATH"))
     }
 
-    fn find_on(&self, driver: Driver, path: Option<&OsStr>) -> Option<PathBuf> {
+    /// Whether no folder is searched besides the shell's PATH.
+    pub fn searches_no_folder(&self) -> bool {
+        self.home.is_none() && self.bins.is_empty() && self.apps.is_empty()
+    }
+
+    fn find_on(&self, driver: Provider, path: Option<&OsStr>) -> Option<PathBuf> {
         find_in(&self.installed(driver), driver.binary(), path).or_else(|| bundled(driver, &self.apps))
     }
 
-    fn installed(&self, driver: Driver) -> Vec<PathBuf> {
+    fn installed(&self, driver: Provider) -> Vec<PathBuf> {
         let name = driver.binary();
         let mut paths = Vec::new();
         if let Some(home) = &self.home {
             paths.push(home.join(".local/bin").join(name));
-            if driver == Driver::Claude {
+            if driver == Provider::Claude {
                 paths.push(home.join(".claude/local/claude"));
             }
         }
@@ -88,8 +82,8 @@ const BUNDLED_CODEX: [&str; 2] = ["Contents/Resources/codex-cli/bin/codex", "Con
 const PREFERRED_APP: &str = "ChatGPT.app";
 
 /// The Codex CLI inside an app under `roots`: ChatGPT.app first, then the others in name order.
-fn bundled(driver: Driver, roots: &[PathBuf]) -> Option<PathBuf> {
-    if driver != Driver::Codex {
+fn bundled(driver: Provider, roots: &[PathBuf]) -> Option<PathBuf> {
+    if driver != Provider::Codex {
         return None;
     }
     let apps = roots.iter().flat_map(|root| {
@@ -160,7 +154,7 @@ mod tests {
         let dir = scratch("chatgpt");
         let wanted = app(&dir, "ChatGPT.app", BUNDLED_CODEX[0]);
         app(&dir, "Conductor.app", BUNDLED_CODEX[1]);
-        assert_eq!(bundled(Driver::Codex, std::slice::from_ref(&dir)), Some(wanted));
+        assert_eq!(bundled(Provider::Codex, std::slice::from_ref(&dir)), Some(wanted));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -170,9 +164,9 @@ mod tests {
         let (system, user) = (dir.join("Applications"), dir.join("home/Applications"));
         app(&system, "Conductor.app", BUNDLED_CODEX[1]);
         let wanted = app(&user, "ChatGPT.app", BUNDLED_CODEX[0]);
-        assert_eq!(bundled(Driver::Codex, &[system.clone(), user]), Some(wanted));
+        assert_eq!(bundled(Provider::Codex, &[system.clone(), user]), Some(wanted));
         let other = app(&system, "Another.app", BUNDLED_CODEX[0]);
-        assert_eq!(bundled(Driver::Codex, &[system]).as_deref(), Some(other.as_path()), "without ChatGPT the apps go in name order");
+        assert_eq!(bundled(Provider::Codex, &[system]).as_deref(), Some(other.as_path()), "without ChatGPT the apps go in name order");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -181,10 +175,10 @@ mod tests {
         let dir = scratch("none");
         let plain = app(&dir, "ChatGPT.app", BUNDLED_CODEX[0]);
         std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(bundled(Driver::Codex, std::slice::from_ref(&dir)), None);
-        assert_eq!(bundled(Driver::Codex, &[dir.join("missing")]), None);
+        assert_eq!(bundled(Provider::Codex, std::slice::from_ref(&dir)), None);
+        assert_eq!(bundled(Provider::Codex, &[dir.join("missing")]), None);
         std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert_eq!(bundled(Driver::Claude, std::slice::from_ref(&dir)), None, "only Codex ships inside other apps");
+        assert_eq!(bundled(Provider::Claude, std::slice::from_ref(&dir)), None, "only Codex ships inside other apps");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -196,9 +190,9 @@ mod tests {
         let path = std::env::join_paths([dir.join("nvm")]).unwrap();
         let apps = [dir.join("Applications")];
         let places = CliPlaces::only_under(&dir);
-        assert_eq!(places.find_on(Driver::Codex, Some(&path)), Some(on_path));
-        assert_eq!(places.find_on(Driver::Codex, None), bundled(Driver::Codex, &apps));
-        assert_eq!(places.find_on(Driver::Claude, None), None);
+        assert_eq!(places.find_on(Provider::Codex, Some(&path)), Some(on_path));
+        assert_eq!(places.find_on(Provider::Codex, None), bundled(Provider::Codex, &apps));
+        assert_eq!(places.find_on(Provider::Claude, None), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -207,27 +201,27 @@ mod tests {
         let home = PathBuf::from("/Users/someone");
         let places = CliPlaces::of_this_mac(Some(home.clone()));
         let claude = ["/Users/someone/.local/bin/claude", "/Users/someone/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
-        assert_eq!(places.installed(Driver::Claude), claude.map(PathBuf::from));
-        assert_eq!(places.installed(Driver::Codex), ["/Users/someone/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"].map(PathBuf::from));
+        assert_eq!(places.installed(Provider::Claude), claude.map(PathBuf::from));
+        assert_eq!(places.installed(Provider::Codex), ["/Users/someone/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"].map(PathBuf::from));
         assert_eq!(places.apps, [PathBuf::from("/Applications"), home.join("Applications")]);
         let homeless = CliPlaces::of_this_mac(None);
-        assert_eq!(homeless.installed(Driver::Codex), Vec::<PathBuf>::new(), "without a home folder no install folder is searched");
+        assert_eq!(homeless.installed(Provider::Codex), Vec::<PathBuf>::new(), "without a home folder no install folder is searched");
         assert_eq!(homeless.apps, [PathBuf::from("/Applications")]);
     }
 
     #[test]
-    fn a_test_build_looks_in_no_folder_of_the_machine() {
-        let places = CliPlaces::for_this_build(dirs::home_dir());
-        assert!(places.home.is_none() && places.bins.is_empty() && places.apps.is_empty(), "{places:?}");
-        assert_eq!(places.find_on(Driver::Codex, None), None);
+    fn no_places_look_in_no_folder_of_the_machine() {
+        let places = CliPlaces::none();
+        assert!(places.searches_no_folder(), "{places:?}");
+        assert_eq!(places.find_on(Provider::Codex, None), None);
     }
 
     #[test]
     fn places_under_a_folder_find_nothing_the_machine_has_installed() {
         let dir = scratch("only-under");
         let places = CliPlaces::only_under(&dir);
-        assert!(places.installed(Driver::Codex).iter().all(|p| p.starts_with(&dir)), "{:?}", places.installed(Driver::Codex));
-        assert_eq!(places.find_on(Driver::Codex, None), None);
+        assert!(places.installed(Provider::Codex).iter().all(|p| p.starts_with(&dir)), "{:?}", places.installed(Provider::Codex));
+        assert_eq!(places.find_on(Provider::Codex, None), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

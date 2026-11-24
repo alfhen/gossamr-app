@@ -7,9 +7,43 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use crate::connections::Driver;
-use crate::probe::{Snapshot, State};
-use crate::runs::env::RunEnv;
+use crate::env::RunEnv;
+use crate::provider::Provider;
+
+/// How a login stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Ready,
+    NotSignedIn,
+    /// The CLI isn't installed.
+    NotFound,
+    /// The check couldn't tell: a timeout, a CLI that would not run, an answer it could not read.
+    Error,
+    Off,
+}
+
+/// What a check of one login found. It holds only the few words below that name the login, never what the CLI printed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub installed: bool,
+    pub version: Option<String>,
+    pub state: State,
+    pub account: Option<String>,
+    pub message: String,
+    /// The command that fixes it, when there is one.
+    pub fix: Option<String>,
+}
+
+impl Snapshot {
+    fn new(state: State, message: impl Into<String>) -> Self {
+        Self { installed: true, version: None, state, account: None, message: message.into(), fix: None }
+    }
+
+    fn fix(mut self, command: impl Into<String>) -> Self {
+        self.fix = Some(command.into());
+        self
+    }
+}
 
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
 pub const ACCOUNT_TIMEOUT: Duration = Duration::from_secs(25);
@@ -43,11 +77,11 @@ pub fn error(message: impl Into<String>) -> Snapshot {
 
 /// Asks the CLI of `driver` how its login stands. `env` is the instance's whole environment. Nothing the CLI prints
 /// is kept except the few words below that name the login.
-pub async fn probe(driver: Driver, binary: Option<&Path>, folder: Option<Folder<'_>>, env: &RunEnv, timeouts: Timeouts) -> Snapshot {
-    if driver == Driver::Codex {
-        if let Some(folder) = folder.filter(|f| !f.path.is_dir()) {
-            return error(format!("The folder {} is gone.", folder.typed));
-        }
+pub async fn probe(driver: Provider, binary: Option<&Path>, folder: Option<Folder<'_>>, env: &RunEnv, timeouts: Timeouts) -> Snapshot {
+    if driver == Provider::Codex
+        && let Some(folder) = folder.filter(|f| !f.path.is_dir())
+    {
+        return error(format!("The folder {} is gone.", folder.typed));
     }
     let Some(binary) = binary else {
         return Snapshot { installed: false, ..Snapshot::new(State::NotFound, format!("`{}` isn't installed.", driver.binary())) };
@@ -57,8 +91,8 @@ pub async fn probe(driver: Driver, binary: Option<&Path>, folder: Option<Folder<
         other => return failed(driver, &other),
     };
     let answer = match driver {
-        Driver::Claude => claude_account(binary, folder, env, timeouts.account).await,
-        Driver::Codex => codex_account(binary, folder, env, timeouts.account).await,
+        Provider::Claude => claude_account(binary, folder, env, timeouts.account).await,
+        Provider::Codex => codex_account(binary, folder, env, timeouts.account).await,
     };
     Snapshot { version, ..answer }
 }
@@ -98,14 +132,14 @@ async fn run(binary: &Path, args: &[&str], env: &RunEnv, timeout: Duration) -> R
 }
 
 /// A run that gave no answer to read. A timeout and a failure to run are both "couldn't check", never "not signed in".
-fn failed(driver: Driver, ran: &Ran) -> Snapshot {
+fn failed(driver: Provider, ran: &Ran) -> Snapshot {
     match ran {
         Ran::TimedOut => error(format!("{} didn't answer in time. Check again.", driver.label())),
         _ => couldnt_check(driver),
     }
 }
 
-fn couldnt_check(driver: Driver) -> Snapshot {
+fn couldnt_check(driver: Provider) -> Snapshot {
     error(format!("Couldn't check {}.", driver.label()))
 }
 
@@ -115,10 +149,10 @@ fn version_of(output: &str) -> Option<String> {
 }
 
 /// What a person types to sign in, for the detail pane to show. Terminal never runs this text.
-fn sign_in_command(driver: Driver, folder: Option<Folder<'_>>) -> String {
+fn sign_in_command(driver: Provider, folder: Option<Folder<'_>>) -> String {
     let login = match driver {
-        Driver::Claude => "claude auth login",
-        Driver::Codex => "codex login",
+        Provider::Claude => "claude auth login",
+        Provider::Codex => "codex login",
     };
     match folder {
         None => login.to_string(),
@@ -130,7 +164,7 @@ fn sign_in_command(driver: Driver, folder: Option<Folder<'_>>) -> String {
     }
 }
 
-fn not_signed_in(driver: Driver, folder: Option<Folder<'_>>) -> Snapshot {
+fn not_signed_in(driver: Provider, folder: Option<Folder<'_>>) -> Snapshot {
     Snapshot::new(State::NotSignedIn, format!("Not signed in to {}.", driver.label())).fix(sign_in_command(driver, folder))
 }
 
@@ -167,26 +201,26 @@ impl ClaudeStatus {
 
 async fn claude_account(binary: &Path, folder: Option<Folder<'_>>, env: &RunEnv, timeout: Duration) -> Snapshot {
     let ran = run(binary, &["auth", "status", "--json"], env, timeout).await;
-    let Ran::Done { stdout, .. } = &ran else { return failed(Driver::Claude, &ran) };
+    let Ran::Done { stdout, .. } = &ran else { return failed(Provider::Claude, &ran) };
     // Signed out, the CLI still prints the JSON but exits 1, so the exit code says nothing here.
-    let Ok(status) = serde_json::from_str::<ClaudeStatus>(stdout) else { return couldnt_check(Driver::Claude) };
+    let Ok(status) = serde_json::from_str::<ClaudeStatus>(stdout) else { return couldnt_check(Provider::Claude) };
     if !status.logged_in {
-        return not_signed_in(Driver::Claude, folder);
+        return not_signed_in(Provider::Claude, folder);
     }
     let login = status.login(folder.is_none());
     Snapshot { account: status.email.filter(|e| !e.is_empty()), ..Snapshot::new(State::Ready, format!("Authenticated · {login}")) }
 }
 
-pub(crate) async fn codex_account(binary: &Path, folder: Option<Folder<'_>>, env: &RunEnv, timeout: Duration) -> Snapshot {
+pub async fn codex_account(binary: &Path, folder: Option<Folder<'_>>, env: &RunEnv, timeout: Duration) -> Snapshot {
     let ran = run(binary, &["login", "status"], env, timeout).await;
-    let Ran::Done { code, stderr, .. } = &ran else { return failed(Driver::Codex, &ran) };
+    let Ran::Done { code, stderr, .. } = &ran else { return failed(Provider::Codex, &ran) };
     // `login status` prints on stderr, and that can hold part of an API key, so only the matched prefix is looked at.
     let said = stderr.trim_start();
     match code {
         Some(0) if said.starts_with("Logged in using ChatGPT") => Snapshot::new(State::Ready, "Authenticated · ChatGPT"),
         Some(0) if said.starts_with("API key configured") => Snapshot::new(State::Ready, "Authenticated · API key"),
-        Some(1) if said.starts_with("Not logged in") => not_signed_in(Driver::Codex, folder),
-        _ => couldnt_check(Driver::Codex),
+        Some(1) if said.starts_with("Not logged in") => not_signed_in(Provider::Codex, folder),
+        _ => couldnt_check(Provider::Codex),
     }
 }
 
@@ -217,7 +251,7 @@ mod tests {
         assert_eq!(capped(&b"short"[..], 100).await, "short");
         let dir = scratch("chatty");
         let noisy = cli(&dir, "claude", "[ \"$1\" = \"--version\" ] && { echo '2.1.316 (Claude Code)'; exit 0; }\necho '{\"loggedIn\":true,\"email\":\"a@b.c\"}'\nhead -c 3000000 /dev/zero | tr '\\0' x >&2");
-        let seen = probe(Driver::Claude, Some(&noisy), None, &env(), Timeouts::default()).await;
+        let seen = probe(Provider::Claude, Some(&noisy), None, &env(), Timeouts::default()).await;
         assert_eq!(seen.state, State::Ready);
     }
 
@@ -238,11 +272,11 @@ mod tests {
     async fn claude(binary: &Path, folder: Option<&str>) -> Snapshot {
         let path = folder.map(PathBuf::from);
         let folder = folder.zip(path.as_deref()).map(|(typed, path)| Folder { typed, path });
-        probe(Driver::Claude, Some(binary), folder, &env(), Timeouts::default()).await
+        probe(Provider::Claude, Some(binary), folder, &env(), Timeouts::default()).await
     }
 
     async fn codex(binary: &Path) -> Snapshot {
-        probe(Driver::Codex, Some(binary), None, &env(), Timeouts::default()).await
+        probe(Provider::Codex, Some(binary), None, &env(), Timeouts::default()).await
     }
 
     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"alf@acme.com","orgName":"Acme","subscriptionType":"team","configDirectory":"/Users/x/.claude"}"#;
@@ -308,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_cli_is_not_found_for_either_driver() {
-        for driver in [Driver::Claude, Driver::Codex] {
+        for driver in [Provider::Claude, Provider::Codex] {
             let seen = probe(driver, None, None, &env(), Timeouts::default()).await;
             assert_eq!((seen.state, seen.installed, seen.message), (State::NotFound, false, format!("`{}` isn't installed.", driver.binary())));
         }
@@ -322,7 +356,7 @@ mod tests {
         let quick = Timeouts { version: Duration::from_millis(200), account: Duration::from_millis(200) };
         for binary in [&hangs_on_version, &hangs_on_status] {
             let started = std::time::Instant::now();
-            let seen = probe(Driver::Claude, Some(binary), None, &env(), quick).await;
+            let seen = probe(Provider::Claude, Some(binary), None, &env(), quick).await;
             assert!(started.elapsed() < Duration::from_secs(5));
             assert_eq!((seen.state, seen.message.as_str(), seen.fix), (State::Error, "Claude didn't answer in time. Check again.", None));
         }
@@ -341,13 +375,14 @@ mod tests {
     async fn the_cli_runs_with_the_environment_it_is_given_and_nothing_else() {
         let dir = scratch("claude-env");
         let binary = cli(&dir, "claude", &format!("[ \"$1\" = \"--version\" ] && exit 0\nenv > '{}'\necho '{SIGNED_IN}'", dir.join("seen").display()));
-        std::env::set_var("GOSSAMR_PROBE_LEAK", "leak");
+        // Setting a variable here would race the other tests' processes, so one this process already has stands in.
+        let own = std::env::vars_os().map(|(name, _)| name).find(|name| name != "PATH" && name != "CLAUDE_CONFIG_DIR").expect("the test process has a variable of its own");
         let base = RunEnv::from_pairs([("PATH", "/usr/bin:/bin"), ("CLAUDE_CONFIG_DIR", "/Users/x/.claude-work")]);
-        probe(Driver::Claude, Some(&binary), None, &base, Timeouts::default()).await;
-        std::env::remove_var("GOSSAMR_PROBE_LEAK");
+        probe(Provider::Claude, Some(&binary), None, &base, Timeouts::default()).await;
         let seen = std::fs::read_to_string(dir.join("seen")).unwrap();
-        assert!(seen.contains("CLAUDE_CONFIG_DIR=/Users/x/.claude-work"), "{seen}");
-        assert!(!seen.contains("GOSSAMR_PROBE_LEAK"), "{seen}");
+        let names: Vec<&str> = seen.lines().filter_map(|line| line.split_once('=').map(|(name, _)| name)).collect();
+        assert!(seen.contains("CLAUDE_CONFIG_DIR=/Users/x/.claude-work"), "{names:?}");
+        assert!(!names.iter().any(|name| *name == own), "{own:?} reached the CLI: {names:?}");
     }
 
     #[tokio::test]
@@ -395,13 +430,13 @@ mod tests {
         let binary = cli(&dir, "codex", &format!("touch '{}'", ran.display()));
         let gone = dir.join("no-such-folder");
         let folder = Folder { typed: "~/.codex-work", path: &gone };
-        let seen = probe(Driver::Codex, Some(&binary), Some(folder), &env(), Timeouts::default()).await;
+        let seen = probe(Provider::Codex, Some(&binary), Some(folder), &env(), Timeouts::default()).await;
         assert_eq!((seen.state, seen.message.as_str()), (State::Error, "The folder ~/.codex-work is gone."));
         assert!(!ran.exists());
 
         std::fs::create_dir_all(&gone).unwrap();
         let there = codex_saying(&dir, "Logged in using ChatGPT", 0);
-        let seen = probe(Driver::Codex, Some(&there), Some(Folder { typed: "~/.codex-work", path: &gone }), &env(), Timeouts::default()).await;
+        let seen = probe(Provider::Codex, Some(&there), Some(Folder { typed: "~/.codex-work", path: &gone }), &env(), Timeouts::default()).await;
         assert_eq!(seen.state, State::Ready);
     }
 
@@ -417,9 +452,9 @@ mod tests {
         std::fs::write(&launcher, "#!/usr/bin/env node\nlogin\n").unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = format!("{}:/usr/bin:/bin", node.display());
-        let seen = probe(Driver::Codex, Some(&launcher), None, &RunEnv::from_pairs([("PATH", path.as_str())]), Timeouts::default()).await;
+        let seen = probe(Provider::Codex, Some(&launcher), None, &RunEnv::from_pairs([("PATH", path.as_str())]), Timeouts::default()).await;
         assert_eq!((seen.state, seen.version.as_deref()), (State::Ready, Some("9.9.9")));
-        let without = probe(Driver::Codex, Some(&launcher), None, &env(), Timeouts::default()).await;
+        let without = probe(Provider::Codex, Some(&launcher), None, &env(), Timeouts::default()).await;
         assert_eq!(without.state, State::Error, "the launcher needs the shell's PATH");
     }
 

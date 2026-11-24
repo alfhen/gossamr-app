@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use super::env::RunEnv;
-use crate::connections::{Driver, ProviderInstance};
+use crate::env::RunEnv;
+use crate::provider::{Login, Provider};
 
 #[derive(Clone, Copy)]
 pub struct Places<'a> {
@@ -106,43 +106,43 @@ pub fn describe(problem: &str, has_folder: bool) -> String {
     }
 }
 
-const DRIVERS: [Driver; 2] = [Driver::Claude, Driver::Codex];
+const DRIVERS: [Provider; 2] = [Provider::Claude, Provider::Codex];
 
 /// The folders the CLI uses when it is not told one, which only the instance without a folder may have. Without the
 /// shell its `CODEX_HOME` is unknown, so `~/.codex` is refused rather than risk the login the CLI would use.
-fn usual_folders(driver: Driver, home: &Path, shell: Option<&RunEnv>) -> Vec<PathBuf> {
+fn usual_folders(driver: Provider, home: &Path, shell: Option<&RunEnv>) -> Vec<PathBuf> {
     let from_shell = shell.and_then(|s| s.get(driver.folder_variable())).filter(|v| !v.is_empty()).map(PathBuf::from);
     match (driver, from_shell) {
-        (Driver::Claude, shell_folder) => [home.join(".claude")].into_iter().chain(shell_folder).collect(),
-        (Driver::Codex, Some(shell_folder)) => vec![shell_folder],
-        (Driver::Codex, None) => vec![home.join(".codex")],
+        (Provider::Claude, shell_folder) => [home.join(".claude")].into_iter().chain(shell_folder).collect(),
+        (Provider::Codex, Some(shell_folder)) => vec![shell_folder],
+        (Provider::Codex, None) => vec![home.join(".codex")],
     }
 }
 
 /// The driver whose usual folder `folder` is. Both drivers' folders count: each CLI keeps files with the same names at
 /// the root of its folder.
-fn usual_owner(folder: &Located, home: &Path, shell: Option<&RunEnv>) -> Option<Driver> {
+fn usual_owner(folder: &Located, home: &Path, shell: Option<&RunEnv>) -> Option<Provider> {
     DRIVERS.into_iter().find(|&driver| usual_folders(driver, home, shell).iter().filter_map(|f| resolve(f).ok()).map(Located::of).any(|u| u.is(folder)))
 }
 
 /// The problem with each provider instance whose folder can't be used, by instance id. The first instance to claim a
 /// folder or the no-folder place keeps it; a later one is the problem. A folder is claimed for every driver, not only
 /// the one that took it.
-pub fn problems(providers: &[ProviderInstance], places: &Places, shell: Option<&RunEnv>) -> HashMap<String, String> {
+pub fn problems(providers: &[Login], places: &Places, shell: Option<&RunEnv>) -> HashMap<String, String> {
     let mut found = HashMap::new();
-    let mut taken: Vec<(Driver, Located)> = Vec::new();
+    let mut taken: Vec<(Provider, Located)> = Vec::new();
     for (at, p) in providers.iter().enumerate() {
-        let problem = match p.config.config_dir.as_deref() {
-            None => providers[..at].iter().find(|q| q.driver == p.driver && q.config.config_dir.is_none()).map(|q| format!("Your usual setup is already added as {}.", q.display_name)),
+        let problem = match p.folder.as_deref() {
+            None => providers[..at].iter().find(|q| q.provider == p.provider && q.folder.is_none()).map(|q| format!("Your usual setup is already added as {}.", q.name)),
             Some(typed) => match locate(typed, places) {
                 Err(problem) => Some(problem),
                 Ok(folder) => match places.home.and_then(|home| usual_owner(&folder, home, shell)) {
-                    Some(owner) if owner == p.driver => Some("That's your usual setup. Choose My usual setup instead.".into()),
+                    Some(owner) if owner == p.provider => Some("That's your usual setup. Choose My usual setup instead.".into()),
                     Some(owner) => Some(format!("That's the usual folder of {}. Choose another folder.", owner.label())),
                     None => match taken.iter().find(|(_, other)| other.is(&folder)) {
                         Some((owner, _)) => Some(format!("Another {} already uses this folder.", owner.label())),
                         None => {
-                            taken.push((p.driver, folder));
+                            taken.push((p.provider, folder));
                             None
                         }
                     },
@@ -159,7 +159,6 @@ pub fn problems(providers: &[ProviderInstance], places: &Places, shell: Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connections::ProviderConfig;
     use std::os::unix::fs::symlink;
 
     struct Rig {
@@ -185,11 +184,11 @@ mod tests {
             self.home.join(name).display().to_string()
         }
 
-        fn problem(&self, driver: Driver, folder: &str) -> Option<String> {
+        fn problem(&self, driver: Provider, folder: &str) -> Option<String> {
             self.problem_with(driver, folder, None)
         }
 
-        fn problem_with(&self, driver: Driver, folder: &str, shell: Option<&RunEnv>) -> Option<String> {
+        fn problem_with(&self, driver: Provider, folder: &str, shell: Option<&RunEnv>) -> Option<String> {
             problems(&[provider("p", driver, Some(folder))], &self.places(), shell).remove("p")
         }
     }
@@ -200,8 +199,8 @@ mod tests {
         }
     }
 
-    fn provider(id: &str, driver: Driver, folder: Option<&str>) -> ProviderInstance {
-        ProviderInstance { id: id.into(), driver, display_name: format!("{id} name"), enabled: true, config: ProviderConfig { config_dir: folder.map(Into::into), ..Default::default() }, extra: Default::default() }
+    fn provider(id: &str, provider: Provider, folder: Option<&str>) -> Login {
+        Login { id: id.into(), provider, name: format!("{id} name"), enabled: true, folder: folder.map(Into::into) }
     }
 
     #[test]
@@ -216,15 +215,15 @@ mod tests {
     #[test]
     fn a_folder_that_does_not_exist_yet_is_fine_inside_the_home_folder() {
         let rig = Rig::new("fine");
-        assert_eq!(rig.problem(Driver::Claude, "~/.claude-new/deeper"), None);
-        assert_eq!(rig.problem(Driver::Claude, &rig.folder(".claude-new")), None);
+        assert_eq!(rig.problem(Provider::Claude, "~/.claude-new/deeper"), None);
+        assert_eq!(rig.problem(Provider::Claude, &rig.folder(".claude-new")), None);
     }
 
     #[test]
     fn a_folder_outside_the_home_folder_or_the_home_folder_itself_is_refused() {
         let rig = Rig::new("outside");
         for typed in ["/tmp/claude-x", "relative/dir", "~", &rig.home.display().to_string(), "~/../elsewhere", "~/new/../../elsewhere"] {
-            assert!(rig.problem(Driver::Claude, typed).is_some(), "{typed}");
+            assert!(rig.problem(Provider::Claude, typed).is_some(), "{typed}");
         }
     }
 
@@ -234,7 +233,7 @@ mod tests {
         let elsewhere = rig.root.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         symlink(&elsewhere, rig.home.join("hop")).unwrap();
-        assert!(rig.problem(Driver::Claude, "~/hop/inner").unwrap().contains("inside your home folder"));
+        assert!(rig.problem(Provider::Claude, "~/hop/inner").unwrap().contains("inside your home folder"));
     }
 
     #[test]
@@ -243,49 +242,49 @@ mod tests {
         std::fs::create_dir_all(rig.home.join("real")).unwrap();
         symlink(rig.home.join("real"), rig.home.join("alias")).unwrap();
         std::fs::write(rig.home.join("file"), "").unwrap();
-        assert!(rig.problem(Driver::Claude, "~/alias").unwrap().contains("link"));
-        assert!(rig.problem(Driver::Claude, "~/alias/").unwrap().contains("link"), "a trailing slash doesn't follow the link");
-        assert!(rig.problem(Driver::Claude, "~/file").unwrap().contains("isn't a folder"));
-        assert_eq!(rig.problem(Driver::Claude, "~/real"), None);
+        assert!(rig.problem(Provider::Claude, "~/alias").unwrap().contains("link"));
+        assert!(rig.problem(Provider::Claude, "~/alias/").unwrap().contains("link"), "a trailing slash doesn't follow the link");
+        assert!(rig.problem(Provider::Claude, "~/file").unwrap().contains("isn't a folder"));
+        assert_eq!(rig.problem(Provider::Claude, "~/real"), None);
     }
 
     #[test]
     fn a_quote_or_a_control_character_is_refused() {
         let rig = Rig::new("quote");
         for typed in ["~/it's", "~/two\nlines", "~/nul\0byte", "   "] {
-            assert!(rig.problem(Driver::Codex, typed).is_some(), "{typed:?}");
+            assert!(rig.problem(Provider::Codex, typed).is_some(), "{typed:?}");
         }
     }
 
     #[test]
     fn the_data_folder_and_anything_in_it_is_refused() {
         let rig = Rig::new("data");
-        assert!(rig.problem(Driver::Claude, &rig.data.display().to_string()).unwrap().contains("data folder"));
-        assert!(rig.problem(Driver::Claude, &rig.data.join("claude").display().to_string()).unwrap().contains("data folder"));
-        assert!(rig.problem(Driver::Claude, &rig.data.display().to_string().to_uppercase()).is_some(), "case doesn't hide it");
+        assert!(rig.problem(Provider::Claude, &rig.data.display().to_string()).unwrap().contains("data folder"));
+        assert!(rig.problem(Provider::Claude, &rig.data.join("claude").display().to_string()).unwrap().contains("data folder"));
+        assert!(rig.problem(Provider::Claude, &rig.data.display().to_string().to_uppercase()).is_some(), "case doesn't hide it");
     }
 
     #[test]
     fn claudes_usual_folders_are_refused_in_any_case_and_the_shells_too() {
         let rig = Rig::new("usual");
         let usual = "That's your usual setup. Choose My usual setup instead.";
-        assert_eq!(rig.problem(Driver::Claude, "~/.claude").as_deref(), Some(usual));
-        assert_eq!(rig.problem(Driver::Claude, &rig.folder(".CLAUDE")).as_deref(), Some(usual));
+        assert_eq!(rig.problem(Provider::Claude, "~/.claude").as_deref(), Some(usual));
+        assert_eq!(rig.problem(Provider::Claude, &rig.folder(".CLAUDE")).as_deref(), Some(usual));
         let shell = RunEnv::from_pairs([("CLAUDE_CONFIG_DIR", rig.folder(".claude-shell"))]);
-        assert_eq!(rig.problem_with(Driver::Claude, "~/.claude-shell", Some(&shell)).as_deref(), Some(usual));
-        assert_eq!(rig.problem_with(Driver::Claude, "~/.claude-other", Some(&shell)), None);
+        assert_eq!(rig.problem_with(Provider::Claude, "~/.claude-shell", Some(&shell)).as_deref(), Some(usual));
+        assert_eq!(rig.problem_with(Provider::Claude, "~/.claude-other", Some(&shell)), None);
     }
 
     #[test]
     fn codexs_usual_folder_is_the_shells_codex_home_else_dot_codex() {
         let rig = Rig::new("codex");
         let unset = RunEnv::from_pairs([("PATH", "/bin")]);
-        assert!(rig.problem_with(Driver::Codex, "~/.codex", Some(&unset)).is_some());
+        assert!(rig.problem_with(Provider::Codex, "~/.codex", Some(&unset)).is_some());
         let set = RunEnv::from_pairs([("CODEX_HOME", rig.folder(".codex-shell"))]);
-        assert_eq!(rig.problem_with(Driver::Codex, "~/.codex", Some(&set)), None, "dot-codex is stored as typed when the shell sets another");
-        assert!(rig.problem_with(Driver::Codex, "~/.codex-shell", Some(&set)).is_some());
-        assert!(rig.problem_with(Driver::Codex, "~/.codex", None).is_some(), "without the shell ~/.codex may be the usual folder");
-        assert_eq!(rig.problem_with(Driver::Codex, "~/.codex-work", None), None);
+        assert_eq!(rig.problem_with(Provider::Codex, "~/.codex", Some(&set)), None, "dot-codex is stored as typed when the shell sets another");
+        assert!(rig.problem_with(Provider::Codex, "~/.codex-shell", Some(&set)).is_some());
+        assert!(rig.problem_with(Provider::Codex, "~/.codex", None).is_some(), "without the shell ~/.codex may be the usual folder");
+        assert_eq!(rig.problem_with(Provider::Codex, "~/.codex-work", None), None);
     }
 
     #[test]
@@ -293,11 +292,11 @@ mod tests {
         let rig = Rig::new("dup");
         std::fs::create_dir_all(rig.home.join("shared")).unwrap();
         let list = [
-            provider("a", Driver::Claude, Some("~/shared")),
-            provider("b", Driver::Claude, Some(&rig.folder("SHARED"))),
-            provider("c", Driver::Claude, Some("~/shared/../shared")),
-            provider("d", Driver::Codex, Some("~/shared")),
-            provider("e", Driver::Codex, Some("~/own")),
+            provider("a", Provider::Claude, Some("~/shared")),
+            provider("b", Provider::Claude, Some(&rig.folder("SHARED"))),
+            provider("c", Provider::Claude, Some("~/shared/../shared")),
+            provider("d", Provider::Codex, Some("~/shared")),
+            provider("e", Provider::Codex, Some("~/own")),
         ];
         let found = problems(&list, &rig.places(), None);
         let mut ids: Vec<_> = found.keys().cloned().collect();
@@ -311,25 +310,25 @@ mod tests {
     fn a_driver_cannot_take_the_other_drivers_usual_folder() {
         let rig = Rig::new("cross");
         let shell = RunEnv::from_pairs([("CLAUDE_CONFIG_DIR", rig.folder(".claude-shell")), ("CODEX_HOME", rig.folder(".codex-shell"))]);
-        for (driver, folder) in [(Driver::Claude, "~/.codex-shell"), (Driver::Codex, "~/.claude"), (Driver::Codex, "~/.claude-shell")] {
+        for (driver, folder) in [(Provider::Claude, "~/.codex-shell"), (Provider::Codex, "~/.claude"), (Provider::Codex, "~/.claude-shell")] {
             let problem = rig.problem_with(driver, folder, Some(&shell)).unwrap_or_default();
             assert!(problem.starts_with("That's the usual folder of"), "{driver:?} {folder}: {problem}");
         }
-        assert!(rig.problem_with(Driver::Claude, "~/.codex", None).is_some(), "without the shell too");
+        assert!(rig.problem_with(Provider::Claude, "~/.codex", None).is_some(), "without the shell too");
     }
 
     #[test]
     fn a_dangling_symlinked_parent_is_refused() {
         let rig = Rig::new("dangling");
         symlink(rig.root.join("unmounted"), rig.home.join("hop")).unwrap();
-        assert!(rig.problem(Driver::Claude, "~/hop/work").unwrap().contains("link"));
-        assert!(rig.problem(Driver::Claude, "~/hop").unwrap().contains("link"));
+        assert!(rig.problem(Provider::Claude, "~/hop/work").unwrap().contains("link"));
+        assert!(rig.problem(Provider::Claude, "~/hop").unwrap().contains("link"));
     }
 
     #[test]
     fn only_one_instance_per_driver_may_have_no_folder() {
         let rig = Rig::new("nofolder");
-        let list = [provider("a", Driver::Claude, None), provider("b", Driver::Claude, None), provider("c", Driver::Codex, None)];
+        let list = [provider("a", Provider::Claude, None), provider("b", Provider::Claude, None), provider("c", Provider::Codex, None)];
         let found = problems(&list, &rig.places(), None);
         assert_eq!(found.len(), 1);
         assert_eq!(found["b"], "Your usual setup is already added as a name.");
@@ -339,6 +338,6 @@ mod tests {
     fn without_a_home_folder_every_folder_is_refused() {
         let rig = Rig::new("nohome");
         let places = Places { home: None, ..rig.places() };
-        assert_eq!(problems(&[provider("a", Driver::Claude, Some("/x/y"))], &places, None).len(), 1);
+        assert_eq!(problems(&[provider("a", Provider::Claude, Some("/x/y"))], &places, None).len(), 1);
     }
 }

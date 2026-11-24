@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::cleanup::{cleanable, Cleanup};
-use super::fresh::agents_root;
+use super::fresh::{agents_root, contained};
 use super::service::RunService;
 use crate::db::ARCHIVABLE;
 use crate::domain::{Run, RunState};
@@ -86,12 +86,6 @@ pub fn select_clearable(runs: &[Run], drafts: &HashSet<String>, filter: &ClearFi
         }
     }
     out
-}
-
-/// `path` made real when it exists and lies strictly inside `root`; anything else, a symlink out or `..` included, is None.
-pub fn contained(root: &Path, path: &Path) -> Option<PathBuf> {
-    let (root, path) = (root.canonicalize().ok()?, path.canonicalize().ok()?);
-    (path != root && path.starts_with(&root)).then_some(path)
 }
 
 /// Bytes under `dir`, counting until the limit has passed. Symlinks are not followed.

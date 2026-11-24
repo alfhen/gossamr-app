@@ -295,7 +295,7 @@ impl RunService {
         if clone.canonicalize().ok().as_ref() != Some(clone) {
             return Err(Failure::NoClone(format!("{} isn't its real path any more", clone.display())));
         }
-        match Git::new(tc.env.clone()).origin_or_why(clone).await {
+        match super::toolchain::git(tc.env.clone()).origin_or_why(clone).await {
             Ok(url) if origin_matches(&url, &spec.repo) => {}
             Ok(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
             Err(why) => return Err(Failure::NoClone(format!("Git couldn't read the origin of {} ({why})", clone.display()))),
@@ -728,7 +728,7 @@ impl RunService {
     }
 
     pub(super) async fn git(&self) -> Result<Git> {
-        Ok(Git::new(self.tools.get().await.map_err(|e| claude_error(e.into()))?.env))
+        Ok(super::toolchain::git(self.tools.get().await.map_err(|e| claude_error(e.into()))?.env))
     }
 }
 

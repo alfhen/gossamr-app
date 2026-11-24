@@ -56,6 +56,20 @@ pub struct Snapshot {
     pub checked_at: String,
 }
 
+impl From<harness::provider_probe::Snapshot> for Snapshot {
+    fn from(seen: harness::provider_probe::Snapshot) -> Self {
+        use harness::provider_probe::State as Seen;
+        let state = match seen.state {
+            Seen::Ready => State::Ready,
+            Seen::NotSignedIn => State::NotSignedIn,
+            Seen::NotFound => State::NotFound,
+            Seen::Error => State::Error,
+            Seen::Off => State::Off,
+        };
+        Snapshot { installed: seen.installed, version: seen.version, account: seen.account, fix: seen.fix, ..Snapshot::new(state, seen.message) }
+    }
+}
+
 impl Snapshot {
     pub(crate) fn new(state: State, message: impl Into<String>) -> Self {
         Self { installed: true, version: None, state, account: None, active_login: None, message: message.into(), detail: None, fix: None, ignored: Vec::new(), checked_at: crate::inbox::now_iso() }

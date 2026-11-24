@@ -26,7 +26,7 @@ impl RunService {
         if !(there && named && quotable(clone).is_ok() && self.core.require_watched_repo(&spec.repo).is_ok()) {
             return false;
         }
-        Git::new(tc.env.clone()).origin(clone).await.is_some_and(|url| origin_matches(&url, &spec.repo))
+        crate::runs::toolchain::git(tc.env.clone()).origin(clone).await.is_some_and(|url| origin_matches(&url, &spec.repo))
     }
 
     /// Writes the trust entry for `run`'s clone in its login's settings file, then retries the run. Refused unless the

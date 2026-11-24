@@ -108,7 +108,7 @@ impl Core {
         let shell = self.shell.get().await.map_err(|e| e.to_string());
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
         let shell_env = shell.as_ref().ok().map(|s| s.as_ref());
-        let states = if observing { observing_states(&config.providers, &places, shell_env) } else { states(&config.providers, &places, shell_env) };
+        let states = if observing { observing_states(&connections::logins(&config.providers), &places, shell_env) } else { states(&connections::logins(&config.providers), &places, shell_env) };
         Listing::Rows { rows: config.providers.into_iter().zip(states).map(|(p, (_, state))| (p, state)).collect(), shell }
     }
 
@@ -167,7 +167,7 @@ impl Core {
         if self.provider_snapshot_for(&instance).is_none_or(|s| s.state != State::NotSignedIn) {
             return Err(Error::Input("Gossamr opens Terminal to sign in only when the last check found you signed out. Check it again.".into()));
         }
-        let binary = self.places.find(instance.driver, &login.over(&shell)).ok_or_else(|| Error::Input(format!("`{}` isn't installed.", instance.driver.binary())))?;
+        let binary = self.places.find(instance.driver.into(), &login.over(&shell)).ok_or_else(|| Error::Input(format!("`{}` isn't installed.", instance.driver.binary())))?;
         Ok(SignIn { driver: instance.driver, binary, login })
     }
 
@@ -187,7 +187,7 @@ fn add_checked(config: &mut AppConfig, driver: Driver, name: String, typed: Opti
     }
     let has_folder = typed.is_some();
     let id = connections::add_provider(config, driver, name, typed.clone());
-    let checked = match provider_folder::problems(&config.providers, places, shell).remove(&id) {
+    let checked = match provider_folder::problems(&connections::logins(&config.providers), places, shell).remove(&id) {
         Some(problem) => Err(Error::Input(provider_folder::describe(&problem, has_folder))),
         None => typed.map_or(Ok(()), |t| make_folder(&provider_folder::expand(&t, places.home.unwrap_or(Path::new(""))))),
     };

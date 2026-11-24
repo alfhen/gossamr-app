@@ -16,6 +16,7 @@ use crate::runs::cli::ShortId;
 use crate::runs::failure::Failure;
 use crate::runs::redact::redact;
 use crate::runs::repo::Git;
+use crate::runs::toolchain::git;
 
 const POLL: Duration = Duration::from_millis(50);
 
@@ -134,7 +135,7 @@ impl CodexBackend {
         let folder = run_folder(&self.runs_root, &req.run_id).ok_or_else(|| failure("the run has no usable id"))?;
         let worktree = worktree_in(&req.cwd, &req.worktree);
         let (branch, start) = (format!("worktree-{}", req.worktree), format!("origin/{}", req.base));
-        let git = Git::new(self.git_env.clone());
+        let git = git(self.git_env.clone());
         git.add_worktree(&req.cwd, &worktree, &branch, &start).await.map_err(|why| failure(format!("the worktree: {why}")))?;
         let mut made = Made { git: &git, clone: &req.cwd, worktree: &worktree, branch: &branch, start: &start, folder: None, process: None };
 

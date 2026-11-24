@@ -11,7 +11,9 @@ use crate::domain::{Run, RunProcess};
 use crate::runs::backend::{BackendError, BackendResult, RemoveOutcome, ResumeRequest, Resumed, Session, Waits};
 use crate::runs::cli::{is_uuid, last_line, ShortId};
 use crate::runs::redact::redact;
-use crate::runs::repo::{random_hex, remove_with_git, Git};
+use crate::runs::cleanup::remove_run_with_git;
+use crate::runs::repo::random_hex;
+use crate::runs::toolchain::git;
 
 const DELETE_WAIT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(25);
@@ -207,8 +209,8 @@ impl CodexBackend {
             }
         }
         if run.worktree_removed_at.is_none() {
-            let git = Git::new(self.git_env.clone());
-            match remove_with_git(&git, self.home.as_deref(), run).await {
+            let git = git(self.git_env.clone());
+            match remove_run_with_git(&git, self.home.as_deref(), run).await {
                 Err(message) => return Err(BackendError::Other(message)),
                 Ok(Some(message)) => return Ok(RemoveOutcome::Refused(message)),
                 Ok(None) => {}

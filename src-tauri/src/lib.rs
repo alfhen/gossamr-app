@@ -16,7 +16,6 @@ mod model_choice;
 mod net;
 mod notify;
 mod probe;
-mod provider_probe;
 mod proposals;
 mod runs;
 mod secrets;
