@@ -9,6 +9,7 @@ pub mod fixture;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -124,10 +125,13 @@ impl Script {
 /// them from the request it last saw.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClientAction {
+    /// A prompt, with its recorded text if it has one; with none, the script waits for one with steps still to play.
     Prompt(Option<String>),
     Answer(Option<Decision>),
     ToolResult(Option<Value>),
     Cancel,
+    /// Nothing is left to play: the recorded client closes the session.
+    Close,
 }
 
 #[derive(Clone)]
@@ -139,6 +143,8 @@ struct Inner {
     script: Script,
     plays: Mutex<HashMap<String, Play>>,
     client: watch::Sender<Option<ClientAction>>,
+    /// The recorded client drives the play, so a replay waits for it only so long, and for its close.
+    recorded: AtomicBool,
 }
 
 /// One provider session of the mock. `run` counts its starts; only the latest start may move `at`.
@@ -154,12 +160,15 @@ struct Play {
 
 impl Mock {
     pub fn new(script: Script) -> Mock {
-        Mock { inner: Arc::new(Inner { script, plays: Mutex::new(HashMap::new()), client: watch::channel(None).0 }) }
+        Mock { inner: Arc::new(Inner { script, plays: Mutex::new(HashMap::new()), client: watch::channel(None).0, recorded: AtomicBool::new(false) }) }
     }
 
     /// What the recorded client did where the mock waits now, or `None` while it does not wait. It holds one action
-    /// at a time, so it serves one session of the mock at a time, as `harness run` opens.
+    /// at a time, so it serves one session of the mock at a time, as `harness run` opens. Taking it makes that client
+    /// the one a replay waits for: at most `CLIENT_LIMIT` each time, and for its close after the last turn. Any other
+    /// client is waited for as a provider waits.
     pub fn client(&self) -> watch::Receiver<Option<ClientAction>> {
+        self.inner.recorded.store(true, Ordering::Relaxed);
         self.inner.client.subscribe()
     }
 
@@ -305,12 +314,15 @@ impl Player {
             tokio::task::yield_now().await;
             let Some(step) = self.mock.next_step(&self.key, self.run) else {
                 // A replayed agent stays up after its last turn, as a provider does, so a prompt or cancel the
-                // recording does not have still reaches it; its client is told the recording is over.
-                if replay
-                    && !self.in_turn
-                    && let Got::Diverged(reason) = self.wait_for(ClientAction::Prompt(None), |_| false, false).await
-                {
-                    self.send(Body::Failed { kind: FailKind::Provider, reason });
+                // recording does not have still reaches it; the recorded client is told the recording is over.
+                if replay && !self.in_turn {
+                    let got = match self.mock.inner.recorded.load(Ordering::Relaxed) {
+                        true => self.wait_for(ClientAction::Close, |_| false, false).await,
+                        false => self.wait(|_| false, false).await,
+                    };
+                    if let Got::Diverged(reason) = got {
+                        self.send(Body::Failed { kind: FailKind::Provider, reason });
+                    }
                 }
                 return;
             };
@@ -319,8 +331,13 @@ impl Player {
                     let got = match self.prompts.pop_front() {
                         Some(_) => Got::Go,
                         None => {
-                            let recorded = recorded.map(|text| self.mapper.text(&text));
-                            self.wait_for(ClientAction::Prompt(recorded), |c| matches!(c, Command::Prompt(_)), false).await
+                            let remain = self.mock.play(&self.key, self.run, |play, steps| play.at < steps.len()).unwrap_or(false);
+                            let action = match recorded {
+                                Some(text) => ClientAction::Prompt(Some(self.mapper.text(&text))),
+                                None if remain => ClientAction::Prompt(None),
+                                None => ClientAction::Close,
+                            };
+                            self.wait_for(action, |c| matches!(c, Command::Prompt(_)), false).await
                         }
                     };
                     match got {
@@ -389,9 +406,11 @@ impl Player {
                     self.mock.skip_turn(&self.key, self.run);
                     self.send(Body::TurnEnded { how: TurnEnd::Cancelled });
                 }
+                // A diverged replay plays nothing more, and says so once.
                 Got::Diverged(reason) => {
                     self.mock.finish(&self.key, self.run);
                     self.send(Body::Failed { kind: FailKind::Provider, reason });
+                    return;
                 }
                 Got::Stopped => {
                     // A resume starts again at the step that was waiting, or past the turn it was in.
@@ -421,17 +440,17 @@ impl Player {
     }
 
     /// Publishes what the recorded client did here, then waits for the command `accept` takes.
-    /// A replay waits at most `CLIENT_LIMIT`.
+    /// A replay waits for the recorded client at most `CLIENT_LIMIT`.
     async fn wait_for(&mut self, action: ClientAction, accept: impl Fn(&Command) -> bool, in_turn: bool) -> Got {
         let what = match action {
-            ClientAction::Prompt(None) if self.mock.inner.script.replay => "close",
             ClientAction::Prompt(_) => "prompt",
             ClientAction::Answer(_) => "answer",
             ClientAction::ToolResult(_) => "tool result",
             ClientAction::Cancel => "cancel",
+            ClientAction::Close => "close",
         };
         let _ = self.mock.inner.client.send(Some(action));
-        let got = match self.mock.inner.script.replay {
+        let got = match self.mock.inner.script.replay && self.mock.inner.recorded.load(Ordering::Relaxed) {
             true => tokio::time::timeout(CLIENT_LIMIT, self.wait(accept, in_turn)).await.unwrap_or_else(|_| {
                 Got::Diverged(format!("the recorded client's {what} did not come within {} s", CLIENT_LIMIT.as_secs()))
             }),

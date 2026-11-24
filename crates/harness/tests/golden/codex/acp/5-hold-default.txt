@@ -1,10 +1,10 @@
 started
 prompted 128
 turn_started
-tool_call tool 0
-tool_call tool 1
-tool_result 1 ok
-tool_result 0 error
+tool_call tool 0 {arguments,server,title,tool} 4
+tool_call tool 1 {action,review,reviewId,startedAtMs,targetItemId,threadId,title,turnId} 8
+tool_result 1 ok {action,completedAtMs,decisionSource,review,reviewId,startedAtMs,targetItemId,threadId,turnId} 9
+tool_result 0 error {error,result} 2
 text 142
 turn_ended done
 closed

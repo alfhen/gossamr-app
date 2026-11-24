@@ -1,16 +1,16 @@
 started
 prompted 298
 turn_started
-tool_call Bash 0
-permission command Bash
+tool_call Bash 0 {command,description} 2
+permission command Bash {command,description} 2
 answered deny
-tool_result 0 error
-tool_call ToolSearch 1
-tool_result 1 ok
-tool_call mcp__projspike__ping 2
-permission tool mcp__projspike__ping
+tool_result 0 error {} 23
+tool_call ToolSearch 1 {max_results,query} 2
+tool_result 1 ok {} 1
+tool_call mcp__projspike__ping 2 {} 0
+permission tool mcp__projspike__ping {} 0
 answered deny
-tool_result 2 error
+tool_result 2 error {} 23
 text 369
 turn_ended done
 closed

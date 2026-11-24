@@ -1,12 +1,12 @@
 started
 prompted 203
 turn_started
-tool_call ToolSearch 0
-tool_call Bash 1
-tool_result 0 ok
-tool_result 1 ok
-tool_call mcp__spike__ping 2
-tool_result 2 ok
+tool_call ToolSearch 0 {} 0
+tool_call Bash 1 {} 0
+tool_result 0 ok {} 1
+tool_result 1 ok {} 8
+tool_call mcp__spike__ping 2 {} 0
+tool_result 2 ok {} 1
 text 171
 turn_ended done
 closed

@@ -1,10 +1,10 @@
 started
 prompted 140
 turn_started
-tool_call Write 0
-tool_call Bash 1
-tool_result 0 ok
-tool_result 1 ok
+tool_call Write 0 {} 0
+tool_call Bash 1 {} 0
+tool_result 0 ok {} 129
+tool_result 1 ok {} 18
 text 77
 turn_ended done
 closed

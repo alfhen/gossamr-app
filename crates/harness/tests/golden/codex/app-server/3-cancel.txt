@@ -1,7 +1,7 @@
 started
 prompted 83
 turn_started
-tool_call command 0
+tool_call command 0 {command} 1
 turn_ended cancelled
 prompted 33
 turn_started
