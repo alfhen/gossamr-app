@@ -41,8 +41,10 @@ pub const MAX_TOOLS: usize = 64;
 pub const MAX_TOOLS_BYTES: usize = 256 << 10;
 /// The most bytes a result schema takes as JSON.
 pub const MAX_SCHEMA_BYTES: usize = 64 << 10;
+/// The harness's own tool the agent ends its work with.
+pub const RESULT: &str = "result";
 /// Names the harness keeps for its own tools.
-pub const RESERVED: &[&str] = &["result", "ask"];
+pub const RESERVED: &[&str] = &[RESULT, "ask"];
 
 /// The most bytes of a request body. A call's input over `event::EVENT_MAX` but under this reaches the client cut, and
 /// fails with the reason; one over this is refused with 413.
@@ -113,14 +115,21 @@ pub fn check_tools(tools: &[ToolSpec], result_schema: Option<&Value>) -> Result<
         return refused(format!("the tools take more than {MAX_TOOLS_BYTES} bytes"));
     }
     if let Some(schema) = result_schema {
-        if !schema.is_object() {
-            return refused("a result schema is a JSON object".into());
-        }
         if serde_json::to_string(schema)?.len() > MAX_SCHEMA_BYTES {
             return refused(format!("a result schema takes at most {MAX_SCHEMA_BYTES} bytes"));
         }
+        crate::schema::check(schema).map_err(|why| Error::Refused(format!("the result schema: {why}")))?;
     }
     Ok(())
+}
+
+/// The `result` tool as `tools/list` shows it: its input is the result, so its schema is the result schema.
+fn result_tool(schema: Option<&Value>) -> Value {
+    json!({
+        "name": RESULT,
+        "description": "Give the result of your work when you are done. With a schema, the result must fit it; a result that does not fit comes back with the reasons, and you can call this again.",
+        "inputSchema": schema.cloned().unwrap_or_else(any_object),
+    })
 }
 
 /// A new endpoint name from the operating system's secure source.
@@ -244,6 +253,7 @@ struct Entry {
     hash: [u8; 32],
     calls: UnboundedSender<ToolCall>,
     tools: Arc<Vec<ToolSpec>>,
+    result_schema: Option<Arc<Value>>,
     in_flight: Arc<Semaphore>,
     made: Arc<AtomicU64>,
 }
@@ -288,15 +298,25 @@ impl Endpoints {
     }
 
     /// Serves `name` for this start of `session` with `token`, in place of any start before it, and gives what a driver
-    /// hands the agent, with the names allowed on `provider`: none for one not in the table.
-    pub fn register(&self, name: &str, (session, start): (&str, u64), token: &Secret, tools: Vec<ToolSpec>, calls: UnboundedSender<ToolCall>, provider: &str) -> ToolsEndpoint {
-        let names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    /// hands the agent, with the names allowed on `provider`: none for one not in the table. It serves the client's
+    /// `tools` and `result`, with `result_schema`.
+    pub fn register(
+        &self,
+        name: &str,
+        (session, start): (&str, u64),
+        token: &Secret,
+        (tools, result_schema): (Vec<ToolSpec>, Option<Value>),
+        calls: UnboundedSender<ToolCall>,
+        provider: &str,
+    ) -> ToolsEndpoint {
+        let names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).chain([RESULT.to_owned()]).collect();
         let made = self.state.made.lock().unwrap_or_else(|p| p.into_inner()).entry(session.to_owned()).or_default().clone();
         let entry = Entry {
             start,
             hash: Sha256::digest(token.expose()).into(),
             calls,
             tools: Arc::new(tools),
+            result_schema: result_schema.map(Arc::new),
             in_flight: Arc::new(Semaphore::new(IN_FLIGHT)),
             made,
         };
@@ -384,8 +404,8 @@ async fn answer_to(state: &Arc<State>, head: &http::request::Parts, body: Incomi
         Err(status) => return answer(status, None),
     };
     let params = msg["params"].clone();
-    let tools = entry.tools.clone();
-    let listed = move || tools.iter().map(ToolSpec::listed).collect();
+    let (tools, schema) = (entry.tools.clone(), entry.result_schema.clone());
+    let listed = move || tools.iter().map(ToolSpec::listed).chain([result_tool(schema.as_deref())]).collect();
     match rpc(msg, SERVER, listed, call(state, &entry, &params)).await {
         Answer::Accepted => answer(StatusCode::ACCEPTED, None),
         Answer::Reply(reply) => answer(StatusCode::OK, Some(reply)),
@@ -416,6 +436,7 @@ async fn discard(body: Incoming, most: usize) {
 struct Opened {
     calls: UnboundedSender<ToolCall>,
     tools: Arc<Vec<ToolSpec>>,
+    result_schema: Option<Arc<Value>>,
     in_flight: Arc<Semaphore>,
     made: Arc<AtomicU64>,
 }
@@ -427,12 +448,12 @@ fn opened(state: &State, name: &str, headers: &HeaderMap) -> Option<Opened> {
     if !bool::from(entry.hash.ct_eq(&given)) {
         return None;
     }
-    Some(Opened { calls: entry.calls.clone(), tools: entry.tools.clone(), in_flight: entry.in_flight.clone(), made: entry.made.clone() })
+    Some(Opened { calls: entry.calls.clone(), tools: entry.tools.clone(), result_schema: entry.result_schema.clone(), in_flight: entry.in_flight.clone(), made: entry.made.clone() })
 }
 
 async fn call(state: &State, entry: &Opened, params: &Value) -> std::result::Result<Value, Value> {
     let name = params["name"].as_str().unwrap_or_default();
-    if !entry.tools.iter().any(|tool| tool.name == name) {
+    if name != RESULT && !entry.tools.iter().any(|tool| tool.name == name) {
         return Err(json!({ "code": -32602, "message": "Unknown tool" }));
     }
     let input = match &params["arguments"] {
@@ -442,6 +463,14 @@ async fn call(state: &State, entry: &Opened, params: &Value) -> std::result::Res
     // 64 bits never wrap, so a refused call can count too.
     if entry.made.fetch_add(1, Ordering::Relaxed) >= u64::from(state.call_cap) {
         return Ok(Reply::failed(format!("this session has made the {} calls it may make to these tools", state.call_cap)).result());
+    }
+    if name == RESULT
+        && let Some(schema) = &entry.result_schema
+    {
+        let misfits = crate::schema::misfits(schema, &input);
+        if !misfits.is_empty() {
+            return Ok(Reply::failed(format!("the result does not fit its schema, so it was not taken: {}", misfits.join("; "))).result());
+        }
     }
     let (reply, answer) = oneshot::channel();
     let ended = || Reply::failed("the session has ended");

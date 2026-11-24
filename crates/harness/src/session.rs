@@ -23,7 +23,7 @@ use crate::error::{Error, Result};
 use crate::event::{Body, Decision, Event, FailKind};
 use crate::redact;
 use crate::store::{Listed, NewSession, Store, now_ms};
-use crate::tools::{Endpoints, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
+use crate::tools::{Endpoints, RESULT, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
 use crate::work::{Setup, Work, valid_effort};
 
 #[derive(Debug, Clone, Copy)]
@@ -655,7 +655,7 @@ impl Harness {
         };
         // Freed again if the driver fails to open, or panics.
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
-        let tools = endpoints.register(&endpoint, (id, start), &token, tools, calls, &provider);
+        let tools = endpoints.register(&endpoint, (id, start), &token, (tools, result_schema.clone()), calls, &provider);
         let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
         let launch = Launch { cwd, locked, model, login, effort, resume, tools_token: token, tools, result_schema, env };
         let caps = driver.capabilities();
@@ -1008,6 +1008,9 @@ impl Task {
                     }
                 }
                 call = calls.recv(), if calls_open => match call {
+                    Some(ToolCall { name, input, reply }) if name == RESULT => {
+                        let _ = reply.send(self.result(input));
+                    }
                     Some(ToolCall { name, input, reply }) => {
                         let id = format!("c{}", random_hex(8));
                         let called = redact::body(Body::ClientToolCall { id: id.clone(), name, input }, &self.secrets);
@@ -1228,6 +1231,23 @@ impl Task {
             }
         }
         false
+    }
+
+    /// Takes the agent's result, which the endpoint has checked against the schema: a `result` event, unless a question
+    /// is open, or the result is too large to keep whole. A result that could not be recorded is not taken.
+    fn result(&self, data: Value) -> Reply {
+        let open: Vec<String> = self.questions.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
+        if !open.is_empty() {
+            return Reply::failed(format!("a question is open ({}): wait for its answer, then give your result", open.join(", ")));
+        }
+        let (body, cut) = crate::event::fit(redact::body(Body::Result { data }, &self.secrets), crate::event::EVENT_MAX);
+        if cut.is_some() {
+            return Reply::failed(format!("the result is over the {}-byte limit of an event, so it was not taken: give a shorter one", crate::event::EVENT_MAX));
+        }
+        match self.keep(body, None) {
+            true => Reply { output: json!("the result was recorded"), error: false },
+            false => Reply::failed(ENDED),
+        }
     }
 
     /// Someone listens to the session's events and can answer its calls: a client that watches it, or the one that

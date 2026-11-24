@@ -260,14 +260,15 @@ async fn tools_endpoint_declared_tools_are_listed_and_each_call_is_an_event_the_
     let (harness, recorder) = recording(&dir, Settings::default());
     let (id, mut events) = harness.open(spec()).await.unwrap();
     let (endpoint, token, _) = recorder.last();
-    assert_eq!(endpoint.tools, ["choose", "read_ticket"]);
-    assert_eq!(endpoint.allowed, [format!("mcp__{}__choose", endpoint.name), format!("mcp__{}__read_ticket", endpoint.name)], "exact names for Claude");
+    assert_eq!(endpoint.tools, ["choose", "read_ticket", "result"]);
+    let exact = |tool: &str| format!("mcp__{}__{tool}", endpoint.name);
+    assert_eq!(endpoint.allowed, [exact("choose"), exact("read_ticket"), exact("result")], "exact names for Claude");
     let (port, path) = place(&endpoint);
     let (status, listed) = post(port, &path, &[("authorization", &format!("Bearer {token}"))], &rpc("tools/list", json!({}))).await.unwrap();
     let listed: Value = serde_json::from_slice(&listed).unwrap();
     assert_eq!(status, 200);
     let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["choose", "read_ticket"]);
+    assert_eq!(names, ["choose", "read_ticket", "result"]);
     assert_eq!(listed["result"]["tools"][1]["inputSchema"], json!({"type": "object"}));
 
     let calling = tokio::spawn(async move { call(port, &path, &token, "read_ticket", json!({"key": "T-1"})).await });
@@ -490,4 +491,126 @@ async fn tools_endpoint_harness_run_prints_the_call_the_clients_answer_and_what_
     let text = [out.stdout, out.stderr].concat();
     let hex_run = text.split(|b| !b.is_ascii_hexdigit()).map(<[u8]>::len).max().unwrap_or(0);
     assert!(hex_run < 64, "no token in the output");
+}
+
+/// A session with `schema` and the place and token of its endpoint, with its events.
+async fn with_schema(dir: &std::path::Path, schema: Option<Value>) -> (Harness, String, tokio::sync::broadcast::Receiver<harness::event::Event>, u16, String, String) {
+    let (harness, recorder) = recording(dir, Settings::default());
+    let (id, events) = harness.open(Open { result_schema: schema, ..spec() }).await.unwrap();
+    let (endpoint, token, _) = recorder.last();
+    let (port, path) = place(&endpoint);
+    (harness, id, events, port, path, token)
+}
+
+fn verdict() -> Value {
+    json!({"type": "object", "properties": {"verdict": {"type": "string", "enum": ["pass", "fail"]}}, "required": ["verdict"], "additionalProperties": false})
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_is_listed_with_the_sessions_schema_as_its_input() {
+    let (_tmp, dir) = data_dir();
+    for schema in [Some(verdict()), None] {
+        let (_harness, _id, _events, port, path, token) = with_schema(&dir.join(schema.is_some().to_string()), schema.clone()).await;
+        let (_, listed) = post(port, &path, &[("authorization", &format!("Bearer {token}"))], &rpc("tools/list", json!({}))).await.unwrap();
+        let listed: Value = serde_json::from_slice(&listed).unwrap();
+        let result = listed["result"]["tools"].as_array().unwrap().iter().find(|tool| tool["name"] == "result").cloned().expect("result is listed");
+        assert_eq!(result["inputSchema"], schema.unwrap_or_else(|| json!({"type": "object"})));
+    }
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_that_fits_is_a_result_event_and_the_agent_is_told() {
+    let (_tmp, dir) = data_dir();
+    let (harness, id, mut events, port, path, token) = with_schema(&dir, Some(verdict())).await;
+    let (_, answer) = call(port, &path, &token, "result", json!({"verdict": "pass"})).await;
+    assert_eq!(answer["result"]["isError"], false, "{answer}");
+    assert_eq!(answer["result"]["content"][0]["text"], "the result was recorded");
+    let seen = until(&mut events, |body| matches!(body, Body::Result { .. })).await;
+    assert_eq!(seen.last().unwrap().body, Body::Result { data: json!({"verdict": "pass"}) });
+    assert_eq!(harness.events(&id, 0).unwrap().last().unwrap().body, Body::Result { data: json!({"verdict": "pass"}) }, "it is stored");
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_that_does_not_fit_goes_back_to_the_agent_with_the_reason_and_no_event() {
+    let (_tmp, dir) = data_dir();
+    let (harness, id, mut events, port, path, token) = with_schema(&dir, Some(verdict())).await;
+    let (_, answer) = call(port, &path, &token, "result", json!({"verdict": "maybe", "extra": 1})).await;
+    assert_eq!(answer["result"]["isError"], true);
+    let reason = answer["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(reason.starts_with("the result does not fit its schema, so it was not taken"), "{reason}");
+    assert!(reason.contains("at /verdict: is not one of the values the schema lists") && reason.contains("at /extra: is not a property the schema allows"), "{reason}");
+    let (_, fits) = call(port, &path, &token, "result", json!({"verdict": "fail"})).await;
+    assert_eq!(fits["result"]["isError"], false, "the agent can call it again");
+    until(&mut events, |body| matches!(body, Body::Result { .. })).await;
+    let results = harness.events(&id, 0).unwrap().into_iter().filter(|event| event.body.type_name() == "result").count();
+    assert_eq!(results, 1, "the misfit made no event");
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_schema_refused_at_open_with_the_keyword_and_nothing_starts() {
+    let (_tmp, dir) = data_dir();
+    let (harness, recorder) = recording(&dir, Settings::default());
+    for (schema, said) in [(json!({"type": "object", "properties": {"a": {"pattern": "x"}}}), "/properties/a: `pattern`"), (json!({"type": "string"}), "top level")] {
+        match harness.open(Open { result_schema: Some(schema), ..spec() }).await {
+            Err(harness::error::Error::Refused(why)) => assert!(why.contains(said), "{why}"),
+            other => panic!("not refused: {:?}", other.map(|(id, _)| id)),
+        }
+    }
+    assert!(recorder.launches.lock().unwrap().is_empty() && harness.sessions().unwrap().is_empty(), "no agent and no row");
+}
+
+/// A driver that asks a question as soon as it starts, and keeps it open.
+#[derive(Clone, Default)]
+struct Asker(Recorder);
+
+impl Driver for Asker {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let Link { commands, output } = self.0.open(launch)?;
+        let (relay, receiver) = mpsc::unbounded_channel();
+        let mut output = output;
+        tokio::spawn(async move {
+            if let Some(started) = output.recv().await {
+                let _ = relay.send(started);
+                let _ = relay.send(Body::Question { id: "q1".into(), text: "which colour?".into() });
+            }
+            while let Some(body) = output.recv().await {
+                let _ = relay.send(body);
+            }
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_is_refused_while_a_question_is_open() {
+    let (_tmp, dir) = data_dir();
+    let asker = Asker::default();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("claude".into(), Arc::new(asker.clone()))];
+    let harness = Harness::with_setup(Store::open(&dir).unwrap(), drivers, Settings::default(), Arc::new(shell(&dir)));
+    let (id, mut events) = harness.open(spec()).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::Question { .. })).await;
+    let (endpoint, token, _) = asker.0.last();
+    let (port, path) = place(&endpoint);
+    let (_, answer) = call(port, &path, &token, "result", json!({"done": true})).await;
+    assert_eq!(answer["result"]["isError"], true);
+    assert_eq!(answer["result"]["content"][0]["text"], "a question is open (q1): wait for its answer, then give your result");
+    assert!(!harness.events(&id, 0).unwrap().iter().any(|event| event.body.type_name() == "result"), "no result event");
+    harness.answer_question(&id, "q1", "blue".into()).unwrap();
+    let (_, answer) = call(port, &path, &token, "result", json!({"done": true})).await;
+    assert_eq!(answer["result"]["isError"], false, "taken once the question is answered: {answer}");
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_over_the_event_cap_is_refused_with_the_reason_and_no_event() {
+    let (_tmp, dir) = data_dir();
+    let (harness, id, _events, port, path, token) = with_schema(&dir, None).await;
+    let big = "x".repeat(harness::event::EVENT_MAX + 1000);
+    let (_, answer) = call(port, &path, &token, "result", json!({ "text": big })).await;
+    assert_eq!(answer["result"]["isError"], true);
+    assert!(answer["result"]["content"][0]["text"].as_str().unwrap().contains("limit of an event, so it was not taken"), "{answer}");
+    assert!(!harness.events(&id, 0).unwrap().iter().any(|event| ["result", "withheld"].contains(&event.body.type_name().as_str())), "no cut result is stored");
 }

@@ -25,6 +25,7 @@ pub mod providers;
 pub mod redact;
 pub mod repo;
 pub mod run;
+pub mod schema;
 pub mod server;
 pub mod session;
 pub mod store;

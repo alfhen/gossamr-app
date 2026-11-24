@@ -115,7 +115,14 @@ pub enum Op {
         /// `result` or `ask`, an input schema that is not an object.
         #[serde(default)]
         tools: Vec<crate::tools::ToolSpec>,
-        /// A JSON Schema object the session's `result` must fit. Left out, any result.
+        /// A JSON Schema the session's `result` must fit; left out, any object. It is the input schema of the endpoint's
+        /// `result` tool, so its top level is `"type": "object"`. The harness checks this part of JSON Schema (`schema`):
+        /// `type` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`, or a list of them),
+        /// `properties`, `required`, `additionalProperties` (a boolean or a schema), `items` (one schema), `enum`,
+        /// `const`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`; it reads `title`,
+        /// `description`, `default`, `examples`, `$schema` and `$comment` as notes. Any other keyword is refused here,
+        /// with where it is. A result that does not fit goes back to the agent with the reasons; one that fits is a
+        /// `result` event. `result` is refused while a question is open.
         #[serde(default)]
         result_schema: Option<Value>,
     },
