@@ -1156,3 +1156,59 @@ async fn shutdown_a_client_that_asks_once_it_has_begun_is_told_so() {
     tokio::time::timeout(Duration::from_secs(60), task).await.expect("the server stops").unwrap().unwrap();
     let_go.notify_one();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tokens_watchers_in_the_middle_of_pushes_get_nothing_stored_after_the_revoke_returns() {
+    // One line a prompt, for as many prompts as the test sends.
+    let script = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..5_000).map(|n| format!("{{\"say\": \"{n}\"}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let served = serve(&script);
+    let (mut feeder, mut admin) = (connect(&served).await, connect(&served).await);
+    let other = Token::random();
+    admin.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
+    let id = open(&mut feeder).await;
+    let mut watchers = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let mut watcher = Client::connect(&served.dir, &other).await.unwrap();
+        watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+        watchers.spawn(async move {
+            let mut seen = 0;
+            while let Ok(Some(push)) = watcher.push().await {
+                if let Push::Event { event, .. } = push {
+                    seen = seen.max(event.seq);
+                }
+            }
+            seen
+        });
+    }
+    let feeding = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let feeds = feeding.clone();
+    let session = id.clone();
+    let feed = tokio::spawn(async move {
+        while feeds.load(std::sync::atomic::Ordering::Relaxed) {
+            if feeder.call(Op::Send { session: session.clone(), text: "go".into() }).await.is_err() {
+                break;
+            }
+        }
+    });
+    let stored = |harness: &Harness| harness.sessions().unwrap().into_iter().find(|row| row.id == id).map_or(0, |row| row.last_seq);
+    while stored(&served.harness) < 300 {
+        tokio::task::yield_now().await;
+    }
+    let listed = admin.call(Op::TokenList).await.unwrap();
+    let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
+    admin.call(Op::TokenRevoke { token: other_id }).await.unwrap();
+    let revoked_at = stored(&served.harness);
+    // Events go on after the revoke, while each watcher's connection may still have pushes to write.
+    while stored(&served.harness) < revoked_at + 300 {
+        tokio::task::yield_now().await;
+    }
+    feeding.store(false, std::sync::atomic::Ordering::Relaxed);
+    feed.await.unwrap();
+    while let Some(seen) = tokio::time::timeout(Duration::from_secs(60), watchers.join_next()).await.expect("each watcher ends") {
+        let seen = seen.unwrap();
+        assert!(seen <= revoked_at, "a watcher got event {seen}, stored after the revoke returned at {revoked_at}");
+    }
+}
