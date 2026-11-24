@@ -1037,3 +1037,12 @@ async fn events_the_opener_of_an_unlocked_session_gets_its_first_event() {
         assert_eq!(end, Some(Push::End { session: id }));
     }
 }
+
+#[tokio::test]
+async fn shutdown_the_socket_and_descriptor_are_gone_when_a_client_gets_its_answer() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let answer = client.call(Op::Shutdown).await.unwrap();
+    assert_eq!(answer, json!({ "left": [] }));
+    assert!(!served.dir.join(SOCKET).exists() && !served.dir.join(DESCRIPTOR).exists(), "removed before the store was let go");
+}

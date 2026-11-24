@@ -191,12 +191,8 @@ impl Harness {
             Ok(())
         })?;
         let plan = Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None };
-        let events = self.start(&id, watcher, |_| Ok(plan))?;
-        // Another session's client keeps the first receiver, which holds every event from the first.
-        match feed {
-            Some(feed) => Ok((id, events, feed)),
-            None => Ok((id, events.resubscribe(), Feed::Stored(events))),
-        }
+        let (events, second) = self.start(&id, watcher, false, |_| Ok(plan))?;
+        Ok((id, events, feed.unwrap_or(Feed::Stored(second))))
     }
 
     /// Starts a session again by its provider's session id, with a new tools token. A running or cleaned-up session
@@ -212,7 +208,7 @@ impl Harness {
     }
 
     fn resume_from(&self, id: &str, taken_back: bool) -> Result<broadcast::Receiver<Event>> {
-        self.start(id, None, |store| {
+        self.start(id, None, taken_back, |store| {
             let row = store.session(id)?;
             if row.cleaned {
                 return Err(Error::CleanedUp(id.to_owned()));
@@ -230,13 +226,7 @@ impl Harness {
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
             Ok(Plan { driver: self.driver(&row.provider)?, cwd: row.cwd, locked: row.locked, model: row.model, resume: Some(provider_session) })
         })
-        .and_then(|events| {
-            // Cleared only once the agent has opened, so a take-back that failed can be tried again.
-            if taken_back {
-                self.inner.with_store(|store| store.set_handed_over(id, false))?;
-            }
-            Ok(events)
-        })
+        .map(|(events, _)| events)
     }
 
     /// Sends a prompt. One sent while a turn runs waits for that turn to end.
@@ -483,10 +473,19 @@ impl Harness {
     /// Takes the session's id before the driver opens, so one session never runs two agents; a failed open frees it.
     /// `plan` reads the session's row under the same lock that clean-up and a task's close take, so a start never
     /// begins from a row being cleaned up, or before the last start's `closed`.
-    fn start(&self, id: &str, watcher: Option<Watcher>, plan: impl FnOnce(&Store) -> Result<Plan>) -> Result<broadcast::Receiver<Event>> {
+    /// Two receivers, both made before the task starts, so neither misses its first events. `taken_back` clears the
+    /// hand-over mark once the agent has opened and before the task can end.
+    fn start(
+        &self,
+        id: &str,
+        watcher: Option<Watcher>,
+        taken_back: bool,
+        plan: impl FnOnce(&Store) -> Result<Plan>,
+    ) -> Result<(broadcast::Receiver<Event>, broadcast::Receiver<Event>)> {
         let token = Secret::random();
         let secrets = vec![token.expose().to_owned()];
         let (events, receiver) = broadcast::channel(1024);
+        let second = events.subscribe();
         let (requests, requests_rx) = mpsc::unbounded_channel();
         let (calls, calls_rx) = mpsc::unbounded_channel();
         let start = self.inner.starts.fetch_add(1, Ordering::Relaxed);
@@ -528,6 +527,11 @@ impl Harness {
         let link = driver.open(launch).map_err(|OpenError { kind, message }| {
             Error::Open { kind, message: redact::text(&message, &secrets) }
         })?;
+        // While the session is still taken: a take-back that failed to open keeps the mark, and a later hand over's
+        // mark is never cleared by this one.
+        if taken_back {
+            self.inner.with_store(|store| store.set_handed_over(id, false))?;
+        }
         reserved.keep();
         let task = Task {
             inner: self.inner.clone(),
@@ -545,7 +549,7 @@ impl Harness {
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         #[cfg(test)]
         tests::after_spawn(id);
-        Ok(receiver)
+        Ok((receiver, second))
     }
 }
 
@@ -1280,5 +1284,45 @@ mod tests {
         let Feed::Stored(mut events) = feed else { panic!("an unlocked session's feed") };
         let first = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
         assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{first:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn events_a_sessions_open_receiver_has_the_events_published_before_open_returns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let reading = harness.clone();
+        *AFTER_SPAWN.lock().unwrap() = Some(Box::new(move |id: &str| {
+            let given = std::time::Instant::now() + Duration::from_secs(5);
+            while reading.events(id, 0).map_or(true, |events| events.is_empty()) && std::time::Instant::now() < given {
+                std::thread::yield_now();
+            }
+        }));
+        let (_, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
+        assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{first:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hand_over_a_take_back_clears_the_mark_before_the_session_can_end() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&dir).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        harness.hand_over(&id).unwrap();
+        while events.recv().await.is_ok_and(|event| event.body != Body::Closed) {}
+        // What the row says the moment the task exists: from then on it could end and be handed over again.
+        let seen: Arc<Mutex<Option<bool>>> = Arc::default();
+        let (kept, file) = (seen.clone(), dir.join("harness.sqlite"));
+        *AFTER_SPAWN.lock().unwrap() = Some(Box::new(move |id: &str| {
+            let raw = rusqlite::Connection::open(&file).unwrap();
+            let marked: bool = raw.query_row("SELECT handed_over FROM sessions WHERE id = ?1", [id], |row| row.get(0)).unwrap();
+            *kept.lock().unwrap() = Some(marked);
+        }));
+        harness.take_back(&id).await.unwrap();
+        assert_eq!(*seen.lock().unwrap(), Some(false), "cleared before the task was spawned");
     }
 }

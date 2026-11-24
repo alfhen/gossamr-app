@@ -15,7 +15,6 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
-use tokio::sync::Notify;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task::{AbortHandle, JoinSet};
@@ -136,7 +135,8 @@ impl Server {
         let Server { harness, listener, dir, stops: (mut term, mut int), limits, sweep_every } = self;
         // Aborted with `run` too, so a server dropped mid-run holds no harness, and no data folder, through it.
         let _sweeper = AbortOnDrop(harness.sweep_on_timer(sweep_every).0);
-        let stop = Arc::new(Notify::new());
+        let (asks, mut asked) = mpsc::unbounded_channel::<ShutdownAsk>();
+        let mut shutting = None;
         let mut connections = JoinSet::new();
         let (proving, proven) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         loop {
@@ -145,7 +145,7 @@ impl Server {
                     Ok((stream, _)) if same_user(&stream) => {
                         match Counted::take(&proving, limits.proving) {
                             Some(slot) => {
-                                connections.spawn(connection(harness.clone(), stream, limits, slot, proven.clone(), stop.clone()));
+                                connections.spawn(connection(harness.clone(), stream, limits, slot, proven.clone(), asks.clone()));
                             }
                             None => {
                                 tokio::spawn(turn_away(stream, limits.proving));
@@ -155,7 +155,10 @@ impl Server {
                     Ok(_) => {}
                     Err(e) => eprintln!("harness: accept failed: {e}"),
                 },
-                _ = stop.notified() => break,
+                Some(ask) = asked.recv() => {
+                    shutting = Some(ask);
+                    break;
+                }
                 _ = term.recv() => break,
                 _ = int.recv() => break,
                 Some(_) = connections.join_next(), if !connections.is_empty() => {}
@@ -169,9 +172,20 @@ impl Server {
         if !left.is_empty() {
             eprintln!("harness: shut down without waiting longer for the stuck agents of sessions {}", left.join(", "));
         }
+        // A client that asked for this gets its answer, if it takes it within a second, before its connection ends.
+        if let Some(ShutdownAsk { left: answer, sent }) = shutting {
+            let _ = answer.send(left);
+            let _ = tokio::time::timeout(CLOSE_WITHIN, sent).await;
+        }
         connections.shutdown().await;
         Ok(())
     }
+}
+
+/// A client's `shutdown`, which `run` carries out: it gives the client the sessions it left, and waits for `sent`.
+struct ShutdownAsk {
+    left: tokio::sync::oneshot::Sender<Vec<String>>,
+    sent: tokio::sync::oneshot::Receiver<()>,
 }
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -214,7 +228,7 @@ async fn send(ws: &mut Ws, reply: &Reply) -> Result<()> {
     ws.send(Message::text(text)).await.map_err(|e| Error::Protocol(e.to_string()))
 }
 
-async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>, stop: Arc<Notify>) {
+async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>, asks: mpsc::UnboundedSender<ShutdownAsk>) {
     // Before the proof, so a revoke during it is heard too.
     let mut revoked = harness.revocations();
     let checked = tokio::time::timeout(limits.proof_within, async {
@@ -240,7 +254,7 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
         return;
     }
     let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
-    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![] };
+    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![], asks, sent: None };
     loop {
         // A revoke is heard before anything else, and during every write: nothing reaches this client after its
         // token's revoke has answered, even one that stopped reading.
@@ -251,13 +265,7 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
                 false => continue,
             },
             message = ws.next() => match message {
-                Some(Ok(Message::Text(text))) => {
-                    let (reply, shut) = client.call(text.as_str()).await;
-                    if shut {
-                        stop.notify_one();
-                    }
-                    reply
-                }
+                Some(Ok(Message::Text(text))) => client.call(text.as_str()).await,
                 Some(Ok(Message::Binary(_))) => Reply { error: Some("a call is a JSON text message".into()), ..Reply::default() },
                 Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
                     let reason = format!("a message over the {MAX_MESSAGE}-byte limit");
@@ -280,6 +288,10 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
                 },
             }
         };
+        // `run` waits for the answer to a shutdown before it ends the connections.
+        if let Some(done) = client.sent.take() {
+            let _ = done.send(());
+        }
         if !sent {
             break;
         }
@@ -327,6 +339,9 @@ struct Client {
     watching: HashMap<String, AbortHandle>,
     /// Sessions this client opened as ending with it: closed when it is dropped, however the connection ends.
     ends_with_it: Vec<String>,
+    asks: mpsc::UnboundedSender<ShutdownAsk>,
+    /// Told once the answer to this client's `shutdown` has gone.
+    sent: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl Drop for Client {
@@ -338,21 +353,18 @@ impl Drop for Client {
 }
 
 impl Client {
-    /// The reply to one call, and whether the harness shut down.
-    async fn call(&mut self, text: &str) -> (Reply, bool) {
+    async fn call(&mut self, text: &str) -> Reply {
         let call: Call = match serde_json::from_str(text) {
             Ok(call) => call,
             Err(e) => {
                 let id = serde_json::from_str::<Value>(text).ok().and_then(|value| value["id"].as_u64());
-                return (Reply { id, error: Some(format!("not a call: {e}")), ..Reply::default() }, false);
+                return Reply { id, error: Some(format!("not a call: {e}")), ..Reply::default() };
             }
         };
-        let shut = call.op == Op::Shutdown;
-        let reply = match self.dispatch(call.op).await {
+        match self.dispatch(call.op).await {
             Ok(value) => Reply { id: Some(call.id), ok: Some(value), ..Reply::default() },
             Err(e) => Reply { id: Some(call.id), error: Some(e.to_string()), ..Reply::default() },
-        };
-        (reply, shut)
+        }
     }
 
     async fn dispatch(&mut self, op: Op) -> Result<Value> {
@@ -403,7 +415,14 @@ impl Client {
             }
             Op::TokenRevoke { token } => done(harness.revoke_client_token(token)),
             Op::Shutdown => {
-                let left = harness.shutdown().await;
+                // `run` removes the socket and the descriptor before the store goes, then shuts the harness down.
+                let (left, answer) = tokio::sync::oneshot::channel();
+                let (sent, done) = tokio::sync::oneshot::channel();
+                let left = match self.asks.send(ShutdownAsk { left, sent: done }) {
+                    Ok(()) => answer.await.unwrap_or_default(),
+                    Err(_) => harness.shutdown().await,
+                };
+                self.sent = Some(sent);
                 Ok(json!({ "left": left }))
             }
         }
