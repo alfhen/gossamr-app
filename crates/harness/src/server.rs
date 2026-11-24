@@ -135,7 +135,8 @@ impl Server {
         let Server { harness, listener, dir, stops: (mut term, mut int), limits, sweep_every } = self;
         // Aborted with `run` too, so a server dropped mid-run holds no harness, and no data folder, through it.
         let _sweeper = AbortOnDrop(harness.sweep_on_timer(sweep_every).0);
-        let (asks, mut asked) = mpsc::unbounded_channel::<ShutdownAsk>();
+        let (queue, mut asked) = mpsc::unbounded_channel::<ShutdownAsk>();
+        let asks = Asks { queue, answering: Arc::new(tokio::sync::RwLock::new(())) };
         let mut shutting = None;
         let mut connections = JoinSet::new();
         let (proving, proven, turning) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
@@ -171,7 +172,7 @@ impl Server {
         // Both before the store goes, so neither can be a next harness's.
         let _ = std::fs::remove_file(dir.join(crate::api::SOCKET));
         let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
-        // Every client that asked gets the answer; one that asks from now on does it itself.
+        // Every client that asked gets the answer; one that asks from now on is refused.
         asked.close();
         let mut shutting: Vec<ShutdownAsk> = shutting.into_iter().collect();
         while let Ok(ask) = asked.try_recv() {
@@ -181,22 +182,28 @@ impl Server {
         if !left.is_empty() {
             eprintln!("harness: shut down without waiting longer for the stuck agents of sessions {}", left.join(", "));
         }
-        // A client that asked for this gets its answer, if it takes it within a second, before its connection ends.
-        let mut sending = JoinSet::new();
-        for ShutdownAsk { left: answer, sent } in shutting {
+        // A client that asked for this, or was refused, gets its answer, if it takes it within a second, before its
+        // connection ends.
+        for ShutdownAsk { left: answer } in shutting {
             let _ = answer.send(left.clone());
-            sending.spawn(sent);
         }
-        let _ = tokio::time::timeout(CLOSE_WITHIN, sending.join_all()).await;
+        let _ = tokio::time::timeout(CLOSE_WITHIN, asks.answering.write()).await;
         connections.shutdown().await;
         Ok(())
     }
 }
 
-/// A client's `shutdown`, which `run` carries out: it gives the client the sessions it left, and waits for `sent`.
+/// A client's `shutdown`, which `run` carries out: it gives the client the sessions it left.
 struct ShutdownAsk {
     left: tokio::sync::oneshot::Sender<Vec<String>>,
-    sent: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// Where a client asks for `shutdown`. A client holds a read of `answering` until its answer is written, and `run`
+/// waits for the write before it ends the connections.
+#[derive(Clone)]
+struct Asks {
+    queue: mpsc::UnboundedSender<ShutdownAsk>,
+    answering: Arc<tokio::sync::RwLock<()>>,
 }
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -239,7 +246,7 @@ async fn send(ws: &mut Ws, reply: &Reply) -> Result<()> {
     ws.send(Message::text(text)).await.map_err(|e| Error::Protocol(e.to_string()))
 }
 
-async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>, asks: mpsc::UnboundedSender<ShutdownAsk>) {
+async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>, asks: Asks) {
     // Before the proof, so a revoke during it is heard too.
     let mut revoked = harness.revocations();
     let checked = tokio::time::timeout(limits.proof_within, async {
@@ -265,7 +272,7 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
         return;
     }
     let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
-    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![], asks, sent: None };
+    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![], asks, answering: None };
     loop {
         // A revoke is heard before anything else, and during every write: nothing reaches this client after its
         // token's revoke has answered, even one that stopped reading.
@@ -300,9 +307,7 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
             }
         };
         // `run` waits for the answer to a shutdown before it ends the connections.
-        if let Some(done) = client.sent.take() {
-            let _ = done.send(());
-        }
+        client.answering = None;
         match sent {
             Some(true) => {}
             Some(false) => break,
@@ -353,9 +358,9 @@ struct Client {
     watching: HashMap<String, AbortHandle>,
     /// Sessions this client opened as ending with it: closed when it is dropped, however the connection ends.
     ends_with_it: Vec<String>,
-    asks: mpsc::UnboundedSender<ShutdownAsk>,
-    /// Told once the answer to this client's `shutdown` has gone.
-    sent: Option<tokio::sync::oneshot::Sender<()>>,
+    asks: Asks,
+    /// Held while the answer to this client's `shutdown` is on its way.
+    answering: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
 }
 
 impl Drop for Client {
@@ -429,15 +434,11 @@ impl Client {
             }
             Op::TokenRevoke { token } => done(harness.revoke_client_token(token)),
             Op::Shutdown => {
-                // `run` removes the socket and the descriptor before the store goes, then shuts the harness down.
+                // Taken before the ask, so `run` cannot end this connection before the answer is written.
+                self.answering = self.asks.answering.clone().try_read_owned().ok();
                 let (left, answer) = tokio::sync::oneshot::channel();
-                let (sent, done) = tokio::sync::oneshot::channel();
-                let left = match self.asks.send(ShutdownAsk { left, sent: done }) {
-                    Ok(()) => answer.await.unwrap_or_default(),
-                    Err(_) => harness.shutdown().await,
-                };
-                self.sent = Some(sent);
-                Ok(json!({ "left": left }))
+                self.asks.queue.send(ShutdownAsk { left }).map_err(|_| Error::Refused("the harness is already shutting down".into()))?;
+                Ok(json!({ "left": answer.await.unwrap_or_default() }))
             }
         }
     }

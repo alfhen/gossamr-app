@@ -727,58 +727,6 @@ async fn caps_a_deny_ends_the_turn_where_the_script_says_so() {
     }
 }
 
-/// How a test agent goes after a stop.
-#[derive(Clone)]
-enum Going {
-    /// 200 ms after the stop, saying a last word.
-    Slowly,
-    /// Only when killed.
-    WhenKilled(Arc<Mutex<bool>>),
-    /// Not even when killed, until the test lets it.
-    WhenLet(Arc<tokio::sync::Notify>),
-}
-
-/// An agent that starts a turn on each prompt and goes after a stop as `going` says. Its driver gives 300 ms for a
-/// stop.
-struct Stopper {
-    going: Going,
-}
-
-impl Driver for Stopper {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities { stop_takes_up_to_ms: Some(300), ..Capabilities::default() }
-    }
-
-    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
-        let (commands, mut commands_rx) = mpsc::unbounded_channel();
-        let (output, receiver) = mpsc::unbounded_channel();
-        output.send(Body::Started { provider_session: "stopper".into(), resumed: false }).unwrap();
-        let going = self.going.clone();
-        tokio::spawn(async move {
-            loop {
-                match (commands_rx.recv().await, &going) {
-                    (Some(Command::Prompt(_)), _) => {
-                        let _ = output.send(Body::TurnStarted);
-                    }
-                    (Some(Command::Stop), Going::Slowly) => {
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        let _ = output.send(Body::Text { text: "stopped at last".into() });
-                        return;
-                    }
-                    (Some(Command::Kill), Going::WhenKilled(killed)) => {
-                        *killed.lock().unwrap() = true;
-                        return;
-                    }
-                    (Some(Command::Kill), Going::WhenLet(let_go)) => return let_go.notified().await,
-                    (None, _) => return,
-                    _ => {}
-                }
-            }
-        });
-        Ok(Link { commands, output: receiver })
-    }
-}
-
 #[tokio::test]
 async fn retention_a_catch_up_read_writes_nothing() {
     let (_tmp, dir) = data_dir();

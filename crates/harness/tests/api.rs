@@ -1126,3 +1126,33 @@ async fn events_a_watch_whose_stored_events_were_swept_says_they_were_lost() {
     }
     assert!(matches!(&end, Some(Push::Lost { reason, .. }) if reason.contains("sweep")), "{end:?}");
 }
+
+#[tokio::test]
+async fn shutdown_a_client_that_asks_once_it_has_begun_is_told_so() {
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stuck".into(), Arc::new(Stopper { going: Going::WhenLet(let_go.clone()) }))];
+    let token = Token::random();
+    let first = token.clone();
+    let server = Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap();
+    let harness = server.harness().clone();
+    let task = tokio::spawn(server.run());
+    let (mut asking, mut late) = (Client::connect(&dir, &token).await.unwrap(), Client::connect(&dir, &token).await.unwrap());
+    let opened = asking.call(Op::Open { provider: "stuck".into(), cwd: "/nowhere".into(), locked: false, model: None, ends_with_client: false }).await.unwrap();
+    let id = opened["session"].as_str().unwrap().to_owned();
+    let mut events = harness.subscribe(&id).unwrap();
+    asking.call(Op::Send { session: id, text: "run".into() }).await.unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnStarted)).await;
+    let first_ask = tokio::spawn(async move { asking.call(Op::Shutdown).await });
+    // On this one thread, `run` removes the socket and closes the asks in one step; the stuck agent then holds the
+    // shutdown open while the late client asks.
+    while dir.join(SOCKET).exists() {
+        tokio::task::yield_now().await;
+    }
+    let refused = late.call(Op::Shutdown).await;
+    assert!(matches!(&refused, Err(Error::Said(why)) if why.contains("already shutting down")), "{refused:?}");
+    let answered = first_ask.await.unwrap();
+    assert!(answered.as_ref().is_ok_and(|said| said["left"].as_array().is_some_and(|left| left.len() == 1)), "{answered:?}");
+    tokio::time::timeout(Duration::from_secs(60), task).await.expect("the server stops").unwrap().unwrap();
+    let_go.notify_one();
+}
