@@ -46,7 +46,7 @@ impl Core {
         }
         let shell = self.shell.get().await.inspect_err(|e| eprintln!("{e}")).ok();
         let places = Places { home: self.home.as_deref(), data_dir: &self.data_dir };
-        let states = states(&config.providers, &places, shell.as_deref());
+        let states = states(&crate::connections::logins(&config.providers), &places, shell.as_deref());
         let state_of = |id: &str| states.iter().find(|(i, _)| i == id).map(|(_, s)| s);
         let none = RunEnv::from_pairs::<&str, &str>([]);
         let binary = find(shell.as_deref().unwrap_or(&none));

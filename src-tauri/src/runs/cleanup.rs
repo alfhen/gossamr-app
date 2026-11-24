@@ -6,11 +6,19 @@ use serde::Serialize;
 
 use super::backend::RemoveOutcome;
 use super::cli::ShortId;
-use super::repo::{remove_with_git, Git};
+use std::path::Path;
+
+use super::repo::{remove_with_git, Git, Worktree};
 use super::service::RunService;
 use crate::domain::{Run, RunState};
 use crate::error::{Error, Result};
 use crate::inbox::Lookup;
+
+/// The run's worktree and branch, removed through git alone: see `repo::remove_with_git`.
+pub(crate) async fn remove_run_with_git(git: &Git, home: Option<&Path>, run: &Run) -> std::result::Result<Option<String>, String> {
+    let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
+    remove_with_git(git, home, Worktree { repo: &run.spec.repo, clone: &run.spec.clone_path, path: &run.expected_worktree, branch: &branch }).await
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -51,7 +59,7 @@ impl RunService {
     /// The run's worktree and branch through git alone, for a run whose instance is gone.
     async fn remove_with_git(&self, run: &Run) -> Result<Option<String>> {
         let git: Git = self.git().await?;
-        remove_with_git(&git, self.home.as_deref(), run).await.map_err(refuse)
+        remove_run_with_git(&git, self.home.as_deref(), run).await.map_err(refuse)
     }
 
     /// Removes the run's worktree and branch, and the earlier sessions it left behind. Never forces: unpushed work stays,

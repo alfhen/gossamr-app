@@ -644,7 +644,7 @@ fn login_in(driver: crate::connections::Driver, folder: &str) -> crate::runs::pr
         extra: Default::default(),
     };
     let places = Places { home: Some(Path::new("/Users/me")), data_dir: Path::new("/Users/me/data") };
-    match states(&[instance], &places, Some(&crate::runs::env::RunEnv::from_pairs([("PATH", "/bin")]))).remove(0).1 {
+    match states(&[instance.login()], &places, Some(&crate::runs::env::RunEnv::from_pairs([("PATH", "/bin")]))).remove(0).1 {
         ProviderState::Ready(login) => login,
         other => panic!("{other:?}"),
     }

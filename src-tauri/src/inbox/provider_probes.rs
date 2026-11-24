@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use super::{Core, Probe};
 use crate::connections::ProviderInstance;
 use crate::probe::{Snapshot, State};
-use crate::provider_probe::{self, Folder, Timeouts};
+use harness::provider_probe::{self, Folder, Timeouts};
 use crate::runs::env::RunEnv;
 use crate::runs::provider_env::ProviderState;
 use crate::runs::provider_folder;
@@ -133,21 +133,21 @@ impl Core {
     /// Off and error instances spawn nothing.
     async fn provider_answer(&self, instance: &ProviderInstance, state: &ProviderState, shell: Option<&RunEnv>) -> Snapshot {
         let login = match state {
-            ProviderState::Off => return provider_probe::off(),
-            ProviderState::Error(problem) => return provider_probe::error(problem),
-            ProviderState::Unavailable(why) => return provider_probe::error(why.message()),
+            ProviderState::Off => return provider_probe::off().into(),
+            ProviderState::Error(problem) => return provider_probe::error(problem).into(),
+            ProviderState::Unavailable(why) => return provider_probe::error(why.message()).into(),
             ProviderState::Ready(login) => login,
         };
         // Ready without a capture means the instance has a folder, which replaces every login variable the app's own
         // environment could have supplied.
         let base = shell.cloned().unwrap_or_else(|| RunEnv::from_pairs(std::env::vars_os()));
         let env = login.over(&base);
-        let binary = self.places.find(instance.driver, &env);
+        let binary = self.places.find(instance.driver.into(), &env);
         let typed = instance.config.config_dir.as_deref();
         let path = typed.map(|t| provider_folder::expand(t, self.home.as_deref().unwrap_or(Path::new(""))));
         let folder = typed.zip(path.as_deref()).map(|(typed, path)| Folder { typed, path });
         let ignored = shell.map(|shell| login.ignored(shell)).unwrap_or_default();
-        Snapshot { ignored, ..provider_probe::probe(instance.driver, binary.as_deref(), folder, &env, Timeouts::default()).await }
+        Snapshot { ignored, ..provider_probe::probe(instance.driver.into(), binary.as_deref(), folder, &env, Timeouts::default()).await.into() }
     }
 
     #[cfg(test)]
@@ -173,19 +173,8 @@ mod tests {
     use crate::runs::env::ShellCapture;
     use std::path::PathBuf;
 
-    const RUN_BODY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/run-body.sh");
-
-    /// A fake at `path` that runs `body`. Some tests here time their probes, so the fake is a link to one script that has
-    /// run before rather than a new executable, whose first run macOS stops to check.
     fn script(path: &Path, body: &str) -> String {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut body_path = path.as_os_str().to_owned();
-        body_path.push(".body");
-        std::fs::write(&body_path, format!("{body}\n")).unwrap();
-        if path.symlink_metadata().is_err() {
-            std::os::unix::fs::symlink(RUN_BODY, path).unwrap();
-        }
-        path.display().to_string()
+        harness::testing::fake_cli(path, body).display().to_string()
     }
 
     /// A shell whose capture holds a PATH only, so the `claude` the tests install in the home folder is the one found.

@@ -69,6 +69,15 @@ pub fn is_transport_failure(e: &reqwest::Error) -> bool {
     e.is_connect() || e.is_timeout() || e.is_request() || e.is_body()
 }
 
+impl From<harness::env::CaptureError> for Error {
+    fn from(e: harness::env::CaptureError) -> Self {
+        match e {
+            harness::env::CaptureError::Spawn(e) => Error::Io(e),
+            harness::env::CaptureError::Failed(message) => Error::Claude(message.into()),
+        }
+    }
+}
+
 impl Error {
     /// A failure of the network or of the server's availability, which says nothing a person can act on.
     pub fn is_transient(&self) -> bool {

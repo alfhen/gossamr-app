@@ -6,30 +6,24 @@ pub mod answer;
 pub mod ask;
 pub mod archive;
 pub mod backend;
-pub mod binary;
 pub mod cleanup;
 pub mod cli;
 pub mod codex;
 pub mod codex_models;
 mod continuation;
 pub mod control;
-pub mod env;
 pub mod failure;
 pub mod message;
 mod final_answer;
 mod finder;
 mod offer;
-pub mod fresh;
 pub mod index;
 pub mod launcher;
 pub mod limits;
 pub mod notices;
 pub mod pr;
-pub mod provider_env;
-pub mod provider_folder;
 pub mod redact;
 pub mod report;
-pub mod repo;
 pub mod result;
 pub mod service;
 pub mod state;
@@ -37,6 +31,9 @@ pub mod toolchain;
 pub mod transcript;
 pub mod tracker;
 pub mod trust;
+
+/// Clones, git, the shell environment and the provider logins belong to the harness; the app reaches them by these paths.
+pub use harness::{binary, env, fresh, provider_env, provider_folder, repo};
 
 #[cfg(test)]
 mod real_tests;

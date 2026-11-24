@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::binary::find_binary;
+use super::binary::CliPlaces;
 use super::agent_config::config_dir;
 use super::backend::claude::ClaudeBackend;
 use super::backend::RunBackend;
@@ -13,10 +13,34 @@ use super::cli::{ClaudeCli, SystemCli};
 use super::codex::{runs_root, CodexBackend};
 use super::env::RunEnv;
 use super::provider_env::{ProviderEnv, ProviderState, Unavailable};
+use super::repo::Git;
 use crate::config::AppConfig;
 use crate::connections::{self, Driver};
 use crate::inbox::{Core, Lookup};
 use crate::model_choice::Reason;
+
+/// Where a CLI is looked for besides the shell's PATH: this Mac's install and app folders in the app, and none in a
+/// test build, so the CLIs installed on the machine never answer a test.
+pub fn cli_places(home: Option<PathBuf>) -> CliPlaces {
+    if cfg!(test) {
+        CliPlaces::none()
+    } else {
+        CliPlaces::of_this_mac(home)
+    }
+}
+
+/// The CLI of `driver` in this build's places: see `CliPlaces::find`.
+pub fn find_binary(driver: Driver, shell: &RunEnv) -> Option<PathBuf> {
+    cli_places(dirs::home_dir()).find(driver.into(), shell)
+}
+
+/// Git in `env`. A test build waits longer for each read, because the suite runs hundreds of tests at once.
+pub fn git(env: Arc<RunEnv>) -> Git {
+    #[cfg(test)]
+    return Git::new(env).with_read_limit(harness::repo::testing::READ_LIMIT);
+    #[cfg(not(test))]
+    Git::new(env)
+}
 
 #[derive(Clone)]
 pub struct Toolchain {
@@ -221,6 +245,12 @@ mod tests {
     use crate::runs::env::ShellCapture;
     use crate::runs::failure::Failure;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_test_build_looks_in_no_folder_of_the_machine() {
+        assert!(cli_places(dirs::home_dir()).searches_no_folder());
+        assert_eq!(find_binary(Driver::Codex, &RunEnv::from_pairs::<&str, &str>([])), None);
+    }
 
     /// A `claude` that prints the login variables it was started with.
     fn fake_claude(dir: &std::path::Path) -> PathBuf {

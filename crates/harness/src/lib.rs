@@ -6,17 +6,27 @@ use std::path::PathBuf;
 
 pub mod api;
 pub mod auth;
+pub mod binary;
 pub mod cli;
 pub mod client;
 pub mod driver;
+pub mod env;
 pub mod error;
 pub mod event;
+pub mod fresh;
 pub mod mock;
+pub mod provider;
+pub mod provider_env;
+pub mod provider_folder;
+pub mod provider_probe;
 pub mod redact;
+pub mod repo;
 pub mod run;
 pub mod server;
 pub mod session;
 pub mod store;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tools;
 
 use event::Decision;

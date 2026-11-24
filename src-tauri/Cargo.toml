@@ -33,6 +33,7 @@ dirs = "7.0.0"
 async-trait = "0.1"
 sha2 = "0.10"
 libc = "0.2"
+harness = { path = "../crates/harness" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
@@ -40,6 +41,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 block2 = "0.6.2"
 
 [dev-dependencies]
+harness = { path = "../crates/harness", features = ["testing"] }
 # A paused clock, for tests of waits measured in minutes.
 tokio = { version = "1.53.1", features = ["test-util"] }
 

@@ -47,6 +47,15 @@ pub enum Driver {
     Codex,
 }
 
+impl From<Driver> for harness::provider::Provider {
+    fn from(driver: Driver) -> Self {
+        match driver {
+            Driver::Claude => Self::Claude,
+            Driver::Codex => Self::Codex,
+        }
+    }
+}
+
 impl Driver {
     /// Codex stays off Pip: its built-in tools (a script tool, `collaboration.*`) can't be switched off by any flag, which
     /// rule 3 needs (docs/agents-cli-findings.md, smoke test C1).
@@ -59,48 +68,21 @@ impl Driver {
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude",
-            Self::Codex => "Codex",
-        }
+        harness::provider::Provider::from(self).label()
     }
 
     pub fn binary(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
+        harness::provider::Provider::from(self).binary()
     }
 
     /// The variable that points the CLI at its login folder.
     pub fn folder_variable(self) -> &'static str {
-        match self {
-            Self::Claude => "CLAUDE_CONFIG_DIR",
-            Self::Codex => "CODEX_HOME",
-        }
+        harness::provider::Provider::from(self).folder_variable()
     }
 
     /// The variables that pick which account the CLI runs as, the folder variable first.
     pub fn login_variables(self) -> &'static [&'static str] {
-        match self {
-            Self::Claude => &[
-                "CLAUDE_CONFIG_DIR",
-                "ANTHROPIC_API_KEY",
-                "ANTHROPIC_AUTH_TOKEN",
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "ANTHROPIC_BASE_URL",
-                "ANTHROPIC_FEDERATION_RULE_ID",
-                "ANTHROPIC_ORGANIZATION_ID",
-                "CLAUDE_CODE_USE_BEDROCK",
-                "CLAUDE_CODE_USE_VERTEX",
-                "CLAUDE_CODE_USE_FOUNDRY",
-                "ANTHROPIC_FOUNDRY_API_KEY",
-                "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
-                "ANTHROPIC_FOUNDRY_RESOURCE",
-                "ANTHROPIC_FOUNDRY_BASE_URL",
-            ],
-            Self::Codex => &["CODEX_HOME", "CODEX_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL"],
-        }
+        harness::provider::Provider::from(self).login_variables()
     }
 }
 
@@ -130,6 +112,18 @@ pub struct ProviderInstance {
     /// Keys a later build wrote on the instance that this one doesn't read. They are saved back as they were.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl ProviderInstance {
+    /// The instance as the harness knows a login.
+    pub fn login(&self) -> harness::provider::Login {
+        harness::provider::Login { id: self.id.clone(), provider: self.driver.into(), name: self.display_name.clone(), enabled: self.enabled, folder: self.config.config_dir.clone() }
+    }
+}
+
+/// Every instance as a harness login, in order.
+pub fn logins(providers: &[ProviderInstance]) -> Vec<harness::provider::Login> {
+    providers.iter().map(ProviderInstance::login).collect()
 }
 
 /// What a row of Settings is: a connection of either kind, or a provider.

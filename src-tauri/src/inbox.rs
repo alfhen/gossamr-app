@@ -261,7 +261,7 @@ impl Core {
             code: CodeService::new(crate::net::client()),
             data_dir,
             home: dirs::home_dir().and_then(|h| h.canonicalize().ok()),
-            places: CliPlaces::for_this_build(dirs::home_dir().and_then(|h| h.canonicalize().ok())),
+            places: crate::runs::toolchain::cli_places(dirs::home_dir().and_then(|h| h.canonicalize().ok())),
             db: Mutex::new(Open::default()),
             jira_sync: Mutex::new(HashMap::new()),
             probes: probes::Probes::default(),
@@ -1027,6 +1027,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_default_fixture_never_reaches_atlassian() {
+        let fx = super::testing::fixture().await;
+        let asked = fx.core.auth.whoami(&fx.scope.connection_id, std::time::Duration::from_secs(10)).await;
+        let Some(Err(Error::Http(refused))) = asked else { panic!("the fixture's Jira login was not refused at a closed port") };
+        let url = refused.url().expect("a refused request has its URL");
+        assert_eq!((url.host_str(), url.port(), refused.is_connect()), (Some("127.0.0.1"), Some(1), true));
+    }
+
+    #[tokio::test]
     async fn only_sessions_started_in_the_sandbox_can_be_resumed() {
         let fx = super::testing::fixture().await;
         fx.core
@@ -1083,7 +1092,7 @@ mod tests {
         core.shell().forget().await;
         assert_eq!(core.shell().get().await.unwrap().get("PATH"), Some(std::ffi::OsStr::new("/usr/bin:/bin")), "a missing CLI forgets the capture, which keeps the test's");
         for driver in [Driver::Claude, Driver::Codex] {
-            assert_eq!(core.places.find(driver, &shell), None, "{driver:?}");
+            assert_eq!(core.places.find(driver.into(), &shell), None, "{driver:?}");
         }
         assert!(core.code.auth.gh_dirs().is_empty(), "{:?}", core.code.auth.gh_dirs());
         let _ = std::fs::remove_dir_all(dir);

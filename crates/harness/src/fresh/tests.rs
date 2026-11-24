@@ -2,9 +2,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use super::*;
-use crate::runs::env::RunEnv;
-use crate::runs::repo::testing::wait_until_executable;
-use crate::runs::repo::PINNED;
+use crate::env::RunEnv;
+use crate::repo::testing::wait_until_executable;
+use crate::repo::PINNED;
 
 /// A `git` and a `gh` that log their arguments and the variables that matter, and make folders instead of cloning.
 /// `FAKE_CLONE` says what a clone does: `ok`, `auth` (fails like a missing credential, leaving a half-made folder),
@@ -95,7 +95,7 @@ impl Rig {
             ("FAKE_LS", ls.into()),
             ("GH_TOKEN", "from-the-persons-shell".into()),
         ]);
-        Git::new(Arc::new(env))
+        Git::new(Arc::new(env)).with_read_limit(crate::repo::testing::READ_LIMIT)
     }
 }
 
@@ -369,4 +369,35 @@ async fn two_holders_of_one_repositorys_file_lock_take_turns() {
     drop(first);
     second.await.unwrap().unwrap();
     assert!(agents_root(&rig.home).join(".locks/acme__webshop").is_file());
+}
+
+#[test]
+fn only_a_folder_strictly_inside_the_root_is_contained() {
+    let rig = Rig::new("contained");
+    let root = rig.dir.join("agents");
+    let inside = root.join("acme/webshop");
+    std::fs::create_dir_all(&inside).unwrap();
+    let outside = rig.dir.join("elsewhere");
+    std::fs::create_dir_all(&outside).unwrap();
+    let sibling = rig.dir.join("agents-evil");
+    std::fs::create_dir_all(&sibling).unwrap();
+
+    assert_eq!(contained(&root, &inside), Some(inside.canonicalize().unwrap()));
+    assert_eq!(contained(&root, &root), None, "the root itself is not removable");
+    assert_eq!(contained(&root, &outside), None);
+    assert_eq!(contained(&root, &root.join("acme/../../elsewhere")), None, "a .. that climbs out");
+    assert_eq!(contained(&root, &root.join("missing")), None);
+    assert_eq!(contained(&rig.dir.join("no-root"), &inside), None);
+    assert_eq!(contained(&root, &sibling), None, "a name that only starts the same");
+}
+
+#[test]
+fn a_symlink_inside_the_root_that_points_out_is_not_contained() {
+    let rig = Rig::new("contained-link");
+    let root = rig.dir.join("agents");
+    let outside = rig.dir.join("precious");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+    assert_eq!(contained(&root, &root.join("link")), None);
 }

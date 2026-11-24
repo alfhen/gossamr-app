@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 aho-corasick = "1.1.5"
+dirs = "7.0.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 getrandom = "0.4.3"
 hmac = "0.12.1"
@@ -20,8 +21,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10.9"
 subtle = "2.6.1"
-tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[features]
+# Test helpers for crates that use these modules: a fake git and constructors of test values. It adds items only.
+testing = []
 
 [dev-dependencies]
 tempfile = "3.27.0"

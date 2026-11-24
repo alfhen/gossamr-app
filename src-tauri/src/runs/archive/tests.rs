@@ -82,38 +82,6 @@ fn an_archived_run_is_not_selected_again() {
     assert!(ids(&[archived], &filter(None, &OVER)).is_empty());
 }
 
-#[test]
-fn only_a_folder_strictly_inside_the_root_is_contained() {
-    let dir = Scratch::new("contained");
-    let root = dir.0.join("agents");
-    let inside = root.join("acme/webshop");
-    std::fs::create_dir_all(&inside).unwrap();
-    let outside = dir.0.join("elsewhere");
-    std::fs::create_dir_all(&outside).unwrap();
-    let sibling = dir.0.join("agents-evil");
-    std::fs::create_dir_all(&sibling).unwrap();
-
-    assert_eq!(contained(&root, &inside), Some(inside.canonicalize().unwrap()));
-    assert_eq!(contained(&root, &root), None, "the root itself is not removable");
-    assert_eq!(contained(&root, &outside), None);
-    assert_eq!(contained(&root, &root.join("acme/../../elsewhere")), None, "a .. that climbs out");
-    assert_eq!(contained(&root, &root.join("missing")), None);
-    assert_eq!(contained(&dir.0.join("no-root"), &inside), None);
-    assert_eq!(contained(&root, &sibling), None, "a name that only starts the same");
-}
-
-#[cfg(unix)]
-#[test]
-fn a_symlink_inside_the_root_that_points_out_is_not_contained() {
-    let dir = Scratch::new("symlink");
-    let root = dir.0.join("agents");
-    let outside = dir.0.join("precious");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::create_dir_all(&outside).unwrap();
-    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
-    assert_eq!(contained(&root, &root.join("link")), None);
-}
-
 fn one(run: &Run) -> Vec<String> {
     vec![run.id.clone()]
 }

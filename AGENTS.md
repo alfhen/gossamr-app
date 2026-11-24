@@ -24,7 +24,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/db/` | SQLite: a cache file per connection, and `app.sqlite` for drafts, runs, workstreams and Pip's conversations. `db/schema.rs` holds the migrations |
 | `src-tauri/src/tracker/`, `codehost/`, `auth/` | Jira, GitHub and their sign-in |
 | `src-tauri/src/probe.rs`, `inbox/probes.rs` | What each connection instance says about itself (`gh`, Jira's `/myself`), and when it is asked |
-| `src-tauri/src/connections.rs`, `provider_probe.rs` | The connection instances kept in `config.json`, and what a provider's CLI says about its login (`claude auth status`) |
+| `src-tauri/src/connections.rs` | The connection instances kept in `config.json`. What a provider's CLI says about its login (`claude auth status`) is `provider_probe.rs` in the harness |
 | `src-tauri/src/model_choice.rs` | Which login and model a piece of work runs on, and the Settings defaults for Pip and new agents |
 | `src-tauri/src/claude/` | Pip's turns (`claude -p`) |
 | `src-tauri/src/agent/` | The gossamr MCP server: Pip's tools and the agents' tools |
@@ -32,7 +32,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/runs/backend.rs`, `runs/backend/` | The `RunBackend` trait (launch, preflight, watching runs, finding a run's session, reading its final answer so far, and every action on a session: answer, message, stop, resume, clean up, attach, sign-in and trust) and `ClaudeBackend`, which wraps `ClaudeCli`. `Toolchain` holds the backend; the service and the tracker call it instead of the CLI for those, and `Toolchain` no longer holds the CLI. A backend states what it can do with plain methods (`resumes_with_tools`, `trust_file`), never by its driver |
 | `src-tauri/src/runs/codex/` | `CodexBackend`: launches `codex exec` in a worktree of the clone, keeps the run folder `<data dir>/agents/runs/<run id>` (events, stderr, final answer, process file, `short-id`) and finds the process again by pid. It also answers, messages, stops, attaches and cleans up a run. The folder goes with the worktree and in the sweep |
 | `src-tauri/src/inbox/` | Draft storage and approval, prose run outcomes, workstreams |
-| `crates/harness/` | The agent harness ([proposal](docs/harness-proposal.md)): a program beside the app that will run agent sessions. It depends on neither Tauri nor the app, and builds on Linux |
+| `crates/harness/` | The agent harness ([proposal](docs/harness-proposal.md)): a program beside the app that will run agent sessions. It depends on neither Tauri nor the app, and builds on Linux. It also holds what the app's runs use for clones, git, the shell environment and provider logins (`repo.rs`, `fresh.rs`, `env.rs`, `provider_env.rs`, `provider_folder.rs`, `provider_probe.rs`, `binary.rs`); the app reaches them as `runs::repo` and so on. Its `testing` feature gives the app's tests the fake git and `fake_cli` |
 | `src/backend/` | The `Backend` interface (`types.ts`), the desktop one (`jira.ts`) and the in-browser mock (`mock*.ts`) |
 | `src/workspace/` | The workspace UI: Inbox, Board and List, Work, peek, Pip pane, review draft hunks |
 | `src/lib/` | Pure front-end logic |
