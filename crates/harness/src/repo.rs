@@ -55,6 +55,8 @@ pub struct CommitIdentity {
     pub signing_key: Option<String>,
 }
 
+const REPO_VARIABLES: [&str; 5] = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"];
+
 /// Switches off what a repository's own config could use to run a program, on every call Gossamr makes in a clone.
 pub const PINNED: [&str; 6] = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never"];
 
@@ -66,8 +68,18 @@ pub struct Git {
 }
 
 impl Git {
+    /// The variables that point git at another repository than the `-C` folder are dropped: one exported in the
+    /// person's shell would make every call read or change that repository instead.
     pub fn new(env: Arc<RunEnv>) -> Self {
         let program = find_in_path(&env, "git").unwrap_or_else(|| PathBuf::from("/usr/bin/git"));
+        let env = match REPO_VARIABLES.iter().any(|name| env.get(name).is_some()) {
+            true => {
+                let mut own = (*env).clone();
+                REPO_VARIABLES.iter().for_each(|name| own.remove(name));
+                Arc::new(own)
+            }
+            false => env,
+        };
         Self { program, env, read_limit: GIT_TIMEOUT }
     }
 
@@ -77,7 +89,7 @@ impl Git {
     }
 
     /// Trimmed stdout, or `None` when git fails, times out or can't start.
-    async fn out(&self, dir: &Path, args: &[&str]) -> Option<String> {
+    pub(crate) async fn out(&self, dir: &Path, args: &[&str]) -> Option<String> {
         self.out_or_why(dir, args).await.ok()
     }
 
@@ -199,26 +211,33 @@ impl Git {
         Ok(!found.trim().is_empty())
     }
 
-    /// Whether `git branch -d` would take the branch, asked before the worktree goes so a refusal leaves both in place.
-    /// Like `-d`, a branch counts as merged when it is in its upstream, or in HEAD when it has none.
-    pub async fn check_branch_deletable(&self, clone: &Path, branch: &str) -> Result<(), String> {
+    /// Where every commit of `branch` is kept besides the branch itself, asked before the worktree goes so a refusal
+    /// leaves both in place: its upstream, its namesake on origin (a push without `-u`), or `origin/<base>`, which it
+    /// started from or was merged into. None when the branch isn't there; a refusal when no such place holds it all.
+    pub async fn check_branch_deletable(&self, clone: &Path, branch: &str, base: &str) -> Result<Option<String>, String> {
         if !self.branch_exists(clone, branch).await? {
-            return Ok(());
+            return Ok(None);
         }
         let local = format!("refs/heads/{branch}");
-        let upstream = format!("{local}@{{upstream}}");
-        let into = if self.out(clone, &["rev-parse", "--verify", "--quiet", &upstream]).await.is_some() { upstream } else { "HEAD".to_owned() };
-        match self.out_or_why(clone, &["merge-base", "--is-ancestor", &local, &into]).await {
-            Ok(_) => Ok(()),
-            Err(_) => Err(format!("git: the branch '{branch}' is not fully merged")),
+        let upstream = self.out(clone, &["rev-parse", "--verify", "--quiet", "--symbolic-full-name", &format!("{branch}@{{upstream}}")]).await;
+        for into in upstream.into_iter().chain([format!("refs/remotes/origin/{branch}"), format!("refs/remotes/origin/{base}")]) {
+            let there = self.out(clone, &["rev-parse", "--verify", "--quiet", &into]).await.is_some();
+            if there && self.out_or_why(clone, &["merge-base", "--is-ancestor", &local, &into]).await.is_ok() {
+                return Ok(Some(into));
+            }
         }
+        Err(format!("git: the branch '{branch}' is not fully merged"))
     }
 
-    /// `git branch -d`, never `-D`: git keeps a branch with commits that are neither merged nor on its upstream.
-    /// A branch that isn't there counts as removed.
-    pub async fn delete_branch(&self, clone: &Path, branch: &str) -> Result<(), String> {
+    /// `git branch -d`, never `-D`, once its upstream is `kept_in`, the place `check_branch_deletable` found: git then
+    /// checks again that nothing on the branch is lost. A branch that isn't there counts as removed.
+    pub async fn delete_branch(&self, clone: &Path, branch: &str, kept_in: Option<&str>) -> Result<(), String> {
         if !self.branch_exists(clone, branch).await? {
             return Ok(());
+        }
+        if let Some(kept_in) = kept_in {
+            let upstream = format!("--set-upstream-to={kept_in}");
+            self.out_or_why_within(clone, &["branch", &upstream, "--", branch], GIT_WRITE_TIMEOUT).await?;
         }
         self.out_or_why_within(clone, &["branch", "-d", "--", branch], GIT_WRITE_TIMEOUT).await.map(drop)
     }
@@ -307,13 +326,15 @@ pub struct Worktree<'a> {
     pub clone: &'a Path,
     pub path: &'a Path,
     pub branch: &'a str,
+    /// The remote branch it started from.
+    pub base: &'a str,
 }
 
 /// Removes a worktree and its branch through git alone. Anything git refuses stays, in git's own words, as `Ok(Some)`.
 /// The clone and the worktree must lie in `~/Gossamr/agents`; otherwise the refusal is the `Err`.
 pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<'_>) -> Result<Option<String>, String> {
     let home = home.ok_or("Gossamr doesn't know your home folder.")?;
-    let Worktree { repo, clone, path: expected, branch } = worktree;
+    let Worktree { repo, clone, path: expected, branch, base } = worktree;
     let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, repo, clone);
     if !in_work_folder {
         return Err("Its clone isn't in ~/Gossamr/agents, so Gossamr leaves it where it is.".into());
@@ -328,13 +349,14 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<
         }
         missing
     };
-    if let Err(message) = git.check_branch_deletable(clone, branch).await {
-        return Ok(Some(message));
-    }
+    let kept_in = match git.check_branch_deletable(clone, branch, base).await {
+        Ok(kept_in) => kept_in,
+        Err(message) => return Ok(Some(message)),
+    };
     if let Err(message) = git.remove_worktree(clone, &worktree).await {
         return Ok(Some(message));
     }
-    Ok(git.delete_branch(clone, branch).await.err())
+    Ok(git.delete_branch(clone, branch, kept_in.as_deref()).await.err())
 }
 
 /// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`.
@@ -450,9 +472,11 @@ case "$*" in
   "worktree prune") ;;
   "worktree remove -- "*) [ ! -f "$dir/.fake-worktree-dirty" ] || { echo "fatal: '$4' contains modified or untracked files, use --force to delete it" >&2; exit 128; }; rm -rf "$4" ;;
   "branch --list --format=%(refname:short) -- "*) cat "$dir/.fake-branches" 2>/dev/null | grep -Fx -- "$5"; true ;;
+  "rev-parse --verify --quiet refs/remotes/origin/"*) echo abc ;;
   "rev-parse --verify --quiet "*) exit 1 ;;
   "merge-base --is-ancestor "*) [ ! -f "$dir/.fake-branch-unmerged" ] || exit 1 ;;
   "branch -d -- "*) [ ! -f "$dir/.fake-branch-unmerged" ] || { echo "error: the branch '$4' is not fully merged." >&2; exit 1; } ;;
+  "branch --set-upstream-to="*) ;;
   *) echo "unexpected git call: $*" >&2; exit 99 ;;
 esac
 "#;
@@ -710,7 +734,7 @@ mod tests {
         let path = agents_root(&home).join("acme/webshop-w1");
         std::fs::create_dir_all(&path).unwrap();
         std::fs::write(clone.join(".fake-branches"), "worktree-w1\n").unwrap();
-        let worktree = Worktree { repo: "acme/webshop", clone: &clone, path: &path, branch: "worktree-w1" };
+        let worktree = Worktree { repo: "acme/webshop", clone: &clone, path: &path, branch: "worktree-w1", base: "main" };
 
         std::fs::write(clone.join(".fake-branch-unmerged"), "").unwrap();
         let kept = remove_with_git(&git, Some(&home), worktree).await.unwrap();
@@ -729,6 +753,23 @@ mod tests {
         let log = std::fs::read_to_string(dir.join("git.log")).unwrap();
         let forced: Vec<&str> = log.split_whitespace().filter(|word| ["--force", "-f", "-D"].contains(word)).collect();
         assert!(forced.is_empty(), "git was told {forced:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_git_dir_in_the_shell_never_points_git_at_another_repository() {
+        let dir = scratch("git-dir");
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let clone = dir.join("clone");
+        init(&clone);
+        let set = std::process::Command::new("git").arg("-C").arg(&clone).args(["remote", "add", "origin", "https://github.com/acme/webshop.git"]).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").status().unwrap();
+        assert!(set.success());
+        let mut env = (*git_in(&home).env).clone();
+        env.set("GIT_DIR", dir.join("elsewhere.git").into_os_string());
+        env.set("GIT_WORK_TREE", dir.join("elsewhere").into_os_string());
+        let git = Git::new(Arc::new(env));
+        assert_eq!(git.origin(&clone).await.as_deref(), Some("https://github.com/acme/webshop.git"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -106,7 +106,7 @@ pub fn describe(problem: &str, has_folder: bool) -> String {
     }
 }
 
-const DRIVERS: [Provider; 2] = [Provider::Claude, Provider::Codex];
+const DRIVERS: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Gemini];
 
 /// The folders the CLI uses when it is not told one, which only the instance without a folder may have. Without the
 /// shell its `CODEX_HOME` is unknown, so `~/.codex` is refused rather than risk the login the CLI would use.
@@ -116,7 +116,7 @@ fn usual_folders(driver: Provider, home: &Path, shell: Option<&RunEnv>) -> Vec<P
         (Provider::Claude, shell_folder) => [home.join(".claude")].into_iter().chain(shell_folder).collect(),
         (Provider::Codex, Some(shell_folder)) => vec![shell_folder],
         (Provider::Codex, None) => vec![home.join(".codex")],
-        (Provider::Gemini, _) => Vec::new(),
+        (Provider::Gemini, _) => vec![home.join(".gemini")],
     }
 }
 
@@ -342,6 +342,15 @@ mod tests {
         std::fs::create_dir_all(rig.home.join(".gemini-work")).unwrap();
         assert_eq!(rig.problem(Provider::Gemini, "~/.gemini-work").as_deref(), Some("Gemini has one login, your usual setup, and no folder of its own."));
         assert!(problems(&[provider("g", Provider::Gemini, None)], &rig.places(), None).is_empty());
+    }
+
+    #[test]
+    fn geminis_usual_folder_is_no_login_of_claude_or_codex() {
+        let rig = Rig::new("gemini-owned");
+        std::fs::create_dir_all(rig.home.join(".gemini/antigravity-cli")).unwrap();
+        for (driver, folder) in [(Provider::Claude, "~/.gemini"), (Provider::Codex, "~/.gemini"), (Provider::Claude, "~/.GEMINI")] {
+            assert_eq!(rig.problem(driver, folder).as_deref(), Some("That's the usual folder of Gemini. Choose another folder."), "{driver:?} {folder}");
+        }
     }
 
     #[test]

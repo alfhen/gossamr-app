@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use crate::binary::CliPlaces;
 use crate::env::{RunEnv, capture};
 use crate::error::{Error, Result};
-use crate::fresh::{ensure_clone, lock_repo, real, remote_default_branch, remove_stale_temps, valid_repo};
+use crate::fresh::{Fetched, agents_root, ensure_clone, lock_repo, real, remote_default_branch, remove_stale_temps, valid_repo};
 use crate::provider::{Login, Provider};
 use crate::provider_env::{ProviderState, states};
 use crate::provider_folder::{Places, expand};
@@ -98,12 +98,31 @@ impl Setup {
         Git::new(Arc::new(self.base()))
     }
 
+    fn clone_refused(&self, e: crate::fresh::CloneError) -> Error {
+        Error::Refused(self.masked(&e.to_string()))
+    }
+
+    /// `text` with the home folder written `~`, so a refusal names the rule and not the person's paths.
+    pub fn masked(&self, text: &str) -> String {
+        match &self.home {
+            Some(home) => text.replace(&*home.to_string_lossy(), "~"),
+            None => text.to_owned(),
+        }
+    }
+
     /// The agent's whole environment for `provider` on `login`, a login folder as typed. A provider of the table
     /// follows `provider_env`: a folder sets its variable and removes every other login variable, and no folder takes
-    /// the shell's own, which has to have been captured. The folder's rules are `provider_folder`'s, and it must
+    /// the shell's own. The folder's rules are `provider_folder`'s; the work root is refused too, and the folder must
     /// already exist: the harness never makes a login folder. A provider outside the table has no logins.
+    ///
+    /// With a shell to capture (`serve`), nothing starts before a capture has worked, an open or a resume alike: each
+    /// client's connection captures the shell, and its `open` waits for that. A resume, which H6's drivers bring, waits
+    /// the same way; until a capture has worked it is refused, never run in the harness's own environment.
     pub fn agent_env(&self, provider: &str, login: Option<&str>) -> Result<RunEnv> {
         let refused = |why: String| Error::Refused(format!("this login can't be used: {why}"));
+        if self.shell_program.is_some() && self.shell().is_none() {
+            return Err(Error::Refused("the shell's environment hasn't been read yet, so no agent starts: connect a client, or fix the shell's startup files".into()));
+        }
         let Some(row) = Provider::named(provider) else {
             return match login {
                 Some(_) => Err(refused(format!("{provider} has no logins"))),
@@ -119,39 +138,52 @@ impl Setup {
             ProviderState::Unavailable(why) => return Err(refused(why.message().into())),
             ProviderState::Off => unreachable!("a login asked for at open is on"),
         };
-        if let (Some(typed), Some(home)) = (login, self.home.as_deref())
-            && !expand(typed, home).is_dir()
-        {
-            return Err(refused("the folder isn't there, and the harness never makes a login folder".into()));
+        if let (Some(typed), Some(home)) = (login, self.home.as_deref()) {
+            let folder = expand(typed, home);
+            if real(&folder).starts_with(real(&agents_root(home))) {
+                return Err(refused("it is inside the harness's work root, where the clones are".into()));
+            }
+            if !folder.is_dir() {
+                return Err(refused("the folder isn't there, and the harness never makes a login folder".into()));
+            }
         }
         Ok(env.over(&self.base()))
     }
 
     /// Clones `repo` into the work root, or fetches the clone there, and adds a worktree on the new `branch` from
     /// `origin/<base>`, the remote's default branch when `base` is None. Nothing is forced, and a folder or branch
-    /// that is already there is refused (`Git::add_worktree`).
-    pub async fn prepare(&self, repo: &str, base: Option<&str>, branch: &str) -> Result<(Work, PathBuf)> {
+    /// that is already there is refused (`Git::add_worktree`). With the work, a note for the session when the fetch
+    /// did not happen, so it starts from what was fetched before.
+    pub async fn prepare(&self, repo: &str, base: Option<&str>, branch: &str) -> Result<(Work, PathBuf, Option<String>)> {
         let home = self.home.as_deref().ok_or_else(|| Error::Refused("the harness doesn't know the home folder, so it has no work root".into()))?;
         let git = self.git();
-        let failed = |e: crate::fresh::CloneError| Error::Refused(e.to_string());
-        let _lock = lock_repo(home, repo).await.map_err(failed)?;
-        remove_stale_temps(home, repo);
-        let clone = ensure_clone(&git, home, repo, true).await.map_err(failed)?.path;
+        let _lock = lock_repo(home, repo).await.map_err(|e| self.clone_refused(e))?;
+        remove_stale_temps(&git, home, repo).await;
+        let ensured = ensure_clone(&git, home, repo, true).await.map_err(|e| self.clone_refused(e))?;
+        let note = match ensured.fetched {
+            Some(Fetched::Not(why)) => Some(self.masked(&format!("The harness couldn't update its clone of {repo}, so this session starts from what was fetched before: {why}"))),
+            _ => None,
+        };
+        let clone = ensured.path;
         let base = match base {
             Some(base) => base.to_owned(),
             None => match git.default_branch(&clone).await {
                 Some(base) => base,
-                None => remote_default_branch(&git, repo).await.map_err(failed)?,
+                None => remote_default_branch(&git, repo).await.map_err(|e| self.clone_refused(e))?,
             },
         };
         check_ref("base", &base)?;
         let worktree = worktree_path(&clone, branch)?;
+        // The worktrees folder can be a link that leads out, as the owner folder can (`make_parent`).
+        if !worktree.parent().is_some_and(|folder| real(folder).starts_with(real(&agents_root(home)))) {
+            return Err(Error::Refused(format!("the worktrees folder of {repo} leads out of the work root, so no worktree is made there")));
+        }
         // `add_worktree` takes back an untouched worktree of an earlier try; a session never shares one.
         if worktree.symlink_metadata().is_ok() || git.branch_exists(&clone, branch).await.map_err(Error::Refused)? {
             return Err(Error::Refused(format!("the branch {branch} or its worktree is already there")));
         }
-        git.add_worktree(&clone, &worktree, branch, &format!("origin/{base}")).await.map_err(|e| Error::Refused(format!("the worktree can't be made: {e}")))?;
-        Ok((Work { repo: repo.to_owned(), base, branch: branch.to_owned(), clone }, worktree))
+        git.add_worktree(&clone, &worktree, branch, &format!("origin/{base}")).await.map_err(|e| Error::Refused(self.masked(&format!("the worktree can't be made: {e}"))))?;
+        Ok((Work { repo: repo.to_owned(), base, branch: branch.to_owned(), clone }, worktree, note))
     }
 
     /// Removes the worktree and branch of a start that never ran, while nothing was done in them.
@@ -162,20 +194,21 @@ impl Setup {
     /// Removes a session's worktree and branch through git alone, never forcing. What git refuses (changes not
     /// committed, commits not merged or pushed) stays, and is the refusal.
     pub async fn remove(&self, work: &Work, worktree: &Path) -> Result<()> {
-        let at = Worktree { repo: &work.repo, clone: &work.clone, path: worktree, branch: &work.branch };
+        let at = Worktree { repo: &work.repo, clone: &work.clone, path: worktree, branch: &work.branch, base: &work.base };
         match remove_with_git(&self.git(), self.home.as_deref(), at).await {
             Ok(None) => Ok(()),
-            Ok(Some(kept)) => Err(Error::Refused(format!("git keeps the worktree: {kept}"))),
-            Err(why) => Err(Error::Refused(why)),
+            Ok(Some(kept)) => Err(Error::Refused(self.masked(&format!("git keeps the worktree: {kept}")))),
+            Err(why) => Err(Error::Refused(self.masked(&why))),
         }
     }
 }
 
-/// Worktrees of `<owner>/<repo>` go in `<owner>/<repo>.worktrees/<branch>`, beside the clone and inside the work root.
+/// Worktrees of `<owner>/<repo>` go in `<owner>/<repo>+worktrees/<branch>`, beside the clone and inside the work root.
+/// `+` is a character `valid_repo` refuses, so no repository's clone can be that folder.
 fn worktree_path(clone: &Path, branch: &str) -> Result<PathBuf> {
     let name = clone.file_name().ok_or_else(|| Error::Refused("the clone has no folder name".into()))?;
     let mut folder = OsString::from(name);
-    folder.push(".worktrees");
+    folder.push("+worktrees");
     Ok(real(&clone.with_file_name(folder)).join(branch))
 }
 
@@ -250,7 +283,7 @@ mod tests {
         let clone = dir.path().join("acme/webshop");
         std::fs::create_dir_all(&clone).unwrap();
         let path = worktree_path(&clone, "harness-1").unwrap();
-        assert!(path.ends_with("acme/webshop.worktrees/harness-1"));
+        assert!(path.ends_with("acme/webshop+worktrees/harness-1"));
         assert!(path.starts_with(dir.path().canonicalize().unwrap()));
     }
 }

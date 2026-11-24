@@ -41,7 +41,7 @@ finish() {
   after="$(snapshot)"
   if [ "$after" != "$before" ]; then
     echo "LOGIN CONFIG CHANGED:" >&2
-    diff <(echo "$before") <(echo "$after") | mask >&2
+    diff <(echo "$before") <(echo "$after") | mask >&2 || true
     exit 9
   fi
   echo "login config unchanged ($(wc -l <<<"$before" | tr -d ' ') files checked)"

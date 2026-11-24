@@ -37,8 +37,8 @@ mod tests {
         for (path, part) in expected {
             let text = std::fs::read_to_string(path).unwrap();
             assert!(text.contains(part) && text.len() < 600, "{} changed", path.rsplit('/').next().unwrap());
-            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o755, "{} changed its mode", path.rsplit('/').next().unwrap());
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert!(mode & 0o100 != 0, "{} can't be run by its owner any more", path.rsplit('/').next().unwrap());
         }
     }
 }

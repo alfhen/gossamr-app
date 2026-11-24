@@ -57,7 +57,7 @@ CI runs these on every pull request. Run them before you push:
 ```bash
 pnpm typecheck && pnpm test && pnpm build
 mkdir -p dist && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
-cargo check -p gossamr --release
+cargo check -p gossamr --release && cargo build -p harness --release
 pnpm e2e
 ```
 
