@@ -1,0 +1,12 @@
+started
+prompted 222
+turn_started
+permission permissions permissions
+answered allow
+tool_call command 0
+tool_result 0 ok
+permission permissions permissions
+answered deny
+text 208
+turn_ended done
+closed

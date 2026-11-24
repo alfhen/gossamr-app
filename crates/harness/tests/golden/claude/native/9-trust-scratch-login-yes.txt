@@ -1,0 +1,6 @@
+started
+prompted 9
+turn_started
+text 33
+failed provider Not logged in · Please run /login
+closed

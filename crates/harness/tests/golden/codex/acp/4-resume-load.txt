@@ -1,0 +1,12 @@
+started
+turn_started
+text 172
+turn_ended done
+prompted 115
+turn_started
+text 32
+tool_call exec_command 0
+tool_result 0 error
+text 190
+turn_ended done
+closed

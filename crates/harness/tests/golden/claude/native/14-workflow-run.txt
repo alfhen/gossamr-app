@@ -1,0 +1,15 @@
+started
+prompted 188
+turn_started
+tool_call Skill 0
+tool_result 0 ok
+tool_call Workflow 1
+permission tool Workflow
+answered allow
+tool_result 1 ok
+text 234
+turn_ended done
+turn_started
+text 103
+turn_ended done
+closed

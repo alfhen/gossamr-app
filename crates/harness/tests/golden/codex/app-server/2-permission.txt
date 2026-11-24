@@ -1,0 +1,19 @@
+started
+prompted 180
+turn_started
+text 80
+tool_call command 0
+permission command command
+answered allow
+tool_result 0 ok
+tool_call command 1
+permission command command
+answered deny
+tool_result 1 error
+tool_call command 2
+permission command command
+answered allow
+tool_result 2 ok
+text 170
+turn_ended done
+closed

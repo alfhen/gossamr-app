@@ -1,0 +1,14 @@
+started
+prompted 209
+turn_started
+tool_call file_change 0
+permission file_change file_change
+answered allow
+tool_result 0 ok
+tool_call file_change 1
+permission file_change file_change
+answered deny
+tool_result 1 error
+text 121
+turn_ended done
+closed

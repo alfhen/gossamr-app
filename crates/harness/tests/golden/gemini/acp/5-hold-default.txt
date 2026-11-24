@@ -1,0 +1,10 @@
+started
+prompted 163
+turn_started
+tool_call mcp_spike_hold 0
+permission tool mcp_spike_hold
+answered allow
+tool_result 0 error
+text 178
+turn_ended done
+closed

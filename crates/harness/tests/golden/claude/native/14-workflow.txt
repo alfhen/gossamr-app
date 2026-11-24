@@ -1,0 +1,8 @@
+started
+prompted 264
+turn_started
+tool_call Skill 0
+tool_result 0 ok
+text 768
+turn_ended done
+closed

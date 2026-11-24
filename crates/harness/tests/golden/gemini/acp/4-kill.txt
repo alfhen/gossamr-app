@@ -1,0 +1,8 @@
+started
+prompted 102
+turn_started
+tool_call run_command 0
+permission command run_command
+answered allow
+failed agent_stopped the agent stopped in the middle of a turn
+closed

@@ -1,0 +1,10 @@
+started
+prompted 197
+turn_started
+tool_call command 0
+tool_result 0 ok
+tool_call spike/ping 1
+tool_result 1 ok
+text 62
+turn_ended done
+closed
