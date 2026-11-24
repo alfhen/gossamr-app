@@ -350,7 +350,7 @@ fn terminal_on_stdin_is_refused(flag: &[&str]) {
     assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
     let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
     let tmp = tempfile::tempdir().unwrap();
-    let mut child = Command::new(HARNESS)
+    let child = Command::new(HARNESS)
         .args(["sessions", "--data"])
         .arg(tmp.path())
         .args(flag)
@@ -359,16 +359,17 @@ fn terminal_on_stdin_is_refused(flag: &[&str]) {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let started = std::time::Instant::now();
-    let done = loop {
-        if let Some(done) = child.try_wait().unwrap() {
-            break done;
-        }
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{flag:?}: it waited for input");
-        std::thread::yield_now();
-    };
-    let out = child.wait_with_output().unwrap();
-    assert_eq!(done.code(), Some(1));
+    // Waited for without spinning, so a loaded machine starves the child no more than it must. One that waits for
+    // input never ends, so it is killed.
+    let pid = child.id() as libc::pid_t;
+    let (done, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait_with_output().unwrap()));
+    let out = output.recv_timeout(std::time::Duration::from_secs(60)).unwrap_or_else(|_| {
+        // SAFETY: kill has no preconditions; the waiting thread reaps the child.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("{flag:?}: it waited for input");
+    });
+    assert_eq!(out.status.code(), Some(1));
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");
 }
