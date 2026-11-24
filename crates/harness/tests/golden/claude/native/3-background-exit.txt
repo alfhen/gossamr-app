@@ -1,12 +1,12 @@
 started
 prompted 107
 turn_started
-tool_call Bash 0
-permission command Bash
+tool_call Bash 0 {command,description,run_in_background} 3
+permission command Bash {command,description,run_in_background} 3
 answered allow
-tool_result 0 ok
-tool_call Read 1
-tool_result 1 ok
+tool_result 0 ok {} 282
+tool_call Read 1 {file_path} 1
+tool_result 1 ok {} 28
 text 228
 turn_ended done
 closed

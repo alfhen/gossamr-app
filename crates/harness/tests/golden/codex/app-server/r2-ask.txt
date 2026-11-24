@@ -1,8 +1,8 @@
 started
 prompted 173
 turn_started
-tool_call spike/ask 0
-tool_result 0 ok
+tool_call spike/ask 0 {question} 1
+tool_result 0 ok {_meta,content,structuredContent} 3
 text 120
 turn_ended done
 prompted 53

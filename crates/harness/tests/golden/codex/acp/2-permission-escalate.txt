@@ -1,13 +1,13 @@
 started
 prompted 236
 turn_started
-tool_call tool 0
-permission command tool
+tool_call tool 0 {command,cwd,title} 3
+permission command tool {command,cwd,title} 3
 answered allow
-tool_result 0 ok
-tool_call tool 1
-permission command tool
+tool_result 0 ok {} 0
+tool_call tool 1 {command,cwd,title} 3
+permission command tool {command,cwd,title} 3
 answered deny
-tool_result 1 error
+tool_result 1 error {} 0
 turn_ended cancelled
 closed

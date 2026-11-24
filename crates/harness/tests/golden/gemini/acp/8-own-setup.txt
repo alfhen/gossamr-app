@@ -5,10 +5,10 @@ text 176
 turn_ended done
 prompted 44
 turn_started
-tool_call run_command 0
-permission command run_command
+tool_call run_command 0 {CommandLine,WaitMsBeforeAsync,toolSummary} 3
+permission command run_command {CommandLine,WaitMsBeforeAsync,toolSummary} 3
 answered allow
-tool_result 0 ok
+tool_result 0 ok {exit_code,output} 2
 text 65
 turn_ended done
 closed

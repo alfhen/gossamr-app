@@ -1,8 +1,8 @@
 started
 prompted 140
 turn_started
-tool_call Bash 0
-tool_result 0 error
+tool_call Bash 0 {} 0
+tool_result 0 error {} 822
 turn_ended cancelled
 prompted 33
 turn_started

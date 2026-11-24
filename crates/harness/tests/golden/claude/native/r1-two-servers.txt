@@ -1,14 +1,14 @@
 started
 prompted 121
 turn_started
-tool_call ToolSearch 0
-tool_result 0 ok
-tool_call mcp__spk0f0949ae__ping 1
-tool_result 1 ok
-tool_call mcp__spkx1be8eb2a__ping 2
-permission tool mcp__spkx1be8eb2a__ping
+tool_call ToolSearch 0 {max_results,query} 2
+tool_result 0 ok {} 2
+tool_call mcp__spk0f0949ae__ping 1 {} 0
+tool_result 1 ok {} 1
+tool_call mcp__spkx1be8eb2a__ping 2 {} 0
+permission tool mcp__spkx1be8eb2a__ping {} 0
 answered allow
-tool_result 2 ok
+tool_result 2 ok {} 1
 text 81
 turn_ended done
 closed

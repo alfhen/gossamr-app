@@ -1,8 +1,8 @@
 started
 prompted 37
 turn_started
-tool_call Read 0
-tool_result 0 error
+tool_call Read 0 {} 0
+tool_result 0 error {} 134
 text 261
 turn_ended done
 prompted 65

@@ -1,18 +1,18 @@
 started
 prompted 173
 turn_started
-tool_call ToolSearch 0
-tool_result 0 ok
-tool_call mcp__spike__ask 1
-tool_result 1 ok
+tool_call ToolSearch 0 {max_results,query} 2
+tool_result 0 ok {} 1
+tool_call mcp__spike__ask 1 {question} 1
+tool_result 1 ok {} 1
 text 180
 turn_ended done
 prompted 53
 turn_started
-tool_call Write 2
-permission file_change Write
+tool_call Write 2 {content,file_path} 2
+permission file_change Write {content,file_path} 2
 answered allow
-tool_result 2 ok
+tool_result 2 ok {} 135
 text 71
 turn_ended done
 closed

@@ -2,8 +2,8 @@ started
 prompted 128
 turn_started
 text 87
-tool_call spike/hold 0
-tool_result 0 ok
+tool_call spike/hold 0 {seconds} 1
+tool_result 0 ok {_meta,content,structuredContent} 3
 text 61
 turn_ended done
 closed

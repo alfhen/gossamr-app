@@ -1,12 +1,12 @@
 started
 prompted 188
 turn_started
-tool_call Skill 0
-tool_result 0 ok
-tool_call Workflow 1
-permission tool Workflow
+tool_call Skill 0 {skill} 1
+tool_result 0 ok {} 35
+tool_call Workflow 1 {script} 1
+permission tool Workflow {script} 1
 answered allow
-tool_result 1 ok
+tool_result 1 ok {} 1308
 text 234
 turn_ended done
 turn_started

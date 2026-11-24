@@ -1,12 +1,12 @@
 started
 prompted 191
 turn_started
-tool_call ToolSearch 0
-tool_result 0 ok
-tool_call mcp__spike__ping 1
-tool_result 1 ok
-tool_call Bash 2
-permission command Bash
+tool_call ToolSearch 0 {max_results,query} 2
+tool_result 0 ok {} 1
+tool_call mcp__spike__ping 1 {} 0
+tool_result 1 ok {} 1
+tool_call Bash 2 {command,description,timeout} 3
+permission command Bash {command,description,timeout} 3
 answered allow
 failed agent_stopped the agent stopped in the middle of a turn
 closed

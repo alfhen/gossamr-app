@@ -1,14 +1,14 @@
 started
 prompted 209
 turn_started
-tool_call file_change 0
-permission file_change file_change
+tool_call file_change 0 {changes} 1
+permission file_change file_change {grantRoot,reason} 2
 answered allow
-tool_result 0 ok
-tool_call file_change 1
-permission file_change file_change
+tool_result 0 ok {} 9
+tool_call file_change 1 {changes} 1
+permission file_change file_change {grantRoot,reason} 2
 answered deny
-tool_result 1 error
+tool_result 1 error {} 8
 text 121
 turn_ended done
 closed
