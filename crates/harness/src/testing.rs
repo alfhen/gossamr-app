@@ -22,3 +22,23 @@ pub fn fake_cli(path: &Path, body: &str) -> PathBuf {
     }
     path.to_path_buf()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A mode set or a write made through a fake's link changes these files for every fake, and git keeps the change.
+    #[test]
+    fn the_shared_fake_scripts_keep_their_content_and_mode() {
+        let expected = [
+            (super::RUN_BODY, "exec /bin/sh \"$0.body\" \"$@\"\n"),
+            (super::NODE_LAUNCHER, "#!/usr/bin/env node\n"),
+        ];
+        for (path, part) in expected {
+            let text = std::fs::read_to_string(path).unwrap();
+            assert!(text.contains(part) && text.len() < 600, "{} changed", path.rsplit('/').next().unwrap());
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755, "{} changed its mode", path.rsplit('/').next().unwrap());
+        }
+    }
+}

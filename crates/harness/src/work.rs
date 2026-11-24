@@ -62,6 +62,7 @@ impl Setup {
     }
 
     /// A capture that already holds `env`, as if the shell printed it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn with_shell_env(self, env: RunEnv) -> Setup {
         Setup { shell: Mutex::new(Some(Arc::new(env))), ..self }
     }

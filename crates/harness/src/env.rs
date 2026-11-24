@@ -159,6 +159,7 @@ impl ShellCapture {
     }
 
     /// A capture that already holds `env`, so a test never starts a shell.
+    #[cfg(any(test, feature = "testing"))]
     pub fn with_env(env: RunEnv) -> Self {
         let env = Arc::new(env);
         Self { shell: None, found: tokio::sync::Mutex::new(Some(env.clone())), fixed: Some(env) }

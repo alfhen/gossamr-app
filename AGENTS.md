@@ -57,10 +57,12 @@ CI runs these on every pull request. Run them before you push:
 ```bash
 pnpm typecheck && pnpm test && pnpm build
 mkdir -p dist && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+cargo check -p gossamr --release
 pnpm e2e
 ```
 
 - `cargo` needs `dist/` to exist, because `generate_context!` embeds the front end.
+- `cargo check -p gossamr --release` builds the app without its dev-dependencies, so app code that calls a test helper of the harness's `testing` feature fails there and nowhere else.
 - `pnpm e2e` starts its own Vite server and runs one worker on purpose, because the mock paces its answers on timers. A full run takes about 11 minutes. Set `E2E_PORT` to run beside another server, and pass `--shard=1/4` for a quarter of it.
 - The tests marked `#[ignore]` start the real `claude` CLI and need Claude Code installed and signed in: `cargo test -p gossamr -- --ignored`. They start real background sessions, so check that none are left afterwards.
 
