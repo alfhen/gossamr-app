@@ -153,6 +153,7 @@ struct Play {
     at: usize,
     run: u64,
     tokens: Vec<String>,
+    env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     received: Vec<Command>,
     replies: Vec<Result<Reply, String>>,
 }
@@ -174,6 +175,11 @@ impl Mock {
     /// Every command the agent with this provider session id received, in order.
     pub fn received(&self, provider_session: &str) -> Vec<Command> {
         self.plays().get(provider_session).map(|play| play.received.clone()).unwrap_or_default()
+    }
+
+    /// The environment of the agent's last start or resume.
+    pub fn env(&self, provider_session: &str) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+        self.plays().get(provider_session).map(|play| play.env.clone()).unwrap_or_default()
     }
 
     /// The tools tokens the agent was given, one per start or resume.
@@ -234,6 +240,7 @@ impl Driver for Mock {
                 let message = format!("the mock has no session {key}");
                 let play = plays.get_mut(&key).ok_or(OpenError { kind: FailKind::Provider, message })?;
                 play.tokens.push(token.clone());
+                play.env = launch.env.clone();
                 play.run += 1;
                 let run = play.run;
                 drop(plays);
@@ -243,7 +250,7 @@ impl Driver for Mock {
             }
             None => {
                 let key = format!("mock-{}", random_hex(8));
-                self.plays().insert(key.clone(), Play { tokens: vec![token.clone()], ..Play::default() });
+                self.plays().insert(key.clone(), Play { tokens: vec![token.clone()], env: launch.env.clone(), ..Play::default() });
                 (key, 0)
             }
         };
@@ -575,7 +582,7 @@ mod tests {
 
     fn launch(resume: Option<String>) -> Launch {
         let tools = Arc::new(Endpoint::unattached("t"));
-        Launch { cwd: "/".into(), locked: false, model: None, resume, tools_token: Secret::random(), tools }
+        Launch { cwd: "/".into(), locked: false, model: None, resume, tools_token: Secret::random(), tools, env: vec![] }
     }
 
     #[test]

@@ -8,6 +8,7 @@
 //! prompted turn then waits.
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,7 +22,7 @@ use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secr
 use crate::error::{Error, Result};
 use crate::event::{Body, Decision, Event, FailKind};
 use crate::redact;
-use crate::store::{Store, now_ms};
+use crate::store::{Listed, Store, now_ms};
 use crate::tools::{Endpoint, Reply, ToolCall};
 
 #[derive(Debug, Clone, Copy)]
@@ -176,10 +177,75 @@ impl Harness {
         self.inner.store().clean_up(id)
     }
 
+    /// The stored events after `after`. A read writes nothing.
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
+        Ok(self.events_page(id, after, usize::MAX)?.0)
+    }
+
+    /// The stored events after `after`, until their payload passes `budget` bytes, and whether more follow.
+    pub fn events_page(&self, id: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
         let store = self.inner.store();
-        store.sweep(now_ms())?;
-        store.events(id, after)
+        store.session(id)?;
+        store.events_page(id, after, budget)
+    }
+
+    /// The stored events after `after` and, while the session runs, a receiver of its events from the moment of the
+    /// read: both under the store's lock, which a session holds while it stores and sends an event, so an event is in
+    /// one or the other and never both.
+    /// The first page of them comes here, with whether more follow; the rest are for `events_page`.
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, Option<broadcast::Receiver<Event>>)> {
+        let live = self.inner.live();
+        let store = self.inner.store();
+        store.session(id)?;
+        let receiver = live.get(id).map(|live| live.events.subscribe());
+        let (page, more) = store.events_page(id, after, crate::api::PAGE_BYTES)?;
+        Ok((page, more, receiver))
+    }
+
+    /// Drops payload past 30 days; see `Store::sweep`.
+    pub fn sweep(&self) -> Result<usize> {
+        self.inner.store().sweep(now_ms())
+    }
+
+    /// Sweeps every `every`, the first one `every` from now. `swept` counts the sweeps.
+    pub fn sweep_on_timer(&self, every: Duration) -> (tokio::task::JoinHandle<()>, tokio::sync::watch::Receiver<u64>) {
+        let (count, swept) = tokio::sync::watch::channel(0);
+        let harness = self.clone();
+        let task = tokio::spawn(async move {
+            let mut timer = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+            loop {
+                timer.tick().await;
+                if let Err(e) = harness.sweep() {
+                    eprintln!("harness: the sweep failed: {e}");
+                }
+                count.send_modify(|n| *n += 1);
+            }
+        });
+        (task, swept)
+    }
+
+    pub fn sessions(&self) -> Result<Vec<Listed>> {
+        let live = self.inner.live();
+        let mut listed = self.inner.store().sessions()?;
+        for session in &mut listed {
+            session.running = live.contains_key(&session.id);
+        }
+        Ok(listed)
+    }
+
+    /// The providers, by name, with what each can do.
+    pub fn providers(&self) -> Vec<(String, Capabilities)> {
+        let mut providers: Vec<_> = self.inner.drivers.iter().map(|(name, driver)| (name.clone(), driver.capabilities())).collect();
+        providers.sort_by(|a, b| a.0.cmp(&b.0));
+        providers
+    }
+
+    pub fn client_tokens(&self) -> Result<Vec<[u8; 32]>> {
+        self.inner.store().client_tokens()
+    }
+
+    pub fn add_client_token(&self, stored_key: &[u8; 32]) -> Result<()> {
+        self.inner.store().add_client_token(stored_key)
     }
 
     pub fn subscribe(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
@@ -234,7 +300,7 @@ impl Harness {
         // Freed again if the driver fails to open, or panics.
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = Arc::new(Endpoint::new(token.expose(), calls));
-        let launch = Launch { cwd, locked, model, resume, tools_token: token, tools };
+        let launch = Launch { cwd, locked, model, resume, tools_token: token, tools, env: agent_env(std::env::vars_os()) };
         let caps = driver.capabilities();
         let link = driver.open(launch).map_err(|OpenError { kind, message }| {
             Error::Open { kind, message: redact::text(&message, &secrets) }
@@ -253,6 +319,11 @@ impl Harness {
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         Ok(receiver)
     }
+}
+
+/// The environment an agent gets: the harness's own, without a client token.
+pub fn agent_env(vars: impl Iterator<Item = (OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    vars.filter(|(name, _)| name != crate::cli::TOKEN_VARIABLE).collect()
 }
 
 /// What a start opens.
@@ -701,21 +772,27 @@ impl Task {
     fn emit(&self, body: Body) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
-                let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                let _ = self.events.send(Event { seq: 0, ms: now_ms(), body, cut: None });
             }
             return false;
         }
-        let body = redact::body(body, &self.secrets);
-        let stored = self.inner.store().append(&self.id, &body, now_ms());
-        match stored {
+        // Cut after redaction, so a secret cut in half is masked whole first.
+        let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
+        // Sent under the store's lock, as `watch` reads under it: a client's read and its live events never overlap,
+        // so a locked session's whole event is never taken for the withheld copy the read gave.
+        let store = self.inner.store();
+        match store.append_cut(&self.id, &body, now_ms(), cut) {
             Ok(event) => {
+                #[cfg(test)]
+                tests::before_publish();
                 let _ = self.events.send(event);
                 true
             }
             Err(e) => {
+                drop(store);
                 self.store_failed(&e);
                 if body == Body::Closed {
-                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+                    let _ = self.events.send(Event { seq: 0, ms: now_ms(), body, cut: None });
                 }
                 false
             }
@@ -728,7 +805,7 @@ impl Task {
         if !self.broken.swap(true, Ordering::Relaxed) {
             let reason = format!("the store could not keep this session's events, so it stops: {e}");
             let body = Body::Failed { kind: FailKind::Harness, reason };
-            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body });
+            let _ = self.events.send(Event { seq: 0, ms: now_ms(), body, cut: None });
         }
     }
 }
@@ -752,6 +829,16 @@ mod tests {
 
     /// Told once when a start is about to take the session's lock to reserve it.
     static BEFORE_RESERVE: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
+
+    /// Runs once, just after an event is stored and before it is sent.
+    static BEFORE_PUBLISH: Mutex<Option<Hook>> = Mutex::new(None);
+
+    pub(super) fn before_publish() {
+        let hook = BEFORE_PUBLISH.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
 
     pub(super) fn before_reserve() {
         if let Some(reached) = BEFORE_RESERVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
@@ -809,5 +896,39 @@ mod tests {
         assert_eq!(starts_and_closes(&harness, &id), ["started", "closed", "started"]);
         worker.lock().unwrap().take().expect("the hook ran").join().unwrap();
     }
-}
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn race_a_watch_between_an_events_store_and_send_gets_it_once_whole_or_withheld_never_both() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The script waits for a second prompt, so the test can make a live event after the watch's read.
+        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"x\"}\n{\"end\": \"done\"}\n{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let spec = Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), model: None };
+        let (id, mut events) = harness.open(spec).await.unwrap();
+        events.recv().await.unwrap();
+        let (watching, id_for_hook) = (harness.clone(), id.clone());
+        let watched: Arc<Mutex<Option<std::thread::JoinHandle<_>>>> = Arc::default();
+        let kept = watched.clone();
+        *BEFORE_PUBLISH.lock().unwrap() = Some(Box::new(move || {
+            // A client watches from another thread at this moment. The hook gives it a bounded time to read: it can
+            // only if the session does not hold the store's lock while it sends.
+            let (done, finished) = std::sync::mpsc::channel();
+            *kept.lock().unwrap() = Some(std::thread::spawn(move || {
+                let watch = watching.watch(&id_for_hook, 0).unwrap();
+                let _ = done.send(());
+                watch
+            }));
+            let _ = finished.recv_timeout(Duration::from_millis(500));
+        }));
+        harness.send(&id, "go").unwrap();
+        while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
+        let handle = watched.lock().unwrap().take().expect("the hook ran");
+        let (stored, _, receiver) = handle.join().unwrap();
+        let mut receiver = receiver.expect("the session waits for a prompt");
+        let last = stored.last().map_or(0, |event| event.seq);
+        harness.send(&id, "again").unwrap();
+        let first_live = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();
+        assert!(first_live.seq == last + 1, "the read ends at {last}, the live events start at {}", first_live.seq);
+    }
+}

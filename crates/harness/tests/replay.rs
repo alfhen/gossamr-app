@@ -560,7 +560,7 @@ async fn replay_a_client_that_missed_events_says_it_did_not_follow_the_recording
     let (id, _events) = open(&harness, false).await;
     let (sender, lagging) = tokio::sync::broadcast::channel(1);
     for body in [Body::Waiting, Body::Waiting, Body::Closed] {
-        sender.send(Event { seq: 0, ms: 0, body }).unwrap();
+        sender.send(Event { seq: 0, ms: 0, body, cut: None }).unwrap();
     }
     assert!(!drive(&harness, &id, lagging, mock.client(), vec![], None, |_| {}).await, "a lagged client did not follow");
 }

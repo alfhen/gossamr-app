@@ -20,7 +20,7 @@ fn an_argument_that_is_not_utf8_prints_the_usage_and_exits_two() {
 
 #[test]
 fn anything_else_prints_the_usage_and_exits_two() {
-    for args in [&[][..], &["serve"]] {
+    for args in [&[][..], &["serve", "extra"]] {
         let out = Command::new(HARNESS).args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(out.stdout.is_empty(), "{args:?}");
@@ -104,6 +104,249 @@ fn lock_a_second_harness_process_on_a_locked_data_folder_is_refused() {
     assert!(stderr == format!("harness: another harness is using the data folder {}\n", data.display()), "the lock is named");
     drop(held);
     assert!(run(&data, &["--script".as_ref(), fixture("claude/native/2-permission.jsonl").as_os_str()]).status.success());
+}
+
+/// `harness serve` on a temp data folder with a mock script, its first token handed over on stdin. It is ready once it
+/// says where it serves.
+struct Serving {
+    _tmp: tempfile::TempDir,
+    dir: std::path::PathBuf,
+    token: String,
+    child: std::process::Child,
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn serve(script: &str) -> Serving {
+    use std::io::{BufRead, Write};
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, path) = (tmp.path().join("d"), tmp.path().join("script.jsonl"));
+    std::fs::write(&path, script).unwrap();
+    let token = harness::auth::Token::random().hex();
+    let mut child = Command::new(HARNESS)
+        .args(["serve".as_ref(), "--data".as_ref(), dir.as_os_str(), "--mock-script".as_ref(), path.as_os_str()])
+        .env_remove("HARNESS_DATA")
+        .env_remove(harness::cli::TOKEN_VARIABLE)
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
+    let mut said = String::new();
+    std::io::BufReader::new(child.stderr.take().unwrap()).read_line(&mut said).unwrap();
+    assert!(said.starts_with("harness: serving "), "serve says where it serves");
+    Serving { _tmp: tmp, dir, token, child }
+}
+
+/// A client command that takes its token on stdin.
+fn client(serving: &Serving, args: &[&str]) -> Command {
+    let mut command = Command::new(HARNESS);
+    command.args(args).args(["--token-stdin", "--data"]).arg(&serving.dir).env_remove("HARNESS_DATA").env_remove(harness::cli::TOKEN_VARIABLE);
+    command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    command
+}
+
+/// Starts `command`, gives it `token` on stdin, and waits for it.
+fn with_token(command: &mut Command, token: &str) -> std::process::Output {
+    let mut child = command.spawn().unwrap();
+    give_token(&mut child, token);
+    child.wait_with_output().unwrap()
+}
+
+fn give_token(child: &mut std::process::Child, token: &str) {
+    use std::io::Write;
+    writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
+}
+
+fn lines(out: &std::process::Output) -> Vec<serde_json::Value> {
+    assert!(out.status.success(), "{:?}", String::from_utf8_lossy(&out.stderr));
+    printed(out)
+}
+
+const WAITS: &str = r#"{"prompt": null}
+{"say": "hello"}
+{"permission": {"kind": "command", "tool": "Bash", "input": {"command": "ls"}}}
+{"say": "done"}
+{"end": "done"}
+{"prompt": null}
+{"say": "again"}
+{"end": "done"}"#;
+
+#[test]
+fn client_a_session_run_through_serve_goes_on_after_its_client_is_killed_and_the_cli_answers_it() {
+    use std::io::BufRead;
+    let serving = serve(WAITS);
+    let mut run = client(&serving, &["run", "--provider", "mock", "hi"]).spawn().unwrap();
+    give_token(&mut run, &serving.token);
+    let mut said = String::new();
+    std::io::BufReader::new(run.stderr.take().unwrap()).read_line(&mut said).unwrap();
+    let session = said.trim().strip_prefix("harness: session ").expect("run names its session").to_owned();
+    let mut seen = vec![];
+    for line in std::io::BufReader::new(run.stdout.take().unwrap()).lines() {
+        let event: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let asks = event["type"] == "permission";
+        seen.push(event);
+        if asks {
+            break;
+        }
+    }
+    let types: Vec<&str> = seen.iter().map(|event| event["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["started", "prompted", "turn_started", "text", "permission"]);
+    run.kill().unwrap();
+    run.wait().unwrap();
+
+    let token = serving.token.clone();
+    let sessions = lines(&with_token(&mut client(&serving, &["sessions"]), &token));
+    assert_eq!((sessions.len(), sessions[0]["id"].as_str(), &sessions[0]["running"]), (1, Some(session.as_str()), &serde_json::json!(true)));
+    let rest = lines(&with_token(&mut client(&serving, &["events", &session, "--after", "2"]), &token));
+    assert!(rest == seen[2..], "events after 2 are the ones the killed client saw after 2");
+    let request = seen[4]["id"].as_str().unwrap();
+    lines(&with_token(&mut client(&serving, &["answer", &session, request, "allow"]), &token));
+    lines(&with_token(&mut client(&serving, &["send", &session, "again"]), &token));
+    let all = lines(&with_token(&mut client(&serving, &["events", &session, "--follow"]), &token));
+    let types: Vec<&str> = all.iter().map(|event| event["type"].as_str().unwrap()).collect();
+    assert_eq!(
+        types,
+        ["started", "prompted", "turn_started", "text", "permission", "answered", "text", "turn_ended", "prompted", "turn_started", "text", "turn_ended", "closed"]
+    );
+    assert_eq!(all[5]["decision"], "allow");
+    assert_eq!(all[8]["text"], "again");
+}
+
+#[test]
+fn client_token_new_needs_a_token_and_makes_one_that_works() {
+    let serving = serve(WAITS);
+    let refused = with_token(&mut client(&serving, &["sessions"]), "");
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("client token"), "it says what is missing");
+    let wrong = with_token(&mut client(&serving, &["token", "new"]), &harness::auth::Token::random().hex());
+    assert_eq!(wrong.status.code(), Some(1), "`token new` with a wrong token");
+    assert_eq!(String::from_utf8_lossy(&wrong.stderr).matches("refused").count(), 1, "the refusal is said once");
+    assert!(wrong.stdout.is_empty());
+
+    let made = with_token(&mut client(&serving, &["token", "new"]), &serving.token);
+    assert!(made.status.success());
+    let new = String::from_utf8(made.stdout.clone()).unwrap().trim().to_owned();
+    assert!(harness::auth::Token::parse(&new).is_some() && new != serving.token, "a new token");
+    let listed = with_token(&mut client(&serving, &["sessions"]), &new);
+    assert!(listed.status.success() && listed.stdout.is_empty(), "the new token opens the API");
+    for out in [&refused, &wrong, &listed] {
+        let all = [&out.stdout[..], &out.stderr[..]].concat();
+        assert!(!String::from_utf8_lossy(&all).contains(&serving.token), "no token in what a client prints");
+    }
+}
+
+#[test]
+fn client_serve_stops_on_sigterm_and_takes_its_socket_and_descriptor_with_it() {
+    let mut serving = serve(WAITS);
+    // SAFETY: kill has no memory preconditions; the pid is our child's, which has not been waited on.
+    assert_eq!(unsafe { libc::kill(serving.child.id() as i32, libc::SIGTERM) }, 0);
+    assert!(serving.child.wait().unwrap().success());
+    assert!(!serving.dir.join(harness::api::SOCKET).exists() && !serving.dir.join(harness::api::DESCRIPTOR).exists());
+}
+
+#[test]
+fn client_a_run_whose_harness_closes_before_its_turn_ends_fails() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let tmp = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    let listener = runtime.block_on(async { tokio::net::UnixListener::bind(tmp.path().join(harness::api::SOCKET)) }).unwrap();
+    // A harness that takes any proof, opens and sends, tells of one event, then closes the connection cleanly.
+    let fake = runtime.spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = harness::api::Hello { protocol: harness::api::PROTOCOL, build: "fake".into(), challenge: "00".repeat(32) };
+        ws.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+        ws.next().await;
+        ws.send(Message::text(r#"{"ok":true}"#)).await.unwrap();
+        for answer in [r#"{"id":1,"ok":{"session":"s"}}"#, r#"{"id":2,"ok":null}"#] {
+            ws.next().await;
+            ws.send(Message::text(answer)).await.unwrap();
+        }
+        let started = r#"{"session":"s","event":{"seq":1,"ms":0,"type":"started","provider_session":"p","resumed":false}}"#;
+        ws.send(Message::text(started)).await.unwrap();
+        ws.close(None).await.unwrap();
+    });
+    let mut out = Command::new(HARNESS);
+    out.args(["run", "--provider", "mock", "hi", "--data"])
+        .arg(tmp.path())
+        .arg("--token-stdin")
+        .env_remove("HARNESS_DATA")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let out = with_token(&mut out, &harness::auth::Token::random().hex());
+    runtime.block_on(fake).unwrap();
+    assert_eq!(out.status.code(), Some(1), "no turn ended, so the run did not succeed");
+    assert_eq!(printed(&out).len(), 1, "it printed the one event");
+}
+
+#[test]
+fn client_no_command_reads_a_token_from_the_environment_or_an_argument() {
+    let serving = serve(WAITS);
+    let with_variable = |args: &[&str]| {
+        let mut command = Command::new(HARNESS);
+        command.args(args).arg("--data").arg(&serving.dir).env_remove("HARNESS_DATA").env(harness::cli::TOKEN_VARIABLE, &serving.token);
+        command.stdin(std::process::Stdio::null()).output().unwrap()
+    };
+    for args in [&["sessions"][..], &["token", "new"], &["events", "x"], &["run", "--provider", "mock", "hi"]] {
+        let out = with_variable(args);
+        assert_eq!(out.status.code(), Some(1), "{args:?} with the variable set and no token on stdin is refused");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("--token-stdin"), "{args:?} says how to give the token");
+    }
+    let out = with_variable(&["sessions", "--token", &serving.token]);
+    assert_eq!(out.status.code(), Some(2), "a token is never an argument");
+}
+
+#[test]
+fn serve_with_a_client_token_in_its_environment_does_not_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("d");
+    let out = Command::new(HARNESS)
+        .args(["serve".as_ref(), "--data".as_ref(), dir.as_os_str()])
+        .env(harness::cli::TOKEN_VARIABLE, harness::auth::Token::random().hex())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains(harness::cli::TOKEN_VARIABLE), "it says why");
+    assert!(!dir.exists(), "nothing was made");
+}
+
+#[test]
+fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting() {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let (mut main, mut side) = (0, 0);
+    // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
+    assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+    let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
+    let tmp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(HARNESS)
+        .args(["sessions", "--data"])
+        .arg(tmp.path())
+        .stdin(side)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let done = loop {
+        if let Some(done) = child.try_wait().unwrap() {
+            break done;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for input");
+        std::thread::yield_now();
+    };
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(done.code(), Some(1));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");
 }
 
 #[test]

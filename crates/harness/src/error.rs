@@ -21,6 +21,16 @@ pub enum Error {
     NotOpen(String),
     /// The session was cleaned up, so it cannot be resumed.
     CleanedUp(String),
+    /// A Unix socket path this platform cannot take.
+    SocketPathTooLong { path: PathBuf, len: usize, max: usize },
+    /// The client's token was not proven, or the request is not one a client may make.
+    Refused(String),
+    /// What the harness answered when it refused a call or a proof, as it said it.
+    Said(String),
+    /// A message over the limit of the client API, which the client did not send.
+    TooLarge { len: usize, max: usize },
+    /// The other side broke the protocol, or the connection failed.
+    Protocol(String),
     Driver(String),
     /// A script or recording that cannot be read or replayed: the file and line, and why.
     Script(String),
@@ -46,6 +56,13 @@ impl fmt::Display for Error {
             Error::NotRunning(id) => write!(f, "session {id} is not running"),
             Error::NotOpen(id) => write!(f, "no open permission request {id}: it was answered, its turn ended, or it never was"),
             Error::CleanedUp(id) => write!(f, "session {id} was cleaned up"),
+            Error::SocketPathTooLong { path, len, max } => {
+                write!(f, "the socket path {} is {len} bytes, and this platform takes at most {max}: use a shorter data folder", path.display())
+            }
+            Error::Refused(why) => write!(f, "refused: {why}"),
+            Error::Said(what) => write!(f, "{what}"),
+            Error::TooLarge { len, max } => write!(f, "the message is {len} bytes, over the {max}-byte limit of the client API"),
+            Error::Protocol(why) => write!(f, "the connection failed: {why}"),
             Error::Driver(message) => write!(f, "the driver failed: {message}"),
             Error::Script(message) => write!(f, "{message}"),
             Error::Open { kind, message } => write!(f, "the agent could not start ({kind:?}): {message}"),

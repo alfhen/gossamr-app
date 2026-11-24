@@ -670,7 +670,7 @@ async fn mock_a_prompt_that_comes_while_the_mock_waits_is_kept_for_the_next_turn
         {"end": "done"}"#,
     );
     let tools = Arc::new(harness::tools::Endpoint::unattached("t"));
-    let launch = Launch { cwd: "/".into(), locked: false, model: None, resume: None, tools_token: harness::driver::Secret::random(), tools };
+    let launch = Launch { cwd: "/".into(), locked: false, model: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
     let mut link = mock.open(launch).unwrap();
     link.commands.send(Command::Prompt("first".into())).unwrap();
     link.commands.send(Command::Prompt("second, early".into())).unwrap();
@@ -780,15 +780,23 @@ impl Driver for Stopper {
 }
 
 #[tokio::test]
-async fn retention_a_running_harness_withholds_payload_once_it_is_30_days_old() {
+async fn retention_a_catch_up_read_writes_nothing() {
     let (_tmp, dir) = data_dir();
     let harness = harness(&dir, &mock(LIFE), 4);
     let (id, mut events) = open(&harness, false).await;
     next(&mut events).await;
     let old = harness::store::now_ms() - harness::store::KEEP_MS - 1;
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE events SET ms = ?1 WHERE seq = 1", [old]).unwrap();
+    let before = std::fs::read(dir.join("harness.sqlite")).unwrap();
     let stored = harness.events(&id, 0).unwrap();
-    assert!(matches!(&stored[0].body, Body::Withheld { of, .. } if of == "started"), "a read sweeps first: {stored:?}");
+    let (watched, more, _live) = harness.watch(&id, 0).unwrap();
+    assert!(!more);
+    assert!(std::fs::read(dir.join("harness.sqlite")).unwrap() == before, "the store file is unchanged by the reads");
+    assert!(matches!(&stored[0].body, Body::Started { .. }), "a read does not sweep: {stored:?}");
+    assert_eq!(stored, watched);
+    // Opening a session still sweeps.
+    open(&harness, false).await;
+    assert!(matches!(&harness.events(&id, 0).unwrap()[0].body, Body::Withheld { of, .. } if of == "started"));
 }
 
 #[tokio::test]
