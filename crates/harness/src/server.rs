@@ -199,7 +199,8 @@ struct ShutdownAsk {
 }
 
 /// Where a client asks for `shutdown`. A client holds a read of `answering` until its answer is written, and `run`
-/// waits for the write before it ends the connections.
+/// waits for the write, up to `CLOSE_WITHIN`, before it ends the connections. A call that comes once that wait has
+/// begun races the end of its connection, as any call then does.
 #[derive(Clone)]
 struct Asks {
     queue: mpsc::UnboundedSender<ShutdownAsk>,
