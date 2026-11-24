@@ -253,7 +253,7 @@ async fn default_fetch_rules(git: &Git, path: &Path, keys: &[String]) -> bool {
 /// when every key is one Gossamr's tools write and the fetch rules are the default. The settings are named in the
 /// answer in a shape that leaves out any URL, never their values. The refspec is given on the command line so the
 /// configured one is not used.
-async fn fetch(git: &Git, path: &Path) -> Fetched {
+pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     let Some(keys) = git.local_config_keys(path).await else { return Fetched::Not("Git couldn't read the clone's settings".into()) };
     let mut odd: Vec<String> = keys.iter().filter(|k| !written_by_gossamr_tools(k)).map(|k| key_shape(&k.to_ascii_lowercase())).collect();
     odd.sort();

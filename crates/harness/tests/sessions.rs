@@ -1893,13 +1893,46 @@ async fn login_the_work_root_is_refused_and_no_agent_starts_before_the_shell_was
     drop(harness);
     let unread = harness::work::Setup::new(Some(m.home.clone()), m.dir.clone()).with_shell_program("/nonexistent/shell");
     let harness = on(&m, reopen(&m.dir).await, unread);
-    for spec in [claude(Some("~/.claude-work"), None), harness::session::Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Default::default() }] {
-        match harness.open(spec).await {
-            Err(Error::Refused(why)) => assert!(why.contains("hasn't been read"), "{why}"),
-            other => panic!("expected a refusal, got {:?}", other.map(|(id, _)| id)),
-        }
+    match harness.open(claude(Some("~/.claude-work"), None)).await {
+        Err(Error::Refused(why)) => assert!(why.contains("hasn't been read"), "{why}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|(id, _)| id)),
     }
     assert!(m.seer.starts().is_empty(), "not even on the harness's own environment");
+    let (_, mut events) = harness.open(harness::session::Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Default::default() }).await.unwrap();
+    next(&mut events).await;
+    assert_eq!(m.seer.starts().len(), 1, "a provider outside the table needs no shell");
+}
+
+/// Refuses every open.
+struct NoGo;
+
+impl Driver for NoGo {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        Err(OpenError { kind: FailKind::Provider, message: "no".into() })
+    }
+}
+
+#[tokio::test]
+async fn the_session_that_ran_owns_a_worktree_a_failed_start_also_names() {
+    let m = machine();
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("claude".into(), Arc::new(m.seer.clone())), ("nogo".into(), Arc::new(NoGo))];
+    let harness = Harness::with_setup(Store::open(&m.dir).unwrap(), drivers, settings(4), Arc::new(setup_of(&m)));
+    let (ran, mut events) = harness.open(harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) }).await.unwrap();
+    next(&mut events).await;
+    harness.close(&ran).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let later = harness::session::Open { provider: "nogo".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() };
+    assert!(harness.open(later).await.is_err(), "a later start that fails, naming the same worktree");
+    let mut events = harness.resume(&ran).await.unwrap();
+    next(&mut events).await;
+    assert_eq!(m.seer.starts().len(), 2, "the session that ran still owns its worktree");
 }
 
 #[tokio::test]

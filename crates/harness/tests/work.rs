@@ -90,6 +90,20 @@ impl Rig {
     }
 }
 
+/// Writes a file in its folder, then refuses to open: a start whose worktree the discard must leave alone.
+struct Scribbler;
+
+impl Driver for Scribbler {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        std::fs::write(launch.cwd.join("scribbled"), "left behind\n").unwrap();
+        Err(OpenError { kind: FailKind::Provider, message: "it gave up".into() })
+    }
+}
+
 /// Refuses every open, as a CLI that is signed out would.
 struct Refuser;
 
@@ -118,7 +132,7 @@ impl Drop for Served {
 
 fn serve(data: &Path, setup: Setup) -> Served {
     let (token, seer) = (Token::random(), Seer::default());
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser))];
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser)), ("scribbler".into(), Arc::new(Scribbler))];
     let first = token.clone();
     let server = Server::bind_with(data, move || Some(first), drivers, settings(4), setup).unwrap();
     Served { token, data: data.to_owned(), seer, task: tokio::spawn(server.run()) }
@@ -270,7 +284,6 @@ async fn a_failed_open_gives_up_its_worktree_and_its_clean_up_leaves_a_later_ses
     let later = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-2"))).await.unwrap();
     let listed = client.call(Op::Sessions).await.unwrap();
     let failed = listed.as_array().unwrap().iter().find(|s| s["provider"] == "refuser").unwrap()["id"].as_str().unwrap().to_owned();
-    assert!(listed.as_array().unwrap().iter().find(|s| s["id"] == failed.as_str()).unwrap()["branch"].is_null(), "the failed open's row names no worktree");
     clean_up(&mut client, &failed).await.unwrap();
     assert!(rig.worktree("harness-2").exists(), "the running session keeps its worktree");
     assert!(!rig.git(&rig.clone(), &["branch", "--list", "harness-2"]).is_empty(), "and its branch");
@@ -420,4 +433,65 @@ async fn a_token_revoked_while_an_open_waits_leaves_no_session() {
     assert!(opening.await.unwrap().is_err(), "the open after the revoke made no session");
     assert!(other.call(Op::Sessions).await.unwrap().as_array().unwrap().is_empty());
     drop(admin);
+}
+
+/// Opens `branch`, commits a file in its worktree and closes the session.
+async fn committed(rig: &Rig, client: &mut Client, branch: &str, base: Option<&str>) -> String {
+    let session = open(client, open_op("mock", None, Some("acme/webshop"), base, Some(branch))).await.unwrap();
+    let worktree = rig.worktree(branch);
+    std::fs::write(worktree.join(branch), "work\n").unwrap();
+    rig.git(&worktree, &["add", branch]);
+    rig.git(&worktree, &["commit", "--quiet", "-m", branch]);
+    close(client, &session).await;
+    session
+}
+
+#[tokio::test]
+async fn clean_up_asks_the_remote_and_keeps_a_branch_deleted_there_or_a_base_pushed_over_or_one_it_cannot_reach() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let seed = seed(&rig);
+
+    let deleted = committed(&rig, &mut client, "deleted", None).await;
+    rig.git(&rig.worktree("deleted"), &["push", "--quiet", "origin", "deleted"]);
+    rig.git(&seed, &["push", "--quiet", "origin", "--delete", "deleted"]);
+    let kept = clean_up(&mut client, &deleted).await;
+    assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("not fully merged")), "a branch deleted on the remote is no longer kept there");
+    assert!(rig.worktree("deleted").join("deleted").exists());
+
+    let from_dev = open(&mut client, open_op("mock", None, Some("acme/webshop"), Some("dev"), Some("from-dev"))).await.unwrap();
+    close(&mut client, &from_dev).await;
+    rig.git(&seed, &["fetch", "--quiet", "origin"]);
+    rig.git(&seed, &["push", "--quiet", "--force", "origin", "main:dev"]);
+    let kept = clean_up(&mut client, &from_dev).await;
+    assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("not fully merged")), "a base pushed over no longer holds the branch");
+    assert!(rig.worktree("from-dev").exists());
+
+    let away = committed(&rig, &mut client, "away", None).await;
+    rig.git(&rig.worktree("away"), &["push", "--quiet", "-u", "origin", "away"]);
+    let remote = rig.tmp.path().canonicalize().unwrap().join("remote");
+    std::fs::rename(&remote, remote.with_file_name("remote-gone")).unwrap();
+    let kept = clean_up(&mut client, &away).await;
+    assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("couldn't be fetched")), "an unreachable remote proves nothing");
+    assert!(rig.worktree("away").join("away").exists());
+    std::fs::rename(remote.with_file_name("remote-gone"), &remote).unwrap();
+    clean_up(&mut client, &away).await.unwrap();
+    assert!(!rig.worktree("away").exists(), "once the remote answers, a branch it holds goes");
+}
+
+#[tokio::test]
+async fn a_failed_open_whose_worktree_was_not_discarded_is_removed_by_its_own_clean_up() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    assert!(open(&mut client, open_op("scribbler", None, Some("acme/webshop"), None, Some("harness-3"))).await.is_err());
+    assert!(rig.worktree("harness-3").join("scribbled").exists(), "the discard leaves a worktree that was written in");
+    let listed = client.call(Op::Sessions).await.unwrap();
+    let failed = listed[0]["id"].as_str().unwrap().to_owned();
+    let kept = clean_up(&mut client, &failed).await;
+    assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("git keeps the worktree")), "its clean-up tries, and git keeps the change");
+    std::fs::remove_file(rig.worktree("harness-3").join("scribbled")).unwrap();
+    clean_up(&mut client, &failed).await.unwrap();
+    assert!(!rig.worktree("harness-3").exists() && rig.git(&rig.clone(), &["branch", "--list", "harness-3"]).is_empty(), "then worktree and branch go");
 }

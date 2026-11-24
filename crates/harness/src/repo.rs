@@ -119,8 +119,10 @@ impl Git {
         self.origin_or_why(dir).await.ok()
     }
 
+    /// The origin URL as the clone's config has it. `git remote get-url` would give it rewritten by an `insteadOf`
+    /// rule, which may name another host.
     pub async fn origin_or_why(&self, dir: &Path) -> Result<String, String> {
-        self.out_or_why(dir, &["remote", "get-url", "origin"]).await
+        self.out_or_why(dir, &["config", "--get", "remote.origin.url"]).await
     }
 
     pub(crate) fn git_program(&self) -> &Path {
@@ -219,7 +221,9 @@ impl Git {
             return Ok(None);
         }
         let local = format!("refs/heads/{branch}");
+        // Only refs of the origin, which `remove_with_git` has just fetched; another remote's may be out of date.
         let upstream = self.out(clone, &["rev-parse", "--verify", "--quiet", "--symbolic-full-name", &format!("{branch}@{{upstream}}")]).await;
+        let upstream = upstream.filter(|name| name.starts_with("refs/remotes/origin/"));
         for into in upstream.into_iter().chain([format!("refs/remotes/origin/{branch}"), format!("refs/remotes/origin/{base}")]) {
             let there = self.out(clone, &["rev-parse", "--verify", "--quiet", &into]).await.is_some();
             if there && self.out_or_why(clone, &["merge-base", "--is-ancestor", &local, &into]).await.is_ok() {
@@ -349,6 +353,11 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<
         }
         missing
     };
+    // The remote-tracking refs say what the last fetch saw. A branch deleted on the remote since, or a base pushed
+    // over, would pass for kept: so the origin is asked now, and a clone that can't be fetched keeps its branch.
+    if let crate::fresh::Fetched::Not(why) = crate::fresh::fetch(git, clone).await {
+        return Ok(Some(format!("the clone couldn't be fetched to check that the branch's commits are on the remote, so they stay: {why}")));
+    }
     let kept_in = match git.check_branch_deletable(clone, branch, base).await {
         Ok(kept_in) => kept_in,
         Err(message) => return Ok(Some(message)),
@@ -359,17 +368,30 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<
     Ok(git.delete_branch(clone, branch, kept_in.as_deref()).await.err())
 }
 
-/// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`.
+/// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`: the host is
+/// exactly `github.com`, in `https://[user@]github.com[:port]/`, `ssh://[user@]github.com[:port]/` or the
+/// `[user@]github.com:` form.
 pub fn origin_matches(url: &str, repo: &str) -> bool {
     let url = url.trim();
-    let Some((before, after)) = url.split_once("github.com") else { return false };
-    if !(before.is_empty() || before.ends_with('/') || before.ends_with('@')) {
-        return false;
-    }
-    let Some(path) = after.strip_prefix(':').or_else(|| after.strip_prefix('/')) else { return false };
-    let path = match path.split_once('/') {
-        Some((port, rest)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && after.starts_with(':') => rest,
-        _ => path,
+    let path = match ["https://", "http://", "ssh://"].iter().find_map(|scheme| url.strip_prefix(scheme)) {
+        Some(rest) => {
+            let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+            let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+            let host = host.split_once(':').map_or(host, |(host, port)| if port.bytes().all(|b| b.is_ascii_digit()) { host } else { "" });
+            if !host.eq_ignore_ascii_case("github.com") {
+                return false;
+            }
+            path
+        }
+        None if url.contains("://") => return false,
+        None => {
+            let Some((at, path)) = url.split_once(':') else { return false };
+            let host = at.rsplit_once('@').map_or(at, |(_, host)| host);
+            if !host.eq_ignore_ascii_case("github.com") || at.contains('/') {
+                return false;
+            }
+            path
+        }
     };
     let path = path.trim_end_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
@@ -454,7 +476,7 @@ dir=.
 [ "$1" = -C ] && { dir=$2; shift 2; }
 [ "$1" = --no-optional-locks ] && shift
 case "$*" in
-  "remote get-url origin") cat "$dir/.fake-origin" 2>/dev/null || exit 2 ;;
+  "config --get remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
   "rev-parse --abbrev-ref HEAD") cat "$dir/.fake-branch" 2>/dev/null || echo main ;;
   "status --porcelain") cat "$dir/.fake-dirty" 2>/dev/null ;;
   "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/main ;;
@@ -557,6 +579,12 @@ mod tests {
             "https://github.com/acme/webshop/extra",
             "https://github.com/acme",
             "/Users/me/Code/webshop",
+            "https://evil.example/github.com/acme/webshop.git",
+            "ssh://git@evil.example/github.com/acme/webshop",
+            "git@evil.example:github.com/acme/webshop",
+            "evil.example/github.com:acme/webshop",
+            "file:///srv/github.com/acme/webshop.git",
+            "https://github.com:evil/acme/webshop",
         ] {
             assert!(!origin_matches(url, "acme/webshop"), "{url}");
         }
