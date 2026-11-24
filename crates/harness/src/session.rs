@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -28,13 +28,14 @@ use crate::tools::{Endpoint, Reply, ToolCall};
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
     pub turn_limit: usize,
-    /// How far a client of a locked session may fall behind; see `LOCKED_BACKLOG`.
+    /// How far a client of a locked session may fall behind, in events and in bytes; see `LOCKED_BACKLOG`.
     pub locked_backlog: usize,
+    pub locked_backlog_bytes: usize,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { turn_limit: 4, locked_backlog: LOCKED_BACKLOG }
+        Settings { turn_limit: 4, locked_backlog: LOCKED_BACKLOG, locked_backlog_bytes: LOCKED_BACKLOG_BYTES }
     }
 }
 
@@ -42,6 +43,8 @@ impl Default for Settings {
 /// session's events are not in the store, so within this a client misses none; past it, the harness holds no more for
 /// it.
 pub const LOCKED_BACKLOG: usize = 1 << 16;
+/// How many bytes of events, as JSON, a client of a locked session may fall behind by, under the same rule.
+pub const LOCKED_BACKLOG_BYTES: usize = 64 << 20;
 
 /// The reason of the `failed` a session records when it cannot be resumed; the session's row is marked with it.
 pub const CANNOT_RESUME: &str = "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops";
@@ -68,28 +71,32 @@ struct Inner {
     /// Told each time a session leaves `live`, or says it is stuck.
     left: Notify,
     locked_backlog: usize,
+    locked_backlog_bytes: usize,
     /// The stored key of each token revoked, for the connections that proved it.
     revoked: broadcast::Sender<[u8; 32]>,
 }
 
-/// A client of a locked session: every event while it keeps up within the backlog, and `lost` once it has not.
+/// A client of a locked session: every event while it keeps up within the backlog, and `lost` once it has not. Each
+/// event goes with its size, which `bytes` counts until the client has taken it.
 pub(crate) struct Watcher {
-    events: mpsc::Sender<Event>,
+    events: mpsc::Sender<(Event, usize)>,
     lost: Arc<AtomicBool>,
+    bytes: Arc<AtomicUsize>,
+    most: usize,
 }
 
 /// Where a client's live events come from. A locked session's events are not in the store, so its client gets them on
 /// a channel of its own and is told if it fell too far behind; any other client reads what it missed from the store.
 pub enum Feed {
-    Locked { events: mpsc::Receiver<Event>, lost: Arc<AtomicBool> },
+    Locked { events: mpsc::Receiver<(Event, usize)>, lost: Arc<AtomicBool>, bytes: Arc<AtomicUsize> },
     Stored(broadcast::Receiver<Event>),
 }
 
 impl Feed {
-    fn locked(backlog: usize) -> (Watcher, Feed) {
+    fn locked(backlog: usize, most: usize) -> (Watcher, Feed) {
         let (events, receiver) = mpsc::channel(backlog);
-        let lost = Arc::new(AtomicBool::new(false));
-        (Watcher { events, lost: lost.clone() }, Feed::Locked { events: receiver, lost })
+        let (lost, bytes) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+        (Watcher { events, lost: lost.clone(), bytes: bytes.clone(), most }, Feed::Locked { events: receiver, lost, bytes })
     }
 }
 
@@ -151,7 +158,9 @@ impl Harness {
                 starts: AtomicU64::new(0),
                 closing: AtomicBool::new(false),
                 left: Notify::new(),
-                locked_backlog: settings.locked_backlog,
+                // A channel takes at least one and at most this many.
+                locked_backlog: settings.locked_backlog.clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
+                locked_backlog_bytes: settings.locked_backlog_bytes,
                 revoked: broadcast::channel(16).0,
             }),
         }
@@ -167,7 +176,7 @@ impl Harness {
     pub fn open_watched(&self, spec: Open) -> Result<(String, broadcast::Receiver<Event>, Feed)> {
         let (watcher, feed) = match spec.locked {
             true => {
-                let (watcher, feed) = Feed::locked(self.inner.locked_backlog);
+                let (watcher, feed) = Feed::locked(self.inner.locked_backlog, self.inner.locked_backlog_bytes);
                 (Some(watcher), Some(feed))
             }
             false => (None, None),
@@ -183,8 +192,11 @@ impl Harness {
         })?;
         let plan = Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None };
         let events = self.start(&id, watcher, |_| Ok(plan))?;
-        let feed = feed.unwrap_or_else(|| Feed::Stored(events.resubscribe()));
-        Ok((id, events, feed))
+        // Another session's client keeps the first receiver, which holds every event from the first.
+        match feed {
+            Some(feed) => Ok((id, events, feed)),
+            None => Ok((id, events.resubscribe(), Feed::Stored(events))),
+        }
     }
 
     /// Starts a session again by its provider's session id, with a new tools token. A running or cleaned-up session
@@ -214,10 +226,16 @@ impl Harness {
             if row.handed_over && !taken_back {
                 return Err(Error::HandedOver(id.to_owned()));
             }
-            store.set_handed_over(id, false)?;
             let provider_session =
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
             Ok(Plan { driver: self.driver(&row.provider)?, cwd: row.cwd, locked: row.locked, model: row.model, resume: Some(provider_session) })
+        })
+        .and_then(|events| {
+            // Cleared only once the agent has opened, so a take-back that failed can be tried again.
+            if taken_back {
+                self.inner.with_store(|store| store.set_handed_over(id, false))?;
+            }
+            Ok(events)
         })
     }
 
@@ -369,9 +387,9 @@ impl Harness {
         Ok(())
     }
 
-    /// How far a client of a locked session may fall behind.
-    pub fn locked_backlog(&self) -> usize {
-        self.inner.locked_backlog
+    /// How far a client of a locked session may fall behind: events, and bytes.
+    pub fn locked_backlog(&self) -> (usize, usize) {
+        (self.inner.locked_backlog, self.inner.locked_backlog_bytes)
     }
 
     /// The stored keys of tokens as they are revoked.
@@ -425,7 +443,7 @@ impl Harness {
             store.session(id)?;
             let receiver = live.get(id).map(|live| match live.locked {
                 true => {
-                    let (watcher, feed) = Feed::locked(self.inner.locked_backlog);
+                    let (watcher, feed) = Feed::locked(self.inner.locked_backlog, self.inner.locked_backlog_bytes);
                     live.watchers.lock().unwrap_or_else(|p| p.into_inner()).push(watcher);
                     feed
                 }
@@ -762,9 +780,13 @@ impl Task {
                             }
                         }
                     }
-                    Some(Body::Question { id, text }) => {
-                        self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone());
-                        self.emit(Body::Question { id, text });
+                    Some(question @ Body::Question { .. }) => {
+                        // The id the client sees, after redaction, is the one its answer names.
+                        let question = redact::body(question, &self.secrets);
+                        if let Body::Question { id, .. } = &question {
+                            self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone());
+                        }
+                        self.emit(question);
                     }
                     Some(body @ Body::Started { .. }) => {
                         if !self.started(body) {
@@ -871,8 +893,14 @@ impl Task {
         };
         self.stopping.store(true, Ordering::Relaxed);
         self.open_requests().clear();
-        // `send` took these, so the client hears they never reached the agent.
-        if !queued.is_empty() {
+        // `send` took these, so the client hears they never reached the agent: those queued here, and those still on
+        // their way when the agent went.
+        requests.close();
+        let mut unsent = !queued.is_empty();
+        while let Ok(request) = requests.try_recv() {
+            unsent |= matches!(request, Request::Prompt(_));
+        }
+        if unsent {
             self.emit(Body::PromptsDropped);
         }
         // No new call reaches the session now: an agent that waits for one while it stops hears that it ended.
@@ -1063,14 +1091,28 @@ impl Task {
     /// Sends the event to the session's clients. A watcher that has gone is dropped, and so is one past its backlog,
     /// which is marked as having lost events.
     fn publish(&self, event: Event) {
-        self.watchers.lock().unwrap_or_else(|p| p.into_inner()).retain(|watcher| match watcher.events.try_send(event.clone()) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                watcher.lost.store(true, Ordering::Relaxed);
-                false
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => false,
-        });
+        let mut watchers = self.watchers.lock().unwrap_or_else(|p| p.into_inner());
+        if !watchers.is_empty() {
+            let size = serde_json::to_string(&event).map_or(0, |text| text.len());
+            watchers.retain(|watcher| {
+                if watcher.bytes.load(Ordering::Relaxed) + size > watcher.most {
+                    watcher.lost.store(true, Ordering::Relaxed);
+                    return false;
+                }
+                match watcher.events.try_send((event.clone(), size)) {
+                    Ok(()) => {
+                        watcher.bytes.fetch_add(size, Ordering::Relaxed);
+                        true
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        watcher.lost.store(true, Ordering::Relaxed);
+                        false
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => false,
+                }
+            });
+        }
+        drop(watchers);
         let _ = self.events.send(event);
     }
 
@@ -1203,7 +1245,7 @@ mod tests {
         let Some(Feed::Locked { events: mut receiver, .. }) = receiver else { panic!("a locked session's feed") };
         let last = stored.last().map_or(0, |event| event.seq);
         harness.send(&id, "again").unwrap();
-        let first_live = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();
+        let (first_live, _) = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();
         assert!(first_live.seq == last + 1, "the read ends at {last}, the live events start at {}", first_live.seq);
     }
 }

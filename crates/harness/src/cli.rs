@@ -108,12 +108,21 @@ pub async fn execute(command: Command, data: Option<PathBuf>, token_stdin: bool)
         }
         Command::Events { session, after, follow: true } => {
             client.call(Op::Watch { session, after }).await?;
-            while let Some(Push::Event { event, .. }) = client.push().await? {
+            while let Some(event) = next_event(&mut client).await? {
                 println!("{}", serde_json::to_string(&event)?);
             }
             Ok(true)
         }
         Command::Run { provider, answers, prompt, ends_with_client } => run(&mut client, provider, answers, prompt, ends_with_client).await,
+    }
+}
+
+/// The next pushed event, None at the end of the watch; a watch that lost events is an error that says why.
+async fn next_event(client: &mut Client) -> Result<Option<crate::event::Event>> {
+    match client.push().await? {
+        Some(Push::Event { event, .. }) => Ok(Some(event)),
+        Some(Push::Lost { reason, .. }) => Err(Error::Said(reason)),
+        Some(Push::End { .. }) | None => Ok(None),
     }
 }
 
@@ -125,7 +134,7 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
     client.call(Op::Send { session: session.clone(), text: prompt }).await?;
     // Done only once a turn has ended, and not in a failure: a connection that drops before then is not done.
     let (mut answers, mut ok, mut ended) = (answers.into_iter(), true, false);
-    while let Some(Push::Event { event, .. }) = client.push().await? {
+    while let Some(event) = next_event(client).await? {
         println!("{}", serde_json::to_string(&event)?);
         match event.body {
             Body::Permission { id, .. } => {

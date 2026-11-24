@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 use tokio::sync::Notify;
-use tokio::sync::broadcast::{self, error::RecvError};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::tungstenite::Message;
@@ -37,6 +37,8 @@ pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Events waiting to be written to one client. Past it its watches wait, and their live events wait on channels that
 /// drop none, because a locked session's events cannot be read back from the store.
 const PUSH_QUEUE: usize = 256;
+/// How long a connection being ended has to take its close frame before its socket is dropped.
+const CLOSE_WITHIN: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -160,13 +162,14 @@ impl Server {
             }
         }
         drop(listener);
+        // Both before the store goes, so neither can be a next harness's.
         let _ = std::fs::remove_file(dir.join(crate::api::SOCKET));
+        let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
         let left = harness.shutdown().await;
         if !left.is_empty() {
             eprintln!("harness: shut down without waiting longer for the stuck agents of sessions {}", left.join(", "));
         }
         connections.shutdown().await;
-        let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
         Ok(())
     }
 }
@@ -239,54 +242,59 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
     let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
     let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![] };
     loop {
-        // A revoke is heard before anything else, so nothing reaches this client after its token's revoke has answered.
-        tokio::select! {
+        // A revoke is heard before anything else, and during every write: nothing reaches this client after its
+        // token's revoke has answered, even one that stopped reading.
+        let reply = tokio::select! {
             biased;
-            heard = revoked.recv() => {
-                let gone = match heard {
-                    Ok(gone) => gone == client.key,
-                    Err(broadcast::error::RecvError::Lagged(_)) => !client.harness.client_tokens().is_ok_and(|tokens| tokens.iter().any(|token| token.stored_key == client.key)),
-                    Err(broadcast::error::RecvError::Closed) => false,
-                };
-                if gone {
-                    let reason = "this connection's token was revoked";
-                    let _ = ws.close(Some(CloseFrame { code: CloseCode::Policy, reason: reason.into() })).await;
-                    break;
-                }
-            }
+            heard = revoked.recv() => match revoked_for(&harness, &key, heard) {
+                true => break,
+                false => continue,
+            },
             message = ws.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     let (reply, shut) = client.call(text.as_str()).await;
-                    if send(&mut ws, &reply).await.is_err() {
-                        break;
-                    }
                     if shut {
                         stop.notify_one();
                     }
+                    reply
                 }
-                Some(Ok(Message::Binary(_))) => {
-                    if send(&mut ws, &Reply { error: Some("a call is a JSON text message".into()), ..Reply::default() }).await.is_err() {
-                        break;
-                    }
-                }
+                Some(Ok(Message::Binary(_))) => Reply { error: Some("a call is a JSON text message".into()), ..Reply::default() },
                 Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
                     let reason = format!("a message over the {MAX_MESSAGE}-byte limit");
-                    let _ = ws.close(Some(CloseFrame { code: CloseCode::Size, reason: reason.into() })).await;
-                    break;
+                    let _ = tokio::time::timeout(CLOSE_WITHIN, ws.close(Some(CloseFrame { code: CloseCode::Size, reason: reason.into() }))).await;
+                    return;
                 }
-                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
-                Some(Ok(_)) => {}
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                Some(Ok(_)) => continue,
             },
-            Some(push) = pushes.recv() => {
-                if send(&mut ws, &push).await.is_err() {
-                    break;
-                }
+            Some(push) = pushes.recv() => push,
+            Some(_) = client.watches.join_next(), if !client.watches.is_empty() => continue,
+        };
+        let sending = send(&mut ws, &reply);
+        tokio::pin!(sending);
+        let sent = loop {
+            tokio::select! {
+                sent = &mut sending => break sent.is_ok(),
+                heard = revoked.recv() => if revoked_for(&harness, &key, heard) {
+                    break false;
+                },
             }
-            Some(_) = client.watches.join_next(), if !client.watches.is_empty() => {}
+        };
+        if !sent {
+            break;
         }
     }
-    for id in &client.ends_with_it {
-        let _ = harness.close(id);
+    // Only a revoke ends the loop: it closes the connection with the reason, if the client will take it in time.
+    let reason = "this connection's token was revoked";
+    let _ = tokio::time::timeout(CLOSE_WITHIN, ws.close(Some(CloseFrame { code: CloseCode::Policy, reason: reason.into() }))).await;
+}
+
+/// Whether what the revocations said ends the connection that proved `key`.
+fn revoked_for(harness: &Harness, key: &[u8; 32], heard: std::result::Result<[u8; 32], RecvError>) -> bool {
+    match heard {
+        Ok(gone) => gone == *key,
+        Err(RecvError::Lagged(_)) => !harness.client_tokens().is_ok_and(|tokens| tokens.iter().any(|token| token.stored_key == *key)),
+        Err(RecvError::Closed) => false,
     }
 }
 
@@ -317,8 +325,16 @@ struct Client {
     watches: JoinSet<()>,
     /// The session each watch is of: one at a time per session.
     watching: HashMap<String, AbortHandle>,
-    /// Sessions this client opened as ending with it.
+    /// Sessions this client opened as ending with it: closed when it is dropped, however the connection ends.
     ends_with_it: Vec<String>,
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        for id in &self.ends_with_it {
+            let _ = self.harness.close(id);
+        }
+    }
 }
 
 impl Client {
@@ -420,11 +436,15 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
     loop {
         let event = match &mut live {
             None => break,
-            Some(Feed::Locked { events, lost: behind }) => match events.recv().await {
-                Some(event) => event,
+            Some(Feed::Locked { events, lost: behind, bytes }) => match events.recv().await {
+                Some((event, size)) => {
+                    bytes.fetch_sub(size, Ordering::Relaxed);
+                    event
+                }
                 None => {
                     if behind.load(Ordering::Relaxed) {
-                        lost = Some(format!("events were lost: this client fell more than {} events behind a locked session, whose events are not stored", harness.locked_backlog()));
+                        let (count, size) = harness.locked_backlog();
+                        lost = Some(format!("events were lost: this client fell more than {count} events or {size} bytes behind a locked session, whose events are not stored"));
                     }
                     break;
                 }
@@ -494,10 +514,10 @@ mod tests {
         let harness = Harness::new(Store::open(&tmp.path().join("d")).unwrap(), vec![], Settings::default());
         let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]).collect();
         let (live, receiver) = mpsc::channel(64);
-        let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
+        let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)), bytes: Arc::new(AtomicUsize::new(0)) };
         // The read got 1 to 3; the receiver has 2 onwards.
         for event in &all[1..] {
-            live.try_send(event.clone()).unwrap();
+            live.try_send((event.clone(), 0)).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
         forward(harness, "s".into(), (all[..3].to_vec(), false, 3), Some(receiver), 0, out).await;
@@ -524,9 +544,9 @@ mod tests {
         let harness = Harness::new(store, vec![], Settings::default());
         let stored = harness.events("s", 0).unwrap();
         let (live, receiver) = mpsc::channel(64);
-        let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
+        let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)), bytes: Arc::new(AtomicUsize::new(0)) };
         for event in &whole[5..] {
-            live.try_send(event.clone()).unwrap();
+            live.try_send((event.clone(), 0)).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
         // The first page held 1 and 2, more follow, and the store is read up to 5.

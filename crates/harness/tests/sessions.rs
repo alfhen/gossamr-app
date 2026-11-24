@@ -1378,7 +1378,7 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
     // A prompt is waiting when the session reads the agent's `started`.
     harness.send(&id, "one").unwrap();
     let all = until(&mut events, |body| *body == Body::Closed).await;
-    assert_eq!(types(&all), ["started", "failed", "closed"], "the session stopped, with no prompt");
+    assert_eq!(types(&all), ["started", "failed", "prompts_dropped", "closed"], "the session stopped, and said the prompt never went");
     assert_eq!(*received.lock().unwrap(), [Command::Stop], "no prompt reached the agent");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "a session with no kept id cannot be resumed");
@@ -1564,11 +1564,13 @@ async fn locked_a_client_that_falls_behind_misses_no_event() {
         }
     }
     let mut got = vec![];
-    while let Ok(event) = watched.try_recv() {
+    while let Ok((event, _)) = watched.try_recv() {
         got.push(event);
     }
     let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
     assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "every event, in order");
+    assert_eq!(got.last().map(|event| &event.body), Some(&Body::Closed), "through to `closed`");
+    assert_eq!(got.last().unwrap().seq, harness.events(&id, 0).unwrap().last().unwrap().seq, "the feed ends where the session did");
     let texts: Vec<&Body> = got.iter().map(|event| &event.body).filter(|body| matches!(body, Body::Text { .. })).collect();
     assert_eq!(texts.len(), says);
     assert_eq!(*texts[says - 1], Body::Text { text: format!("line {}", says - 1) }, "whole, not withheld");

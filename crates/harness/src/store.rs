@@ -271,10 +271,11 @@ impl Store {
     /// Numbers and stores an event; the caller holds the transaction.
     fn insert_event(&self, session: &str, body: &Body, ms: i64, cut: Option<u64>) -> Result<Event> {
         let row = self.session(session)?;
-        let withheld = row.locked || row.cleaned;
+        // A body already withheld, such as one too large to keep, is marked so: the sweep's rewrite would lose its type.
+        let withheld = row.locked || row.cleaned || matches!(body, Body::Withheld { .. });
         let payload = serde_json::to_string(&if withheld { body.withheld() } else { body.clone() })?;
         let seq = self.conn.query_row(
-            "UPDATE sessions SET last_seq = MAX(last_seq, (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = ?1)) + 1, last_ms = ?2
+            "UPDATE sessions SET last_seq = MAX(last_seq, (SELECT COALESCE(MAX(seq), 0) FROM events WHERE session = ?1)) + 1, last_ms = MAX(last_ms, ?2)
              WHERE id = ?1 RETURNING last_seq",
             params![session, ms],
             |row| row.get::<_, i64>(0),
