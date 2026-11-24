@@ -1633,6 +1633,7 @@ dependencies = [
  "getrandom 0.4.3",
  "harness",
  "hmac",
+ "http",
  "libc",
  "regex",
  "rusqlite",

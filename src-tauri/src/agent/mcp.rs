@@ -17,6 +17,8 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 
+use harness::mcp::{bearer, local_request, message, rpc, same_token, Answer, ServerInfo};
+
 use crate::auth::Scope;
 use crate::error::{Error, Result};
 use super::agent_tools::{self, AgentSide};
@@ -264,7 +266,7 @@ async fn pip_endpoint(State(st): State<Arc<Serving>>, Path(request_id): Path<Str
         Err(status) => return status.into_response(),
     };
     let params = msg["params"].clone();
-    rpc(msg, tool_list, call_tool(&st.pip, &request_id, &params)).await
+    answer(rpc(msg, GOSSAMR, tool_list, async { Ok(call_tool(&st.pip, &request_id, &params).await) }).await)
 }
 
 async fn agent_endpoint(State(st): State<Arc<Serving>>, Path(run_id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
@@ -289,7 +291,16 @@ async fn agent_endpoint(State(st): State<Arc<Serving>>, Path(run_id): Path<Strin
     } else {
         quick
     };
-    rpc(msg, agent_tools::tools, st.agents.call(&run_id, token, &params)).await
+    answer(rpc(msg, GOSSAMR, agent_tools::tools, async { Ok(st.agents.call(&run_id, token, &params).await) }).await)
+}
+
+const GOSSAMR: ServerInfo<'static> = ServerInfo { name: "gossamr", version: env!("CARGO_PKG_VERSION") };
+
+fn answer(answer: Answer) -> Response {
+    match answer {
+        Answer::Accepted => StatusCode::ACCEPTED.into_response(),
+        Answer::Reply(reply) => Json(reply).into_response(),
+    }
 }
 
 pub(super) fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -1119,6 +1130,16 @@ mod tests {
         assert_eq!(status(&a.url, "").await, 401);
         let nobody = a.url.replace("run-a", "never-started");
         assert_eq!(status(&nobody, &a.token).await, 401);
+    }
+
+    #[tokio::test]
+    async fn a_request_from_a_web_page_is_refused_even_with_the_token() {
+        let server = server().await;
+        let a = server.endpoint("run-a").unwrap();
+        let rpc = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+        let from = |origin: &'static str| reqwest::Client::new().post(&a.url).bearer_auth(&a.token).header("origin", origin).json(&rpc).send();
+        assert_eq!(from("https://evil.example").await.unwrap().status().as_u16(), 403);
+        assert_eq!(from("http://localhost:3000").await.unwrap().status().as_u16(), 200);
     }
 
     #[tokio::test]
