@@ -55,7 +55,7 @@ impl ProviderEnv {
         let vars = match instance.folder.as_deref() {
             Some(typed) => {
                 let folder = provider_folder::expand(typed, home).into_os_string();
-                driver.login_variables().iter().map(|&name| (name, (name == driver.folder_variable()).then(|| folder.clone()))).collect()
+                driver.login_variables().iter().map(|&name| (name, (Some(name) == driver.folder_variable()).then(|| folder.clone()))).collect()
             }
             None => {
                 let shell = shell.ok_or(Unavailable::NoShellSetup)?;

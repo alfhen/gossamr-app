@@ -1631,6 +1631,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "getrandom 0.4.3",
+ "harness",
  "hmac",
  "libc",
  "regex",

@@ -88,6 +88,11 @@ impl RunEnv {
         self.vars.iter().find(|(k, _)| k == OsStr::new(key)).map(|(_, v)| v.as_os_str())
     }
 
+    /// Every variable, to hand to a process another way.
+    pub fn into_pairs(self) -> impl Iterator<Item = (OsString, OsString)> {
+        self.vars.into_iter()
+    }
+
     /// Replaces the command's whole environment. Adding anything afterwards would reach the shared daemon.
     pub fn apply(&self, cmd: &mut std::process::Command) {
         cmd.env_clear();
@@ -154,6 +159,7 @@ impl ShellCapture {
     }
 
     /// A capture that already holds `env`, so a test never starts a shell.
+    #[cfg(any(test, feature = "testing"))]
     pub fn with_env(env: RunEnv) -> Self {
         let env = Arc::new(env);
         Self { shell: None, found: tokio::sync::Mutex::new(Some(env.clone())), fixed: Some(env) }

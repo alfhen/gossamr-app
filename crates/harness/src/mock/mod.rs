@@ -582,7 +582,7 @@ mod tests {
 
     fn launch(resume: Option<String>) -> Launch {
         let tools = Arc::new(Endpoint::unattached("t"));
-        Launch { cwd: "/".into(), locked: false, model: None, resume, tools_token: Secret::random(), tools, env: vec![] }
+        Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume, tools_token: Secret::random(), tools, env: vec![] }
     }
 
     #[test]

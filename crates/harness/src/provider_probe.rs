@@ -93,6 +93,7 @@ pub async fn probe(driver: Provider, binary: Option<&Path>, folder: Option<Folde
     let answer = match driver {
         Provider::Claude => claude_account(binary, folder, env, timeouts.account).await,
         Provider::Codex => codex_account(binary, folder, env, timeouts.account).await,
+        Provider::Gemini => error("agy has no command that says whether it is signed in."),
     };
     Snapshot { version, ..answer }
 }
@@ -150,17 +151,14 @@ fn version_of(output: &str) -> Option<String> {
 
 /// What a person types to sign in, for the detail pane to show. Terminal never runs this text.
 fn sign_in_command(driver: Provider, folder: Option<Folder<'_>>) -> String {
-    let login = match driver {
-        Provider::Claude => "claude auth login",
-        Provider::Codex => "codex login",
-    };
-    match folder {
-        None => login.to_string(),
-        Some(f) if f.typed.chars().all(|c| c.is_ascii_alphanumeric() || "._~/-".contains(c)) => format!("{}={} {login}", driver.folder_variable(), f.typed),
-        Some(f) => match f.typed.strip_prefix("~/") {
-            Some(rest) => format!("{}=~/'{rest}' {login}", driver.folder_variable()),
-            None => format!("{}='{}' {login}", driver.folder_variable(), f.typed),
-        },
+    let login = driver.sign_in();
+    let (Some(f), Some(variable)) = (folder, driver.folder_variable()) else { return login.to_string() };
+    if f.typed.chars().all(|c| c.is_ascii_alphanumeric() || "._~/-".contains(c)) {
+        return format!("{variable}={} {login}", f.typed);
+    }
+    match f.typed.strip_prefix("~/") {
+        Some(rest) => format!("{variable}=~/'{rest}' {login}"),
+        None => format!("{variable}='{}' {login}", f.typed),
     }
 }
 
@@ -338,11 +336,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_cli_is_not_found_for_either_driver() {
-        for driver in [Provider::Claude, Provider::Codex] {
+    async fn a_missing_cli_is_not_found_for_any_provider() {
+        for driver in Provider::ALL {
             let seen = probe(driver, None, None, &env(), Timeouts::default()).await;
             assert_eq!((seen.state, seen.installed, seen.message), (State::NotFound, false, format!("`{}` isn't installed.", driver.binary())));
         }
+    }
+
+    #[tokio::test]
+    async fn an_installed_agy_gives_its_version_but_cannot_say_who_is_signed_in() {
+        let dir = scratch("agy");
+        let asked = dir.join("asked");
+        let agy = cli(&dir, "agy", &format!("[ \"$1\" = \"--version\" ] && {{ echo '1.5.14'; exit 0; }}\ntouch '{}'", asked.display()));
+        let seen = probe(Provider::Gemini, Some(&agy), None, &env(), Timeouts::default()).await;
+        assert_eq!((seen.state, seen.version.as_deref(), seen.installed), (State::Error, Some("1.5.14"), true));
+        assert!(!asked.exists(), "nothing but --version runs");
     }
 
     #[tokio::test]

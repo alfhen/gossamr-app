@@ -654,7 +654,7 @@ async fn real_fresh_clone_is_refused_until_trusted_then_its_worktree_session_sta
     let mut s = Scratch::new("fresh").await;
     let home = s.root.join("home");
     std::fs::create_dir_all(&home).unwrap();
-    let path = super::fresh::ensure_clone(&super::repo::Git::new(s.env.clone()), &home, "octocat/Hello-World", true).await.expect("clone").path;
+    let path = super::fresh::ensure_clone(&super::toolchain::git(s.env.clone()), &home, "octocat/Hello-World", true).await.expect("clone").path;
     assert_eq!(path, super::fresh::work_path(&home, "octocat/Hello-World").unwrap());
     assert!(path.join(".git").is_dir());
     let request = |name: &str| LaunchRequest { cwd: path.clone(), name: format!("{name} investigate"), worktree: name.to_owned(), guard: "Do nothing.".into(), prompt: "Reply with OK and stop.".into(), agent: None, model: None };

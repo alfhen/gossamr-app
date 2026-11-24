@@ -28,9 +28,14 @@ use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
 use crate::event::{Body, Event};
+use crate::driver::random_hex;
+use crate::providers::{check, with_usual};
 use crate::session::{Feed, Harness, Open, Settings};
 use crate::store::Store;
+use crate::work::{Setup, check_work};
 
+/// The most logins one `providers` call may name.
+pub const MAX_LOGINS_ASKED: usize = 16;
 /// How often the sweep runs while the harness serves.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Events waiting to be written to one client. Past it its watches wait, and their live events wait on channels that
@@ -92,13 +97,18 @@ impl Server {
     /// Takes the data folder and listens on its socket. A store with no client token yet takes `first_token`'s, the
     /// one the client that starts the harness hands over; with none, the harness does not start.
     pub fn bind(dir: &Path, first_token: impl FnOnce() -> Option<Token>, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings) -> Result<Server> {
+        Server::bind_with(dir, first_token, drivers, settings, Setup::default())
+    }
+
+    /// `bind`, with sessions taking their home folder, logins, clones and captured shell from `setup`.
+    pub fn bind_with(dir: &Path, first_token: impl FnOnce() -> Option<Token>, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings, setup: Setup) -> Result<Server> {
         let socket = socket_path(dir)?;
         let store = Store::open(dir)?;
         if store.client_tokens()?.is_empty() {
             let token = first_token().ok_or_else(|| Error::Refused("no client token yet: give the first one on stdin".into()))?;
             store.add_client_token(&token.stored_key())?;
         }
-        let harness = Harness::new(store, drivers, settings);
+        let harness = Harness::with_setup(store, drivers, settings, Arc::new(setup));
         // The store's lock is ours, so a socket or a descriptor left here is a dead harness's.
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;
@@ -275,7 +285,14 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
         return;
     }
     let (out, mut pushes) = mpsc::channel(PUSH_QUEUE);
-    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![], asks, answering: None };
+    // Each client gets the shell as it is now: a changed rc file needs no restart. Opens wait for it.
+    let setup = harness.setup().clone();
+    let capturing = tokio::spawn(async move {
+        if let Err(why) = setup.capture().await {
+            eprintln!("harness: {why}");
+        }
+    });
+    let mut client = Client { harness: harness.clone(), key, out, watches: JoinSet::new(), watching: HashMap::new(), ends_with_it: vec![], asks, answering: None, capturing: Some(capturing) };
     loop {
         // A revoke is heard before anything else, and during every write: nothing reaches this client after its
         // token's revoke has answered, even one that stopped reading.
@@ -366,6 +383,8 @@ struct Client {
     asks: Asks,
     /// Held while the answer to this client's `shutdown` is on its way.
     answering: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+    /// The capture of the shell for this client, until it has ended.
+    capturing: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for Client {
@@ -377,6 +396,13 @@ impl Drop for Client {
 }
 
 impl Client {
+    /// Waits for this client's capture of the shell, once.
+    async fn captured(&mut self) {
+        if let Some(capturing) = self.capturing.take() {
+            let _ = capturing.await;
+        }
+    }
+
     async fn call(&mut self, text: &str) -> Reply {
         let call: Call = match serde_json::from_str(text) {
             Ok(call) => call,
@@ -395,8 +421,37 @@ impl Client {
         let harness = self.harness.clone();
         let done = |result: Result<()>| result.map(|()| Value::Null);
         match op {
-            Op::Open { provider, cwd, locked, model, ends_with_client } => {
-                let (id, _, events) = harness.open_watched(Open { provider, cwd, locked, model, ends_with_client })?;
+            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, ends_with_client } => {
+                self.captured().await;
+                harness.check_open(&provider, login.as_deref(), effort.as_deref())?;
+                let (cwd, work, notices) = match (cwd, repo) {
+                    (Some(cwd), None) if base.is_none() && branch.is_none() => (cwd, None, vec![]),
+                    (Some(_), None) => return Err(Error::Refused("base and branch go with repo".into())),
+                    (None, Some(repo)) => {
+                        let branch = branch.unwrap_or_else(|| format!("harness-{}", random_hex(4)));
+                        check_work(&repo, base.as_deref(), &branch)?;
+                        let (work, worktree, note) = harness.setup().prepare(&repo, base.as_deref(), &branch).await?;
+                        (worktree, Some(work), note.into_iter().collect())
+                    }
+                    _ => return Err(Error::Refused("give cwd or repo, and not both".into())),
+                };
+                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), notices };
+                // A clone can take minutes, and the token may have been revoked meanwhile. The clone stays, as the
+                // harness's own, for the next session; the worktree goes, and no session is made.
+                let opened = match harness.client_tokens().map(|tokens| tokens.iter().any(|token| token.stored_key == self.key)) {
+                    Ok(true) => harness.open_watched(spec),
+                    Ok(false) => Err(Error::Refused("this connection's token was revoked".into())),
+                    Err(e) => Err(e),
+                };
+                let (id, _, events) = match opened {
+                    Ok(opened) => opened,
+                    Err(e) => {
+                        if let Some(work) = work {
+                            harness.setup().discard(&work, &cwd).await;
+                        }
+                        return Err(e);
+                    }
+                };
                 if ends_with_client {
                     self.ends_with_it.push(id.clone());
                 }
@@ -410,11 +465,16 @@ impl Client {
             Op::AnswerQuestion { session, question, text } => done(harness.answer_question(&session, &question, text)),
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
-            Op::CleanUp { session } => done(harness.clean_up(&session)),
+            Op::CleanUp { session } => done(harness.clean_up(&session).await),
             Op::Sessions => Ok(serde_json::to_value(harness.sessions()?)?),
-            Op::Providers => {
-                let providers = harness.providers().into_iter().map(|(name, capabilities)| json!({ "name": name, "capabilities": capabilities }));
-                Ok(Value::Array(providers.collect()))
+            Op::Providers { logins } => {
+                if logins.len() > MAX_LOGINS_ASKED {
+                    return Err(Error::Refused(format!("one call checks at most {MAX_LOGINS_ASKED} logins besides the usual ones")));
+                }
+                self.captured().await;
+                let drivers: Vec<Value> = harness.providers().into_iter().map(|(name, capabilities)| json!({ "name": name, "capabilities": capabilities })).collect();
+                let logins = check(harness.setup(), harness.setup().places(), &with_usual(logins)).await;
+                Ok(json!({ "drivers": drivers, "logins": logins }))
             }
             Op::Events { session, after } => {
                 let (events, more) = harness.events_page(&session, after, u64::MAX, PAGE_BYTES)?;

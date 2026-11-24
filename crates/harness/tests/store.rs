@@ -99,15 +99,33 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
     store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
-    assert_eq!(user_version(&dir), 3, "user_version counts the steps");
+    assert_eq!(user_version(&dir), 4, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
     let row = store.session("a").unwrap();
     assert_eq!((row.provider.as_str(), row.locked, row.model.as_deref(), row.provider_session.as_deref()), ("mock", true, Some("haiku"), Some("p-1")));
     drop(store);
-    assert_eq!(user_version(&dir), 3);
+    assert_eq!(user_version(&dir), 4);
 
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().pragma_update(None, "user_version", 9).unwrap();
     assert!(matches!(Store::open(&dir), Err(Error::NewerStore(9))), "a store from a newer harness is not opened");
+}
+
+#[test]
+fn store_a_store_of_three_steps_gets_step_four_and_its_sessions_have_no_login_effort_or_work() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("old", "mock", false, Path::new("/a"), Some("haiku")).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    for column in ["login", "effort", "repo", "base", "branch", "clone"] {
+        conn.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column}")).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 3).unwrap();
+    drop(conn);
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(user_version(&dir), 4);
+    let row = store.session("old").unwrap();
+    assert_eq!((row.model.as_deref(), row.login, row.effort, row.work), (Some("haiku"), None, None, None));
 }
 
 #[test]

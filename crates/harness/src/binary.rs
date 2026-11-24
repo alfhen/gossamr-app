@@ -43,6 +43,7 @@ impl CliPlaces {
     }
 
     /// Only `home` and its `Applications` folder.
+    #[cfg(any(test, feature = "testing"))]
     pub fn only_under(home: &Path) -> Self {
         Self { home: Some(home.to_path_buf()), bins: Vec::new(), apps: vec![home.join("Applications")] }
     }

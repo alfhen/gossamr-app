@@ -77,7 +77,7 @@ impl Driver {
 
     /// The variable that points the CLI at its login folder.
     pub fn folder_variable(self) -> &'static str {
-        harness::provider::Provider::from(self).folder_variable()
+        harness::provider::Provider::from(self).folder_variable().expect("Claude and Codex keep their login in a folder")
     }
 
     /// The variables that pick which account the CLI runs as, the folder variable first.
