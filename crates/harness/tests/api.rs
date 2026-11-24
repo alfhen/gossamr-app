@@ -620,8 +620,10 @@ fn big_say(len: usize) -> String {
 
 #[tokio::test]
 async fn limits_an_event_over_the_cap_is_cut_stored_and_sent_cut_and_readers_go_on_past_it() {
+    // Just over the cap shows the cut; a larger event would only time the redaction of a debug build (#458 item 6).
+    let len = 2 << 20;
     for locked in [false, true] {
-        let served = serve(&big_say(20 << 20));
+        let served = serve(&big_say(len));
         let mut client = connect(&served).await;
         let id = open_as(&mut client, locked, false).await;
         client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
@@ -629,7 +631,7 @@ async fn limits_an_event_over_the_cap_is_cut_stored_and_sent_cut_and_readers_go_
         let big = seen.iter().find(|event| matches!(&event.body, Body::Text { text } if text.starts_with('y'))).expect("the big text came, cut");
         let Body::Text { text } = &big.body else { unreachable!() };
         assert!(text.len() <= harness::event::EVENT_MAX, "locked {locked}: cut to the cap");
-        assert_eq!(big.cut, Some(((20 << 20) - text.len()) as u64), "locked {locked}: it says how much was cut");
+        assert_eq!(big.cut, Some((len - text.len()) as u64), "locked {locked}: it says how much was cut");
         let stored = served.harness.events(&id, big.seq - 1).unwrap();
         assert_eq!(stored[0].cut, big.cut, "locked {locked}: the cut is kept in the store");
         assert_eq!(matches!(stored[0].body, Body::Withheld { .. }), locked, "a locked session's text is still withheld");
