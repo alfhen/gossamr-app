@@ -74,6 +74,8 @@ struct Inner {
     locked_backlog_bytes: usize,
     /// The stored key of each token revoked, for the connections that proved it.
     revoked: broadcast::Sender<[u8; 32]>,
+    #[cfg(test)]
+    hooks: tests::Hooks,
 }
 
 /// A client of a locked session: every event while it keeps up within the backlog, and `lost` once it has not. Each
@@ -162,6 +164,8 @@ impl Harness {
                 locked_backlog: settings.locked_backlog.clamp(1, tokio::sync::Semaphore::MAX_PERMITS),
                 locked_backlog_bytes: settings.locked_backlog_bytes,
                 revoked: broadcast::channel(16).0,
+                #[cfg(test)]
+                hooks: tests::Hooks::default(),
             }),
         }
     }
@@ -495,7 +499,7 @@ impl Harness {
         let watchers = Arc::new(Mutex::new(watcher.into_iter().collect()));
         let stuck = Arc::new(AtomicBool::new(false));
         #[cfg(test)]
-        tests::before_reserve();
+        self.inner.hooks.before_reserve();
         let Plan { driver, cwd, locked, model, resume } = {
             let mut live = self.inner.live();
             if self.inner.closing.load(Ordering::Relaxed) {
@@ -548,7 +552,7 @@ impl Harness {
         };
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         #[cfg(test)]
-        tests::after_spawn(id);
+        self.inner.hooks.after_spawn(id);
         Ok((receiver, second))
     }
 }
@@ -929,7 +933,7 @@ impl Task {
         // `closed` is recorded under the lock a start takes the session by, so a resume's `started` comes after it.
         let mut live = self.inner.live();
         #[cfg(test)]
-        tests::before_closed();
+        self.inner.hooks.before_closed();
         self.emit(Body::Closed);
         if live.get(&self.id).is_some_and(|entry| entry.start == self.start) {
             live.remove(&self.id);
@@ -1079,7 +1083,7 @@ impl Task {
         match store.as_ref().ok_or(Error::ShutDown).and_then(|store| store.append_cut(&self.id, &body, now_ms(), cut)) {
             Ok(event) => {
                 #[cfg(test)]
-                tests::before_publish();
+                self.inner.hooks.before_publish();
                 self.publish(event);
                 true
             }
@@ -1139,45 +1143,71 @@ mod tests {
     use crate::mock::{Mock, Script};
 
     type Hook = Box<dyn FnOnce() + Send>;
-
-    /// Runs once, just before a task records its `closed`.
-    static BEFORE_CLOSED: Mutex<Option<Hook>> = Mutex::new(None);
-
-    pub(super) fn before_closed() {
-        let hook = BEFORE_CLOSED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
-
-    /// Told once when a start is about to take the session's lock to reserve it.
-    static BEFORE_RESERVE: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
-
-    /// Runs once, just after a session's task is spawned, with its id.
     type IdHook = Box<dyn FnOnce(&str) + Send>;
-    static AFTER_SPAWN: Mutex<Option<IdHook>> = Mutex::new(None);
 
-    pub(super) fn after_spawn(id: &str) {
-        let hook = AFTER_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
-        if let Some(hook) = hook {
-            hook(id);
+    /// Moments a test can act at, each set on one harness so tests that run at the same time never take each other's.
+    /// Each runs once.
+    #[derive(Default)]
+    pub(super) struct Hooks {
+        /// Just before a task records its `closed`.
+        before_closed: Mutex<Option<Hook>>,
+        /// Told when a start is about to take the session's lock to reserve it.
+        before_reserve: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+        /// Just after a session's task is spawned, with its id.
+        after_spawn: Mutex<Option<IdHook>>,
+        /// Just after an event is stored and before it is sent.
+        before_publish: Mutex<Option<Hook>>,
+    }
+
+    fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
+        slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+    }
+
+    fn set<T>(slot: &Mutex<Option<T>>, hook: T) {
+        *slot.lock().unwrap() = Some(hook);
+    }
+
+    impl Hooks {
+        pub(super) fn before_closed(&self) {
+            if let Some(hook) = take(&self.before_closed) {
+                hook();
+            }
+        }
+
+        pub(super) fn before_reserve(&self) {
+            if let Some(reached) = take(&self.before_reserve) {
+                let _ = reached.send(());
+            }
+        }
+
+        pub(super) fn after_spawn(&self, id: &str) {
+            if let Some(hook) = take(&self.after_spawn) {
+                hook(id);
+            }
+        }
+
+        pub(super) fn before_publish(&self) {
+            if let Some(hook) = take(&self.before_publish) {
+                hook();
+            }
         }
     }
 
-    /// Runs once, just after an event is stored and before it is sent.
-    static BEFORE_PUBLISH: Mutex<Option<Hook>> = Mutex::new(None);
-
-    pub(super) fn before_publish() {
-        let hook = BEFORE_PUBLISH.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
-        if let Some(hook) = hook {
-            hook();
-        }
-    }
-
-    pub(super) fn before_reserve() {
-        if let Some(reached) = BEFORE_RESERVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
-            let _ = reached.send(());
-        }
+    /// Holds a session's start until its first event is stored, and says whether it was within the time given.
+    fn hold_start_until_an_event(harness: &Harness) -> Arc<AtomicBool> {
+        let (seen, reading) = (Arc::new(AtomicBool::new(false)), harness.clone());
+        let kept = seen.clone();
+        set(&harness.inner.hooks.after_spawn, Box::new(move |id: &str| {
+            let given = std::time::Instant::now() + Duration::from_secs(10);
+            while std::time::Instant::now() < given {
+                if reading.events(id, 0).is_ok_and(|events| !events.is_empty()) {
+                    kept.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::yield_now();
+            }
+        }) as IdHook);
+        seen
     }
 
     fn starts_and_closes(harness: &Harness, id: &str) -> Vec<String> {
@@ -1196,12 +1226,13 @@ mod tests {
         let (resuming, resumed_id, id_for_hook) = (harness.clone(), id.clone(), id.clone());
         let worker: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::default();
         let kept = worker.clone();
-        *BEFORE_CLOSED.lock().unwrap() = Some(Box::new(move || {
+        let hooks = harness.clone();
+        set(&harness.inner.hooks.before_closed, Box::new(move || {
             // A client resumes from another thread at this moment. The hook waits until the resume has reached its
             // reservation, then gives its start a bounded time to record `started`: it can only if the lock this
             // task holds does not guard the reservation.
             let (reached, reaches) = std::sync::mpsc::channel();
-            *BEFORE_RESERVE.lock().unwrap() = Some(reached);
+            set(&hooks.inner.hooks.before_reserve, reached);
             let recorder = resuming.clone();
             *kept.lock().unwrap() = Some(std::thread::spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
@@ -1218,7 +1249,7 @@ mod tests {
             while std::time::Instant::now() < given && starts_and_closes(&recorder, &id_for_hook).len() < 2 {
                 std::thread::sleep(Duration::from_millis(5));
             }
-        }));
+        }) as Hook);
         harness.close(&id).unwrap();
         while events.recv().await.is_ok_and(|event| event.body != Body::Closed) {}
         for _ in 0..200 {
@@ -1244,7 +1275,7 @@ mod tests {
         let (watching, id_for_hook) = (harness.clone(), id.clone());
         let watched: Arc<Mutex<Option<std::thread::JoinHandle<_>>>> = Arc::default();
         let kept = watched.clone();
-        *BEFORE_PUBLISH.lock().unwrap() = Some(Box::new(move || {
+        set(&harness.inner.hooks.before_publish, Box::new(move || {
             // A client watches from another thread at this moment. The hook gives it a bounded time to read: it can
             // only if the session does not hold the store's lock while it sends.
             let (done, finished) = std::sync::mpsc::channel();
@@ -1254,7 +1285,7 @@ mod tests {
                 watch
             }));
             let _ = finished.recv_timeout(Duration::from_millis(500));
-        }));
+        }) as Hook);
         harness.send(&id, "go").unwrap();
         while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
         let handle = watched.lock().unwrap().take().expect("the hook ran");
@@ -1272,15 +1303,9 @@ mod tests {
         let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
-        let reading = harness.clone();
-        // The session publishes its `started` before `open_watched` returns.
-        *AFTER_SPAWN.lock().unwrap() = Some(Box::new(move |id: &str| {
-            let given = std::time::Instant::now() + Duration::from_secs(5);
-            while reading.events(id, 0).map_or(true, |events| events.is_empty()) && std::time::Instant::now() < given {
-                std::thread::yield_now();
-            }
-        }));
+        let seen = hold_start_until_an_event(&harness);
         let (_, _, feed) = harness.open_watched(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).unwrap();
+        assert!(seen.load(Ordering::Relaxed), "the session published its `started` before `open_watched` returned");
         let Feed::Stored(mut events) = feed else { panic!("an unlocked session's feed") };
         let first = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
         assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{first:?}");
@@ -1292,14 +1317,9 @@ mod tests {
         let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
-        let reading = harness.clone();
-        *AFTER_SPAWN.lock().unwrap() = Some(Box::new(move |id: &str| {
-            let given = std::time::Instant::now() + Duration::from_secs(5);
-            while reading.events(id, 0).map_or(true, |events| events.is_empty()) && std::time::Instant::now() < given {
-                std::thread::yield_now();
-            }
-        }));
+        let seen = hold_start_until_an_event(&harness);
         let (_, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        assert!(seen.load(Ordering::Relaxed), "the session published its `started` before `open` returned");
         let first = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
         assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{first:?}");
     }
@@ -1317,11 +1337,11 @@ mod tests {
         // What the row says the moment the task exists: from then on it could end and be handed over again.
         let seen: Arc<Mutex<Option<bool>>> = Arc::default();
         let (kept, file) = (seen.clone(), dir.join("harness.sqlite"));
-        *AFTER_SPAWN.lock().unwrap() = Some(Box::new(move |id: &str| {
+        set(&harness.inner.hooks.after_spawn, Box::new(move |id: &str| {
             let raw = rusqlite::Connection::open(&file).unwrap();
             let marked: bool = raw.query_row("SELECT handed_over FROM sessions WHERE id = ?1", [id], |row| row.get(0)).unwrap();
             *kept.lock().unwrap() = Some(marked);
-        }));
+        }) as IdHook);
         harness.take_back(&id).await.unwrap();
         assert_eq!(*seen.lock().unwrap(), Some(false), "cleared before the task was spawned");
     }
