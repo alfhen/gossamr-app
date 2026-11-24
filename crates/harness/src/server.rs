@@ -138,7 +138,7 @@ impl Server {
         let (asks, mut asked) = mpsc::unbounded_channel::<ShutdownAsk>();
         let mut shutting = None;
         let mut connections = JoinSet::new();
-        let (proving, proven) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (proving, proven, turning) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         loop {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
@@ -147,8 +147,11 @@ impl Server {
                             Some(slot) => {
                                 connections.spawn(connection(harness.clone(), stream, limits, slot, proven.clone(), asks.clone()));
                             }
+                            // As many are told why as may prove; any more are dropped at once.
                             None => {
-                                tokio::spawn(turn_away(stream, limits.proving));
+                                if let Some(slot) = Counted::take(&turning, limits.proving) {
+                                    tokio::spawn(turn_away(stream, limits.proving, slot));
+                                }
                             }
                         }
                     }
@@ -168,15 +171,23 @@ impl Server {
         // Both before the store goes, so neither can be a next harness's.
         let _ = std::fs::remove_file(dir.join(crate::api::SOCKET));
         let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
+        // Every client that asked gets the answer; one that asks from now on does it itself.
+        asked.close();
+        let mut shutting: Vec<ShutdownAsk> = shutting.into_iter().collect();
+        while let Ok(ask) = asked.try_recv() {
+            shutting.push(ask);
+        }
         let left = harness.shutdown().await;
         if !left.is_empty() {
             eprintln!("harness: shut down without waiting longer for the stuck agents of sessions {}", left.join(", "));
         }
         // A client that asked for this gets its answer, if it takes it within a second, before its connection ends.
-        if let Some(ShutdownAsk { left: answer, sent }) = shutting {
-            let _ = answer.send(left);
-            let _ = tokio::time::timeout(CLOSE_WITHIN, sent).await;
+        let mut sending = JoinSet::new();
+        for ShutdownAsk { left: answer, sent } in shutting {
+            let _ = answer.send(left.clone());
+            sending.spawn(sent);
         }
+        let _ = tokio::time::timeout(CLOSE_WITHIN, sending.join_all()).await;
         connections.shutdown().await;
         Ok(())
     }
@@ -202,7 +213,7 @@ fn same_user(stream: &UnixStream) -> bool {
 }
 
 /// Tells a connection past the cap of those proving why it is closed, within a second.
-async fn turn_away(stream: UnixStream, proving: usize) {
+async fn turn_away(stream: UnixStream, proving: usize, _slot: Counted) {
     let _ = tokio::time::timeout(Duration::from_secs(1), async {
         let mut ws = accept_async_with_config(stream, Some(config())).await.ok()?;
         let error = format!("the harness has {proving} connections still proving a token: try again");
@@ -282,9 +293,9 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
         tokio::pin!(sending);
         let sent = loop {
             tokio::select! {
-                sent = &mut sending => break sent.is_ok(),
+                sent = &mut sending => break Some(sent.is_ok()),
                 heard = revoked.recv() => if revoked_for(&harness, &key, heard) {
-                    break false;
+                    break None;
                 },
             }
         };
@@ -292,8 +303,11 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
         if let Some(done) = client.sent.take() {
             let _ = done.send(());
         }
-        if !sent {
-            break;
+        match sent {
+            Some(true) => {}
+            Some(false) => break,
+            // A close would flush the write the revoke cut short, so the connection is dropped as it is.
+            None => return,
         }
     }
     // Only a revoke ends the loop: it closes the connection with the reason, if the client will take it in time.
@@ -446,12 +460,16 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
     let mut last = after;
     // The store is read only up to where the feed begins: an event stored after that comes on the feed.
     let (page, more, upto) = stored;
+    let mut lost = None;
     match pages(&harness, &session, page, more, upto, &mut last, &out).await {
-        Some(false) => {}
-        Some(true) => return finish(&out, session).await,
+        Some(Paged::Done) => {}
+        Some(Paged::Closed) => return finish(&out, session).await,
+        Some(Paged::Short) => {
+            lost = Some(format!("events were lost: the sweep deleted the stored events of session {session} after {last}, up to {upto}, before they were read"));
+            live = None;
+        }
         None => return,
     }
-    let mut lost = None;
     loop {
         let event = match &mut live {
             None => break,
@@ -472,8 +490,8 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
                 Ok(event) => event,
                 // What it missed is in the store.
                 Err(RecvError::Lagged(_)) => match pages(&harness, &session, vec![], true, u64::MAX, &mut last, &out).await {
-                    Some(false) => continue,
-                    Some(true) => break,
+                    Some(Paged::Done | Paged::Short) => continue,
+                    Some(Paged::Closed) => break,
                     None => return,
                 },
                 Err(RecvError::Closed) => break,
@@ -494,9 +512,18 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
     let _ = out.send(Reply { session: Some(session), end: true, error: lost, ..Reply::default() }).await;
 }
 
-/// Pushes `page`, then, while `more`, the store's next pages after `last` and up to `upto`. Some(true) once it has
-/// pushed `closed`, Some(false) when the store has no more, None when the client has gone.
-async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more: bool, upto: u64, last: &mut u64, out: &Sender<Reply>) -> Option<bool> {
+enum Paged {
+    /// It pushed `closed`.
+    Closed,
+    /// The store has no more up to `upto`.
+    Done,
+    /// The store has no more, short of `upto`: its rows went while they were read.
+    Short,
+}
+
+/// Pushes `page`, then, while `more`, the store's next pages after `last` and up to `upto`. None when the client has
+/// gone.
+async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more: bool, upto: u64, last: &mut u64, out: &Sender<Reply>) -> Option<Paged> {
     loop {
         for event in page {
             *last = event.seq;
@@ -505,11 +532,11 @@ async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more:
                 return None;
             }
             if closed {
-                return Some(true);
+                return Some(Paged::Closed);
             }
         }
         if !more {
-            return Some(false);
+            return Some(if upto != u64::MAX && *last < upto { Paged::Short } else { Paged::Done });
         }
         (page, more) = harness.events_page(session, *last, upto, PAGE_BYTES).ok()?;
     }

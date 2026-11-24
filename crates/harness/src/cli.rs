@@ -137,11 +137,18 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
     while let Some(event) = next_event(client).await? {
         println!("{}", serde_json::to_string(&event)?);
         match event.body {
-            Body::Permission { id, .. } => {
-                if let Some(decision) = answers.next() {
+            Body::Permission { id, .. } => match answers.next() {
+                // The harness refuses it, and the agent would wait on: the session is closed, and the run fails.
+                Some(Decision::Allow) if event.cut.is_some() => {
+                    eprintln!("harness: {id} was cut to fit, so not all it asks is shown and it can only be denied; closing the session");
+                    ok = false;
+                    let _ = client.call(Op::Close { session: session.clone() }).await;
+                }
+                Some(decision) => {
                     client.call(Op::Answer { session: session.clone(), request: id, decision, message: None }).await?;
                 }
-            }
+                None => {}
+            },
             body if body.ends_turn() => {
                 ended = true;
                 ok &= !matches!(body, Body::Failed { .. });

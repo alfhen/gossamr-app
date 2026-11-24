@@ -187,15 +187,14 @@ impl Harness {
         };
         let driver = self.driver(&spec.provider)?;
         let id = random_hex(8);
-        self.inner.with_store(|store| {
+        // The row is made where the start checks for a shutdown, so a refused open leaves none.
+        let (events, second) = self.start(&id, watcher, false, |store| {
             store.create_session(&id, &spec.provider, spec.locked, &spec.cwd, spec.model.as_deref())?;
             if spec.ends_with_client {
                 store.set_ends_with_client(&id)?;
             }
-            Ok(())
+            Ok(Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None })
         })?;
-        let plan = Plan { driver, cwd: spec.cwd, locked: spec.locked, model: spec.model, resume: None };
-        let (events, second) = self.start(&id, watcher, false, |_| Ok(plan))?;
         Ok((id, events, feed.unwrap_or(Feed::Stored(second))))
     }
 
@@ -291,9 +290,16 @@ impl Harness {
         self.stop(id, Request::HandOver)
     }
 
+    /// The first stop wins: a hand over after another stop is refused, as it would be dropped with the session's other
+    /// requests, and a close after one has nothing more to do.
     fn stop(&self, id: &str, request: Request) -> Result<()> {
         let live = self.live(id)?;
-        live.stopping.store(true, Ordering::Relaxed);
+        if live.stopping.swap(true, Ordering::Relaxed) {
+            return match request {
+                Request::HandOver => Err(Error::Refused(format!("session {id} is already stopping, so it was not handed over"))),
+                _ => Ok(()),
+            };
+        }
         live.requests.send(request).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 

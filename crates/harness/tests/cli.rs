@@ -158,6 +158,23 @@ fn with_token(command: &mut Command, token: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+/// As `with_token`, but a child still running after `limit` is killed, and the test fails.
+fn with_token_within(command: &mut Command, token: &str, limit: std::time::Duration) -> std::process::Output {
+    let mut child = command.spawn().unwrap();
+    give_token(&mut child, token);
+    let pid = child.id() as libc::pid_t;
+    let (done, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait_with_output().unwrap()));
+    match output.recv_timeout(limit) {
+        Ok(out) => out,
+        Err(_) => {
+            // SAFETY: kill has no preconditions; the waiting thread reaps the child.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            panic!("the command was still running after {limit:?}");
+        }
+    }
+}
+
 fn give_token(child: &mut std::process::Child, token: &str) {
     use std::io::Write;
     writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
@@ -281,8 +298,8 @@ fn client_a_run_whose_harness_closes_before_its_turn_ends_fails() {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let out = with_token(&mut out, &harness::auth::Token::random().hex());
-    runtime.block_on(fake).unwrap();
+    let out = with_token_within(&mut out, &harness::auth::Token::random().hex(), std::time::Duration::from_secs(60));
+    runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(60), fake).await }).expect("the fake harness ends").unwrap();
     assert_eq!(out.status.code(), Some(1), "no turn ended, so the run did not succeed");
     assert_eq!(printed(&out).len(), 1, "it printed the one event");
 }
@@ -430,8 +447,8 @@ fn client_events_follow_fails_and_says_why_when_its_watch_lost_events() {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let out = with_token(&mut out, &harness::auth::Token::random().hex());
-    runtime.block_on(fake).unwrap();
+    let out = with_token_within(&mut out, &harness::auth::Token::random().hex(), std::time::Duration::from_secs(60));
+    runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(60), fake).await }).expect("the fake harness ends").unwrap();
     assert_eq!(out.status.code(), Some(1), "an incomplete stream is not a success");
     assert!(String::from_utf8_lossy(&out.stderr).contains("events were lost"), "it says why");
     assert_eq!(printed(&out).len(), 1, "it printed what came");
@@ -449,4 +466,16 @@ fn run_a_script_that_waits_for_a_prompt_with_steps_left_fails_and_one_that_waits
     assert!(String::from_utf8(out.stderr).unwrap().contains("the script waits for a prompt; give one on the command line"));
     let out = run(&tmp.path().join("two"), &["--script".as_ref(), trailing.as_os_str()]);
     assert!(out.status.success(), "a script that waits for one more prompt at its end has played to its end");
+}
+
+#[test]
+fn client_run_told_to_allow_a_request_that_was_cut_closes_the_session_and_fails() {
+    let big = "q".repeat(2 << 20);
+    let script = format!("{{\"prompt\": null}}\n{{\"permission\": {{\"kind\": \"command\", \"tool\": \"Bash\", \"input\": {{\"command\": \"{big}\"}}}}}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}");
+    let serving = serve(&script);
+    let out = with_token_within(&mut client(&serving, &["run", "--provider", "mock", "--answer", "allow", "go"]), &serving.token, std::time::Duration::from_secs(60));
+    assert_eq!(out.status.code(), Some(1), "the request was not allowed");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("can only be denied; closing the session"));
+    let printed = printed(&out);
+    assert_eq!(printed.last().map(|event| &event["type"]), Some(&serde_json::json!("closed")), "it read on until the session closed");
 }

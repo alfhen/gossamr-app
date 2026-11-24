@@ -938,14 +938,17 @@ fn many_lines(says: usize) -> String {
         .join("\n")
 }
 
-/// Waits until the session has closed, reading nothing from the client.
-async fn until_closed(served: &Served, id: &str) {
+/// Waits until the session has closed, reading nothing from the client. It subscribes now, so a session that closes
+/// before the wait is polled is still seen to close.
+fn until_closed(served: &Served, id: &str) -> impl std::future::Future<Output = ()> + use<> {
     let mut done = served.harness.subscribe(id).unwrap();
-    loop {
-        match done.recv().await {
-            Ok(event) if event.body == Body::Closed => return,
-            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-            Err(e) => panic!("{e}"),
+    async move {
+        loop {
+            match done.recv().await {
+                Ok(event) if event.body == Body::Closed => return,
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(e) => panic!("{e}"),
+            }
         }
     }
 }
@@ -1045,4 +1048,81 @@ async fn shutdown_the_socket_and_descriptor_are_gone_when_a_client_gets_its_answ
     let answer = client.call(Op::Shutdown).await.unwrap();
     assert_eq!(answer, json!({ "left": [] }));
     assert!(!served.dir.join(SOCKET).exists() && !served.dir.join(DESCRIPTOR).exists(), "removed before the store was let go");
+}
+
+#[tokio::test]
+async fn serve_past_the_proving_cap_only_as_many_as_may_prove_are_told_why_and_the_rest_are_dropped() {
+    let served = serve_with(SCRIPT, Limits { proving: 1, ..Limits::default() });
+    // One proving and one being told why, neither of which says anything.
+    let _held = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    let _told = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
+    match Client::connect(&served.dir, &served.token).await {
+        Err(Error::Said(why)) => panic!("a third was told why: {why}"),
+        Err(_) => {}
+        Ok(_) => panic!("a third connected past the cap"),
+    }
+}
+
+#[tokio::test]
+async fn tokens_a_revoke_that_cuts_a_write_short_drops_the_connection_without_flushing_it() {
+    let served = serve_set(&many_lines(3_000), Limits { proven: 2, ..Limits::default() }, settings(4));
+    let mut admin = connect(&served).await;
+    let other = Token::random();
+    admin.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
+    let id = open(&mut admin).await;
+    let closing = until_closed(&served, &id);
+    // The watcher reads nothing, so the harness's write to it is cut short by the revoke.
+    let (mut stuck, hello) = raw(&served).await;
+    stuck.send(Message::text(json!(Proof { proof: encode(&other.answer(hello.as_bytes())) }).to_string())).await.unwrap();
+    stuck.next().await;
+    stuck.send(Message::text(json!({ "id": 1, "op": "watch", "session": id, "after": 0 }).to_string())).await.unwrap();
+    admin.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    closing.await;
+    let listed = admin.call(Op::TokenList).await.unwrap();
+    let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
+    admin.call(Op::TokenRevoke { token: other_id }).await.unwrap();
+    // What reaches it now is only what the socket already held: no close follows, as a close would send the rest first.
+    loop {
+        match tokio::time::timeout(Duration::from_secs(60), stuck.next()).await.expect("the connection ends") {
+            Some(Ok(Message::Close(frame))) => panic!("a close came after the revoke: {frame:?}"),
+            Some(Ok(_)) => continue,
+            Some(Err(_)) | None => break,
+        }
+    }
+}
+
+#[tokio::test]
+async fn shutdown_two_clients_that_ask_at_once_both_get_the_answer() {
+    let served = serve(SCRIPT);
+    let (mut first, mut second) = (connect(&served).await, connect(&served).await);
+    let (one, two) = tokio::join!(first.call(Op::Shutdown), second.call(Op::Shutdown));
+    for answer in [one, two] {
+        assert!(answer.as_ref().is_ok_and(|said| said["left"].is_array()), "{answer:?}");
+    }
+}
+
+#[tokio::test]
+async fn events_a_watch_whose_stored_events_were_swept_says_they_were_lost() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    let closing = until_closed(&served, &id);
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    closing.await;
+    // The watch `open` began ends at `closed`.
+    while !matches!(tokio::time::timeout(Duration::from_secs(60), client.push()).await.unwrap().unwrap(), Some(Push::End { .. }) | None) {}
+    // As if it had been idle 91 days: the sweep deletes its rows.
+    let old = harness::store::now_ms() - 91 * 24 * 60 * 60 * 1000;
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET last_ms = ?1", [old]).unwrap();
+    served.harness.sweep().unwrap();
+    client.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    let mut end = None;
+    while let Some(push) = tokio::time::timeout(Duration::from_secs(60), client.push()).await.unwrap().unwrap() {
+        if !matches!(push, Push::Event { .. }) {
+            end = Some(push);
+            break;
+        }
+    }
+    assert!(matches!(&end, Some(Push::Lost { reason, .. }) if reason.contains("sweep")), "{end:?}");
 }

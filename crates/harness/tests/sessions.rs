@@ -1710,3 +1710,43 @@ async fn question_one_whose_id_redaction_changes_is_answered_by_the_id_the_clien
     let Body::Question { id: seen, .. } = &asked.last().unwrap().body else { unreachable!() };
     harness.answer_question(&id, seen, "this one".into()).expect("the id the client saw is the open one");
 }
+
+#[tokio::test]
+async fn hand_over_after_a_close_is_refused_and_the_session_closes_as_closed() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock("{\"prompt\": null}"), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    harness.close(&id).unwrap();
+    assert!(harness.hand_over(&id).is_err(), "the close came first, so the hand over would be dropped");
+    let seen = until(&mut events, |body| *body == Body::Closed).await;
+    assert!(!seen.iter().any(|event| event.body == Body::HandedOver), "{seen:?}");
+}
+
+#[tokio::test]
+async fn shutdown_an_open_it_refuses_leaves_no_session_row() {
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stuck".into(), Arc::new(Stopper { going: Going::WhenLet(let_go.clone()) })), ("mock".into(), Arc::new(mock(LIFE)))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (stuck, mut events) = open_on(&harness, "stuck", false).await;
+    harness.send(&stuck, "run").unwrap();
+    until(&mut events, |body| matches!(body, Body::TurnStarted)).await;
+    // The store stays open while shutdown waits for the stuck agent, so a refused open could still make a row.
+    let stopping = harness.clone();
+    let shutting = tokio::spawn(async move { stopping.shutdown().await });
+    let mut opened = 0;
+    loop {
+        match harness.open(harness::session::Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Default::default() }).await {
+            Ok(_) => opened += 1,
+            Err(Error::ShutDown) => break,
+            Err(e) => panic!("{e}"),
+        }
+        tokio::task::yield_now().await;
+    }
+    tokio::time::timeout(Duration::from_secs(30), shutting).await.expect("shutdown does not wait for ever").unwrap();
+    let_go.notify_one();
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    let rows: i64 = raw.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0)).unwrap();
+    assert_eq!(rows, 1 + opened, "only the sessions that started have rows");
+}
