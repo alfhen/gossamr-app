@@ -1,15 +1,15 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use harness::driver::Driver;
+use harness::driver::{Capabilities, Command, Driver, Launch, Link, OpenError};
 use harness::event::{Body, Event};
 use harness::mock::{Mock, Script};
 use harness::session::{Harness, Open, Settings};
 use harness::store::Store;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 /// A data folder under a temp folder that the harness makes itself.
 pub fn data_dir() -> (tempfile::TempDir, PathBuf) {
@@ -32,7 +32,7 @@ pub fn harness_on(store: Store, mock: &Mock, limit: usize) -> Harness {
 }
 
 pub fn settings(turn_limit: usize) -> Settings {
-    Settings { turn_limit }
+    Settings { turn_limit, ..Settings::default() }
 }
 
 pub async fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiver<Event>) {
@@ -40,7 +40,7 @@ pub async fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiv
 }
 
 pub async fn open_on(harness: &Harness, provider: &str, locked: bool) -> (String, broadcast::Receiver<Event>) {
-    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), model: None }).await.unwrap()
+    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), ..Default::default() }).await.unwrap()
 }
 
 pub async fn next(events: &mut broadcast::Receiver<Event>) -> Event {
@@ -122,4 +122,56 @@ pub async fn reopen(dir: &Path) -> Store {
         }
     }
     panic!("the store stayed locked");
+}
+
+/// How a test agent goes after a stop.
+#[derive(Clone)]
+pub enum Going {
+    /// 200 ms after the stop, saying a last word.
+    Slowly,
+    /// Only when killed.
+    WhenKilled(Arc<Mutex<bool>>),
+    /// Not even when killed, until the test lets it.
+    WhenLet(Arc<tokio::sync::Notify>),
+}
+
+/// An agent that starts a turn on each prompt and goes after a stop as `going` says. Its driver gives 300 ms for a
+/// stop.
+pub struct Stopper {
+    pub going: Going,
+}
+
+impl Driver for Stopper {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { stop_takes_up_to_ms: Some(300), ..Capabilities::default() }
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: "stopper".into(), resumed: false }).unwrap();
+        let going = self.going.clone();
+        tokio::spawn(async move {
+            loop {
+                match (commands_rx.recv().await, &going) {
+                    (Some(Command::Prompt(_)), _) => {
+                        let _ = output.send(Body::TurnStarted);
+                    }
+                    (Some(Command::Stop), Going::Slowly) => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let _ = output.send(Body::Text { text: "stopped at last".into() });
+                        return;
+                    }
+                    (Some(Command::Kill), Going::WhenKilled(killed)) => {
+                        *killed.lock().unwrap() = true;
+                        return;
+                    }
+                    (Some(Command::Kill), Going::WhenLet(let_go)) => return let_go.notified().await,
+                    (None, _) => return,
+                    _ => {}
+                }
+            }
+        });
+        Ok(Link { commands, output: receiver })
+    }
 }

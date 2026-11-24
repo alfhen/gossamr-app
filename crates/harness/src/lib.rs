@@ -48,13 +48,13 @@ pub const USAGE: &str = "usage: harness --version
        harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]
        harness serve [--data <folder>] [--mock-script <file>]   (the first client token on stdin)
   against the harness serving --data <folder>, with the client token on stdin (--token-stdin):
-       harness run --provider <name> [--answer allow|deny]... <prompt>
-       harness sessions
+       harness run --provider <name> [--answer allow|deny]... [--ends-with-client] <prompt>
+       harness sessions | shutdown | token list | token revoke <id>
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
        harness answer <session> <request> allow|deny [--message <text>]
        harness token new
-  A safe place for the token is a Keychain item that trusts no app, so each read asks you:
+  One place to keep the token is a Keychain item that trusts no app; check that reading it asks you first:
        security add-generic-password -s gossamr-harness -a client -T \"\" -w     (paste the token when asked)
        security find-generic-password -s gossamr-harness -a client -w | harness sessions --token-stdin";
 

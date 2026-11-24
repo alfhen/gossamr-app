@@ -28,7 +28,8 @@ pub enum Body {
     Prompted { text: String },
     /// The prompt waits because the limit of sessions in a turn is reached.
     Waiting,
-    /// A cancel dropped the prompts that waited for a slot; no turn had started.
+    /// Prompts the agent never got were dropped: a cancel dropped those that waited for a slot, or the session stopped
+    /// with prompts still queued.
     PromptsDropped,
     /// A turn began, prompted or not. A driver sends it once per turn, before anything the turn says, and ends every
     /// turn it starts with exactly one `turn_ended` or `failed`.
@@ -52,6 +53,8 @@ pub enum Body {
     TurnEnded { how: TurnEnd },
     /// The turn failed, or the session could not start or go on. Either way no turn is running after it.
     Failed { kind: FailKind, reason: String },
+    /// The session was handed over to Terminal; `closed` follows. Its provider id is kept, to resume it there.
+    HandedOver,
     Closed,
     /// What the store gives back for an event whose private fields it does not keep: a locked session's, one dropped
     /// at clean-up or by age, one too large to keep even when cut, or one of a type this build does not know (so a later step can add an event without a
@@ -209,8 +212,9 @@ mod tests {
             Body::Question { .. } => 11,
             Body::TurnEnded { .. } => 12,
             Body::Failed { .. } => 13,
-            Body::Closed => 14,
-            Body::Withheld { .. } => 15,
+            Body::HandedOver => 14,
+            Body::Closed => 15,
+            Body::Withheld { .. } => 16,
         }
     }
 
@@ -232,6 +236,7 @@ mod tests {
             Body::Question { id: "i".into(), text: "t".into() },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
+            Body::HandedOver,
             Body::Closed,
         ]
     }

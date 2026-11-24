@@ -44,7 +44,7 @@ async fn play(script: Script, dir: &std::path::Path, args: RunArgs) -> Result<bo
     let harness = Harness::new(Store::open(dir)?, vec![("mock".into(), Arc::new(mock.clone()))], Settings::default());
     let client = mock.client();
     let cwd = std::env::current_dir()?;
-    let (id, events) = harness.open(Open { provider: "mock".into(), locked: false, cwd, model: None }).await?;
+    let (id, events) = harness.open(Open { provider: "mock".into(), cwd, ..Open::default() }).await?;
     let mut ok = true;
     let followed = drive(&harness, &id, events, client, args.answers, args.prompt, |event| {
         println!("{}", serde_json::to_string(event).expect("an event always serializes"));

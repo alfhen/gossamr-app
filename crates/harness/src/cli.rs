@@ -25,12 +25,13 @@ pub enum Command {
     Events { session: String, after: u64, follow: bool },
     /// Opens a session on the harness, sends the prompt, prints its events, answers its permission requests as
     /// `answers` say (and leaves the rest for `harness answer`), and closes it when its turn ends.
-    Run { provider: String, answers: Vec<Decision>, prompt: String },
+    Run { provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool },
     /// Makes a token, adds it with a valid one, and prints it.
     TokenNew,
 }
 
-/// A place for the client token that asks the person on each read: a Keychain item that trusts no app.
+/// A suggested place for the client token: a Keychain item that trusts no app. Whether reading it asks the person each
+/// time is for them to check.
 pub const KEYCHAIN_ADD: &str = r#"security add-generic-password -s gossamr-harness -a client -T "" -w"#;
 pub const KEYCHAIN_READ: &str = "security find-generic-password -s gossamr-harness -a client -w";
 
@@ -41,7 +42,7 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
     let mut args = args.iter().copied();
     while let Some(arg) = args.next() {
         match arg {
-            "--follow" => flags.push((arg, None)),
+            "--follow" | "--ends-with-client" => flags.push((arg, None)),
             "--token-stdin" => *token_stdin = true,
             "--data" => *data = Some(args.next()?.into()),
             flag if flag.starts_with("--") => flags.push((flag, Some(args.next()?))),
@@ -59,7 +60,10 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
     let call = |op: Op| Some(Command::Call(op));
     match (command, words.as_slice()) {
         ("sessions", []) if known(&[]) => call(Op::Sessions),
+        ("shutdown", []) if known(&[]) => call(Op::Shutdown),
         ("token", [new]) if new == "new" && known(&[]) => Some(Command::TokenNew),
+        ("token", [list]) if list == "list" && known(&[]) => call(Op::TokenList),
+        ("token", [revoke, id]) if revoke == "revoke" && known(&[]) => call(Op::TokenRevoke { token: id.parse().ok()? }),
         ("events", [session]) if known(&["--after", "--follow"]) => {
             let after = flag("--after").flatten().map_or(Some(0), |after| after.parse().ok())?;
             Some(Command::Events { session: session.clone(), after, follow: flag("--follow").is_some() })
@@ -69,10 +73,10 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
             let message = flag("--message").flatten().map(str::to_owned);
             call(Op::Answer { session: session.clone(), request: request.clone(), decision: decision(word)?, message })
         }
-        ("run", [prompt]) if known(&["--provider", "--answer"]) => {
+        ("run", [prompt]) if known(&["--provider", "--answer", "--ends-with-client"]) => {
             let answers = flags.iter().filter(|(flag, _)| *flag == "--answer").map(|(_, word)| decision((*word)?)).collect::<Option<_>>()?;
             let provider = flag("--provider")??.to_owned();
-            Some(Command::Run { provider, answers, prompt: prompt.clone() })
+            Some(Command::Run { provider, answers, prompt: prompt.clone(), ends_with_client: flag("--ends-with-client").is_some() })
         }
         _ => None,
     }
@@ -104,31 +108,47 @@ pub async fn execute(command: Command, data: Option<PathBuf>, token_stdin: bool)
         }
         Command::Events { session, after, follow: true } => {
             client.call(Op::Watch { session, after }).await?;
-            while let Some(Push::Event { event, .. }) = client.push().await? {
+            while let Some(event) = next_event(&mut client).await? {
                 println!("{}", serde_json::to_string(&event)?);
             }
             Ok(true)
         }
-        Command::Run { provider, answers, prompt } => run(&mut client, provider, answers, prompt).await,
+        Command::Run { provider, answers, prompt, ends_with_client } => run(&mut client, provider, answers, prompt, ends_with_client).await,
     }
 }
 
-async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String) -> Result<bool> {
+/// The next pushed event, None at the end of the watch; a watch that lost events is an error that says why.
+async fn next_event(client: &mut Client) -> Result<Option<crate::event::Event>> {
+    match client.push().await? {
+        Some(Push::Event { event, .. }) => Ok(Some(event)),
+        Some(Push::Lost { reason, .. }) => Err(Error::Said(reason)),
+        Some(Push::End { .. }) | None => Ok(None),
+    }
+}
+
+async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool) -> Result<bool> {
     let cwd = std::env::current_dir()?;
-    let opened = client.call(Op::Open { provider, cwd, locked: false, model: None }).await?;
+    let opened = client.call(Op::Open { provider, cwd, locked: false, model: None, ends_with_client }).await?;
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
     client.call(Op::Send { session: session.clone(), text: prompt }).await?;
     // Done only once a turn has ended, and not in a failure: a connection that drops before then is not done.
     let (mut answers, mut ok, mut ended) = (answers.into_iter(), true, false);
-    while let Some(Push::Event { event, .. }) = client.push().await? {
+    while let Some(event) = next_event(client).await? {
         println!("{}", serde_json::to_string(&event)?);
         match event.body {
-            Body::Permission { id, .. } => {
-                if let Some(decision) = answers.next() {
+            Body::Permission { id, .. } => match answers.next() {
+                // The harness refuses it, and the agent would wait on: the session is closed, and the run fails.
+                Some(Decision::Allow) if event.cut.is_some() => {
+                    eprintln!("harness: {id} was cut to fit, so not all it asks is shown and it can only be denied; closing the session");
+                    ok = false;
+                    let _ = client.call(Op::Close { session: session.clone() }).await;
+                }
+                Some(decision) => {
                     client.call(Op::Answer { session: session.clone(), request: id, decision, message: None }).await?;
                 }
-            }
+                None => {}
+            },
             body if body.ends_turn() => {
                 ended = true;
                 ok &= !matches!(body, Body::Failed { .. });
@@ -143,8 +163,10 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
 
 /// The client token, from the first line of stdin, which `--token-stdin` says holds it.
 fn read_token(from_stdin: bool) -> Result<Token> {
-    if !from_stdin {
-        return Err(Error::Refused(format!("give the client token on stdin with --token-stdin, for example: {KEYCHAIN_READ} | harness sessions --token-stdin")));
+    // SAFETY: isatty has no preconditions.
+    let terminal = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
+    if !from_stdin || terminal {
+        return Err(Error::Refused(format!("give the client token on stdin with --token-stdin, piped from where you keep it, for example: {KEYCHAIN_READ} | harness sessions --token-stdin")));
     }
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;

@@ -99,12 +99,12 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
     store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
-    assert_eq!(user_version(&dir), 2, "user_version counts the steps");
+    assert_eq!(user_version(&dir), 3, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
     let row = store.session("a").unwrap();
     assert_eq!((row.provider.as_str(), row.locked, row.model.as_deref(), row.provider_session.as_deref()), ("mock", true, Some("haiku"), Some("p-1")));
     drop(store);
-    assert_eq!(user_version(&dir), 2);
+    assert_eq!(user_version(&dir), 3);
 
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().pragma_update(None, "user_version", 9).unwrap();
     assert!(matches!(Store::open(&dir), Err(Error::NewerStore(9))), "a store from a newer harness is not opened");
@@ -223,7 +223,7 @@ fn tokens_the_store_keeps_stored_keys_once_each_and_never_a_token() {
     let token = harness::auth::Token::random();
     store.add_client_token(&token.stored_key()).unwrap();
     store.add_client_token(&token.stored_key()).unwrap();
-    assert_eq!(store.client_tokens().unwrap(), [token.stored_key()]);
+    assert_eq!(store.client_tokens().unwrap().iter().map(|token| token.stored_key).collect::<Vec<_>>(), [token.stored_key()]);
     drop(store);
     let disk = bytes_on_disk(&dir);
     assert!(!disk.windows(32).any(|window| window == harness::auth::decode(&token.hex()).unwrap()), "the token's bytes are nowhere on disk");
@@ -247,4 +247,106 @@ async fn sweep_runs_on_its_timer_with_no_read_or_open() {
     swept.changed().await.unwrap();
     assert!(!payload().contains("old"), "the timer's sweep dropped the payload with no read or open");
     task.abort();
+}
+
+#[test]
+fn sweep_deletes_the_rows_of_old_cleaned_and_old_idle_sessions() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let day = 24 * 60 * 60 * 1000;
+    let now = now_ms();
+    // a: cleaned 31 days ago. b: never cleaned, last event 91 days ago. c and d: a day short of each.
+    for (id, last_event) in [("a", now - day), ("b", now - 91 * day), ("c", now - day), ("d", now - 89 * day)] {
+        store.create_session(id, "mock", false, Path::new("/x"), None).unwrap();
+        store.append(id, &text("one"), last_event - 1).unwrap();
+        store.append(id, &text("two"), last_event).unwrap();
+    }
+    store.clean_up("a").unwrap();
+    store.clean_up("c").unwrap();
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET cleaned_ms = ?1 WHERE id = 'a'", [now - 31 * day]).unwrap();
+    raw.execute("UPDATE sessions SET cleaned_ms = ?1 WHERE id = 'c'", [now - 29 * day]).unwrap();
+    store.sweep(now).unwrap();
+    let rows = |id: &str| -> i64 { raw.query_row("SELECT COUNT(*) FROM events WHERE session = ?1", [id], |row| row.get(0)).unwrap() };
+    assert_eq!((rows("a"), rows("b"), rows("c"), rows("d")), (0, 0, 2, 2));
+    assert_eq!(store.append("b", &text("three"), now).unwrap().seq, 3, "the numbers go on after the rows are gone");
+    assert_eq!(store.sessions().unwrap().iter().map(|row| row.last_seq).collect::<Vec<_>>(), [2, 3, 2, 2]);
+}
+
+#[test]
+fn tokens_past_the_cap_are_refused_and_the_last_one_cannot_be_revoked() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let max = harness::store::MAX_CLIENT_TOKENS;
+    for _ in 0..max {
+        store.add_client_token(&harness::auth::Token::random().stored_key()).unwrap();
+    }
+    let kept = store.client_tokens().unwrap();
+    assert!(matches!(store.add_client_token(&harness::auth::Token::random().stored_key()), Err(Error::Refused(_))), "one past the cap");
+    store.add_client_token(&kept[0].stored_key).expect("adding one it has is not a new one");
+    assert_eq!(store.client_tokens().unwrap().len(), max);
+    for token in &kept[1..] {
+        store.revoke_client_token(token.id).unwrap();
+    }
+    assert!(matches!(store.revoke_client_token(kept[0].id), Err(Error::Refused(_))), "the last one stays");
+    assert!(matches!(store.revoke_client_token(9_999), Err(Error::Refused(_))), "no such token");
+    assert_eq!(store.client_tokens().unwrap(), kept[..1]);
+}
+
+#[test]
+fn sweep_finds_idle_sessions_without_reading_their_events() {
+    let (_tmp, dir) = data_dir();
+    drop(Store::open(&dir).unwrap());
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    let plan: Vec<String> = raw
+        .prepare(&format!("EXPLAIN QUERY PLAN {}", harness::store::SWEEP_ROWS))
+        .unwrap()
+        .query_map(rusqlite::params![0, 0, "[]"], |row| row.get::<_, String>(3))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(!plan.iter().any(|step| step.contains("CORRELATED")), "no read of a session's events to choose it: {plan:?}");
+}
+
+#[test]
+fn tokens_an_id_is_never_used_again_and_a_refusal_says_which_it_is() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    for _ in 0..2 {
+        store.add_client_token(&harness::auth::Token::random().stored_key()).unwrap();
+    }
+    let ids: Vec<i64> = store.client_tokens().unwrap().iter().map(|token| token.id).collect();
+    store.revoke_client_token(ids[1]).unwrap();
+    store.add_client_token(&harness::auth::Token::random().stored_key()).unwrap();
+    let after: Vec<i64> = store.client_tokens().unwrap().iter().map(|token| token.id).collect();
+    assert_eq!(after, [ids[0], ids[1] + 1], "the revoked id is not handed out again");
+    let unknown = store.revoke_client_token(ids[1]).unwrap_err().to_string();
+    assert!(unknown.contains(&format!("no client token {}", ids[1])), "{unknown}");
+    store.revoke_client_token(after[1]).unwrap();
+    let last = store.revoke_client_token(after[0]).unwrap_err().to_string();
+    assert!(last.contains("last client token"), "{last}");
+}
+
+#[test]
+fn sweep_an_event_stored_with_an_earlier_time_does_not_make_a_session_look_idle() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let now = now_ms();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    store.append("a", &text("today"), now).unwrap();
+    // The clock stepped back 91 days for the next event.
+    store.append("a", &text("long ago"), now - 91 * 24 * 60 * 60 * 1000).unwrap();
+    store.sweep(now).unwrap();
+    assert_eq!(store.events("a", 0).unwrap().len(), 2, "its newest event is today, so its rows stay");
+}
+
+#[test]
+fn store_a_body_already_withheld_keeps_its_type_through_clean_up() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    let dropped = Body::Withheld { of: "permission".into(), kept: Default::default() };
+    store.append("a", &dropped, now_ms()).unwrap();
+    store.clean_up("a").unwrap();
+    assert_eq!(store.events("a", 0).unwrap()[0].body, dropped, "still a withheld permission, not a withheld withheld");
 }

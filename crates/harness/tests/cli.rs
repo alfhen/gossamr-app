@@ -158,6 +158,42 @@ fn with_token(command: &mut Command, token: &str) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+/// As `with_token`, but a child still running after `limit` is killed, and the test fails.
+fn with_token_within(command: &mut Command, token: &str, limit: std::time::Duration) -> std::process::Output {
+    let mut child = command.spawn().unwrap();
+    give_token(&mut child, token);
+    output_within(child, limit)
+}
+
+/// The child's output once it has ended, read without spinning. Its pipes close when it ends; one still running
+/// after `limit` is killed and reaped here, where it is still the child, and the test fails.
+fn output_within(mut child: std::process::Child, limit: std::time::Duration) -> std::process::Output {
+    use std::io::Read;
+    let (drained, outputs) = std::sync::mpsc::channel();
+    for (which, mut pipe) in [(0, Box::new(child.stdout.take().unwrap()) as Box<dyn Read + Send>), (1, Box::new(child.stderr.take().unwrap()))] {
+        let drained = drained.clone();
+        std::thread::spawn(move || {
+            let mut bytes = vec![];
+            let _ = pipe.read_to_end(&mut bytes);
+            let _ = drained.send((which, bytes));
+        });
+    }
+    let deadline = std::time::Instant::now() + limit;
+    let (mut stdout, mut stderr) = (None, None);
+    while stdout.is_none() || stderr.is_none() {
+        match outputs.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+            Ok((0, bytes)) => stdout = Some(bytes),
+            Ok((_, bytes)) => stderr = Some(bytes),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the command was still running after {limit:?}");
+            }
+        }
+    }
+    std::process::Output { status: child.wait().unwrap(), stdout: stdout.unwrap(), stderr: stderr.unwrap() }
+}
+
 fn give_token(child: &mut std::process::Child, token: &str) {
     use std::io::Write;
     writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
@@ -281,8 +317,8 @@ fn client_a_run_whose_harness_closes_before_its_turn_ends_fails() {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let out = with_token(&mut out, &harness::auth::Token::random().hex());
-    runtime.block_on(fake).unwrap();
+    let out = with_token_within(&mut out, &harness::auth::Token::random().hex(), std::time::Duration::from_secs(60));
+    runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(60), fake).await }).expect("the fake harness ends").unwrap();
     assert_eq!(out.status.code(), Some(1), "no turn ended, so the run did not succeed");
     assert_eq!(printed(&out).len(), 1, "it printed the one event");
 }
@@ -320,31 +356,31 @@ fn serve_with_a_client_token_in_its_environment_does_not_start() {
 }
 
 #[test]
-fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting() {
+fn client_with_a_terminal_on_stdin_is_refused_without_waiting_with_or_without_token_stdin() {
+    for flag in [&[][..], &["--token-stdin"]] {
+        terminal_on_stdin_is_refused(flag);
+    }
+}
+
+fn terminal_on_stdin_is_refused(flag: &[&str]) {
     use std::os::fd::{FromRawFd, OwnedFd};
     let (mut main, mut side) = (0, 0);
     // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
     assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
     let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
     let tmp = tempfile::tempdir().unwrap();
-    let mut child = Command::new(HARNESS)
+    let child = Command::new(HARNESS)
         .args(["sessions", "--data"])
         .arg(tmp.path())
+        .args(flag)
         .stdin(side)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let started = std::time::Instant::now();
-    let done = loop {
-        if let Some(done) = child.try_wait().unwrap() {
-            break done;
-        }
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for input");
-        std::thread::yield_now();
-    };
-    let out = child.wait_with_output().unwrap();
-    assert_eq!(done.code(), Some(1));
+    // A loaded machine can take seconds to start a newly built binary; one that waits for input never ends.
+    let out = output_within(child, std::time::Duration::from_secs(60));
+    assert_eq!(out.status.code(), Some(1));
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");
 }
@@ -395,6 +431,42 @@ fn run_a_script_that_waits_for_a_first_prompt_with_none_given_fails() {
 }
 
 #[test]
+fn client_events_follow_fails_and_says_why_when_its_watch_lost_events() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let tmp = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    let listener = runtime.block_on(async { tokio::net::UnixListener::bind(tmp.path().join(harness::api::SOCKET)) }).unwrap();
+    // A harness that takes any proof, answers the watch, pushes one event, then ends the watch as lost.
+    let fake = runtime.spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = harness::api::Hello { protocol: harness::api::PROTOCOL, build: "fake".into(), challenge: "00".repeat(32) };
+        ws.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+        ws.next().await;
+        ws.send(Message::text(r#"{"ok":true}"#)).await.unwrap();
+        ws.next().await;
+        ws.send(Message::text(r#"{"id":1,"ok":null}"#)).await.unwrap();
+        let started = r#"{"session":"s","event":{"seq":1,"ms":0,"type":"started","provider_session":"p","resumed":false}}"#;
+        ws.send(Message::text(started)).await.unwrap();
+        ws.send(Message::text(r#"{"session":"s","end":true,"error":"events were lost: behind"}"#)).await.unwrap();
+        let _ = ws.next().await;
+    });
+    let mut out = Command::new(HARNESS);
+    out.args(["events", "s", "--follow", "--token-stdin", "--data"])
+        .arg(tmp.path())
+        .env_remove("HARNESS_DATA")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let out = with_token_within(&mut out, &harness::auth::Token::random().hex(), std::time::Duration::from_secs(60));
+    runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(60), fake).await }).expect("the fake harness ends").unwrap();
+    assert_eq!(out.status.code(), Some(1), "an incomplete stream is not a success");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("events were lost"), "it says why");
+    assert_eq!(printed(&out).len(), 1, "it printed what came");
+}
+
+#[test]
 fn run_a_script_that_waits_for_a_prompt_with_steps_left_fails_and_one_that_waits_at_its_end_closes() {
     let tmp = tempfile::tempdir().unwrap();
     let (waiting, trailing) = (tmp.path().join("waiting.jsonl"), tmp.path().join("trailing.jsonl"));
@@ -406,4 +478,16 @@ fn run_a_script_that_waits_for_a_prompt_with_steps_left_fails_and_one_that_waits
     assert!(String::from_utf8(out.stderr).unwrap().contains("the script waits for a prompt; give one on the command line"));
     let out = run(&tmp.path().join("two"), &["--script".as_ref(), trailing.as_os_str()]);
     assert!(out.status.success(), "a script that waits for one more prompt at its end has played to its end");
+}
+
+#[test]
+fn client_run_told_to_allow_a_request_that_was_cut_closes_the_session_and_fails() {
+    let big = "q".repeat(2 << 20);
+    let script = format!("{{\"prompt\": null}}\n{{\"permission\": {{\"kind\": \"command\", \"tool\": \"Bash\", \"input\": {{\"command\": \"{big}\"}}}}}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}");
+    let serving = serve(&script);
+    let out = with_token_within(&mut client(&serving, &["run", "--provider", "mock", "--answer", "allow", "go"]), &serving.token, std::time::Duration::from_secs(60));
+    assert_eq!(out.status.code(), Some(1), "the request was not allowed");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("can only be denied; closing the session"));
+    let printed = printed(&out);
+    assert_eq!(printed.last().map(|event| &event["type"]), Some(&serde_json::json!("closed")), "it read on until the session closed");
 }

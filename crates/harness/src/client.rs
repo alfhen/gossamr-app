@@ -16,11 +16,12 @@ use crate::auth::{Token, encode};
 use crate::error::{Error, Result};
 use crate::event::Event;
 
-/// What the harness pushes: an event of a session, or the end of a watch.
+/// What the harness pushes: an event of a session, the end of a watch, or the end of one that lost events, with why.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Push {
     Event { session: String, event: Event },
     End { session: String },
+    Lost { session: String, reason: String },
 }
 
 pub struct Client {
@@ -48,6 +49,10 @@ impl Client {
         let (ws, _) = client_async_with_config("ws://harness/", stream, Some(config)).await.map_err(|e| Error::Protocol(e.to_string()))?;
         let mut client = Client { ws, next_id: 0, pushes: VecDeque::new(), hello: Hello { protocol: 0, build: String::new(), challenge: String::new() } };
         let hello = client.read_text().await?;
+        // A harness that turns the connection away says why instead of hello.
+        if let Ok(Reply { error: Some(error), .. }) = serde_json::from_str::<Reply>(&hello) {
+            return Err(Error::Said(error));
+        }
         client.hello = serde_json::from_str(&hello)?;
         if client.hello.protocol != PROTOCOL {
             return Err(Error::Protocol(format!("the harness speaks protocol {}, this client {PROTOCOL}", client.hello.protocol)));
@@ -136,8 +141,9 @@ const CLOSED: &str = "the harness closed the connection";
 
 fn into_push(reply: Reply) -> Option<Push> {
     let session = reply.session?;
-    match reply.event {
-        Some(event) => Some(Push::Event { session, event }),
-        None => reply.end.then_some(Push::End { session }),
+    match (reply.event, reply.error) {
+        (Some(event), _) => Some(Push::Event { session, event }),
+        (None, Some(reason)) if reply.end => Some(Push::Lost { session, reason }),
+        (None, _) => reply.end.then_some(Push::End { session }),
     }
 }
