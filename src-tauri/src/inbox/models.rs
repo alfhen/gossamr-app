@@ -152,7 +152,6 @@ mod tests {
     use super::*;
     use crate::inbox::testing::fixture_with_shell;
     use crate::runs::env::ShellCapture;
-    use std::os::unix::fs::PermissionsExt;
 
     fn pick(instance: &str, model: &str) -> ModelChoice {
         ModelChoice { instance_id: instance.into(), model: model.into(), effort: None }
@@ -171,11 +170,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let codex = dir.join("bin/codex");
         let body = if fails { "exit 1".to_string() } else { format!("cat <<'JSON'\n{CATALOG}\nJSON") };
-        std::fs::write(&codex, format!("#!/bin/sh\necho run >> '{}'\n{body}\n", dir.join("runs").display())).unwrap();
-        std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let shell = dir.join("fakeshell");
-        std::fs::write(&shell, format!("#!/bin/sh\nprintf '\\0GOSSAMR_ENV_BEGIN\\0PATH={}:/usr/bin:/bin\\0'\n", dir.join("bin").display())).unwrap();
-        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        harness::testing::fake_cli(&codex, &format!("echo run >> '{}'\n{body}", dir.join("runs").display()));
+        let shell = harness::testing::fake_cli(&dir.join("fakeshell"), &format!("printf '\\0GOSSAMR_ENV_BEGIN\\0PATH={}:/usr/bin:/bin\\0'", dir.join("bin").display()));
         let fx = fixture_with_shell(ShellCapture::with_shell(&shell.display().to_string())).await;
         AppConfig::update(&fx.core.data_dir(), |config| {
             config.providers.push(connections::ProviderInstance { id: "codex".into(), driver: connections::Driver::Codex, display_name: "Codex".into(), config: connections::ProviderConfig { config_dir: Some("~/.codex-work".into()), ..Default::default() }, ..connections::default_claude() });

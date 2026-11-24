@@ -283,9 +283,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gossamr-probe-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("gh");
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        harness::testing::fake_cli(&dir.join("gh"), script);
         vec![dir]
     }
 
@@ -447,7 +445,11 @@ mod tests {
     #[test]
     fn a_gh_file_that_cannot_run_does_not_hide_one_that_can() {
         let blocked = gh_dir("blocked", "exit 1");
-        std::fs::set_permissions(blocked[0].join("gh"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        // A file of its own: a mode set through the fake's link would change the script every fake runs.
+        let gh = blocked[0].join("gh");
+        std::fs::remove_file(&gh).unwrap();
+        std::fs::write(&gh, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o644)).unwrap();
         let working = gh_dir("working", "exit 0");
         let dirs = [blocked[0].clone(), working[0].clone()];
         assert_eq!(find_gh_in(&dirs), Some(working[0].join("gh")));

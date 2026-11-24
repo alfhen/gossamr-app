@@ -173,19 +173,8 @@ mod tests {
     use crate::runs::env::ShellCapture;
     use std::path::PathBuf;
 
-    const RUN_BODY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/run-body.sh");
-
-    /// A fake at `path` that runs `body`. Some tests here time their probes, so the fake is a link to one script that has
-    /// run before rather than a new executable, whose first run macOS stops to check.
     fn script(path: &Path, body: &str) -> String {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mut body_path = path.as_os_str().to_owned();
-        body_path.push(".body");
-        std::fs::write(&body_path, format!("{body}\n")).unwrap();
-        if path.symlink_metadata().is_err() {
-            std::os::unix::fs::symlink(RUN_BODY, path).unwrap();
-        }
-        path.display().to_string()
+        harness::testing::fake_cli(path, body).display().to_string()
     }
 
     /// A shell whose capture holds a PATH only, so the `claude` the tests install in the home folder is the one found.

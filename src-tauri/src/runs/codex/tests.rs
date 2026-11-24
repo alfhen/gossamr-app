@@ -414,7 +414,8 @@ async fn a_failed_codex_launch_never_reads_as_needing_trust_and_never_says_claud
 #[tokio::test]
 async fn a_codex_launch_that_never_names_a_thread_fails_and_stops_the_process() {
     let rig = Rig::new("slow", "start_delay=30\n");
-    let backend = CodexBackend::new(rig.backend.binary().unwrap(), rig.backend.login_env.clone(), rig.backend.git_env.clone(), rig.backend.runs_root.clone(), "Codex".into(), false).with_launch_wait(Duration::from_millis(400));
+    // The wait must outlast the fake's own start, which writes its pid: under load that has taken over 400 ms.
+    let backend = CodexBackend::new(rig.backend.binary().unwrap(), rig.backend.login_env.clone(), rig.backend.git_env.clone(), rig.backend.runs_root.clone(), "Codex".into(), false).with_launch_wait(Duration::from_secs(3));
     let failed = backend.launch(&rig.request(None)).await.unwrap_err();
     assert!(failed.to_string().contains("didn't start a session"), "{failed}");
     assert!(!rig.folder().exists() && !rig.worktree().exists());

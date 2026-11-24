@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+// Starts the way an npm-installed CLI does: env runs node with this file. The tests put a fake node first on PATH.

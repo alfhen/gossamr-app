@@ -212,11 +212,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn fake_shell(fx_dir: &std::path::Path, vars: &str) -> String {
-        std::fs::create_dir_all(fx_dir).unwrap();
-        let path = fx_dir.join("fakeshell");
-        std::fs::write(&path, format!("#!/bin/sh\nprintf '\\0GOSSAMR_ENV_BEGIN\\0{vars}'\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.display().to_string()
+        harness::testing::fake_cli(&fx_dir.join("fakeshell"), &format!("printf '\\0GOSSAMR_ENV_BEGIN\\0{vars}'")).display().to_string()
     }
 
     fn add(core: &Core, id: &str, folder: Option<&str>) {

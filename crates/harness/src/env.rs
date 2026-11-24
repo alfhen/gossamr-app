@@ -186,12 +186,7 @@ mod tests {
     }
 
     fn script(dir: &Path, name: &str, body: &str) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(dir).unwrap();
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.to_string_lossy().into_owned()
+        crate::testing::fake_cli(&dir.join(name), body).to_string_lossy().into_owned()
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
