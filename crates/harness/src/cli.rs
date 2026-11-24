@@ -101,8 +101,7 @@ pub async fn execute(command: Command, data: Option<PathBuf>, token_stdin: bool)
         if let Err(why) = setup.capture().await {
             eprintln!("harness: {why}");
         }
-        let places = crate::binary::CliPlaces::of_this_mac(setup.home().map(std::path::Path::to_path_buf));
-        check(&setup, &places, &with_usual(logins.clone())).await.iter().for_each(|standing| println!("{}", line(standing)));
+        check(&setup, setup.places(), &with_usual(logins.clone())).await.iter().for_each(|standing| println!("{}", line(standing)));
         return Ok(true);
     }
     let token = read_token(token_stdin)?;

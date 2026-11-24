@@ -28,7 +28,6 @@ use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
 use crate::event::{Body, Event};
-use crate::binary::CliPlaces;
 use crate::driver::random_hex;
 use crate::providers::{check, with_usual};
 use crate::session::{Feed, Harness, Open, Settings};
@@ -462,8 +461,7 @@ impl Client {
             Op::Providers { logins } => {
                 self.captured().await;
                 let drivers: Vec<Value> = harness.providers().into_iter().map(|(name, capabilities)| json!({ "name": name, "capabilities": capabilities })).collect();
-                let places = CliPlaces::of_this_mac(harness.setup().home().map(Path::to_path_buf));
-                let logins = check(harness.setup(), &places, &with_usual(logins)).await;
+                let logins = check(harness.setup(), harness.setup().places(), &with_usual(logins)).await;
                 Ok(json!({ "drivers": drivers, "logins": logins }))
             }
             Op::Events { session, after } => {

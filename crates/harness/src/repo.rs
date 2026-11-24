@@ -194,7 +194,7 @@ impl Git {
         }
     }
 
-    async fn branch_exists(&self, clone: &Path, branch: &str) -> Result<bool, String> {
+    pub(crate) async fn branch_exists(&self, clone: &Path, branch: &str) -> Result<bool, String> {
         let found = self.out_or_why(clone, &["branch", "--list", "--format=%(refname:short)", "--", branch]).await?;
         Ok(!found.trim().is_empty())
     }

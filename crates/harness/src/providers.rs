@@ -85,13 +85,14 @@ fn standing(asked: &Asked, seen: Snapshot, models: Vec<ModelOption>) -> Standing
     }
 }
 
-/// One line for a person: provider, login, version, state and message, and the models.
+/// One line for a person: provider, login folder (`(usual)` for the usual setup), version, state and message, and
+/// the models.
 pub fn line(standing: &Standing) -> String {
     let models: Vec<&str> = standing.models.iter().map(|m| m.id.as_str()).collect();
     format!(
         "{} {} {} {}: {} [models: {}]",
         standing.provider,
-        standing.folder.as_deref().unwrap_or("(usual setup)"),
+        standing.folder.as_deref().unwrap_or("(usual)"),
         standing.version.as_deref().unwrap_or("-"),
         standing.state,
         standing.message,

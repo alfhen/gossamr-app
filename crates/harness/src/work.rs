@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::binary::CliPlaces;
 use crate::env::{RunEnv, capture};
 use crate::error::{Error, Result};
 use crate::fresh::{ensure_clone, lock_repo, real, remote_default_branch, remove_stale_temps, valid_repo};
@@ -24,14 +25,22 @@ pub struct Work {
 }
 
 /// What the harness knows of the machine it runs on: the home folder (the work root, `~/Gossamr/agents`, is in it),
-/// its own data folder, and the shell environment it last captured.
-#[derive(Default)]
+/// its own data folder, where CLIs are installed, and the shell environment it last captured.
 pub struct Setup {
     home: Option<PathBuf>,
     data_dir: PathBuf,
+    places: CliPlaces,
     /// The shell `capture` runs; None captures nothing, so sessions run in the harness's own environment.
     shell_program: Option<String>,
     shell: Mutex<Option<Arc<RunEnv>>>,
+}
+
+/// No home folder, no CLI folder of the machine and no shell: sessions run in the harness's own environment, on
+/// their provider's usual login.
+impl Default for Setup {
+    fn default() -> Setup {
+        Setup { home: None, data_dir: PathBuf::new(), places: CliPlaces::none(), shell_program: None, shell: Mutex::new(None) }
+    }
 }
 
 impl Setup {
@@ -40,13 +49,26 @@ impl Setup {
         Setup { home: home.and_then(|home| home.canonicalize().ok()), data_dir, ..Setup::default() }
     }
 
-    /// The machine's home folder, as `dirs` finds it, and the person's shell, `$SHELL` (zsh when it is unset).
+    /// The machine's home folder, as `dirs` finds it, the folders installers put CLIs in, and the person's shell,
+    /// `$SHELL` (zsh when it is unset).
     pub fn of_this_machine(data_dir: PathBuf) -> Setup {
-        Setup::new(dirs::home_dir(), data_dir).with_shell_program(&std::env::var("SHELL").unwrap_or_default())
+        let setup = Setup::new(dirs::home_dir(), data_dir);
+        let places = CliPlaces::of_this_mac(setup.home.clone());
+        Setup { places, ..setup }.with_shell_program(&std::env::var("SHELL").unwrap_or_default())
     }
 
     pub fn with_shell_program(self, program: &str) -> Setup {
         Setup { shell_program: Some(program.into()), ..self }
+    }
+
+    /// A capture that already holds `env`, as if the shell printed it.
+    pub fn with_shell_env(self, env: RunEnv) -> Setup {
+        Setup { shell: Mutex::new(Some(Arc::new(env))), ..self }
+    }
+
+    /// Where a CLI is looked for besides the shell's PATH.
+    pub fn places(&self) -> &CliPlaces {
+        &self.places
     }
 
     pub fn home(&self) -> Option<&Path> {
@@ -123,6 +145,10 @@ impl Setup {
         };
         check_ref("base", &base)?;
         let worktree = worktree_path(&clone, branch)?;
+        // `add_worktree` takes back an untouched worktree of an earlier try; a session never shares one.
+        if worktree.symlink_metadata().is_ok() || git.branch_exists(&clone, branch).await.map_err(Error::Refused)? {
+            return Err(Error::Refused(format!("the branch {branch} or its worktree is already there")));
+        }
         git.add_worktree(&clone, &worktree, branch, &format!("origin/{base}")).await.map_err(|e| Error::Refused(format!("the worktree can't be made: {e}")))?;
         Ok((Work { repo: repo.to_owned(), base, branch: branch.to_owned(), clone }, worktree))
     }
