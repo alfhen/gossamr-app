@@ -372,14 +372,14 @@ mod tests {
     async fn the_cli_runs_with_the_environment_it_is_given_and_nothing_else() {
         let dir = scratch("claude-env");
         let binary = cli(&dir, "claude", &format!("[ \"$1\" = \"--version\" ] && exit 0\nenv > '{}'\necho '{SIGNED_IN}'", dir.join("seen").display()));
-        // Setting a variable here would race the other tests' processes, so one this process already has stands in.
-        let own = std::env::vars_os().map(|(name, _)| name).find(|name| name != "PATH" && name != "CLAUDE_CONFIG_DIR").expect("the test process has a variable of its own");
         let base = RunEnv::from_pairs([("PATH", "/usr/bin:/bin"), ("CLAUDE_CONFIG_DIR", "/Users/x/.claude-work")]);
         probe(Provider::Claude, Some(&binary), None, &base, Timeouts::default()).await;
         let seen = std::fs::read_to_string(dir.join("seen")).unwrap();
+        assert!(seen.contains("CLAUDE_CONFIG_DIR=/Users/x/.claude-work"));
+        // Nothing of this process's own environment: only what it was given, and what the fake's shell sets itself.
         let names: Vec<&str> = seen.lines().filter_map(|line| line.split_once('=').map(|(name, _)| name)).collect();
-        assert!(seen.contains("CLAUDE_CONFIG_DIR=/Users/x/.claude-work"), "{names:?}");
-        assert!(!names.iter().any(|name| *name == own), "{own:?} reached the CLI: {names:?}");
+        let extra: Vec<&&str> = names.iter().filter(|name| !["PATH", "CLAUDE_CONFIG_DIR", "PWD", "OLDPWD", "SHLVL", "_"].contains(name)).collect();
+        assert!(extra.is_empty(), "the CLI also got {extra:?}");
     }
 
     #[tokio::test]
