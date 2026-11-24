@@ -1698,3 +1698,66 @@ async fn shutdown_an_open_it_refuses_leaves_no_session_row() {
     let rows: i64 = raw.query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0)).unwrap();
     assert_eq!(rows, 1 + opened, "only the sessions that started have rows");
 }
+
+#[tokio::test]
+async fn question_an_answer_reaches_the_agent_before_prompts_sent_while_it_was_open() {
+    let (_tmp, dir) = data_dir();
+    /// Asks a question and a permission in its first turn, which ends when the test says.
+    struct Questioner {
+        end: Arc<tokio::sync::Notify>,
+    }
+    impl Driver for Questioner {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "questioner".into(), resumed: false }).unwrap();
+            let end = self.end.clone();
+            tokio::spawn(async move {
+                let mut first = true;
+                while let Some(command) = commands_rx.recv().await {
+                    match command {
+                        Command::Prompt(_) => {
+                            let _ = output.send(Body::TurnStarted);
+                            if std::mem::take(&mut first) {
+                                let _ = output.send(Body::Question { id: "q1".into(), text: "which?".into() });
+                                let _ = output.send(Body::Permission { id: "d1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({}) });
+                                end.notified().await;
+                            }
+                            let _ = output.send(Body::TurnEnded { how: TurnEnd::Done });
+                        }
+                        Command::Stop => return,
+                        _ => {}
+                    }
+                }
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let end = Arc::new(tokio::sync::Notify::new());
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("questioner".into(), Arc::new(Questioner { end: end.clone() }))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "questioner", false).await;
+    harness.send(&id, "first").unwrap();
+    let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+    let request = permission_id(&asked.last().unwrap().body);
+    let question = asked.iter().find_map(|event| match &event.body {
+        Body::Question { id, .. } => Some(id.clone()),
+        _ => None,
+    });
+    harness.send(&id, "later").unwrap();
+    harness.answer_question(&id, &question.expect("the question came first"), "blue".into()).unwrap();
+    // Requests are taken in order, so once this answer is recorded the two before it are queued.
+    harness.answer(&id, &request, Decision::Allow, None).unwrap();
+    until(&mut events, |body| matches!(body, Body::Answered { .. })).await;
+    end.notify_one();
+    let mut prompted = vec![];
+    while prompted.len() < 2 {
+        if let Body::Prompted { text } = next(&mut events).await.body {
+            prompted.push(text);
+        }
+    }
+    assert_eq!(prompted, ["blue", "later"], "the answer went first");
+}

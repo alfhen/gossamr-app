@@ -162,17 +162,36 @@ fn with_token(command: &mut Command, token: &str) -> std::process::Output {
 fn with_token_within(command: &mut Command, token: &str, limit: std::time::Duration) -> std::process::Output {
     let mut child = command.spawn().unwrap();
     give_token(&mut child, token);
-    let pid = child.id() as libc::pid_t;
-    let (done, output) = std::sync::mpsc::channel();
-    std::thread::spawn(move || done.send(child.wait_with_output().unwrap()));
-    match output.recv_timeout(limit) {
-        Ok(out) => out,
-        Err(_) => {
-            // SAFETY: kill has no preconditions; the waiting thread reaps the child.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
-            panic!("the command was still running after {limit:?}");
+    output_within(child, limit)
+}
+
+/// The child's output once it has ended, read without spinning. Its pipes close when it ends; one still running
+/// after `limit` is killed and reaped here, where it is still the child, and the test fails.
+fn output_within(mut child: std::process::Child, limit: std::time::Duration) -> std::process::Output {
+    use std::io::Read;
+    let (drained, outputs) = std::sync::mpsc::channel();
+    for (which, mut pipe) in [(0, Box::new(child.stdout.take().unwrap()) as Box<dyn Read + Send>), (1, Box::new(child.stderr.take().unwrap()))] {
+        let drained = drained.clone();
+        std::thread::spawn(move || {
+            let mut bytes = vec![];
+            let _ = pipe.read_to_end(&mut bytes);
+            let _ = drained.send((which, bytes));
+        });
+    }
+    let deadline = std::time::Instant::now() + limit;
+    let (mut stdout, mut stderr) = (None, None);
+    while stdout.is_none() || stderr.is_none() {
+        match outputs.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+            Ok((0, bytes)) => stdout = Some(bytes),
+            Ok((_, bytes)) => stderr = Some(bytes),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the command was still running after {limit:?}");
+            }
         }
     }
+    std::process::Output { status: child.wait().unwrap(), stdout: stdout.unwrap(), stderr: stderr.unwrap() }
 }
 
 fn give_token(child: &mut std::process::Child, token: &str) {
@@ -359,16 +378,8 @@ fn terminal_on_stdin_is_refused(flag: &[&str]) {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    // Waited for without spinning, so a loaded machine starves the child no more than it must. One that waits for
-    // input never ends, so it is killed.
-    let pid = child.id() as libc::pid_t;
-    let (done, output) = std::sync::mpsc::channel();
-    std::thread::spawn(move || done.send(child.wait_with_output().unwrap()));
-    let out = output.recv_timeout(std::time::Duration::from_secs(60)).unwrap_or_else(|_| {
-        // SAFETY: kill has no preconditions; the waiting thread reaps the child.
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-        panic!("{flag:?}: it waited for input");
-    });
+    // A loaded machine can take seconds to start a newly built binary; one that waits for input never ends.
+    let out = output_within(child, std::time::Duration::from_secs(60));
     assert_eq!(out.status.code(), Some(1));
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");

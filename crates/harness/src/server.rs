@@ -120,7 +120,9 @@ impl Server {
         self
     }
 
+    /// A zero interval panics here, rather than in the sweeper, where the server would go on without its sweep.
     pub fn sweep_every(mut self, every: Duration) -> Server {
+        assert!(!every.is_zero(), "the sweep needs an interval above zero");
         self.sweep_every = every;
         self
     }
@@ -301,10 +303,12 @@ async fn connection(harness: Harness, stream: UnixStream, limits: Limits, provin
         tokio::pin!(sending);
         let sent = loop {
             tokio::select! {
-                sent = &mut sending => break Some(sent.is_ok()),
+                // A revoke heard first, so a write that is ready by then does not go out after it.
+                biased;
                 heard = revoked.recv() => if revoked_for(&harness, &key, heard) {
                     break None;
                 },
+                sent = &mut sending => break Some(sent.is_ok()),
             }
         };
         // `run` waits for the answer to a shutdown before it ends the connections.
@@ -489,6 +493,12 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
                 }
             },
             Some(Feed::Stored(events)) => match events.recv().await {
+                // Live events come one after another, and a lag is filled from the store: a gap now is one the store
+                // could not fill.
+                Ok(event) if event.seq > last + 1 => {
+                    lost = Some(format!("events were lost: the store no longer holds the events of session {session} after {last}, before {}", event.seq));
+                    break;
+                }
                 Ok(event) => event,
                 // What it missed is in the store.
                 Err(RecvError::Lagged(_)) => match pages(&harness, &session, vec![], true, u64::MAX, &mut last, &out).await {
@@ -576,6 +586,28 @@ mod tests {
         let events: Vec<Event> = got.iter().filter_map(|push| push.event.clone()).collect();
         assert_eq!(events, all, "each once, in order");
         assert!(got.last().unwrap().end, "then the end");
+    }
+
+    #[tokio::test]
+    async fn events_a_lag_the_store_cannot_fill_ends_the_watch_as_lost() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&tmp.path().join("d")).unwrap();
+        // The session's rows are gone, as the sweep leaves them, so a lag cannot be filled from the store.
+        store.create_session("s", "mock", false, Path::new("/"), None).unwrap();
+        let harness = Harness::new(store, vec![], Settings::default());
+        let (live, receiver) = tokio::sync::broadcast::channel(2);
+        for event in (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]) {
+            live.send(event).unwrap();
+        }
+        let (out, mut pushes) = mpsc::channel(64);
+        forward(harness, "s".into(), (vec![], false, 0), Some(Feed::Stored(receiver)), 0, out).await;
+        let mut got = vec![];
+        while let Ok(push) = pushes.try_recv() {
+            got.push(push);
+        }
+        assert!(got.iter().all(|push| push.event.is_none()), "nothing after the gap was pushed: {got:?}");
+        let end = got.last().unwrap();
+        assert!(end.end && end.error.as_deref().is_some_and(|why| why.contains("events were lost")), "{end:?}");
     }
 
     #[tokio::test]

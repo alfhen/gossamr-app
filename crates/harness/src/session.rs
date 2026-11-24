@@ -131,6 +131,8 @@ struct OpenRequest {
 
 enum Request {
     Prompt(String),
+    /// An answer to a question, which goes before the prompts already queued.
+    Reply(String),
     Answer { id: String, decision: Decision, message: Option<String> },
     ToolResult { id: String, reply: Reply },
     Cancel,
@@ -259,13 +261,13 @@ impl Harness {
     }
 
     /// Answers an open question, once. Until `ask` holds the agent's call (H5b), the answer goes to the agent as the
-    /// next prompt.
+    /// next prompt, before any sent while the question was open.
     pub fn answer_question(&self, id: &str, question: &str, text: String) -> Result<()> {
         let live = self.taking(id)?;
         if !live.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(question) {
             return Err(Error::NoQuestion(question.to_owned()));
         }
-        live.requests.send(Request::Prompt(text)).map_err(|_| Error::NotRunning(id.to_owned()))
+        live.requests.send(Request::Reply(text)).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
     /// Posts the result of a client tool call. A call that was already cut is passed over.
@@ -294,7 +296,10 @@ impl Harness {
     /// requests, and a close after one has nothing more to do.
     fn stop(&self, id: &str, request: Request) -> Result<()> {
         let live = self.live(id)?;
-        if live.stopping.swap(true, Ordering::Relaxed) {
+        let already = live.stopping.swap(true, Ordering::Relaxed);
+        #[cfg(test)]
+        self.inner.hooks.after_stop_flag();
+        if already {
             return match request {
                 Request::HandOver => Err(Error::Refused(format!("session {id} is already stopping, so it was not handed over"))),
                 _ => Ok(()),
@@ -312,10 +317,14 @@ impl Harness {
             self.inner.closing.store(true, Ordering::Relaxed);
             live.values().cloned().collect()
         };
+        // As in `stop`, the first stop wins: a hand over already on its way is not overtaken.
         for live in running {
-            live.stopping.store(true, Ordering::Relaxed);
-            let _ = live.requests.send(Request::Stop);
+            if !live.stopping.swap(true, Ordering::Relaxed) {
+                let _ = live.requests.send(Request::Stop);
+            }
         }
+        #[cfg(test)]
+        self.inner.hooks.after_shutdown_stops();
         loop {
             let left = self.inner.left.notified();
             tokio::pin!(left);
@@ -867,6 +876,7 @@ impl Task {
                 }
                 request = requests.recv() => match request {
                     Some(Request::Prompt(text)) => queued.push_back(text),
+                    Some(Request::Reply(text)) => queued.push_front(text),
                     Some(Request::Cancel) => match waiting.take() {
                         Some(granted) if turn == Turn::Idle => {
                             turns.give_up(granted);
@@ -914,7 +924,7 @@ impl Task {
         requests.close();
         let mut unsent = !queued.is_empty();
         while let Ok(request) = requests.try_recv() {
-            unsent |= matches!(request, Request::Prompt(_));
+            unsent |= matches!(request, Request::Prompt(_) | Request::Reply(_));
         }
         if unsent {
             self.emit(Body::PromptsDropped);
@@ -1163,6 +1173,10 @@ mod tests {
         after_spawn: Mutex<Option<IdHook>>,
         /// Just after an event is stored and before it is sent.
         before_publish: Mutex<Option<Hook>>,
+        /// Just after a stop has taken the session's stop flag, before it sends its request.
+        after_stop_flag: Mutex<Option<Hook>>,
+        /// Just after `shutdown` has told the sessions to stop.
+        after_shutdown_stops: Mutex<Option<Hook>>,
     }
 
     fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
@@ -1194,6 +1208,18 @@ mod tests {
 
         pub(super) fn before_publish(&self) {
             if let Some(hook) = take(&self.before_publish) {
+                hook();
+            }
+        }
+
+        pub(super) fn after_stop_flag(&self) {
+            if let Some(hook) = take(&self.after_stop_flag) {
+                hook();
+            }
+        }
+
+        pub(super) fn after_shutdown_stops(&self) {
+            if let Some(hook) = take(&self.after_shutdown_stops) {
                 hook();
             }
         }
@@ -1350,5 +1376,41 @@ mod tests {
         }) as IdHook);
         harness.take_back(&id).await.unwrap();
         assert_eq!(*seen.lock().unwrap(), Some(false), "cleared before the task was spawned");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hand_over_one_that_took_the_stop_is_not_overtaken_by_a_shutdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        let (stops_sent, stopped) = std::sync::mpsc::channel();
+        set(&harness.inner.hooks.after_shutdown_stops, Box::new(move || {
+            let _ = stops_sent.send(());
+        }) as Hook);
+        // A shutdown runs from another thread between the hand over's flag and its request, and tells the sessions to
+        // stop before the hand over's request is sent.
+        let (shutting, worker) = (harness.clone(), Arc::new(Mutex::new(None)));
+        let kept = worker.clone();
+        set(&harness.inner.hooks.after_stop_flag, Box::new(move || {
+            *kept.lock().unwrap() = Some(std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(shutting.shutdown())
+            }));
+            stopped.recv_timeout(Duration::from_secs(10)).expect("the shutdown told the sessions to stop");
+        }) as Hook);
+        harness.hand_over(&id).unwrap();
+        let mut seen = vec![];
+        while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(10), events.recv()).await {
+            let closed = event.body == Body::Closed;
+            seen.push(event.body);
+            if closed {
+                break;
+            }
+        }
+        assert!(seen.contains(&Body::HandedOver), "the hand over took effect: {seen:?}");
+        let left = worker.lock().unwrap().take().expect("the hook ran").join().unwrap();
+        assert!(left.is_empty());
     }
 }
