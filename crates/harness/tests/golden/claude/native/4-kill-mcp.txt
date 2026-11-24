@@ -1,0 +1,12 @@
+started
+prompted 191
+turn_started
+tool_call ToolSearch 0
+tool_result 0 ok
+tool_call mcp__spike__ping 1
+tool_result 1 ok
+tool_call Bash 2
+permission command Bash
+answered allow
+failed agent_stopped the agent stopped in the middle of a turn
+closed

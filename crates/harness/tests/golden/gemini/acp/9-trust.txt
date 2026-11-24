@@ -1,0 +1,10 @@
+started
+prompted 59
+turn_started
+tool_call run_command 0
+permission command run_command
+answered allow
+tool_result 0 ok
+text 15
+turn_ended done
+closed

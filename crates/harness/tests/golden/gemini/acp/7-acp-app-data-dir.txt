@@ -1,0 +1,3 @@
+started
+failed provider Failed to start Antigravity: language server failed to start: must not be absolute: $SCRATCH/agy-home/app
+closed

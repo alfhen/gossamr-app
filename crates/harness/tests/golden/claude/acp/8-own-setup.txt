@@ -1,0 +1,14 @@
+started
+prompted 330
+turn_started
+tool_call Bash 0
+tool_call Bash 1
+tool_call ToolSearch 2
+tool_result 0 ok
+tool_result 1 ok
+tool_result 2 ok
+tool_call mcp__projspike__ping 3
+tool_result 3 ok
+text 414
+turn_ended done
+closed

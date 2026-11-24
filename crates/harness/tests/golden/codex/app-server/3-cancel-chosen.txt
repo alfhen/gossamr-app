@@ -1,0 +1,10 @@
+started
+prompted 83
+turn_started
+tool_call command 0
+turn_ended cancelled
+prompted 33
+turn_started
+text 5
+turn_ended done
+closed

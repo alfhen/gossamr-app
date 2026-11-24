@@ -1,0 +1,18 @@
+started
+prompted 125
+turn_started
+tool_call Bash 0
+permission command Bash
+answered allow
+tool_call Bash 1
+tool_result 0 ok
+tool_result 1 ok
+tool_call Write 2
+permission file_change Write
+answered deny
+tool_result 2 error
+tool_call Bash 3
+tool_result 3 error
+text 221
+turn_ended done
+closed

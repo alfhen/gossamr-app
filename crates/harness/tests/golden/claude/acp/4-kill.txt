@@ -1,0 +1,6 @@
+started
+prompted 142
+turn_started
+tool_call Bash 0
+failed agent_stopped the agent stopped in the middle of a turn
+closed
