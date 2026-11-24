@@ -383,3 +383,13 @@ fn run_a_request_with_no_recorded_answer_and_none_given_fails() {
     assert!(stderr.contains("the recording has no answer to this request; give one with --answer"), "and says why");
     assert!(!printed(&out).iter().any(|event| event["type"] == "answered"), "nothing answered it");
 }
+
+#[test]
+fn run_a_script_that_waits_for_a_first_prompt_with_none_given_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let script = tmp.path().join("script.jsonl");
+    std::fs::write(&script, "{\"prompt\": null}\n{\"say\": \"hello\"}\n{\"end\": \"done\"}\n").unwrap();
+    let out = run(&tmp.path().join("data"), &["--script".as_ref(), script.as_os_str()]);
+    assert_eq!(out.status.code(), Some(1), "nothing was played");
+    assert!(String::from_utf8(out.stderr).unwrap().contains("the script waits for a prompt; give one on the command line"));
+}

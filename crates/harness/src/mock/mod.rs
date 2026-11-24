@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use aho_corasick::{AhoCorasick, MatchKind};
+use aho_corasick::AhoCorasick;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -72,11 +72,19 @@ impl Script {
     /// line, never what the line holds.
     pub fn load(path: &Path) -> Result<Script, String> {
         let at = |e: String| format!("{}:{}{e}", path.display(), if e.starts_with(|c: char| c.is_ascii_digit()) { "" } else { " " });
-        let size = std::fs::metadata(path).map_err(|e| at(e.to_string()))?.len();
+        let too_big = |size: u64| at(format!("too big: {size} bytes, over the {MAX_SCRIPT_BYTES} a script may have"));
+        let file = std::fs::File::open(path).map_err(|e| at(e.to_string()))?;
+        let size = file.metadata().map_err(|e| at(e.to_string()))?.len();
         if size > MAX_SCRIPT_BYTES {
-            return Err(at(format!("too big: {size} bytes, over the {MAX_SCRIPT_BYTES} a script may have")));
+            return Err(too_big(size));
         }
-        Script::parse(&std::fs::read_to_string(path).map_err(|e| at(e.to_string()))?).map_err(at)
+        // The file may grow after its size was read, so no more than the limit is read either.
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::Read::take(file, MAX_SCRIPT_BYTES + 1), &mut text).map_err(|e| at(e.to_string()))?;
+        if text.len() as u64 > MAX_SCRIPT_BYTES {
+            return Err(too_big(text.len() as u64));
+        }
+        Script::parse(&text).map_err(at)
     }
 
     /// A harness script has one step per line, and may start with a `{"capabilities": ...}` line.
@@ -104,6 +112,9 @@ impl Script {
                 Some(caps) => script.capabilities = serde_json::from_value(caps.clone()).map_err(|e| bad(n, e))?,
                 None => script.steps.push(serde_json::from_value(line).map_err(|e| bad(n, e))?),
             }
+        }
+        if script.steps.is_empty() {
+            return Err("no steps".into());
         }
         Ok(script)
     }
@@ -146,7 +157,8 @@ impl Mock {
         Mock { inner: Arc::new(Inner { script, plays: Mutex::new(HashMap::new()), client: watch::channel(None).0 }) }
     }
 
-    /// What the recorded client did where the mock waits now, or `None` while it does not wait.
+    /// What the recorded client did where the mock waits now, or `None` while it does not wait. It holds one action
+    /// at a time, so it serves one session of the mock at a time, as `harness run` opens.
     pub fn client(&self) -> watch::Receiver<Option<ClientAction>> {
         self.inner.client.subscribe()
     }
@@ -294,7 +306,10 @@ impl Player {
                 Step::Prompt(recorded) => {
                     let got = match self.prompts.pop_front() {
                         Some(_) => Got::Go,
-                        None => self.wait_for(ClientAction::Prompt(recorded), |c| matches!(c, Command::Prompt(_)), false).await,
+                        None => {
+                            let recorded = recorded.map(|text| self.mapper.text(&text));
+                            self.wait_for(ClientAction::Prompt(recorded), |c| matches!(c, Command::Prompt(_)), false).await
+                        }
                     };
                     match got {
                         Got::Go | Got::Matched(_) => self.send(Body::TurnStarted),
@@ -464,7 +479,7 @@ impl Mapper {
         let keys: Vec<String> = to.keys().cloned().collect();
         let words = match keys.is_empty() {
             true => None,
-            false => Some((AhoCorasick::builder().match_kind(MatchKind::LeftmostLongest).build(&keys).map_err(|e| e.to_string())?, keys)),
+            false => Some((AhoCorasick::new(&keys).map_err(|e| e.to_string())?, keys)),
         };
         Ok(Mapper { to, words, pids })
     }
@@ -472,9 +487,15 @@ impl Mapper {
     fn text(&self, s: &str) -> String {
         let Some((finder, keys)) = &self.words else { return s.to_owned() };
         let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        // Each whole word, leftmost and then longest: a match that is no whole word does not hide one inside it.
+        let mut words: Vec<_> = finder
+            .find_overlapping_iter(s)
+            .filter(|found| !word(s[..found.start()].chars().next_back()) && !word(s[found.end()..].chars().next()))
+            .collect();
+        words.sort_by_key(|found| (found.start(), std::cmp::Reverse(found.end())));
         let (mut out, mut last) = (String::with_capacity(s.len()), 0);
-        for found in finder.find_iter(s) {
-            if word(s[..found.start()].chars().next_back()) || word(s[found.end()..].chars().next()) {
+        for found in words {
+            if found.start() < last {
                 continue;
             }
             out.push_str(&s[last..found.start()]);
@@ -525,6 +546,14 @@ mod tests {
     fn launch(resume: Option<String>) -> Launch {
         let tools = Arc::new(Endpoint::unattached("t"));
         Launch { cwd: "/".into(), locked: false, model: None, resume, tools_token: Secret::random(), tools, env: vec![] }
+    }
+
+    #[test]
+    fn mock_a_recorded_id_inside_a_longer_one_that_is_no_whole_word_is_still_mapped() {
+        let recorded = [("item-aaaaaa-call-bbbbbb".to_owned(), Recorded::Id), ("call-bbbbbb".to_owned(), Recorded::Id)];
+        let mapper = Mapper::new(&recorded, "s").unwrap();
+        assert_eq!(mapper.text("xitem-aaaaaa-call-bbbbbb"), "xitem-aaaaaa-id1");
+        assert_eq!(mapper.text("item-aaaaaa-call-bbbbbb and call-bbbbbb"), "id0 and id1", "the longest whole word wins");
     }
 
     #[tokio::test]
