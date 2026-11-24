@@ -34,6 +34,8 @@ use crate::session::{Feed, Harness, Open, Settings};
 use crate::store::Store;
 use crate::work::{Setup, check_work};
 
+/// The most logins one `providers` call may name.
+pub const MAX_LOGINS_ASKED: usize = 16;
 /// How often the sweep runs while the harness serves.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Events waiting to be written to one client. Past it its watches wait, and their live events wait on channels that
@@ -423,19 +425,26 @@ impl Client {
                 self.captured().await;
                 harness.check_open(&provider, login.as_deref(), effort.as_deref())?;
                 crate::tools::check_tools(&tools, result_schema.as_ref())?;
-                let (cwd, work) = match (cwd, repo) {
-                    (Some(cwd), None) if base.is_none() && branch.is_none() => (cwd, None),
+                let (cwd, work, notices) = match (cwd, repo) {
+                    (Some(cwd), None) if base.is_none() && branch.is_none() => (cwd, None, vec![]),
                     (Some(_), None) => return Err(Error::Refused("base and branch go with repo".into())),
                     (None, Some(repo)) => {
                         let branch = branch.unwrap_or_else(|| format!("harness-{}", random_hex(4)));
                         check_work(&repo, base.as_deref(), &branch)?;
-                        let (work, worktree) = harness.setup().prepare(&repo, base.as_deref(), &branch).await?;
-                        (worktree, Some(work))
+                        let (work, worktree, note) = harness.setup().prepare(&repo, base.as_deref(), &branch).await?;
+                        (worktree, Some(work), note.into_iter().collect())
                     }
                     _ => return Err(Error::Refused("give cwd or repo, and not both".into())),
                 };
-                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), tools, result_schema };
-                let (id, _, events) = match harness.open_watched(spec) {
+                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), notices, tools, result_schema };
+                // A clone can take minutes, and the token may have been revoked meanwhile. The clone stays, as the
+                // harness's own, for the next session; the worktree goes, and no session is made.
+                let revoked = !harness.client_tokens()?.iter().any(|token| token.stored_key == self.key);
+                let opened = match revoked {
+                    true => Err(Error::Refused("this connection's token was revoked".into())),
+                    false => harness.open_watched(spec),
+                };
+                let (id, _, events) = match opened {
                     Ok(opened) => opened,
                     Err(e) => {
                         if let Some(work) = work {
@@ -460,6 +469,9 @@ impl Client {
             Op::CleanUp { session } => done(harness.clean_up(&session).await),
             Op::Sessions => Ok(serde_json::to_value(harness.sessions()?)?),
             Op::Providers { logins } => {
+                if logins.len() > MAX_LOGINS_ASKED {
+                    return Err(Error::Refused(format!("one call checks at most {MAX_LOGINS_ASKED} logins besides the usual ones")));
+                }
                 self.captured().await;
                 let drivers: Vec<Value> = harness.providers().into_iter().map(|(name, capabilities)| json!({ "name": name, "capabilities": capabilities })).collect();
                 let logins = check(harness.setup(), harness.setup().places(), &with_usual(logins)).await;

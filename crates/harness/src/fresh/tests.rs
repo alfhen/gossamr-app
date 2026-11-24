@@ -140,7 +140,7 @@ async fn a_missing_copy_is_cloned_over_https_with_hooks_off_and_prompts_off_for_
     assert_eq!(path, agents_root(&rig.home).join("acme/webshop"));
     assert!(path.join(".git").is_dir());
     let log = rig.log();
-    let command = format!("git {} clone -- https://github.com/acme/webshop.git {}/.webshop.cloning-", PINNED.join(" "), path.parent().unwrap().display());
+    let command = format!("git {} clone -- https://github.com/acme/webshop.git {}/.webshop+cloning-", PINNED.join(" "), path.parent().unwrap().display());
     assert!(log.lines().next().unwrap().starts_with(&command), "{log}");
     assert!(log.contains("git env GIT_TERMINAL_PROMPT=0"), "{log}");
     assert!(!log.contains("from-the-persons-shell"), "the shell's variables aren't copied into arguments");
@@ -205,7 +205,7 @@ async fn a_credential_failure_falls_back_to_a_signed_in_gh_with_hooks_off() {
     let path = ensure_clone(&rig.git("auth", Some("signed-in")), &rig.home, "acme/webshop", true).await.unwrap().path;
     assert!(path.join(".git").is_dir(), "the half-made folder from git is replaced by gh's clone");
     let log = rig.log();
-    assert!(log.contains(&format!("gh repo clone acme/webshop {}/.webshop.cloning-", path.parent().unwrap().display())), "{log}");
+    assert!(log.contains(&format!("gh repo clone acme/webshop {}/.webshop+cloning-", path.parent().unwrap().display())), "{log}");
     assert!(log.contains("gh env GIT_TERMINAL_PROMPT=0 hooks=core.hooksPath=/dev/null"), "{log}");
 }
 
@@ -313,13 +313,21 @@ async fn a_temporary_folder_older_than_the_clone_limit_is_removed_and_a_newer_on
     let rig = Rig::new("stale-temps");
     let path = agents_root(&rig.home).join("acme/webshop");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let stale = path.with_file_name(".webshop.cloning-0123456789ab");
-    let fresh = path.with_file_name(".webshop.cloning-ba9876543210");
-    std::fs::create_dir_all(&stale).unwrap();
-    std::fs::create_dir_all(&fresh).unwrap();
-    std::fs::File::open(&stale).unwrap().set_modified(std::time::SystemTime::now() - CLONE_LIMIT - Duration::from_secs(60)).unwrap();
-    remove_stale_temps(&rig.home, "acme/webshop");
-    assert!(!stale.exists() && fresh.exists(), "only a leftover older than the clone limit is removed");
+    let stale = path.with_file_name(".webshop+cloning-0123456789ab");
+    let fresh = path.with_file_name(".webshop+cloning-ba9876543210");
+    let unmarked = path.with_file_name(".webshop+cloning-aaaaaaaaaaaa");
+    for (folder, marked) in [(&stale, true), (&fresh, true), (&unmarked, false)] {
+        std::fs::create_dir_all(folder).unwrap();
+        if marked {
+            std::fs::write(made_mark(folder), "").unwrap();
+        }
+    }
+    for folder in [&stale, &unmarked] {
+        std::fs::File::open(folder).unwrap().set_modified(std::time::SystemTime::now() - CLONE_LIMIT - Duration::from_secs(60)).unwrap();
+    }
+    remove_stale_temps(&rig.git("ok", None), &rig.home, "acme/webshop").await;
+    assert!(!stale.exists() && !made_mark(&stale).exists() && fresh.exists(), "only a leftover older than the clone limit is removed");
+    assert!(unmarked.exists(), "a folder this code did not mark is never taken for its temp clone");
 }
 
 #[tokio::test]

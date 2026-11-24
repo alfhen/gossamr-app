@@ -1854,7 +1854,8 @@ async fn login_the_usual_one_needs_a_captured_shell_and_a_folder_does_not() {
 #[tokio::test]
 async fn a_sessions_login_effort_and_work_survive_a_restart_and_reach_the_driver_on_resume() {
     let m = machine();
-    let worktree = m.home.join("Gossamr/agents/acme/webshop.worktrees/harness-1");
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
     let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
     let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
     let spec = harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(Some("~/.claude-work"), Some("xhigh")) };
@@ -1872,5 +1873,31 @@ async fn a_sessions_login_effort_and_work_survive_a_restart_and_reach_the_driver
     next(&mut events).await;
     let resumed = m.seer.starts().pop().unwrap();
     assert_eq!((resumed.resume.as_deref(), resumed.login.as_deref(), resumed.effort.as_deref()), (Some("seer-1"), Some("~/.claude-work"), Some("xhigh")));
-    assert_eq!((resumed.cwd.clone(), resumed.var("CLAUDE_CONFIG_DIR")), (worktree, Some(m.home.join(".claude-work").display().to_string())));
+    assert_eq!((resumed.cwd.clone(), resumed.var("CLAUDE_CONFIG_DIR")), (worktree.clone(), Some(m.home.join(".claude-work").display().to_string())));
+    let listed = harness.sessions().unwrap();
+    assert_eq!((listed[0].repo.as_deref(), listed[0].branch.as_deref(), listed[0].login.as_deref(), listed[0].effort.as_deref()), (Some("acme/webshop"), Some("harness-1"), Some("~/.claude-work"), Some("xhigh")));
+
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    std::fs::remove_dir_all(&worktree).unwrap();
+    assert!(matches!(harness.resume(&id).await, Err(Error::Refused(_))), "a session whose worktree is gone isn't resumed");
+}
+
+#[tokio::test]
+async fn login_the_work_root_is_refused_and_no_agent_starts_before_the_shell_was_read() {
+    let m = machine();
+    let clone = m.home.join("Gossamr/agents/acme/webshop");
+    std::fs::create_dir_all(&clone).unwrap();
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    assert!(matches!(harness.open(claude(Some("~/Gossamr/agents/acme/webshop"), None)).await, Err(Error::Refused(_))), "a clone is not a login");
+    drop(harness);
+    let unread = harness::work::Setup::new(Some(m.home.clone()), m.dir.clone()).with_shell_program("/nonexistent/shell");
+    let harness = on(&m, reopen(&m.dir).await, unread);
+    for spec in [claude(Some("~/.claude-work"), None), harness::session::Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Default::default() }] {
+        match harness.open(spec).await {
+            Err(Error::Refused(why)) => assert!(why.contains("hasn't been read"), "{why}"),
+            other => panic!("expected a refusal, got {:?}", other.map(|(id, _)| id)),
+        }
+    }
+    assert!(m.seer.starts().is_empty(), "not even on the harness's own environment");
 }

@@ -17,7 +17,7 @@ use crate::inbox::Lookup;
 /// The run's worktree and branch, removed through git alone: see `repo::remove_with_git`.
 pub(crate) async fn remove_run_with_git(git: &Git, home: Option<&Path>, run: &Run) -> std::result::Result<Option<String>, String> {
     let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
-    remove_with_git(git, home, Worktree { repo: &run.spec.repo, clone: &run.spec.clone_path, path: &run.expected_worktree, branch: &branch }).await
+    remove_with_git(git, home, Worktree { repo: &run.spec.repo, clone: &run.spec.clone_path, path: &run.expected_worktree, branch: &branch, base: &run.spec.base }).await
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

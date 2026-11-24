@@ -91,12 +91,21 @@ fn after_a_refused_group_kill(group: libc::pid_t, refused: std::io::Error) -> st
     }
 }
 
-/// Done when the group is gone or takes the kill; otherwise the first refusal stands.
+/// Done when the group is gone or takes the kill. Refused again, it is listed again: a zombie that is still there
+/// beside the member reaped meanwhile refuses every kill, so a group of zombies and reaped members, with a zombie
+/// among them, is done. Otherwise the first refusal stands.
 fn kill_group_again(group: libc::pid_t, refused: std::io::Error) -> std::io::Result<()> {
     match deliver(-group, libc::SIGKILL) {
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
         Ok(()) => Ok(()),
-        Err(_) => Err(refused),
+        Err(_) => match group_members(group) {
+            Listing::Members(members) => {
+                let states: Vec<Member> = members.iter().map(|pid| member(*pid)).collect();
+                let done = states.contains(&Member::Zombie) && !states.contains(&Member::Running);
+                if done { Ok(()) } else { Err(refused) }
+            }
+            Listing::Nothing | Listing::Full => Err(refused),
+        },
     }
 }
 

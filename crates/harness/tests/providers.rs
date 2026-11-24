@@ -133,3 +133,19 @@ fn command_line(data: &Path, token: &str) -> std::process::Output {
     writeln!(child.stdin.take().unwrap(), "{token}").unwrap();
     child.wait_with_output().unwrap()
 }
+
+#[tokio::test]
+async fn providers_one_call_names_at_most_sixteen_logins() {
+    let rig = Rig::new();
+    let token = Token::random();
+    let first = token.clone();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(Seer::default()))];
+    let server = Server::bind_with(&rig.data, move || Some(first), drivers, settings(4), rig.setup()).unwrap();
+    let task = tokio::spawn(server.run());
+    let mut client = harness::client::Client::connect(&rig.data, &token).await.unwrap();
+    let asked = |n: usize| harness::api::Op::Providers { logins: vec![scratch(); n] };
+    assert!(client.call(asked(harness::server::MAX_LOGINS_ASKED + 1)).await.is_err(), "one more is refused before any CLI runs");
+    let answer = client.call(asked(harness::server::MAX_LOGINS_ASKED)).await.unwrap();
+    assert_eq!(answer["logins"].as_array().unwrap().len(), 3 + harness::server::MAX_LOGINS_ASKED);
+    task.abort();
+}

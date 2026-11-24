@@ -146,6 +146,15 @@ pub struct Listed {
     /// Set by the harness: the session's agent runs.
     #[serde(default)]
     pub running: bool,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// The login folder as typed.
+    #[serde(default)]
+    pub login: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
 }
 
 impl Store {
@@ -250,6 +259,28 @@ impl Store {
         Ok(())
     }
 
+    /// Sets or clears the clone and branch the session's row names.
+    pub fn set_work(&self, id: &str, work: Option<&Work>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET repo = ?2, base = ?3, branch = ?4, clone = ?5 WHERE id = ?1",
+            params![id, work.map(|w| &w.repo), work.map(|w| &w.base), work.map(|w| &w.branch), work.map(|w| w.clone.as_os_str().as_bytes())],
+        )?;
+        Ok(())
+    }
+
+    /// Whether a session other than `id`, not cleaned up, names the same clone and branch.
+    pub fn another_holds(&self, id: &str, work: &Work) -> Result<bool> {
+        let found: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM sessions WHERE id != ?1 AND clone = ?2 AND branch = ?3 AND cleaned_ms IS NULL LIMIT 1",
+                params![id, work.clone.as_os_str().as_bytes(), work.branch],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
     /// The session ends when the client that opened it leaves, and is never resumed.
     pub fn set_ends_with_client(&self, id: &str) -> Result<()> {
         self.conn.execute("UPDATE sessions SET ends_with_client = 1 WHERE id = ?1", [id])?;
@@ -258,12 +289,14 @@ impl Store {
 
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq FROM sessions ORDER BY created_ms, id",
+            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort
+             FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false })
+            let (repo, branch, login, effort) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?);
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

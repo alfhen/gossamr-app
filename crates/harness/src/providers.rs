@@ -1,7 +1,7 @@
 //! `harness providers`: how each login of the provider table stands, asked of its CLI's own status command. No
 //! credential file is opened.
 
-use futures_util::future::join_all;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::binary::CliPlaces;
@@ -40,9 +40,13 @@ pub fn with_usual(extra: Vec<Asked>) -> Vec<Asked> {
     Provider::ALL.iter().map(|p| Asked { provider: p.name().into(), folder: None }).chain(extra).collect()
 }
 
-/// Checks every login at once.
+/// How many logins are checked at once, each with two or three CLI runs.
+pub const AT_ONCE: usize = 4;
+
+/// Checks the logins, `AT_ONCE` at a time, in order.
 pub async fn check(setup: &Setup, places: &CliPlaces, asked: &[Asked]) -> Vec<Standing> {
-    join_all(asked.iter().map(|login| one(setup, places, login))).await
+    let each: Vec<_> = asked.iter().map(|login| one(setup, places, login)).collect();
+    futures_util::stream::iter(each).buffered(AT_ONCE).collect().await
 }
 
 async fn one(setup: &Setup, places: &CliPlaces, asked: &Asked) -> Standing {

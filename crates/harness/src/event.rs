@@ -53,6 +53,8 @@ pub enum Body {
     TurnEnded { how: TurnEnd },
     /// The turn failed, or the session could not start or go on. Either way no turn is running after it.
     Failed { kind: FailKind, reason: String },
+    /// A word from the harness about the session, for the person: say, that it starts from what was fetched before.
+    Notice { text: String },
     /// The session was handed over to Terminal; `closed` follows. Its provider id is kept, to resume it there.
     HandedOver,
     Closed,
@@ -212,9 +214,10 @@ mod tests {
             Body::Question { .. } => 11,
             Body::TurnEnded { .. } => 12,
             Body::Failed { .. } => 13,
-            Body::HandedOver => 14,
-            Body::Closed => 15,
-            Body::Withheld { .. } => 16,
+            Body::Notice { .. } => 14,
+            Body::HandedOver => 15,
+            Body::Closed => 16,
+            Body::Withheld { .. } => 17,
         }
     }
 
@@ -236,6 +239,7 @@ mod tests {
             Body::Question { id: "i".into(), text: "t".into() },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
+            Body::Notice { text: "t".into() },
             Body::HandedOver,
             Body::Closed,
         ]

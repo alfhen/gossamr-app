@@ -110,7 +110,7 @@ impl RunService {
         let lock = self.repo_lock(&spec.repo);
         let _turn = lock.lock().await;
         let _other_process = lock_repo(&home, &spec.repo).await.map_err(clone_failure)?;
-        remove_stale_temps(&home, &spec.repo);
+        remove_stale_temps(&git, &home, &spec.repo).await;
         let cloning = real(&spec.clone_path).symlink_metadata().is_err();
         if cloning {
             self.note_clone(run, "clone_started", format!("Cloning {} into ~/Gossamr/agents", spec.repo)).await;

@@ -180,6 +180,8 @@ pub struct Open {
     pub tools: Vec<ToolSpec>,
     /// The JSON Schema the session's `result` must fit.
     pub result_schema: Option<Value>,
+    /// Said to the session's clients as its first events, before the agent's own.
+    pub notices: Vec<String>,
 }
 
 impl Harness {
@@ -249,8 +251,8 @@ impl Harness {
             if spec.ends_with_client {
                 store.set_ends_with_client(&id)?;
             }
-            let Open { provider, cwd, locked, model, login, effort, tools, result_schema, .. } = spec;
-            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume: None, endpoint, tools, result_schema })
+            let Open { provider, cwd, locked, model, login, effort, notices, tools, result_schema, .. } = spec;
+            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume: None, notices, endpoint, tools, result_schema })
         })?;
         Ok((id, events, feed.unwrap_or(Feed::Stored(second))))
     }
@@ -294,6 +296,10 @@ impl Harness {
             }
             let provider_session =
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
+            // A clean-up cut short after the worktree went leaves nothing to resume in.
+            if row.work.is_some() && row.cwd.symlink_metadata().is_err() {
+                return Err(Error::Refused(format!("session {id}'s worktree is gone, so it can't be resumed: clean it up")));
+            }
             let driver = self.driver(&row.provider)?;
             let endpoint = match row.endpoint {
                 Some(endpoint) => endpoint,
@@ -305,7 +311,7 @@ impl Harness {
             };
             let (provider, cwd, locked, model, login, effort) = (row.provider, row.cwd, row.locked, row.model, row.login, row.effort);
             let (tools, result_schema, resume) = (row.tools, row.result_schema, Some(provider_session));
-            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume, endpoint, tools, result_schema })
+            Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume, notices: Vec::new(), endpoint, tools, result_schema })
         })
         .map(|(events, _)| events)
     }
@@ -507,10 +513,16 @@ impl Harness {
             if !cleaning.insert(id.to_owned()) {
                 return Err(Error::Running(id.to_owned()));
             }
-            row.work.filter(|_| !row.cleaned).map(|work| (work, row.cwd))
+            // The worktree is this session's only while no other session that is not cleaned up names it.
+            let owned = match &row.work {
+                Some(work) if !row.cleaned => !self.inner.with_store(|store| store.another_holds(id, work))?,
+                _ => false,
+            };
+            row.work.filter(|_| owned).map(|work| (work, row.cwd))
         };
         let _cleaning = Cleaning { inner: &self.inner, id };
         if let Some((work, worktree)) = work {
+            // If what follows fails, the row still names the worktree that is gone, and `resume` refuses it.
             self.inner.setup.remove(&work, &worktree).await?;
         }
         self.inner.with_store(|store| store.clean_up(id))
@@ -610,7 +622,7 @@ impl Harness {
         let endpoints = self.inner.endpoints()?;
         #[cfg(test)]
         self.inner.hooks.before_reserve();
-        let Plan { driver, provider, cwd, locked, model, login, effort, resume, endpoint, tools, result_schema } = {
+        let Plan { driver, provider, cwd, locked, model, login, effort, resume, notices, endpoint, tools, result_schema } = {
             let mut live = self.inner.live();
             if self.inner.closing.load(Ordering::Relaxed) {
                 return Err(Error::ShutDown);
@@ -638,9 +650,14 @@ impl Harness {
         let reserved = Reserved { inner: &self.inner, id, start, kept: false };
         let tools = endpoints.register(&endpoint, (id, start), &token, tools, calls, &provider);
         let env = agent_env(self.inner.setup.agent_env(&provider, login.as_deref())?.into_pairs());
+        let fresh = resume.is_none();
         let launch = Launch { cwd, locked, model, login, effort, resume, tools_token: token, tools, result_schema, env };
         let caps = driver.capabilities();
         let link = driver.open(launch).map_err(|OpenError { kind, message }| {
+            // A first start that failed gives up its worktree, which the caller removes: its row must not name it.
+            if fresh && let Err(e) = self.inner.with_store(|store| store.set_work(id, None)) {
+                eprintln!("harness: session {id} keeps the name of a worktree it never used: {e}");
+            }
             Error::Open { kind, message: redact::text(&message, &secrets) }
         })?;
         // While the session is still taken: a take-back that failed to open keeps the mark, and a later hand over's
@@ -663,6 +680,9 @@ impl Harness {
             endpoint,
             broken: AtomicBool::new(false),
         };
+        for text in notices {
+            task.emit(Body::Notice { text });
+        }
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
         #[cfg(test)]
         self.inner.hooks.after_spawn(id);
@@ -688,6 +708,7 @@ struct Plan {
     endpoint: String,
     tools: Vec<ToolSpec>,
     result_schema: Option<Value>,
+    notices: Vec<String>,
 }
 
 /// A session's place in `cleaning`, given up however its clean-up ends.

@@ -356,6 +356,26 @@ fn a_listed_member_reaped_before_it_is_checked_gets_the_group_asked_again() {
     assert_eq!(kill_group(&still).unwrap_err().raw_os_error(), Some(libc::EPERM), "a group that still refuses keeps the refusal");
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn a_group_of_a_zombie_and_a_member_reaped_after_the_listing_is_killed_once_it_is_listed_again() {
+    let mut leader = group_leader("exit 0");
+    let zombie = RunProcess { pid: leader.id(), started: started_of(leader.id()).unwrap_or(0) };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while started_of(zombie.pid).is_some() {
+        assert!(std::time::Instant::now() < deadline, "the shell never exited");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let mut other = group_leader("exit 0");
+    let reaped = other.id() as libc::pid_t;
+    other.wait().unwrap();
+    process::seam::refuse_group_kills(zombie.pid, 2);
+    process::seam::list_group_as(zombie.pid, process::Listing::Members(vec![zombie.pid as libc::pid_t, reaped]));
+    kill_group(&zombie).unwrap();
+    assert_eq!(process::seam::sent_to(zombie.pid).iter().filter(|s| **s == libc::SIGKILL).count(), 2, "asked twice, then listed again");
+    leader.wait().unwrap();
+}
+
 #[tokio::test]
 async fn a_process_start_time_does_not_change_while_it_runs() {
     let pid = std::process::id();
@@ -419,7 +439,7 @@ async fn a_codex_launch_that_never_names_a_thread_fails_and_stops_the_process() 
     let failed = backend.launch(&rig.request(None)).await.unwrap_err();
     assert!(failed.to_string().contains("didn't start a session"), "{failed}");
     assert!(!rig.folder().exists() && !rig.worktree().exists());
-    let pid: u32 = rig.calls().lines().find_map(|l| l.strip_prefix("pid=")).unwrap().parse().unwrap();
+    let pid: u32 = rig.calls().lines().find_map(|l| l.strip_prefix("pid=")).expect("the fake wrote its pid within the 3 s launch wait").parse().unwrap();
     until("the fake to be gone", || started_of(pid).is_none() || unsafe { libc::kill(pid as i32, 0) } != 0).await;
 }
 
