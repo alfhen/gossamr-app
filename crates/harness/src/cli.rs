@@ -1,7 +1,6 @@
 //! The command line's client commands. Each connects to the harness serving the data folder (`--data`, else the
-//! default). It reads its client token from stdin with `--token-stdin`, or asks for it on the terminal without echo:
-//! never from an environment variable, an argument or a file, where an agent of the same user could read it without
-//! the person and approve its own requests.
+//! default). It reads its client token from stdin, with `--token-stdin`: never from an environment variable, an
+//! argument or a file, where an agent of the same user could read it without the person and approve its own requests.
 
 use std::path::PathBuf;
 
@@ -31,23 +30,19 @@ pub enum Command {
     TokenNew,
 }
 
-/// Where the client's token comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenFrom {
-    /// The first line of stdin.
-    Stdin,
-    /// The terminal, asked without echo.
-    Terminal,
-}
+/// A place for the client token that asks the person on each read: a Keychain item that trusts no app.
+pub const KEYCHAIN_ADD: &str = r#"security add-generic-password -s gossamr-harness -a client -T "" -w"#;
+pub const KEYCHAIN_READ: &str = "security find-generic-password -s gossamr-harness -a client -w";
 
-pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token: &mut TokenFrom) -> Option<Command> {
+/// `token_stdin` is set when the arguments hold `--token-stdin`.
+pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_stdin: &mut bool) -> Option<Command> {
     let mut flags: Vec<(&str, Option<&str>)> = vec![];
     let mut words = vec![];
     let mut args = args.iter().copied();
     while let Some(arg) = args.next() {
         match arg {
             "--follow" | "--ends-with-client" => flags.push((arg, None)),
-            "--token-stdin" => *token = TokenFrom::Stdin,
+            "--token-stdin" => *token_stdin = true,
             "--data" => *data = Some(args.next()?.into()),
             flag if flag.starts_with("--") => flags.push((flag, Some(args.next()?))),
             word => words.push(word.to_owned()),
@@ -67,7 +62,7 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token: &m
         ("shutdown", []) if known(&[]) => call(Op::Shutdown),
         ("token", [new]) if new == "new" && known(&[]) => Some(Command::TokenNew),
         ("token", [list]) if list == "list" && known(&[]) => call(Op::TokenList),
-        ("token", [revoke, id]) if revoke == "revoke" && known(&[]) => call(Op::TokenRevoke { id: id.parse().ok()? }),
+        ("token", [revoke, id]) if revoke == "revoke" && known(&[]) => call(Op::TokenRevoke { token: id.parse().ok()? }),
         ("events", [session]) if known(&["--after", "--follow"]) => {
             let after = flag("--after").flatten().map_or(Some(0), |after| after.parse().ok())?;
             Some(Command::Events { session: session.clone(), after, follow: flag("--follow").is_some() })
@@ -87,9 +82,9 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token: &m
 }
 
 /// Runs the command. True when it did what it was asked; a session's failure makes `run` false.
-pub async fn execute(command: Command, data: Option<PathBuf>, from: TokenFrom) -> Result<bool> {
+pub async fn execute(command: Command, data: Option<PathBuf>, token_stdin: bool) -> Result<bool> {
     let dir = data.or_else(default_dir).ok_or_else(|| Error::Refused("no data folder: set HARNESS_DATA".into()))?;
-    let token = read_token(from)?;
+    let token = read_token(token_stdin)?;
     let mut client = Client::connect(&dir, &token).await?;
     match command {
         Command::Call(op) => {
@@ -107,10 +102,7 @@ pub async fn execute(command: Command, data: Option<PathBuf>, from: TokenFrom) -
             Ok(true)
         }
         Command::Events { session, after, follow: false } => {
-            let events: Vec<crate::event::Event> = serde_json::from_value(client.call(Op::Events { session, after }).await?)?;
-            for event in events {
-                println!("{}", serde_json::to_string(&event)?);
-            }
+            client.events(&session, after, |event| println!("{}", serde_json::to_string(&event).expect("an event always serializes"))).await?;
             Ok(true)
         }
         Command::Events { session, after, follow: true } => {
@@ -152,49 +144,12 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
     Ok(ok && ended)
 }
 
-/// The client token, from stdin or asked for on the terminal without echo.
-fn read_token(from: TokenFrom) -> Result<Token> {
-    // SAFETY: isatty has no preconditions.
-    let terminal = unsafe { libc::isatty(libc::STDIN_FILENO) } == 1;
-    if from == TokenFrom::Terminal && !terminal {
-        return Err(Error::Refused("give the client token on stdin with --token-stdin, or run this in a terminal to be asked for it".into()));
+/// The client token, from the first line of stdin, which `--token-stdin` says holds it.
+fn read_token(from_stdin: bool) -> Result<Token> {
+    if !from_stdin {
+        return Err(Error::Refused(format!("give the client token on stdin with --token-stdin, for example: {KEYCHAIN_READ} | harness sessions --token-stdin")));
     }
     let mut line = String::new();
-    if terminal {
-        eprint!("client token: ");
-        let _quiet = Quiet::new();
-        std::io::stdin().read_line(&mut line)?;
-        eprintln!();
-    } else {
-        std::io::stdin().read_line(&mut line)?;
-    }
+    std::io::stdin().read_line(&mut line)?;
     Token::parse(&line).ok_or_else(|| Error::Refused("that is not a client token, which is 64 hex digits".into()))
-}
-
-/// The terminal's echo, off until this is dropped.
-struct Quiet(Option<libc::termios>);
-
-impl Quiet {
-    fn new() -> Quiet {
-        // SAFETY: `termios` is plain data that tcgetattr fills in; both calls only read and set stdin's terminal flags.
-        unsafe {
-            let mut flags: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(libc::STDIN_FILENO, &mut flags) != 0 {
-                return Quiet(None);
-            }
-            let kept = flags;
-            flags.c_lflag &= !libc::ECHO;
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &flags);
-            Quiet(Some(kept))
-        }
-    }
-}
-
-impl Drop for Quiet {
-    fn drop(&mut self) {
-        if let Some(kept) = &self.0 {
-            // SAFETY: puts back the flags tcgetattr gave.
-            unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, kept) };
-        }
-    }
 }

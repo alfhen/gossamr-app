@@ -789,7 +789,8 @@ async fn retention_a_catch_up_read_writes_nothing() {
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE events SET ms = ?1 WHERE seq = 1", [old]).unwrap();
     let before = std::fs::read(dir.join("harness.sqlite")).unwrap();
     let stored = harness.events(&id, 0).unwrap();
-    let (watched, _live) = harness.watch(&id, 0).unwrap();
+    let (watched, more, _live) = harness.watch(&id, 0).unwrap();
+    assert!(!more);
     assert!(std::fs::read(dir.join("harness.sqlite")).unwrap() == before, "the store file is unchanged by the reads");
     assert!(matches!(&stored[0].body, Body::Started { .. }), "a read does not sweep: {stored:?}");
     assert_eq!(stored, watched);

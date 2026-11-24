@@ -225,6 +225,7 @@ fn client_token_new_needs_a_token_and_makes_one_that_works() {
     assert!(String::from_utf8_lossy(&refused.stderr).contains("client token"), "it says what is missing");
     let wrong = with_token(&mut client(&serving, &["token", "new"]), &harness::auth::Token::random().hex());
     assert_eq!(wrong.status.code(), Some(1), "`token new` with a wrong token");
+    assert_eq!(String::from_utf8_lossy(&wrong.stderr).matches("refused").count(), 1, "the refusal is said once");
     assert!(wrong.stdout.is_empty());
 
     let made = with_token(&mut client(&serving, &["token", "new"]), &serving.token);
@@ -315,4 +316,34 @@ fn serve_with_a_client_token_in_its_environment_does_not_start() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains(harness::cli::TOKEN_VARIABLE), "it says why");
     assert!(!dir.exists(), "nothing was made");
+}
+
+#[test]
+fn client_with_a_terminal_on_stdin_and_no_token_stdin_is_refused_without_waiting() {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let (mut main, mut side) = (0, 0);
+    // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
+    assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+    let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
+    let tmp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(HARNESS)
+        .args(["sessions", "--data"])
+        .arg(tmp.path())
+        .stdin(side)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let done = loop {
+        if let Some(done) = child.try_wait().unwrap() {
+            break done;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "it waited for input");
+        std::thread::yield_now();
+    };
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(done.code(), Some(1));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("--token-stdin") && said.contains(harness::cli::KEYCHAIN_READ), "it says how to give the token: {said}");
 }

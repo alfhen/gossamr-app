@@ -8,6 +8,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -18,10 +19,10 @@ use tokio::sync::Notify;
 use tokio::sync::mpsc::{self, Sender, UnboundedReceiver};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{WebSocketStream, accept_async_with_config};
 
-use crate::api::{Call, DESCRIPTOR, Descriptor, Hello, Op, PROTOCOL, Proof, Reply, socket_path};
+use crate::api::{BEFORE_PROOF_MAX, Call, DESCRIPTOR, Descriptor, Hello, MAX_MESSAGE, Op, PAGE_BYTES, PROTOCOL, Proof, Reply, socket_path};
 use crate::auth::{Token, decode, encode, verify};
 use crate::driver::Driver;
 use crate::error::{Error, Result};
@@ -31,23 +32,46 @@ use crate::store::Store;
 
 /// How often the sweep runs while the harness serves.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
-/// Events waiting to be written to one client. Past it its watches wait, and their events wait on channels that drop
-/// none, because a locked session's events cannot be read back from the store.
+/// Events waiting to be written to one client. Past it its watches wait, and their live events wait on channels that
+/// drop none, because a locked session's events cannot be read back from the store.
 const PUSH_QUEUE: usize = 256;
-/// The largest message a connection may send before its proof holds. A proof is about 80 bytes.
-const BEFORE_PROOF_MAX: usize = 4096;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     /// How long a new connection has for the WebSocket handshake and its proof, together.
     pub proof_within: Duration,
-    /// Connections at once, proven or not. One past it is closed at once.
-    pub connections: usize,
+    /// Connections that have not proven a token yet. One past it is closed at once.
+    pub proving: usize,
+    /// Proven connections. One past it is told so and closed.
+    pub proven: usize,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { proof_within: Duration::from_secs(10), connections: 64 }
+        Limits { proof_within: Duration::from_secs(10), proving: 8, proven: 64 }
+    }
+}
+
+/// Counts a connection in one of the two caps while it holds this.
+struct Counted(Arc<AtomicUsize>);
+
+impl Counted {
+    /// Counts one more unless `cap` are counted; one step, so two at once cannot pass it.
+    fn take(count: &Arc<AtomicUsize>, cap: usize) -> Option<Counted> {
+        let mut now = count.load(Ordering::Acquire);
+        while now < cap {
+            match count.compare_exchange_weak(now, now + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(Counted(count.clone())),
+                Err(seen) => now = seen,
+            }
+        }
+        None
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -109,11 +133,14 @@ impl Server {
         let (sweeper, _) = harness.sweep_on_timer(sweep_every);
         let stop = Arc::new(Notify::new());
         let mut connections = JoinSet::new();
+        let (proving, proven) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         loop {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
-                    Ok((stream, _)) if same_user(&stream) && connections.len() < limits.connections => {
-                        connections.spawn(connection(harness.clone(), stream, limits.proof_within, stop.clone()));
+                    Ok((stream, _)) if same_user(&stream) => {
+                        if let Some(slot) = Counted::take(&proving, limits.proving) {
+                            connections.spawn(connection(harness.clone(), stream, limits, slot, proven.clone(), stop.clone()));
+                        }
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("harness: accept failed: {e}"),
@@ -139,36 +166,42 @@ fn same_user(stream: &UnixStream) -> bool {
     stream.peer_cred().is_ok_and(|cred| cred.uid() == unsafe { libc::geteuid() })
 }
 
-/// Until the proof holds a connection may send only small messages.
-fn before_proof() -> WebSocketConfig {
-    WebSocketConfig::default().max_message_size(Some(BEFORE_PROOF_MAX)).max_frame_size(Some(BEFORE_PROOF_MAX))
+/// The limits of a connection, both ways, from its start.
+pub(crate) fn config() -> WebSocketConfig {
+    WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE))
 }
 
 type Ws = WebSocketStream<UnixStream>;
 
-async fn send(ws: &mut Ws, reply: &impl serde::Serialize) -> Result<()> {
-    let text = serde_json::to_string(reply)?;
+async fn send(ws: &mut Ws, reply: &Reply) -> Result<()> {
+    let mut text = serde_json::to_string(reply)?;
+    if text.len() > MAX_MESSAGE {
+        let error = format!("the answer is over the {MAX_MESSAGE}-byte limit of a message");
+        text = serde_json::to_string(&Reply { id: reply.id, session: reply.session.clone(), error: Some(error), ..Reply::default() })?;
+    }
     ws.send(Message::text(text)).await.map_err(|e| Error::Protocol(e.to_string()))
 }
 
-async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration, stop: Arc<Notify>) {
-    let proven = tokio::time::timeout(proof_within, async {
-        let mut ws = accept_async_with_config(stream, Some(before_proof())).await.ok()?;
+async fn connection(harness: Harness, stream: UnixStream, limits: Limits, proving: Counted, proven: Arc<AtomicUsize>, stop: Arc<Notify>) {
+    let checked = tokio::time::timeout(limits.proof_within, async {
+        let mut ws = accept_async_with_config(stream, Some(config())).await.ok()?;
         let proof = prove(&harness, &mut ws).await;
         Some((ws, proof))
     });
-    let (mut ws, key) = match proven.await {
-        Ok(Some((ws, Ok(key)))) => (ws, key),
-        Ok(Some((mut ws, Err(e)))) => {
-            let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
-            let _ = ws.close(None).await;
-            return;
-        }
+    let checked = checked.await;
+    drop(proving);
+    let (mut ws, slot, key) = match checked {
+        Ok(Some((mut ws, proof))) => match proof.and_then(|key| Ok((key, Counted::take(&proven, limits.proven).ok_or(Error::Refused(format!("the harness has {} clients already", limits.proven)))?))) {
+            Ok((key, slot)) => (ws, slot, key),
+            Err(e) => {
+                let _ = send(&mut ws, &Reply { error: Some(e.to_string()), ..Reply::default() }).await;
+                let _ = ws.close(None).await;
+                return;
+            }
+        },
         Ok(None) | Err(_) => return,
     };
-    // The default limits once the proof holds. A client sends nothing more until it has the answer to its proof, so
-    // the stream holds no bytes read ahead.
-    ws = WebSocketStream::from_raw_socket(ws.into_inner(), Role::Server, None).await;
+    let _slot = slot;
     if send(&mut ws, &Reply { ok: Some(json!(true)), ..Reply::default() }).await.is_err() {
         return;
     }
@@ -189,6 +222,11 @@ async fn connection(harness: Harness, stream: UnixStream, proof_within: Duration
                     }
                     if shut {
                         stop.notify_one();
+                    }
+                }
+                Some(Ok(Message::Binary(_))) => {
+                    if send(&mut ws, &Reply { error: Some("a call is a JSON text message".into()), ..Reply::default() }).await.is_err() {
+                        break;
                     }
                 }
                 Some(Ok(Message::Close(_)) | Err(_)) | None => break,
@@ -216,6 +254,9 @@ async fn prove(harness: &Harness, ws: &mut Ws) -> Result<[u8; 32]> {
     ws.send(Message::text(hello.clone())).await.map_err(|e| Error::Protocol(e.to_string()))?;
     let refused = || Error::Refused("the client did not prove a token".into());
     let Some(Ok(Message::Text(text))) = ws.next().await else { return Err(refused()) };
+    if text.len() > BEFORE_PROOF_MAX {
+        return Err(refused());
+    }
     let proof: Proof = serde_json::from_str(text.as_str()).map_err(|_| refused())?;
     let answer = decode(&proof.proof).ok_or_else(refused)?;
     let keys: Vec<[u8; 32]> = harness.client_tokens()?.into_iter().map(|token| token.stored_key).collect();
@@ -263,7 +304,7 @@ impl Client {
                 if ends_with_client {
                     self.ends_with_it.push(id.clone());
                 }
-                self.watch(id.clone(), vec![], Some(events), 0);
+                self.watch(id.clone(), vec![], false, Some(events), 0);
                 Ok(json!({ "session": id }))
             }
             Op::Send { session, text } => done(harness.send(&session, text)),
@@ -279,13 +320,16 @@ impl Client {
                 let providers = harness.providers().into_iter().map(|(name, capabilities)| json!({ "name": name, "capabilities": capabilities }));
                 Ok(Value::Array(providers.collect()))
             }
-            Op::Events { session, after } => Ok(serde_json::to_value(harness.events(&session, after)?)?),
+            Op::Events { session, after } => {
+                let (events, more) = harness.events_page(&session, after, PAGE_BYTES)?;
+                Ok(json!({ "events": events, "more": more }))
+            }
             Op::Watch { session, after } => {
                 if self.watching.get(&session).is_some_and(|watch| !watch.is_finished()) {
                     return Err(Error::Refused(format!("this connection already watches session {session}")));
                 }
-                let (stored, live) = harness.watch(&session, after)?;
-                self.watch(session, stored, live, after);
+                let (stored, more, live) = harness.watch(&session, after)?;
+                self.watch(session, stored, more, live, after);
                 Ok(Value::Null)
             }
             Op::TokenNew { stored_key } => {
@@ -297,7 +341,7 @@ impl Client {
                 let listed = tokens.map(|token| json!({ "id": token.id, "created_ms": token.created_ms, "yours": token.stored_key == self.key }));
                 Ok(Value::Array(listed.collect()))
             }
-            Op::TokenRevoke { id } => done(harness.revoke_client_token(id)),
+            Op::TokenRevoke { token } => done(harness.revoke_client_token(token)),
             Op::Shutdown => {
                 harness.shutdown().await;
                 Ok(Value::Null)
@@ -305,8 +349,8 @@ impl Client {
         }
     }
 
-    fn watch(&mut self, session: String, stored: Vec<Event>, live: Option<UnboundedReceiver<Event>>, after: u64) {
-        let task = forward(session.clone(), stored, live, after, self.out.clone());
+    fn watch(&mut self, session: String, stored: Vec<Event>, more: bool, live: Option<UnboundedReceiver<Event>>, after: u64) {
+        let task = forward(self.harness.clone(), session.clone(), stored, more, live, after, self.out.clone());
         self.watching.insert(session, self.watches.spawn(task));
     }
 }
@@ -315,15 +359,15 @@ async fn push(out: &Sender<Reply>, session: &str, event: Event) -> bool {
     out.send(Reply { session: Some(session.to_owned()), event: Some(event), ..Reply::default() }).await.is_ok()
 }
 
-/// Pushes `stored`, then each live event numbered past `after` and not already pushed, until the session closes; then
-/// the end of the watch. The live events come on a channel that drops none, so a client that falls behind misses nothing.
-async fn forward(session: String, stored: Vec<Event>, live: Option<UnboundedReceiver<Event>>, after: u64, out: Sender<Reply>) {
+/// Pushes `stored`, the pages of the store that follow it while `more`, then each live event numbered past `after` and
+/// not already pushed, until the session closes; then the end of the watch. The live events come on a channel that
+/// drops none, so a client that falls behind misses nothing.
+async fn forward(harness: Harness, session: String, stored: Vec<Event>, more: bool, live: Option<UnboundedReceiver<Event>>, after: u64, out: Sender<Reply>) {
     let mut last = after;
-    for event in stored {
-        last = event.seq;
-        if !push(&out, &session, event).await {
-            return;
-        }
+    match pages(&harness, &session, stored, more, &mut last, &out).await {
+        Some(false) => {}
+        Some(true) => return finish(&out, session).await,
+        None => return,
     }
     if let Some(mut live) = live {
         while let Some(event) = live.recv().await {
@@ -343,6 +387,27 @@ async fn forward(session: String, stored: Vec<Event>, live: Option<UnboundedRece
     finish(&out, session).await;
 }
 
+/// Pushes `page`, then, while `more`, the store's next pages after `last`. Some(true) once it has pushed `closed`,
+/// Some(false) when the store has no more, None when the client has gone.
+async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more: bool, last: &mut u64, out: &Sender<Reply>) -> Option<bool> {
+    loop {
+        for event in page {
+            *last = event.seq;
+            let closed = event.body == Body::Closed;
+            if !push(out, session, event).await {
+                return None;
+            }
+            if closed {
+                return Some(true);
+            }
+        }
+        if !more {
+            return Some(false);
+        }
+        (page, more) = harness.events_page(session, *last, PAGE_BYTES).ok()?;
+    }
+}
+
 async fn finish(out: &Sender<Reply>, session: String) {
     let _ = out.send(Reply { session: Some(session), end: true, ..Reply::default() }).await;
 }
@@ -352,19 +417,21 @@ mod tests {
     use crate::event::Body;
 
     fn text(seq: u64) -> Event {
-        Event { seq, ms: 0, body: Body::Text { text: format!("t{seq}") } }
+        Event { seq, ms: 0, body: Body::Text { text: format!("t{seq}") }, cut: None }
     }
 
     #[tokio::test]
     async fn events_an_event_both_read_and_live_is_pushed_once_and_the_watch_ends_at_closed() {
-        let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed }]).collect();
+        let tmp = tempfile::tempdir().unwrap();
+        let harness = Harness::new(Store::open(&tmp.path().join("d")).unwrap(), vec![], Settings::default());
+        let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]).collect();
         let (live, receiver) = mpsc::unbounded_channel();
         // The read got 1 to 3; the receiver has 2 onwards.
         for event in &all[1..] {
             live.send(event.clone()).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
-        forward("s".into(), all[..3].to_vec(), Some(receiver), 0, out).await;
+        forward(harness, "s".into(), all[..3].to_vec(), false, Some(receiver), 0, out).await;
         let mut got = vec![];
         while let Ok(push) = pushes.try_recv() {
             got.push(push);
@@ -372,12 +439,5 @@ mod tests {
         let events: Vec<Event> = got.iter().filter_map(|push| push.event.clone()).collect();
         assert_eq!(events, all, "each once, in order");
         assert!(got.last().unwrap().end, "then the end");
-    }
-
-    #[test]
-    fn serve_before_the_proof_a_connection_may_send_only_small_messages() {
-        let limits = before_proof();
-        assert_eq!((limits.max_message_size, limits.max_frame_size), (Some(BEFORE_PROOF_MAX), Some(BEFORE_PROOF_MAX)));
-        assert!(limits.max_message_size.is_some_and(|max| max <= 4096), "a few KB at most");
     }
 }

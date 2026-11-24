@@ -311,17 +311,23 @@ impl Harness {
 
     /// The stored events after `after`. A read writes nothing: the sweep runs on its timer.
     pub fn events(&self, id: &str, after: u64) -> Result<Vec<Event>> {
+        Ok(self.events_page(id, after, usize::MAX)?.0)
+    }
+
+    /// The stored events after `after`, until they would pass `budget` bytes as JSON, and whether more follow.
+    pub fn events_page(&self, id: &str, after: u64, budget: usize) -> Result<(Vec<Event>, bool)> {
         self.inner.with_store(|store| {
             store.session(id)?;
-            store.events(id, after)
+            store.events_page(id, after, budget)
         })
     }
 
     /// The stored events after `after`, and, while the session runs, a receiver of every event from the moment of the
     /// read, which never falls behind. Both under the store's lock, which a session holds while it stores and sends an
     /// event, so an event is in one or the other and never both. A locked session's events come from the store
-    /// withheld, and whole only to a receiver.
-    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, Option<UnboundedReceiver<Event>>)> {
+    /// withheld, and whole only to a receiver. The first page of them comes here, with whether more follow; the rest
+    /// are for `events_page`.
+    pub fn watch(&self, id: &str, after: u64) -> Result<(Vec<Event>, bool, Option<UnboundedReceiver<Event>>)> {
         let live = self.inner.live();
         self.inner.with_store(|store| {
             store.session(id)?;
@@ -330,7 +336,8 @@ impl Harness {
                 live.watchers.lock().unwrap_or_else(|p| p.into_inner()).push(watcher);
                 receiver
             });
-            Ok((store.events(id, after)?, receiver))
+            let (page, more) = store.events_page(id, after, crate::api::PAGE_BYTES)?;
+            Ok((page, more, receiver))
         })
     }
 
@@ -895,15 +902,16 @@ impl Task {
     fn emit(&self, body: Body) -> bool {
         if self.broken.load(Ordering::Relaxed) {
             if body == Body::Closed {
-                self.publish(Event { seq: 0, ms: now_ms(), body });
+                self.publish(Event { seq: 0, ms: now_ms(), body, cut: None });
             }
             return false;
         }
-        let body = redact::body(body, &self.secrets);
+        // Cut after redaction, so a secret cut in half is masked whole first.
+        let (body, cut) = crate::event::fit(redact::body(body, &self.secrets), crate::event::EVENT_MAX);
         // Stored and sent under the store's lock, as `watch` reads and registers under it: a client's read and its live
         // events never overlap, so a locked session's whole event is never taken for the withheld copy the read gave.
         let store = self.inner.store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        match store.as_ref().ok_or(Error::ShutDown).and_then(|store| store.append(&self.id, &body, now_ms())) {
+        match store.as_ref().ok_or(Error::ShutDown).and_then(|store| store.append_cut(&self.id, &body, now_ms(), cut)) {
             Ok(event) => {
                 #[cfg(test)]
                 tests::before_publish();
@@ -914,7 +922,7 @@ impl Task {
                 drop(store);
                 self.store_failed(&e);
                 if body == Body::Closed {
-                    self.publish(Event { seq: 0, ms: now_ms(), body });
+                    self.publish(Event { seq: 0, ms: now_ms(), body, cut: None });
                 }
                 false
             }
@@ -933,7 +941,7 @@ impl Task {
         if !self.broken.swap(true, Ordering::Relaxed) {
             let reason = format!("the store could not keep this session's events, so it stops: {e}");
             let body = Body::Failed { kind: FailKind::Harness, reason };
-            self.publish(Event { seq: 0, ms: now_ms(), body });
+                    self.publish(Event { seq: 0, ms: now_ms(), body, cut: None });
         }
     }
 }
@@ -1028,7 +1036,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn race_a_watch_between_an_events_store_and_send_gets_it_once_whole_or_withheld_never_both() {
         let tmp = tempfile::tempdir().unwrap();
-        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"x\"}").unwrap());
+        // The script waits for a second prompt, so the test can make a live event after the watch's read.
+        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"say\": \"x\"}\n{\"end\": \"done\"}\n{\"prompt\": null}").unwrap());
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
         let spec = Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), ..Open::default() };
@@ -1051,10 +1060,11 @@ mod tests {
         harness.send(&id, "go").unwrap();
         while events.recv().await.is_ok_and(|event| event.body != Body::TurnStarted) {}
         let handle = watched.lock().unwrap().take().expect("the hook ran");
-        let (stored, receiver) = handle.join().unwrap();
-        let mut receiver = receiver.expect("the session runs");
+        let (stored, _, receiver) = handle.join().unwrap();
+        let mut receiver = receiver.expect("the session waits for a prompt");
         let last = stored.last().map_or(0, |event| event.seq);
-        let first_live = receiver.recv().await.unwrap();
+        harness.send(&id, "again").unwrap();
+        let first_live = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();
         assert!(first_live.seq == last + 1, "the read ends at {last}, the live events start at {}", first_live.seq);
     }
 }

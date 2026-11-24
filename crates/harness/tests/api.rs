@@ -150,7 +150,7 @@ async fn auth_no_token_a_wrong_token_and_a_sessions_tools_token_are_refused() {
     assert!(refused(&after_first(ws, replayed).await), "a right answer to another connection's hello");
 
     match Client::connect(&served.dir, &tools).await {
-        Err(Error::Refused(_)) => {}
+        Err(Error::Said(_)) => {}
         other => assert!(other.is_err(), "the client module is refused with the tools token too"),
     }
     let sessions = client.call(Op::Sessions).await.unwrap();
@@ -250,7 +250,7 @@ async fn requests_each_request_of_the_api_works_against_the_mock() {
     let asked = events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
     let Body::Permission { id: request, .. } = &asked.last().unwrap().body else { unreachable!() };
     let wrong = client.call(Op::Answer { session: s(), request: "p-never".into(), decision: Decision::Allow, message: None }).await;
-    assert!(matches!(wrong, Err(Error::Refused(_))), "an answer to no request is refused: {wrong:?}");
+    assert!(matches!(wrong, Err(Error::Said(_))), "an answer to no request is refused: {wrong:?}");
     client.call(Op::Answer { session: s(), request: request.clone(), decision: Decision::Allow, message: None }).await.unwrap();
     let called = events_until(&mut client, |body| matches!(body, Body::ClientToolCall { .. })).await;
     assert!(matches!(&called[0].body, Body::Answered { decision: Decision::Allow, .. }));
@@ -268,11 +268,13 @@ async fn requests_each_request_of_the_api_works_against_the_mock() {
     events_until(&mut client, |body| *body == Body::Closed).await;
     client.call(Op::CleanUp { session: s() }).await.unwrap();
 
-    let stored: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: s(), after: 0 }).await.unwrap()).unwrap();
+    let page = client.call(Op::Events { session: s(), after: 0 }).await.unwrap();
+    assert_eq!(page["more"], json!(false));
+    let stored: Vec<Event> = serde_json::from_value(page["events"].clone()).unwrap();
     assert!(stored.iter().all(|event| matches!(event.body, Body::Withheld { .. })), "cleaned up, the payload is gone");
     let sessions = client.call(Op::Sessions).await.unwrap();
     assert_eq!((sessions[0]["id"].as_str(), &sessions[0]["cleaned"], &sessions[0]["running"]), (Some(id.as_str()), &json!(true), &json!(false)));
-    assert!(matches!(client.call(Op::Watch { session: "nope".into(), after: 0 }).await, Err(Error::Refused(_))), "no such session");
+    assert!(matches!(client.call(Op::Watch { session: "nope".into(), after: 0 }).await, Err(Error::Said(_))), "no such session");
 }
 
 fn provider_session(served: &Served, id: &str) -> String {
@@ -322,11 +324,23 @@ async fn serve_a_connection_that_never_does_the_handshake_is_closed_at_the_proof
 }
 
 #[tokio::test]
-async fn serve_a_connection_past_the_cap_is_closed_at_once() {
-    let served = serve_with(SCRIPT, Limits { connections: 2, ..Limits::default() });
+async fn serve_a_connection_past_the_cap_of_those_proving_is_closed_at_once_and_proven_ones_go_on() {
+    let served = serve_with(SCRIPT, Limits { proving: 2, ..Limits::default() });
+    let mut client = connect(&served).await;
     let _kept = [UnixStream::connect(served.dir.join(SOCKET)).await.unwrap(), UnixStream::connect(served.dir.join(SOCKET)).await.unwrap()];
     let third = UnixStream::connect(served.dir.join(SOCKET)).await.unwrap();
-    assert!(closed_by_the_harness(third).await, "a third connection is one past the cap");
+    assert!(closed_by_the_harness(third).await, "a third connection still proving is one past the cap");
+    client.call(Op::Sessions).await.expect("a proven client is not counted among those proving");
+}
+
+#[tokio::test]
+async fn serve_a_client_past_the_cap_of_proven_ones_is_told_so() {
+    let served = serve_with(SCRIPT, Limits { proven: 1, ..Limits::default() });
+    let _first = connect(&served).await;
+    match Client::connect(&served.dir, &served.token).await {
+        Err(Error::Said(why)) => assert!(why.contains("1 clients already"), "{why}"),
+        other => panic!("expected the cap, got {:?}", other.err()),
+    }
 }
 
 #[tokio::test]
@@ -392,7 +406,7 @@ async fn events_one_connection_watches_a_session_once_at_a_time() {
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
     let again = client.call(Op::Watch { session: id.clone(), after: 0 }).await;
-    assert!(matches!(again, Err(Error::Refused(ref why)) if why.contains("already watches")), "{again:?}");
+    assert!(matches!(again, Err(Error::Said(ref why)) if why.contains("already watches")), "{again:?}");
     client.call(Op::Close { session: id.clone() }).await.unwrap();
     while let Some(push) = tokio::time::timeout(Duration::from_secs(10), client.push()).await.unwrap().unwrap() {
         if push == (Push::End { session: id.clone() }) {
@@ -417,7 +431,7 @@ async fn events_one_connection_watches_a_session_once_at_a_time() {
 async fn events_for_an_unknown_session_is_an_error() {
     let served = serve(SCRIPT);
     let mut client = connect(&served).await;
-    assert!(matches!(client.call(Op::Events { session: "nope".into(), after: 0 }).await, Err(Error::Refused(_))));
+    assert!(matches!(client.call(Op::Events { session: "nope".into(), after: 0 }).await, Err(Error::Said(_))));
 }
 
 #[tokio::test]
@@ -506,7 +520,7 @@ async fn requests_a_question_is_answered_as_the_next_prompt_and_hand_over_keeps_
     let Body::Question { id: question, .. } = &asked.last().unwrap().body else { unreachable!() };
     client.call(Op::AnswerQuestion { session: id.clone(), question: question.clone(), text: "this one".into() }).await.unwrap();
     let again = client.call(Op::AnswerQuestion { session: id.clone(), question: question.clone(), text: "twice".into() }).await;
-    assert!(matches!(again, Err(Error::Refused(_))), "a question is answered once: {again:?}");
+    assert!(matches!(again, Err(Error::Said(_))), "a question is answered once: {again:?}");
     let answered = events_until(&mut client, |body| *body == Body::Text { text: "thanks".into() }).await;
     assert!(answered.iter().any(|event| event.body == Body::Prompted { text: "this one".into() }), "the answer went as the next prompt");
     events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
@@ -582,10 +596,145 @@ async fn tokens_a_revoked_token_is_refused_and_its_open_connection_ends_at_its_n
     let mut second = Client::connect(&served.dir, &other).await.unwrap();
     let listed = first.call(Op::TokenList).await.unwrap();
     let id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
-    first.call(Op::TokenRevoke { id }).await.unwrap();
+    first.call(Op::TokenRevoke { token: id }).await.unwrap();
     assert!(second.call(Op::Sessions).await.is_err(), "the open connection of a revoked token ends");
     assert!(Client::connect(&served.dir, &other).await.is_err(), "and the token opens nothing again");
     let own = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(true)).unwrap()["id"].as_i64().unwrap();
-    assert!(matches!(first.call(Op::TokenRevoke { id: own }).await, Err(Error::Refused(_))), "the last token stays");
+    assert!(matches!(first.call(Op::TokenRevoke { token: own }).await, Err(Error::Said(_))), "the last token stays");
     first.call(Op::Sessions).await.expect("the first token still works");
+}
+
+/// A session that says a text of `len` bytes, then "after".
+fn big_say(len: usize) -> String {
+    format!("{{\"prompt\": null}}\n{{\"say\": \"{}\"}}\n{{\"say\": \"after\"}}\n{{\"end\": \"done\"}}", "y".repeat(len))
+}
+
+#[tokio::test]
+async fn limits_an_event_over_the_cap_is_cut_stored_and_sent_cut_and_readers_go_on_past_it() {
+    for locked in [false, true] {
+        let served = serve(&big_say(20 << 20));
+        let mut client = connect(&served).await;
+        let id = open_as(&mut client, locked, false).await;
+        client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+        let seen = events_until(&mut client, |body| *body == Body::Text { text: "after".into() }).await;
+        let big = seen.iter().find(|event| matches!(&event.body, Body::Text { text } if text.starts_with('y'))).expect("the big text came, cut");
+        let Body::Text { text } = &big.body else { unreachable!() };
+        assert!(text.len() <= harness::event::EVENT_MAX, "locked {locked}: cut to the cap");
+        assert_eq!(big.cut, Some(((20 << 20) - text.len()) as u64), "locked {locked}: it says how much was cut");
+        let stored = served.harness.events(&id, big.seq - 1).unwrap();
+        assert_eq!(stored[0].cut, big.cut, "locked {locked}: the cut is kept in the store");
+        assert_eq!(matches!(stored[0].body, Body::Withheld { .. }), locked, "a locked session's text is still withheld");
+        let mut read = vec![];
+        client.events(&id, 0, |event| read.push(event)).await.unwrap();
+        assert!(read.iter().any(|event| event.seq > big.seq), "locked {locked}: a reader goes on past it");
+    }
+}
+
+#[tokio::test]
+async fn limits_events_come_in_pages_and_the_client_reads_them_all() {
+    // About 12 MiB stored: more than a page and more than a message.
+    let says = 40;
+    let script: String = std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"{n} {}\"}}", "z".repeat(300_000))))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let served = serve(&script);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
+    let first = client.call(Op::Events { session: id.clone(), after: 0 }).await.unwrap();
+    assert_eq!(first["more"], json!(true), "the first page is not all");
+    assert!(first.to_string().len() <= harness::api::PAGE_BYTES + harness::event::EVENT_MAX, "a page holds about a page");
+    let mut read = vec![];
+    client.events(&id, 0, |event| read.push(event)).await.unwrap();
+    assert!(read == served.harness.events(&id, 0).unwrap(), "every page, each event once, in order");
+    assert_eq!(read.iter().filter(|event| matches!(event.body, Body::Text { .. })).count(), says);
+
+    // A watch from the start reads the same backlog page by page, then ends at `closed`. The script has ended.
+    events_until(&mut client, |body| *body == Body::Closed).await;
+    let mut watcher = connect(&served).await;
+    watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    let mut watched = vec![];
+    while let Some(Push::Event { event, .. }) = tokio::time::timeout(Duration::from_secs(10), watcher.push()).await.unwrap().unwrap() {
+        watched.push(event);
+    }
+    assert!(watched == served.harness.events(&id, 0).unwrap(), "a watch pages through the store too");
+}
+
+#[tokio::test]
+async fn limits_a_page_of_many_small_events_fits_in_a_message() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    events_until(&mut client, |body| *body == Body::Closed).await;
+    // Small events whose payload fits a page several times over as stored, but not once as sent.
+    let small = 240_000;
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+         INSERT INTO events (session, seq, ms, type, payload, withheld) SELECT ?1, 1000 + i, 0, 'waiting', '{\"type\":\"waiting\"}', 0 FROM n",
+        rusqlite::params![id, small],
+    )
+    .unwrap();
+    let mut read = 0;
+    client.events(&id, 999, |_| read += 1).await.expect("every page fits in a message");
+    assert_eq!(read, small);
+}
+
+#[tokio::test]
+async fn limits_a_call_over_the_limit_is_refused_and_the_connection_goes_on() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    let big = json!("w".repeat(harness::api::MAX_MESSAGE));
+    match client.call(Op::ToolResult { session: id.clone(), call: "c1".into(), output: big, error: false }).await {
+        Err(e @ Error::TooLarge { .. }) => assert!(e.to_string().contains(&harness::api::MAX_MESSAGE.to_string()), "it names the limit: {e}"),
+        other => panic!("expected the limit, got {other:?}"),
+    }
+    client.call(Op::Sessions).await.expect("the connection goes on");
+}
+
+#[tokio::test]
+async fn serve_a_call_sent_with_the_proof_is_answered() {
+    let served = serve(SCRIPT);
+    let (mut ws, hello) = raw(&served).await;
+    let proof = json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) });
+    // Both in one flush, before the answer to the proof.
+    ws.feed(Message::text(proof.to_string())).await.unwrap();
+    ws.feed(Message::text(json!({ "id": 1, "op": "sessions" }).to_string())).await.unwrap();
+    ws.flush().await.unwrap();
+    let mut said = vec![];
+    while said.len() < 2 {
+        let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap() else { panic!("closed") };
+        said.push(serde_json::from_str::<Value>(text.as_str()).unwrap());
+    }
+    assert_eq!((&said[0]["ok"], &said[1]["id"], &said[1]["ok"]), (&json!(true), &json!(1), &json!([])));
+}
+
+#[tokio::test]
+async fn serve_a_binary_frame_after_the_proof_gets_an_error() {
+    let served = serve(SCRIPT);
+    let (mut ws, hello) = raw(&served).await;
+    ws.send(Message::text(json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) }).to_string())).await.unwrap();
+    ws.next().await;
+    ws.send(Message::binary(b"{\"id\":1,\"op\":\"sessions\"}".to_vec())).await.unwrap();
+    let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.unwrap() else { panic!("no answer") };
+    let said: Value = serde_json::from_str(text.as_str()).unwrap();
+    assert!(said["error"].as_str().is_some_and(|error| error.contains("text")), "{said}");
+}
+
+#[tokio::test]
+async fn auth_a_client_gives_up_on_a_harness_that_never_says_hello() {
+    let tmp = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(tmp.path().join(SOCKET)).unwrap();
+    let _silent = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let _ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        std::future::pending::<()>().await;
+    });
+    let gave_up = tokio::time::timeout(Duration::from_secs(10), Client::connect_within(tmp.path(), &Token::random(), Duration::from_millis(200))).await;
+    assert!(matches!(gave_up, Ok(Err(Error::Protocol(ref why))) if why.contains("did not answer")), "{:?}", gave_up.map(|r| r.err()));
 }
