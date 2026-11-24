@@ -32,6 +32,9 @@ jobs:
       - run: mkdir -p dist
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The harness's `testing` feature is on only where the app's tests are built. A release build has no dev-dependencies,
+      # so anything of the app's own code that leans on that feature fails here.
+      - run: cargo check -p gossamr --release
 
   # The harness has to build and pass on Linux, where it will also run. It needs neither the app nor dist/.
   harness-linux:
@@ -45,6 +48,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p harness --all-targets -- -D warnings
       - run: cargo test -p harness
+      # Without the `testing` feature, as the app's release build and the sidecar use it.
+      - run: cargo build -p harness --release
 
   # The browser tests, split four ways so a full run takes about a quarter as long. Each shard keeps the config's one worker:
   # the mock paces its answers on timers.
