@@ -543,6 +543,8 @@ impl Harness {
             broken: AtomicBool::new(false),
         };
         tokio::spawn(task.run(link, caps, requests_rx, calls_rx));
+        #[cfg(test)]
+        tests::after_spawn(id);
         Ok(receiver)
     }
 }
@@ -1147,6 +1149,17 @@ mod tests {
     /// Told once when a start is about to take the session's lock to reserve it.
     static BEFORE_RESERVE: Mutex<Option<std::sync::mpsc::Sender<()>>> = Mutex::new(None);
 
+    /// Runs once, just after a session's task is spawned, with its id.
+    type IdHook = Box<dyn FnOnce(&str) + Send>;
+    static AFTER_SPAWN: Mutex<Option<IdHook>> = Mutex::new(None);
+
+    pub(super) fn after_spawn(id: &str) {
+        let hook = AFTER_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        if let Some(hook) = hook {
+            hook(id);
+        }
+    }
+
     /// Runs once, just after an event is stored and before it is sent.
     static BEFORE_PUBLISH: Mutex<Option<Hook>> = Mutex::new(None);
 
@@ -1247,5 +1260,25 @@ mod tests {
         harness.send(&id, "again").unwrap();
         let (first_live, _) = tokio::time::timeout(Duration::from_secs(10), receiver.recv()).await.expect("a live event").unwrap();
         assert!(first_live.seq == last + 1, "the read ends at {last}, the live events start at {}", first_live.seq);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn events_an_unlocked_sessions_feed_has_the_events_published_before_open_returns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let reading = harness.clone();
+        // The session publishes its `started` before `open_watched` returns.
+        *AFTER_SPAWN.lock().unwrap() = Some(Box::new(move |id: &str| {
+            let given = std::time::Instant::now() + Duration::from_secs(5);
+            while reading.events(id, 0).map_or(true, |events| events.is_empty()) && std::time::Instant::now() < given {
+                std::thread::yield_now();
+            }
+        }));
+        let (_, _, feed) = harness.open_watched(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).unwrap();
+        let Feed::Stored(mut events) = feed else { panic!("an unlocked session's feed") };
+        let first = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.unwrap().unwrap();
+        assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{first:?}");
     }
 }

@@ -400,3 +400,39 @@ fn run_a_script_that_waits_for_a_first_prompt_with_none_given_fails() {
     assert_eq!(out.status.code(), Some(1), "nothing was played");
     assert!(String::from_utf8(out.stderr).unwrap().contains("the script waits for a prompt; give one on the command line"));
 }
+
+#[test]
+fn client_events_follow_fails_and_says_why_when_its_watch_lost_events() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let tmp = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    let listener = runtime.block_on(async { tokio::net::UnixListener::bind(tmp.path().join(harness::api::SOCKET)) }).unwrap();
+    // A harness that takes any proof, answers the watch, pushes one event, then ends the watch as lost.
+    let fake = runtime.spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = harness::api::Hello { protocol: harness::api::PROTOCOL, build: "fake".into(), challenge: "00".repeat(32) };
+        ws.send(Message::text(serde_json::to_string(&hello).unwrap())).await.unwrap();
+        ws.next().await;
+        ws.send(Message::text(r#"{"ok":true}"#)).await.unwrap();
+        ws.next().await;
+        ws.send(Message::text(r#"{"id":1,"ok":null}"#)).await.unwrap();
+        let started = r#"{"session":"s","event":{"seq":1,"ms":0,"type":"started","provider_session":"p","resumed":false}}"#;
+        ws.send(Message::text(started)).await.unwrap();
+        ws.send(Message::text(r#"{"session":"s","end":true,"error":"events were lost: behind"}"#)).await.unwrap();
+        let _ = ws.next().await;
+    });
+    let mut out = Command::new(HARNESS);
+    out.args(["events", "s", "--follow", "--token-stdin", "--data"])
+        .arg(tmp.path())
+        .env_remove("HARNESS_DATA")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let out = with_token(&mut out, &harness::auth::Token::random().hex());
+    runtime.block_on(fake).unwrap();
+    assert_eq!(out.status.code(), Some(1), "an incomplete stream is not a success");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("events were lost"), "it says why");
+    assert_eq!(printed(&out).len(), 1, "it printed what came");
+}

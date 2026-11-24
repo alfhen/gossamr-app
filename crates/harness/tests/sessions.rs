@@ -1656,3 +1656,57 @@ async fn sweep_leaves_the_rows_of_a_running_session() {
     harness.sweep().unwrap();
     assert!(!harness.events(&id, 0).unwrap().is_empty(), "a running session's rows stay");
 }
+
+#[tokio::test]
+async fn hand_over_a_take_back_that_fails_leaves_the_session_handed_over() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock("{\"prompt\": null}"), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    harness.hand_over(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    harness.shutdown().await;
+    drop(harness);
+    // A new harness whose mock never had this session, so taking it back cannot open the agent.
+    let harness = harness_on(Store::open(&dir).unwrap(), &mock("{\"prompt\": null}"), 4);
+    assert!(matches!(harness.take_back(&id).await, Err(Error::Open { .. })), "the agent could not be opened");
+    assert!(matches!(harness.resume(&id).await, Err(Error::HandedOver(_))), "so it is still handed over");
+}
+
+#[tokio::test]
+async fn locked_a_backlog_of_zero_is_taken_as_one_and_opens() {
+    let (_tmp, dir) = data_dir();
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock(LIFE)))];
+    let settings = harness::session::Settings { locked_backlog: 0, ..settings(4) };
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings);
+    let spec = harness::session::Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), ..Default::default() };
+    assert!(harness.open_watched(spec).is_ok(), "no panic for a zero capacity");
+}
+
+#[tokio::test]
+async fn question_one_whose_id_redaction_changes_is_answered_by_the_id_the_client_saw() {
+    let (_tmp, dir) = data_dir();
+    struct Asker(String);
+    impl Driver for Asker {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+        fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+            let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "asker".into(), resumed: false }).unwrap();
+            output.send(Body::Question { id: format!("q-{}", self.0), text: "which?".into() }).unwrap();
+            tokio::spawn(async move {
+                let _output = output;
+                while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("asker".into(), Arc::new(Asker(example("GitHub token"))))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let (id, mut events) = open_on(&harness, "asker", false).await;
+    let asked = until(&mut events, |body| matches!(body, Body::Question { .. })).await;
+    let Body::Question { id: seen, .. } = &asked.last().unwrap().body else { unreachable!() };
+    harness.answer_question(&id, seen, "this one".into()).expect("the id the client saw is the open one");
+}

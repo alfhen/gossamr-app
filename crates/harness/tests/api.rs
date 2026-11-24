@@ -928,3 +928,112 @@ async fn serve_aborting_the_server_stops_its_sweeper_and_frees_the_data_folder()
     }
     assert!(opened.is_ok(), "nothing holds the harness, so the folder is free");
 }
+
+/// A locked session that says `says` long lines in one turn.
+fn many_lines(says: usize) -> String {
+    std::iter::once("{\"prompt\": null}".to_owned())
+        .chain((0..says).map(|n| format!("{{\"say\": \"{n} {}\"}}", "x".repeat(400))))
+        .chain(std::iter::once("{\"end\": \"done\"}".to_owned()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Waits until the session has closed, reading nothing from the client.
+async fn until_closed(served: &Served, id: &str) {
+    let mut done = served.harness.subscribe(id).unwrap();
+    loop {
+        match done.recv().await {
+            Ok(event) if event.body == Body::Closed => return,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn locked_a_client_past_the_backlogs_bytes_is_told_events_were_lost() {
+    let settings = harness::session::Settings { locked_backlog_bytes: 50_000, ..settings(4) };
+    let served = serve_set(&many_lines(3_000), Limits::default(), settings);
+    let mut slow = connect(&served).await;
+    let id = open_as(&mut slow, true, false).await;
+    let closing = until_closed(&served, &id);
+    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    closing.await;
+    let end = loop {
+        match tokio::time::timeout(Duration::from_secs(60), slow.push()).await.unwrap().unwrap() {
+            Some(Push::Event { .. }) => continue,
+            other => break other,
+        }
+    };
+    assert!(matches!(&end, Some(Push::Lost { reason, .. }) if reason.contains("50000 bytes")), "{end:?}");
+}
+
+#[tokio::test]
+async fn tokens_a_revoke_ends_a_connection_whose_client_stopped_reading() {
+    let served = serve_set(&many_lines(3_000), Limits { proven: 2, ..Limits::default() }, settings(4));
+    let mut admin = connect(&served).await;
+    let other = Token::random();
+    admin.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
+    let id = open(&mut admin).await;
+    let closing = until_closed(&served, &id);
+    // The watcher reads nothing, so the harness's writes to it block once the socket is full.
+    let mut stuck = Client::connect(&served.dir, &other).await.unwrap();
+    stuck.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
+    admin.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    closing.await;
+    let listed = admin.call(Op::TokenList).await.unwrap();
+    let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
+    admin.call(Op::TokenRevoke { token: other_id }).await.unwrap();
+    // Its slot of the two is free once the revoked connection has ended.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if Client::connect(&served.dir, &served.token).await.is_ok() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the revoked connection still holds its slot");
+        tokio::task::yield_now().await;
+    }
+    drop(stuck);
+}
+
+#[tokio::test]
+async fn shutdown_a_client_that_leaves_before_the_answer_still_stops_the_server() {
+    let mut served = serve(SCRIPT);
+    let (mut ws, hello) = raw(&served).await;
+    ws.send(Message::text(json!(Proof { proof: encode(&served.token.answer(hello.as_bytes())) }).to_string())).await.unwrap();
+    ws.next().await;
+    ws.send(Message::text(json!({ "id": 1, "op": "shutdown" }).to_string())).await.unwrap();
+    drop(ws);
+    tokio::time::timeout(Duration::from_secs(60), &mut served.task).await.expect("the server stops").unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn leave_a_session_that_ends_with_its_client_closes_when_the_server_is_aborted() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    let id = open_as(&mut client, false, true).await;
+    let mut events = served.harness.subscribe(&id).unwrap();
+    served.task.abort();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(60), events.recv()).await.expect("the session closes") {
+            Ok(event) if event.body == Body::Closed => break,
+            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn events_the_opener_of_an_unlocked_session_gets_its_first_event() {
+    let served = serve(SCRIPT);
+    let mut client = connect(&served).await;
+    for _ in 0..50 {
+        let id = open(&mut client).await;
+        let first = next_event(&mut client).await;
+        assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{id}: {first:?}");
+        client.call(Op::Close { session: id.clone() }).await.unwrap();
+        events_until(&mut client, |body| *body == Body::Closed).await;
+        let end = tokio::time::timeout(Duration::from_secs(60), client.push()).await.unwrap().unwrap();
+        assert_eq!(end, Some(Push::End { session: id }));
+    }
+}

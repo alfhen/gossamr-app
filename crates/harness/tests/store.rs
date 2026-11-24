@@ -326,3 +326,27 @@ fn tokens_an_id_is_never_used_again_and_a_refusal_says_which_it_is() {
     let last = store.revoke_client_token(after[0]).unwrap_err().to_string();
     assert!(last.contains("last client token"), "{last}");
 }
+
+#[test]
+fn sweep_an_event_stored_with_an_earlier_time_does_not_make_a_session_look_idle() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    let now = now_ms();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    store.append("a", &text("today"), now).unwrap();
+    // The clock stepped back 91 days for the next event.
+    store.append("a", &text("long ago"), now - 91 * 24 * 60 * 60 * 1000).unwrap();
+    store.sweep(now).unwrap();
+    assert_eq!(store.events("a", 0).unwrap().len(), 2, "its newest event is today, so its rows stay");
+}
+
+#[test]
+fn store_a_body_already_withheld_keeps_its_type_through_clean_up() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, Path::new("/a"), None).unwrap();
+    let dropped = Body::Withheld { of: "permission".into(), kept: Default::default() };
+    store.append("a", &dropped, now_ms()).unwrap();
+    store.clean_up("a").unwrap();
+    assert_eq!(store.events("a", 0).unwrap()[0].body, dropped, "still a withheld permission, not a withheld withheld");
+}
