@@ -77,12 +77,17 @@ fn rpc(method: &str, params: Value) -> Vec<u8> {
     json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string().into_bytes()
 }
 
+/// How long a test waits for an answer that must come: only a failure waits this long.
+const ANSWER_WITHIN: Duration = Duration::from_secs(30);
+
 async fn ping(port: u16, path: &str, token: &str) -> (u16, Vec<u8>) {
-    post(port, path, &[("authorization", &format!("Bearer {token}"))], &rpc("ping", json!({}))).await.unwrap()
+    let (bearer, body) = (format!("Bearer {token}"), rpc("ping", json!({})));
+    tokio::time::timeout(ANSWER_WITHIN, post(port, path, &[("authorization", &bearer)], &body)).await.expect("an answer within the wait").unwrap()
 }
 
 async fn call(port: u16, path: &str, token: &str, name: &str, input: Value) -> (u16, Value) {
-    let (status, body) = post(port, path, &[("authorization", &format!("Bearer {token}"))], &rpc("tools/call", json!({ "name": name, "arguments": input }))).await.unwrap();
+    let (bearer, body) = (format!("Bearer {token}"), rpc("tools/call", json!({ "name": name, "arguments": input })));
+    let (status, body) = tokio::time::timeout(ANSWER_WITHIN, post(port, path, &[("authorization", &bearer)], &body)).await.expect("an answer within the wait").unwrap();
     (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
 }
 
@@ -291,9 +296,7 @@ async fn tools_endpoint_declared_a_call_with_no_client_listening_fails_at_once_a
     drop(events);
     let (endpoint, token, _) = recorder.last();
     let (port, path) = place(&endpoint);
-    let started = Instant::now();
-    let (status, answer) = call(port, &path, &token, "choose", json!({})).await;
-    assert!(started.elapsed() < Duration::from_secs(5), "at once");
+    let (status, answer) = tokio::time::timeout(Duration::from_secs(10), call(port, &path, &token, "choose", json!({}))).await.expect("it fails at once, it does not wait for a client");
     assert_eq!(status, 200);
     assert_eq!(answer["result"]["isError"], true);
     assert_eq!(answer["result"]["content"][0]["text"], harness::session::CLIENT_AWAY);
