@@ -419,9 +419,10 @@ impl Client {
         let harness = self.harness.clone();
         let done = |result: Result<()>| result.map(|()| Value::Null);
         match op {
-            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, ends_with_client } => {
+            Op::Open { provider, cwd, repo, base, branch, locked, model, login, effort, ends_with_client, tools, result_schema } => {
                 self.captured().await;
                 harness.check_open(&provider, login.as_deref(), effort.as_deref())?;
+                crate::tools::check_tools(&tools, result_schema.as_ref())?;
                 let (cwd, work) = match (cwd, repo) {
                     (Some(cwd), None) if base.is_none() && branch.is_none() => (cwd, None),
                     (Some(_), None) => return Err(Error::Refused("base and branch go with repo".into())),
@@ -433,7 +434,7 @@ impl Client {
                     }
                     _ => return Err(Error::Refused("give cwd or repo, and not both".into())),
                 };
-                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone() };
+                let spec = Open { provider, cwd: cwd.clone(), locked, model, ends_with_client, login, effort, work: work.clone(), tools, result_schema };
                 let (id, _, events) = match harness.open_watched(spec) {
                     Ok(opened) => opened,
                     Err(e) => {

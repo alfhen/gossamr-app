@@ -120,6 +120,26 @@ impl Provider {
         }
     }
 
+    /// The exact names a driver lets through without asking the person, for the session's tools endpoint `name` and
+    /// its `tools`: each full tool name, or Codex's server key, which takes `default_tools_approval_mode` for that one
+    /// server. Never a prefix or a wildcard (H0, R1).
+    pub fn own_tool_names(self, name: &str, tools: &[String]) -> Vec<String> {
+        match self {
+            Self::Claude => tools.iter().map(|tool| format!("mcp__{name}__{tool}")).collect(),
+            Self::Codex => vec![name.to_owned()],
+            Self::Gemini => tools.iter().map(|tool| format!("mcp_{name}_{tool}")).collect(),
+        }
+    }
+
+    /// How a call to the tools endpoint is made to outwait a question, as H0 found.
+    pub fn tool_wait(self) -> ToolWait {
+        match self {
+            Self::Claude => ToolWait { setting: Some("`timeout` in ms on the server of the `mcp_set_servers` control request"), cut_without_ms: Some(60_000), limit_ms: None },
+            Self::Codex => ToolWait { setting: Some("`mcp_servers.<name>.tool_timeout_sec` in the thread's config"), cut_without_ms: None, limit_ms: None },
+            Self::Gemini => ToolWait { setting: None, cut_without_ms: Some(180_000), limit_ms: Some(180_000) },
+        }
+    }
+
     /// Whether its CLI lists the models a login offers (`codex debug models`).
     pub fn lists_models(self) -> bool {
         self == Self::Codex
@@ -136,6 +156,17 @@ impl Provider {
         }
         list
     }
+}
+
+/// What makes a provider hold a tool call while a question waits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolWait {
+    /// The setting a driver gives; None where the path has none.
+    pub setting: Option<&'static str>,
+    /// Where the provider cut a call without the setting, if H0 saw it do so.
+    pub cut_without_ms: Option<u64>,
+    /// The provider's cut a call cannot outwait, where no setting lifts it: `ask` returns before it (H5b).
+    pub limit_ms: Option<u64>,
 }
 
 /// One login of a provider: its own folder, or the CLI's usual setup when `folder` is `None`.
@@ -173,6 +204,30 @@ mod tests {
         assert_eq!(Provider::Claude.models(Some(&listed)).iter().filter(|m| m.id == "gpt-7").count(), 0, "Claude has no listing to take");
         assert_eq!(Provider::Gemini.models(None), [option(DEFAULT_MODEL, "Default")]);
         assert!(Provider::ALL.iter().all(|p| p.models(None).iter().all(|m| valid_model_id(&m.id))));
+    }
+
+    #[test]
+    fn tools_endpoint_own_tool_names_are_exact_full_names_built_from_the_endpoint_name() {
+        let tools = ["read_ticket".to_owned(), "result".to_owned()];
+        assert_eq!(Provider::Claude.own_tool_names("k3x9", &tools), ["mcp__k3x9__read_ticket", "mcp__k3x9__result"]);
+        assert_eq!(Provider::Codex.own_tool_names("k3x9", &tools), ["k3x9"], "Codex allows by server key");
+        assert_eq!(Provider::Gemini.own_tool_names("k3x9", &tools), ["mcp_k3x9_read_ticket", "mcp_k3x9_result"]);
+        for provider in Provider::ALL {
+            let names = provider.own_tool_names("k3x9", &tools);
+            assert!(names.iter().all(|name| !name.contains('*') && name.contains("k3x9")), "{names:?}");
+            assert!(provider.own_tool_names("k3x9", &[]).len() <= 1, "no tools, nothing to allow but Codex's key");
+        }
+    }
+
+    #[test]
+    fn tools_endpoint_each_provider_names_the_setting_that_makes_a_call_outwait_a_question_or_its_limit() {
+        for provider in Provider::ALL {
+            let wait = provider.tool_wait();
+            assert!(wait.setting.is_some() != wait.limit_ms.is_some(), "{provider:?}: a setting, or a limit where none lifts it");
+        }
+        assert_eq!(Provider::Gemini.tool_wait().limit_ms, Some(180_000), "agy cuts at 3 min with no setting");
+        assert!(Provider::Claude.tool_wait().setting.is_some_and(|s| s.contains("timeout")));
+        assert!(Provider::Codex.tool_wait().setting.is_some_and(|s| s.contains("tool_timeout_sec")));
     }
 
     #[test]

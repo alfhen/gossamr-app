@@ -109,6 +109,15 @@ pub enum Op {
         /// The session is closed when this connection ends, and is never resumed.
         #[serde(default)]
         ends_with_client: bool,
+        /// The tools this client offers the agent, on the session's tools endpoint. Each call is a `client_tool_call`
+        /// event the client answers with `tool_result`; while no client listens to the session, a call fails at once.
+        /// Refused: more than `tools::MAX_TOOLS`, a name that is not 1 to 64 letters, digits, `_` and `-`, a name twice,
+        /// `result` or `ask`, an input schema that is not an object.
+        #[serde(default)]
+        tools: Vec<crate::tools::ToolSpec>,
+        /// A JSON Schema object the session's `result` must fit. Left out, any result.
+        #[serde(default)]
+        result_schema: Option<Value>,
     },
     Send { session: String, text: String },
     Cancel { session: String },

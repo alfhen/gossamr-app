@@ -124,7 +124,7 @@ async fn connect(served: &Served) -> Client {
 
 fn open_op(provider: &str, cwd: Option<&str>, repo: Option<&str>, base: Option<&str>, branch: Option<&str>) -> Op {
     let owned = |value: Option<&str>| value.map(str::to_owned);
-    Op::Open { provider: provider.into(), cwd: cwd.map(PathBuf::from), repo: owned(repo), base: owned(base), branch: owned(branch), locked: false, model: None, login: None, effort: None, ends_with_client: false }
+    Op::Open { provider: provider.into(), cwd: cwd.map(PathBuf::from), repo: owned(repo), base: owned(base), branch: owned(branch), locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None }
 }
 
 async fn open(client: &mut Client, op: Op) -> harness::error::Result<String> {
