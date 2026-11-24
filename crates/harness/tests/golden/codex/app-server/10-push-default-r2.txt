@@ -1,0 +1,14 @@
+started
+prompted 300
+turn_started
+text 179
+tool_call command 0
+tool_result 0 ok
+text 134
+tool_call command 1
+permission command command
+answered allow
+tool_result 1 error
+text 247
+turn_ended done
+closed

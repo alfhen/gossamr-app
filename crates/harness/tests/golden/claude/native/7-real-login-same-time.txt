@@ -1,0 +1,6 @@
+started
+prompted 30
+turn_started
+text 2
+turn_ended done
+closed

@@ -1,0 +1,13 @@
+started
+prompted 236
+turn_started
+tool_call tool 0
+permission command tool
+answered allow
+tool_result 0 ok
+tool_call tool 1
+permission command tool
+answered deny
+tool_result 1 error
+turn_ended cancelled
+closed

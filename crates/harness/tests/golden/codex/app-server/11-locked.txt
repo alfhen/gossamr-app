@@ -1,0 +1,18 @@
+started
+prompted 80
+turn_started
+text 192
+turn_ended done
+prompted 92
+turn_started
+text 7
+turn_ended done
+prompted 89
+turn_started
+text 7
+turn_ended done
+prompted 94
+turn_started
+text 7
+turn_ended done
+closed

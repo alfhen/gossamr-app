@@ -1,0 +1,16 @@
+started
+prompted 203
+turn_started
+tool_call ToolSearch 0
+tool_result 0 ok
+tool_call mcp__spike__ping 1
+permission tool mcp__spike__ping
+answered allow
+tool_result 1 ok
+tool_call Bash 2
+permission command Bash
+answered allow
+tool_result 2 ok
+text 159
+turn_ended done
+closed

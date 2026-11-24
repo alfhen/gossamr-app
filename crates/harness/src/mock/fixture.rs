@@ -103,7 +103,7 @@ pub fn convert(numbered: &[(usize, Value)]) -> Result<Script, String> {
     if !c.held.is_empty() {
         return Err("a prompt was sent while a turn ran, and the recording never ends that turn".into());
     }
-    if !c.steps.iter().any(|step| matches!(step, Step::Prompt(_) | Step::Turn)) {
+    if !c.steps.iter().any(|step| matches!(step, Step::Prompt(_) | Step::Turn | Step::Fail(_))) {
         return Err("no turn in this recording".into());
     }
     let mut seen = HashSet::new();
@@ -138,8 +138,10 @@ struct Converter {
     /// The agent's requests the client has not answered yet, and its tool calls.
     asked: HashSet<String>,
     called: HashSet<String>,
-    /// Prompts sent while a turn ran: a provider plays each once the turn before it has ended.
-    held: VecDeque<String>,
+    /// Prompts sent while a turn ran, with their request ids: a provider plays each once the turn before it has ended.
+    held: VecDeque<(String, String)>,
+    /// What the client's requests asked for, by id.
+    requests: HashMap<String, String>,
     /// When agy's unprompted turn ends, once the client lines recorded before then are read.
     ends_at: Option<u64>,
 }
@@ -166,8 +168,8 @@ impl Converter {
         self.steps.push(step);
         if ends {
             self.ends_at = None;
-            if let Some(text) = self.held.pop_front() {
-                self.prompt(text);
+            if let Some((id, text)) = self.held.pop_front() {
+                self.prompt(id, text);
             }
         }
     }
@@ -190,10 +192,10 @@ impl Converter {
     }
 
     /// A prompt sent while a turn runs waits for that turn's end in the recording.
-    fn prompt(&mut self, text: String) {
+    fn prompt(&mut self, id: String, text: String) {
         self.flush();
         if self.in_turn {
-            self.held.push_back(text);
+            self.held.push_back((id, text));
             return self.end_for_held();
         }
         self.cancelled = false;
@@ -227,8 +229,27 @@ impl Converter {
         if !client && !request.is_null() {
             self.asked.insert(request.to_string());
         }
+        if let Some(method) = data["method"].as_str().filter(|_| client && !request.is_null()) {
+            self.requests.insert(request.to_string(), method.to_owned());
+        }
         if client && !reply.is_null() && !self.asked.remove(&reply.to_string()) {
             self.fail_at("a reply to no request");
+        }
+    }
+
+    /// An error reply fails what it answers: a prompt's turn, or the session when it answers setting the session up.
+    /// A prompt refused while it was held is never played. An error to any other request (`config/read`, a list) is
+    /// the client's affair.
+    fn error_reply(&mut self, data: &Value) {
+        let id = data["id"].to_string();
+        let reason = Step::Fail(str_of(&data["error"]["message"]));
+        match self.requests.get(&id).map(String::as_str) {
+            Some("turn/start" | "session/prompt") => match self.held.iter().position(|(held, _)| *held == id) {
+                Some(at) => drop(self.held.remove(at)),
+                None => self.push(reason),
+            },
+            Some("initialize" | "authenticate" | "session/new" | "session/load" | "thread/start" | "thread/resume") | None => self.push(reason),
+            Some(_) => {}
         }
     }
 
@@ -252,7 +273,7 @@ impl Converter {
 
     fn claude_client(&mut self, data: &Value) {
         match (data["type"].as_str(), data["request"]["subtype"].as_str()) {
-            (Some("user"), _) => self.prompt(texts(&data["message"]["content"])),
+            (Some("user"), _) => self.prompt(String::new(), texts(&data["message"]["content"])),
             (Some("control_request"), Some("interrupt")) => self.cancel(),
             _ => {}
         }
@@ -261,8 +282,8 @@ impl Converter {
     /// The client's side of app-server and ACP, both JSON-RPC.
     fn rpc_client(&mut self, data: &Value) {
         match data["method"].as_str() {
-            Some("turn/start") => self.prompt(texts(&data["params"]["input"])),
-            Some("session/prompt") => self.prompt(texts(&data["params"]["prompt"])),
+            Some("turn/start") => self.prompt(data["id"].to_string(), texts(&data["params"]["input"])),
+            Some("session/prompt") => self.prompt(data["id"].to_string(), texts(&data["params"]["prompt"])),
             Some("turn/interrupt" | "session/cancel") => self.cancel(),
             Some("session/load") => self.loading = Some(data["id"].clone()),
             _ => {}
@@ -377,7 +398,7 @@ impl Converter {
                 };
                 self.push(step);
             }
-            None if data.get("error").is_some() => self.push(Step::Fail(str_of(&data["error"]["message"]))),
+            None if data.get("error").is_some() => self.error_reply(data),
             _ => {}
         }
     }
@@ -428,7 +449,7 @@ impl Converter {
                 (Some("end_turn"), _) => self.push(Step::End(TurnEnd::Done)),
                 (Some("cancelled"), _) => self.push(Step::End(TurnEnd::Cancelled)),
                 (Some(other), _) => self.push(Step::Fail(format!("the turn stopped: {other}"))),
-                (None, Some(error)) => self.push(Step::Fail(str_of(&error["message"]))),
+                (None, Some(_)) => self.error_reply(data),
                 _ => {}
             },
             _ => {}

@@ -101,7 +101,7 @@ fn lock_a_second_harness_process_on_a_locked_data_folder_is_refused() {
     assert_eq!(out.status.code(), Some(1), "a locked folder exits 1");
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert_eq!(stderr, format!("harness: another harness is using the data folder {}\n", data.display()));
+    assert!(stderr == format!("harness: another harness is using the data folder {}\n", data.display()), "the lock is named");
     drop(held);
     assert!(run(&data, &["--script".as_ref(), fixture("claude/native/2-permission.jsonl").as_os_str()]).status.success());
 }

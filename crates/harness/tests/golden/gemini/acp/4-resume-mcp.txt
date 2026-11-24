@@ -1,0 +1,10 @@
+started
+prompted 72
+turn_started
+tool_call mcp_spike_ping 0
+permission tool mcp_spike_ping
+answered allow
+tool_result 0 ok
+text 59
+turn_ended done
+closed

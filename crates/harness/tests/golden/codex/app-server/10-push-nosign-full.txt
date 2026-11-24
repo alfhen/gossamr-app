@@ -1,0 +1,8 @@
+started
+prompted 201
+turn_started
+tool_call command 0
+tool_result 0 ok
+text 149
+turn_ended done
+closed
