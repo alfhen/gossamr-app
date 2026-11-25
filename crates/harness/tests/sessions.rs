@@ -1918,7 +1918,7 @@ impl Driver for NoGo {
 }
 
 #[tokio::test]
-async fn the_session_that_ran_owns_a_worktree_a_failed_start_also_names() {
+async fn the_latest_start_owns_a_worktree_even_one_that_failed_after_an_earlier_session_lost_it() {
     let m = machine();
     let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
     std::fs::create_dir_all(&worktree).unwrap();
@@ -1929,11 +1929,15 @@ async fn the_session_that_ran_owns_a_worktree_a_failed_start_also_names() {
     next(&mut events).await;
     harness.close(&ran).unwrap();
     until(&mut events, |body| *body == Body::Closed).await;
+    std::fs::remove_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
     let later = harness::session::Open { provider: "nogo".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() };
-    assert!(harness.open(later).await.is_err(), "a later start that fails, naming the same worktree");
-    let mut events = harness.resume(&ran).await.unwrap();
-    next(&mut events).await;
-    assert_eq!(m.seer.starts().len(), 2, "the session that ran still owns its worktree");
+    assert!(harness.open(later).await.is_err(), "a later start on the same branch, whose worktree stays on disk, fails");
+    let failed = harness.sessions().unwrap().into_iter().map(|s| s.id).find(|id| *id != ran).unwrap();
+    let cleaned = harness.clean_up(&failed).await;
+    assert!(cleaned.is_err() || !worktree.exists(), "the failed start's clean-up doesn't say done while its worktree is there");
+    assert!(matches!(harness.resume(&ran).await, Err(Error::Refused(_))), "the earlier session doesn't resume into a worktree it no longer had");
+    assert_eq!(m.seer.starts().len(), 1);
 }
 
 #[tokio::test]

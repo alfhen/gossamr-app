@@ -190,6 +190,8 @@ impl Setup {
 
     /// Removes the worktree and branch of a start that never ran, while nothing was done in them.
     pub async fn discard(&self, work: &Work, worktree: &Path) {
+        let Some(home) = self.home.as_deref() else { return };
+        let Ok(_lock) = lock_repo(home, &work.repo).await else { return };
         self.git().discard_untouched_worktree(&work.clone, worktree, &work.branch, &format!("origin/{}", work.base)).await;
     }
 
@@ -202,6 +204,7 @@ impl Setup {
         let at = Worktree { repo: &work.repo, clone: &work.clone, path: worktree, branch: &work.branch, base: &work.base };
         match remove_with_git(&self.git(), self.home.as_deref(), at).await {
             Ok(None) => Ok(()),
+            Ok(Some(kept)) if kept.starts_with("nothing was removed") => Err(Error::Refused(self.masked(&kept))),
             Ok(Some(kept)) => Err(Error::Refused(self.masked(&format!("git keeps the worktree: {kept}")))),
             Err(why) => Err(Error::Refused(self.masked(&why))),
         }

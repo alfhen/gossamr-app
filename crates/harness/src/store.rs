@@ -234,13 +234,13 @@ impl Store {
     }
 
     /// Which session owns the worktree of this clone and branch, among those not cleaned up that name it: one that
-    /// `is_live` says runs, else the latest whose agent ran, else the latest. A session runs in its worktree whether or
-    /// not its provider id has come yet; a later session can only take a branch once an earlier one's worktree is gone,
-    /// so the latest is the one working there, and one that ran outranks a start that failed.
+    /// `is_live` says runs, else the latest. A session runs in its worktree whether or not its provider id has come
+    /// yet, and a later session can only take a branch once an earlier one's worktree is gone, so the latest row is
+    /// the one whose worktree is on disk.
     pub fn worktree_owner(&self, work: &Work, is_live: impl Fn(&str) -> bool) -> Result<Option<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM sessions WHERE clone = ?1 AND branch = ?2 AND cleaned_ms IS NULL
-             ORDER BY provider_session IS NOT NULL DESC, created_ms DESC, rowid DESC",
+             ORDER BY created_ms DESC, rowid DESC",
         )?;
         let holders: Vec<String> = stmt.query_map(params![work.clone.as_os_str().as_bytes(), work.branch], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
         Ok(holders.iter().find(|id| is_live(id)).or(holders.first()).cloned())
