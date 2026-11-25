@@ -8,9 +8,8 @@
 //! never a payload. A mismatch exits 3.
 //!
 //! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, an
-//! answer's decision, and every id by the mapping. Config requests (a control request other than `initialize` and
-//! `interrupt`, `mcp_set_servers` among them) are not compared: the replay answers each one it is sent with success
-//! and skips the recording's own, with their answers. A recorded endpoint's server name becomes the driver's when both
+//! answer's decision, and every id by the mapping. The config requests named in `CONFIG` are not compared: the replay
+//! answers each one it is sent with success and skips the recording's own, with their answers. A recorded endpoint's server name becomes the driver's when both
 //! name exactly one server. Codex's and Gemini's wires add their rules with H7a and H8.
 
 use std::collections::{HashMap, HashSet};
@@ -217,9 +216,12 @@ fn request_id(data: &Value) -> String {
     data["request_id"].as_str().or(data["response"]["request_id"].as_str()).unwrap_or_default().to_owned()
 }
 
-/// A control request the driver chooses to send or not, which a replay does not compare.
+/// The control requests a driver chooses to send or not, which a replay answers and does not compare: the config lines
+/// H6 leaves out. Any other line the recording does not have is a mismatch.
+const CONFIG: &[&str] = &["mcp_set_servers"];
+
 fn is_config(data: &Value) -> bool {
-    data["type"] == "control_request" && !matches!(data["request"]["subtype"].as_str(), Some("initialize" | "interrupt"))
+    data["type"] == "control_request" && data["request"]["subtype"].as_str().is_some_and(|subtype| CONFIG.contains(&subtype))
 }
 
 fn config_answer(sent: &Value) -> Value {

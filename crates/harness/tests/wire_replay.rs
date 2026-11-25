@@ -150,7 +150,7 @@ fn mapped(value: &Value, key: &str, ids: &HashMap<String, String>) -> Value {
 }
 
 fn is_config(data: &Value) -> bool {
-    data["type"] == "control_request" && !matches!(data["request"]["subtype"].as_str(), Some("initialize" | "interrupt"))
+    data["type"] == "control_request" && data["request"]["subtype"] == "mcp_set_servers"
 }
 
 /// Changes the client line it is given.
@@ -354,6 +354,16 @@ fn wire_replay_config_lines_the_recording_lacks_are_answered_and_recorded_ones_m
     let (read, code, _, out) = play(&native().join("5-mcp-control.jsonl"), Client { skip_config: true, ..Client::default() });
     assert_eq!((code, report(&out)), (Some(0), String::new()));
     assert!(!read.iter().any(|line| line["response"]["response"]["added"].is_array()), "no answer to a request never sent");
+}
+
+#[test]
+fn wire_replay_a_control_request_that_is_not_named_config_and_not_recorded_is_refused() {
+    // A driver that sets its model by a control request the recording lacks, before its first prompt.
+    let set_model = json!({"type": "control_request", "request_id": "m-1", "request": {"subtype": "set_model", "model": "haiku"}});
+    let report = refused("2-permission.jsonl", Client { change: Some((5, |sent| *sent = json!({"type": "control_request", "request_id": "m-1", "request": {"subtype": "set_model", "model": "haiku"}}))), ..Client::default() });
+    assert_eq!(report, "line 5: the driver sent control_request set_model where the recording has user\n");
+    let report = refused("4-kill.jsonl", Client { after: Some(set_model), ..Client::default() });
+    assert_eq!(report, "the driver sent control_request set_model after the recording ended\n");
 }
 
 #[test]
