@@ -132,7 +132,12 @@ impl Drop for Served {
 }
 
 fn serve(data: &Path, setup: Setup) -> Served {
-    let (token, seer) = (Token::random(), Seer::default());
+    serve_as(data, setup, Token::random())
+}
+
+/// As `serve`, with `token` as the data folder's first: a folder served again keeps the token it first had.
+fn serve_as(data: &Path, setup: Setup, token: Token) -> Served {
+    let seer = Seer::default();
     let drivers: Vec<(String, Arc<dyn Driver>)> =
         vec![("mock".into(), Arc::new(seer.clone())), ("claude".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser)), ("scribbler".into(), Arc::new(Scribbler))];
     let first = token.clone();
@@ -303,9 +308,7 @@ async fn resume_take_back_and_an_answer_that_resumes_wait_for_the_connections_sh
         drop(store);
         // The first client's shell takes a moment to read.
         let shell = harness::testing::fake_cli(&rig.tmp.path().join("slowshell"), "sleep 1; printf '\\0GOSSAMR_ENV_BEGIN\\0PATH=/usr/bin:/bin\\0'");
-        let mut served = serve(&rig.data, Setup::new(Some(rig.home.clone()), rig.data.clone()).with_shell_program(&shell.to_string_lossy()));
-        // The store keeps the first harness's token; a later one adds none.
-        served.token = token;
+        let served = serve_as(&rig.data, Setup::new(Some(rig.home.clone()), rig.data.clone()).with_shell_program(&shell.to_string_lossy()), token);
         let mut client = connect(&served).await;
         let session = id.clone();
         let called = match op {
