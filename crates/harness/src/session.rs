@@ -725,6 +725,19 @@ impl Drop for Cleaning<'_> {
     }
 }
 
+/// A start's tools endpoint, forgotten however its task ends.
+struct Serving {
+    inner: Arc<Inner>,
+    name: String,
+    start: u64,
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        self.inner.forget_endpoint(&self.name, self.start);
+    }
+}
+
 /// A session's live entry from the moment it is taken until the driver has opened.
 struct Reserved<'a> {
     inner: &'a Inner,
@@ -888,6 +901,8 @@ impl Task {
         mut requests: UnboundedReceiver<Request>,
         mut calls: UnboundedReceiver<ToolCall>,
     ) {
+        // A task that panics still stops serving its endpoint, so its token stops working.
+        let _serving = Serving { inner: self.inner.clone(), name: self.endpoint.clone(), start: self.start };
         let turns = self.inner.turns.clone();
         let mut queued: VecDeque<String> = VecDeque::new();
         let mut turn = Turn::Idle;
@@ -1428,6 +1443,26 @@ mod tests {
     fn starts_and_closes(harness: &Harness, id: &str) -> Vec<String> {
         let events = harness.events(id, 0).unwrap_or_default();
         events.into_iter().map(|event| event.body.type_name()).filter(|kind| kind == "started" || kind == "closed").collect()
+    }
+
+    #[tokio::test]
+    async fn tools_endpoint_a_session_task_that_panics_stops_serving_its_endpoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        let name = harness.inner.live().get(&id).unwrap().endpoint.clone();
+        let endpoints = harness.inner.endpoints().unwrap();
+        assert!(endpoints.serves(&name));
+        set(&harness.inner.hooks.before_publish, Box::new(|| -> () { panic!("the test's panic in the session task") }) as Hook);
+        harness.send(&id, "go").unwrap();
+        let given = std::time::Instant::now() + Duration::from_secs(10);
+        while endpoints.serves(&name) && std::time::Instant::now() < given {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(!endpoints.serves(&name), "the endpoint of a task that panicked is forgotten");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

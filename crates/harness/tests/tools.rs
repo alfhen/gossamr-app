@@ -438,7 +438,7 @@ async fn tools_endpoint_what_open_refuses_of_the_tools_and_the_schema() {
         vec![tool("ask")],
         vec![tool("a b")],
         vec![tool("")],
-        vec![tool(&"x".repeat(65))],
+        vec![tool(&"x".repeat(harness::tools::TOOL_NAME_MAX + 1))],
         vec![tool("twice"), tool("twice")],
         vec![ToolSpec { input_schema: json!("string"), ..tool("odd") }],
         (0..=harness::tools::MAX_TOOLS).map(|n| tool(&format!("t{n}"))).collect(),
@@ -451,6 +451,14 @@ async fn tools_endpoint_what_open_refuses_of_the_tools_and_the_schema() {
     assert!(matches!(open, Err(harness::error::Error::Refused(_))), "a schema is an object");
     assert!(recorder.launches.lock().unwrap().is_empty(), "no refused open started an agent");
     assert!(harness.sessions().unwrap().is_empty(), "or made a row");
+    let longest = tool(&"y".repeat(harness::tools::TOOL_NAME_MAX));
+    harness.open(Open { tools: vec![longest], ..spec() }).await.expect("the longest name opens");
+    let (endpoint, _, _) = recorder.last();
+    assert!(endpoint.allowed.iter().all(|full| full.len() <= 64), "every full name fits a provider's 64: {:?}", endpoint.allowed);
+    for provider in harness::provider::Provider::ALL {
+        let full = provider.own_tool_names(&endpoint.name, &endpoint.tools);
+        assert!(full.iter().all(|name| name.len() <= 64), "{provider:?}: {full:?}");
+    }
 }
 
 #[tokio::test]
@@ -490,4 +498,36 @@ async fn tools_endpoint_harness_run_prints_the_call_the_clients_answer_and_what_
     let text = [out.stdout, out.stderr].concat();
     let hex_run = text.split(|b| !b.is_ascii_hexdigit()).map(<[u8]>::len).max().unwrap_or(0);
     assert!(hex_run < 64, "no token in the output");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tools_endpoint_limits_calls_waiting_on_their_clients_never_shut_another_session_out() {
+    let (_tmp, dir) = data_dir();
+    let (harness, recorder) = recording(&dir, Settings::default());
+    // More sessions, each with all its calls waiting, than there are slots for connections still proving a token.
+    let busy = harness::tools::MAX_CONNECTIONS / harness::tools::IN_FLIGHT + 1;
+    let (mut held, mut kept) = (vec![], vec![]);
+    for _ in 0..busy {
+        let (id, mut events) = harness.open(spec()).await.unwrap();
+        let (endpoint, token, _) = recorder.last();
+        let (port, path) = place(&endpoint);
+        for _ in 0..harness::tools::IN_FLIGHT {
+            let (path, token) = (path.clone(), token.clone());
+            held.push(tokio::spawn(async move { call(port, &path, &token, "choose", json!({})).await }));
+        }
+        for _ in 0..harness::tools::IN_FLIGHT {
+            until(&mut events, |body| matches!(body, Body::ClientToolCall { .. })).await;
+        }
+        kept.push((id, events));
+    }
+    let (_free, _events) = harness.open(spec()).await.unwrap();
+    let (endpoint, token, _) = recorder.last();
+    let (port, path) = place(&endpoint);
+    assert_eq!(ping(port, &path, &token).await.0, 200, "{} calls wait, and another session's agent still gets in", busy * harness::tools::IN_FLIGHT);
+    for (id, _) in &kept {
+        harness.close(id).unwrap();
+    }
+    for call in held {
+        assert_eq!(call.await.unwrap().1["result"]["content"][0]["text"], "the session has ended");
+    }
 }

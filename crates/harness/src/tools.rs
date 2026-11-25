@@ -36,6 +36,10 @@ const NAME_REST: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 /// A letter, then 13 letters or digits: log2(26) + 13 log2(36), about 72 bits.
 pub const NAME_LEN: usize = 14;
 
+/// The longest name a declared tool may have. A provider takes a tool name of at most 64 characters (Anthropic's
+/// API), and the longest full name is `mcp__<name>__<tool>`: 21 characters around it.
+pub const TOOL_NAME_MAX: usize = 64 - NAME_LEN - 7;
+
 /// The most tools a client declares for a session, and the most bytes their definitions take as JSON.
 pub const MAX_TOOLS: usize = 64;
 pub const MAX_TOOLS_BYTES: usize = 256 << 10;
@@ -57,8 +61,12 @@ const MAX_HEADERS: usize = 16 << 10;
 /// How long a connection has to send its headers, and then its body.
 pub const HEADERS_WITHIN: Duration = Duration::from_secs(10);
 pub const BODY_WITHIN: Duration = Duration::from_secs(30);
-/// Connections open at once, held calls among them. One past it is closed at once.
+/// Connections whose token has not held yet. One past it is closed at once. A connection leaves this count once its
+/// token holds, so calls waiting on a client never take the slots other sessions' agents connect through; those are
+/// held to `IN_FLIGHT` per session instead.
 pub const MAX_CONNECTIONS: usize = 64;
+/// How long the listener waits after an accept fails, as when the process is out of file descriptors.
+const ACCEPT_AGAIN_AFTER: Duration = Duration::from_millis(50);
 /// Calls of one session in flight at once.
 pub const IN_FLIGHT: usize = 8;
 
@@ -68,7 +76,7 @@ const SERVER: ServerInfo<'static> = ServerInfo { name: "harness", version: crate
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolSpec {
-    /// Letters, digits, `_` and `-`, at most 64.
+    /// Letters, digits, `_` and `-`, at most `TOOL_NAME_MAX`.
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -96,8 +104,8 @@ pub fn check_tools(tools: &[ToolSpec], result_schema: Option<&Value>) -> Result<
     let mut names = HashSet::new();
     for tool in tools {
         let name = &tool.name;
-        if name.is_empty() || name.len() > 64 || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-            return refused("a tool's name is 1 to 64 letters, digits, `_` and `-`".into());
+        if name.is_empty() || name.len() > TOOL_NAME_MAX || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+            return refused(format!("a tool's name is 1 to {TOOL_NAME_MAX} letters, digits, `_` and `-`"));
         }
         if RESERVED.contains(&name.as_str()) {
             return refused(format!("`{name}` is the harness's own tool"));
@@ -305,6 +313,11 @@ impl Endpoints {
         ToolsEndpoint { url: format!("http://127.0.0.1:{}/mcp/{name}", self.state.port), name: name.to_owned(), tools: names, allowed, port: self.state.port }
     }
 
+    #[cfg(test)]
+    pub(crate) fn serves(&self, name: &str) -> bool {
+        self.state.entries().contains_key(name)
+    }
+
     /// Stops serving `name` if it is still this start's: its token is refused from now on.
     pub fn forget(&self, name: &str, start: u64) {
         let mut entries = self.state.entries();
@@ -317,12 +330,15 @@ impl Endpoints {
 async fn serve(listener: tokio::net::TcpListener, state: Arc<State>) {
     let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
-        let Ok((stream, _)) = listener.accept().await else { continue };
+        let Ok((stream, _)) = listener.accept().await else {
+            tokio::time::sleep(ACCEPT_AGAIN_AFTER).await;
+            continue;
+        };
         let Ok(slot) = connections.clone().try_acquire_owned() else { continue };
         let state = state.clone();
         tokio::spawn(async move {
-            let _slot = slot;
-            let service = hyper::service::service_fn(move |request| handle(state.clone(), request));
+            let slot = Arc::new(Mutex::new(Some(slot)));
+            let service = hyper::service::service_fn(move |request| handle(state.clone(), slot.clone(), request));
             let mut http = hyper::server::conn::http1::Builder::new();
             // One request per connection: a connection that waits for another holds no slot.
             http.timer(TokioTimer::new()).header_read_timeout(HEADERS_WITHIN).max_buf_size(MAX_HEADERS).keep_alive(false);
@@ -348,13 +364,16 @@ fn cut(status: StatusCode, reason: String) -> Answered {
     answer(status, Some(json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32000, "message": reason } })))
 }
 
-async fn handle(state: Arc<State>, request: Request<Incoming>) -> std::result::Result<Answered, Infallible> {
+/// A connection's place among those whose token has not held yet.
+type Unproven = Arc<Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>;
+
+async fn handle(state: Arc<State>, unproven: Unproven, request: Request<Incoming>) -> std::result::Result<Answered, Infallible> {
     let (head, body) = request.into_parts();
-    let answered = answer_to(&state, &head, body).await;
+    let answered = answer_to(&state, &unproven, &head, body).await;
     Ok(answered)
 }
 
-async fn answer_to(state: &Arc<State>, head: &http::request::Parts, body: Incoming) -> Answered {
+async fn answer_to(state: &Arc<State>, unproven: &Unproven, head: &http::request::Parts, body: Incoming) -> Answered {
     if head.method != Method::POST {
         // No event stream is offered, on any path, so this says nothing of a session.
         let mut refused = answer(StatusCode::METHOD_NOT_ALLOWED, None);
@@ -370,6 +389,7 @@ async fn answer_to(state: &Arc<State>, head: &http::request::Parts, body: Incomi
         discard(body, REFUSED_BODY).await;
         return answer(StatusCode::NOT_FOUND, None);
     };
+    unproven.lock().unwrap_or_else(|p| p.into_inner()).take();
     let Ok(_held) = entry.in_flight.clone().try_acquire_owned() else {
         discard(body, REFUSED_BODY).await;
         return cut(StatusCode::TOO_MANY_REQUESTS, format!("this session has {IN_FLIGHT} calls in flight already: wait for one"));

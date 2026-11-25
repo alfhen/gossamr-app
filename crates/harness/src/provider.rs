@@ -135,7 +135,7 @@ impl Provider {
     pub fn tool_wait(self) -> ToolWait {
         match self {
             Self::Claude => ToolWait { setting: Some("`timeout` in ms on the server of the `mcp_set_servers` control request"), cut_without_ms: Some(60_000), limit_ms: None },
-            Self::Codex => ToolWait { setting: Some("`mcp_servers.<name>.tool_timeout_sec` in the thread's config"), cut_without_ms: None, limit_ms: None },
+            Self::Codex => ToolWait { setting: Some("`mcp_servers.<name>.tool_timeout_sec` in the thread's config"), cut_without_ms: Some(300_000), limit_ms: None },
             Self::Gemini => ToolWait { setting: None, cut_without_ms: Some(180_000), limit_ms: Some(180_000) },
         }
     }
@@ -228,6 +228,8 @@ mod tests {
         assert_eq!(Provider::Gemini.tool_wait().limit_ms, Some(180_000), "agy cuts at 3 min with no setting");
         assert!(Provider::Claude.tool_wait().setting.is_some_and(|s| s.contains("timeout")));
         assert!(Provider::Codex.tool_wait().setting.is_some_and(|s| s.contains("tool_timeout_sec")));
+        let cuts: Vec<Option<u64>> = Provider::ALL.iter().map(|p| p.tool_wait().cut_without_ms).collect();
+        assert_eq!(cuts, [Some(60_000), Some(300_000), Some(180_000)], "where H0 saw each cut a call without the setting");
     }
 
     #[test]
