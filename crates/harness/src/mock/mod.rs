@@ -19,7 +19,7 @@ use serde_json::Value;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 
-use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, random_hex};
+use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, random_hex};
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::redact::each_string;
 use crate::tools::{Reply, ToolSpec, ToolsEndpoint};
@@ -46,6 +46,10 @@ pub enum Step {
     Cancel,
     End(TurnEnd),
     Fail(String),
+    /// The agent's process exits by itself with this code, and the mock says so as a driver does.
+    Exit(i32),
+    /// A signal from outside the harness ends the agent's process, as at a logout.
+    Killed(i32),
 }
 
 /// A value in a recording that belongs to the recorded run, and what it is mapped to as the script plays.
@@ -237,6 +241,16 @@ impl Driver for Mock {
     }
 
     fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        self.start(launch, None)
+    }
+
+    fn open_reporting(&self, launch: Launch, end: EndReport) -> Result<Link, OpenError> {
+        self.start(launch, Some(end))
+    }
+}
+
+impl Mock {
+    fn start(&self, launch: Launch, end: Option<EndReport>) -> Result<Link, OpenError> {
         let token = launch.tools_token.expose().to_owned();
         let resumed = launch.resume.is_some();
         let (key, run) = match launch.resume {
@@ -276,6 +290,7 @@ impl Driver for Mock {
             last_tool: String::new(),
             prompts: VecDeque::new(),
             in_turn: false,
+            end,
         };
         tokio::spawn(player.play());
         Ok(Link { commands, output })
@@ -308,9 +323,17 @@ struct Player {
     /// Prompts that came while the mock was not waiting for one, kept for the next prompt step, as a provider would.
     prompts: VecDeque<String>,
     in_turn: bool,
+    end: Option<EndReport>,
 }
 
 impl Player {
+    /// Says how the agent ended, then ends: `output` closes as the player goes.
+    fn end(&mut self, end: AgentEnd) {
+        if let Some(report) = self.end.take() {
+            report.send(end);
+        }
+    }
+
     async fn play(mut self) {
         let caps = self.mock.inner.script.capabilities;
         let replay = self.mock.inner.script.replay;
@@ -352,6 +375,8 @@ impl Player {
                 }
                 Step::Turn => self.send(Body::TurnStarted),
                 Step::Say(text) => self.send(Body::Text { text }),
+                Step::Exit(code) => return self.end(AgentEnd::Exited(code)),
+                Step::Killed(signal) => return self.end(AgentEnd::Signalled { signal, sent: false }),
                 Step::Tool { id, name, input } => {
                     let id = id.map(|id| self.mapper.text(&id)).unwrap_or_else(|| self.fresh("t"));
                     self.last_tool = id.clone();

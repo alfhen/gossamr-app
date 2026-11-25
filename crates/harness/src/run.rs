@@ -78,7 +78,7 @@ pub async fn drive(
                 Ok(event) => {
                     seen(&event);
                     match &event.body {
-                        Body::Closed => return followed,
+                        Body::Closed { .. } => return followed,
                         Body::Permission { id, .. } => asked = Some(id.clone()),
                         Body::ClientToolCall { id, .. } => called = Some(id.clone()),
                         _ => {}

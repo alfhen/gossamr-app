@@ -161,7 +161,7 @@ async fn replay_every_fixture_of_the_chosen_drivers_gives_what_its_recording_has
             let open = want.prompts + unprompted > want.ends + inferred + want.failures;
             let stopped = count(&|body| matches!(body, Body::Failed { kind: FailKind::AgentStopped, .. }));
             assert!(stopped == usize::from(open), "{}: {stopped} agent-stopped failures", name(&file));
-            assert!(events.last().is_some_and(|event| event.body == Body::Closed), "{} does not end closed", name(&file));
+            assert!(events.last().is_some_and(|event| matches!(event.body, Body::Closed { .. })), "{} does not end closed", name(&file));
             played += 1;
         }
     }
@@ -510,7 +510,7 @@ async fn replay_acting(fixture: &Path, mut act: impl FnMut(&harness::session::Ha
                     asked = Some(id.clone());
                 }
                 seen.push(event.clone());
-                if event.body == Body::Closed {
+                if matches!(event.body, Body::Closed { .. }) {
                     return seen;
                 }
             }
@@ -559,7 +559,7 @@ async fn replay_a_client_that_missed_events_says_it_did_not_follow_the_recording
     let harness = harness(&dir, &mock, 4);
     let (id, _events) = open(&harness, false).await;
     let (sender, lagging) = tokio::sync::broadcast::channel(1);
-    for body in [Body::Waiting, Body::Waiting, Body::Closed] {
+    for body in [Body::Waiting, Body::Waiting, Body::Closed { by: harness::event::ClosedBy::Agent }] {
         sender.send(Event { seq: 0, ms: 0, body, cut: None }).unwrap();
     }
     assert!(!drive(&harness, &id, lagging, mock.client(), vec![], None, |_| {}).await, "a lagged client did not follow");
@@ -906,7 +906,7 @@ async fn replay_driven_by_another_client_waits_for_it_as_a_provider_does() {
     assert!(events.try_recv().is_err(), "nothing comes after the last turn: the session stays open");
     assert!(!seen.iter().any(|event| matches!(event.body, Body::Failed { .. })), "a late answer fails nothing: {:?}", kinds(&seen));
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(kinds(&rest), ["closed"], "it closes when told to, with no failure");
 }
 
@@ -921,7 +921,7 @@ async fn replay_a_divergence_gives_exactly_one_failure_though_its_recorded_clien
     let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
     let Some(Body::Permission { id: request, .. }) = asked.last().map(|event| &event.body) else { unreachable!() };
     harness.answer(&id, request, Decision::Deny, None).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(rest.iter().filter(|event| matches!(event.body, Body::Failed { .. })).count(), 1, "{:?}", kinds(&rest));
 }
 
