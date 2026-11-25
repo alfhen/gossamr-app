@@ -1239,7 +1239,7 @@ fn serve_a_sweep_interval_of_zero_is_refused_before_the_server_runs() {
 async fn client_a_proof_the_harness_does_not_know_is_not_proven() {
     let served = serve(SCRIPT);
     let refused = Client::connect(&served.dir, &Token::random()).await;
-    assert!(matches!(refused, Err(Error::NotProven)), "{:?}", refused.err());
+    assert!(refused.as_ref().is_err_and(harness::client::not_proven), "{:?}", refused.err());
     assert!(Client::connect(&served.dir, &served.token).await.is_ok(), "the known token still proves");
 }
 

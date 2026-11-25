@@ -77,7 +77,7 @@ export function HarnessView({ status, busy, onAction }: { status: HarnessStatus 
               Restart the harness to update
             </Button>
           )}
-          {(status.state === "failed" || status.state === "stopped") && (
+          {(status.state === "stopped" || (status.state === "failed" && !status.update)) && (
             <Button disabled={busy} onClick={() => onAction("start")}>
               {status.state === "failed" ? "Try again" : "Start the harness"}
             </Button>

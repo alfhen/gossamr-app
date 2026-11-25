@@ -69,7 +69,6 @@ impl Client {
         let reply: Reply = client.read().await?;
         match reply.error {
             None => Ok(client),
-            Some(error) if error == Error::Refused(crate::server::NOT_PROVEN.into()).to_string() => Err(Error::NotProven),
             Some(error) => Err(Error::Said(error)),
         }
     }
@@ -150,6 +149,14 @@ impl Client {
 }
 
 const CLOSED: &str = "the harness closed the connection";
+
+/// What a harness of any protocol answers a proof of a token it does not hold.
+const NOT_PROVEN: &str = "refused: the client did not prove a token";
+
+/// Whether `connect` failed because the harness does not know the token, rather than being busy or gone.
+pub fn not_proven(e: &Error) -> bool {
+    matches!(e, Error::Said(said) if said == NOT_PROVEN)
+}
 
 fn into_push(reply: Reply) -> Option<Push> {
     let session = reply.session?;

@@ -31,9 +31,6 @@ use crate::event::{Body, Event};
 use crate::session::{Feed, Harness, Open, Settings};
 use crate::store::Store;
 
-/// The answer to a proof that holds no stored token. Its text is part of the handshake, which every protocol keeps.
-pub const NOT_PROVEN: &str = "the client did not prove a token";
-
 /// How often the sweep runs while the harness serves.
 pub const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Events waiting to be written to one client. Past it its watches wait, and their live events wait on channels that
@@ -344,7 +341,7 @@ async fn prove(harness: &Harness, ws: &mut Ws) -> Result<[u8; 32]> {
     getrandom::fill(&mut challenge).expect("the operating system has a secure random source");
     let hello = serde_json::to_string(&Hello { protocol: PROTOCOL, build: crate::BUILD_ID.into(), challenge: encode(&challenge) })?;
     ws.send(Message::text(hello.clone())).await.map_err(|e| Error::Protocol(e.to_string()))?;
-    let refused = || Error::Refused(NOT_PROVEN.into());
+    let refused = || Error::Refused("the client did not prove a token".into());
     let Some(Ok(Message::Text(text))) = ws.next().await else { return Err(refused()) };
     if text.len() > BEFORE_PROOF_MAX {
         return Err(refused());

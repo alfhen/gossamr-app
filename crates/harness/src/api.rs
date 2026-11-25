@@ -26,8 +26,9 @@ pub const BEFORE_PROOF_MAX: usize = 4096;
 pub const PAGE_BYTES: usize = 4 << 20;
 
 /// Changes when a client of the last protocol could no longer talk to this harness. The hello, the proof, the answer to
-/// the proof (with `server::NOT_PROVEN` when it proves no token) and `shutdown` keep their shape in every protocol, so
-/// an app of one protocol can stop a harness of another without killing a process it cannot prove is that harness.
+/// the proof (`client::not_proven` reads its refusal) and `shutdown`, still behind the proof, keep their shape in every
+/// protocol, so an app of one protocol can stop a harness of another without killing a process it cannot prove is that
+/// harness.
 pub const PROTOCOL: u32 = 1;
 pub const SOCKET: &str = "harness.sock";
 /// The descriptor file beside the socket, while the harness serves.

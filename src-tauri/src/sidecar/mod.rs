@@ -2,9 +2,9 @@
 //!
 //! The harness is started detached, in a session of its own, so it outlives the app and its agents keep running. The
 //! app's client token lives in the vault item and in memory, and reaches the harness on its stdin only. Same protocol:
-//! adopted, whatever its build, and an older build is offered a restart. An older protocol: told to shut down through
-//! its own `shutdown`, which every protocol keeps, so its sessions are stopped; the bundled harness then starts (H10
-//! resumes them). A newer protocol: left alone, with "update Gossamr". A harness that does not know the app's token is
+//! adopted, whatever its build, and an older build is offered a restart. An older protocol: kept, since stopping it
+//! ends its agents' turns, and offered a restart, which stops it through its own `shutdown` (every protocol keeps it)
+//! and starts the bundled one (H10 resumes the sessions). A newer protocol: left alone, with "update Gossamr". A harness that does not know the app's token is
 //! never killed: the app cannot prove it is its own. Only a child the app started itself, still unreaped, is signalled.
 
 use std::fs::{DirBuilder, File, OpenOptions};
@@ -191,7 +191,9 @@ impl Sidecar {
         if status.bundled_build.is_none() {
             status.bundled_build = self.bundled_build(inner);
         }
-        status.update = status.state == State::Running && status.build.is_some() && status.build != status.bundled_build && status.bundled_build.is_some();
+        if status.state == State::Running {
+            status.update = status.build.is_some() && status.build != status.bundled_build && status.bundled_build.is_some();
+        }
         self.set(status.clone());
         status
     }
@@ -268,12 +270,11 @@ impl Sidecar {
 
     async fn start_or_adopt(&self, token: &Token, socket: &Path) -> Result<Status, String> {
         let mut started: Option<Child> = None;
-        let mut replaced: Option<Vec<String>> = None;
         let mut failures = 0;
         let mut waiting_since: Option<Instant> = None;
         loop {
             match Client::connect_any_protocol(&self.dir, token, self.limits.prove_within).await {
-                Ok(mut client) => {
+                Ok(client) => {
                     let hello = client.hello.clone();
                     if hello.protocol != PROTOCOL && started.is_some() {
                         stop_child(started.take().expect("a child was started"), self.limits.prove_within);
@@ -283,17 +284,17 @@ impl Sidecar {
                         if let Some(child) = started.take() {
                             reap(child);
                         }
-                        let message = replaced.map(|left| left_message("Gossamr replaced a harness that spoke another protocol, and stopped its agents.", &left).unwrap_or_default());
-                        return Ok(Status { build: Some(hello.build), message, ..Status::new(State::Running, None) });
+                        return Ok(Status { build: Some(hello.build), ..Status::new(State::Running, None) });
                     }
                     if hello.protocol > PROTOCOL {
                         let message = format!("The running harness is newer than this Gossamr (protocol {}, Gossamr knows {PROTOCOL}). Update Gossamr.", hello.protocol);
                         return Err(message);
                     }
-                    let answer = client.call(Op::Shutdown).await.map_err(|e| format!("Gossamr couldn't stop a harness that spoke another protocol: {e}"))?;
-                    replaced = Some(left_of(&answer));
+                    // Stopping it ends its agents' turns, so that is yours to choose: Restart does it through its own `shutdown`.
+                    let message = format!("The running harness came with an older Gossamr (protocol {}), so this one can't use it. Restarting it stops any agents it runs.", hello.protocol);
+                    return Ok(Status { build: Some(hello.build), update: true, ..Status::new(State::Failed, Some(message)) });
                 }
-                Err(HarnessError::NotProven) => {
+                Err(e) if harness::client::not_proven(&e) => {
                     if let Some(child) = started.take() {
                         stop_child(child, self.limits.prove_within);
                         return Err(self.not_this_key());
@@ -365,7 +366,7 @@ impl Sidecar {
         let mut client = match Client::connect_any_protocol(&self.dir, token, self.limits.prove_within).await {
             Ok(client) => client,
             Err(e) if nothing_serving(&e) => return Ok(vec![]),
-            Err(HarnessError::NotProven) => return Err("A harness is running that doesn't know this Gossamr's key, so Gossamr leaves it alone.".into()),
+            Err(e) if harness::client::not_proven(&e) => return Err("A harness is running that doesn't know this Gossamr's key, so Gossamr leaves it alone.".into()),
             Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
         let answer = client.call(Op::Shutdown).await.map_err(|e| format!("Gossamr couldn't stop the harness: {e}"))?;

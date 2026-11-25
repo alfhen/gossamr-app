@@ -1,8 +1,10 @@
 //! The manager against a fake harness: this test binary, run again through a link to the harness crate's checked
 //! `run-body.sh` (a new executable's first run is checked by macOS, which made tests that write one flaky). The fake
 //! speaks the hello and the proof with the protocol and build its body names, keeps only stored keys, holds the data
-//! folder's lock as the harness does, and logs each life to a file of the test's. Every test proves afterwards that
-//! no fake still runs.
+//! folder's lock as the harness does, and logs each life to a file of the test's. A fake holds a lock on its own
+//! `life-<pid>` file while it runs, and ends when its test writes `stop` (or `stop-<pid>` for that one alone), so a
+//! test never signals a pid: one that has ended may belong to another test's fake by now. Every test proves
+//! afterwards that no fake still runs.
 
 use std::io::BufRead;
 use std::sync::Arc;
@@ -52,6 +54,18 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
     std::fs::write(seen, format!("{argv}\n{}", env.join("\n"))).unwrap();
     let ["serve", "--data", dir] = args[..] else { return 2 };
     let dir = PathBuf::from(dir);
+    let root = fake.log.parent().unwrap().to_owned();
+    let pid = std::process::id();
+    let life = File::create(root.join(format!("life-{pid}"))).unwrap();
+    life.lock().unwrap();
+    // Held until the process ends, when the system lets it go.
+    std::mem::forget(life);
+    std::thread::spawn(move || loop {
+        if !root.exists() || root.join("stop").exists() || root.join(format!("stop-{pid}")).exists() {
+            std::process::exit(0);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    });
     let lock = OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("lock")).unwrap();
     if lock.try_lock().is_err() {
         note("in-use");
@@ -167,18 +181,27 @@ impl Bed {
         }
     }
 
-    /// Starts `program` as an earlier run of the app would have, and waits until it serves.
+    /// Starts `program` as an earlier run of the app would have, and waits until it serves. macOS now and then kills
+    /// a fake run within milliseconds of its link and body being written (SIGKILL, nothing logged; 3 in 40 runs here,
+    /// none with 200 ms between), so one killed before it began is started again, as the manager does.
     async fn serve_by_hand(&self, program: &Path, token: &Token) -> u32 {
         DirBuilder::new().recursive(true).mode(0o700).create(&self.dir).unwrap();
         let before = self.pids("serving").len();
-        let child = spawn(program, &self.dir, token).unwrap();
-        let pid = child.id();
-        reap(child);
+        let mut child = spawn(program, &self.dir, token).unwrap();
+        let mut tries = 1;
         let until = Instant::now() + WAIT;
         while self.pids("serving").len() == before {
+            if let Ok(Some(status)) = child.try_wait() {
+                use std::os::unix::process::ExitStatusExt;
+                assert!(status.signal() == Some(libc::SIGKILL) && tries < 3, "the fake ended before it served: {status:?}");
+                child = spawn(program, &self.dir, token).unwrap();
+                tries += 1;
+            }
             assert!(Instant::now() < until, "the fake did not serve");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        let pid = child.id();
+        reap(child);
         pid
     }
 
@@ -191,34 +214,37 @@ impl Bed {
         std::fs::read_to_string(&self.log).unwrap_or_default().lines().map(|line| line.split(' ').next().unwrap().to_owned()).collect()
     }
 
-    /// Stops every fake still running and proves none is left.
-    async fn none_left(&self) {
-        for pid in self.pids("serving") {
-            if alive(pid) {
-                // SAFETY: kill has no preconditions; the pid is a fake this test started.
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-            }
-        }
+    /// Whether the fake that logged `pid` still runs: it holds its life file.
+    fn running(&self, pid: u32) -> bool {
+        File::open(self.root.join(format!("life-{pid}"))).is_ok_and(|life| matches!(life.try_lock(), Err(std::fs::TryLockError::WouldBlock)))
+    }
+
+    /// Ends the one fake that logged `pid`, abruptly, leaving its socket, and waits until it has.
+    async fn end(&self, pid: u32) {
+        std::fs::write(self.root.join(format!("stop-{pid}")), "").unwrap();
+        self.until_ended(&[pid], "the fake did not end").await;
+    }
+
+    async fn until_ended(&self, pids: &[u32], why: &str) {
         let until = Instant::now() + WAIT;
-        while self.pids("serving").into_iter().any(alive) {
-            assert!(Instant::now() < until, "a fake is still running");
+        while pids.iter().any(|pid| self.running(*pid)) {
+            assert!(Instant::now() < until, "{why}");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// Ends every fake still running and proves none is left.
+    async fn none_left(&self) {
+        std::fs::write(self.root.join("stop"), "").unwrap();
+        self.until_ended(&self.pids("serving"), "a fake is still running").await;
     }
 }
 
 impl Drop for Bed {
     fn drop(&mut self) {
-        for pid in self.pids("serving").into_iter().filter(|pid| alive(*pid)) {
-            // SAFETY: as in `none_left`, on a failed test's way out.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-        }
+        // On a failed test's way out; a fake also ends once the test's folder is gone.
+        let _ = std::fs::write(self.root.join("stop"), "");
     }
-}
-
-fn alive(pid: u32) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
 #[tokio::test]
@@ -251,7 +277,7 @@ async fn an_older_build_of_the_same_protocol_is_kept_and_a_restart_updates_it() 
     let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
     let kept = sidecar.ensure().await;
     assert_eq!((kept.state, kept.build.as_deref(), kept.bundled_build.as_deref(), kept.update), (State::Running, Some("old"), Some("new"), true), "{kept:?}");
-    assert!(alive(old));
+    assert!(bed.running(old));
     let restarted = sidecar.act(Action::Restart).await;
     assert_eq!((restarted.state, restarted.build.as_deref(), restarted.update), (State::Running, Some("new"), false), "{restarted:?}");
     assert_eq!(bed.lines(), ["serving", "exit", "serving"]);
@@ -259,12 +285,17 @@ async fn an_older_build_of_the_same_protocol_is_kept_and_a_restart_updates_it() 
 }
 
 #[tokio::test]
-async fn an_older_protocol_is_shut_down_through_its_own_call_and_the_bundled_one_starts() {
+async fn an_older_protocol_is_kept_until_you_restart_it_through_its_own_shutdown() {
     let bed = Bed::new();
-    bed.serve_by_hand(&bed.fake("old", PROTOCOL - 1, "old"), &bed.token()).await;
-    let status = bed.sidecar(&bed.fake("harness", PROTOCOL, "new")).ensure().await;
-    assert_eq!((status.state, status.build.as_deref()), (State::Running, Some("new")), "{status:?}");
-    assert!(status.message.as_deref().is_some_and(|m| m.contains("replaced") && m.contains("stopped its agents")), "{status:?}");
+    let old = bed.serve_by_hand(&bed.fake("old", PROTOCOL - 1, "old"), &bed.token()).await;
+    let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
+    let status = sidecar.ensure().await;
+    assert_eq!((status.state, status.build.as_deref(), status.update), (State::Failed, Some("old"), true), "{status:?}");
+    assert!(status.message.as_deref().is_some_and(|m| m.contains("Restarting it stops any agents")), "{status:?}");
+    assert!(bed.running(old), "not stopped without you");
+    assert_eq!(sidecar.ensure().await.state, State::Failed, "nor by a later read");
+    let restarted = sidecar.act(Action::Restart).await;
+    assert_eq!((restarted.state, restarted.build.as_deref()), (State::Running, Some("new")), "{restarted:?}");
     assert_eq!(bed.lines(), ["serving", "exit", "serving"], "the old one stopped itself before the new one started");
     bed.none_left().await;
 }
@@ -286,7 +317,7 @@ async fn a_newer_protocol_is_left_running_and_asks_for_an_update() {
     let status = bed.sidecar(&bed.fake("harness", PROTOCOL, "new")).ensure().await;
     assert_eq!(status.state, State::Failed);
     assert!(status.message.as_deref().is_some_and(|m| m.contains("Update Gossamr")), "{status:?}");
-    assert!(alive(newer), "it is left running");
+    assert!(bed.running(newer), "it is left running");
     assert_eq!(bed.pids("serving").len(), 1);
     bed.none_left().await;
 }
@@ -296,14 +327,7 @@ async fn a_dead_harness_is_started_again_over_its_stale_socket() {
     let bed = Bed::new();
     let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
     assert_eq!(sidecar.ensure().await.state, State::Running);
-    let first = bed.pids("serving")[0];
-    // SAFETY: kill has no preconditions; the pid is the fake this test's manager started.
-    unsafe { libc::kill(first as libc::pid_t, libc::SIGKILL) };
-    let until = Instant::now() + WAIT;
-    while alive(first) {
-        assert!(Instant::now() < until);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    bed.end(bed.pids("serving")[0]).await;
     assert!(bed.dir.join(SOCKET).exists(), "a stale socket is left");
     assert_eq!(sidecar.ensure().await.state, State::Running);
     assert_eq!(bed.pids("serving").len(), 2);
@@ -345,7 +369,7 @@ async fn a_harness_that_refuses_the_apps_token_is_never_killed_and_none_starts_b
     let status = bed.sidecar(&bed.fake("harness", PROTOCOL, "new")).ensure().await;
     assert_eq!(status.state, State::Failed);
     assert!(status.message.as_deref().is_some_and(|m| m.contains("doesn't know this Gossamr's key")), "{status:?}");
-    assert!(alive(foreign), "left alone");
+    assert!(bed.running(foreign), "left alone");
     assert_eq!(bed.pids("serving").len(), 1);
     bed.none_left().await;
 }
@@ -361,11 +385,7 @@ async fn a_harness_that_refuses_the_apps_token_after_the_app_started_it_is_stopp
     assert_eq!(status.state, State::Failed);
     assert!(status.message.as_deref().is_some_and(|m| m.contains("holds a key this Gossamr doesn't have")), "{status:?}");
     assert_eq!(bed.pids("serving").len(), 1, "it started one, and not again");
-    let until = Instant::now() + WAIT;
-    while bed.pids("serving").into_iter().any(alive) {
-        assert!(Instant::now() < until, "the one it started was not stopped");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    bed.until_ended(&bed.pids("serving"), "the one it started was not stopped").await;
 }
 
 #[tokio::test]
