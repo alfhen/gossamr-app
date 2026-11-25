@@ -681,13 +681,14 @@ async fn a_bundled_harness_that_never_says_its_build_is_killed_and_the_status_go
     assert_eq!((status.state, status.build.as_deref(), status.bundled_build.as_deref(), status.update), (State::Running, Some("new"), None, false), "{status:?}");
     assert_eq!(sidecar.ensure().await.bundled_build, None);
     assert!(bed.pids("asked").len() <= 1, "asked once per run");
-    bed.none_left().await;
-    // Every life, the probe's too, has ended: the stop file only ends the serving ones and a probe still waiting.
+    // Before the stop file, which would also end a probe that was never killed: only the serving fake still runs.
+    let serving = bed.pids("serving");
     for entry in std::fs::read_dir(&bed.root).unwrap() {
         let name = entry.unwrap().file_name().into_string().unwrap();
         let Some(pid) = name.strip_prefix("life-").and_then(|pid| pid.parse().ok()) else { continue };
-        assert!(!bed.running(pid), "{name} still runs");
+        assert!(serving.contains(&pid) || !bed.running(pid), "{name} still runs");
     }
+    bed.none_left().await;
 }
 
 #[test]

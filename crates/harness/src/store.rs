@@ -564,8 +564,11 @@ pub fn now_ms() -> i64 {
 /// yet holds none.
 pub fn holds_client_tokens(dir: &Path) -> bool {
     let path = dir.join("harness.sqlite");
-    if !path.exists() {
-        return false;
+    // Only a store that isn't there holds none: one whose folder can't be searched may.
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+        Ok(_) => {}
     }
     let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return true };
     let held = |sql: &str| conn.query_row(sql, [], |row| row.get::<_, bool>(0));

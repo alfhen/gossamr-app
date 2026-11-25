@@ -78,6 +78,8 @@ struct Ready {
     doc: Doc,
     /// Pre-vault items that could not be read this run; they are not asked for again.
     legacy_failed: HashMap<String, String>,
+    /// Pre-vault values in `doc` that the vault write of their move didn't save: the old item still holds them.
+    unsaved: BTreeSet<String>,
 }
 
 enum State {
@@ -130,7 +132,7 @@ impl Vault {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if matches!(*state, State::Unread) {
             *state = match self.read_vault() {
-                Ok(doc) => State::Ready(Ready { doc, legacy_failed: HashMap::new() }),
+                Ok(doc) => State::Ready(Ready { doc, legacy_failed: HashMap::new(), unsaved: BTreeSet::new() }),
                 Err(e) => State::Unavailable(e.to_string()),
             };
         }
@@ -241,7 +243,10 @@ impl Vault {
         self.with_ready(|backend, ready| {
             let held = hold(backend);
             let base = latest(backend)?;
-            let current = base.secrets.get(account).map(|v| serde_json::from_value(v.clone())).transpose()?;
+            // A value whose move didn't save is in this app's copy and the old item only: start from it, as `load` does.
+            let unsaved = ready.unsaved.contains(account) && !base.probed.contains(account);
+            let stored = if unsaved { ready.doc.secrets.get(account) } else { base.secrets.get(account) };
+            let current = stored.map(|v| serde_json::from_value(v.clone())).transpose()?;
             let Some(value) = f(current) else {
                 ready.doc = base;
                 return Ok(());
@@ -253,6 +258,10 @@ impl Vault {
                 write_vault(backend, &next)?;
             }
             ready.doc = next;
+            if unsaved {
+                ready.unsaved.remove(account);
+                forget_legacy(backend, account);
+            }
             drop(held);
             Ok(())
         })
@@ -350,6 +359,8 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
     ready.doc = next;
     if migrated && written.is_ok() {
         forget_legacy(backend, account);
+    } else if migrated {
+        ready.unsaved.insert(account.into());
     }
     drop(held);
     Ok(())
@@ -585,6 +596,20 @@ mod tests {
 
     fn text(v: &str) -> Value {
         Value::String(v.into())
+    }
+
+    #[test]
+    fn an_update_after_a_move_whose_vault_write_failed_starts_from_the_old_items_value_and_then_moves_it() {
+        let fake = Fake::default();
+        fake.put("logins", r#"["a"]"#);
+        let v = vault(&fake);
+        fake.deny_writes(true);
+        assert_eq!(v.load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned()]), "read from the old item");
+        fake.deny_writes(false);
+        let added = |list: Option<Vec<String>>| Some([list.unwrap_or_default(), vec!["b".to_owned()]].concat());
+        v.update::<Vec<String>>("logins", added).unwrap();
+        assert_eq!(vault(&fake).load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(fake.get("logins"), None, "the old item goes once the vault holds its value");
     }
 
     #[test]
