@@ -63,11 +63,11 @@ struct Rig {
 /// A harness whose `claude` is the wire replay of `fixture`, on a shell environment that holds only what the replay
 /// needs and `extra`.
 fn rig(fixture: &Path, extra: &[(&str, &str)]) -> Rig {
-    rig_on(fixture, extra, None)
+    rig_on(fixture, extra, None, None)
 }
 
 /// As `rig`, on the data folder `data` when one is given, so a second harness opens the first one's store.
-fn rig_on(fixture: &Path, extra: &[(&str, &str)], data: Option<&Path>) -> Rig {
+fn rig_on(fixture: &Path, extra: &[(&str, &str)], data: Option<&Path>, store: Option<Store>) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("out");
     let data = data.map_or_else(|| tmp.path().join("data"), Path::to_path_buf);
@@ -96,7 +96,8 @@ fn rig_on(fixture: &Path, extra: &[(&str, &str)], data: Option<&Path>) -> Rig {
     });
     let setup = Setup::new(None, data.clone()).with_shell_env(RunEnv::from_pairs(env));
     let driver = ClaudeDriver::new(REPLAY.into()).with_graces(Duration::from_millis(300), Duration::from_millis(1_500));
-    let harness = Harness::with_setup(Store::open(&data).unwrap(), vec![("claude".into(), Arc::new(driver))], settings(4), Arc::new(setup));
+    let store = store.unwrap_or_else(|| Store::open(&data).unwrap());
+    let harness = Harness::with_setup(store, vec![("claude".into(), Arc::new(driver))], settings(4), Arc::new(setup));
     Rig { tmp, out, harness, written }
 }
 
@@ -813,6 +814,7 @@ async fn claude_an_agent_that_exits_before_any_prompt_fails_with_its_last_stderr
         "{said:?}"
     );
     while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
+}
 
 #[tokio::test]
 async fn claude_each_result_gives_a_usage_event_before_its_turns_end() {
@@ -828,16 +830,27 @@ async fn claude_each_result_gives_a_usage_event_before_its_turns_end() {
     }
 }
 
-/// The text of the recording's prompts, in order.
-fn prompts(fixture: &Path) -> Vec<String> {
-    recorded_client(&lines_of(fixture)).0.into_iter().filter_map(|act| match act { Act::Prompt(text, _) => Some(text), _ => None }).collect()
-}
-
 fn provider_session(seen: &[Event]) -> String {
     seen.iter().find_map(|event| match &event.body { Body::Started { provider_session, .. } => Some(provider_session.clone()), _ => None }).expect("the session started")
 }
 
 /// Until the replay has gone: its progress FIFO closes with it.
+/// A rig on the data folder of a harness that just shut down, whose store's lock outlives it by a moment. The store
+/// is kept, not opened again: a process another test forks meanwhile holds a dropped lock until it execs.
+async fn rig_after(fixture: &Path, extra: &[(&str, &str)], data: &Path) -> Rig {
+    let store = common::reopen(data).await;
+    rig_on(fixture, extra, Some(data), Some(store))
+}
+
+/// Until `agent` has exited. A killed process closes its files before it is gone, and nothing else says when.
+async fn gone(agent: &Process) {
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while process::alive(agent) {
+        assert!(tokio::time::Instant::now() < given, "the agent outlived its kill by 10 s");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn replay_gone(rig: &Rig) {
     let mut written = rig.written.clone();
     tokio::time::timeout(Duration::from_secs(10), async { while written.changed().await.is_ok() {} }).await.expect("the replay goes");
@@ -852,7 +865,7 @@ fn resumes(argv: &[String]) -> Vec<String> {
 async fn claude_a_restart_in_the_middle_of_a_turn_stops_the_leftover_and_resumes_once() {
     let (_tmp, data) = data_dir();
     let kill = native().join("4-kill.jsonl");
-    let first = rig_on(&kill, &[("WIRE_REPLAY_IGNORE_TERM", "1")], Some(&data));
+    let first = rig_on(&kill, &[("WIRE_REPLAY_IGNORE_TERM", "1")], Some(&data), None);
     let (id, mut events) = first.open(false, None).await;
     first.harness.send(&id, prompts(&kill).remove(0)).unwrap();
     let seen = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
@@ -867,12 +880,21 @@ async fn claude_a_restart_in_the_middle_of_a_turn_stops_the_leftover_and_resumes
     process::seam::refuse_group_kills(agent.pid, 1);
     process::seam::list_group_as(agent.pid, Listing::Full);
     assert_eq!(first.harness.shutdown().await, std::slice::from_ref(&id), "the shutdown gave up on it mid-turn");
+    // The shutdown gives up when the session's wait ends, which may be before the driver's kill took the refusal; the
+    // next harness's leftover stop must not take it instead.
+    let refused = async {
+        while !process::seam::sent_to(agent.pid).contains(&libc::SIGKILL) {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), refused).await.expect("the driver tried to kill it");
     assert!(process::alive(&agent), "and it runs on");
 
     let resume = native().join("4-resume.jsonl");
-    let second = rig_on(&resume, &[], Some(&data));
+    let second = rig_after(&resume, &[], &data).await;
     replay_gone(&first).await;
-    assert!(!process::alive(&agent), "the next harness stopped it as it started");
+    assert_eq!(process::seam::sent_to(agent.pid).iter().filter(|signal| **signal == libc::SIGKILL).count(), 2, "the next harness killed it as it started");
+    gone(&agent).await;
     let mut events = second.harness.resume_with(&id, None).await.unwrap();
     second.harness.send(&id, prompts(&resume).remove(0)).unwrap();
     let seen = until(&mut events, |body| body.ends_turn()).await;
@@ -890,7 +912,7 @@ async fn claude_a_resume_starts_claude_by_its_session_and_carry_on_is_the_first_
     let (_tmp, data) = data_dir();
     // A first start whose turn a deny did not end (Claude goes on after one), then a shutdown: nothing forbids "carry on".
     let fixture = native().join("2-permission.jsonl");
-    let first = rig_on(&fixture, &[], Some(&data));
+    let first = rig_on(&fixture, &[], Some(&data), None);
     let (acts, results) = recorded_client(&lines_of(&fixture));
     let (id, mut events) = first.open(false, None).await;
     let (seen, _) = play_turns(&first, &id, &mut events, acts, results).await;
@@ -898,7 +920,7 @@ async fn claude_a_resume_starts_claude_by_its_session_and_carry_on_is_the_first_
     let session = provider_session(&seen);
     assert_eq!(first.harness.shutdown().await, Vec::<String>::new());
     let resume = native().join("4-resume.jsonl");
-    let second = rig_on(&resume, &[], Some(&data));
+    let second = rig_after(&resume, &[], &data).await;
     let carry_on = prompts(&resume).remove(0);
     let mut events = second.harness.resume_with(&id, Some(carry_on.clone())).await.unwrap();
     let seen = until(&mut events, |body| body.ends_turn()).await;
@@ -920,7 +942,7 @@ async fn claude_no_carry_on_after_a_cancelled_turn() {
     lines.push(json!({"seq": 34, "ms": 0, "dir": "driver", "data": {"note": "close_stdin"}}));
     let fixture = written(tmp.path(), &lines);
     let (_tmp, data) = data_dir();
-    let first = rig_on(&fixture, &[], Some(&data));
+    let first = rig_on(&fixture, &[], Some(&data), None);
     let (acts, results) = recorded_client(&lines_of(&fixture));
     let (id, mut events) = first.open(false, None).await;
     let (seen, _) = play_turns(&first, &id, &mut events, acts, results).await;
@@ -929,7 +951,7 @@ async fn claude_no_carry_on_after_a_cancelled_turn() {
     // A shutdown, not a stop, so the cancel is what forbids it.
     first.harness.shutdown().await;
     assert_eq!(first.report(), "");
-    let second = rig_on(&fixture, &[], Some(&data));
+    let second = rig_after(&fixture, &[], &data).await;
     let refused = second.harness.resume_with(&id, Some("carry on".into())).await;
     assert!(matches!(&refused, Err(harness::error::Error::Refused(why)) if why.contains("cancelled")), "{:?}", refused.err());
 }
