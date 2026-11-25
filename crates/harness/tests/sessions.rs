@@ -297,7 +297,7 @@ async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
     let stopped = Instant::now();
     harness.close(&slow).unwrap();
     assert!(matches!(harness.resume(&slow).await, Err(Error::Running(_))), "no resume while the old agent runs");
-    assert!(matches!(harness.clean_up(&slow), Err(Error::Running(_))), "no clean-up while it runs");
+    assert!(matches!(harness.clean_up(&slow).await, Err(Error::Running(_))), "no clean-up while it runs");
     let gone = until(&mut slow_events, |body| *body == Body::Closed).await;
     assert_eq!(types(&gone), ["text", "failed", "closed"], "what the agent says while it stops is kept, and its open turn ends");
     until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
@@ -337,7 +337,7 @@ async fn limit_an_agent_that_ignores_stop_and_kill_keeps_its_session_taken_until
     assert_eq!(types(&stuck), ["failed", "failed"], "told to kill, then stuck: {stuck:?}");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(matches!(harness.resume(&id).await, Err(Error::Running(_))), "never freed on a timer");
-    assert!(matches!(harness.clean_up(&id), Err(Error::Running(_))));
+    assert!(matches!(harness.clean_up(&id).await, Err(Error::Running(_))));
     quiet(&mut other_events, 100).await;
     assert!(!harness.events(&other, 0).unwrap().iter().any(|event| matches!(event.body, Body::Prompted { .. })), "its slot is still taken");
 
@@ -639,7 +639,7 @@ async fn resume_a_cleaned_up_session_is_refused() {
     next(&mut events).await;
     harness.close(&id).unwrap();
     until(&mut events, |body| *body == Body::Closed).await;
-    harness.clean_up(&id).unwrap();
+    harness.clean_up(&id).await.unwrap();
     assert!(matches!(harness.resume(&id).await, Err(Error::CleanedUp(_))));
 }
 
@@ -670,7 +670,7 @@ async fn mock_a_prompt_that_comes_while_the_mock_waits_is_kept_for_the_next_turn
         {"end": "done"}"#,
     );
     let tools = Arc::new(harness::tools::Endpoint::unattached("t"));
-    let launch = Launch { cwd: "/".into(), locked: false, model: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
+    let launch = Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
     let mut link = mock.open(launch).unwrap();
     link.commands.send(Command::Prompt("first".into())).unwrap();
     link.commands.send(Command::Prompt("second, early".into())).unwrap();
@@ -1034,7 +1034,7 @@ async fn resume_a_driver_that_panics_as_it_opens_leaves_the_session_free() {
         .unwrap()
         .query_row("SELECT id FROM sessions", [], |row| row.get(0))
         .unwrap();
-    assert!(matches!(harness.clean_up(&row), Ok(())), "no reservation is left behind");
+    assert!(matches!(harness.clean_up(&row).await, Ok(())), "no reservation is left behind");
 }
 
 #[tokio::test]
@@ -1453,7 +1453,7 @@ async fn race_clean_up_and_resume_of_one_session_are_never_both_taken() {
         harness.close(&id).unwrap();
         until(&mut events, |body| *body == Body::Closed).await;
         let (a, b, id_a, id_b) = (harness.clone(), harness.clone(), id.clone(), id.clone());
-        let cleaning = tokio::spawn(async move { a.clean_up(&id_a).is_ok() });
+        let cleaning = tokio::spawn(async move { a.clean_up(&id_a).await.is_ok() });
         let resuming = tokio::spawn(async move { b.resume(&id_b).await.ok() });
         let (cleaned, resumed) = (cleaning.await.unwrap(), resuming.await.unwrap());
         if let Some(mut events) = resumed {
@@ -1760,4 +1760,197 @@ async fn question_an_answer_reaches_the_agent_before_prompts_sent_while_it_was_o
         }
     }
     assert_eq!(prompted, ["blue", "later"], "the answer went first");
+}
+
+/// A home folder with a login folder of its own, `~/.claude-work`, and a captured shell that sets Claude's login.
+struct Machine {
+    _tmp: tempfile::TempDir,
+    dir: std::path::PathBuf,
+    home: std::path::PathBuf,
+    seer: Seer,
+}
+
+fn machine() -> Machine {
+    let (tmp, dir) = data_dir();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(home.join(".claude-work")).unwrap();
+    let home = home.canonicalize().unwrap();
+    Machine { _tmp: tmp, dir, home, seer: Seer::default() }
+}
+
+fn setup_of(m: &Machine) -> harness::work::Setup {
+    let shell = harness::env::RunEnv::from_pairs([
+        ("PATH", "/usr/bin:/bin".to_owned()),
+        ("CLAUDE_CONFIG_DIR", m.home.join(".claude-shell").display().to_string()),
+        ("ANTHROPIC_API_KEY", "sk-shell".to_owned()),
+    ]);
+    harness::work::Setup::new(Some(m.home.clone()), m.dir.clone()).with_shell_env(shell)
+}
+
+fn on(m: &Machine, store: Store, setup: harness::work::Setup) -> Harness {
+    let drivers: Vec<(String, Arc<dyn Driver>)> = ["claude", "gemini", "mock"].map(|name| (name.to_owned(), Arc::new(m.seer.clone()) as Arc<dyn Driver>)).into();
+    Harness::with_setup(store, drivers, settings(4), Arc::new(setup))
+}
+
+fn claude(login: Option<&str>, effort: Option<&str>) -> harness::session::Open {
+    harness::session::Open { provider: "claude".into(), cwd: "/nowhere".into(), login: login.map(Into::into), effort: effort.map(Into::into), ..Default::default() }
+}
+
+#[tokio::test]
+async fn a_sessions_login_and_effort_reach_its_driver() {
+    let m = machine();
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    let (_, mut events) = harness.open(claude(Some("~/.claude-work"), Some("high"))).await.unwrap();
+    next(&mut events).await;
+    let (_, mut events) = harness.open(claude(None, None)).await.unwrap();
+    next(&mut events).await;
+    let [own, usual] = <[Seen; 2]>::try_from(m.seer.starts()).unwrap();
+    assert_eq!((own.login.as_deref(), own.effort.as_deref()), (Some("~/.claude-work"), Some("high")));
+    let work = m.home.join(".claude-work").display().to_string();
+    assert_eq!((own.var("CLAUDE_CONFIG_DIR"), own.var("ANTHROPIC_API_KEY")), (Some(work), None), "a folder drops the shell's login");
+    assert_eq!(own.var("PATH").as_deref(), Some("/usr/bin:/bin"), "the rest is the captured shell's");
+    let shell = m.home.join(".claude-shell").display().to_string();
+    assert_eq!((usual.login.clone(), usual.effort.clone(), usual.var("CLAUDE_CONFIG_DIR"), usual.var("ANTHROPIC_API_KEY")), (None, None, Some(shell), Some("sk-shell".into())));
+}
+
+#[tokio::test]
+async fn login_one_the_harness_cannot_run_as_is_refused_at_open_and_starts_nothing() {
+    let m = machine();
+    std::fs::create_dir_all(m.home.join(".claude")).unwrap();
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    let refused = [
+        claude(Some("~/.claude-missing"), None),
+        claude(Some("/tmp"), None),
+        claude(Some("~/.claude"), None),
+        claude(Some("~"), None),
+        claude(Some("~/../elsewhere"), None),
+        harness::session::Open { provider: "gemini".into(), cwd: "/nowhere".into(), login: Some("~/.claude-work".into()), ..Default::default() },
+        harness::session::Open { provider: "mock".into(), cwd: "/nowhere".into(), login: Some("~/.claude-work".into()), ..Default::default() },
+        claude(None, Some("High")),
+        claude(None, Some("--max")),
+    ];
+    for (at, spec) in refused.into_iter().enumerate() {
+        match harness.open(spec).await {
+            Err(Error::Refused(why)) => assert!(!why.contains(&*m.home.to_string_lossy()), "{at}: the refusal names no full path"),
+            other => panic!("{at}: expected a refusal, got {:?}", other.map(|(id, _)| id)),
+        }
+    }
+    assert!(m.seer.starts().is_empty(), "no agent started");
+    assert!(harness.sessions().unwrap().is_empty(), "and no session row was made");
+}
+
+#[tokio::test]
+async fn login_the_usual_one_needs_a_captured_shell_and_a_folder_does_not() {
+    let m = machine();
+    let harness = on(&m, Store::open(&m.dir).unwrap(), harness::work::Setup::new(Some(m.home.clone()), m.dir.clone()));
+    assert!(matches!(harness.open(claude(None, None)).await, Err(Error::Refused(_))), "the usual login is the shell's, which is unknown");
+    let (_, mut events) = harness.open(claude(Some("~/.claude-work"), None)).await.unwrap();
+    next(&mut events).await;
+    assert_eq!(m.seer.starts().len(), 1);
+}
+
+#[tokio::test]
+async fn a_sessions_login_effort_and_work_survive_a_restart_and_reach_the_driver_on_resume() {
+    let m = machine();
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    let spec = harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(Some("~/.claude-work"), Some("xhigh")) };
+    let (id, mut events) = harness.open(spec).await.unwrap();
+    next(&mut events).await;
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    drop(harness);
+
+    let store = reopen(&m.dir).await;
+    let row = store.session(&id).unwrap();
+    assert_eq!((row.login.as_deref(), row.effort.as_deref(), row.work.as_ref()), (Some("~/.claude-work"), Some("xhigh"), Some(&work)));
+    let harness = on(&m, store, setup_of(&m));
+    let mut events = harness.resume(&id).await.unwrap();
+    next(&mut events).await;
+    let resumed = m.seer.starts().pop().unwrap();
+    assert_eq!((resumed.resume.as_deref(), resumed.login.as_deref(), resumed.effort.as_deref()), (Some("seer-1"), Some("~/.claude-work"), Some("xhigh")));
+    assert_eq!((resumed.cwd.clone(), resumed.var("CLAUDE_CONFIG_DIR")), (worktree.clone(), Some(m.home.join(".claude-work").display().to_string())));
+    let listed = harness.sessions().unwrap();
+    assert_eq!((listed[0].repo.as_deref(), listed[0].branch.as_deref(), listed[0].login.as_deref(), listed[0].effort.as_deref()), (Some("acme/webshop"), Some("harness-1"), Some("~/.claude-work"), Some("xhigh")));
+
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    std::fs::remove_dir_all(&worktree).unwrap();
+    assert!(matches!(harness.resume(&id).await, Err(Error::Refused(_))), "a session whose worktree is gone isn't resumed");
+}
+
+#[tokio::test]
+async fn login_the_work_root_is_refused_and_no_agent_starts_before_the_shell_was_read() {
+    let m = machine();
+    let clone = m.home.join("Gossamr/agents/acme/webshop");
+    std::fs::create_dir_all(&clone).unwrap();
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    assert!(matches!(harness.open(claude(Some("~/Gossamr/agents/acme/webshop"), None)).await, Err(Error::Refused(_))), "a clone is not a login");
+    drop(harness);
+    let unread = harness::work::Setup::new(Some(m.home.clone()), m.dir.clone()).with_shell_program("/nonexistent/shell");
+    let harness = on(&m, reopen(&m.dir).await, unread);
+    match harness.open(claude(Some("~/.claude-work"), None)).await {
+        Err(Error::Refused(why)) => assert!(why.contains("hasn't been read"), "{why}"),
+        other => panic!("expected a refusal, got {:?}", other.map(|(id, _)| id)),
+    }
+    assert!(m.seer.starts().is_empty(), "not even on the harness's own environment");
+    let (_, mut events) = harness.open(harness::session::Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Default::default() }).await.unwrap();
+    next(&mut events).await;
+    assert_eq!(m.seer.starts().len(), 1, "a provider outside the table needs no shell");
+}
+
+/// Refuses every open.
+struct NoGo;
+
+impl Driver for NoGo {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        Err(OpenError { kind: FailKind::Provider, message: "no".into() })
+    }
+}
+
+#[tokio::test]
+async fn the_session_that_ran_owns_a_worktree_a_failed_start_also_names() {
+    let m = machine();
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("claude".into(), Arc::new(m.seer.clone())), ("nogo".into(), Arc::new(NoGo))];
+    let harness = Harness::with_setup(Store::open(&m.dir).unwrap(), drivers, settings(4), Arc::new(setup_of(&m)));
+    let (ran, mut events) = harness.open(harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) }).await.unwrap();
+    next(&mut events).await;
+    harness.close(&ran).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let later = harness::session::Open { provider: "nogo".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() };
+    assert!(harness.open(later).await.is_err(), "a later start that fails, naming the same worktree");
+    let mut events = harness.resume(&ran).await.unwrap();
+    next(&mut events).await;
+    assert_eq!(m.seer.starts().len(), 2, "the session that ran still owns its worktree");
+}
+
+#[tokio::test]
+async fn resume_refuses_a_session_whose_worktree_another_session_holds_now() {
+    let m = machine();
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
+    let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
+    let spec = || harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) };
+    let (old, mut events) = harness.open(spec()).await.unwrap();
+    next(&mut events).await;
+    harness.close(&old).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let mut events = harness.resume(&old).await.unwrap();
+    next(&mut events).await;
+    harness.close(&old).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+
+    let (_later, mut events) = harness.open(spec()).await.unwrap();
+    next(&mut events).await;
+    assert!(matches!(harness.resume(&old).await, Err(Error::Refused(_))), "the old session doesn't take the later one's worktree");
 }

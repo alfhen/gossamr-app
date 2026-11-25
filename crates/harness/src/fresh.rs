@@ -253,7 +253,7 @@ async fn default_fetch_rules(git: &Git, path: &Path, keys: &[String]) -> bool {
 /// when every key is one Gossamr's tools write and the fetch rules are the default. The settings are named in the
 /// answer in a shape that leaves out any URL, never their values. The refspec is given on the command line so the
 /// configured one is not used.
-async fn fetch(git: &Git, path: &Path) -> Fetched {
+pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     let Some(keys) = git.local_config_keys(path).await else { return Fetched::Not("Git couldn't read the clone's settings".into()) };
     let mut odd: Vec<String> = keys.iter().filter(|k| !written_by_gossamr_tools(k)).map(|k| key_shape(&k.to_ascii_lowercase())).collect();
     odd.sort();
@@ -273,19 +273,44 @@ async fn fetch(git: &Git, path: &Path) -> Fetched {
     }
 }
 
+/// A temp clone's folder name: `+` is a character `valid_repo` refuses, so no repository's clone or worktree can be
+/// named like one.
+fn temp_prefix(name: &str) -> String {
+    format!(".{name}+cloning-")
+}
+
+/// The file beside a temp clone that says this code made it.
+fn made_mark(temp: &Path) -> PathBuf {
+    let mut mark = temp.as_os_str().to_owned();
+    mark.push(".made");
+    PathBuf::from(mark)
+}
+
 /// Removes the folders an earlier clone of `repo` left behind when Gossamr stopped in the middle of it. Called with the
-/// repository's locks held, so a folder that old is nobody's work in progress.
-pub fn remove_stale_temps(home: &Path, repo: &str) {
+/// repository's locks held, so a folder that old is nobody's work in progress. Only a folder this code marked as its
+/// own temp clone goes, and none that holds a worktree or a commit no remote branch has, or that git can't read.
+pub async fn remove_stale_temps(git: &Git, home: &Path, repo: &str) {
     let Ok(path) = work_path(home, repo) else { return };
     let (Some(parent), Some(name)) = (path.parent(), path.file_name().map(|n| n.to_string_lossy().into_owned())) else { return };
     let Ok(entries) = std::fs::read_dir(parent) else { return };
-    let prefix = format!(".{name}.cloning-");
+    let prefix = temp_prefix(&name);
     for entry in entries.flatten() {
+        let (temp, mark) = (entry.path(), made_mark(&entry.path()));
         let old = entry.metadata().and_then(|m| m.modified()).is_ok_and(|at| at.elapsed().is_ok_and(|age| age >= CLONE_LIMIT));
-        if old && entry.file_name().to_string_lossy().starts_with(&prefix) {
-            let _ = std::fs::remove_dir_all(entry.path());
+        let ours = entry.file_name().to_string_lossy().starts_with(&prefix) && mark.is_file() && temp.symlink_metadata().is_ok_and(|m| m.is_dir());
+        if old && ours && holds_nothing(git, &temp).await {
+            let _ = std::fs::remove_dir_all(&temp);
+            let _ = std::fs::remove_file(mark);
         }
     }
+}
+
+/// No worktree, and no commit that only this clone has. A temp that never got its `.git` holds no commit.
+async fn holds_nothing(git: &Git, temp: &Path) -> bool {
+    if temp.join(".git").symlink_metadata().is_err() {
+        return true;
+    }
+    !temp.join(".git/worktrees").exists() && git.out(temp, &["rev-list", "--branches", "--tags", "HEAD", "--not", "--remotes"]).await.is_some_and(|only| only.is_empty())
 }
 
 /// Gossamr's clone of `repo`, made now if it isn't there. A missing clone is cloned into a new folder beside it and
@@ -303,7 +328,9 @@ pub async fn ensure_clone(git: &Git, home: &Path, repo: &str, fetch_due: bool) -
     }
     make_parent(home, &path)?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = path.with_file_name(format!(".{name}.cloning-{}", random_hex(12)));
+    let temp = path.with_file_name(format!("{}{}", temp_prefix(&name), random_hex(12)));
+    let mark = made_mark(&temp);
+    std::fs::write(&mark, "").map_err(|e| CloneError::Failed(format!("couldn't start the clone: {e}")))?;
     let made = attempt(git, repo, &temp).await;
     let placed = match made {
         Ok(()) if path.symlink_metadata().is_ok() => Err(CloneError::Failed(format!("{} appeared while it was being cloned", tilde(&path)))),
@@ -313,13 +340,15 @@ pub async fn ensure_clone(git: &Git, home: &Path, repo: &str, fetch_due: bool) -
         }
         Err(e) => Err(e),
     };
-    match placed {
+    let ensured = match placed {
         Ok(()) => Ok(Ensured { path, cloned: true, fetched: None }),
         Err(e) => {
             let _ = std::fs::remove_dir_all(&temp);
             Err(e)
         }
-    }
+    };
+    let _ = std::fs::remove_file(mark);
+    ensured
 }
 
 /// The branch `repo` is cloned from when there is no clone yet: what the remote's `HEAD` points at. Falls back to `gh`

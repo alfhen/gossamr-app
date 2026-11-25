@@ -33,7 +33,7 @@ It is a Tauri 2 app: a Rust backend in `src-tauri/` and a React, TypeScript and 
 | `src-tauri/src/runs/codex/` | `CodexBackend`: launches `codex exec` in a worktree of the clone, keeps the run folder `<data dir>/agents/runs/<run id>` (events, stderr, final answer, process file, `short-id`) and finds the process again by pid. It also answers, messages, stops, attaches and cleans up a run. The folder goes with the worktree and in the sweep |
 | `src-tauri/src/inbox/` | Draft storage and approval, prose run outcomes, workstreams |
 | `src-tauri/src/sidecar/` | Starts the bundled harness detached, or adopts the one serving its data folder (`harness_status`, Settings > Harness). `scripts/stage-harness.sh` builds it into the bundle |
-| `crates/harness/` | The agent harness ([proposal](docs/harness-proposal.md)): a program beside the app that will run agent sessions. It depends on neither Tauri nor the app, and builds on Linux. It also holds what the app's runs use for clones, git, the shell environment and provider logins (`repo.rs`, `fresh.rs`, `env.rs`, `provider_env.rs`, `provider_folder.rs`, `provider_probe.rs`, `binary.rs`); the app reaches them as `runs::repo` and so on. Its `testing` feature gives the app's tests the fake git and `fake_cli` |
+| `crates/harness/` | The agent harness ([proposal](docs/harness-proposal.md)): a program beside the app that will run agent sessions. It depends on neither Tauri nor the app, and builds on Linux. It also holds what the app's runs use for clones, git, the shell environment and provider logins (`repo.rs`, `fresh.rs`, `env.rs`, `provider_env.rs`, `provider_folder.rs`, `provider_probe.rs`, `binary.rs`, `codex_models.rs`); the app reaches them as `runs::repo` and so on. `provider.rs` is the provider table (Claude, Codex and Gemini), whose model lists the app uses too. `work.rs` is where a session runs and as whom: its login folder and its clone and worktree. Its `testing` feature gives the app's tests the fake git and `fake_cli` |
 | `src/backend/` | The `Backend` interface (`types.ts`), the desktop one (`jira.ts`) and the in-browser mock (`mock*.ts`) |
 | `src/workspace/` | The workspace UI: Inbox, Board and List, Work, peek, Pip pane, review draft hunks |
 | `src/lib/` | Pure front-end logic |
@@ -60,10 +60,12 @@ CI runs these on every pull request. Run them before you push:
 ```bash
 pnpm typecheck && pnpm test && pnpm build
 mkdir -p dist && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+cargo check -p gossamr --release && cargo build -p harness --release
 pnpm e2e
 ```
 
 - `cargo` needs `dist/` to exist, because `generate_context!` embeds the front end.
+- `cargo check -p gossamr --release` builds the app without its dev-dependencies, so app code that calls a test helper of the harness's `testing` feature fails there and nowhere else.
 - `pnpm e2e` starts its own Vite server and runs one worker on purpose, because the mock paces its answers on timers. A full run takes about 11 minutes. Set `E2E_PORT` to run beside another server, and pass `--shard=1/4` for a quarter of it.
 - The tests marked `#[ignore]` start the real `claude` CLI and need Claude Code installed and signed in: `cargo test -p gossamr -- --ignored`. They start real background sessions, so check that none are left afterwards.
 

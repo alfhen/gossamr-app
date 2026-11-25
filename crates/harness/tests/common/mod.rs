@@ -175,3 +175,52 @@ impl Driver for Stopper {
         Ok(Link { commands, output: receiver })
     }
 }
+
+/// What a driver was given at one start.
+#[derive(Debug, Clone)]
+pub struct Seen {
+    pub cwd: PathBuf,
+    pub login: Option<String>,
+    pub effort: Option<String>,
+    pub resume: Option<String>,
+    pub env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+
+impl Seen {
+    pub fn var(&self, name: &str) -> Option<String> {
+        self.env.iter().find(|(key, _)| key == name).map(|(_, value)| value.to_string_lossy().into_owned())
+    }
+}
+
+/// Records each start, says it started, and goes when it is stopped.
+#[derive(Clone, Default)]
+pub struct Seer(pub Arc<Mutex<Vec<Seen>>>);
+
+impl Seer {
+    pub fn starts(&self) -> Vec<Seen> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl Driver for Seer {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let seen = Seen { cwd: launch.cwd, login: launch.login, effort: launch.effort, resume: launch.resume.clone(), env: launch.env };
+        self.0.lock().unwrap().push(seen);
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel();
+        output.send(Body::Started { provider_session: "seer-1".into(), resumed: launch.resume.is_some() }).unwrap();
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                if matches!(command, Command::Stop | Command::Kill) {
+                    break;
+                }
+            }
+            drop(output);
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}

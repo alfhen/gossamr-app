@@ -9,7 +9,6 @@ pub mod backend;
 pub mod cleanup;
 pub mod cli;
 pub mod codex;
-pub mod codex_models;
 mod continuation;
 pub mod control;
 pub mod failure;
@@ -33,7 +32,7 @@ pub mod tracker;
 pub mod trust;
 
 /// Clones, git, the shell environment and the provider logins belong to the harness; the app reaches them by these paths.
-pub use harness::{binary, env, fresh, provider_env, provider_folder, repo};
+pub use harness::{binary, codex_models, env, fresh, provider_env, provider_folder, repo};
 
 #[cfg(test)]
 mod real_tests;

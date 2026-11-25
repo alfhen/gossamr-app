@@ -10,9 +10,8 @@ use crate::config::AppConfig;
 use crate::connections::{Driver, ProviderInstance};
 
 /// "Default" passes no `--model`, so the login folder's own setting applies.
-pub const DEFAULT_MODEL: &str = "default";
+pub use harness::provider::{valid_model_id, ModelOption, DEFAULT_MODEL, MODEL_ID_LIMIT};
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-const MODEL_ID_LIMIT: usize = 100;
 const CUSTOM_MODEL_LIMIT: usize = 20;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,11 +30,6 @@ impl ModelChoice {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct ModelOption {
-    pub id: String,
-    pub label: String,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Use {
@@ -56,14 +50,6 @@ fn option(id: &str, label: &str) -> ModelOption {
     ModelOption { id: id.into(), label: label.into() }
 }
 
-/// Letters, digits, `.`, `_`, `-`, `[` and `]`; starts with a letter or digit. The start rule keeps an id from reading as a flag.
-pub fn valid_model_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    id.len() <= MODEL_ID_LIMIT
-        && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '[' | ']'))
-}
-
 /// What `codex debug models` last listed for each Codex instance, by instance id. Claude has no such command.
 #[derive(Clone, Debug, Default)]
 pub struct Found(HashMap<String, Vec<ModelOption>>);
@@ -78,22 +64,9 @@ impl Found {
     }
 }
 
-/// Used when `codex debug models` can't be read. Ids from the catalog of codex-cli 0.165.
-const CODEX_FALLBACK: [(&str, &str); 4] = [("gpt-6.1-sol", "GPT-6.1-Sol"), ("gpt-6-sol", "GPT-6-Sol"), ("gpt-6-luna", "GPT-6-Luna"), ("gpt-5.5", "GPT-5.5")];
-
 /// "Default" passes no `-m` to Codex, so the `config.toml` in the login folder picks the model.
 fn built_in(provider: &ProviderInstance, found: &Found) -> Vec<ModelOption> {
-    match provider.driver {
-        Driver::Claude => vec![option(DEFAULT_MODEL, "Default"), option("claude-fable-5-1", "Fable"), option("opus", "Opus"), option("sonnet", "Sonnet"), option("haiku", "Haiku")],
-        Driver::Codex => {
-            let mut list = vec![option(DEFAULT_MODEL, "Default")];
-            match found.0.get(&provider.id) {
-                Some(listed) => list.extend(listed.iter().cloned()),
-                None => list.extend(CODEX_FALLBACK.map(|(id, label)| option(id, label))),
-            }
-            list
-        }
-    }
+    harness::provider::Provider::from(provider.driver).models(found.0.get(&provider.id).map(Vec::as_slice))
 }
 
 /// The instance's list: the driver's own (for Codex, what its CLI lists when that was read), then the ids added to it.
