@@ -176,6 +176,14 @@ impl RunBackend for ClaudeBackend {
         Ok(())
     }
 
+    async fn preflight_on_harness(&self, clone: &Path) -> std::result::Result<(), Failure> {
+        let auth = self.cli.auth_status().await.map_err(|e| self.failure(e, clone))?;
+        if !auth.logged_in {
+            return Err(Failure::NotSignedIn { instance: self.instance.clone(), own_folder: self.own_folder });
+        }
+        Ok(())
+    }
+
     async fn launch(&self, req: &LaunchRequest) -> std::result::Result<Session, Failure> {
         let mut guard = req.guard.clone();
         let agent = req.tools.as_ref().and_then(|offer| match write_mcp_file(&self.files, offer) {

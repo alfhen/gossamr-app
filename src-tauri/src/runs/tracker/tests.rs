@@ -1338,3 +1338,12 @@ async fn the_old_passes_leave_a_run_on_the_harness_alone_once_it_ended_and_recov
     rig.svc.recover().await;
     assert_eq!(rig.get(&launching).await, before, "recovery does not fail it as an interrupted launch");
 }
+
+#[tokio::test]
+async fn a_run_bound_to_a_harness_session_after_the_snapshot_is_not_tracked() {
+    let rig = ready().await;
+    let run = rig.launched(1).await;
+    let snapshot = rig.get(&run).await;
+    rig.fx.core.bind_run_session(&run.id, "s1").await.unwrap();
+    assert!(rig.svc.watched(&[&snapshot]).await.is_empty(), "its reload is the event consumer's");
+}

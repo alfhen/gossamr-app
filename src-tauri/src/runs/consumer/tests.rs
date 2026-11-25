@@ -244,6 +244,7 @@ fn a_loss_names_the_events_it_skipped_and_reads_on_after_them() {
     let rows = lost(&mut p.run, &mut p.follow, "events were lost: swept", 9, Utc::now());
     assert_eq!((rows[0].text.as_str(), p.follow.seq, p.follow.lost), (format!("{LOST}: events 4 to 9 were skipped").as_str(), 9, 1));
     assert_eq!(rows[0].detail.as_deref(), Some("events were lost: swept"));
+    assert_eq!(p.run.last_detail.as_deref(), Some(rows[0].text.as_str()), "on the run too, for a full timeline");
     let one = lost(&mut p.run, &mut p.follow, "again", 10, Utc::now());
     assert_eq!((one[0].text.as_str(), p.follow.lost), (format!("{LOST}: event 10 was skipped").as_str(), 2));
     let none = lost(&mut p.run, &mut p.follow, "behind", 3, Utc::now());
@@ -396,4 +397,14 @@ fn a_waiting_answer_ends_with_a_failed_turn_or_a_stop_and_outlasts_a_close_a_res
     assert_eq!((shut.run.state, shut.run.answer_waits, shut.run.last_detail.as_deref()), (RunState::Stopped, true, Some(ANSWER_WAITS_RESUME)));
     shut.play([Body::Started { provider_session: "p".into(), resumed: true }]);
     assert_eq!((shut.run.state, shut.run.last_detail.as_deref()), (RunState::Working, Some(ANSWER_WAITS)));
+}
+
+#[test]
+fn a_tool_calls_detail_on_the_run_is_redacted_as_its_row_is() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::ToolCall { id: "t1".into(), name: "Bash".into(), input: json!({ "command": "deploy --password=hunter2secret" }) }]);
+    let detail = p.run.last_detail.clone().unwrap();
+    assert!(!detail.contains("hunter2secret"), "{detail}");
+    assert_eq!(Some(detail.as_str()), p.rows.last().map(|row| row.text.as_str()));
 }

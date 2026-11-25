@@ -427,3 +427,34 @@ async fn at_start_a_session_an_interrupted_open_left_on_its_runs_branch_closes_a
 fn claude_runs_open_on_the_harnesss_claude_driver_unless_a_debug_build_serves_the_mock() {
     assert_eq!((provider(false), provider(true)), ("claude", MOCK));
 }
+
+#[tokio::test]
+async fn a_run_on_the_harness_records_the_branch_and_worktree_the_harness_made_so_its_pull_request_is_found() {
+    let (_repo, setup) = on_a_bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let row = sessions(&served).await.into_iter().find(|s| s["id"] == done.harness_session.as_deref().unwrap()).unwrap();
+    assert_eq!(done.branch.as_deref(), Some(run.spec.name.as_str()), "the branch the harness made, with no prefix");
+    assert_eq!(Some(done.expected_worktree.to_string_lossy().as_ref()), row["cwd"].as_str(), "the worktree the harness reports");
+    assert!(done.expected_worktree.is_dir() && done.expected_worktree.ends_with(format!("acme/webshop+worktrees/{}", run.spec.name)));
+    let pushed = crate::codehost::links::tests::pr(12, &run.spec.name, "Fix the cart total", "");
+    assert_eq!(crate::runs::pr::change_for(&done, &[pushed]).and_then(|c| c.number), Some(12), "the run finds the pull request pushed from its branch");
+    let refused = rig.svc.cleanup(&run.id).await.unwrap_err().to_string();
+    assert!(refused.contains("comes in a coming update"), "not that there is no worktree: {refused}");
+}
+
+#[tokio::test]
+async fn a_harness_run_needs_its_login_signed_in_and_not_a_claude_that_has_bg() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    rig.cli.with(|s| s.bg = false);
+    let run = rig.launched(1).await;
+    let opened = rig.get(&run).await;
+    assert!(opened.harness_session.is_some(), "opened: {:?}", opened.error);
+    rig.cli.with(|s| s.logged_in = false);
+    let refused = rig.get(&rig.launched(2).await).await;
+    assert_eq!((refused.state, refused.harness_session.is_none()), (RunState::Failed, true), "{:?}", refused.error);
+}

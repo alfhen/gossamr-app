@@ -81,6 +81,9 @@ impl RunService {
         if !worktree_pending && leftovers.is_empty() {
             return Err(refuse("This run's worktree is already removed."));
         }
+        if run.harness_session.is_some() {
+            return Err(refuse("Clean up for an agent on the harness comes in a coming update. Its worktree stays in ~/Gossamr/agents until then."));
+        }
         if !cleanable(&run) {
             return Err(refuse(match run.state {
                 RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown => "This run has no session, so there is no worktree to remove.".to_owned(),
