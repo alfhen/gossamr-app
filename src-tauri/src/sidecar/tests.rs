@@ -601,3 +601,29 @@ fn a_restart_that_finds_a_harness_it_cannot_use_keeps_why_and_still_names_the_ag
     let running = Status { state: State::Running, build: None, bundled_build: None, update: false, message: None };
     assert_eq!(restarted(running, &[]).message.as_deref(), Some("Restarted."));
 }
+
+#[tokio::test]
+async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_stopped_for_one() {
+    let bed = Bed::new();
+    let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
+    let none = sidecar.client().await.err().unwrap();
+    assert!(none.contains("no key"), "{none}");
+    let hex = bed.token().hex();
+    let none = sidecar.client().await.err().unwrap();
+    assert!(none.contains("isn't running") && !none.contains(&hex), "{none}");
+    assert!(bed.pids("serving").is_empty(), "nothing was started for it");
+
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    let client = sidecar.client().await.unwrap();
+    assert_eq!(client.hello.protocol, PROTOCOL, "a proven client of this protocol");
+    drop(client);
+    let started = bed.pids("serving");
+    assert_eq!(started.len(), 1, "the one the manager started");
+    bed.end(started[0]).await;
+
+    let old = bed.serve_by_hand(&bed.fake("old", PROTOCOL - 1, "old"), &bed.token()).await;
+    let other = sidecar.client().await.err().unwrap();
+    assert!(other.contains(&format!("protocol {}", PROTOCOL - 1)) && !other.contains(&hex), "{other}");
+    assert!(bed.running(old), "not stopped for it");
+    bed.none_left().await;
+}

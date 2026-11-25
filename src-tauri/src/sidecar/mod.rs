@@ -187,6 +187,37 @@ impl Sidecar {
         self.run(&mut inner, Some(action)).await
     }
 
+    /// A client of the harness, proven with the app's token, which never leaves the manager. It starts and stops
+    /// nothing: with no harness serving, one of another protocol, or one that doesn't know the token, it says why, and
+    /// starting or restarting stays with `ensure` and Settings. Before the first start it reads the vault but makes no
+    /// token.
+    #[cfg_attr(not(test), expect(dead_code, reason = "H10's runs are its first caller"))]
+    pub async fn client(&self) -> Result<Client, String> {
+        let token = {
+            let mut inner = self.work.lock().await;
+            match &inner.token {
+                Some(token) => token.clone(),
+                None => {
+                    let refused = |e: crate::error::Error| format!("The harness needs Gossamr's key from the Keychain, which couldn't be read: {e}");
+                    self.keep.reread().map_err(refused)?;
+                    let found = self.keep.load().map_err(refused)?;
+                    let token = found.as_deref().and_then(Token::parse).ok_or("Gossamr has no key for the harness yet. It makes one when it first starts the harness.")?;
+                    inner.token = Some(token.clone());
+                    token
+                }
+            }
+        };
+        let client = match Client::connect_any_protocol(&self.dir, &token, self.limits.prove_within).await {
+            Ok(client) => client,
+            Err(e) if harness::client::not_proven(&e) => return Err(self.not_this_key()),
+            Err(_) => return Err("The harness isn't running. Start it in Settings > Harness.".into()),
+        };
+        match client.hello.protocol {
+            PROTOCOL => Ok(client),
+            other => Err(format!("The running harness speaks protocol {other}, and Gossamr {PROTOCOL}. Settings > Harness says what to do.")),
+        }
+    }
+
     async fn run(&self, inner: &mut Inner, action: Option<Action>) -> Status {
         self.set(Status::new(State::Starting, None));
         let mut status = match self.work_on(inner, action).await {
