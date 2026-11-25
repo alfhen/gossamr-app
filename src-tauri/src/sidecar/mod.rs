@@ -107,6 +107,9 @@ pub struct Status {
     pub update: bool,
     /// What the person should know, in the app's words.
     pub message: Option<String>,
+    /// A debug build serves the mock script `GOSSAMR_MOCK_SCRIPT` names, and its agents run on that, not on Claude.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mock: bool,
 }
 
 impl Status {
@@ -115,7 +118,7 @@ impl Status {
     }
 
     fn new(state: State, message: Option<String>) -> Status {
-        Status { state, build: None, bundled_build: None, update: false, message }
+        Status { state, build: None, bundled_build: None, update: false, message, mock: mock_script().is_some() }
     }
 }
 

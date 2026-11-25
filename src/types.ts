@@ -833,6 +833,8 @@ export interface HarnessStatus {
   update: boolean;
   /** What the person should know, already worded for them. */
   message: string | null;
+  /** A debug build started with `GOSSAMR_MOCK_SCRIPT`: agents run on that mock script, not on Claude. */
+  mock?: boolean;
 }
 
 export type HarnessAction = "start" | "restart" | "stop";

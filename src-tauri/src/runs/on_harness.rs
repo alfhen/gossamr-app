@@ -10,7 +10,7 @@ use harness::client::Client;
 use super::failure::Failure;
 use super::link::{Connect, Link};
 use super::service::RunService;
-use crate::domain::{render_prompt, Run, RunState};
+use crate::domain::{render_prompt, Run, RunEvent, RunState};
 use crate::error::{Error, Result};
 
 /// The link to the harness, and the provider runs open on: `claude`, or the mock a debug build was started with.
@@ -32,10 +32,16 @@ impl Connect for ViaSidecar {
     }
 }
 
+/// The provider of a debug build's mock switch.
+pub const MOCK: &str = "mock";
+
+/// The run sheet says it, so a mock run is never taken for a real one.
+pub const ON_THE_MOCK: &str = "This run is on a mock script, not on Claude. Nothing it says is real.";
+
 /// The mock works in the clone as it is; every other provider in a new worktree on the run's branch.
 pub fn open_op(run: &Run, provider: &str, model: Option<String>) -> Op {
     let spec = &run.spec;
-    let mock = provider == "mock";
+    let mock = provider == MOCK;
     Op::Open {
         provider: provider.to_owned(),
         cwd: mock.then(|| spec.clone_path.clone()),
@@ -67,6 +73,10 @@ impl RunService {
     /// session's first events said as they come.
     pub(super) async fn open_on_harness(&self, run: &mut Run, model: Option<String>) -> Result<std::result::Result<(), Failure>> {
         let Some(on) = &self.harness else { return Ok(Err(Failure::CommandFailed("Gossamr has no harness to run agents on.".into()))) };
+        if on.provider == MOCK {
+            let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "update".into(), text: ON_THE_MOCK.into(), detail: None };
+            self.core.append_run_events(&run.id, &[row]).await?;
+        }
         let session = match on.link.open(&run.id, open_op(run, &on.provider, model)).await {
             Ok(session) => session,
             Err(why) => return Ok(Err(Failure::CommandFailed(format!("The harness didn't open a session: {why}")))),

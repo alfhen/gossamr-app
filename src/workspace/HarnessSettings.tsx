@@ -85,6 +85,11 @@ export function HarnessView({
         {status.build && <span className="text-ws-ink2">, build {status.build}</span>}
         {status.update && status.bundledBuild && <span className="text-ws-ink2">. Gossamr has build {status.bundledBuild}.</span>}
       </p>
+      {status.mock && (
+        <p data-harness-mock className="m-0" role="note">
+          Agents run on a mock script, not on Claude. Nothing they say is real.
+        </p>
+      )}
       {status.message && (
         <p className="m-0 text-ws-ink2" role={status.state === "failed" ? "alert" : undefined}>
           {status.message}

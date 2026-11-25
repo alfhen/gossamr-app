@@ -48,6 +48,8 @@ async fn an_approved_run_opens_a_harness_session_sends_its_brief_and_reads_done_
     let session = done.harness_session.clone().expect("the run is its session");
     assert!(rig.cli.0.lock().unwrap().calls.is_empty(), "no claude --bg");
     assert_eq!(done.last_detail.as_deref(), Some("Looking at the cart."));
+    let rows = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert_eq!(rows.first().map(|row| row.text.as_str()), Some(ON_THE_MOCK), "the run sheet says it is the mock first");
     let mut client = served.client().await;
     let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session, after: 0 }).await.unwrap()["events"].clone()).unwrap();
     let brief = events.iter().find_map(|e| match &e.body {
