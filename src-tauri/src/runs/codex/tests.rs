@@ -40,11 +40,15 @@ impl Rig {
         git(&clone, &["commit", "-q", "-m", "first"]);
         git(&clone, &["push", "-q", "origin", "HEAD:main"]);
         git(&clone, &["fetch", "-q", "origin"]);
+        // Clean-up trusts only an origin on GitHub, so the clone names one and git is sent to the bare repo instead.
+        git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/webshop.git"]);
+        let gitconfig = dir.join("gitconfig");
+        std::fs::write(&gitconfig, format!("[url \"file://{}\"]\n\tinsteadOf = https://github.com/acme/webshop.git\n", dir.join("origin.git").display())).unwrap();
 
         let scenario_file = dir.join("scenario");
         std::fs::write(&scenario_file, scenario).unwrap();
         let login = RunEnv::from_pairs([("PATH", "/usr/bin:/bin".to_owned()), ("FAKE_CODEX_SCENARIO", scenario_file.display().to_string())]);
-        let shell = RunEnv::from_pairs([("PATH", "/usr/bin:/bin"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_SYSTEM", "/dev/null")]);
+        let shell = RunEnv::from_pairs([("PATH", "/usr/bin:/bin".to_owned()), ("GIT_CONFIG_GLOBAL", gitconfig.display().to_string()), ("GIT_CONFIG_SYSTEM", "/dev/null".to_owned()), ("GIT_ALLOW_PROTOCOL", "file".to_owned())]);
         let backend = CodexBackend::new(PathBuf::from(FAKE), Arc::new(login), Arc::new(shell), dir.join("agents").join("runs"), "Codex".into(), false).with_launch_wait(Duration::from_secs(20)).with_stop_wait(Duration::from_millis(500)).with_home(Some(dir.clone()));
         Self { dir, clone, scenario: scenario_file, backend }
     }
