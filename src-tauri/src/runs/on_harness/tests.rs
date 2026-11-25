@@ -274,3 +274,33 @@ async fn until_detail(rig: &Rig, run: &Run, detail: &str) -> Run {
     .await
     .unwrap_or_else(|_| panic!("the run never said {detail:?}"))
 }
+
+const REPORTS_WHAT_DOES_NOT_FIT: &str = r#"{"capabilities": {"tool_call_limit_ms": 600000}}
+{"prompt": null}
+{"call": {"name": "result", "input": {"status": "maybe", "note": "Not sure."}}}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn open_carries_the_result_schema_so_a_result_that_does_not_fit_it_is_refused() {
+    let served = Served::new(REPORTS_WHAT_DOES_NOT_FIT, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    assert_eq!(done.result, None, "the harness checked it against the schema and took none");
+    assert!(rig.fx.core.report_stored(&run.id).await.unwrap().and_then(|row| row.report).is_none());
+}
+
+#[tokio::test]
+async fn pips_message_to_a_run_on_the_harness_that_was_handed_over_is_refused() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Working).await;
+    rig.set(&run, |r| r.handed_over = true).await;
+    let refused = rig.svc.message_agent(&run.id, "Carry on.", crate::domain::Actor::Pip).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::message::HANDED_OVER_ASK);
+    let mut client = served.client().await;
+    let events = client.call(Op::Events { session: rig.get(&run).await.harness_session.unwrap(), after: 0 }).await.unwrap();
+    assert!(!events["events"].as_array().unwrap().iter().any(|e| e["type"] == "prompted" && e["text"] == "Carry on."), "nothing reached the agent");
+}

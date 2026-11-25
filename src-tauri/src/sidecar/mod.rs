@@ -194,7 +194,7 @@ impl Sidecar {
     pub async fn serves(&self, provider: &str) -> bool {
         let Ok(mut client) = self.client().await else { return false };
         let Ok(offered) = client.call(Op::Providers { logins: Vec::new() }).await else { return false };
-        offered["drivers"].as_array().is_some_and(|drivers| drivers.iter().any(|driver| driver["name"] == provider))
+        offers(&offered, provider)
     }
 
     /// A client of the harness, proven with the app's token, which never leaves the manager. It starts and stops
@@ -499,6 +499,11 @@ fn serve_command(program: &Path, dir: &Path, mock: Option<&Path>) -> Command {
         command.arg("--mock-script").arg(script);
     }
     command
+}
+
+/// Whether a `providers` answer names `provider` among its drivers.
+fn offers(offered: &serde_json::Value, provider: &str) -> bool {
+    offered["drivers"].as_array().is_some_and(|drivers| drivers.iter().any(|driver| driver["name"] == provider))
 }
 
 /// The variable that makes a debug build serve the harness's mock provider from the script it names, and open its

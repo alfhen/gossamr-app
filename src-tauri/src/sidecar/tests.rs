@@ -634,3 +634,11 @@ async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_st
     assert!(bed.running(old), "not stopped for it");
     bed.none_left().await;
 }
+
+#[test]
+fn the_mock_line_comes_from_the_drivers_the_harness_names() {
+    let served = serde_json::json!({ "drivers": [{ "name": "claude" }, { "name": "mock" }], "logins": [] });
+    assert!(offers(&served, "mock") && offers(&served, "claude"));
+    assert!(!offers(&serde_json::json!({ "drivers": [{ "name": "claude" }] }), "mock"), "an adopted harness that serves no mock");
+    assert!(!offers(&serde_json::json!({}), "mock"));
+}
