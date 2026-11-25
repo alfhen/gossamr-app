@@ -54,11 +54,25 @@ export function HarnessSection() {
       </div>
     );
   }
-  return <HarnessView status={status} busy={busy} failed={failed} onAction={act} />;
+  return <HarnessView status={status} busy={busy} failed={failed} unread={unread} onRetry={() => setAsks((n) => n + 1)} onAction={act} />;
 }
 
-/** `failed` is the action whose call didn't come back, so the status shown is the one from before it. */
-export function HarnessView({ status, busy, failed = null, onAction }: { status: HarnessStatus | null; busy: boolean; failed?: HarnessAction | null; onAction(action: HarnessAction): void }) {
+/** `failed` is the action whose call didn't come back, and `unread` a later read that failed, so the status shown is the one from before. */
+export function HarnessView({
+  status,
+  busy,
+  failed = null,
+  unread = false,
+  onRetry,
+  onAction,
+}: {
+  status: HarnessStatus | null;
+  busy: boolean;
+  failed?: HarnessAction | null;
+  unread?: boolean;
+  onRetry?(): void;
+  onAction(action: HarnessAction): void;
+}) {
   /** Both stop every agent the harness runs, so each asks first. */
   const [asking, setAsking] = useState<"stop" | "restart" | null>(null);
   if (!status) return <p className="m-0 text-ws-ink2">Checking…</p>;
@@ -75,6 +89,12 @@ export function HarnessView({ status, busy, failed = null, onAction }: { status:
         <p className="m-0 text-ws-ink2" role={status.state === "failed" ? "alert" : undefined}>
           {status.message}
         </p>
+      )}
+      {unread && (
+        <div className="flex flex-wrap items-center gap-2" role="alert">
+          <span className="text-ws-ink2">Gossamr couldn't ask how the harness stands now.</span>
+          <Button onClick={onRetry}>Try again</Button>
+        </div>
       )}
       {failed && (
         <p className="m-0 text-ws-ink2" role="alert">

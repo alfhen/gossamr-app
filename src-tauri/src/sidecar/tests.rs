@@ -592,3 +592,12 @@ async fn stop_while_a_harness_is_stopping_without_its_socket_waits_for_the_folde
     assert_eq!(sidecar.act(Action::Stop).await.state, State::Stopped, "once the folder is free");
     assert!(bed.pids("serving").is_empty());
 }
+
+#[test]
+fn a_restart_that_finds_a_harness_it_cannot_use_keeps_why_and_still_names_the_agents_left() {
+    let failed = Status { state: State::Failed, build: None, bundled_build: None, update: true, message: Some("Older.".into()) };
+    let said = restarted(failed, &["s1".into()]).message.unwrap();
+    assert!(said.starts_with("Older.") && said.contains("s1"), "{said}");
+    let running = Status { state: State::Running, build: None, bundled_build: None, update: false, message: None };
+    assert_eq!(restarted(running, &[]).message.as_deref(), Some("Restarted."));
+}

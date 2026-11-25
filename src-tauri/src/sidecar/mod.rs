@@ -223,10 +223,7 @@ impl Sidecar {
         let result = match action {
             Some(Action::Stop) => self.stop(&token).await.map(|left| Status::new(State::Stopped, left_message("Stopped.", &left))),
             Some(Action::Restart) => match self.stop(&token).await {
-                Ok(left) => self.start_or_adopt(&token, &socket).await.map(|mut status| {
-                    status.message = left_message("Restarted.", &left);
-                    status
-                }),
+                Ok(left) => self.start_or_adopt(&token, &socket).await.map(|status| restarted(status, &left)),
                 Err(e) => Err(e),
             },
             Some(Action::Start) | None => self.start_or_adopt(&token, &socket).await,
@@ -500,6 +497,17 @@ fn held(lock: &Path) -> bool {
 
 fn left_of(answer: &serde_json::Value) -> Vec<String> {
     answer["left"].as_array().map(|left| left.iter().filter_map(|id| id.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+}
+
+/// What Restart says: that it restarted, or why the harness found in its place can't be used, as one may come up in
+/// between; then any agents the old one left.
+fn restarted(mut status: Status, left: &[String]) -> Status {
+    let done = match status.state {
+        State::Running => "Restarted.".to_owned(),
+        _ => status.message.take().unwrap_or_default(),
+    };
+    status.message = left_message(done.trim(), left);
+    status
 }
 
 fn left_message(done: &str, left: &[String]) -> Option<String> {

@@ -187,8 +187,10 @@ impl Vault {
     /// Applies every change in one vault write, so a failure leaves all of them undone.
     pub fn apply(&self, ops: &[Op]) -> Result<()> {
         self.with_ready(|backend, ready| {
-            let mut next = latest(backend)?;
-            let first_touch: Vec<&str> = ops.iter().map(Op::account).filter(|a| !ready.doc.probed.contains(*a)).collect();
+            // Changes are judged against the item as it is, not this app's copy, which another app may have changed.
+            let base = latest(backend)?;
+            let mut next = base.clone();
+            let first_touch: Vec<&str> = ops.iter().map(Op::account).filter(|a| !base.probed.contains(*a)).collect();
             for op in ops {
                 match op {
                     Op::Save(account, value) => next.secrets.insert(account.clone(), value.clone()),
@@ -196,10 +198,10 @@ impl Vault {
                 };
                 next.probed.insert(op.account().into());
             }
-            if next.secrets != ready.doc.secrets || !first_touch.is_empty() {
+            if next.secrets != base.secrets || next.probed != base.probed {
                 write_vault(backend, &next)?;
-                ready.doc = next;
             }
+            ready.doc = next;
             for account in first_touch {
                 forget_legacy(backend, account);
             }
@@ -238,6 +240,13 @@ fn forget_legacy(backend: &dyn Backend, account: &str) {
 /// Moves one pre-vault item into the vault. The old item goes only after the vault holds the value, so a failure
 /// part-way loses nothing.
 fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()> {
+    let base = latest(backend);
+    // Another app may have saved or deleted the account since this one read the vault, and its old item may still be
+    // there: that app's decision stands.
+    if let Some(found) = base.as_ref().ok().filter(|doc| doc.secrets.contains_key(account) || doc.probed.contains(account)) {
+        ready.doc = found.clone();
+        return Ok(());
+    }
     let read = backend.read(account).and_then(|found| Ok(found.map(|json| serde_json::from_str::<Value>(&json)).transpose()?));
     let value = match read {
         Ok(value) => value,
@@ -247,7 +256,6 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
             return Err(Error::KeychainUnavailable(reason));
         }
     };
-    let base = latest(backend);
     let mut next = base.as_ref().map_or_else(|_| ready.doc.clone(), Clone::clone);
     next.probed.insert(account.into());
     let migrated = value.is_some();
@@ -641,7 +649,7 @@ mod tests {
         let v = vault(&fake);
         assert!(v.load::<String>("session").is_err());
         assert!(v.load::<String>("session").is_err());
-        assert_eq!(fake.reads(), 2);
+        assert_eq!(fake.reads(), 3, "the vault, the vault as it is before the old item, and the old item once");
         assert_eq!(v.load::<String>("other").unwrap(), None);
     }
 
@@ -716,5 +724,29 @@ mod tests {
         one.delete("session").unwrap();
         one.apply(&[Op::save("other", &"x").unwrap()]).unwrap();
         assert_eq!(vault(&fake).load::<String>("harness").unwrap().as_deref(), Some("token"), "the other app's save is kept");
+    }
+
+    #[test]
+    fn apply_writes_a_change_that_undoes_another_apps_save_since_this_one_read_the_vault() {
+        let fake = Fake::default();
+        let (one, two) = (vault(&fake), vault(&fake));
+        one.save("x", &"one").unwrap();
+        assert_eq!(two.load::<String>("x").unwrap().as_deref(), Some("one"));
+        one.save("x", &"two").unwrap();
+        two.apply(&[Op::save("x", &"one").unwrap()]).unwrap();
+        assert_eq!(vault(&fake).load::<String>("x").unwrap().as_deref(), Some("one"), "the change was written");
+    }
+
+    #[test]
+    fn an_old_item_another_app_could_not_remove_is_not_moved_over_what_that_app_saved() {
+        let fake = Fake::default();
+        let (one, two) = (vault(&fake), vault(&fake));
+        assert_eq!(two.load::<String>("other").unwrap(), None);
+        fake.put("session", "\"old\"");
+        fake.deny_removes(true);
+        one.save("session", &"new").unwrap();
+        assert_eq!(fake.get("session").as_deref(), Some("\"old\""), "the old item is still there");
+        assert_eq!(two.load::<String>("session").unwrap().as_deref(), Some("new"), "the other app's value is served");
+        assert_eq!(vault(&fake).load::<String>("session").unwrap().as_deref(), Some("new"), "and kept");
     }
 }

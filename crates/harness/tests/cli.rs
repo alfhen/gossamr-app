@@ -145,7 +145,7 @@ fn serve(script: &str) -> Serving {
 
 #[test]
 fn serve_drains_its_stdin_on_a_later_start_and_does_not_start_on_a_token_the_folder_does_not_know() {
-    use std::io::{BufRead, Write};
+    use std::io::Write;
     use std::os::fd::{FromRawFd, OwnedFd};
     let mut first = serve("{\"prompt\": null}\n");
     first.child.kill().unwrap();
@@ -153,7 +153,7 @@ fn serve_drains_its_stdin_on_a_later_start_and_does_not_start_on_a_token_the_fol
     let serve_again = |stdin: std::process::Stdio| {
         let mut command = Command::new(HARNESS);
         command.args(["serve".as_ref(), "--data".as_ref(), first.dir.as_os_str()]).env_remove("HARNESS_DATA").env_remove(harness::cli::TOKEN_VARIABLE);
-        command.stdin(stdin).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+        command.stdin(stdin).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
         command
     };
 
@@ -165,34 +165,62 @@ fn serve_drains_its_stdin_on_a_later_start_and_does_not_start_on_a_token_the_fol
         (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1]))
     };
     writeln!(std::fs::File::from(write), "{}", first.token).unwrap();
-    let mut again = serve_again(std::process::Stdio::from(read.try_clone().unwrap())).spawn().unwrap();
-    let mut said = String::new();
-    std::io::BufReader::new(again.stderr.take().unwrap()).read_line(&mut said).unwrap();
-    assert!(said.starts_with("harness: serving "), "a token the folder knows starts it: {said}");
+    let again = Running::ready(serve_again(std::process::Stdio::from(read.try_clone().unwrap())));
     let mut left = std::fs::File::from(read);
     // SAFETY: fcntl on a descriptor this test owns.
     unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&left), libc::F_SETFL, libc::O_NONBLOCK) };
     let mut buffer = [0u8; 128];
     let unread = std::io::Read::read(&mut left, &mut buffer);
     assert!(unread.as_ref().is_ok_and(|n| *n == 0) || unread.is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock), "nothing is left to read");
-    assert_eq!(stdin_of(again.id()), "/dev/null", "its stdin is /dev/null");
-    again.kill().unwrap();
-    again.wait().unwrap();
+    assert_eq!(stdin_of(again.0.id()), "/dev/null", "its stdin is /dev/null");
+    drop(again);
 
-    let mut other = serve_again(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
-    give_token(&mut other, &harness::auth::Token::random().hex());
-    let refused = output_within(other, std::time::Duration::from_secs(30));
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("not one this data folder knows"), "{refused:?}");
+    for (what, line, said) in [("another token", harness::auth::Token::random().hex(), "not one this data folder knows"), ("a line that is not a token", "not a token".into(), "not a client token")] {
+        let mut other = serve_again(std::process::Stdio::piped()).spawn().unwrap();
+        give_token(&mut other, &line);
+        let refused = output_within(other, std::time::Duration::from_secs(60));
+        assert_eq!(refused.status.code(), Some(1), "{what} on stdin does not start it");
+        assert!(String::from_utf8_lossy(&refused.stderr).contains(said), "it says why: {:?}", String::from_utf8_lossy(&refused.stderr));
+    }
 
-    let mut kept = serve_again(std::process::Stdio::null()).spawn().unwrap();
-    let mut said = String::new();
-    std::io::BufReader::new(kept.stderr.take().unwrap()).read_line(&mut said).unwrap();
-    assert!(said.starts_with("harness: serving "), "no token starts it: {said}");
+    let kept = Running::ready(serve_again(std::process::Stdio::null()));
     let proven = with_token(&mut client(&first, &["sessions"]), &first.token);
-    kept.kill().unwrap();
-    kept.wait().unwrap();
-    assert!(proven.status.success(), "the first token still proves: {proven:?}");
+    assert!(proven.status.success(), "no token starts it, and the first token still proves: {proven:?}");
+    drop(kept);
+
+    let (mut main, mut side) = (0, 0);
+    // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
+    assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+    let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
+    drop(Running::ready(serve_again(std::process::Stdio::from(side))));
+}
+
+/// A started `serve`, killed and reaped however the test ends.
+struct Running(std::process::Child);
+
+impl Running {
+    /// Starts `command` and waits, up to a minute, for it to say where it serves.
+    fn ready(mut command: Command) -> Running {
+        use std::io::BufRead;
+        let mut running = Running(command.spawn().unwrap());
+        let stderr = running.0.stderr.take().unwrap();
+        let (said, heard) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stderr).read_line(&mut line);
+            let _ = said.send(line);
+        });
+        let line = heard.recv_timeout(std::time::Duration::from_secs(60)).unwrap_or_default();
+        assert!(line.starts_with("harness: serving "), "it serves within a minute: {line:?}");
+        running
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 /// What a process's stdin is open on.
