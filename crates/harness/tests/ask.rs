@@ -290,7 +290,8 @@ async fn ask_after_a_cancel_the_answer_comes_as_the_next_prompt() {
     harness.answer_question(&id, &q, "blue".into()).await.unwrap();
     let seen = until(&mut events, |body| *body == Body::Text { text: "with the answer".into() }).await;
     let at = |body: &Body| seen.iter().position(|event| event.body == *body).unwrap();
-    assert!(at(&Body::QuestionClosed { id: q.clone(), how: QuestionEnd::Answered }) < at(&Body::Prompted { text: "blue".into() }));
+    // Closed once the prompt has reached the driver.
+    assert!(at(&Body::Prompted { text: "blue".into() }) < at(&Body::QuestionClosed { id: q.clone(), how: QuestionEnd::Answered }));
     assert!(mock.received(&ps).contains(&Command::Prompt("blue".into())), "the agent got the answer");
 }
 
@@ -350,6 +351,10 @@ async fn ask_clean_up_and_a_resume_refused_for_good_close_the_open_question_and_
             true => assert!(matches!(harness.answer_question(&id, &q, "blue".into()).await, Err(Error::EndedWithClient(_)))),
         }
         assert_eq!(harness.open_question(&id).unwrap(), None, "ends with its client: {ends_with_client}");
+        // Said in the events too, as a `question_closed` stored with the clean-up or the refusal.
+        let how = if ends_with_client { QuestionEnd::NotResumable } else { QuestionEnd::CleanedUp };
+        let said = harness.events(&id, 0).unwrap().into_iter().map(|event| event.body.withheld()).find(|body| body.type_name() == "question_closed" || matches!(body, Body::Withheld { of, .. } if of == "question_closed"));
+        assert_eq!(said, Some(Body::QuestionClosed { id: q.clone(), how }.withheld()), "{how:?}");
         assert_eq!(harness.sessions().unwrap().into_iter().find(|row| row.id == id).unwrap().open_question, None);
         assert!(harness.may_carry_on(&id).is_ok());
     }

@@ -238,3 +238,14 @@ fn an_answer_the_harness_took_reads_working_until_it_reaches_the_agent() {
     answered(&mut p.run, &mut p.follow, "q1");
     assert!(p.follow.answered.is_none(), "an answer to a closed question changes nothing");
 }
+
+#[test]
+fn a_question_closed_by_a_clean_up_or_a_session_that_cannot_resume_waits_on_no_one_and_says_why() {
+    for (how, says) in [(QuestionEnd::CleanedUp, "the run was cleaned up"), (QuestionEnd::NotResumable, "no answer can reach the agent now")] {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }, Body::QuestionClosed { id: "q1".into(), how }]);
+        assert_eq!((p.run.state, p.run.needs.as_deref(), p.follow.question.as_deref()), (RunState::Working, None, None), "{how:?}");
+        assert!(p.rows.last().unwrap().text.ends_with(says), "{how:?}");
+    }
+}
