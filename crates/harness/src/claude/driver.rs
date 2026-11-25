@@ -465,7 +465,8 @@ impl Stream {
         let Some(input) = self.asked.remove(id) else { return };
         let response = match decision {
             Decision::Allow => json!({"behavior": "allow", "updatedInput": input}),
-            Decision::Deny => json!({"behavior": "deny", "message": message.unwrap_or_else(|| "The person denied this.".to_owned())}),
+            // The harness refuses any other answer before it reaches a driver; one that did is no allow.
+            Decision::Deny | Decision::Other => json!({"behavior": "deny", "message": message.unwrap_or_else(|| "The person denied this.".to_owned())}),
         };
         self.send(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": response}}));
     }

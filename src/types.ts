@@ -547,6 +547,8 @@ export interface Run {
   expectedWorktree: string;
   /** Whether its clone is in Gossamr's work folder, `~/Gossamr/agents`. False for a run an earlier release set up in the person's own clone. Read as true when absent. */
   inWorkFolder?: boolean;
+  /** The harness session the run is, once it opened one. */
+  harnessSession?: string;
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
   commitEmail?: string | null;
   signingKey?: string | null;

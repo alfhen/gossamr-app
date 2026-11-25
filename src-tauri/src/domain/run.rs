@@ -573,6 +573,9 @@ pub struct Run {
     /// Whether its clone is in Gossamr's work folder. Worked out whenever a run is read, never taken from what is stored.
     #[serde(default, skip_deserializing)]
     pub in_work_folder: bool,
+    /// The harness session the run is, once it opened one. Its events decide the run's state from then on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_session: Option<String>,
 }
 
 impl Run {
@@ -646,6 +649,7 @@ impl Run {
             commit_email: None,
             signing_key: None,
             in_work_folder: false,
+            harness_session: None,
         }
     }
 
@@ -658,6 +662,40 @@ impl Run {
 
 fn first_pass() -> u32 {
     1
+}
+
+/// How far the app has followed a run's harness session: the last event it applied, and what those events left open.
+/// Kept beside the run and written with it, so an event is applied once, and a reconnect reads on from `seq`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFollow {
+    pub seq: u64,
+    /// Turns that ended, counted by `turn_ended`, never by prompt: one prompt can give two turns.
+    pub turns: u32,
+    /// "Carry on" prompts the app sent in a row after the harness restarted, reset when a turn ends by itself.
+    pub carry_ons: u32,
+    /// Prompts sent: the first is the brief, each later one a message.
+    pub prompts: u32,
+    pub in_turn: bool,
+    /// The question the agent asked that is still open, and what the run shows it needs while it waits on it.
+    pub question: Option<String>,
+    pub asked: Option<String>,
+    /// Permission requests still open, oldest first: each with whether it was cut to fit, which can then only be
+    /// denied, and what the run shows it needs.
+    pub permissions: Vec<(String, bool, String)>,
+    /// The session's events up to `seq` were partly lost; how many times.
+    pub lost: u32,
+    /// The session's task ended. A shutdown or a hand-over ends it too, and a resume's `started` opens it again.
+    pub closed: bool,
+    /// The app asked the harness to stop the session, so the end of a turn the stop cut is a stop, not a failure.
+    pub stop_asked: bool,
+    /// It closed after a stop the app asked for: nothing resumes it, so it is followed no more.
+    #[serde(default)]
+    pub ended: bool,
+    /// Calls of the app's tools with no result yet: id, name and input. One a quit left unanswered is answered on the
+    /// next start.
+    #[serde(default)]
+    pub calls: Vec<(String, String, serde_json::Value)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

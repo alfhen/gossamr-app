@@ -18,6 +18,7 @@ mod code;
 mod pip_turns;
 mod proposals;
 mod reports;
+mod run_sessions;
 mod runs;
 mod schema;
 mod watch;
@@ -25,6 +26,7 @@ mod workstreams;
 
 pub use cache::{stamp, SyncState, Upserted};
 pub use runs::ARCHIVABLE;
+pub use run_sessions::Applied;
 pub use code::CachedHttp;
 pub use proposals::{connection_of, is_for};
 pub use pip_turns::{PipTurn, DISCONNECTED, NEVER_RAN};
