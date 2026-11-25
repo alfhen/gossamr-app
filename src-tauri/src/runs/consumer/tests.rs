@@ -228,13 +228,13 @@ fn an_answer_the_harness_took_reads_working_until_it_reaches_the_agent() {
     p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }, Body::TurnEnded { how: TurnEnd::Done }, Body::TurnStarted]);
     assert_eq!(p.run.state, RunState::NeedsAnswer, "a turn of its own started before the answer");
     answered(&mut p.run, &mut p.follow, "q1");
-    assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.last_detail.as_deref()), (RunState::Working, None, Some(ANSWER_WAITS)));
+    assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.last_detail.as_deref(), p.run.answer_waits), (RunState::Working, None, Some(ANSWER_WAITS), true));
     p.play([Body::Text { text: "still busy".into() }]);
     assert_eq!(p.run.state, RunState::Working, "the answered question waits on no one");
     p.play([Body::TurnEnded { how: TurnEnd::Done }]);
-    assert_eq!(p.run.state, RunState::Working, "not done while the answer is on its way");
+    assert_eq!((p.run.state, p.run.answer_waits), (RunState::Working, true), "not done while the answer is on its way");
     p.play([Body::QuestionClosed { id: "q1".into(), how: QuestionEnd::Answered }, Body::Prompted { text: "Blue".into() }, Body::TurnStarted]);
-    assert_eq!((p.follow.answered.as_deref(), p.follow.question.as_deref()), (None, None));
+    assert_eq!((p.follow.answered.as_deref(), p.follow.question.as_deref(), p.run.answer_waits), (None, None, false));
     answered(&mut p.run, &mut p.follow, "q1");
     assert!(p.follow.answered.is_none(), "an answer to a closed question changes nothing");
 }

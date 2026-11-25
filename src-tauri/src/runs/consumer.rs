@@ -163,6 +163,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::Withheld { .. } => {}
     }
     settle(run, follow);
+    run.answer_waits = follow.answered.is_some();
     run.asking = run.state == RunState::NeedsAnswer;
     // What it waits on now: the oldest permission request, else the question, whichever event closed the other.
     run.needs = match run.state {
@@ -200,6 +201,7 @@ pub fn answered(run: &mut Run, follow: &mut SessionFollow, question: &str) {
         return;
     }
     follow.answered = Some(question.to_owned());
+    run.answer_waits = true;
     settle(run, follow);
     if run.state == RunState::Working && follow.permissions.is_empty() {
         run.asking = false;
@@ -299,6 +301,13 @@ fn plain(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     }
+}
+
+/// A `result` as the run's report, for Pip to read as it read `report`: one the harness checked against
+/// `report::result_schema`, so one that does not fit it is none.
+pub fn report_of(body: &Body) -> Option<crate::runs::report::Report> {
+    let Body::Result { data } = body else { return None };
+    crate::runs::report::check(data).ok().map(|checked| checked.report)
 }
 
 /// A result as the run shows it: its `note` when it has one, else the whole of it.

@@ -587,6 +587,9 @@ pub struct Run {
     /// The harness session the run is, once it opened one. Its events decide the run's state from then on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session: Option<String>,
+    /// The harness took the person's answer to the open question, and it has not reached the agent yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub answer_waits: bool,
     /// Its session was handed over to Terminal: nothing resumes it until the person says they took it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
@@ -664,6 +667,7 @@ impl Run {
             signing_key: None,
             in_work_folder: false,
             harness_session: None,
+            answer_waits: false,
             handed_over: false,
         }
     }

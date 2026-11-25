@@ -1079,7 +1079,7 @@ pub fn run() {
             if sidecar::mock_script().is_some() {
                 let connect = Arc::new(runs::on_harness::ViaSidecar(sidecar.clone()));
                 let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |connection_id| runs_changed(&runs_changed_too, connection_id));
-                let link = tauri::async_runtime::block_on(async { runs::link::Link::start(core.clone(), connect, Arc::new(runs::link::NoTools), notifier, changed) });
+                let link = tauri::async_runtime::block_on(async { runs::link::Link::start(core.clone(), connect, Arc::new(agent::agent_tools::HarnessReads(core.clone())), notifier, changed) });
                 service = service.with_harness(runs::on_harness::OnHarness { link: Arc::new(link), provider: runs::on_harness::MOCK.into() });
             }
             let service = Arc::new(service);

@@ -555,6 +555,8 @@ export interface Run {
   inWorkFolder?: boolean;
   /** The harness session the run is, once it opened one. */
   harnessSession?: string;
+  /** The harness took your answer to its open question, and it has not reached the agent yet; `lastDetail` says so in words. */
+  answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */

@@ -38,8 +38,10 @@ pub const MOCK: &str = "mock";
 /// The run sheet says it, so a mock run is never taken for a real one.
 pub const ON_THE_MOCK: &str = "This run is on a mock script, not on Claude. Nothing it says is real.";
 
-/// The mock works in the clone as it is; every other provider in a new worktree on the run's branch.
-pub fn open_op(run: &Run, provider: &str, model: Option<String>) -> Op {
+/// The mock works in the clone as it is; every other provider in a new worktree on the run's branch, on the login
+/// folder of the run's instance as the person typed it (`None`: their usual setup). Effort is the provider's own, since
+/// no agent chooses one yet.
+pub fn open_op(run: &Run, provider: &str, model: Option<String>, login: Option<String>) -> Op {
     let spec = &run.spec;
     let mock = provider == MOCK;
     Op::Open {
@@ -50,11 +52,11 @@ pub fn open_op(run: &Run, provider: &str, model: Option<String>) -> Op {
         branch: (!mock).then(|| spec.name.clone()),
         locked: false,
         model,
-        login: None,
+        login: login.filter(|_| !mock),
         effort: None,
         ends_with_client: false,
-        tools: Vec::new(),
-        result_schema: None,
+        tools: crate::agent::agent_tools::client_tools(),
+        result_schema: Some(super::report::result_schema()),
     }
 }
 
@@ -77,7 +79,9 @@ impl RunService {
             let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "update".into(), text: ON_THE_MOCK.into(), detail: None };
             self.core.append_run_events(&run.id, &[row]).await?;
         }
-        let session = match on.link.open(&run.id, open_op(run, &on.provider, model)).await {
+        let config = crate::config::AppConfig::load(&self.core.data_dir());
+        let login = config.providers.iter().find(|p| p.id == run.instance_id()).and_then(|p| p.config.config_dir.clone());
+        let session = match on.link.open(&run.id, open_op(run, &on.provider, model, login)).await {
             Ok(session) => session,
             Err(why) => return Ok(Err(Failure::CommandFailed(format!("The harness didn't open a session: {why}")))),
         };

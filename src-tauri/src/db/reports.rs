@@ -1,13 +1,13 @@
 //! Reports an agent made through the report tool, and the tokens minted for its runs.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
 
 use super::{stamp, Db};
 use crate::domain::{Run, REPORT_TOOL_VERSION};
 use crate::error::Result;
-use crate::runs::report::{check, Reply, StoredReport, MAX_CALLS, MAX_REJECTIONS};
+use crate::runs::report::{check, Report, Reply, StoredReport, MAX_CALLS, MAX_REJECTIONS};
 
 /// A call is accepted while the run is in one of these states. `done`, `failed` and `stopped` are over; a stopped run
 /// that is being woken with an answer is `working` again by the time its agent can call.
@@ -17,7 +17,7 @@ fn parsed(at: Option<String>) -> Option<DateTime<Utc>> {
     at.and_then(|a| DateTime::parse_from_rfc3339(&a).ok()).map(|d| d.with_timezone(&Utc))
 }
 
-fn row_of(tx: &Transaction, run_id: &str) -> Result<Option<StoredReport>> {
+fn row_of(tx: &Connection, run_id: &str) -> Result<Option<StoredReport>> {
     let row = tx
         .query_row("SELECT report, revision, calls, rejections, stale, first_at, last_at FROM run_reports WHERE run_id = ?1", params![run_id], |r| {
             Ok((r.get::<_, Option<String>>(0)?, r.get::<_, u32>(1)?, r.get::<_, u32>(2)?, r.get::<_, u32>(3)?, r.get::<_, i64>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?))
@@ -35,7 +35,7 @@ fn row_of(tx: &Transaction, run_id: &str) -> Result<Option<StoredReport>> {
     }))
 }
 
-fn save(tx: &Transaction, run_id: &str, row: &StoredReport) -> Result<()> {
+fn save(tx: &Connection, run_id: &str, row: &StoredReport) -> Result<()> {
     let report = row.report.as_ref().map(serde_json::to_string).transpose()?;
     tx.execute(
         "INSERT INTO run_reports (run_id, report, revision, calls, rejections, stale, first_at, last_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -46,6 +46,18 @@ fn save(tx: &Transaction, run_id: &str, row: &StoredReport) -> Result<()> {
 }
 
 impl Db {
+    /// Keeps a harness session's `result` as the run's report, a revision of any it had. The caller holds the
+    /// transaction that applies the event, so the report is kept once, with the event.
+    pub(super) fn keep_result(&self, run_id: &str, report: Report, now: DateTime<Utc>) -> Result<()> {
+        let mut row = row_of(&self.conn, run_id)?.unwrap_or(StoredReport { report: None, revision: 0, calls: 0, rejections: 0, stale: false, first_at: None, last_at: None });
+        row.revision += 1;
+        row.stale = false;
+        row.first_at.get_or_insert(now);
+        row.last_at = Some(now);
+        row.report = Some(report);
+        save(&self.conn, run_id, &row)
+    }
+
     /// Records that a run was offered the tool with this token. Never replaces an earlier token of the run: a launch whose
     /// answer was lost, and then adopted, still holds the one it started with.
     pub fn reserve_report_token(&self, run_id: &str, token_hash: &str, tool_version: u32, now: DateTime<Utc>) -> Result<()> {

@@ -244,9 +244,10 @@ impl Inner {
         let mut fresh = false;
         let applied = self
             .core
-            .apply_session(session, |run, follow| {
+            .apply_session_reporting(session, |run, follow| {
                 fresh = event.seq == 0 || event.seq > follow.seq;
-                consumer::fold(run, follow, &event, now)
+                let report = fresh.then(|| consumer::report_of(&event.body)).flatten();
+                (consumer::fold(run, follow, &event, now), report)
             })
             .await;
         let applied = match applied {
