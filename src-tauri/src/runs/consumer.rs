@@ -22,6 +22,7 @@ pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
+pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
@@ -42,6 +43,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.closed = false;
             follow.stop_asked = false;
             follow.ended = false;
+            follow.taken_back = false;
+            run.handed_over = false;
             reopen(run);
             if follow.answered.is_some() {
                 run.last_detail = Some(ANSWER_WAITS.into());
@@ -86,8 +89,12 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::ToolResult { id, error, output } => {
             follow.calls.retain(|(open, ..)| *open != id);
-            if error {
-                rows.add("error", "A tool call failed", Some(&plain(&output)));
+            let said = plain(&output);
+            if signing_refused(&said) {
+                follow.signing_refused = true;
+                rows.add("error", "A commit wasn't signed: your signing agent refused it", Some(&said));
+            } else if error {
+                rows.add("error", "A tool call failed", Some(&said));
             }
         }
         Body::Permission { id, kind, tool, input } => {
@@ -171,6 +178,12 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 run.last_detail = (how == TurnEnd::Denied).then(|| STOPPED_AFTER_DENY.into()).or(run.last_detail.take());
                 run.ended_at = Some(now);
             }
+            // The turn's work could not be committed, whatever the agent made of it: the person has to act.
+            if std::mem::take(&mut follow.signing_refused) && follow.question.is_none() {
+                run.state = RunState::Failed;
+                run.error = Some(SIGNING_NEEDS_YOU.into());
+                run.failure = Some(RunFailure::SigningNeedsYou);
+            }
         }
         Body::Failed { kind: FailKind::AgentStopped, .. } if follow.stop_asked => {
             follow.in_turn = false;
@@ -203,6 +216,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::Notice { text } => rows.add("update", &text, None),
         Body::HandedOver => {
+            run.handed_over = true;
             run.last_detail = Some(HANDED_OVER.into());
             rows.add("stop", HANDED_OVER, None);
         }
@@ -283,6 +297,12 @@ fn drop_answer(run: &mut Run, follow: &mut SessionFollow) {
     if matches!(run.last_detail.as_deref(), Some(ANSWER_WAITS | ANSWER_WAITS_RESUME)) {
         run.last_detail = None;
     }
+}
+
+/// What git says when the signing program refused a commit: it wrote no commit object, and the signer said why.
+fn signing_refused(said: &str) -> bool {
+    let said = said.to_lowercase();
+    said.contains("failed to write commit object") && ["sign", "1password", "gpg", "ssh-keygen"].iter().any(|signer| said.contains(signer))
 }
 
 /// A run its session takes up again, after a failed turn, a stop or a close: no longer over.

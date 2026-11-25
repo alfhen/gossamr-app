@@ -391,6 +391,14 @@ impl Core {
         self.with_proposals(|db| db.apply_session(session, f)).await
     }
 
+    pub async fn harness_moved(&self) -> Result<bool> {
+        self.with_app_db(|db| db.harness_moved()).await
+    }
+
+    pub async fn mark_harness_moved(&self) -> Result<()> {
+        self.with_app_db(|db| db.mark_harness_moved()).await
+    }
+
     /// `apply_session`, keeping the report `f` returns as the run's in the same transaction.
     pub async fn apply_session_reporting(
         &self,

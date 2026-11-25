@@ -80,6 +80,11 @@ impl RunService {
         if run.handed_over && !took_back {
             return Err(refuse(super::message::HANDED_OVER_ASK));
         }
+        if run.handed_over {
+            if let Some(taken) = self.take_back_on_harness(&run).await {
+                run = taken?;
+            }
+        }
         if let Some(sent) = self.send_on_harness(&run, text).await {
             return sent.map(|(run, _)| run);
         }

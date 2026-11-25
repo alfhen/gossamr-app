@@ -35,7 +35,9 @@ pub enum Cleanup {
 
 /// A run that is over and still has something to remove: its worktree, or an earlier session that was kept.
 pub fn cleanable(run: &Run) -> bool {
-    matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown) && run.short_id.is_some() && (run.worktree_removed_at.is_none() || !run.leftover_sessions().is_empty())
+    let over = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown);
+    let on_harness = run.harness_session.is_some() && run.worktree_removed_at.is_none();
+    over && (on_harness || run.short_id.is_some() && (run.worktree_removed_at.is_none() || !run.leftover_sessions().is_empty()))
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -87,7 +89,15 @@ impl RunService {
                 other => format!("This run is {}. Stop it first, then clean it up.", other.as_str()),
             }));
         }
-        if self.instance_removed(&run).await {
+        if let Some(cleaned) = self.cleanup_on_harness(&run).await {
+            return match cleaned? {
+                Some(message) => Ok(Cleanup::Refused { message }),
+                None => self.settle_cleanup(&run, true, Vec::new(), None, false).await,
+            };
+        }
+        // An agent the move to the harness stopped is cleaned up with git alone, as the old path's tools are no longer used.
+        let interrupted = run.failure == Some(crate::domain::RunFailure::Interrupted);
+        if interrupted || self.instance_removed(&run).await {
             if worktree_pending {
                 if let Some(message) = self.remove_with_git(&run).await? {
                     return Ok(Cleanup::Refused { message });

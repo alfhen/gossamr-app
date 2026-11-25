@@ -146,6 +146,7 @@ impl Db {
     fn migrated_app(mut conn: Connection) -> Result<Connection> {
         conn.execute_batch("PRAGMA journal_mode = WAL;")?;
         schema::migrate_app(&mut conn)?;
+        run_sessions::rebind(&conn)?;
         Ok(conn)
     }
 

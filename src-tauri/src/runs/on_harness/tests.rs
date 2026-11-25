@@ -359,6 +359,12 @@ async fn a_failed_bind_says_so_in_the_apps_words_and_shows_no_database_text() {
 /// A home folder whose git sends `https://github.com/` to a bare `acme/webshop` on disk with one commit on `main`, and
 /// the harness's setup for it.
 fn on_a_bare_repo() -> (tempfile::TempDir, harness::work::Setup) {
+    let (tmp, setup, _) = bare_repo();
+    (tmp, setup)
+}
+
+/// `on_a_bare_repo`, with the home folder the harness clones into and a git to run in it.
+fn bare_repo() -> (tempfile::TempDir, harness::work::Setup, Git) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let (home, data, remote, config) = (root.join("home"), root.join("data"), root.join("remote/github.com"), root.join("gitconfig"));
@@ -383,8 +389,24 @@ fn on_a_bare_repo() -> (tempfile::TempDir, harness::work::Setup) {
     git(&root.join("seed"), &["add", "README"]);
     git(&root.join("seed"), &["commit", "--quiet", "-m", "first"]);
     git(&root.join("seed"), &["push", "--quiet", "origin", "main"]);
-    let setup = harness::work::Setup::new(Some(home), data).with_shell_env(crate::runs::env::RunEnv::from_pairs(env));
-    (tmp, setup)
+    let setup = harness::work::Setup::new(Some(home.clone()), data).with_shell_env(crate::runs::env::RunEnv::from_pairs(env.clone()));
+    (tmp, setup, Git { home, env })
+}
+
+struct Git {
+    home: std::path::PathBuf,
+    env: Vec<(String, String)>,
+}
+
+impl Git {
+    fn worktree(&self, branch: &str) -> std::path::PathBuf {
+        self.home.join("Gossamr/agents/acme/webshop+worktrees").join(branch)
+    }
+
+    fn run(&self, dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git").current_dir(dir).args(args).env_clear().envs(self.env.clone()).output().unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    }
 }
 
 #[tokio::test]
@@ -426,4 +448,96 @@ async fn at_start_a_session_an_interrupted_open_left_on_its_runs_branch_closes_a
 #[test]
 fn claude_runs_open_on_the_harnesss_claude_driver_unless_a_debug_build_serves_the_mock() {
     assert_eq!((provider(false), provider(true)), ("claude", MOCK));
+}
+
+#[tokio::test]
+async fn clean_up_closes_a_finished_runs_session_and_removes_its_worktree_through_the_harness() {
+    let (_repo, setup, git) = bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    assert!(crate::runs::cleanup::cleanable(&done), "a finished harness run has its worktree to remove");
+    let worktree = git.worktree(&done.spec.name);
+    assert!(worktree.is_dir());
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), crate::runs::cleanup::Cleanup::Removed);
+    assert!(!worktree.exists(), "the harness removed it");
+    let cleaned = rig.get(&run).await;
+    assert!(cleaned.worktree_removed_at.is_some() && !crate::runs::cleanup::cleanable(&cleaned));
+}
+
+#[tokio::test]
+async fn clean_up_of_a_run_with_unpushed_work_is_refused_with_the_harnesss_reason_and_keeps_the_work() {
+    let (_repo, setup, git) = bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let worktree = git.worktree(&done.spec.name);
+    std::fs::write(worktree.join("FIX"), "fixed\n").unwrap();
+    git.run(&worktree, &["add", "FIX"]);
+    git.run(&worktree, &["commit", "--quiet", "-m", "the fix"]);
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert!(!message.is_empty(), "the harness says why");
+    assert!(worktree.join("FIX").is_file(), "the work stays");
+    assert!(rig.get(&run).await.worktree_removed_at.is_none());
+}
+
+#[tokio::test]
+async fn the_move_to_the_harness_stops_each_agent_the_old_path_has_going_once_and_marks_it_interrupted() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let old = |n: u32, state: RunState| {
+        let rig = &rig;
+        async move {
+            let run = rig.fx.core.queue_test_run(rig.spec(n), None).await.unwrap();
+            rig.set(&run, |r| {
+                r.state = state;
+                r.short_id = Some(crate::runs::cli::ShortId::parse(&format!("{n:08x}")).unwrap());
+            })
+            .await
+        }
+    };
+    let going = old(1, RunState::Working).await;
+    let finished = old(2, RunState::Done).await;
+    let on_harness = rig.launched(3).await;
+    until_state(&rig, &on_harness, RunState::Working).await;
+    rig.svc.move_to_harness().await;
+    assert_eq!(rig.cli.0.lock().unwrap().stops, vec![going.short_id.clone().unwrap().as_str().to_owned()], "only the agent the old path had going");
+    let stopped = rig.get(&going).await;
+    assert_eq!((stopped.state, stopped.failure.clone(), stopped.error.as_deref()), (RunState::Failed, Some(crate::domain::RunFailure::Interrupted), Some(INTERRUPTED)));
+    assert_eq!(rig.get(&finished).await.state, RunState::Done);
+    assert_eq!(rig.get(&on_harness).await.state, RunState::Working);
+    assert!(rig.fx.core.harness_moved().await.unwrap());
+    rig.set(&going, |r| r.state = RunState::Working).await;
+    rig.svc.move_to_harness().await;
+    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 1, "once");
+}
+
+const TWO_TURNS: &str = r#"{"prompt": null}
+{"say": "First."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Back again."}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_run_handed_over_to_terminal_takes_your_message_only_once_you_say_you_took_it_back() {
+    let served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let link = &rig.svc.harness.as_ref().unwrap().link;
+    link.call(Op::HandOver { session: done.harness_session.clone().unwrap() }).await.unwrap();
+    let handed = until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    assert!(handed.handed_over, "the run says so");
+    let refused = rig.svc.answer_took_back(&run.id, "Carry on.", false).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::message::HANDED_OVER_ASK);
+    rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap();
+    let back = until_detail(&rig, &run, "Back again.").await;
+    assert!(!back.handed_over, "taken back");
+    until_state(&rig, &run, RunState::Done).await;
 }

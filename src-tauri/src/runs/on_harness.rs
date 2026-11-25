@@ -38,6 +38,12 @@ pub const MOCK: &str = "mock";
 /// How long after a run launched the harness can create its session: an open waits for the shell and makes a clone.
 const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
 
+/// How long clean-up waits for a session it closed to say so.
+const CLOSE_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What an agent of the old path reads when the move to the harness stopped it.
+pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness. Its worktree is kept; Clean up removes it. Ask Pip to start it again on the harness.";
+
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
 /// What Claude runs open on: the harness's `claude` driver, or the mock a debug build was started with.
@@ -133,6 +139,48 @@ impl RunService {
         Ok(Ok(()))
     }
 
+    /// Once, when Claude's runs first go to the harness: stops each agent the old `claude --bg` path still has going,
+    /// found as the old tracker found it, from the session the app's own database names for its run, and marks the run
+    /// interrupted. Its worktree stays; Clean up removes it with git. A run that is over, or queued, is left alone: a
+    /// queued one starts on the harness. A stop that fails leaves the move to be tried again at the next start.
+    pub async fn move_to_harness(&self) {
+        if self.harness.is_none() || !matches!(self.core.harness_moved().await, Ok(false)) {
+            return;
+        }
+        let going = vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked, RunState::Unknown];
+        let Ok(runs) = self.core.runs_list(&crate::domain::RunQuery { states: Some(going), ..Default::default() }).await else { return };
+        let _turn = self.launching.lock().await;
+        let mut all_stopped = true;
+        for run in runs.iter().filter(|run| run.harness_session.is_none()) {
+            let (Some(session), Ok(tc)) = (super::backend::Session::of(run), self.observing_toolchain(run).await) else { continue };
+            if tc.driver != crate::connections::Driver::Claude {
+                continue;
+            }
+            if let Err(e) = tc.backend.stop(&session).await {
+                eprintln!("couldn't stop run {}'s agent on the old path: {e}", run.id);
+                all_stopped = false;
+                continue;
+            }
+            let Ok(mut run) = self.load(&run.id).await else { continue };
+            run.state = RunState::Failed;
+            run.error = Some(INTERRUPTED.into());
+            run.failure = Some(crate::domain::RunFailure::Interrupted);
+            run.ended_at = Some(chrono::Utc::now());
+            if let Err(e) = self.store(&run).await {
+                eprintln!("couldn't mark run {} interrupted: {e}", run.id);
+                all_stopped = false;
+            }
+            if let Err(e) = self.index.mark_terminal(&run.id) {
+                eprintln!("couldn't update the run index: {e}");
+            }
+        }
+        if all_stopped {
+            if let Err(e) = self.core.mark_harness_moved().await {
+                eprintln!("couldn't note that the old path's agents were stopped; it runs again at the next start: {e}");
+            }
+        }
+    }
+
     /// At start, under the launch lock, so no open runs meanwhile. It closes a session the harness runs for an open
     /// the app quit in the middle of: on the repo and branch of a run still Launching with no session, created just
     /// after that run launched, and bound to no run. And it closes the session of a run whose brief the harness never
@@ -182,13 +230,52 @@ impl RunService {
     /// `None` for a run that is not on the harness.
     pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, bool)>> {
         let (link, session) = self.on_harness_of(run)?;
-        if matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
+        // A session just taken back is starting again: its run reads stopped until its `started` comes.
+        let starting = matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.taken_back);
+        if !starting && matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
             return Some(Err(Error::Proposal(format!("This run is {}, so it takes no message.", run.state.as_str()))));
         }
         Some(match link.send(session, text).await {
             Ok(answered) => self.load(&run.id).await.map(|run| (run, answered)),
             Err(why) if why == super::link::ANSWER_ON_ITS_WAY => Err(Error::Proposal(why)),
             Err(why) => Err(Error::Proposal(format!("The harness didn't take it: {why}"))),
+        })
+    }
+
+    /// Cleans up a run's session through the harness: its worktree and branch, never forced, so unpushed work stays and
+    /// the harness says why. A session at rest is closed first, since a session that runs is not cleaned up. `None` for
+    /// a run not on the harness; `Some(Ok(Some(why)))` for a refusal.
+    pub(super) async fn cleanup_on_harness(&self, run: &Run) -> Option<Result<Option<String>>> {
+        let (link, session) = self.on_harness_of(run)?;
+        let closed = |follow: &crate::domain::SessionFollow| follow.closed;
+        let open = matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if !closed(&follow));
+        if open {
+            let mut applied = link.applied();
+            if let Err(why) = link.stop(session).await {
+                return Some(Ok(Some(format!("The harness didn't close the session first: {why}"))));
+            }
+            let waited = tokio::time::timeout(CLOSE_TAKES_UP_TO, async {
+                while !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if closed(&follow)) {
+                    if applied.changed().await.is_err() {
+                        return;
+                    }
+                }
+            });
+            if waited.await.is_err() {
+                return Some(Ok(Some("The session hasn't closed yet, so it can't be cleaned up. Try again in a moment.".into())));
+            }
+        }
+        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err()))
+    }
+
+    /// Takes a session handed over to Terminal back, on the person's word that they took it back there, so it can be
+    /// resumed. The run no longer reads handed over, and the app follows the session again. `None` for a run not on the
+    /// harness.
+    pub(super) async fn take_back_on_harness(&self, run: &Run) -> Option<Result<Run>> {
+        let (link, session) = self.on_harness_of(run)?;
+        Some(match link.take_back(session).await {
+            Ok(()) => self.load(&run.id).await,
+            Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {why}"))),
         })
     }
 

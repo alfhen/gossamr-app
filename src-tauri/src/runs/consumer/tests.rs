@@ -395,3 +395,23 @@ fn a_waiting_answer_ends_with_a_failed_turn_or_a_stop_and_outlasts_a_close_a_res
     shut.play([Body::Started { provider_session: "p".into(), resumed: true }]);
     assert_eq!((shut.run.state, shut.run.last_detail.as_deref()), (RunState::Working, Some(ANSWER_WAITS)));
 }
+
+#[test]
+fn a_commit_the_signing_agent_refused_ends_the_turn_with_signing_needs_you_and_a_later_turn_clears_it() {
+    let mut p = Played::new();
+    p.play(started());
+    let refused = "error: 1Password: Could not connect to socket. Is the agent running?\n\nfatal: failed to write commit object";
+    p.play([
+        Body::ToolCall { id: "t1".into(), name: "Bash".into(), input: json!({ "command": "git commit -m fix" }) },
+        Body::ToolResult { id: "t1".into(), output: json!(refused), error: true },
+        Body::Text { text: "I couldn't commit; signing failed.".into() },
+        Body::TurnEnded { how: TurnEnd::Done },
+    ]);
+    assert_eq!((p.run.state, p.run.failure.clone(), p.run.error.as_deref()), (RunState::Failed, Some(RunFailure::SigningNeedsYou), Some(SIGNING_NEEDS_YOU)));
+    p.play([Body::Prompted { text: "Unlocked, try again.".into() }, Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!((p.run.state, p.run.failure.clone()), (RunState::Done, None), "a turn that commits clears it");
+    let mut other = Played::new();
+    other.play(started());
+    other.play([Body::ToolResult { id: "t1".into(), output: json!("fatal: not a git repository"), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(other.run.state, RunState::Done, "any other failed command is not this");
+}
