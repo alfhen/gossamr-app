@@ -3,9 +3,12 @@
 //! `to_agent` line on what a replay needs (`docs/plan-harness.md`, H6). A driver run against it is then compared with
 //! H2's converter. Only test builds have it (`required-features = ["testing"]`).
 //!
-//! `WIRE_REPLAY_FIXTURE` names the recording. `WIRE_REPLAY_OUT` names a folder that gets `argv.json`, `env.json`,
-//! `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the field and
-//! never a payload. A mismatch exits 3.
+//! `WIRE_REPLAY_FIXTURE` names the recording. `WIRE_REPLAY_OUT` names a folder that gets `argv.json`, `env.json` (every
+//! variable's name, and the values of `SHOWN` and `WIRE_REPLAY_*` only), `sent.jsonl` (each line received, a server's
+//! header values written `<redacted>`) and, on a mismatch, `report.txt`, which names the recorded line and the field and
+//! never a payload. A mismatch exits 3. With `WIRE_REPLAY_SECRET_FILE` naming a file that holds a secret, `secret.json`
+//! names the variables whose value holds it and counts the arguments that do. `WIRE_REPLAY_DEADLINE_MS` and
+//! `WIRE_REPLAY_PROGRESS` (a FIFO that gets the seq of each agent line as it is written) serve tests.
 //!
 //! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, an
 //! answer's decision, and every id by the mapping. The config requests named in `CONFIG` are not compared: the replay
@@ -51,8 +54,13 @@ fn main() -> ExitCode {
     };
     let out = PathBuf::from(out);
     let argv: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
-    let env: Map<String, Value> = std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), Value::from(v.to_string_lossy().into_owned()))).collect();
-    let written = std::fs::write(out.join("argv.json"), Value::from(argv).to_string()).and_then(|()| std::fs::write(out.join("env.json"), Value::Object(env).to_string()));
+    let vars: Vec<(String, String)> = std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned())).collect();
+    let written = std::fs::write(out.join("argv.json"), Value::from(argv.clone()).to_string())
+        .and_then(|()| std::fs::write(out.join("env.json"), Value::Object(environment(&vars)).to_string()))
+        .and_then(|()| match std::env::var_os("WIRE_REPLAY_SECRET_FILE") {
+            Some(file) => std::fs::read_to_string(file).and_then(|secret| std::fs::write(out.join("secret.json"), holding(secret.trim(), &vars, &argv).to_string())),
+            None => Ok(()),
+        });
     let recording = match (written, load(Path::new(&fixture))) {
         (Ok(()), Ok(recording)) => recording,
         (Err(e), _) => return refuse(&out, &format!("cannot write the out folder: {e}")),
@@ -121,9 +129,32 @@ fn read_stdin(written: &AtomicUsize, mut sent: std::fs::File, lines: &Sender<Res
     }
 }
 
-/// A line as `sent.jsonl` keeps it.
+/// The variables whose values `env.json` shows. Of any other it holds the name only, since values can be secrets.
+const SHOWN: &[&str] = &["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_DISABLE_AUTO_MEMORY"];
+
+fn environment(vars: &[(String, String)]) -> Map<String, Value> {
+    let shown = |name: &str| SHOWN.contains(&name) || name.starts_with("WIRE_REPLAY_");
+    vars.iter().map(|(name, value)| (name.clone(), if shown(name) { Value::from(value.as_str()) } else { Value::Null })).collect()
+}
+
+/// Where the test's secret is: the names of the variables whose value holds it, and how many arguments do.
+fn holding(secret: &str, vars: &[(String, String)], argv: &[String]) -> Value {
+    if secret.is_empty() {
+        return json!({"env": [], "argv": 0});
+    }
+    let env: Vec<&String> = vars.iter().filter(|(name, value)| name != "WIRE_REPLAY_SECRET_FILE" && value.contains(secret)).map(|(name, _)| name).collect();
+    json!({"env": env, "argv": argv.iter().filter(|arg| arg.contains(secret)).count()})
+}
+
+/// A line as `sent.jsonl` keeps it: a server's header values, a token among them, are written `<redacted>`.
 fn kept(text: &str) -> String {
-    text.to_owned()
+    let Ok(mut line) = serde_json::from_str::<Value>(text) else { return "<a line that is not JSON>".to_owned() };
+    if let Some(servers) = line.get_mut("request").and_then(|request| request.get_mut("servers")).and_then(Value::as_object_mut) {
+        for headers in servers.values_mut().filter_map(|server| server.get_mut("headers")).filter_map(Value::as_object_mut) {
+            headers.values_mut().for_each(|value| *value = Value::from("<redacted>"));
+        }
+    }
+    line.to_string()
 }
 
 fn refuse(out: &Path, why: &str) -> ExitCode {

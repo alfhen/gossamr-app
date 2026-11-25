@@ -543,9 +543,36 @@ fn wire_replay_records_its_argv_its_environment_and_each_line_sent() {
     let argv: Value = serde_json::from_slice(&std::fs::read(out.path().join("argv.json")).unwrap()).unwrap();
     assert_eq!(argv, json!(["-p", "--model", "haiku"]));
     let env: Value = serde_json::from_slice(&std::fs::read(out.path().join("env.json")).unwrap()).unwrap();
-    assert_eq!(env["ONE_VARIABLE"], "its value");
+    assert_eq!(env["ONE_VARIABLE"], Value::Null, "its name only: a value can be a secret");
+    assert!(env.as_object().unwrap().contains_key("ONE_VARIABLE"));
+    assert!(env["WIRE_REPLAY_FIXTURE"].as_str().is_some_and(|fixture| fixture.ends_with("6-model.jsonl")), "the replay's own are shown");
     let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
     assert_eq!(sent, format!("{initialize}\n"));
+}
+
+#[test]
+fn wire_replay_records_where_a_secret_is_and_never_a_header_value() {
+    let fixture = native().join("2-permission.jsonl");
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("secret");
+    std::fs::write(&secret, "tok-5f2a9c\n").unwrap();
+    let secret_file = secret.display().to_string();
+    let env = [("WIRE_REPLAY_SECRET_FILE", secret_file.as_str()), ("LEAKED", "Bearer tok-5f2a9c"), ("CLAUDE_CONFIG_DIR", "/a/b")];
+    let mut run = start(&fixture, &["--token", "tok-5f2a9c"], &env);
+    let set = json!({"type": "control_request", "request_id": "s-1", "request": {"subtype": "mcp_set_servers", "servers": {"abc": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer tok-5f2a9c"}}}}});
+    run.send(&set);
+    run.read().unwrap();
+    let (_, _, out) = run.end();
+    let held: Value = serde_json::from_slice(&std::fs::read(out.path().join("secret.json")).unwrap()).unwrap();
+    assert_eq!(held, json!({"env": ["LEAKED"], "argv": 1}));
+    let env: Value = serde_json::from_slice(&std::fs::read(out.path().join("env.json")).unwrap()).unwrap();
+    assert_eq!(env["CLAUDE_CONFIG_DIR"], "/a/b", "a login folder is shown");
+    for file in ["env.json", "sent.jsonl", "report.txt"] {
+        let text = std::fs::read_to_string(out.path().join(file)).unwrap_or_default();
+        assert!(!text.contains("tok-5f2a9c"), "{file} holds the secret");
+    }
+    let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
+    assert!(sent.contains("\"Authorization\":\"<redacted>\""), "the header is kept, its value is not");
 }
 
 #[test]
