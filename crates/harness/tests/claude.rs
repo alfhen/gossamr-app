@@ -203,7 +203,7 @@ fn ends(seen: &[Event]) -> usize {
 async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, acts: Vec<Act>, results: usize) -> (Vec<Event>, Process) {
     let (mut seen, mut agent) = play_turns(rig, id, events, acts, results).await;
     rig.harness.close(id).unwrap();
-    while !seen.last().is_some_and(|event| event.body == Body::Closed) {
+    while !seen.last().is_some_and(|event| matches!(event.body, Body::Closed { .. })) {
         next_within(rig, events, &mut seen, &mut agent).await;
     }
     (seen, agent.expect("the session started"))
@@ -486,7 +486,7 @@ async fn claude_a_withdrawn_permission_closes_and_a_later_answer_is_refused() {
     assert_eq!(closed.as_deref(), Some(asked.as_str()), "the close names the harness's id of the request");
     assert!(matches!(rig.harness.answer(&id, &asked, Decision::Allow, None), Err(harness::error::Error::NotOpen(_))));
     rig.harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(rig.report(), "", "no answer reached the agent");
 }
 
@@ -649,7 +649,7 @@ async fn claude_prompts_sent_at_once_each_reach_claude_after_the_result_before_i
     }
     // Until the agent has ended as many turns as the recording, or the session closed because the replay refused.
     let mut seen: Vec<Event> = vec![];
-    while ends(&seen) < results && !seen.iter().any(|event| event.body == Body::Closed) {
+    while ends(&seen) < results && !seen.iter().any(|event| matches!(event.body, Body::Closed { .. })) {
         match tokio::time::timeout(Duration::from_secs(30), events.recv()).await.expect("an event within 30 s") {
             Ok(event) => seen.push(event),
             Err(_) => break,
@@ -901,7 +901,7 @@ async fn claude_a_restart_in_the_middle_of_a_turn_stops_the_leftover_and_resumes
     assert!(seen.iter().any(|event| event.body == Body::Started { provider_session: session.clone(), resumed: true }), "{:?}", types(&seen));
     assert_eq!(resumes(&second.argv()), [session], "one agent, resumed once by its session");
     second.harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
     assert_eq!(second.report(), "");
     second.harness.shutdown().await;
     assert_eq!(Store::open(&data).unwrap().agents().unwrap(), [], "its agent gone, nothing is on record");
@@ -930,7 +930,7 @@ async fn claude_a_resume_starts_claude_by_its_session_and_carry_on_is_the_first_
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["message"]["content"][0]["text"], carry_on.as_str(), "carry on is the first prompt");
     second.harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
     assert_eq!(second.report(), "");
 }
 

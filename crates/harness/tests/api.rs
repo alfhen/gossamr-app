@@ -12,7 +12,7 @@ use harness::auth::{Token, decode, encode};
 use harness::client::{Client, Push};
 use harness::driver::Driver;
 use harness::error::Error;
-use harness::event::{Body, Decision, Event};
+use harness::event::{Body, ClosedBy, Decision, Event};
 use harness::mock::Mock;
 use harness::server::{Limits, Server};
 use harness::session::Harness;
@@ -235,7 +235,7 @@ async fn events_a_client_that_reconnects_after_n_gets_exactly_what_it_missed() {
     second.call(Op::ToolResult { session: id.clone(), call: call_id.clone(), output: json!("ticket"), error: false }).await.unwrap();
     let ended = events_until(&mut second, |body| matches!(body, Body::TurnEnded { .. })).await;
     second.call(Op::Close { session: id.clone() }).await.unwrap();
-    let rest = events_until(&mut second, |body| *body == Body::Closed).await;
+    let rest = events_until(&mut second, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(tokio::time::timeout(WAIT, second.push()).await.unwrap().unwrap(), Some(Push::End { session: id.clone() }));
 
     let got: Vec<Event> = [request, call, ended, rest].concat();
@@ -273,7 +273,7 @@ async fn requests_each_request_of_the_api_works_against_the_mock() {
     client.call(Op::Cancel { session: s() }).await.unwrap();
     events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
     client.call(Op::Close { session: s() }).await.unwrap();
-    events_until(&mut client, |body| *body == Body::Closed).await;
+    events_until(&mut client, |body| matches!(*body, Body::Closed { .. })).await;
     client.call(Op::CleanUp { session: s() }).await.unwrap();
 
     let page = client.call(Op::Events { session: s(), after: 0 }).await.unwrap();
@@ -377,7 +377,7 @@ async fn locked_a_client_that_stops_reading_misses_no_event_and_gets_each_whole(
     // The client reads nothing until the session has closed.
     loop {
         match done.recv().await {
-            Ok(event) if event.body == Body::Closed => break,
+            Ok(event) if matches!(event.body, Body::Closed { .. }) => break,
             Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(e) => panic!("{e}"),
         }
@@ -388,7 +388,7 @@ async fn locked_a_client_that_stops_reading_misses_no_event_and_gets_each_whole(
     }
     let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
     assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "every event once, in order");
-    assert!(got.last().unwrap().body.withheld() == Body::Closed.withheld(), "the last is `closed`");
+    assert!(matches!(got.last().unwrap().body.withheld(), Body::Withheld { of, .. } if of == "closed"), "the last is `closed`");
     // A locked session's text is not in the store, so a client that fell behind gets it only if nothing was dropped.
     assert!(got.iter().all(|event| !matches!(event.body, Body::Withheld { .. })), "every event whole");
     assert_eq!(got.iter().filter(|event| matches!(event.body, Body::Text { .. })).count(), says);
@@ -476,7 +476,7 @@ async fn leave_a_session_that_ends_with_its_client_closes_when_it_leaves_and_is_
     watcher.call(Op::Watch { session: ends.clone(), after: 0 }).await.unwrap();
     next_event(&mut watcher).await;
     drop(first);
-    events_until(&mut watcher, |body| *body == Body::Closed).await;
+    events_until(&mut watcher, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(matches!(served.harness.resume(&ends).await, Err(Error::EndedWithClient(_))), "never resumed");
     let sessions = watcher.call(Op::Sessions).await.unwrap();
     let row = |id: &str| sessions.as_array().unwrap().iter().find(|row| row["id"] == id).unwrap().clone();
@@ -501,7 +501,7 @@ async fn shutdown_stops_every_session_and_frees_the_data_folder() {
     let store = harness::store::Store::open(&served.dir).expect("the data folder is free once shutdown answers");
     for id in [&idle, &asking] {
         let last = store.events(id, 0).unwrap().pop().unwrap();
-        assert_eq!(last.body, Body::Closed, "{id} recorded its close");
+        assert!(matches!(last.body, Body::Closed { .. }), "{id} recorded its close");
     }
     drop(store);
     assert!(matches!(served.harness.open(harness::session::Open { provider: "mock".into(), ..Default::default() }).await, Err(Error::ShutDown)));
@@ -534,7 +534,7 @@ async fn requests_a_question_is_answered_as_the_next_prompt_and_hand_over_keeps_
     events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
 
     client.call(Op::HandOver { session: id.clone() }).await.unwrap();
-    let rest = events_until(&mut client, |body| *body == Body::Closed).await;
+    let rest = events_until(&mut client, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(rest.iter().map(|event| event.body.type_name()).collect::<Vec<_>>(), ["handed_over", "closed"]);
     let provider = provider_session(&served, &id);
     assert!(matches!(served.harness.resume(&id).await, Err(Error::HandedOver(_))), "not resumed while Terminal may hold it");
@@ -664,7 +664,7 @@ async fn limits_events_come_in_pages_and_the_client_reads_them_all() {
     assert_eq!(read.iter().filter(|event| matches!(event.body, Body::Text { .. })).count(), says);
 
     // A watch from the start reads the same backlog page by page, then ends at `closed`. The script has ended.
-    events_until(&mut client, |body| *body == Body::Closed).await;
+    events_until(&mut client, |body| matches!(*body, Body::Closed { .. })).await;
     let mut watcher = connect(&served).await;
     watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
     let mut watched = vec![];
@@ -680,7 +680,7 @@ async fn limits_a_page_of_many_small_events_fits_in_a_message() {
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
     client.call(Op::Close { session: id.clone() }).await.unwrap();
-    events_until(&mut client, |body| *body == Body::Closed).await;
+    events_until(&mut client, |body| matches!(*body, Body::Closed { .. })).await;
     // Small events whose payload fits a page several times over as stored, but not once as sent.
     let small = 240_000;
     let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
@@ -864,7 +864,7 @@ async fn locked_a_client_past_the_backlog_is_told_events_were_lost() {
     // The client reads nothing until the session has closed.
     loop {
         match done.recv().await {
-            Ok(event) if event.body == Body::Closed => break,
+            Ok(event) if matches!(event.body, Body::Closed { .. }) => break,
             Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(e) => panic!("{e}"),
         }
@@ -898,7 +898,7 @@ async fn events_an_unlocked_client_that_stops_reading_reads_what_it_missed_from_
     slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
     loop {
         match done.recv().await {
-            Ok(event) if event.body == Body::Closed => break,
+            Ok(event) if matches!(event.body, Body::Closed { .. }) => break,
             Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(e) => panic!("{e}"),
         }
@@ -947,7 +947,7 @@ fn until_closed(served: &Served, id: &str) -> impl std::future::Future<Output = 
     async move {
         loop {
             match done.recv().await {
-                Ok(event) if event.body == Body::Closed => return,
+                Ok(event) if matches!(event.body, Body::Closed { .. }) => return,
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(e) => panic!("{e}"),
             }
@@ -1021,7 +1021,7 @@ async fn leave_a_session_that_ends_with_its_client_closes_when_the_server_is_abo
     served.task.abort();
     loop {
         match tokio::time::timeout(Duration::from_secs(60), events.recv()).await.expect("the session closes") {
-            Ok(event) if event.body == Body::Closed => break,
+            Ok(event) if matches!(event.body, Body::Closed { .. }) => break,
             Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(e) => panic!("{e}"),
         }
@@ -1037,7 +1037,7 @@ async fn events_the_opener_of_an_unlocked_session_gets_its_first_event() {
         let first = next_event(&mut client).await;
         assert!(first.seq == 1 && matches!(first.body, Body::Started { .. }), "{id}: {first:?}");
         client.call(Op::Close { session: id.clone() }).await.unwrap();
-        events_until(&mut client, |body| *body == Body::Closed).await;
+        events_until(&mut client, |body| matches!(*body, Body::Closed { .. })).await;
         let end = tokio::time::timeout(Duration::from_secs(60), client.push()).await.unwrap().unwrap();
         assert_eq!(end, Some(Push::End { session: id }));
     }
@@ -1354,7 +1354,114 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket_with_the_clau
     assert!(seen.iter().any(|event| matches!(event.body, Body::Text { .. })), "Claude's text came over the socket");
     assert_eq!(seen.last().map(|event| &event.body), Some(&Body::TurnEnded { how: harness::event::TurnEnd::Done }));
     client.call(Op::Close { session: id }).await.unwrap();
-    events_until(&mut client, |body| *body == Body::Closed).await;
+    events_until(&mut client, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(std::fs::read_to_string(out.join("report.txt")).unwrap_or_default(), "", "the replay took every line");
     task.abort();
+}
+
+/// A turn that says it works, then runs until it is stopped.
+const LONG_TURN: &str = "{\"prompt\": null}\n{\"say\": \"working\"}\n{\"sleep\": 600000}\n{\"end\": \"done\"}\n{\"prompt\": null}";
+
+/// The client's session in its long turn: it has said it works.
+async fn working(client: &mut Client, ends_with_client: bool) -> String {
+    let id = open_as(client, false, ends_with_client).await;
+    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    events_until(client, |body| *body == Body::Text { text: "working".into() }).await;
+    id
+}
+
+/// The `by` of the `closed` a client sees for its session.
+async fn closed_by(client: &mut Client) -> ClosedBy {
+    match events_until(client, |body| matches!(body, Body::Closed { .. })).await.pop().unwrap().body {
+        Body::Closed { by } => by,
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test]
+async fn closed_by_a_stop_a_hand_over_a_client_that_left_and_a_shutdown_each_say_so() {
+    let served = serve(LONG_TURN);
+    for (op, by) in [("close", ClosedBy::Stop), ("hand_over", ClosedBy::HandOver)] {
+        let mut client = connect(&served).await;
+        let id = working(&mut client, false).await;
+        let op = if op == "close" { Op::Close { session: id } } else { Op::HandOver { session: id } };
+        client.call(op).await.unwrap();
+        assert_eq!(closed_by(&mut client).await, by);
+    }
+    let mut leaving = connect(&served).await;
+    let id = working(&mut leaving, true).await;
+    let mut watcher = connect(&served).await;
+    watcher.call(Op::Watch { session: id, after: 0 }).await.unwrap();
+    drop(leaving);
+    assert_eq!(closed_by(&mut watcher).await, ClosedBy::ClientLeft);
+    let mut client = connect(&served).await;
+    working(&mut client, false).await;
+    assert!(served.harness.shutdown().await.is_empty());
+    assert_eq!(closed_by(&mut client).await, ClosedBy::Shutdown, "a turn the shutdown cut");
+}
+
+#[tokio::test]
+async fn closed_by_an_agent_that_dies_in_the_middle_of_its_turn_says_agent() {
+    let served = serve("{\"prompt\": null}\n{\"say\": \"working\"}");
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    client.call(Op::Send { session: id, text: "go".into() }).await.unwrap();
+    let seen = events_until(&mut client, |body| matches!(body, Body::Closed { .. })).await;
+    assert!(seen.iter().any(|event| matches!(event.body, Body::Failed { kind: harness::event::FailKind::AgentStopped, .. })));
+    assert_eq!(seen.last().unwrap().body, Body::Closed { by: ClosedBy::Agent });
+}
+
+#[tokio::test]
+async fn closed_by_is_kept_for_a_locked_session() {
+    let served = serve(LONG_TURN);
+    let mut client = connect(&served).await;
+    let id = open_as(&mut client, true, false).await;
+    client.call(Op::Close { session: id.clone() }).await.unwrap();
+    assert_eq!(closed_by(&mut client).await, ClosedBy::Stop, "whole to the client");
+    let stored = served.harness.events(&id, 0).unwrap().pop().unwrap().body;
+    assert!(matches!(&stored, Body::Withheld { of, kept } if of == "closed" && kept["by"] == "stop"), "{stored:?}");
+}
+
+#[test]
+fn closed_by_an_older_reader_reads_it_and_a_newer_one_reads_what_it_does_not_know_as_unknown() {
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum Before {
+        Closed,
+    }
+    let now = serde_json::to_string(&Body::Closed { by: ClosedBy::Shutdown }).unwrap();
+    assert_eq!(now, r#"{"type":"closed","by":"shutdown"}"#);
+    assert_eq!(serde_json::from_str::<Before>(&now).unwrap(), Before::Closed, "a reader from before the field");
+    for (text, by) in [(r#"{"type":"closed"}"#, ClosedBy::Unknown), (r#"{"type":"closed","by":"a later reason"}"#, ClosedBy::Unknown)] {
+        assert_eq!(serde_json::from_str::<Body>(text).unwrap(), Body::Closed { by }, "{text}");
+    }
+}
+
+#[tokio::test]
+async fn closed_by_says_signal_only_for_what_a_logout_sends_and_agent_for_a_crash_a_kill_or_an_exit() {
+    let killed = |signal: i32| format!("{{\"killed\": {signal}}}");
+    let cases = [
+        (killed(libc::SIGTERM), ClosedBy::Signal, "signal 15 (SIGTERM)".to_owned()),
+        (killed(libc::SIGHUP), ClosedBy::Signal, "(SIGHUP)".into()),
+        (killed(libc::SIGINT), ClosedBy::Signal, "(SIGINT)".into()),
+        // A Node out of heap aborts: the agent's own crash, and the turn's `failed` says which signal.
+        (killed(libc::SIGABRT), ClosedBy::Agent, format!("signal {} (SIGABRT)", libc::SIGABRT)),
+        (killed(libc::SIGSEGV), ClosedBy::Agent, "(SIGSEGV)".into()),
+        (killed(libc::SIGKILL), ClosedBy::Agent, "signal 9 (SIGKILL)".into()),
+        (killed(libc::SIGUSR1), ClosedBy::Agent, format!("signal {}", libc::SIGUSR1)),
+        ("{\"exit\": 1}".to_owned(), ClosedBy::Agent, "the agent stopped in the middle of a turn".into()),
+    ];
+    for (end, by, said) in cases {
+        let served = serve(&format!("{{\"prompt\": null}}\n{{\"say\": \"working\"}}\n{end}"));
+        let mut client = connect(&served).await;
+        let id = open(&mut client).await;
+        client.call(Op::Send { session: id, text: "go".into() }).await.unwrap();
+        let seen = events_until(&mut client, |body| matches!(body, Body::Closed { .. })).await;
+        let failed = seen.iter().find_map(|event| match &event.body {
+            Body::Failed { reason, .. } => Some(reason.clone()),
+            _ => None,
+        });
+        assert!(failed.as_deref().is_some_and(|reason| reason.contains(&said)), "{end}: {failed:?}");
+        assert_eq!(seen.last().unwrap().body, Body::Closed { by }, "{end}");
+    }
 }

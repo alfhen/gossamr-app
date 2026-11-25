@@ -172,7 +172,7 @@ async fn close(client: &mut Client, session: &str) {
     client.call(Op::Close { session: session.into() }).await.unwrap();
     loop {
         match tokio::time::timeout(WAIT, client.push()).await.expect("a push within the wait").unwrap() {
-            Some(Push::Event { event, .. }) if event.body == Body::Closed => return,
+            Some(Push::Event { event, .. }) if matches!(event.body, Body::Closed { .. }) => return,
             Some(_) => continue,
             None => panic!("the connection ended"),
         }
@@ -303,7 +303,7 @@ async fn resume_take_back_and_an_answer_that_resumes_wait_for_the_connections_sh
             match op {
                 "take_back" => {
                     client.call(Op::HandOver { session: id.clone() }).await.unwrap();
-                    while !matches!(tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap(), Some(Push::Event { event, .. }) if event.body == Body::Closed) {}
+                    while !matches!(tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap(), Some(Push::Event { event, .. }) if matches!(event.body, Body::Closed { .. })) {}
                 }
                 _ => close(&mut client, &id).await,
             }
