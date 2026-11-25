@@ -486,7 +486,7 @@ async fn redact_a_drivers_error_is_masked_keeps_its_kind_and_frees_the_session()
 
 const HOLD: &str = r#"{"capabilities": {"tool_call_limit_ms": 200}}
 {"prompt": null}
-{"call": {"name": "ask", "input": {"question": "which colour?"}}}
+{"call": {"name": "choose", "input": {"question": "which colour?"}}}
 {"say": "after"}
 {"end": "done"}
 {"prompt": null}"#;
@@ -502,12 +502,13 @@ async fn hold_a_client_tool_call_held_past_the_limit_is_cut_with_a_timeout_resul
     harness.send(&id, "ask me").unwrap();
     let held = until(&mut events, |body| matches!(body, Body::ClientToolCall { .. })).await;
     let Body::ClientToolCall { id: call, name, .. } = &held.last().unwrap().body else { unreachable!() };
-    assert_eq!(name, "ask");
+    assert_eq!(name, "choose");
     let rest = until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
     assert!(sent.elapsed() >= Duration::from_millis(200), "held until the limit");
-    assert_eq!(types(&rest), ["tool_result", "text", "turn_ended"]);
+    assert_eq!(types(&rest), ["tool_result", "tool_result", "text", "turn_ended"]);
     assert_eq!(rest[0].body, Body::ToolResult { id: call.clone(), output: json!("timed out after 200 ms"), error: true });
-    assert_eq!(mock.replies(&ps), [Err("timed out after 200 ms".to_owned())], "the agent's call was cut");
+    assert!(matches!(&rest[1].body, Body::ToolResult { output, error: true, .. } if *output == json!("timed out after 200 ms")), "the agent says what it got");
+    assert_eq!(mock.replies(&ps), [Ok(harness::tools::Reply::failed("timed out after 200 ms"))], "the agent's call was cut");
     harness.tool_result(&id, call, json!("blue"), false).unwrap();
     quiet(&mut events, 100).await;
 }
@@ -669,8 +670,8 @@ async fn mock_a_prompt_that_comes_while_the_mock_waits_is_kept_for_the_next_turn
         {"say": "two"}
         {"end": "done"}"#,
     );
-    let tools = Arc::new(harness::tools::Endpoint::unattached("t"));
-    let launch = Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: harness::driver::Secret::random(), tools, env: vec![] };
+    let tools = harness::tools::ToolsEndpoint::unattached();
+    let launch = Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: harness::driver::Secret::random(), tools, result_schema: None, env: vec![] };
     let mut link = mock.open(launch).unwrap();
     link.commands.send(Command::Prompt("first".into())).unwrap();
     link.commands.send(Command::Prompt("second, early".into())).unwrap();
@@ -1051,9 +1052,10 @@ async fn hold_a_client_tool_call_ended_by_a_close_gets_its_end() {
     let rest = until(&mut events, |body| *body == Body::Closed).await;
     let ended = Body::ToolResult { id: call.clone(), output: json!("the session has ended"), error: true };
     assert_eq!(rest[0].body, ended, "{rest:?}");
-    // The mock takes a reply that is ready before a stop (`biased`), and the session sends the reply before the stop.
-    let replies: Vec<Result<(), String>> = mock.replies(&ps).into_iter().map(|reply| reply.map(|_| ())).collect();
-    assert_eq!(replies, [Err("the session has ended".to_owned())]);
+    // The session answers the call before it stops the agent, but the answer crosses HTTP and the stop does not, so
+    // the agent may be stopped first. Either way it hears nothing else.
+    let replies = mock.replies(&ps);
+    assert!(replies.is_empty() || replies == [Ok(harness::tools::Reply::failed("the session has ended"))], "{replies:?}");
 }
 
 #[tokio::test]
@@ -1074,7 +1076,7 @@ async fn hold_a_tool_result_or_a_cut_that_cannot_be_recorded_does_not_reach_the_
         }
         until(&mut events, |body| *body == Body::Closed).await;
         let replies = mock.replies(&ps);
-        let ended = Err("the session has ended".to_owned());
+        let ended = Ok(harness::tools::Reply::failed("the session has ended"));
         assert!(replies.iter().all(|reply| *reply == ended), "cut {cut}: nothing unrecorded reached the agent: {replies:?}");
     }
 }
@@ -1273,7 +1275,7 @@ async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and
                 let _output = output;
                 while let Some(command) = commands_rx.recv().await {
                     if command == Command::Stop {
-                        let reply = launch.tools.call(launch.tools_token.expose(), "ask", json!({})).await;
+                        let reply = launch.tools.call(launch.tools_token.expose(), "choose", json!({})).await;
                         *heard.lock().unwrap() = Some(reply);
                         return;
                     }
@@ -1290,7 +1292,7 @@ async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and
     let rest = until(&mut events, |body| *body == Body::Closed).await;
     assert!(stopped.elapsed() < Duration::from_secs(5), "the agent was not held until the grace ran out");
     assert_eq!(types(&rest), ["started", "closed"]);
-    assert_eq!(heard.lock().unwrap().clone().map(|reply| reply.map(|_| ())), Some(Err("the session has ended".into())));
+    assert_eq!(heard.lock().unwrap().clone(), Some(Ok(harness::tools::Reply::failed("the session has ended"))));
 }
 
 #[tokio::test]
@@ -1656,7 +1658,7 @@ async fn question_one_whose_id_redaction_changes_is_answered_by_the_id_the_clien
     let (id, mut events) = open_on(&harness, "asker", false).await;
     let asked = until(&mut events, |body| matches!(body, Body::Question { .. })).await;
     let Body::Question { id: seen, .. } = &asked.last().unwrap().body else { unreachable!() };
-    harness.answer_question(&id, seen, "this one".into()).expect("the id the client saw is the open one");
+    harness.answer_question(&id, seen, "this one".into()).await.expect("the id the client saw is the open one");
 }
 
 #[tokio::test]
@@ -1748,7 +1750,7 @@ async fn question_an_answer_reaches_the_agent_before_prompts_sent_while_it_was_o
         _ => None,
     });
     harness.send(&id, "later").unwrap();
-    harness.answer_question(&id, &question.expect("the question came first"), "blue".into()).unwrap();
+    harness.answer_question(&id, &question.expect("the question came first"), "blue".into()).await.unwrap();
     // Requests are taken in order, so once this answer is recorded the two before it are queued.
     harness.answer(&id, &request, Decision::Allow, None).unwrap();
     until(&mut events, |body| matches!(body, Body::Answered { .. })).await;

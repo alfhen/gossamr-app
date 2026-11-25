@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::event::{Body, Event, KEPT_FIELDS};
+use crate::tools::ToolSpec;
 use crate::work::Work;
 
 /// The migration steps, in order. `PRAGMA user_version` counts the steps applied, so a step that has shipped is never
@@ -58,7 +59,22 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     ALTER TABLE sessions ADD COLUMN repo TEXT;
     ALTER TABLE sessions ADD COLUMN base TEXT;
     ALTER TABLE sessions ADD COLUMN branch TEXT;
-    ALTER TABLE sessions ADD COLUMN clone BLOB;"];
+    ALTER TABLE sessions ADD COLUMN clone BLOB;",
+    // The session's tools endpoint name, so a resume serves it under the same name; the tools its client declared, and
+    // the schema its result must fit, both as JSON.
+    "ALTER TABLE sessions ADD COLUMN endpoint TEXT;
+    ALTER TABLE sessions ADD COLUMN tools TEXT;
+    ALTER TABLE sessions ADD COLUMN result_schema TEXT;",
+    // Questions the agent asked through `ask`, so one asked before a restart is still open after it. Its text is in
+    // its `question` event only.
+    "CREATE TABLE questions (
+        session TEXT NOT NULL REFERENCES sessions (id),
+        id TEXT NOT NULL,
+        asked_ms INTEGER NOT NULL,
+        closed_ms INTEGER,
+        closed TEXT,
+        PRIMARY KEY (session, id)
+    );"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -105,6 +121,10 @@ pub struct SessionRow {
     pub login: Option<String>,
     pub effort: Option<String>,
     pub work: Option<Work>,
+    /// None for a session made before the store kept it.
+    pub endpoint: Option<String>,
+    pub tools: Vec<ToolSpec>,
+    pub result_schema: Option<serde_json::Value>,
 }
 
 /// What a new session's row holds besides its id.
@@ -117,6 +137,9 @@ pub struct NewSession<'a> {
     pub login: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub work: Option<&'a Work>,
+    pub endpoint: Option<&'a str>,
+    pub tools: &'a [ToolSpec],
+    pub result_schema: Option<&'a serde_json::Value>,
 }
 
 /// A session as `sessions` lists it.
@@ -176,14 +199,14 @@ impl Store {
     }
 
     pub fn create_session(&self, id: &str, provider: &str, locked: bool, cwd: &Path, model: Option<&str>) -> Result<()> {
-        self.insert_session(id, &NewSession { provider, locked, cwd, model, login: None, effort: None, work: None })
+        self.insert_session(id, &NewSession { provider, locked, cwd, model, login: None, effort: None, work: None, endpoint: None, tools: &[], result_schema: None })
     }
 
     pub fn insert_session(&self, id: &str, new: &NewSession) -> Result<()> {
         let work = new.work;
         self.conn.execute(
-            "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms, login, effort, repo, base, branch, clone)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO sessions (id, provider, locked, cwd, model, created_ms, login, effort, repo, base, branch, clone, endpoint, tools, result_schema)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             // The folders' bytes, as they are: a path need not be UTF-8.
             params![
                 id,
@@ -197,7 +220,10 @@ impl Store {
                 work.map(|w| &w.repo),
                 work.map(|w| &w.base),
                 work.map(|w| &w.branch),
-                work.map(|w| w.clone.as_os_str().as_bytes())
+                work.map(|w| w.clone.as_os_str().as_bytes()),
+                new.endpoint,
+                serde_json::to_string(new.tools)?,
+                new.result_schema.map(serde_json::Value::to_string)
             ],
         )?;
         Ok(())
@@ -207,7 +233,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over,
-                 login, effort, repo, base, branch, clone FROM sessions WHERE id = ?1",
+                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -226,11 +252,21 @@ impl Store {
                             (Some(repo), Some(base), Some(branch), Some(clone)) => Some(Work { repo, base, branch, clone: PathBuf::from(OsString::from_vec(clone)) }),
                             _ => None,
                         },
+                        endpoint: row.get(15)?,
+                        // Written by `insert_session` only, so a value that does not read is a broken file.
+                        tools: json_column(row, 16)?.unwrap_or_default(),
+                        result_schema: json_column(row, 17)?,
                     })
                 },
             )
             .optional()?
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
+    }
+
+    /// Names the tools endpoint of a session made before the store kept the name.
+    pub fn set_endpoint(&self, id: &str, endpoint: &str) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET endpoint = ?2 WHERE id = ?1 AND endpoint IS NULL", params![id, endpoint])?;
+        Ok(())
     }
 
     /// Which session owns the worktree of this clone and branch, among those not cleaned up that name it: one that
@@ -244,6 +280,30 @@ impl Store {
         )?;
         let holders: Vec<String> = stmt.query_map(params![work.clone.as_os_str().as_bytes(), work.branch], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
         Ok(holders.iter().find(|id| is_live(id)).or(holders.first()).cloned())
+    }
+
+    /// Keeps that the agent asked question `id`, open until it is closed.
+    pub fn ask(&self, session: &str, id: &str, ms: i64) -> Result<()> {
+        self.conn.execute("INSERT INTO questions (session, id, asked_ms) VALUES (?1, ?2, ?3)", params![session, id, ms])?;
+        Ok(())
+    }
+
+    /// The session's open question, if it has one: its id.
+    pub fn open_question(&self, session: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM questions WHERE session = ?1 AND closed_ms IS NULL ORDER BY asked_ms DESC LIMIT 1", [session], |row| row.get(0))
+            .optional()?)
+    }
+
+    /// Closes an open question, saying how; one already closed, or never kept, is left as it is.
+    pub fn close_question(&self, session: &str, id: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let how = serde_json::to_value(how)?;
+        self.conn.execute(
+            "UPDATE questions SET closed_ms = ?3, closed = ?4 WHERE session = ?1 AND id = ?2 AND closed_ms IS NULL",
+            params![session, id, ms, how.as_str()],
+        )?;
+        Ok(())
     }
 
     /// The session ends when the client that opened it leaves, and is never resumed.
@@ -426,6 +486,11 @@ static WITHHOLD: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
          FROM json_each(payload) WHERE key IN ({kept})))"
     )
 });
+
+fn json_column<T: serde::de::DeserializeOwned>(row: &rusqlite::Row, at: usize) -> rusqlite::Result<Option<T>> {
+    let Some(text) = row.get::<_, Option<String>>(at)? else { return Ok(None) };
+    serde_json::from_str(&text).map(Some).map_err(|e| rusqlite::Error::FromSqlConversionFailure(at, rusqlite::types::Type::Text, Box::new(e)))
+}
 
 fn migrate(conn: &mut Connection) -> Result<()> {
     let done: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;

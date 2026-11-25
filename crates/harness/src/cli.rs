@@ -80,6 +80,10 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
             Some(Command::Events { session: session.clone(), after, follow: flag("--follow").is_some() })
         }
         ("send", [session, text]) if known(&[]) => call(Op::Send { session: session.clone(), text: text.clone() }),
+        ("answer", [session, question]) if known(&["--text"]) => {
+            let text = flag("--text")??.to_owned();
+            call(Op::AnswerQuestion { session: session.clone(), question: question.clone(), text })
+        }
         ("answer", [session, request, word]) if known(&["--message"]) => {
             let message = flag("--message").flatten().map(str::to_owned);
             call(Op::Answer { session: session.clone(), request: request.clone(), decision: decision(word)?, message })
@@ -153,16 +157,27 @@ async fn next_event(client: &mut Client) -> Result<Option<crate::event::Event>> 
 
 async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prompt: String, ends_with_client: bool) -> Result<bool> {
     let cwd = std::env::current_dir()?;
-    let open = Op::Open { provider, cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client };
+    let open = Op::Open { provider, cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client, tools: vec![], result_schema: None };
     let opened = client.call(open).await?;
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
     client.call(Op::Send { session: session.clone(), text: prompt }).await?;
     // Done only once a turn has ended, and not in a failure: a connection that drops before then is not done.
     let (mut answers, mut ok, mut ended) = (answers.into_iter(), true, false);
+    // A turn that ends while a question is open is not the end: the answer comes as the next prompt.
+    let mut asking = std::collections::HashSet::new();
     while let Some(event) = next_event(client).await? {
         println!("{}", serde_json::to_string(&event)?);
         match event.body {
+            Body::Question { id, .. } => {
+                asking.insert(id);
+            }
+            Body::QuestionClosed { id, .. } => {
+                asking.remove(&id);
+            }
+            Body::TurnEnded { .. } if !asking.is_empty() => {
+                eprintln!("harness: the turn ended with a question open; answer it with `harness answer <session> <question> --text <answer>`");
+            }
             Body::Permission { id, .. } => match answers.next() {
                 // The harness refuses it, and the agent would wait on: the session is closed, and the run fails.
                 Some(Decision::Allow) if event.cut.is_some() => {

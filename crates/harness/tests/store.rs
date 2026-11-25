@@ -99,12 +99,12 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
     store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
-    assert_eq!(user_version(&dir), 4, "user_version counts the steps");
+    assert_eq!(user_version(&dir), 6, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
     let row = store.session("a").unwrap();
     assert_eq!((row.provider.as_str(), row.locked, row.model.as_deref(), row.provider_session.as_deref()), ("mock", true, Some("haiku"), Some("p-1")));
     drop(store);
-    assert_eq!(user_version(&dir), 4);
+    assert_eq!(user_version(&dir), 6);
 
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().pragma_update(None, "user_version", 9).unwrap();
     assert!(matches!(Store::open(&dir), Err(Error::NewerStore(9))), "a store from a newer harness is not opened");
@@ -117,15 +117,38 @@ fn store_a_store_of_three_steps_gets_step_four_and_its_sessions_have_no_login_ef
     store.create_session("old", "mock", false, Path::new("/a"), Some("haiku")).unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
-    for column in ["login", "effort", "repo", "base", "branch", "clone"] {
+    conn.execute_batch("DROP TABLE questions").unwrap();
+    for column in ["login", "effort", "repo", "base", "branch", "clone", "endpoint", "tools", "result_schema"] {
         conn.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column}")).unwrap();
     }
     conn.pragma_update(None, "user_version", 3).unwrap();
     drop(conn);
     let store = Store::open(&dir).unwrap();
-    assert_eq!(user_version(&dir), 4);
+    assert_eq!(user_version(&dir), 6);
     let row = store.session("old").unwrap();
     assert_eq!((row.model.as_deref(), row.login, row.effort, row.work), (Some("haiku"), None, None, None));
+}
+
+#[test]
+fn tools_endpoint_a_store_of_four_steps_gets_step_five_and_its_sessions_have_no_endpoint_tools_or_schema_yet() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("old", "mock", false, Path::new("/a"), Some("haiku")).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    conn.execute_batch("DROP TABLE questions").unwrap();
+    for column in ["endpoint", "tools", "result_schema"] {
+        conn.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column}")).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 4).unwrap();
+    drop(conn);
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(user_version(&dir), 6);
+    let row = store.session("old").unwrap();
+    assert_eq!((row.model.as_deref(), row.endpoint, row.tools, row.result_schema), (Some("haiku"), None, vec![], None));
+    store.set_endpoint("old", "k3x9").unwrap();
+    store.set_endpoint("old", "other").unwrap();
+    assert_eq!(store.session("old").unwrap().endpoint.as_deref(), Some("k3x9"), "a name once given is kept");
 }
 
 #[test]
@@ -367,4 +390,28 @@ fn store_a_body_already_withheld_keeps_its_type_through_clean_up() {
     store.append("a", &dropped, now_ms()).unwrap();
     store.clean_up("a").unwrap();
     assert_eq!(store.events("a", 0).unwrap()[0].body, dropped, "still a withheld permission, not a withheld withheld");
+}
+
+#[test]
+fn ask_a_store_of_five_steps_gets_step_six_and_a_question_stays_open_until_it_is_closed() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    conn.execute_batch("DROP TABLE questions").unwrap();
+    conn.pragma_update(None, "user_version", 5).unwrap();
+    drop(conn);
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(user_version(&dir), 6);
+    assert_eq!(store.open_question("s").unwrap(), None);
+    store.ask("s", "q1", now_ms()).unwrap();
+    drop(store);
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(store.open_question("s").unwrap().as_deref(), Some("q1"), "open after a reopen");
+    store.close_question("s", "q1", harness::event::QuestionEnd::Answered, now_ms()).unwrap();
+    assert_eq!(store.open_question("s").unwrap(), None);
+    store.close_question("s", "q1", harness::event::QuestionEnd::Stopped, now_ms()).unwrap();
+    let how: String = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().query_row("SELECT closed FROM questions", [], |row| row.get(0)).unwrap();
+    assert_eq!(how, "answered", "a closed question is not closed again");
 }

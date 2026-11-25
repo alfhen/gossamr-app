@@ -50,6 +50,12 @@ pub enum Body {
         message: Option<String>,
     },
     Question { id: String, text: String },
+    /// An open question was closed: answered, or ended with the session, a hand-over or a turn a deny ended. After
+    /// anything but an answer, its answer is refused.
+    QuestionClosed { id: String, how: QuestionEnd },
+    /// What the agent gave as its work's result, through the endpoint's `result` tool, after it fit the session's
+    /// result schema.
+    Result { data: Value },
     TurnEnded { how: TurnEnd },
     /// The turn failed, or the session could not start or go on. Either way no turn is running after it.
     Failed { kind: FailKind, reason: String },
@@ -76,7 +82,7 @@ pub enum Body {
 pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
-pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message"];
+pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message", "data"];
 
 /// The body within `max` bytes of JSON, and how many bytes were cut to get there, if any. Only private fields are cut,
 /// the largest first, from their end; a field that held JSON then holds the start of its text. A body that is still
@@ -173,6 +179,18 @@ pub enum TurnEnd {
     Denied,
 }
 
+/// What closed a question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionEnd {
+    Answered,
+    /// The session was stopped. A harness that shuts down closes none: they are answered after it starts again.
+    Stopped,
+    HandedOver,
+    /// A deny ended the turn that asked it.
+    Denied,
+}
+
 /// Why a turn or a session failed, so a client can say what to do about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -212,12 +230,14 @@ mod tests {
             Body::Permission { .. } => 9,
             Body::Answered { .. } => 10,
             Body::Question { .. } => 11,
-            Body::TurnEnded { .. } => 12,
-            Body::Failed { .. } => 13,
-            Body::Notice { .. } => 14,
-            Body::HandedOver => 15,
-            Body::Closed => 16,
-            Body::Withheld { .. } => 17,
+            Body::QuestionClosed { .. } => 12,
+            Body::Result { .. } => 13,
+            Body::TurnEnded { .. } => 14,
+            Body::Failed { .. } => 15,
+            Body::Notice { .. } => 16,
+            Body::HandedOver => 17,
+            Body::Closed => 18,
+            Body::Withheld { .. } => 19,
         }
     }
 
@@ -237,6 +257,8 @@ mod tests {
             Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
             Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
+            Body::QuestionClosed { id: "i".into(), how: QuestionEnd::Stopped },
+            Body::Result { data: json!({}) },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
             Body::Notice { text: "t".into() },
