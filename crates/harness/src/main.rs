@@ -45,14 +45,40 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     let script = mock_script.map(|path| harness::mock::Script::load(&path)).transpose().map_err(Error::Driver)?;
     // The mock provider is there only when a script is given, and Claude when its CLI is installed.
     let drivers = harness::serve_drivers(script, harness::binary::find_claude());
-    let first_token = || {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).ok()?;
-        harness::auth::Token::parse(&line)
-    };
+    // A token on a pipe is read on every start, the pipe swapped for /dev/null, so none waits behind fd 0 while the
+    // harness runs. A terminal is never read: a token typed there stays on the screen, and no prompt holds up a start.
+    // SAFETY: isatty has no preconditions.
+    let handed = if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 { None } else { drain_stdin()? };
+    let first_token = move || handed;
     let setup = harness::work::Setup::of_this_machine(dir.clone());
     let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings::default(), setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
     Ok(true)
+}
+
+/// The token on stdin, read to its first newline or the end, with `/dev/null` put in its place. An empty stdin gives
+/// no token; a line that is not one stops the start, as one the store does not know does.
+fn drain_stdin() -> harness::error::Result<Option<harness::auth::Token>> {
+    use harness::error::Error;
+    let mut line = Vec::new();
+    let read = std::io::BufRead::read_until(&mut std::io::stdin().lock(), b'\n', &mut line);
+    // SAFETY: open, dup2 and close have no preconditions.
+    let swapped = unsafe {
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY);
+        let swapped = null == libc::STDIN_FILENO || (null > libc::STDIN_FILENO && libc::dup2(null, libc::STDIN_FILENO) != -1);
+        if null > libc::STDIN_FILENO {
+            libc::close(null);
+        }
+        swapped
+    };
+    if !swapped {
+        return Err(Error::Refused("couldn't put /dev/null in place of stdin, so the harness does not start".into()));
+    }
+    read.map_err(|e| Error::Refused(format!("couldn't read stdin: {e}")))?;
+    let line = String::from_utf8_lossy(&line);
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    harness::auth::Token::parse(&line).map(Some).ok_or_else(|| Error::Refused("the line on stdin is not a client token".into()))
 }

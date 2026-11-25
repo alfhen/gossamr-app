@@ -7,6 +7,7 @@ import { useWorkspace } from "../workspaceStore";
 import { syncLine } from "./connectionsLogic";
 import { ConnectionsSection } from "./Connections";
 import { WatchingSection } from "./WatchSettings";
+import { HarnessSection } from "./HarnessSettings";
 import { useEscBack } from "./escBack";
 import { Segmented } from "../components/Segmented";
 
@@ -75,6 +76,10 @@ export function Settings() {
 
         <Section title="Watching" id="settings-watching">
           <WatchingSection syncLine={syncLine} />
+        </Section>
+
+        <Section title="Harness" id="settings-harness">
+          <HarnessSection />
         </Section>
       </div>
     </div>

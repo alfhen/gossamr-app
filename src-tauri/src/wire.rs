@@ -51,6 +51,8 @@ pub enum Topic {
     Display,
     /// A connection's probe found something new about how it stands; the page re-reads `connections_list`.
     Connections,
+    /// Whether the harness runs changed; the page re-reads `harness_status`. Its connection id is empty.
+    Harness,
 }
 
 #[derive(Clone, Serialize)]
@@ -122,6 +124,12 @@ mod tests {
     fn a_changed_event_names_its_topic_and_connection() {
         let json = serde_json::to_value(Changed { topic: Topic::DevLinks, connection_id: "jira:1", strays: None }).unwrap();
         assert_eq!(json, serde_json::json!({ "topic": "devLinks", "connectionId": "jira:1" }));
+    }
+
+    #[test]
+    fn the_harness_is_a_topic_of_the_changed_event() {
+        let json = serde_json::to_value(Changed { topic: Topic::Harness, connection_id: "", strays: None }).unwrap();
+        assert_eq!(json, serde_json::json!({ "topic": "harness", "connectionId": "" }));
     }
 
     #[test]

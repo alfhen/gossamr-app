@@ -131,6 +131,19 @@ pub async fn reopen(dir: &Path) -> Store {
     panic!("the store stayed locked");
 }
 
+/// Binds a data folder that was served before, once its lock is free. The test has let go of the lock by then, but on
+/// Linux a child that another test's thread was starting at that moment holds a copy of the lock's descriptor until it
+/// execs, so the first try can still find the folder in use.
+pub async fn bind_again(mut bind: impl FnMut() -> harness::error::Result<harness::server::Server>) -> harness::server::Server {
+    let given = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match bind() {
+            Err(harness::error::Error::InUse(_)) if std::time::Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+            bound => return bound.unwrap(),
+        }
+    }
+}
+
 /// How a test agent goes after a stop.
 #[derive(Clone)]
 pub enum Going {

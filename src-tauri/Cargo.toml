@@ -37,11 +37,15 @@ harness = { path = "../crates/harness" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSNotification", "NSOperation", "NSString"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSError", "NSNotification", "NSOperation", "NSString", "NSURL", "NSValue"] }
 block2 = "0.6.2"
 
 [dev-dependencies]
 harness = { path = "../crates/harness", features = ["testing"] }
+# The fake harness of the sidecar's tests speaks the client API.
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+tempfile = "3.27.0"
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 # A paused clock, for tests of waits measured in minutes.
 tokio = { version = "1.53.1", features = ["test-util"] }
 

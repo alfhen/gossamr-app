@@ -19,6 +19,7 @@ mod probe;
 mod proposals;
 mod runs;
 mod secrets;
+mod sidecar;
 mod sync;
 mod tracker;
 mod wire;
@@ -49,6 +50,8 @@ type CoreState = Arc<Core>;
 type AgentState = Arc<AgentService>;
 type LauncherState = Arc<dyn runs::launcher::RunLauncher>;
 type RunsState = Arc<runs::service::RunService>;
+/// None when there is no folder for the harness's data.
+type SidecarState = Arc<Option<sidecar::Sidecar>>;
 
 /// Tells the window something changed. It carries nothing: the window reads what it shows through the cache commands.
 fn publish(app: &AppHandle) {
@@ -172,6 +175,16 @@ fn use_freed_slot(service: &RunsState) {
             eprintln!("couldn't start the runs waiting for a slot: {e}");
         }
     });
+}
+
+/// Starts or adopts the harness, unless you stopped it, and says how it stands; or does `action`.
+#[tauri::command]
+async fn harness_status(sidecar: State<'_, SidecarState>, action: Option<sidecar::Action>) -> Result<sidecar::Status> {
+    Ok(match (sidecar.as_ref().as_ref(), action) {
+        (None, _) => sidecar::Status::no_folder(),
+        (Some(sidecar), None) => sidecar.ensure().await,
+        (Some(sidecar), Some(action)) => sidecar.act(action).await,
+    })
 }
 
 #[tauri::command]
@@ -1078,6 +1091,16 @@ pub fn run() {
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
 
+            let sidecar: SidecarState = Arc::new(sidecar::Sidecar::bundled(sidecar::Limits::default()));
+            app.manage(sidecar.clone());
+            let harness_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(sidecar) = sidecar.as_ref() {
+                    sidecar.ensure().await;
+                    wire::changed(&harness_handle, wire::Topic::Harness, "");
+                }
+            });
+
             let checked = core.clone();
             tauri::async_runtime::spawn(async move { checked.check_providers().await });
             spawn_sync_loop(app.handle().clone(), core);
@@ -1165,7 +1188,8 @@ pub fn run() {
             mentionable,
             ask_claude,
             cancel_claude,
-            pip_turns
+            pip_turns,
+            harness_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
