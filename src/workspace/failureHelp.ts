@@ -97,8 +97,8 @@ function endedHelp(run: Run): FailureHelp | null {
       return {
         ...ended,
         kind: "signingNeedsYou",
-        summary: "Your signing agent refused a commit, so the agent stopped.",
-        detail: "Git signs each commit with your key, and your signing agent said no or didn't answer. Unlock it or check its settings, then ask Pip to start the agent again. The worktree keeps what it did so far.",
+        summary: "Git couldn't sign a commit, so the agent stopped.",
+        detail: "Git signs each commit with your key, and your signing app said no or didn't answer. Unlock it or check its settings, then ask Pip to start the agent again. The worktree keeps what it did so far.",
         primary: START_AGAIN,
       };
     case "interrupted":
@@ -117,11 +117,23 @@ function endedHelp(run: Run): FailureHelp | null {
   }
 }
 
-/** What to offer for a failed run that never got a session, or one that ended in a failure you can act on. Null for anything else. */
+/**
+ * What to offer for a failed run that never got a session, or one that ended in a failure you can act on. Null for anything
+ * else. A run on the harness is never retried, since Retry would open a second session for it: Pip starts it again.
+ */
 export function failureHelp(run: Run, refusal: string | null = null, instance: RunInstance | null = null): FailureHelp | null {
   if (run.state !== "failed") return null;
   const ended = endedHelp(run);
-  if (ended || run.shortId || run.harnessSession) return ended;
+  if (ended || run.shortId) return ended;
+  if (run.harnessSession) {
+    const help = run.failure?.type === "notSignedIn" ? launchHelp(run, refusal, instance) : null;
+    const name = instance?.name ?? "Claude";
+    return help && { ...help, detail: `${name} was signed out while the agent worked. Sign in again in Terminal, then ask Pip to start it again.`, secondary: START_AGAIN, retry: false, retryNeedsTerminal: false };
+  }
+  return launchHelp(run, refusal, instance);
+}
+
+function launchHelp(run: Run, refusal: string | null, instance: RunInstance | null): FailureHelp | null {
   const failure = run.failure;
   // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
   if (run.inWorkFolder === false) return { ...OUTSIDE_WORK_FOLDER };

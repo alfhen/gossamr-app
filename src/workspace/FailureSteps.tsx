@@ -6,6 +6,7 @@ import { Icon } from "./AgentIcons";
 import type { FailureAct } from "./failureHelp";
 import { refuserOf } from "./cleanupLogic";
 import { useRuns } from "./runsStore";
+import { ownKey } from "./agentKeys";
 
 const ACT_ICONS = { terminal: "term", install: "ext", trust: "shield", cleanup: "folder" } as const;
 
@@ -55,6 +56,7 @@ function CleanupStep({ run, label, primary, size }: { run: Run; label: string; p
         onClick={(ev) => ev.stopPropagation()}
         onKeyDown={(ev) => {
           if (ev.key === "Escape") (ev.stopPropagation(), setAsking(false));
+          else ownKey(ev);
         }}
       >
         <span className="text-ws-ink2">Remove the worktree?</span>

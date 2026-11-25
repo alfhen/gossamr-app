@@ -96,10 +96,10 @@ export function RunAnswer({ run, answering, on }: { run: Run; answering: boolean
       <p className="m-0 text-xs text-ws-ink3">
         {handedOver
           ? "If the session is still open in Terminal, answer it there instead. Only the agent sees your answer; nothing goes to Jira."
-          : run.asking
-            ? "Your answer goes straight to the agent, which is waiting for it. Only the agent sees it; nothing goes to Jira."
-            : run.harnessSession
-              ? "Your answer reaches the agent when its current turn ends. Its conversation is kept. Only the agent sees your answer; nothing goes to Jira."
+          : run.harnessSession
+            ? "Your answer reaches the agent when its current turn ends. Its conversation is kept. Only the agent sees your answer; nothing goes to Jira."
+            : run.asking
+              ? "Your answer goes straight to the agent, which is waiting for it. Only the agent sees it; nothing goes to Jira."
               : "Gossamr stops the agent and wakes it with your answer, which takes a few seconds. Its conversation is kept. Only the agent sees your answer; nothing goes to Jira."}
       </p>
     </Box>

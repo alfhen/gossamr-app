@@ -1,4 +1,4 @@
-import { ANSWER_WAITS, HANDED_OVER_ASK, answerWaits, type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { HANDED_OVER_ASK, type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -421,15 +421,24 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
   return { ...run, inWorkFolder: inWork(run.spec.clonePath), ...(inWork(run.spec.clonePath) && run.state !== "queued" && { commitEmail: COMMIT_EMAIL }) };
 }
 
-const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: `4a7e000${i}`, sessionId: null });
+/** What a run on the harness says while it holds your answer, as `ANSWER_WAITS` in `runs/consumer.rs`. */
+const ANSWER_WAITS = "Your answer waits for the turn to end";
 
-/** Runs on the harness in each state the page shows for them: signing needs you, interrupted, handed over, an answer it holds, and a clean-up it refuses. */
+/** A run on the harness has its harness session and no Claude session id, as H10b writes it. */
+const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null });
+
+/**
+ * Runs in each state the page shows for runs on the harness: signing needs you, interrupted, handed over (asking, and
+ * stopped as H10b ends it), an answer it holds, and a clean-up refused. Each is on a ticket the sample cache has, so Ask
+ * Pip opens its workstream.
+ */
 const HARNESS_SEEDS: Seed[] = [
-  { key: "CA-430", name: "ca-430-invoice-pdf-1a2c", state: "failed", minutesAgo: 18, over: { ...harnessOf(1), error: "git commit failed: error: 1Password: agent returned an error. fatal: failed to write commit object", failure: { type: "signingNeedsYou" }, branch: "worktree-ca-430-invoice-pdf-1a2c" } },
-  { key: "WEB-131", name: "web-131-menu-focus-3b4d", state: "failed", minutesAgo: 120, over: { shortId: "01d0b9a1", sessionId: "01d0b9a1-0000-4000-8000-000000000000", error: "Stopped when Gossamr updated how agents run. The worktree is kept.", failure: { type: "interrupted" } } },
-  { key: "SUP-21", name: "sup-21-payout-retry-5c6e", state: "needsAnswer", minutesAgo: 26, over: { ...harnessOf(2), handedOver: true, asking: true, needs: "Should payouts retry on weekends too?", lastDetail: "Waiting for an answer" } },
-  { key: "CA-432", name: "ca-432-promo-codes-7d8f", state: "needsAnswer", minutesAgo: 9, over: { ...harnessOf(3), needs: "Do expired codes show an error or vanish?", lastDetail: "Waiting for an answer" } },
-  { key: "DEVOPS-490", name: "devops-490-log-rotate-9e0a", state: "done", minutesAgo: 21 * 24 * 60, quietMinutes: 20 * 24 * 60, unpushed: true, over: { ...harnessOf(4), result: "Rotation runs nightly now, and old logs are compressed.", branch: "worktree-devops-490-log-rotate-9e0a" } },
+  { key: "CA-405", name: "ca-405-back-in-stock-1a2c", state: "failed", minutesAgo: 18, over: { ...harnessOf(1), error: "git commit failed: error: 1Password: agent returned an error. fatal: failed to write commit object", failure: { type: "signingNeedsYou" }, branch: "worktree-ca-405-back-in-stock-1a2c" } },
+  { key: "WEB-106", name: "web-106-cart-badge-3b4d", state: "failed", minutesAgo: 120, over: { shortId: "01d0b9a1", sessionId: "01d0b9a1-0000-4000-8000-000000000000", error: "Stopped when Gossamr updated how agents run. The worktree is kept.", failure: { type: "interrupted" } } },
+  { key: "SUP-13", name: "sup-13-delivery-address-5c6e", state: "needsAnswer", minutesAgo: 26, over: { ...harnessOf(2), handedOver: true, asking: true, needs: "Should the new address apply to orders already packed?", lastDetail: "Waiting for an answer" } },
+  { key: "CA-407", name: "ca-407-send-time-7d8f", state: "needsAnswer", minutesAgo: 9, over: { ...harnessOf(3), asking: true, needs: "Should the test keep 10% back as a control?", lastDetail: "Waiting for an answer" } },
+  { key: "DEVOPS-490", name: "devops-490-backfill-9e0a", state: "done", minutesAgo: 21 * 24 * 60, quietMinutes: 20 * 24 * 60, unpushed: true, over: { result: "The backfill replayed the last 30 days of events.", branch: "worktree-devops-490-backfill-9e0a" } },
+  { key: "SUP-15", name: "sup-15-wholesale-1b2d", state: "stopped", minutesAgo: 40, over: { ...harnessOf(5), handedOver: true, lastDetail: "Handed over to Terminal" } },
 ];
 
 /** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
@@ -874,7 +883,7 @@ export class MockRuns {
       patch.lastDetail = "Reading the code";
       patch.tokens = (run.tokens ?? 0) + 12_000;
     }
-    if (answerWaits(run)) patch.lastDetail = to === "working" ? "Reading your answer" : null;
+    if (run.answerWaits) Object.assign(patch, { answerWaits: undefined, lastDetail: to === "working" ? "Reading your answer" : null });
     const opened = to === "done" && stepIs(run.spec, "build") && run.spec.workstream ? (this.newCommit(run) ?? this.draftPullRequest(run)) : null;
     if (to === "done") {
       const answered = (run.passes ?? 1) > 1 && stepIs(run.spec, "plan");
@@ -1032,6 +1041,7 @@ export class MockRuns {
   /** Answers a run that is asking, or sends again an answer that was stopped on its way, as `answer_as`. */
   /** `tookBack`: the person says they took a run handed over to Terminal back; without it such a run is refused. */
   answer(id: string, text: string, actor: "person" | "pip" = "person", tookBack = false): Run {
+    this.answerTries.push(id);
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     if (run.handedOver && !tookBack) throw new Error(HANDED_OVER_ASK);
@@ -1040,7 +1050,7 @@ export class MockRuns {
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
     // The harness holds every answer until the agent's turn ends.
-    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? `${ANSWER_WAITS}.` : null, handedOver: false });
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? ANSWER_WAITS : null, answerWaits: run.harnessSession ? true : undefined, handedOver: false });
     this.markStale(id);
     this.answeredAt.set(id, [...(this.answeredAt.get(id) ?? []), next.lastProgressAt]);
     this.changed();
@@ -1358,6 +1368,8 @@ export class MockRuns {
   private limits: AgentSettings = { maxRuns: 3, terminal: "terminal", notifications: "workstream" };
   /** Run ids whose worktree holds work that was never pushed; `claude rm` refuses these. */
   readonly unpushed = new Set<string>();
+  /** The run of every answer tried, refused or not, oldest first. */
+  readonly answerTries: string[] = [];
 
   settings(): AgentSettings {
     return this.limits;

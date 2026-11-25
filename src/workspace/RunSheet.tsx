@@ -234,7 +234,7 @@ function FailureBox({ run, opened, trust, on }: { run: Run; opened: boolean; tru
       ) : (
         <>
           <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{message}</pre>
-          {!run.shortId && (
+          {!run.shortId && !run.harnessSession && (
             <div className="grid gap-1.5">
               <div>
                 <Btn tone="primary" icon="retry" onClick={on.retry}>

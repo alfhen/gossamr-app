@@ -289,7 +289,7 @@ function FailureBody({ run }: { run: Run }) {
         <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{run.error?.trim() || "No reason was recorded."}</pre>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        {!help && !run.shortId && (
+        {!help && !run.shortId && !run.harnessSession && (
           <Btn tone="primary" icon="retry" onClick={() => void store.retryLaunch(run.id)}>
             Retry launch
           </Btn>

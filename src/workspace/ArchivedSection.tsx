@@ -56,9 +56,7 @@ function DeletePanel({ ask, onRemoveWorktree, onCancel, onConfirm }: { ask: Dele
                 ? "Removed with claude rm, which refuses work that was never pushed."
                 : ask.remover === "git"
                   ? "Removed with git, which refuses changes and branches that aren't merged."
-                  : ask.remover === "gossamr"
-                    ? "Removed only once the work in it is pushed."
-                    : "Removes the folder only if the work in it is pushed or merged."}{" "}
+                  : "Removes the folder only if the work in it is pushed or merged."}{" "}
               Only folders in ~/Gossamr/agents are ever removed.
             </span>
           </span>

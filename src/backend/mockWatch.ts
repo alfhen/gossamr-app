@@ -125,6 +125,8 @@ export interface MockHandle {
   loseRun(id: string): void;
   /** The run ids Terminal was opened on (`runsAttach`), oldest first. */
   attached(): string[];
+  /** The run of every answer tried, refused or not. */
+  answerTries(): string[];
   /** The command Terminal was opened on for each run in `attached`. */
   attachCommands(): string[];
   /** How many times Reveal in Finder was pressed for the work folder. */
@@ -191,7 +193,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
@@ -237,6 +239,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     blockRun: (id) => void runs.block(id),
     loseRun: (id) => void runs.lose(id),
     attached: () => [...runs.attached],
+    answerTries: () => [...runs.answerTries],
     attachCommands: () => [...runs.attachCommands],
     workFolderReveals: () => runs.workFolderReveals,
     connectionTerminals: () => [...(terminals ?? [])],

@@ -557,6 +557,8 @@ export interface Run {
   harnessSession?: string;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
+  /** You answered its question and the harness holds the answer until the agent's turn ends; left out when false. */
+  answerWaits?: boolean;
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
   commitEmail?: string | null;
   signingKey?: string | null;
@@ -617,10 +619,6 @@ export interface Run {
 /** Why a message to a run handed over to Terminal waits on you, as `HANDED_OVER_ASK` in `runs/message.rs`. */
 export const HANDED_OVER_ASK = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
 
-/** How `lastDetail` begins while a run on the harness holds your answer until the agent's turn ends. */
-export const ANSWER_WAITS = "Your answer waits for the turn to end";
-
-export const answerWaits = (run: Pick<Run, "lastDetail">) => !!run.lastDetail?.startsWith(ANSWER_WAITS);
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
 export const SUMMARY_ONLY = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";

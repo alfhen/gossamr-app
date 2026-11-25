@@ -10,13 +10,12 @@ const DAY = 86_400_000;
 export const leftoverSessions = (run: Pick<Run, "earlierSessions">) => (run.earlierSessions ?? []).filter((s) => !s.removed).length;
 
 /** A run that is over, has a session to remove, and still has its worktree or an earlier session that was kept. */
-export const cleanable = (run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions"> & Partial<Pick<Run, "harnessSession">>) =>
-  ["done", "failed", "stopped"].includes(run.state) && (!!run.shortId || !!run.harnessSession) && (!run.worktreeRemovedAt || leftoverSessions(run) > 0);
+export const cleanable = (run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions">) => ["done", "failed", "stopped"].includes(run.state) && !!run.shortId && (!run.worktreeRemovedAt || leftoverSessions(run) > 0);
 
 const endedAt = (run: Pick<Run, "endedAt" | "lastProgressAt">) => Date.parse(run.endedAt ?? run.lastProgressAt);
 
 /** Why cleaning this run up is worth offering, or null when it is not: its pull request is settled, it is old, or it takes a lot of disk. */
-export function cleanupReason(run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions" | "endedAt" | "lastProgressAt"> & Partial<Pick<Run, "harnessSession" | "failure">>, now: number, known: { disk: number | null; change: Pick<CodeChange, "state"> | null }): string | null {
+export function cleanupReason(run: Pick<Run, "state" | "shortId" | "worktreeRemovedAt" | "earlierSessions" | "endedAt" | "lastProgressAt"> & Partial<Pick<Run, "failure">>, now: number, known: { disk: number | null; change: Pick<CodeChange, "state"> | null }): string | null {
   // Its failure already offers Clean up, so the sheet doesn't offer it twice.
   if (!cleanable(run) || run.failure?.type === "interrupted") return null;
   if (known.change?.state === "merged" || known.change?.state === "closed") return `Its pull request is ${known.change.state}.`;
@@ -48,15 +47,14 @@ export function cleanupReport(removed: number, refused: readonly string[]): stri
 
 /**
  * What removes a run's worktree: `claude rm`, git (Codex, a login that was removed, or an agent the move to the harness
- * interrupted), Gossamr for a run on the harness, or unknown while the logins haven't loaded or can't be read.
+ * interrupted), or unknown while the logins haven't loaded or can't be read.
  */
-export type Remover = "claude" | "git" | "gossamr" | "unknown";
+export type Remover = "claude" | "git" | "unknown";
 
 /** Follows `RunService::instance_removed`: git only for a run that records its login, once the logins have loaded and none has that id. An unreadable list, shown as one provider row without a driver or as no provider row, is not a removed login. */
-export function removerOf(run: Pick<Run, "runsOn"> & Partial<Pick<Run, "harnessSession" | "failure">>, connections: readonly ConnectionInfo[], loaded: boolean): { remover: Remover; login: string | null } {
+export function removerOf(run: Pick<Run, "runsOn"> & Partial<Pick<Run, "failure">>, connections: readonly ConnectionInfo[], loaded: boolean): { remover: Remover; login: string | null } {
   const instanceId = run.runsOn?.instanceId ?? DEFAULT_INSTANCE;
   if (run.failure?.type === "interrupted") return { remover: "git", login: null };
-  if (run.harnessSession) return { remover: "gossamr", login: instanceOf(connections, instanceId).name };
   const known = connections.some((c) => c.kind === "provider" && c.instanceId === instanceId);
   if (!known && run.runsOn) {
     const rows = connections.filter((c) => c.kind === "provider");
@@ -68,4 +66,4 @@ export function removerOf(run: Pick<Run, "runsOn"> & Partial<Pick<Run, "harnessS
 }
 
 /** Who is named when the worktree could not be removed. */
-export const refuserOf = (remover: Remover, login: string | null) => (remover === "git" ? "Git" : remover === "gossamr" ? "Gossamr" : (login ?? "The login"));
+export const refuserOf = (remover: Remover, login: string | null) => (remover === "git" ? "Git" : (login ?? "The login"));

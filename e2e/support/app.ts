@@ -125,6 +125,7 @@ interface Handle {
   blockRun(id: string): void;
   loseRun(id: string): void;
   attached(): string[];
+  answerTries(): string[];
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
@@ -250,6 +251,14 @@ export const loseRun = (page: Page, id: string) =>
     },
     { id, missing: NO_MOCK },
   );
+
+/** The run of every answer the sample backend was given, refused or not, oldest first. */
+export const mockAnswerTries = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.answerTries();
+  }, NO_MOCK);
 
 /** The run ids Terminal was opened on, oldest first. */
 export const mockAttached = (page: Page) =>
