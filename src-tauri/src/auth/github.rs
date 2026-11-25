@@ -110,12 +110,7 @@ impl GithubAuth {
 
     /// Adds `login` to the index. It holds no token.
     pub fn record_login(&self, login: &str) -> Result<()> {
-        let mut logins = self.try_logins()?;
-        if logins.iter().any(|l| l.eq_ignore_ascii_case(login)) {
-            return Ok(());
-        }
-        logins.push(login.into());
-        secrets::save(INDEX_KEY, &logins)
+        secrets::update(INDEX_KEY, |logins| with_login(logins, login))
     }
 
     /// Deletes the token an earlier build saved for `login` and leaves the login in the index.
@@ -131,15 +126,30 @@ impl GithubAuth {
 
     /// Forgets `login`: its saved token, if any, and its place in the index.
     pub fn forget_login(&self, login: &str) -> Result<()> {
-        let mut logins = self.try_logins()?;
+        self.try_logins()?;
         secrets::delete(&entry(login))?;
-        if logins.iter().any(|l| l.eq_ignore_ascii_case(login)) {
-            logins.retain(|l| !l.eq_ignore_ascii_case(login));
-            secrets::save(INDEX_KEY, &logins)?;
-        }
+        secrets::update(INDEX_KEY, |logins| without_login(logins, login))?;
         self.token_dropped.lock().expect("token lock poisoned").remove(&entry(login));
         Ok(())
     }
+}
+
+/// The index with `login` added, judged on the index as the vault holds it now; `None` when it is there already.
+fn with_login(logins: Option<Vec<String>>, login: &str) -> Option<Vec<String>> {
+    let mut logins = logins.unwrap_or_default();
+    if logins.iter().any(|l| l.eq_ignore_ascii_case(login)) {
+        return None;
+    }
+    logins.push(login.into());
+    Some(logins)
+}
+
+/// The index without `login`; `None` when it isn't there.
+fn without_login(logins: Option<Vec<String>>, login: &str) -> Option<Vec<String>> {
+    let mut logins = logins?;
+    let before = logins.len();
+    logins.retain(|l| !l.eq_ignore_ascii_case(login));
+    (logins.len() != before).then_some(logins)
 }
 
 #[cfg(test)]
@@ -227,5 +237,25 @@ mod tests {
         auth.forget_login("ANN").unwrap();
         assert_eq!(auth.logins(), ["bob"]);
         assert_eq!((fake.get("github:ann"), fake.get("github:bob").is_some()), (None, true));
+    }
+
+    #[test]
+    fn two_apps_that_change_the_sign_ins_each_keep_the_others_change() {
+        use crate::secrets::{FileVault, Vault};
+        let tmp = tempfile::tempdir().unwrap();
+        let app = || Vault::new(Box::new(FileVault::new(tmp.path().join("vault.json"))));
+        let (one, two) = (app(), app());
+        let logins = |vault: &Vault| vault.load::<Vec<String>>(INDEX_KEY).unwrap().unwrap_or_default();
+        assert!(logins(&two).is_empty(), "the second app has read the vault: no sign-ins");
+        one.update(INDEX_KEY, |l| with_login(l, "ann")).unwrap();
+        two.update(INDEX_KEY, |l| with_login(l, "bob")).unwrap();
+        assert_eq!(logins(&app()), ["ann", "bob"], "the first app's sign-in is kept");
+
+        one.update(INDEX_KEY, |l| with_login(l, "cat")).unwrap();
+        assert_eq!(logins(&two), ["ann", "bob"], "the second app's copy does not know cat");
+        two.update(INDEX_KEY, |l| without_login(l, "cat")).unwrap();
+        one.update(INDEX_KEY, |l| without_login(l, "bob")).unwrap();
+        two.update(INDEX_KEY, |l| with_login(l, "bob")).unwrap();
+        assert_eq!(logins(&app()), ["ann", "bob"], "neither a stale copy's remove nor its add was skipped");
     }
 }

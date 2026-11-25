@@ -8,7 +8,7 @@
 //! never killed: the app cannot prove it is its own. Only a child the app started itself, still unreaped, is signalled.
 
 use std::fs::{DirBuilder, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -31,8 +31,6 @@ pub const TOKEN_ACCOUNT: &str = "harness";
 /// harness's stderr from its last start by the app.
 const APP_LOCK: &str = "app.lock";
 const LOG: &str = "harness.log";
-/// The harness's store, there once a harness has served the folder.
-const STORE: &str = "harness.sqlite";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -42,11 +40,13 @@ pub struct Limits {
     pub start_within: Duration,
     /// For a harness that holds the data folder with no socket, as one does while it shuts down.
     pub stopping_within: Duration,
+    /// For the bundled harness to say its build.
+    pub probe_within: Duration,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { prove_within: Duration::from_secs(10), start_within: Duration::from_secs(10), stopping_within: Duration::from_secs(60) }
+        Limits { prove_within: Duration::from_secs(10), start_within: Duration::from_secs(10), stopping_within: Duration::from_secs(60), probe_within: Duration::from_secs(5) }
     }
 }
 
@@ -130,7 +130,8 @@ pub enum Action {
 
 struct Inner {
     token: Option<Token>,
-    bundled_build: Option<String>,
+    /// Once asked: the bundled harness's build, if it said one.
+    bundled_build: Option<Option<String>>,
     excluded: bool,
     stopped_by_you: bool,
 }
@@ -149,6 +150,8 @@ pub struct Sidecar {
 
 impl Sidecar {
     pub fn new(dir: PathBuf, program: PathBuf, keep: Box<dyn Keep>, limits: Limits) -> Sidecar {
+        // The harness runs in its data folder, so a relative one would name another folder there.
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
         let inner = Inner { token: None, bundled_build: None, excluded: false, stopped_by_you: false };
         Sidecar {
             dir,
@@ -183,7 +186,8 @@ impl Sidecar {
 
     pub async fn act(&self, action: Action) -> Status {
         let mut inner = self.work.lock().await;
-        inner.stopped_by_you = false;
+        // Before the call: a Stop whose answer is lost may still have stopped it, and a read must not start it again.
+        inner.stopped_by_you = action == Action::Stop;
         self.run(&mut inner, Some(action)).await
     }
 
@@ -210,7 +214,8 @@ impl Sidecar {
         let client = match Client::connect_any_protocol(&self.dir, &token, self.limits.prove_within).await {
             Ok(client) => client,
             Err(e) if harness::client::not_proven(&e) => return Err(self.not_this_key()),
-            Err(_) => return Err("The harness isn't running. Start it in Settings > Harness.".into()),
+            Err(e) if nothing_serving(&e) => return Err("The harness isn't running. Start it in Settings > Harness.".into()),
+            Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
         match client.hello.protocol {
             PROTOCOL => Ok(client),
@@ -224,11 +229,8 @@ impl Sidecar {
             Ok(status) => status,
             Err(message) => Status::new(State::Failed, Some(message)),
         };
-        if action == Some(Action::Stop) && status.state != State::Failed {
-            inner.stopped_by_you = true;
-        }
         if status.bundled_build.is_none() {
-            status.bundled_build = self.bundled_build(inner);
+            status.bundled_build = self.bundled_build(inner).await;
         }
         if status.state == State::Running {
             status.update = status.build.is_some() && status.build != status.bundled_build && status.bundled_build.is_some();
@@ -252,9 +254,9 @@ impl Sidecar {
         let lock = self.app_lock().await?;
         let token = self.token(inner)?;
         let result = match action {
-            Some(Action::Stop) => self.stop(&token).await.map(|left| Status::new(State::Stopped, left_message("Stopped.", &left))),
+            Some(Action::Stop) => self.stop(&token).await.map(|left| Status::new(State::Stopped, Some(left_message("Stopped.", &left)))),
             Some(Action::Restart) => match self.stop(&token).await {
-                Ok(left) => self.start_or_adopt(&token, &socket).await.map(|status| restarted(status, &left)),
+                Ok(left) => restarted(self.start_or_adopt(&token, &socket).await, &left),
                 Err(e) => Err(e),
             },
             Some(Action::Start) | None => self.start_or_adopt(&token, &socket).await,
@@ -275,7 +277,7 @@ impl Sidecar {
         self.keep.reread().map_err(refused)?;
         let token = match self.keep.load().map_err(refused)? {
             Some(hex) => Token::parse(&hex).ok_or("The harness key in Gossamr's Keychain item is damaged.")?,
-            None if self.dir.join(STORE).exists() => return Err(self.not_this_key()),
+            None if harness::store::holds_client_tokens(&self.dir) => return Err(self.not_this_key()),
             None => {
                 let token = Token::random();
                 self.keep.save(&token.hex()).map_err(refused)?;
@@ -341,7 +343,11 @@ impl Sidecar {
                 }
                 Err(e) if nothing_serving(&e) => {
                     if let Some(mut child) = started.take() {
-                        if let Ok(Some(_)) = child.try_wait() {
+                        if let Ok(Some(exit)) = child.try_wait() {
+                            // A store of another install's key: starting it again would only be refused again.
+                            if exit.code() == Some(i32::from(harness::server::UNKNOWN_TOKEN_EXIT)) {
+                                return Err(self.not_this_key());
+                            }
                             failures += 1;
                         } else {
                             started = Some(child);
@@ -429,13 +435,12 @@ impl Sidecar {
     }
 
     /// What the bundled harness says its build is, asked once per run.
-    fn bundled_build(&self, inner: &mut Inner) -> Option<String> {
+    async fn bundled_build(&self, inner: &mut Inner) -> Option<String> {
         if inner.bundled_build.is_none() {
-            let out = Command::new(&self.program).arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
-            let line = String::from_utf8_lossy(&out.stdout);
-            inner.bundled_build = line.split("(build ").nth(1).and_then(|rest| rest.split(')').next()).map(str::to_owned);
+            let (program, within) = (self.program.clone(), self.limits.probe_within);
+            inner.bundled_build = Some(tokio::task::spawn_blocking(move || build_of(&program, within)).await.ok().flatten());
         }
-        inner.bundled_build.clone()
+        inner.bundled_build.clone().flatten()
     }
 
     fn not_this_key(&self) -> String {
@@ -478,6 +483,24 @@ fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
         let _ = stdin.write_all(format!("{}\n", token.hex()).as_bytes());
     }
     Ok(child)
+}
+
+/// What `program --version` says its build is. One that hasn't exited within `within` is killed and says none: the
+/// manager holds its lock while it waits.
+fn build_of(program: &Path, within: Duration) -> Option<String> {
+    let mut child = Command::new(program).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let until = Instant::now() + within;
+    while matches!(child.try_wait(), Ok(None)) {
+        if Instant::now() > until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    out.split("(build ").nth(1).and_then(|rest| rest.split(')').next()).map(str::to_owned)
 }
 
 /// Runs in the data folder, so the harness holds no other folder of the person's open as its working folder.
@@ -530,21 +553,22 @@ fn left_of(answer: &serde_json::Value) -> Vec<String> {
     answer["left"].as_array().map(|left| left.iter().filter_map(|id| id.as_str().map(str::to_owned)).collect()).unwrap_or_default()
 }
 
-/// What Restart says: that it restarted, or why the harness found in its place can't be used, as one may come up in
-/// between; then any agents the old one left.
-fn restarted(mut status: Status, left: &[String]) -> Status {
+/// What Restart says: that it restarted, why the harness found in its place can't be used, as one may come up in
+/// between, or why the new one didn't start; then any agents the old one left.
+fn restarted(started: Result<Status, String>, left: &[String]) -> Result<Status, String> {
+    let mut status = started.map_err(|why| left_message(why.trim(), left))?;
     let done = match status.state {
         State::Running => "Restarted.".to_owned(),
         _ => status.message.take().unwrap_or_default(),
     };
-    status.message = left_message(done.trim(), left);
-    status
+    status.message = Some(left_message(done.trim(), left));
+    Ok(status)
 }
 
-fn left_message(done: &str, left: &[String]) -> Option<String> {
+fn left_message(done: &str, left: &[String]) -> String {
     match left {
-        [] => Some(done.to_owned()),
-        left => Some(format!("{done} The agents of these sessions didn't stop and may still run: {}.", left.join(", "))),
+        [] => done.to_owned(),
+        left => format!("{done} The agents of these sessions didn't stop and may still run: {}.", left.join(", ")),
     }
 }
 

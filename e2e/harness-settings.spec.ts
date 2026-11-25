@@ -42,6 +42,15 @@ test.describe("The harness in Settings", () => {
     await expect(harness.locator("[data-harness-state]")).toHaveText("Running");
   });
 
+  test("says so when a Stop doesn't go through, and keeps what it knew", async ({ page }) => {
+    const harness = await openSettings(page, "runs=empty&mockHarness=refuses");
+    await expect(harness.locator("[data-harness-state]")).toHaveText("Running");
+    await harness.getByRole("button", { name: "Stop all agents and the harness" }).click();
+    await harness.getByRole("button", { name: "Stop all", exact: true }).click();
+    await expect(harness.getByRole("alert")).toHaveText("Couldn't stop the harness. Try again.");
+    await expect(harness.locator("[data-harness-state]")).toHaveText("Running");
+  });
+
   test("says plainly why it can't start, and lets you try again", async ({ page }) => {
     const harness = await openSettings(page, "runs=empty&mockHarness=failed");
     await expect(harness.locator("[data-harness-state]")).toHaveText("Failed");
