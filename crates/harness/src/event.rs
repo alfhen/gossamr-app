@@ -50,6 +50,9 @@ pub enum Body {
         message: Option<String>,
     },
     Question { id: String, text: String },
+    /// An open question was closed: answered, or ended with the session, a hand-over or a turn a deny ended. After
+    /// anything but an answer, its answer is refused.
+    QuestionClosed { id: String, how: QuestionEnd },
     /// What the agent gave as its work's result, through the endpoint's `result` tool, after it fit the session's
     /// result schema.
     Result { data: Value },
@@ -176,6 +179,22 @@ pub enum TurnEnd {
     Denied,
 }
 
+/// What closed a question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionEnd {
+    Answered,
+    /// The session was stopped. A harness that shuts down closes none: they are answered after it starts again.
+    Stopped,
+    HandedOver,
+    /// A deny ended the turn whose `ask` call held it.
+    Denied,
+    /// The session was cleaned up with it open.
+    CleanedUp,
+    /// The session can never be resumed (it ended with its client, or cannot be), so no answer can reach it.
+    NotResumable,
+}
+
 /// Why a turn or a session failed, so a client can say what to do about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -215,13 +234,14 @@ mod tests {
             Body::Permission { .. } => 9,
             Body::Answered { .. } => 10,
             Body::Question { .. } => 11,
-            Body::Result { .. } => 12,
-            Body::TurnEnded { .. } => 13,
-            Body::Failed { .. } => 14,
-            Body::Notice { .. } => 15,
-            Body::HandedOver => 16,
-            Body::Closed => 17,
-            Body::Withheld { .. } => 18,
+            Body::QuestionClosed { .. } => 12,
+            Body::Result { .. } => 13,
+            Body::TurnEnded { .. } => 14,
+            Body::Failed { .. } => 15,
+            Body::Notice { .. } => 16,
+            Body::HandedOver => 17,
+            Body::Closed => 18,
+            Body::Withheld { .. } => 19,
         }
     }
 
@@ -241,6 +261,7 @@ mod tests {
             Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
             Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
+            Body::QuestionClosed { id: "i".into(), how: QuestionEnd::Stopped },
             Body::Result { data: json!({}) },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },

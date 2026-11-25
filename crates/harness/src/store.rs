@@ -64,7 +64,21 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     // the schema its result must fit, both as JSON.
     "ALTER TABLE sessions ADD COLUMN endpoint TEXT;
     ALTER TABLE sessions ADD COLUMN tools TEXT;
-    ALTER TABLE sessions ADD COLUMN result_schema TEXT;"];
+    ALTER TABLE sessions ADD COLUMN result_schema TEXT;",
+    // Questions the agent asked through `ask`, so one asked before a restart is still open after it. Its text is in
+    // its `question` event only.
+    "CREATE TABLE questions (
+        session TEXT NOT NULL REFERENCES sessions (id),
+        id TEXT NOT NULL,
+        asked_ms INTEGER NOT NULL,
+        closed_ms INTEGER,
+        closed TEXT,
+        PRIMARY KEY (session, id)
+    );",
+    // Why the harness may not send "carry on" to the session, if anything forbids it now; and that a shutdown gave up
+    // on its agent, which may still run, so no resume may start a second one.
+    "ALTER TABLE sessions ADD COLUMN no_carry_on TEXT;
+    ALTER TABLE sessions ADD COLUMN given_up INTEGER NOT NULL DEFAULT 0;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -115,6 +129,10 @@ pub struct SessionRow {
     pub endpoint: Option<String>,
     pub tools: Vec<ToolSpec>,
     pub result_schema: Option<serde_json::Value>,
+    /// Why "carry on" may not be sent now: a stop, a deny-ended turn, a permission request left open.
+    pub no_carry_on: Option<String>,
+    /// A shutdown gave up on its agent, which may still run (#458 item 11).
+    pub given_up: bool,
 }
 
 /// What a new session's row holds besides its id.
@@ -155,6 +173,9 @@ pub struct Listed {
     pub login: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// The question the agent asked through `ask` that is still open: its id.
+    #[serde(default)]
+    pub open_question: Option<String>,
 }
 
 impl Store {
@@ -223,7 +244,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over,
-                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema FROM sessions WHERE id = ?1",
+                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema, no_carry_on, given_up FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -246,11 +267,24 @@ impl Store {
                         // Written by `insert_session` only, so a value that does not read is a broken file.
                         tools: json_column(row, 16)?.unwrap_or_default(),
                         result_schema: json_column(row, 17)?,
+                        no_carry_on: row.get(18)?,
+                        given_up: row.get(19)?,
                     })
                 },
             )
             .optional()?
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
+    }
+
+    /// None says "carry on" may be sent again.
+    pub fn set_no_carry_on(&self, id: &str, why: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET no_carry_on = ?2 WHERE id = ?1", params![id, why])?;
+        Ok(())
+    }
+
+    pub fn set_given_up(&self, id: &str) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET given_up = 1 WHERE id = ?1", [id])?;
+        Ok(())
     }
 
     /// Names the tools endpoint of a session made before the store kept the name.
@@ -272,6 +306,51 @@ impl Store {
         Ok(holders.iter().find(|id| is_live(id)).or(holders.first()).cloned())
     }
 
+    /// Keeps that the agent asked question `id`, open until it is closed.
+    pub fn ask(&self, session: &str, id: &str, ms: i64) -> Result<()> {
+        self.conn.execute("INSERT INTO questions (session, id, asked_ms) VALUES (?1, ?2, ?3)", params![session, id, ms])?;
+        Ok(())
+    }
+
+    /// The session's open question, if it has one: its id.
+    pub fn open_question(&self, session: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM questions WHERE session = ?1 AND closed_ms IS NULL ORDER BY asked_ms DESC LIMIT 1", [session], |row| row.get(0))
+            .optional()?)
+    }
+
+    /// Closes an open question, saying how; one already closed, or never kept, is left as it is.
+    pub fn close_question(&self, session: &str, id: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let how = serde_json::to_value(how)?;
+        self.conn.execute(
+            "UPDATE questions SET closed_ms = ?3, closed = ?4 WHERE session = ?1 AND id = ?2 AND closed_ms IS NULL",
+            params![session, id, ms, how.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Closes the open questions of a session that is not running, which can no longer be answered, each with its
+    /// `question_closed` event in the same transaction, so the events and `sessions` agree.
+    pub fn close_questions(&self, session: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.close_open_questions(session, how, ms)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `close_questions`; the caller holds the transaction.
+    fn close_open_questions(&self, session: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let open: Vec<String> = self.conn.prepare("SELECT id FROM questions WHERE session = ?1 AND closed_ms IS NULL ORDER BY asked_ms")?
+            .query_map([session], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for id in open {
+            self.close_question(session, &id, how, ms)?;
+            self.insert_event(session, &Body::QuestionClosed { id, how }, ms, None)?;
+        }
+        Ok(())
+    }
+
     /// The session ends when the client that opened it leaves, and is never resumed.
     pub fn set_ends_with_client(&self, id: &str) -> Result<()> {
         self.conn.execute("UPDATE sessions SET ends_with_client = 1 WHERE id = ?1", [id])?;
@@ -280,14 +359,15 @@ impl Store {
 
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort
+            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort,
+                (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1)
              FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
-            let (repo, branch, login, effort) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?);
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort })
+            let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -418,6 +498,7 @@ impl Store {
         self.session(session)?;
         // Both or neither: a session marked clean must not keep its payload.
         let tx = self.conn.unchecked_transaction()?;
+        self.close_open_questions(session, crate::event::QuestionEnd::CleanedUp, now_ms())?;
         tx.execute("UPDATE sessions SET cleaned_ms = ?2 WHERE id = ?1", params![session, now_ms()])?;
         tx.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND session = ?1", WITHHOLD.as_str()), [session])?;
         tx.commit()?;

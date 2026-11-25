@@ -47,8 +47,10 @@ pub const MAX_TOOLS_BYTES: usize = 256 << 10;
 pub const MAX_SCHEMA_BYTES: usize = 64 << 10;
 /// The harness's own tool the agent ends its work with.
 pub const RESULT: &str = "result";
+/// The harness's own tool the agent asks the person a question with.
+pub const ASK: &str = "ask";
 /// Names the harness keeps for its own tools.
-pub const RESERVED: &[&str] = &[RESULT, "ask"];
+pub const RESERVED: &[&str] = &[RESULT, ASK];
 
 /// The most bytes of a request body. A call's input over `event::EVENT_MAX` but under this reaches the client cut, and
 /// fails with the reason; one over this is refused with 413.
@@ -137,6 +139,15 @@ pub fn check_tools(tools: &[ToolSpec], result_schema: Option<&Value>) -> Result<
     Ok(())
 }
 
+/// The `ask` tool as `tools/list` shows it.
+fn ask_tool() -> Value {
+    json!({
+        "name": ASK,
+        "description": "Ask the person a question and wait for the answer, which can take minutes. If it comes back as a question pending, end your turn: the answer comes as your next prompt.",
+        "inputSchema": { "type": "object", "properties": { "question": { "type": "string", "description": "What you need decided or answered, in a few sentences." } }, "required": ["question"] },
+    })
+}
+
 /// The `result` tool as `tools/list` shows it: its input is the result, so its schema is the result schema.
 fn result_tool(schema: Option<&Value>) -> Value {
     json!({
@@ -177,6 +188,9 @@ pub(crate) struct ToolCall {
     pub name: String,
     pub input: Value,
     pub reply: oneshot::Sender<Reply>,
+    /// When the call reached the endpoint. A provider's limit on a call runs from its start, not from when the session
+    /// took it.
+    pub arrived: tokio::time::Instant,
 }
 
 /// What a call gets back: the client's output, or the harness's reason it failed, with `error` set.
@@ -323,7 +337,7 @@ impl Endpoints {
         calls: UnboundedSender<ToolCall>,
         provider: &str,
     ) -> ToolsEndpoint {
-        let names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).chain([RESULT.to_owned()]).collect();
+        let names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).chain([RESULT.to_owned(), ASK.to_owned()]).collect();
         let made = self.state.made.lock().unwrap_or_else(|p| p.into_inner()).entry(session.to_owned()).or_default().clone();
         let entry = Entry {
             start,
@@ -400,6 +414,7 @@ async fn handle(state: Arc<State>, unproven: Unproven, request: Request<Incoming
 }
 
 async fn answer_to(state: &Arc<State>, unproven: &Unproven, head: &http::request::Parts, body: Incoming) -> Answered {
+    let arrived = tokio::time::Instant::now();
     if head.method != Method::POST {
         // No event stream is offered, on any path, so this says nothing of a session.
         let mut refused = answer(StatusCode::METHOD_NOT_ALLOWED, None);
@@ -431,8 +446,8 @@ async fn answer_to(state: &Arc<State>, unproven: &Unproven, head: &http::request
     };
     let params = msg["params"].clone();
     let (tools, schema) = (entry.tools.clone(), entry.result_schema.clone());
-    let listed = move || tools.iter().map(ToolSpec::listed).chain([result_tool(schema.as_deref())]).collect();
-    match rpc(msg, SERVER, listed, call(state, &entry, &params)).await {
+    let listed = move || tools.iter().map(ToolSpec::listed).chain([result_tool(schema.as_deref()), ask_tool()]).collect();
+    match rpc(msg, SERVER, listed, call(state, &entry, &params, arrived)).await {
         Answer::Accepted => answer(StatusCode::ACCEPTED, None),
         Answer::Reply(reply) => answer(StatusCode::OK, Some(reply)),
     }
@@ -477,9 +492,9 @@ fn opened(state: &State, name: &str, headers: &HeaderMap) -> Option<Opened> {
     Some(Opened { calls: entry.calls.clone(), tools: entry.tools.clone(), result_schema: entry.result_schema.clone(), in_flight: entry.in_flight.clone(), made: entry.made.clone() })
 }
 
-async fn call(state: &State, entry: &Opened, params: &Value) -> std::result::Result<Value, Value> {
+async fn call(state: &State, entry: &Opened, params: &Value, arrived: tokio::time::Instant) -> std::result::Result<Value, Value> {
     let name = params["name"].as_str().unwrap_or_default();
-    if name != RESULT && !entry.tools.iter().any(|tool| tool.name == name) {
+    if !RESERVED.contains(&name) && !entry.tools.iter().any(|tool| tool.name == name) {
         return Err(json!({ "code": -32602, "message": "Unknown tool" }));
     }
     let input = match &params["arguments"] {
@@ -508,7 +523,7 @@ async fn call(state: &State, entry: &Opened, params: &Value) -> std::result::Res
     };
     let (reply, answer) = oneshot::channel();
     let ended = || Reply::failed("the session has ended");
-    let reply = match entry.calls.send(ToolCall { name: name.to_owned(), input, reply }) {
+    let reply = match entry.calls.send(ToolCall { name: name.to_owned(), input, reply, arrived }) {
         Ok(()) => answer.await.unwrap_or_else(|_| ended()),
         Err(_) => ended(),
     };

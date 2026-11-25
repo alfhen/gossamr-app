@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub mod api;
+pub mod ask;
 pub mod auth;
 pub mod binary;
 pub mod claude;
@@ -69,7 +70,9 @@ pub const USAGE: &str = "usage: harness --version
        harness providers [--login <provider>=<folder>]...   (without --token-stdin it asks the CLIs itself)
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
+       harness resume <session> [--carry-on <text>] | take-back <session>
        harness answer <session> <request> allow|deny [--message <text>]
+       harness answer <session> <question> --text <answer>
        harness token new
   One place to keep the token is a Keychain item that trusts no app; check that reading it asks you first:
        security add-generic-password -s gossamr-harness -a client -T \"\" -w     (paste the token when asked)
