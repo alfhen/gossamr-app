@@ -612,12 +612,22 @@ fn a_restart_that_finds_a_harness_it_cannot_use_keeps_why_and_still_names_the_ag
 async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_stopped_for_one() {
     let bed = Bed::new();
     let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
+    // `spawn` makes the log before it returns, so a start shows here at once, before the fake says it serves.
+    let log = bed.dir.join(LOG);
+    let unstarted = |log: &Path| {
+        let _ = std::fs::remove_file(log);
+        move |log: &Path| assert!(!log.exists(), "nothing was started for it")
+    };
     let none = sidecar.client().await.err().unwrap();
     assert!(none.contains("no key"), "{none}");
     let hex = bed.token().hex();
+    // With its folder there, a harness could start.
+    DirBuilder::new().recursive(true).mode(0o700).create(&bed.dir).unwrap();
+    let check = unstarted(&log);
     let none = sidecar.client().await.err().unwrap();
     assert!(none.contains("isn't running") && !none.contains(&hex), "{none}");
-    assert!(bed.pids("serving").is_empty(), "nothing was started for it");
+    check(&log);
+    assert!(bed.pids("serving").is_empty());
 
     assert_eq!(sidecar.ensure().await.state, State::Running);
     let client = sidecar.client().await.unwrap();
@@ -628,15 +638,19 @@ async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_st
     bed.end(started[0]).await;
 
     let old = bed.serve_by_hand(&bed.fake("old", PROTOCOL - 1, "old"), &bed.token()).await;
+    let check = unstarted(&log);
     let other = sidecar.client().await.err().unwrap();
     assert!(other.contains(&format!("protocol {}", PROTOCOL - 1)) && !other.contains(&hex), "{other}");
+    check(&log);
     assert!(bed.running(old), "not stopped for it");
     bed.end(old).await;
 
     // One that answers and goes is there but can't be reached, which is not the same as not running.
     let dying = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), mute: false };
     bed.serve_by_hand(&bed.fake_with("dying", dying), &bed.token()).await;
+    let check = unstarted(&log);
     let gone = sidecar.client().await.err().unwrap();
     assert!(gone.starts_with("Gossamr couldn't reach the harness: ") && !gone.contains(&hex), "{gone}");
+    check(&log);
     bed.none_left().await;
 }
