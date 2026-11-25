@@ -14,7 +14,7 @@ use tokio_tungstenite::{WebSocketStream, client_async_with_config};
 use crate::api::{Call, Hello, MAX_MESSAGE, Op, PROTOCOL, Proof, Reply, socket_path};
 use crate::auth::{Token, encode};
 use crate::error::{Error, Result};
-use crate::event::Event;
+use crate::event::{Body, Event};
 
 /// What the harness pushes: an event of a session, the end of a watch, or the end of one that lost events, with why.
 #[derive(Debug, Clone, PartialEq)]
@@ -96,7 +96,7 @@ impl Client {
         let id = self.next_id;
         self.write(&Call { id, op }).await?;
         loop {
-            let reply: Reply = self.read().await?;
+            let reply = decode_reply(&self.read_text().await?)?;
             if reply.id == Some(id) {
                 return match reply.error {
                     Some(error) => Err(Error::Said(error)),
@@ -115,8 +115,8 @@ impl Client {
             if let Some(push) = self.pushes.pop_front() {
                 return Ok(Some(push));
             }
-            match self.read::<Reply>().await {
-                Ok(reply) => self.pushes.extend(into_push(reply)),
+            match self.read_text().await {
+                Ok(text) => self.pushes.extend(into_push(decode_reply(&text)?)),
                 Err(Error::Protocol(why)) if why == CLOSED => return Ok(None),
                 Err(e) => return Err(e),
             }
@@ -158,11 +158,46 @@ pub fn not_proven(e: &Error) -> bool {
     matches!(e, Error::Said(said) if said == NOT_PROVEN)
 }
 
+/// A reply, with its event read on its own: one of a type this build does not know, from a newer harness of the same
+/// protocol, comes as `withheld` with nothing kept, so a client moves past its number instead of losing the connection.
+fn decode_reply(text: &str) -> Result<Reply> {
+    let mut value: Value = serde_json::from_str(text)?;
+    let event = value.as_object_mut().and_then(|reply| reply.remove("event"));
+    let mut reply: Reply = serde_json::from_value(value)?;
+    reply.event = event.map(readable_event).transpose()?;
+    Ok(reply)
+}
+
+fn readable_event(value: Value) -> Result<Event> {
+    match serde_json::from_value::<Event>(value.clone()) {
+        Ok(event) => Ok(event),
+        Err(e) => match (value["seq"].as_u64(), value["type"].as_str()) {
+            (Some(seq), Some(of)) => Ok(Event { seq, ms: value["ms"].as_i64().unwrap_or(0), body: Body::Withheld { of: of.to_owned(), kept: Default::default() }, cut: None }),
+            _ => Err(e.into()),
+        },
+    }
+}
+
 fn into_push(reply: Reply) -> Option<Push> {
     let session = reply.session?;
     match (reply.event, reply.error) {
         (Some(event), _) => Some(Push::Event { session, event }),
         (None, Some(reason)) if reply.end => Some(Push::Lost { session, reason }),
         (None, _) => reply.end.then_some(Push::End { session }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_event_of_a_type_this_build_does_not_know_comes_as_withheld_with_its_number() {
+        let reply = decode_reply(r#"{"session":"s1","event":{"seq":5,"ms":7,"type":"progress","percent":40}}"#).unwrap();
+        let Some(Push::Event { session, event }) = into_push(reply) else { panic!("an event") };
+        assert_eq!((session.as_str(), event.seq, event.body), ("s1", 5, Body::Withheld { of: "progress".into(), kept: Default::default() }));
+        let known = decode_reply(r#"{"session":"s1","event":{"seq":6,"ms":8,"type":"text","text":"hi"}}"#).unwrap();
+        assert_eq!(known.event.map(|e| e.body), Some(Body::Text { text: "hi".into() }));
+        assert!(decode_reply(r#"{"session":"s1","event":{"type":"progress"}}"#).is_err(), "with no number there is nothing to move past");
     }
 }

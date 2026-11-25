@@ -38,14 +38,15 @@ impl Db {
         Ok(Some((run_id, serde_json::from_str(&data)?)))
     }
 
-    /// Every session the app still follows, with how far: one that has not closed, of a run this handle sees.
+    /// Every session the app still follows, with how far: one that has not ended, of a run this handle sees. A session
+    /// a shutdown or a hand-over closed is still followed, since a resume takes it up again.
     pub fn followed_sessions(&self) -> Result<Vec<(String, SessionFollow)>> {
         let mut stmt = self.conn.prepare("SELECT session, run_id, data FROM run_sessions ORDER BY run_id")?;
         let rows: Vec<(String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
         let mut out = Vec::new();
         for (session, run_id, data) in rows {
             let follow: SessionFollow = serde_json::from_str(&data)?;
-            if !follow.closed && self.run(&run_id)?.is_some() {
+            if !follow.ended && self.run(&run_id)?.is_some() {
                 out.push((session, follow));
             }
         }
@@ -145,11 +146,17 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_session_is_no_longer_followed() {
+    fn a_session_a_shutdown_closed_is_still_followed_and_one_the_app_stopped_is_not() {
         let (_dir, db, _) = db_with_run();
         db.bind_run_session("r1", "s1").unwrap();
         db.apply_session("s1", |_, follow| {
             follow.closed = true;
+            vec![]
+        })
+        .unwrap();
+        assert_eq!(db.followed_sessions().unwrap().len(), 1, "a resume takes it up again");
+        db.apply_session("s1", |_, follow| {
+            follow.ended = true;
             vec![]
         })
         .unwrap();
