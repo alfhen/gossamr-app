@@ -7,6 +7,7 @@
 //! afterwards that no fake still runs.
 
 use std::io::BufRead;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
@@ -20,6 +21,8 @@ use crate::secrets::{FileVault, Vault};
 
 const FAKE: &str = "GOSSAMR_FAKE_HARNESS";
 const FAKE_ARGV: &str = "GOSSAMR_FAKE_ARGV";
+/// The descriptors above 2 the fake found open when it started.
+static INHERITED: std::sync::OnceLock<Vec<libc::c_int>> = std::sync::OnceLock::new();
 /// Only a failure waits this long.
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -41,6 +44,9 @@ struct Fake {
 #[test]
 fn fake_harness() {
     let Some(config) = std::env::var_os(FAKE) else { return };
+    // Before the fake opens anything of its own.
+    let inherited: Vec<libc::c_int> = (3..256).filter(|fd| unsafe { libc::fcntl(*fd, libc::F_GETFD) } != -1).collect();
+    INHERITED.set(inherited).unwrap();
     let fake: Fake = serde_json::from_str(config.to_str().unwrap()).unwrap();
     std::process::exit(fake_main(fake, std::env::var(FAKE_ARGV).unwrap_or_default()));
 }
@@ -82,7 +88,9 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
         let Some(token) = Token::parse(&line) else { return 1 };
         let in_env = std::env::vars().any(|(_, value)| value.contains(&token.hex()));
         let named = std::env::var_os(harness::cli::TOKEN_VARIABLE).is_some();
-        std::fs::write(&seen, format!("{argv}\ntoken in environment: {in_env}\n{}: {named}", harness::cli::TOKEN_VARIABLE)).unwrap();
+        let (cwd, inherited) = (std::env::current_dir().unwrap(), INHERITED.get().cloned().unwrap_or_default());
+        let cwd = if cwd.canonicalize().ok() == dir.canonicalize().ok() { "the data folder" } else { "elsewhere" };
+        std::fs::write(&seen, format!("{argv}\ntoken in environment: {in_env}\n{}: {named}\nworking folder: {cwd}\ninherited: {inherited:?}", harness::cli::TOKEN_VARIABLE)).unwrap();
         keys.push(token.stored_key());
         std::fs::write(&store, encode(&token.stored_key())).unwrap();
     }
@@ -494,6 +502,10 @@ fn files_holding(dir: &Path, needle: &str, found: &mut Vec<PathBuf>) {
 #[tokio::test]
 async fn the_token_is_in_the_vault_and_in_no_file_under_the_data_folder_nor_the_harnesss_argv_or_environment() {
     let bed = Bed::new();
+    // A descriptor the app holds without close-on-exec, as a library might open one.
+    // SAFETY: open with a valid path; the descriptor is owned from here on.
+    let held = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+    let held = unsafe { std::os::fd::OwnedFd::from_raw_fd(held) };
     assert_eq!(bed.sidecar(&bed.fake("harness", PROTOCOL, "new")).ensure().await.state, State::Running);
     let hex = bed.token().hex();
     assert!(std::fs::read_to_string(bed.root.join("vault.json")).unwrap().contains(&hex), "the vault holds it");
@@ -508,6 +520,9 @@ async fn the_token_is_in_the_vault_and_in_no_file_under_the_data_folder_nor_the_
     assert!(seen.starts_with("serve --data "), "its argv");
     assert!(!seen.contains(&hex), "its argv does not hold the token");
     assert!(seen.contains("token in environment: false") && seen.contains("HARNESS_TOKEN: false"), "nor its environment");
+    let found: Vec<&str> = seen.lines().skip(1).collect();
+    assert!(seen.contains("working folder: the data folder"), "it runs in the data folder: {found:?}");
+    assert!(seen.contains("inherited: []"), "it inherits no descriptor above 2 (the app held {}): {found:?}", held.as_raw_fd());
     bed.none_left().await;
 }
 
@@ -517,6 +532,7 @@ fn the_harness_starts_without_the_variable_serve_refuses() {
     assert!(command.get_envs().any(|(name, value)| name == harness::cli::TOKEN_VARIABLE && value.is_none()), "HARNESS_TOKEN is taken out of its environment");
     let args: Vec<_> = command.get_args().collect();
     assert_eq!(args, ["serve", "--data", "data"]);
+    assert_eq!(command.get_current_dir(), Some(Path::new("data")), "it runs in the data folder");
 }
 
 #[tokio::test]
@@ -575,4 +591,39 @@ async fn stop_while_a_harness_is_stopping_without_its_socket_waits_for_the_folde
     drop(lock);
     assert_eq!(sidecar.act(Action::Stop).await.state, State::Stopped, "once the folder is free");
     assert!(bed.pids("serving").is_empty());
+}
+
+#[test]
+fn a_restart_that_finds_a_harness_it_cannot_use_keeps_why_and_still_names_the_agents_left() {
+    let failed = Status { state: State::Failed, build: None, bundled_build: None, update: true, message: Some("Older.".into()) };
+    let said = restarted(failed, &["s1".into()]).message.unwrap();
+    assert!(said.starts_with("Older.") && said.contains("s1"), "{said}");
+    let running = Status { state: State::Running, build: None, bundled_build: None, update: false, message: None };
+    assert_eq!(restarted(running, &[]).message.as_deref(), Some("Restarted."));
+}
+
+#[tokio::test]
+async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_stopped_for_one() {
+    let bed = Bed::new();
+    let sidecar = bed.sidecar(&bed.fake("harness", PROTOCOL, "new"));
+    let none = sidecar.client().await.err().unwrap();
+    assert!(none.contains("no key"), "{none}");
+    let hex = bed.token().hex();
+    let none = sidecar.client().await.err().unwrap();
+    assert!(none.contains("isn't running") && !none.contains(&hex), "{none}");
+    assert!(bed.pids("serving").is_empty(), "nothing was started for it");
+
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    let client = sidecar.client().await.unwrap();
+    assert_eq!(client.hello.protocol, PROTOCOL, "a proven client of this protocol");
+    drop(client);
+    let started = bed.pids("serving");
+    assert_eq!(started.len(), 1, "the one the manager started");
+    bed.end(started[0]).await;
+
+    let old = bed.serve_by_hand(&bed.fake("old", PROTOCOL - 1, "old"), &bed.token()).await;
+    let other = sidecar.client().await.err().unwrap();
+    assert!(other.contains(&format!("protocol {}", PROTOCOL - 1)) && !other.contains(&hex), "{other}");
+    assert!(bed.running(old), "not stopped for it");
+    bed.none_left().await;
 }

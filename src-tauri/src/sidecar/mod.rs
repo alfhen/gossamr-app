@@ -187,6 +187,37 @@ impl Sidecar {
         self.run(&mut inner, Some(action)).await
     }
 
+    /// A client of the harness, proven with the app's token, which never leaves the manager. It starts and stops
+    /// nothing: with no harness serving, one of another protocol, or one that doesn't know the token, it says why, and
+    /// starting or restarting stays with `ensure` and Settings. Before the first start it reads the vault but makes no
+    /// token.
+    #[cfg_attr(not(test), expect(dead_code, reason = "H10's runs are its first caller"))]
+    pub async fn client(&self) -> Result<Client, String> {
+        let token = {
+            let mut inner = self.work.lock().await;
+            match &inner.token {
+                Some(token) => token.clone(),
+                None => {
+                    let refused = |e: crate::error::Error| format!("The harness needs Gossamr's key from the Keychain, which couldn't be read: {e}");
+                    self.keep.reread().map_err(refused)?;
+                    let found = self.keep.load().map_err(refused)?;
+                    let token = found.as_deref().and_then(Token::parse).ok_or("Gossamr has no key for the harness yet. It makes one when it first starts the harness.")?;
+                    inner.token = Some(token.clone());
+                    token
+                }
+            }
+        };
+        let client = match Client::connect_any_protocol(&self.dir, &token, self.limits.prove_within).await {
+            Ok(client) => client,
+            Err(e) if harness::client::not_proven(&e) => return Err(self.not_this_key()),
+            Err(_) => return Err("The harness isn't running. Start it in Settings > Harness.".into()),
+        };
+        match client.hello.protocol {
+            PROTOCOL => Ok(client),
+            other => Err(format!("The running harness speaks protocol {other}, and Gossamr {PROTOCOL}. Settings > Harness says what to do.")),
+        }
+    }
+
     async fn run(&self, inner: &mut Inner, action: Option<Action>) -> Status {
         self.set(Status::new(State::Starting, None));
         let mut status = match self.work_on(inner, action).await {
@@ -223,10 +254,7 @@ impl Sidecar {
         let result = match action {
             Some(Action::Stop) => self.stop(&token).await.map(|left| Status::new(State::Stopped, left_message("Stopped.", &left))),
             Some(Action::Restart) => match self.stop(&token).await {
-                Ok(left) => self.start_or_adopt(&token, &socket).await.map(|mut status| {
-                    status.message = left_message("Restarted.", &left);
-                    status
-                }),
+                Ok(left) => self.start_or_adopt(&token, &socket).await.map(|status| restarted(status, &left)),
                 Err(e) => Err(e),
             },
             Some(Action::Start) | None => self.start_or_adopt(&token, &socket).await,
@@ -426,21 +454,36 @@ fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
     let log = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(dir.join(LOG))?;
     let mut command = serve_command(program, dir);
     command.stderr(log);
-    // SAFETY: `setsid` is async-signal-safe and the closure touches nothing else.
+    // SAFETY: sysconf has no preconditions.
+    let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) }.clamp(256, 1 << 16) as libc::c_int;
+    // SAFETY: `setsid` and `fcntl` are async-signal-safe and the closure touches nothing else.
     unsafe {
-        command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+        command.pre_exec(move || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // A descriptor the app or a library opened without close-on-exec would stay open in the harness, which
+            // outlives the app. Marking them, not closing them, keeps the pipe that reports a failed exec.
+            for fd in 3..open_max {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags != -1 && flags & libc::FD_CLOEXEC == 0 {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
     }
     let mut child = command.spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
-        // A harness that already knows a token does not read it; the pipe holds it until the harness ends.
         let _ = stdin.write_all(format!("{}\n", token.hex()).as_bytes());
     }
     Ok(child)
 }
 
+/// Runs in the data folder, so the harness holds no other folder of the person's open as its working folder.
 fn serve_command(program: &Path, dir: &Path) -> Command {
     let mut command = Command::new(program);
-    command.arg("serve").arg("--data").arg(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
+    command.arg("serve").arg("--data").arg(dir).current_dir(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
     command
 }
 
@@ -485,6 +528,17 @@ fn held(lock: &Path) -> bool {
 
 fn left_of(answer: &serde_json::Value) -> Vec<String> {
     answer["left"].as_array().map(|left| left.iter().filter_map(|id| id.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+}
+
+/// What Restart says: that it restarted, or why the harness found in its place can't be used, as one may come up in
+/// between; then any agents the old one left.
+fn restarted(mut status: Status, left: &[String]) -> Status {
+    let done = match status.state {
+        State::Running => "Restarted.".to_owned(),
+        _ => status.message.take().unwrap_or_default(),
+    };
+    status.message = left_message(done.trim(), left);
+    status
 }
 
 fn left_message(done: &str, left: &[String]) -> Option<String> {

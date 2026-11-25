@@ -143,6 +143,95 @@ fn serve(script: &str) -> Serving {
     Serving { _tmp: tmp, dir, token, child }
 }
 
+#[test]
+fn serve_drains_its_stdin_on_a_later_start_and_does_not_start_on_a_token_the_folder_does_not_know() {
+    use std::io::Write;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut first = serve("{\"prompt\": null}\n");
+    first.child.kill().unwrap();
+    first.child.wait().unwrap();
+    let serve_again = |stdin: std::process::Stdio| {
+        let mut command = Command::new(HARNESS);
+        command.args(["serve".as_ref(), "--data".as_ref(), first.dir.as_os_str()]).env_remove("HARNESS_DATA").env_remove(harness::cli::TOKEN_VARIABLE);
+        command.stdin(stdin).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        command
+    };
+
+    // The test keeps its own copy of the pipe's read end, so what the harness leaves in the pipe is still there to read.
+    let mut ends = [0; 2];
+    // SAFETY: pipe writes two new descriptors into `ends`, owned from here on.
+    let (read, write) = unsafe {
+        assert_eq!(libc::pipe(ends.as_mut_ptr()), 0);
+        (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1]))
+    };
+    writeln!(std::fs::File::from(write), "{}", first.token).unwrap();
+    let again = Running::ready(serve_again(std::process::Stdio::from(read.try_clone().unwrap())));
+    let mut left = std::fs::File::from(read);
+    // SAFETY: fcntl on a descriptor this test owns.
+    unsafe { libc::fcntl(std::os::fd::AsRawFd::as_raw_fd(&left), libc::F_SETFL, libc::O_NONBLOCK) };
+    let mut buffer = [0u8; 128];
+    let unread = std::io::Read::read(&mut left, &mut buffer);
+    assert!(unread.as_ref().is_ok_and(|n| *n == 0) || unread.is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock), "nothing is left to read");
+    assert_eq!(stdin_of(again.0.id()), "/dev/null", "its stdin is /dev/null");
+    drop(again);
+
+    for (what, line, said) in [("another token", harness::auth::Token::random().hex(), "not one this data folder knows"), ("a line that is not a token", "not a token".into(), "not a client token")] {
+        let mut other = serve_again(std::process::Stdio::piped()).spawn().unwrap();
+        give_token(&mut other, &line);
+        let refused = output_within(other, std::time::Duration::from_secs(60));
+        assert_eq!(refused.status.code(), Some(1), "{what} on stdin does not start it");
+        assert!(String::from_utf8_lossy(&refused.stderr).contains(said), "it says why: {:?}", String::from_utf8_lossy(&refused.stderr));
+    }
+
+    let kept = Running::ready(serve_again(std::process::Stdio::null()));
+    let proven = with_token(&mut client(&first, &["sessions"]), &first.token);
+    assert!(proven.status.success(), "no token starts it, and the first token still proves: {proven:?}");
+    drop(kept);
+
+    let (mut main, mut side) = (0, 0);
+    // SAFETY: openpty fills in two descriptors it opened, which are then owned here.
+    assert_eq!(unsafe { libc::openpty(&mut main, &mut side, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) }, 0);
+    let (_main, side) = unsafe { (OwnedFd::from_raw_fd(main), OwnedFd::from_raw_fd(side)) };
+    drop(Running::ready(serve_again(std::process::Stdio::from(side))));
+}
+
+/// A started `serve`, killed and reaped however the test ends.
+struct Running(std::process::Child);
+
+impl Running {
+    /// Starts `command` and waits, up to a minute, for it to say where it serves.
+    fn ready(mut command: Command) -> Running {
+        use std::io::BufRead;
+        let mut running = Running(command.spawn().unwrap());
+        let stderr = running.0.stderr.take().unwrap();
+        let (said, heard) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stderr).read_line(&mut line);
+            let _ = said.send(line);
+        });
+        let line = heard.recv_timeout(std::time::Duration::from_secs(60)).unwrap_or_default();
+        assert!(line.starts_with("harness: serving "), "it serves within a minute: {line:?}");
+        running
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// What a process's stdin is open on.
+fn stdin_of(pid: u32) -> String {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_link(format!("/proc/{pid}/fd/0")).unwrap().display().to_string();
+    }
+    let out = Command::new("lsof").args(["-a", "-p", &pid.to_string(), "-d", "0", "-Fn"]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).lines().find_map(|line| line.strip_prefix('n').map(str::to_owned)).unwrap_or_default()
+}
+
 /// A client command that takes its token on stdin.
 fn client(serving: &Serving, args: &[&str]) -> Command {
     let mut command = Command::new(HARNESS);

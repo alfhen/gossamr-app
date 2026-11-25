@@ -1283,3 +1283,36 @@ async fn client_proves_and_shuts_down_a_harness_of_another_protocol_and_sends_it
     drop(client);
     assert_eq!(fake.await.unwrap(), vec!["shutdown"], "the fake saw only the shutdown");
 }
+
+/// The messages every protocol keeps, as literal text. A change here breaks every older and newer app: it could no
+/// longer prove a token to, or stop, a harness of another protocol, and would have to kill a process it cannot prove is
+/// that harness. Change `PROTOCOL` for anything else, never these.
+#[tokio::test]
+async fn api_the_hello_the_proof_its_refusal_and_shutdown_keep_their_shape_in_every_protocol() {
+    let served = serve(SCRIPT);
+    let (ws, hello) = raw(&served).await;
+    let said: Value = serde_json::from_str(&hello).unwrap();
+    let (build, challenge) = (said["build"].as_str().unwrap(), said["challenge"].as_str().unwrap());
+    let literal: Value = serde_json::from_str(&format!(r#"{{"protocol": {PROTOCOL}, "build": "{build}", "challenge": "{challenge}"}}"#)).unwrap();
+    assert_eq!(said, literal, "the hello");
+    assert!(said["protocol"].is_u64() && challenge.len() == 64, "a number and 32 bytes in hex");
+
+    let refused = after_first(ws, serde_json::from_str(&format!(r#"{{"proof": "{}"}}"#, "0".repeat(64))).unwrap()).await;
+    let refusal = "refused: the client did not prove a token";
+    assert_eq!(refused, [serde_json::from_str::<Value>(&format!(r#"{{"error": "{refusal}"}}"#)).unwrap()], "the refusal");
+    assert!(harness::client::not_proven(&Error::Said(refusal.into())), "the client reads that refusal as not proven");
+
+    let (mut ws, hello) = raw(&served).await;
+    let answer = encode(&served.token.answer(hello.as_bytes()));
+    ws.send(Message::text(format!(r#"{{"proof": "{answer}"}}"#))).await.unwrap();
+    assert_eq!(next_text(&mut ws).await, serde_json::from_str::<Value>(r#"{"ok": true}"#).unwrap(), "the answer to a proof");
+    ws.send(Message::text(r#"{"id": 1, "op": "shutdown"}"#)).await.unwrap();
+    assert_eq!(next_text(&mut ws).await, serde_json::from_str::<Value>(r#"{"id": 1, "ok": {"left": []}}"#).unwrap(), "shutdown and what it left");
+}
+
+async fn next_text(ws: &mut tokio_tungstenite::WebSocketStream<UnixStream>) -> Value {
+    match tokio::time::timeout(WAIT, ws.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(text.as_str()).unwrap(),
+        other => panic!("no answer: {other:?}"),
+    }
+}
