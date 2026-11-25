@@ -157,8 +157,13 @@ pub fn args(launch: &Launch) -> Vec<String> {
     if !launch.tools.allowed.is_empty() {
         args.extend(["--allowedTools".to_owned(), launch.tools.allowed.join(",")]);
     }
-    if let Some(model) = &launch.model {
-        args.extend(["--model".to_owned(), model.clone()]);
+    // A model and an effort only when the person chose one other than the default (AGENTS.md rule 4).
+    let chosen = |value: &Option<String>| value.clone().filter(|value| value != crate::provider::DEFAULT_MODEL);
+    if let Some(model) = chosen(&launch.model) {
+        args.extend(["--model".to_owned(), model]);
+    }
+    if let Some(effort) = chosen(&launch.effort) {
+        args.extend(["--effort".to_owned(), effort]);
     }
     if let Some(session) = &launch.resume {
         args.extend(["--resume".to_owned(), session.clone()]);
@@ -787,6 +792,23 @@ mod tests {
         let ((lines, _l), (output, mut said)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
         let _resumed = Stream::new(lines, output, Some("s-0"));
         assert_eq!(said.try_recv().ok(), Some(Body::Started { provider_session: "s-0".into(), resumed: true }));
+    }
+
+    #[test]
+    fn the_argv_names_an_effort_beside_the_model_only_when_one_is_chosen() {
+        let with = |locked: bool, model: Option<&str>, effort: Option<&str>| {
+            let mut launch = launch(locked, model, None);
+            launch.effort = effort.map(str::to_owned);
+            args(&launch)
+        };
+        let normal = with(false, Some("haiku"), Some("low"));
+        assert_eq!(normal[STREAM.len()..STREAM.len() + 4], ["--model", "haiku", "--effort", "low"]);
+        let locked = with(true, None, Some("high"));
+        assert_eq!(locked[STREAM.len() + LOCKED.len()..], ["--effort", "high"], "a locked session too");
+        for (model, effort) in [(None, None), (Some("default"), Some("default"))] {
+            let argv = with(false, model, effort);
+            assert!(!argv.iter().any(|arg| arg == "--effort" || arg == "--model"), "the default passes neither: {argv:?}");
+        }
     }
 
     fn launch(locked: bool, model: Option<&str>, resume: Option<&str>) -> Launch {
