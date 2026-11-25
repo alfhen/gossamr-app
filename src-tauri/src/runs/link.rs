@@ -144,6 +144,7 @@ type LostAt = HashMap<String, u64>;
 
 async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedReceiver<Command>) {
     let mut wait = RETRY_FIRST;
+    let mut said: Option<String> = None;
     let mut lost_at = LostAt::new();
     // No strong hold on the link while waiting, so the task ends once the last `Link` is dropped.
     let connect = |inner: &std::sync::Weak<Inner>| inner.upgrade().map(|link| link.connect.clone());
@@ -152,7 +153,12 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
         let mut client = match connector.connect().await {
             Ok(client) => client,
             Err(e) => {
-                eprintln!("couldn't reach the harness: {e}");
+                // At start the manager has not made its key or started the harness yet, so only a failure that
+                // outlasts the backoff is a fault worth a line, and the same one is said once.
+                if wait == RETRY_MOST && said.as_deref() != Some(e.as_str()) {
+                    eprintln!("couldn't reach the harness: {e}");
+                    said = Some(e);
+                }
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(RETRY_MOST);
                 continue;
@@ -166,6 +172,7 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
             tokio::time::sleep(wait).await;
             continue;
         }
+        said = None;
         loop {
             tokio::select! {
                 command = commands.recv() => match command {
