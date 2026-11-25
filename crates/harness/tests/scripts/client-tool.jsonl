@@ -1,0 +1,6 @@
+{"tools": [{"name": "read_ticket", "description": "Read a ticket's cached text.", "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}}]}
+{"prompt": null}
+{"say": "I will read the ticket."}
+{"call": {"name": "read_ticket", "input": {"key": "T-1"}, "result": {"key": "T-1", "title": "Fix the login page"}}}
+{"say": "Read it."}
+{"end": "done"}

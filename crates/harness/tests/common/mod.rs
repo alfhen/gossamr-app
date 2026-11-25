@@ -9,6 +9,7 @@ use harness::event::{Body, Event};
 use harness::mock::{Mock, Script};
 use harness::session::{Harness, Open, Settings};
 use harness::store::Store;
+use harness::tools::ToolSpec;
 use tokio::sync::{broadcast, mpsc};
 
 /// A data folder under a temp folder that the harness makes itself.
@@ -40,7 +41,12 @@ pub async fn open(harness: &Harness, locked: bool) -> (String, broadcast::Receiv
 }
 
 pub async fn open_on(harness: &Harness, provider: &str, locked: bool) -> (String, broadcast::Receiver<Event>) {
-    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), ..Default::default() }).await.unwrap()
+    harness.open(Open { provider: provider.into(), locked, cwd: "/nowhere".into(), tools: tools(), ..Default::default() }).await.unwrap()
+}
+
+/// The client tools the tests' sessions declare.
+pub fn tools() -> Vec<ToolSpec> {
+    ["choose", "read_ticket"].map(|name| ToolSpec { name: name.into(), description: format!("the test's {name}"), input_schema: serde_json::json!({"type": "object"}) }).to_vec()
 }
 
 pub async fn next(events: &mut broadcast::Receiver<Event>) -> Event {
