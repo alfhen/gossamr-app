@@ -91,7 +91,8 @@ impl Run {
         let mut stderr = BufReader::new(self.child.lock().unwrap().stderr.take().unwrap());
         let (mut said, mut line) = (String::new(), String::new());
         while stderr.read_line(&mut line).unwrap() > 0 {
-            if line.contains("staying until signalled") {
+            // The replay's own line, whole: recorded stderr comes as JSON strings and cannot match it.
+            if line.trim_end() == "wire-replay: staying until signalled" {
                 let mut child = self.child.lock().unwrap();
                 child.kill().unwrap();
                 child.wait().unwrap();

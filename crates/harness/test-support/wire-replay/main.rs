@@ -19,6 +19,9 @@ use std::process::ExitCode;
 
 use serde_json::{Map, Value, json};
 
+/// The line the replay writes on stderr when it stays.
+const STAYING: &str = "wire-replay: staying until signalled";
+
 /// What the replay does once the recording has been played.
 #[derive(Debug, PartialEq)]
 enum End {
@@ -52,8 +55,9 @@ fn main() -> ExitCode {
     match Replay::new(recording).play(stdin, &mut std::io::stdout().lock(), &mut std::io::stderr().lock()) {
         Ok(End::Exit) => ExitCode::SUCCESS,
         Ok(End::Stay) => {
-            // Tests read this line to know the replay stays, rather than waiting to see that it did not exit.
-            eprintln!("wire-replay: staying until signalled");
+            // Tests read this line to know the replay stays, rather than waiting to see that it did not exit. Recorded
+            // stderr is written as JSON strings, so it never starts with this.
+            eprintln!("{STAYING}");
             loop {
                 std::thread::park();
             }
@@ -117,8 +121,9 @@ impl Replay {
                     writeln!(stdout, "{data}").and_then(|()| stdout.flush()).map_err(|e| format!("cannot write stdout: {e}"))?;
                 }
                 ("stderr", _) => {
+                    // As one JSON string per line, so no recorded text can read as one of the replay's own lines.
                     let text = line.data.as_str().map_or_else(|| line.data.to_string(), str::to_owned);
-                    let _ = writeln!(stderr, "{text}");
+                    let _ = writeln!(stderr, "{}", Value::from(text));
                 }
                 ("to_agent", _) if is_config(&line.data) => {
                     // A recorded config request the driver may or may not send; its answer is the replay's own.
@@ -417,6 +422,15 @@ mod tests {
         assert!(new.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase() || b == b'-'));
         let tool = fresh("toolu_01KX85KeVuBaHQoR3pzBhj2M");
         assert!(tool.starts_with("toolu_") && tool.len() == "toolu_01KX85KeVuBaHQoR3pzBhj2M".len() && tool != "toolu_01KX85KeVuBaHQoR3pzBhj2M");
+    }
+
+    #[test]
+    fn recorded_stderr_cannot_read_as_the_stay_line() {
+        let recording = vec![Recorded { seq: 1, dir: "stderr".into(), data: Value::from(format!("{STAYING}\nmore")) }];
+        let mut stderr = vec![];
+        Replay::new(recording).play(std::iter::empty(), &mut vec![], &mut stderr).unwrap();
+        let said = String::from_utf8(stderr).unwrap();
+        assert!(!said.lines().any(|line| line == STAYING), "{said:?}");
     }
 
     #[test]
