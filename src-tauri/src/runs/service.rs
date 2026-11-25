@@ -653,7 +653,8 @@ impl RunService {
         let _only_pass = self.recovery.lock().await;
         self.forget_slot_waits().await;
         let live = vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked, RunState::Unknown];
-        let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(live), ..RunQuery::default() }).await else { return };
+        let Ok(mut runs) = self.core.runs_list(&RunQuery { states: Some(live), ..RunQuery::default() }).await else { return };
+        runs.retain(|r| r.harness_session.is_none());
         runs.iter().filter(|r| !self.index.contains(&r.id)).for_each(|r| self.remember(r));
         let in_flight = self.in_flight.lock().expect("in-flight lock poisoned").clone();
         let mut waiting: Vec<Run> = runs.into_iter().filter(|r| r.state == RunState::Launching && !in_flight.contains(&r.id)).collect();

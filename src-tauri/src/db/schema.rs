@@ -534,7 +534,16 @@ ALTER TABLE run_messages ADD COLUMN author TEXT NOT NULL DEFAULT 'pip';";
 /// The agent process of a run's current turn as JSON, for a backend that has to find it again. It is not in `data`, which the page also gets.
 const RUN_PROCESS: &str = "ALTER TABLE runs ADD COLUMN process TEXT;";
 
-const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR, RUN_PROCESS];
+/// The harness session each run follows, and how far: `data` is a `SessionFollow`. The run and its row are written in
+/// one transaction, so an event is applied once.
+const RUN_SESSIONS: &str = "
+CREATE TABLE run_sessions (
+  run_id TEXT PRIMARY KEY,
+  session TEXT NOT NULL UNIQUE,
+  data TEXT NOT NULL
+) WITHOUT ROWID;";
+
+const APP_STEPS: &[&str] = &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR, RUN_PROCESS, RUN_SESSIONS];
 
 const APP_TABLES: &[&str] = &["proposals", "runs", "run_events", "run_messages", "run_reports", "run_report_tokens", "pip_turns", "workstreams", "workstream_events"];
 

@@ -1301,3 +1301,16 @@ async fn a_held_ask_is_handed_to_the_backend_with_the_run_it_belongs_to() {
     let held = rig.get(&run).await;
     assert_eq!((held.state, held.needs.as_deref()), (RunState::NeedsAnswer, Some("Which database?")));
 }
+
+#[tokio::test]
+async fn a_poll_leaves_a_run_on_the_harness_alone_however_long_no_listing_shows_it() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| r.state = RunState::Working).await;
+    rig.fx.core.bind_run_session(&run.id, "s1").await.unwrap();
+    let before = rig.get(&run).await;
+    for minutes in [0, 15, 60] {
+        rig.svc.poll_at(Utc::now() + Span::minutes(minutes)).await;
+    }
+    assert_eq!(rig.get(&run).await, before, "its state is its session's events, not the listing's");
+}
