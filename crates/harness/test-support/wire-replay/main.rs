@@ -226,9 +226,11 @@ impl Replay {
                     {
                         self.asked.insert(id.to_owned(), data["request"]["input"].clone());
                     }
-                    writeln!(stdout, "{data}").and_then(|()| stdout.flush()).map_err(|e| format!("cannot write stdout: {e}"))?;
+                    // Counted before it is written: a driver can answer a line only once it is in the pipe, so an
+                    // answer always sees the count, and only a line sent before it can be stamped early.
                     self.played.push(line.seq);
                     written.store(self.played.len(), Ordering::SeqCst);
+                    writeln!(stdout, "{data}").and_then(|()| stdout.flush()).map_err(|e| format!("cannot write stdout: {e}"))?;
                     if let Some(progress) = &mut self.progress {
                         let _ = writeln!(progress, "{}", line.seq).and_then(|()| progress.flush());
                     }
@@ -606,6 +608,36 @@ mod tests {
         assert!(new.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase() || b == b'-'));
         let tool = fresh("toolu_01KX85KeVuBaHQoR3pzBhj2M");
         assert!(tool.starts_with("toolu_") && tool.len() == "toolu_01KX85KeVuBaHQoR3pzBhj2M".len() && tool != "toolu_01KX85KeVuBaHQoR3pzBhj2M");
+    }
+
+    /// A stdout that notes, at each write, how many lines the replay had counted as written.
+    struct Seeing<'a> {
+        written: &'a AtomicUsize,
+        seen: Vec<usize>,
+    }
+
+    impl Write for Seeing<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if buf.ends_with(b"\n") {
+                self.seen.push(self.written.load(Ordering::SeqCst));
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn an_agent_line_is_counted_before_it_reaches_the_driver() {
+        // So an answer to it, however fast, is never stamped early.
+        let line = |seq: u64| Recorded { seq, dir: "from_agent".into(), data: json!({"type": "system", "subtype": "status"}) };
+        let (_, input) = std::sync::mpsc::channel();
+        let written = AtomicUsize::new(0);
+        let mut stdout = Seeing { written: &written, seen: vec![] };
+        Replay::new(vec![line(1), line(2), line(3)]).play(&input, &written, &mut stdout, &mut vec![]).unwrap();
+        assert_eq!(stdout.seen, [1, 2, 3]);
     }
 
     #[test]
