@@ -660,7 +660,7 @@ mod tests {
         use super::*;
         use std::collections::BTreeSet;
 
-        const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/fake-claude.sh");
+        const FAKE: &str = harness::testing::FAKE_CLAUDE;
 
         struct Rig {
             dir: PathBuf,
