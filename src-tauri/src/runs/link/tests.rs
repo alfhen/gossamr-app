@@ -410,3 +410,35 @@ async fn a_call_of_the_apps_tools_a_quit_left_unanswered_is_answered_on_the_next
     assert_eq!(bed.tickets.0.lock().unwrap().len(), 1, "answered once, by the app that started again");
     bed.end().await;
 }
+
+#[tokio::test]
+async fn a_tool_call_read_again_is_not_answered_twice() {
+    let bed = Bed::new(READS).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1);
+    let mut client = bed.served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.clone(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    let call = events.into_iter().find(|e| matches!(e.body, harness::event::Body::ClientToolCall { .. })).unwrap();
+    bed.link.inner.take(&session, call).await.unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1, "applied once, answered once");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn the_same_loss_at_one_place_is_asked_about_once() {
+    let bed = Bed::new(STREAM).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    let mut client = bed.served.client().await;
+    let mut lost_at = LostAt::new();
+    for _ in 0..4 {
+        bed.link.inner.lost(&mut client, &session, "events were lost: test", &mut lost_at).await.unwrap();
+    }
+    let losses = bed.rows(&run).await.iter().filter(|(_, text)| text.starts_with(consumer::LOST)).count();
+    assert_eq!(losses, 1, "a loss at the same place again is not asked about again");
+    bed.end().await;
+}

@@ -668,6 +668,29 @@ mod tests {
         apply(conn, &STEPS[..CACHE_STEPS_WITH_APP_STATE])
     }
 
+    #[test]
+    fn a_file_at_the_shipped_app_steps_takes_run_sessions_as_its_next_step_and_keeps_its_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.sqlite");
+        let run = crate::domain::Run::queued("r1".into(), "p1".into(), "c1".into(), None, crate::domain::fixtures::run_spec(), chrono::Utc::now());
+        {
+            let mut conn = Connection::open(&path).unwrap();
+            // The steps a release before this one shipped, named and in their order, not read from `APP_STEPS`.
+            apply(&mut conn, &[APP, RUNS_ON, RUN_MESSAGE_AUTHOR, RUN_PROCESS]).unwrap();
+            conn.execute(
+                "INSERT INTO runs (id, proposal_id, start_key, connection_id, role, repo, expected_worktree, state, queued_at, last_progress_at, data)
+                 VALUES ('r1', 'p1', 'k1', 'c1', 'builder', 'acme/webshop', '/w/r1', 'queued', 't', 't', ?1)",
+                [serde_json::to_string(&run).unwrap()],
+            )
+            .unwrap();
+        }
+        let db = crate::db::Db::open_app(&path).unwrap();
+        assert_eq!(db.conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)).unwrap(), APP_STEPS.len() as i64);
+        assert_eq!(db.run("r1").unwrap().map(|r| r.id), Some("r1".to_owned()), "the run reads as it did");
+        db.bind_run_session("r1", "s1").unwrap();
+        assert_eq!(db.session_run("s1").unwrap().map(|(id, _)| id), Some("r1".to_owned()));
+    }
+
     fn tables(conn: &Connection) -> Vec<String> {
         let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").unwrap();
         stmt.query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
