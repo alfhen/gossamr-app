@@ -71,10 +71,7 @@ pub fn is_transport_failure(e: &reqwest::Error) -> bool {
 
 impl From<harness::env::CaptureError> for Error {
     fn from(e: harness::env::CaptureError) -> Self {
-        match e {
-            harness::env::CaptureError::Spawn(e) => Error::Io(e),
-            harness::env::CaptureError::Failed(message) => Error::Claude(message.into()),
-        }
+        Error::Claude(e.to_string())
     }
 }
 

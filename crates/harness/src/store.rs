@@ -173,6 +173,9 @@ pub struct Listed {
     pub login: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// The question the agent asked through `ask` that is still open: its id.
+    #[serde(default)]
+    pub open_question: Option<String>,
 }
 
 impl Store {
@@ -290,19 +293,17 @@ impl Store {
         Ok(())
     }
 
-    /// Which session owns the worktree of this clone and branch, among those not cleaned up that name it: the latest
-    /// whose agent ran, else the latest. A later session can only take a branch once an earlier one's worktree is gone,
-    /// so the latest is the one working there; one that ran outranks a start that failed.
-    pub fn worktree_owner(&self, work: &Work) -> Result<Option<String>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT id FROM sessions WHERE clone = ?1 AND branch = ?2 AND cleaned_ms IS NULL
-                 ORDER BY provider_session IS NOT NULL DESC, created_ms DESC, rowid DESC LIMIT 1",
-                params![work.clone.as_os_str().as_bytes(), work.branch],
-                |row| row.get(0),
-            )
-            .optional()?)
+    /// Which session owns the worktree of this clone and branch, among those not cleaned up that name it: one that
+    /// `is_live` says runs, else the latest. A session runs in its worktree whether or not its provider id has come
+    /// yet, and a later session can only take a branch once an earlier one's worktree is gone, so the latest row is
+    /// the one whose worktree is on disk.
+    pub fn worktree_owner(&self, work: &Work, is_live: impl Fn(&str) -> bool) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM sessions WHERE clone = ?1 AND branch = ?2 AND cleaned_ms IS NULL
+             ORDER BY created_ms DESC, rowid DESC",
+        )?;
+        let holders: Vec<String> = stmt.query_map(params![work.clone.as_os_str().as_bytes(), work.branch], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(holders.iter().find(|id| is_live(id)).or(holders.first()).cloned())
     }
 
     /// Keeps that the agent asked question `id`, open until it is closed.
@@ -329,6 +330,14 @@ impl Store {
         Ok(())
     }
 
+    /// Closes the session's open questions, which can no longer be answered: it is cleaned up, or it can never be
+    /// resumed.
+    pub fn close_questions(&self, session: &str, ms: i64) -> Result<()> {
+        let how = serde_json::to_value(crate::event::QuestionEnd::Stopped)?;
+        self.conn.execute("UPDATE questions SET closed_ms = ?2, closed = ?3 WHERE session = ?1 AND closed_ms IS NULL", params![session, ms, how.as_str()])?;
+        Ok(())
+    }
+
     /// The session ends when the client that opened it leaves, and is never resumed.
     pub fn set_ends_with_client(&self, id: &str) -> Result<()> {
         self.conn.execute("UPDATE sessions SET ends_with_client = 1 WHERE id = ?1", [id])?;
@@ -337,14 +346,15 @@ impl Store {
 
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort
+            "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort,
+                (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1)
              FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
-            let (repo, branch, login, effort) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?);
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort })
+            let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -476,6 +486,7 @@ impl Store {
         // Both or neither: a session marked clean must not keep its payload.
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("UPDATE sessions SET cleaned_ms = ?2 WHERE id = ?1", params![session, now_ms()])?;
+        tx.execute("UPDATE questions SET closed_ms = ?2, closed = 'stopped' WHERE session = ?1 AND closed_ms IS NULL", params![session, now_ms()])?;
         tx.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND session = ?1", WITHHOLD.as_str()), [session])?;
         tx.commit()?;
         Ok(())

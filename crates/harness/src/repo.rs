@@ -121,8 +121,31 @@ impl Git {
 
     /// The origin URL as the clone's config has it. `git remote get-url` would give it rewritten by an `insteadOf`
     /// rule, which may name another host.
+    /// One URL only, and no push URL: `git config --get` gives the last of several and `git fetch` uses the first,
+    /// and a push URL sends pushes to a remote the fetch never reads, so either could make a check trust another host.
     pub async fn origin_or_why(&self, dir: &Path) -> Result<String, String> {
-        self.out_or_why(dir, &["config", "--get", "remote.origin.url"]).await
+        let urls = self.out_or_why(dir, &["config", "--get-all", "remote.origin.url"]).await?;
+        let mut urls = urls.lines();
+        let (Some(url), None) = (urls.next(), urls.next()) else { return Err("the clone's origin has more than one URL".into()) };
+        match self.config_all(dir, "remote.origin.pushurl").await {
+            Ok(push) if push.is_empty() => Ok(url.to_owned()),
+            Ok(_) => Err("the clone's origin has a push URL of its own".into()),
+            Err(why) => Err(format!("the clone's push URL couldn't be read ({why})")),
+        }
+    }
+
+    /// Every value of `key`; none when it is unset, which git says with exit code 1 and no message.
+    async fn config_all(&self, dir: &Path, key: &str) -> Result<Vec<String>, String> {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(PINNED).arg("-C").arg(dir).arg("--no-optional-locks").args(["config", "--get-all", key]);
+        self.env.apply(cmd.as_std_mut());
+        let child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| format!("git didn't start: {e}"))?;
+        let out = tokio::time::timeout(self.read_limit, child.wait_with_output()).await.map_err(|_| "git took too long".to_owned())?.map_err(|e| e.to_string())?;
+        match out.status.code() {
+            Some(0) => Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()),
+            Some(1) if out.stderr.is_empty() => Ok(Vec::new()),
+            _ => Err(format!("git {}", out.status)),
+        }
     }
 
     pub(crate) fn git_program(&self) -> &Path {
@@ -138,6 +161,22 @@ impl Git {
     /// is the last line of stderr.
     pub(crate) async fn run(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<(), String> {
         self.run_stdout(program, args, extra, limit).await.map(drop)
+    }
+
+    /// `run`, but a failure gives everything the program wrote on stderr, at most 1,000 characters.
+    pub(crate) async fn run_telling_all(&self, program: &Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>, extra: &[(&str, &str)], limit: Duration) -> Result<(), String> {
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        self.env.apply(cmd.as_std_mut());
+        cmd.envs(extra.iter().copied());
+        let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| e.to_string())?;
+        let out = tokio::time::timeout(limit, child.wait_with_output()).await.map_err(|_| format!("took longer than {} seconds", limit.as_secs()))?.map_err(|e| e.to_string())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let said: Vec<String> = String::from_utf8_lossy(&out.stderr).lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect();
+        let said = if said.is_empty() { "it exited without a message".to_owned() } else { said.join(" ") };
+        Err(said.chars().take(1000).collect())
     }
 
     /// `run`, with what the program printed.
@@ -230,7 +269,7 @@ impl Git {
                 return Ok(Some(into));
             }
         }
-        Err(format!("git: the branch '{branch}' is not fully merged"))
+        Err(format!("nothing was removed: the branch '{branch}' is not fully merged into anything origin has, so its commits would be lost"))
     }
 
     /// `git branch -d`, never `-D`, once its upstream is `kept_in`, the place `check_branch_deletable` found: git then
@@ -355,8 +394,14 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<
     };
     // The remote-tracking refs say what the last fetch saw. A branch deleted on the remote since, or a base pushed
     // over, would pass for kept: so the origin is asked now, and a clone that can't be fetched keeps its branch.
+    // The fetch below and the refs it updates prove something only for the one origin on GitHub.
+    match git.origin_or_why(clone).await {
+        Ok(url) if origin_matches(&url, repo) => {}
+        Ok(_) => return Ok(Some(format!("nothing was removed: the clone's origin isn't {repo} on GitHub"))),
+        Err(why) => return Ok(Some(format!("nothing was removed: {why}"))),
+    }
     if let crate::fresh::Fetched::Not(why) = crate::fresh::fetch(git, clone).await {
-        return Ok(Some(format!("the clone couldn't be fetched to check that the branch's commits are on the remote, so they stay: {why}")));
+        return Ok(Some(format!("nothing was removed: the clone couldn't be fetched to check that the branch's commits are on the remote, because {why}")));
     }
     let kept_in = match git.check_branch_deletable(clone, branch, base).await {
         Ok(kept_in) => kept_in,
@@ -476,7 +521,8 @@ dir=.
 [ "$1" = -C ] && { dir=$2; shift 2; }
 [ "$1" = --no-optional-locks ] && shift
 case "$*" in
-  "config --get remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
+  "config --get-all remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
+  "config --get-all remote.origin.pushurl") [ ! -f "$dir/.fake-pushurl-fails" ] || exit 3; exit 1 ;;
   "rev-parse --abbrev-ref HEAD") cat "$dir/.fake-branch" 2>/dev/null || echo main ;;
   "status --porcelain") cat "$dir/.fake-dirty" 2>/dev/null ;;
   "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/main ;;
@@ -602,6 +648,19 @@ mod tests {
         let log = std::fs::read_to_string(dir.join("git.log")).unwrap();
         let pinned = PINNED.join(" ");
         assert!(log.lines().all(|l| l.starts_with(&format!("{pinned} -C ")) && l.contains(" --no-optional-locks ")), "{log}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_push_url_that_cannot_be_read_refuses_as_a_url_that_cannot_be_read_does() {
+        let dir = scratch("pushurl");
+        let git = fake_git(&dir);
+        let clone = dir.join("webshop");
+        clone_with_origin(&clone, "https://github.com/acme/webshop.git");
+        assert_eq!(git.origin_or_why(&clone).await.as_deref(), Ok("https://github.com/acme/webshop.git"), "no push URL is git's exit code 1");
+        std::fs::write(clone.join(".fake-pushurl-fails"), "").unwrap();
+        assert!(git.origin_or_why(&clone).await.is_err_and(|why| why.contains("push URL couldn't be read")));
+        assert_eq!(git.origin(&clone).await, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -766,7 +825,7 @@ mod tests {
 
         std::fs::write(clone.join(".fake-branch-unmerged"), "").unwrap();
         let kept = remove_with_git(&git, Some(&home), worktree).await.unwrap();
-        assert_eq!(kept.as_deref(), Some("git: the branch 'worktree-w1' is not fully merged"));
+        assert!(kept.as_deref().is_some_and(|why| why.starts_with("nothing was removed") && why.contains("not fully merged")), "{kept:?}");
         assert!(path.exists(), "a branch git won't delete keeps its worktree too");
 
         std::fs::remove_file(clone.join(".fake-branch-unmerged")).unwrap();
