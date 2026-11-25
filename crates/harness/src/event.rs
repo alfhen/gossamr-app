@@ -43,6 +43,8 @@ pub enum Body {
     ToolResult { id: String, output: Value, error: bool },
     /// The id is the harness's own, unique in the session across restarts and resumes, not the provider's.
     Permission { id: String, kind: PermissionKind, tool: String, input: Value },
+    /// The agent withdrew a permission request before it was answered; an answer to it is refused from now on.
+    PermissionClosed { id: String },
     Answered {
         id: String,
         decision: Decision,
@@ -160,6 +162,9 @@ pub enum PermissionKind {
     Permissions,
     /// A call of a named tool, an MCP tool among them.
     Tool,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// An answer to a permission request. It holds for that one request: no answer is ever "always".
@@ -168,6 +173,9 @@ pub enum PermissionKind {
 pub enum Decision {
     Allow,
     Deny,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +185,9 @@ pub enum TurnEnd {
     Cancelled,
     /// A deny ended the turn, so no "carry on" may follow it.
     Denied,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// What closed a question.
@@ -193,6 +204,9 @@ pub enum QuestionEnd {
     CleanedUp,
     /// The session can never be resumed (it ended with its client, or cannot be), so no answer can reach it.
     NotResumable,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// Why a turn or a session failed, so a client can say what to do about it.
@@ -211,6 +225,9 @@ pub enum FailKind {
     Driver,
     /// The harness itself could not go on, for example its store.
     Harness,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[cfg(test)]
@@ -232,16 +249,17 @@ mod tests {
             Body::ClientToolCall { .. } => 7,
             Body::ToolResult { .. } => 8,
             Body::Permission { .. } => 9,
-            Body::Answered { .. } => 10,
-            Body::Question { .. } => 11,
-            Body::QuestionClosed { .. } => 12,
-            Body::Result { .. } => 13,
-            Body::TurnEnded { .. } => 14,
-            Body::Failed { .. } => 15,
-            Body::Notice { .. } => 16,
-            Body::HandedOver => 17,
-            Body::Closed => 18,
-            Body::Withheld { .. } => 19,
+            Body::PermissionClosed { .. } => 10,
+            Body::Answered { .. } => 11,
+            Body::Question { .. } => 12,
+            Body::QuestionClosed { .. } => 13,
+            Body::Result { .. } => 14,
+            Body::TurnEnded { .. } => 15,
+            Body::Failed { .. } => 16,
+            Body::Notice { .. } => 17,
+            Body::HandedOver => 18,
+            Body::Closed => 19,
+            Body::Withheld { .. } => 20,
         }
     }
 
@@ -259,6 +277,7 @@ mod tests {
             Body::ClientToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
             Body::ToolResult { id: "i".into(), output: json!("o"), error: false },
             Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
+            Body::PermissionClosed { id: "i".into() },
             Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
             Body::QuestionClosed { id: "i".into(), how: QuestionEnd::Stopped },

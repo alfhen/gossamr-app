@@ -844,62 +844,11 @@ async fn projection(fixture: &Path) -> String {
         return format!("refused{}\n", refused(fixture));
     }
     let (events, followed) = replay_following(fixture, vec![]).await;
-    let word = |value: &dyn erased::Word| value.word();
-    let mut calls: Vec<String> = vec![];
-    let mut call = |id: &str| match calls.iter().position(|seen| seen == id) {
-        Some(at) => at,
-        None => {
-            calls.push(id.to_owned());
-            calls.len() - 1
-        }
-    };
-    let mut lines: Vec<String> = events
-        .iter()
-        .map(|event| match &event.body {
-            Body::Prompted { text } => format!("prompted {}", text.chars().count()),
-            Body::Text { text } => format!("text {}", text.chars().count()),
-            Body::ToolCall { id, name, input } => format!("tool_call {name} {} {}", call(id), shape(input)),
-            Body::ToolResult { id, error, output } => format!("tool_result {} {} {}", call(id), if *error { "error" } else { "ok" }, shape(output)),
-            Body::Permission { kind, tool, input, .. } => format!("permission {} {tool} {}", word(kind), shape(input)),
-            Body::Answered { decision, .. } => format!("answered {}", word(decision)),
-            Body::TurnEnded { how } => format!("turn_ended {}", word(how)),
-            Body::Failed { kind, reason } => format!("failed {} {reason}", word(kind)),
-            other => other.type_name(),
-        })
-        .collect();
+    let mut lines = project(&events);
     if !followed {
         lines.push("the client did not follow".into());
     }
     lines.join("\n") + "\n"
-}
-
-/// A payload's shape with none of its values: an object's sorted top-level keys, and how many entries an object or
-/// array has, or how many characters a string has.
-fn shape(value: &Value) -> String {
-    let (keys, len) = match value {
-        Value::Object(fields) => {
-            let mut keys: Vec<&str> = fields.keys().map(String::as_str).collect();
-            keys.sort();
-            (keys.join(","), fields.len())
-        }
-        Value::Array(items) => (String::new(), items.len()),
-        Value::String(text) => (String::new(), text.chars().count()),
-        _ => (String::new(), 0),
-    };
-    format!("{{{keys}}} {len}")
-}
-
-mod erased {
-    /// An enum's own word on the wire, as `serde` writes it.
-    pub trait Word {
-        fn word(&self) -> String;
-    }
-
-    impl<T: serde::Serialize> Word for T {
-        fn word(&self) -> String {
-            serde_json::to_value(self).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
-        }
-    }
 }
 
 /// Run with `HARNESS_UPDATE_GOLDEN=1` to write the golden files from the converter as it is, then read the diff.

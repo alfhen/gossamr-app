@@ -75,13 +75,15 @@ struct Inner {
     applied: watch::Sender<u64>,
     /// Event types this build could not read, each logged once.
     unread: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Calls of the app's tools whose answer is on its way, so a reconnect does not answer them again.
+    answering: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl Link {
     /// Starts the watching task, which follows every session the app's runs still follow.
     pub fn start(core: Arc<Core>, connect: Arc<dyn Connect>, tools: Arc<dyn ClientTools>, notifier: Arc<dyn RunNotifier>, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Link {
         let (commands, received) = mpsc::unbounded_channel();
-        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default() });
+        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default() });
         tokio::spawn(watching(Arc::downgrade(&inner), received));
         Link { inner }
     }
@@ -223,8 +225,12 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
                         let _ = done.send(watched);
                     }
                     Some(Command::Answer { session, call, output, error }) => {
-                        if let Err(e) = client.call(Op::ToolResult { session, call, output, error }).await {
+                        if let Err(e) = client.call(Op::ToolResult { session, call: call.clone(), output, error }).await {
                             eprintln!("couldn't answer a tool call: {e}");
+                        }
+                        // Posted or not, it is no longer on its way: a call still without a result is answered again.
+                        if let Some(link) = inner.upgrade() {
+                            link.answering.lock().unwrap_or_else(|e| e.into_inner()).remove(&call);
                         }
                     }
                 },
@@ -278,7 +284,9 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
         let Ok(Some((run_id, _))) = link.core.session_run(&session).await else { continue };
         if let Ok(Some(run)) = link.core.run(&run_id).await {
             for (id, name, input) in follow.calls {
-                link.answer_tool(&session, run.clone(), id, name, input);
+                if !link.answering.lock().unwrap_or_else(|e| e.into_inner()).contains(&id) {
+                    link.answer_tool(&session, run.clone(), id, name, input);
+                }
             }
         }
     }
@@ -324,6 +332,7 @@ impl Inner {
     }
 
     fn answer_tool(&self, session: &str, run: Run, call: String, name: String, input: Value) {
+        self.answering.lock().unwrap_or_else(|e| e.into_inner()).insert(call.clone());
         let (tools, commands, session) = (self.tools.clone(), self.commands.clone(), session.to_owned());
         tokio::spawn(async move {
             let (output, error) = tools.call(&run, &name, &input).await;

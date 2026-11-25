@@ -400,6 +400,9 @@ impl Harness {
     /// loses the race with its turn's end (accepted here, but the turn ended before the session dispatched it) is
     /// dropped: it is neither recorded nor sent, and the client hears nothing more of it than the turn's end.
     pub fn answer(&self, id: &str, request: &str, decision: Decision, message: Option<String>) -> Result<()> {
+        if decision == Decision::Other {
+            return Err(Error::Refused("an answer is allow or deny".into()));
+        }
         let live = self.taking(id)?;
         {
             let mut open = live.open.lock().unwrap_or_else(|p| p.into_inner());
@@ -1146,6 +1149,18 @@ impl Task {
                             }
                         }
                     }
+                    Some(Body::PermissionClosed { id: driver_id }) => {
+                        let closed = {
+                            let mut open = self.open_requests();
+                            let id = open.iter().find(|(_, request)| request.driver_id == driver_id).map(|(id, _)| id.clone());
+                            id.inspect(|id| {
+                                open.remove(id);
+                            })
+                        };
+                        if let Some(id) = closed {
+                            self.emit(Body::PermissionClosed { id });
+                        }
+                    }
                     Some(question @ Body::Question { .. }) => {
                         // The id the client sees, after redaction, is the one its answer names.
                         let question = redact::body(question, &self.secrets);
@@ -1428,7 +1443,7 @@ impl Task {
         let gone = async {
             while let Some(body) = link.output.recv().await {
                 match &body {
-                    Body::Permission { .. } => continue,
+                    Body::Permission { .. } | Body::PermissionClosed { .. } => continue,
                     Body::Started { .. } => {
                         self.started(body);
                         continue;

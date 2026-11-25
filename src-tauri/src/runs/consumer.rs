@@ -5,7 +5,7 @@
 //! the session was followed (`Db::apply_session`), so an event is applied once, and one already applied is passed over.
 
 use chrono::{DateTime, Utc};
-use harness::event::{Body, Decision, Event, FailKind, QuestionEnd, TurnEnd, PRIVATE_FIELDS};
+use harness::event::{Body, Decision, Event, FailKind, PermissionKind, QuestionEnd, TurnEnd, PRIVATE_FIELDS};
 use serde_json::Value;
 
 use super::redact::redact;
@@ -41,6 +41,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::Started { resumed: true, .. } => {
             follow.closed = false;
             follow.stop_asked = false;
+            follow.ended = false;
             reopen(run);
             if follow.answered.is_some() {
                 run.last_detail = Some(ANSWER_WAITS.into());
@@ -89,14 +90,25 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 rows.add("error", "A tool call failed", Some(&plain(&output)));
             }
         }
-        Body::Permission { id, tool, input, .. } => {
+        Body::Permission { id, kind, tool, input } => {
             let what = describe(&tool, &input);
-            follow.permissions.push((id, event.cut.is_some(), cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
+            // A kind this build does not know is still a request, one the person can only deny.
+            let deny_only = event.cut.is_some() || kind == PermissionKind::Other;
+            follow.permissions.push((id, deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
             rows.add("ask", &format!("Asks to use {what}"), None);
+        }
+        // An answer to it is refused from now on, so it waits on no one; settling shows what the run waits on instead.
+        Body::PermissionClosed { id } => {
+            follow.permissions.retain(|(open, ..)| *open != id);
+            rows.add("update", "It withdrew the request before you answered", None);
         }
         Body::Answered { id, decision, .. } => {
             follow.permissions.retain(|(open, ..)| *open != id);
-            rows.add("update", if decision == Decision::Allow { "You allowed it" } else { "You denied it" }, None);
+            rows.add("update", match decision {
+                Decision::Allow => "You allowed it",
+                Decision::Deny => "You denied it",
+                Decision::Other => "It was answered",
+            }, None);
         }
         Body::Question { id, text } => {
             // A withheld question keeps no text: keep what was read of it, or say so.
@@ -121,6 +133,16 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 QuestionEnd::Denied => rows.add("stop", "Its question was closed: a deny ended its turn", None),
                 QuestionEnd::CleanedUp => rows.add("stop", "Its question was closed: the run was cleaned up", None),
                 QuestionEnd::NotResumable => rows.add("stop", "Its question was closed: no answer can reach the agent now", None),
+                QuestionEnd::Other => rows.add("stop", "Its question was closed", None),
+            }
+            // Nothing resumes a session after these, so nothing more comes from it.
+            if matches!(how, QuestionEnd::CleanedUp | QuestionEnd::NotResumable) {
+                follow.ended = true;
+                follow.closed = true;
+            }
+            if follow.closed && follow.question.is_none() && matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission) {
+                run.state = RunState::Stopped;
+                run.ended_at.get_or_insert(now);
             }
         }
         // A withheld result kept nothing to show; the run keeps what it had.
@@ -142,6 +164,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 }
                 TurnEnd::Cancelled => rows.add("stop", "Its turn was cancelled", None),
                 TurnEnd::Denied => rows.add("stop", STOPPED_AFTER_DENY, None),
+                TurnEnd::Other => rows.add("stop", "Its turn ended", None),
             }
             if follow.question.is_none() {
                 run.state = if how == TurnEnd::Done { RunState::Done } else { RunState::Stopped };
@@ -285,6 +308,8 @@ fn settle(run: &mut Run, follow: &SessionFollow) {
             // The answer is the harness's, and reaches the agent once the session is resumed.
             run.state = RunState::Stopped;
             run.last_detail = Some(ANSWER_WAITS_RESUME.into());
+        } else if matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission) {
+            run.state = RunState::Stopped;
         }
         return;
     }

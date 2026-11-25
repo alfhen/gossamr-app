@@ -109,12 +109,41 @@ fn valid_key(key: &[u8]) -> bool {
     matches!(it.next(), Some(b) if b.is_ascii_alphabetic() || *b == b'_') && it.all(|b| b.is_ascii_alphanumeric() || *b == b'_')
 }
 
+/// What a login session gets from the system and a shell does not set itself. The shell starts with these and nothing
+/// else of the process that captures it, so an agent never gets what that process happened to inherit (a Claude Code
+/// session's own variables, a terminal's one-off exports): what the person's start files set, it sets again.
+/// The proxy and CA variables are kept too: set with `launchctl setenv` and in no start file, they would otherwise
+/// not reach an agent, whose requests then fail behind a TLS-inspecting proxy. Any other variable set that way does not.
+const KEPT: &[&str] = &[
+    "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+];
+
+/// The PATH a login shell starts from; its start files and `path_helper` build the person's from it.
+const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/// The environment a capture's shell starts with: the kept variables of `inherited`, the `LC_*` ones, and the system
+/// PATH.
+fn login_start(inherited: Vec<(OsString, OsString)>) -> Vec<(OsString, OsString)> {
+    let kept = |name: &OsStr| name.to_str().is_some_and(|name| KEPT.contains(&name) || name.starts_with("LC_"));
+    let mut vars: Vec<(OsString, OsString)> = inherited.into_iter().filter(|(name, _)| kept(name)).collect();
+    vars.push(("PATH".into(), SYSTEM_PATH.into()));
+    vars
+}
+
 /// `shell` is `$SHELL`; an empty value falls back to zsh. Interactive and login, so `.zshrc` PATH additions count.
 pub async fn capture(shell: &str) -> Result<RunEnv> {
+    capture_from(shell, std::env::vars_os().collect()).await
+}
+
+async fn capture_from(shell: &str, inherited: Vec<(OsString, OsString)>) -> Result<RunEnv> {
     let shell = if shell.trim().is_empty() { FALLBACK_SHELL } else { shell };
     let failed = |why: String| CaptureError { shell: shell.to_owned(), why };
     let script = format!("printf '\\0{MARKER}\\0'; env -0");
     let child = Command::new(shell)
+        .env_clear()
+        .envs(login_start(inherited))
         .args(["-ilc", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -269,6 +298,50 @@ mod tests {
         assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/one");
         shell.forget().await;
         assert_eq!(shell.get().await.unwrap().get("PATH").unwrap(), "/two");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_shell_starts_from_the_login_variables_and_never_the_capturing_processs_own() {
+        let dir = scratch("clean");
+        let sh = script(&dir, "fakeshell", "export FROM_START_FILE=yes; printf '\\0GOSSAMR_ENV_BEGIN\\0'; env -0");
+        let inherited = [
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_ENTRYPOINT", "claude-desktop"),
+            ("ANTHROPIC_BASE_URL", "http://127.0.0.1:9"),
+            ("HARNESS_TOKEN", "a-client-token"),
+            ("ONE_OFF_EXPORT", "from a terminal"),
+            ("PATH", "/somewhere/else"),
+            ("HOME", "/Users/someone"),
+            ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
+            ("LC_CTYPE", "UTF-8"),
+        ];
+        let env = capture_from(&sh, inherited.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))).collect()).await.unwrap();
+        for gone in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "ANTHROPIC_BASE_URL", "HARNESS_TOKEN", "ONE_OFF_EXPORT"] {
+            assert!(env.get(gone).is_none(), "{gone} reached the capture");
+        }
+        assert_eq!(env.get("FROM_START_FILE").unwrap(), "yes", "what the start file sets is kept");
+        assert_eq!(env.get("SSH_AUTH_SOCK").unwrap(), "/tmp/agent.sock", "git over SSH needs the agent");
+        assert_eq!(env.get("HOME").unwrap(), "/Users/someone");
+        assert_eq!(env.get("LC_CTYPE").unwrap(), "UTF-8");
+        assert_eq!(env.get("PATH").unwrap(), SYSTEM_PATH, "the shell builds PATH from the system's");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_proxy_and_ca_variables_reach_the_capture_and_another_launchd_one_does_not() {
+        let dir = scratch("proxy");
+        let sh = script(&dir, "fakeshell", "printf '\\0GOSSAMR_ENV_BEGIN\\0'; env -0");
+        let proxies = [
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy", "NODE_EXTRA_CA_CERTS",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        ];
+        let inherited = proxies.iter().map(|name| (OsString::from(name), OsString::from(format!("value of {name}")))).chain([("SOME_LAUNCHD_ONLY".into(), "x".into())]);
+        let env = capture_from(&sh, inherited.collect()).await.unwrap();
+        for name in proxies {
+            assert_eq!(env.get(name).and_then(OsStr::to_str), Some(format!("value of {name}").as_str()), "{name} is kept");
+        }
+        assert!(env.get("SOME_LAUNCHD_ONLY").is_none(), "a variable on no list is not");
         let _ = std::fs::remove_dir_all(dir);
     }
 
