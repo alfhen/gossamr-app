@@ -22,6 +22,8 @@ pub struct Served {
     pub dir: PathBuf,
     pub token: Token,
     task: Option<tokio::task::JoinHandle<harness::error::Result<()>>>,
+    /// The provider, kept over a restart as a real one keeps its sessions, so a session can be resumed.
+    mock: Option<Mock>,
 }
 
 impl Served {
@@ -29,14 +31,19 @@ impl Served {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("h");
         let token = Token::random();
-        let mut served = Served { _tmp: tmp, dir, token, task: None };
+        let mut served = Served { _tmp: tmp, dir, token, task: None, mock: None };
         served.serve(script, turn_limit);
         served
     }
 
     /// Serves the data folder, again after a shutdown.
+    /// Serves the data folder, again after a shutdown with the same provider, so its sessions can be resumed.
     pub fn serve(&mut self, script: &str, turn_limit: usize) {
-        self.serve_on(script, turn_limit, harness::work::Setup::default());
+        let mock = self.mock.get_or_insert_with(|| Mock::new(Script::parse(script).unwrap())).clone();
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let first = self.token.clone();
+        let server = Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }).unwrap();
+        self.task = Some(tokio::spawn(server.run()));
     }
 
     /// Serves with what the harness knows of the machine: a home folder and a shell, for sessions that name a repo.
@@ -52,7 +59,7 @@ impl Served {
     pub fn idle() -> Served {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("h");
-        Served { _tmp: tmp, dir, token: Token::random(), task: None }
+        Served { _tmp: tmp, dir, token: Token::random(), task: None, mock: None }
     }
 
     pub async fn client(&self) -> Client {

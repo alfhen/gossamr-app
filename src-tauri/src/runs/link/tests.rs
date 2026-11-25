@@ -476,3 +476,85 @@ async fn a_call_whose_answer_is_on_its_way_is_not_answered_again_on_a_reconnect(
     bed.until(&run, |r, _| r.state == RunState::Done).await;
     bed.end().await;
 }
+
+#[tokio::test]
+async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
+    let mut bed = Bed::new(ASKS).await;
+    let (run, session) = bed.started().await;
+    let (_, follow) = bed.until(&run, |r, _| r.state == RunState::NeedsAnswer).await;
+    bed.served.shut_down().await;
+    bed.served.serve(ASKS, 4);
+    // Answered once the link watches again: a follow it takes after its reconnect's watches is that handshake.
+    let _ = bed.link.follow("no-such-session", 0).await;
+    let (after, _) = bed.until(&run, |r, f| f.closed && r.state == RunState::NeedsAnswer).await;
+    assert_eq!(after.needs.as_deref(), Some("Which colour should the button be?"));
+    // The verifier's quiet spell: long enough for every watch the reconnect made of the closed session to have ended.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let before = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap().1.seq;
+    bed.link.call(Op::AnswerQuestion { session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
+    // At once: the watching connection follows it now, not at some later reconnect, seconds on.
+    let resumed = tokio::time::timeout(std::time::Duration::from_millis(1500), bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1)).await;
+    let (_, resumed) = resumed.expect("the resumed start's events were applied at once");
+    assert!(resumed.seq > before);
+    let rows = bed.rows(&run).await;
+    assert!(rows.iter().any(|(_, text)| text == "Resumed") && rows.iter().any(|(_, text)| text == "Its question was answered"), "{rows:?}");
+    bed.end().await;
+}
+
+/// Connects as `Direct` does, noting when each attempt was made.
+struct Counting {
+    direct: Arc<Direct>,
+    at: Mutex<Vec<std::time::Instant>>,
+}
+
+#[async_trait]
+impl Connect for Counting {
+    async fn connect(&self) -> Result<Client, String> {
+        self.at.lock().unwrap().push(std::time::Instant::now());
+        self.direct.connect().await
+    }
+}
+
+#[tokio::test]
+async fn a_dropped_connection_is_tried_again_only_after_a_wait() {
+    let mut bed = Bed::new(STREAM).await;
+    let counting = Arc::new(Counting { direct: bed.direct.clone(), at: Mutex::new(Vec::new()) });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    let _ = bed.link.follow("no-such-session", 0).await;
+    bed.served.shut_down().await;
+    let dropped = std::time::Instant::now();
+    tokio::time::timeout(WAIT, async {
+        while counting.at.lock().unwrap().iter().all(|at| *at < dropped) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let next = *counting.at.lock().unwrap().iter().find(|at| **at >= dropped).unwrap();
+    assert!(next - dropped >= std::time::Duration::from_millis(60), "tried again after {:?}", next - dropped);
+}
+
+#[tokio::test]
+async fn the_wait_grows_while_watching_the_followed_sessions_keeps_failing() {
+    let mut bed = Bed::new(STREAM).await;
+    let (run, _) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    let app = rusqlite::Connection::open(bed.rig.fx.dir.join("app.sqlite")).unwrap();
+    app.execute_batch("ALTER TABLE run_sessions RENAME TO run_sessions_away").unwrap();
+    let counting = Arc::new(Counting { direct: bed.direct.clone(), at: Mutex::new(Vec::new()) });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    let started = std::time::Instant::now();
+    tokio::time::timeout(WAIT, async {
+        while counting.at.lock().unwrap().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // 100, 200 and 400 ms between the first four tries when the wait doubles; 300 ms at most when it does not.
+    assert!(started.elapsed() >= std::time::Duration::from_millis(600), "four tries in {:?}", started.elapsed());
+    app.execute_batch("ALTER TABLE run_sessions_away RENAME TO run_sessions").unwrap();
+    bed.end().await;
+}
