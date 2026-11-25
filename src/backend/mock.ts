@@ -1,4 +1,5 @@
 import { reviewText, SAMPLE_REVIEW_COMMENTS, SAMPLE_REVIEW_SUMMARY } from "./mockReviewDraft";
+import { HANDED_OVER_ASK } from "../types";
 import type { ClearFilter } from "../types";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -617,7 +618,8 @@ export class MockBackend implements Backend {
     return this.runs.setModel(id, choice);
   }
 
-  async runsAnswer(id: string, text: string) {
+  async runsAnswer(id: string, text: string, options?: { tookBack?: boolean }) {
+    if (this.runs.get(id)?.handedOver && !options?.tookBack) throw new Error(HANDED_OVER_ASK);
     return this.runs.answer(id, text);
   }
 

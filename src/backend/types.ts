@@ -159,8 +159,12 @@ export interface Backend {
   runsStop(id: string): Promise<Run>;
   /** Changes the instance and model a run launches on, while it is still queued; rejects once it has started or for a choice the instance does not list. */
   runsSetModel(id: string, choice: ModelChoice): Promise<Run>;
+  /**
+   * `tookBack`: for a run handed over to Terminal, you say you took it back there, so Gossamr may resume it. Without it
+   * such a run is refused with `HANDED_OVER_ASK`.
+   */
   /** Answers a run that is asking a question: hands the answer to the agent waiting in its ask call, or stops its session and wakes it when its turn ended. Also sends again an answer that was stopped on its way. */
-  runsAnswer(id: string, text: string): Promise<Run>;
+  runsAnswer(id: string, text: string, options?: { tookBack?: boolean }): Promise<Run>;
   /** Takes a listed session over as the continuation of a stopped or finished run. */
   runsAdoptSession(id: string, session: string): Promise<Run>;
   /** Stops every active run, across accounts, and the runs waiting for a slot (`waiting`); nothing starts in the slots it frees. */

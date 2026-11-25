@@ -60,14 +60,26 @@ impl RunService {
     /// a failure leaves the run `Stopped` with the reason and the answer kept on it, so nothing the person wrote is
     /// lost.
     pub async fn answer(&self, run_id: &str, text: &str) -> Result<Run> {
-        self.answer_as(run_id, text, Actor::Person).await
+        self.answer_with(run_id, text, Actor::Person, false).await
+    }
+
+    /// `answer` from the page, where `took_back` says the person took a run handed over to Terminal back.
+    pub async fn answer_took_back(&self, run_id: &str, text: &str, took_back: bool) -> Result<Run> {
+        self.answer_with(run_id, text, Actor::Person, took_back).await
     }
 
     /// `answer`, recorded as `by`'s.
     pub async fn answer_as(&self, run_id: &str, text: &str, by: Actor) -> Result<Run> {
+        self.answer_with(run_id, text, by, false).await
+    }
+
+    async fn answer_with(&self, run_id: &str, text: &str, by: Actor, took_back: bool) -> Result<Run> {
         let text = checked(text)?;
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
+        if run.handed_over && !took_back {
+            return Err(refuse(super::message::HANDED_OVER_ASK));
+        }
         if self.core.asks().question(run_id).is_some() {
             if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
                 return self.answer_ask(run, text, by).await;

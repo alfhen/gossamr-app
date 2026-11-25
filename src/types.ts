@@ -523,7 +523,11 @@ export interface RunSpec {
 
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
 
-/** Why a launch failed, for the failures the person can fix. `Run.error` has the full text. */
+/**
+ * Why a run failed, for the failures the person can fix. `Run.error` has the full text. `signingNeedsYou`: a commit the
+ * person's signing agent refused ended the run. `interrupted`: an agent an earlier release started was stopped when
+ * Gossamr moved its runs to the harness; its worktree stays, and Clean up removes it.
+ */
 export type RunFailure =
   | { type: "untrustedFolder"; path: string }
   | { type: "notSignedIn" }
@@ -533,6 +537,8 @@ export type RunFailure =
   | { type: "outsideWorkFolder"; path: string }
   | { type: "cloneOccupied"; path: string }
   | { type: "capReached" }
+  | { type: "signingNeedsYou" }
+  | { type: "interrupted" }
   | { type: "other" };
 
 export interface Run {
@@ -549,6 +555,8 @@ export interface Run {
   inWorkFolder?: boolean;
   /** The harness session the run is, once it opened one. */
   harnessSession?: string;
+  /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
+  handedOver?: boolean;
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
   commitEmail?: string | null;
   signingKey?: string | null;
@@ -573,7 +581,7 @@ export interface Run {
   /** Whether `result` is the whole final answer. Absent in sample data, which is always complete. */
   resultComplete?: boolean;
   error: string | null;
-  /** Set with `error` when a launch fails; absent for a run that stopped after it started. */
+  /** Set with `error` when a launch fails, and for a run on the harness whose session ended in one of these. */
   failure?: RunFailure | null;
   queuedAt: string;
   launchedAt: string | null;
@@ -605,6 +613,9 @@ export interface Run {
   /** The Pip turn that started it, when Pip did. */
   origin?: ProposalOrigin | null;
 }
+
+/** Why a message to a run handed over to Terminal waits on you, as `HANDED_OVER_ASK` in `runs/message.rs`. */
+export const HANDED_OVER_ASK = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
 export const SUMMARY_ONLY = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";

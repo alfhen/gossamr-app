@@ -767,8 +767,8 @@ async fn runs_stop(runs: State<'_, RunsState>, id: String) -> Result<Run> {
 
 /// Sends the person's answer to an agent that asked a question: stops its session and wakes it with the answer.
 #[tauri::command]
-async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String) -> Result<Run> {
-    runs.answer(&id, &text).await
+async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String, took_back: Option<bool>) -> Result<Run> {
+    runs.answer_took_back(&id, &text, took_back.unwrap_or(false)).await
 }
 
 /// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.

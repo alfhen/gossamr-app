@@ -402,6 +402,10 @@ pub enum RunFailure {
     /// Something that isn't a clone of the repository is where Gossamr's clone goes.
     CloneOccupied { path: PathBuf },
     CapReached,
+    /// A commit the person's signing agent refused ended the run.
+    SigningNeedsYou,
+    /// An agent an earlier release started, stopped when its runs moved to the harness. Its worktree stays.
+    Interrupted,
     Other,
 }
 
@@ -513,7 +517,8 @@ pub struct Run {
     #[serde(default)]
     pub result_complete: bool,
     pub error: Option<String>,
-    /// Set with `error` when a launch fails; absent for failures the tracker saw after the session started.
+    /// Set with `error` when a launch fails, and for a run on the harness whose session ended in one of these; absent for
+    /// failures the old tracker saw after the session started.
     #[serde(default)]
     pub failure: Option<RunFailure>,
     pub queued_at: DateTime<Utc>,
@@ -581,6 +586,9 @@ pub struct Run {
     /// The harness session the run is, once it opened one. Its events decide the run's state from then on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session: Option<String>,
+    /// Its session was handed over to Terminal: nothing resumes it until the person says they took it back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_over: bool,
 }
 
 impl Run {
@@ -655,6 +663,7 @@ impl Run {
             signing_key: None,
             in_work_folder: false,
             harness_session: None,
+            handed_over: false,
         }
     }
 
