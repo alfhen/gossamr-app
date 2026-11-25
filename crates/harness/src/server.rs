@@ -394,7 +394,7 @@ struct Client {
 impl Drop for Client {
     fn drop(&mut self) {
         for id in &self.ends_with_it {
-            let _ = self.harness.close(id);
+            let _ = self.harness.client_left(id);
         }
     }
 }
@@ -592,7 +592,7 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
                 Err(RecvError::Closed) => break,
             },
         };
-        let closed = event.body == Body::Closed;
+        let closed = matches!(event.body, Body::Closed { .. });
         // An event numbered 0 was not stored, so it cannot have been pushed before.
         if event.seq == 0 || event.seq > last {
             last = last.max(event.seq);
@@ -623,7 +623,7 @@ async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more:
     loop {
         for event in page {
             *last = event.seq;
-            closed = event.body == Body::Closed;
+            closed = matches!(event.body, Body::Closed { .. });
             if !push(out, session, event).await {
                 return None;
             }
@@ -655,7 +655,7 @@ mod tests {
     async fn events_an_event_both_read_and_live_is_pushed_once_and_the_watch_ends_at_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let harness = Harness::new(Store::open(&tmp.path().join("d")).unwrap(), vec![], Settings::default());
-        let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]).collect();
+        let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed { by: crate::event::ClosedBy::Stop }, cut: None }]).collect();
         let (live, receiver) = mpsc::channel(64);
         let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)), bytes: Arc::new(AtomicUsize::new(0)) };
         // The read got 1 to 3; the receiver has 2 onwards.
@@ -681,7 +681,7 @@ mod tests {
         store.create_session("s", "mock", false, Path::new("/"), None).unwrap();
         let harness = Harness::new(store, vec![], Settings::default());
         let (live, receiver) = tokio::sync::broadcast::channel(2);
-        for event in (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]) {
+        for event in (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed { by: crate::event::ClosedBy::Stop }, cut: None }]) {
             live.send(event).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
@@ -702,7 +702,7 @@ mod tests {
         store.create_session("s", "mock", true, Path::new("/"), None).unwrap();
         // Events 1 to 8 and `closed` are stored, withheld as a locked session's are. The watch began after 5, so 6 on
         // also came to its receiver, whole, while it read the store.
-        let whole: Vec<Event> = (1..=8).map(text).chain([Event { seq: 9, ms: 0, body: Body::Closed, cut: None }]).collect();
+        let whole: Vec<Event> = (1..=8).map(text).chain([Event { seq: 9, ms: 0, body: Body::Closed { by: crate::event::ClosedBy::Stop }, cut: None }]).collect();
         for event in &whole {
             store.append("s", &event.body, 0).unwrap();
         }

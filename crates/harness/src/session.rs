@@ -20,7 +20,7 @@ use tokio::sync::{Notify, broadcast, oneshot};
 
 use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secret, random_hex};
 use crate::error::{Error, Result};
-use crate::event::{Body, Decision, Event, FailKind, QuestionEnd, TurnEnd};
+use crate::event::{Body, ClosedBy, Decision, Event, FailKind, QuestionEnd, TurnEnd};
 use crate::redact;
 use crate::store::{Listed, NewSession, Store, now_ms};
 use crate::tools::{ASK, Endpoints, RESULT, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
@@ -168,7 +168,8 @@ enum Request {
     Answer { id: String, decision: Decision, message: Option<String> },
     ToolResult { id: String, reply: Reply },
     Cancel,
-    Stop,
+    /// A client's Stop, or the client a session ends with leaving: what its `closed` says.
+    Stop(ClosedBy),
     HandOver,
     /// The harness shuts down: the session stops, and its open question stays open for after the restart.
     Shutdown,
@@ -468,7 +469,12 @@ impl Harness {
     /// Stops the session. It is closed once its agent has gone, which its `closed` event says; until then it takes no
     /// more requests.
     pub fn close(&self, id: &str) -> Result<()> {
-        self.stop(id, Request::Stop)
+        self.stop(id, Request::Stop(ClosedBy::Stop))
+    }
+
+    /// As `close`, for a session that ends with its client, which has left.
+    pub fn client_left(&self, id: &str) -> Result<()> {
+        self.stop(id, Request::Stop(ClosedBy::ClientLeft))
     }
 
     /// Closes the session as handed over to Terminal, which its `handed_over` event says. Its provider id is kept,
@@ -1059,6 +1065,8 @@ impl Task {
         // "Carry on" waiting to be sent, and whether the store says it may not be.
         let mut carry_on: Option<String> = None;
         let mut blocked = self.inner.with_store(|store| store.session(&self.id)).is_ok_and(|row| row.no_carry_on.is_some());
+        // Why the task ends, for its `closed`: the agent's own going unless a request or the store says otherwise.
+        let mut by = ClosedBy::Agent;
         let stopped = 'run: loop {
             if self.broken.load(Ordering::Relaxed) {
                 break true;
@@ -1336,19 +1344,24 @@ impl Task {
                         // Marked before it is said, so a resume never starts a session Terminal now holds.
                         match self.inner.with_store(|store| store.set_handed_over(&self.id, true)) {
                             Ok(()) => {
+                                by = ClosedBy::HandOver;
                                 self.emit(Body::HandedOver);
                             }
                             Err(e) => self.store_failed(&e),
                         }
                         break 'run true;
                     }
-                    Some(Request::Stop) => {
+                    Some(Request::Stop(who)) => {
+                        by = who;
                         self.close_questions(QuestionEnd::Stopped, &mut held_ask);
                         self.forbid_carry_on(Some("it was stopped"), &mut blocked);
                         break 'run true;
                     }
                     Some(Request::CarryOn(text)) => carry_on = Some(text),
-                    Some(Request::Shutdown) | None => break 'run true,
+                    Some(Request::Shutdown) | None => {
+                        by = ClosedBy::Shutdown;
+                        break 'run true;
+                    }
                 },
             }
         };
@@ -1392,7 +1405,10 @@ impl Task {
         self.inner.forget_endpoint(&self.endpoint, self.start);
         #[cfg(test)]
         self.inner.hooks.before_closed();
-        self.emit(Body::Closed);
+        if by == ClosedBy::Agent && self.broken.load(Ordering::Relaxed) {
+            by = ClosedBy::Harness;
+        }
+        self.emit(Body::Closed { by });
         if live.get(&self.id).is_some_and(|entry| entry.start == self.start) {
             live.remove(&self.id);
             self.inner.left.notify_waiters();
@@ -1655,7 +1671,7 @@ impl Task {
     /// `emit` for a body already redacted and fitted.
     fn keep(&self, body: Body, cut: Option<u64>) -> bool {
         if self.broken.load(Ordering::Relaxed) {
-            if body == Body::Closed {
+            if matches!(body, Body::Closed { .. }) {
                 self.publish(Event { seq: 0, ms: now_ms(), body, cut: None });
             }
             return false;
@@ -1673,7 +1689,7 @@ impl Task {
             Err(e) => {
                 drop(store);
                 self.store_failed(&e);
-                if body == Body::Closed {
+                if matches!(body, Body::Closed { .. }) {
                     self.publish(Event { seq: 0, ms: now_ms(), body, cut: None });
                 }
                 false
@@ -2065,7 +2081,7 @@ mod tests {
         harness.answer_question(&id, &question, "blue".into()).await.unwrap();
         events_until(&mut events, |body| matches!(body, Body::Failed { kind: FailKind::AgentStopped, .. })).await;
         hand.output.lock().unwrap().take();
-        events_until(&mut events, |body| *body == Body::Closed).await;
+        events_until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         assert_eq!(harness.open_question(&id).unwrap().as_deref(), Some(question.as_str()), "still open, to be answered again");
     }
 
@@ -2083,7 +2099,7 @@ mod tests {
         let (stopping, session) = (harness.clone(), id.clone());
         set(&harness.inner.hooks.after_answer_taken, Box::new(move || stopping.close(&session).unwrap()) as Hook);
         let _ = harness.answer_question(&id, &question, "red".into()).await;
-        let seen = events_until(&mut events, |body| *body == Body::Closed).await;
+        let seen = events_until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         assert!(seen.contains(&Body::QuestionClosed { id: question.clone(), how: QuestionEnd::Stopped }), "{seen:?}");
         assert_eq!(harness.open_question(&id).unwrap(), None, "closed in the store");
         assert!(harness.answer_question(&id, &question, "red".into()).await.is_err());
@@ -2167,7 +2183,7 @@ mod tests {
             }
         }) as Hook);
         harness.close(&id).unwrap();
-        while events.recv().await.is_ok_and(|event| event.body != Body::Closed) {}
+        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
         for _ in 0..200 {
             if starts_and_closes(&harness, &id).len() == 3 {
                 break;
@@ -2249,7 +2265,7 @@ mod tests {
         let harness = Harness::new(Store::open(&dir).unwrap(), drivers, Settings::default());
         let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
         harness.hand_over(&id).unwrap();
-        while events.recv().await.is_ok_and(|event| event.body != Body::Closed) {}
+        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
         // What the row says the moment the task exists: from then on it could end and be handed over again.
         let seen: Arc<Mutex<Option<bool>>> = Arc::default();
         let (kept, file) = (seen.clone(), dir.join("harness.sqlite"));
@@ -2287,7 +2303,7 @@ mod tests {
         harness.hand_over(&id).unwrap();
         let mut seen = vec![];
         while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(10), events.recv()).await {
-            let closed = event.body == Body::Closed;
+            let closed = matches!(event.body, Body::Closed { .. });
             seen.push(event.body);
             if closed {
                 break;

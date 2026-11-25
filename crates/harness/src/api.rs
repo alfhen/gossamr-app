@@ -8,7 +8,11 @@
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 //!
-//! No call resumes a session yet: H10 adds resuming after a restart, and H14 adds taking a handed-over session back.
+//! Each start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the
+//! harness went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the
+//! agent ended or died by itself, or its driver failed), `client_left` (it ended with its client), or `harness` (its
+//! store failed). It is kept when the event is withheld. A reader takes a value it does not know, or a `closed` from a
+//! harness that did not say, as `unknown`, so a later value needs no new protocol.
 
 use std::path::{Path, PathBuf};
 
