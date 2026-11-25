@@ -166,7 +166,10 @@ pub enum Op {
     /// asked it, a clean-up or a resume refused for good closed is refused.
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
-    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
+    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume. It answers once the
+    /// hand-over is taken, and then it is done even if the agent goes before the session reads it: the session is
+    /// marked as handed over, says `handed_over`, then closes `by: hand_over`. It is refused for a session already
+    /// stopping.
     HandOver { session: String },
     /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token, and
     /// watches it on this connection from its next event, as `open` does, so a locked session's client misses none.

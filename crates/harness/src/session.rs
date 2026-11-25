@@ -1349,14 +1349,8 @@ impl Task {
                         }
                     }
                     Some(Request::HandOver) => {
-                        self.close_questions(QuestionEnd::HandedOver, &mut held_ask);
-                        // Marked before it is said, so a resume never starts a session Terminal now holds.
-                        match self.inner.with_store(|store| store.set_handed_over(&self.id, true)) {
-                            Ok(()) => {
-                                by = ClosedBy::HandOver;
-                                self.emit(Body::HandedOver);
-                            }
-                            Err(e) => self.store_failed(&e),
+                        if self.hand_over(&mut held_ask) {
+                            by = ClosedBy::HandOver;
                         }
                         break 'run true;
                     }
@@ -1394,6 +1388,11 @@ impl Task {
                 _ => None,
             });
         }
+        // The client was told the hand-over was taken, so it is done, though the agent went before it was read.
+        let requested = matches!(by, ClosedBy::Stop | ClosedBy::Shutdown | ClosedBy::HandOver | ClosedBy::ClientLeft);
+        if !requested && taken == Some(ClosedBy::HandOver) && !self.hand_over(&mut held_ask) {
+            taken = None;
+        }
         if unsent {
             self.emit(Body::PromptsDropped);
         }
@@ -1423,7 +1422,7 @@ impl Task {
         #[cfg(test)]
         self.inner.hooks.before_closed();
         // A request the harness took wins, then the harness's own failure, then a signal from outside, then the agent.
-        if !matches!(by, ClosedBy::Stop | ClosedBy::Shutdown | ClosedBy::HandOver | ClosedBy::ClientLeft) {
+        if !requested {
             by = match taken {
                 Some(taken) => taken,
                 None if self.broken.load(Ordering::Relaxed) => ClosedBy::Harness,
@@ -1665,6 +1664,20 @@ impl Task {
             self.close_question(&question, QuestionEnd::Answered);
         }
         Some(Turn::Prompted)
+    }
+
+    /// Hands the session over to Terminal: closes its questions, keeps the mark, then says so. False when the store
+    /// would not keep the mark, and the session stops on its broken store.
+    fn hand_over(&self, held_ask: &mut Option<(String, oneshot::Sender<Reply>)>) -> bool {
+        self.close_questions(QuestionEnd::HandedOver, held_ask);
+        // Marked before it is said, so a resume never starts a session Terminal now holds.
+        match self.inner.with_store(|store| store.set_handed_over(&self.id, true)) {
+            Ok(()) => self.emit(Body::HandedOver),
+            Err(e) => {
+                self.store_failed(&e);
+                false
+            }
+        }
     }
 
     /// Drops the queued prompts. A question whose answer was among them stays open, to be answered again.
@@ -2101,6 +2114,20 @@ mod tests {
             let by = closed_by(&mut events).await;
             assert_eq!(by, if shutdown { ClosedBy::Shutdown } else { ClosedBy::Stop });
         }
+    }
+
+    #[tokio::test]
+    async fn closed_by_a_hand_over_the_agent_overtook_is_still_done_as_its_client_was_told() {
+        let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+        let (harness, mut events, id) = in_a_turn(&tmp, &hand).await;
+        // On this one thread the session runs only once both are queued, and it reads the output first.
+        hand.output.lock().unwrap().take();
+        assert!(harness.hand_over(&id).is_ok(), "the client is told it was taken");
+        let seen = events_until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+        assert!(seen.contains(&Body::HandedOver), "{seen:?}");
+        assert_eq!(seen.last(), Some(&Body::Closed { by: ClosedBy::HandOver }));
+        assert!(harness.inner.with_store(|store| store.session(&id)).unwrap().handed_over, "marked, so a resume is refused");
+        assert!(matches!(harness.resume(&id).await, Err(Error::HandedOver(_))));
     }
 
     #[tokio::test]
