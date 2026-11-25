@@ -70,23 +70,23 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::ToolResult { error: true, output, .. } => rows.add("error", "A tool call failed", Some(&plain(&output))),
         Body::ToolResult { .. } => {}
         Body::Permission { id, tool, input, .. } => {
-            follow.permissions.push((id, event.cut.is_some()));
             let what = describe(&tool, &input);
-            run.needs = Some(cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT));
+            follow.permissions.push((id, event.cut.is_some(), cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
             rows.add("ask", &format!("Asks to use {what}"), None);
         }
         Body::Answered { id, decision, .. } => {
-            follow.permissions.retain(|(open, _)| *open != id);
+            follow.permissions.retain(|(open, ..)| *open != id);
             rows.add("update", if decision == Decision::Allow { "You allowed it" } else { "You denied it" }, None);
         }
         Body::Question { id, text } => {
             follow.question = Some(id);
-            run.needs = Some(cut(&redact(&text), NEEDS_KEPT));
+            follow.asked = Some(cut(&redact(&text), NEEDS_KEPT));
             rows.add("ask", &text, None);
         }
         Body::QuestionClosed { id, how } => {
             if follow.question.as_deref() == Some(id.as_str()) {
                 follow.question = None;
+                follow.asked = None;
             }
             match how {
                 QuestionEnd::Answered => rows.add("update", "Its question was answered", None),
@@ -142,6 +142,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.closed = true;
             follow.in_turn = false;
             follow.question = None;
+            follow.asked = None;
             follow.permissions.clear();
             if !matches!(run.state, RunState::Done | RunState::Failed) {
                 run.state = RunState::Stopped;
@@ -153,9 +154,12 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     }
     settle(run, follow);
     run.asking = run.state == RunState::NeedsAnswer;
-    if run.state != RunState::NeedsAnswer && run.state != RunState::NeedsPermission {
-        run.needs = None;
-    }
+    // What it waits on now: the oldest permission request, else the question, whichever event closed the other.
+    run.needs = match run.state {
+        RunState::NeedsPermission => follow.permissions.first().map(|(.., need)| need.clone()),
+        RunState::NeedsAnswer => follow.asked.clone(),
+        _ => None,
+    };
     if run.state != before || !rows.rows.is_empty() {
         run.last_progress_at = now;
     }

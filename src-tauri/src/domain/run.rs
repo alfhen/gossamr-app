@@ -682,10 +682,12 @@ pub struct SessionFollow {
     /// Prompts sent: the first is the brief, each later one a message.
     pub prompts: u32,
     pub in_turn: bool,
-    /// The question the agent asked that is still open.
+    /// The question the agent asked that is still open, and what the run shows it needs while it waits on it.
     pub question: Option<String>,
-    /// Permission requests still open, with whether each was cut to fit, which can then only be denied.
-    pub permissions: Vec<(String, bool)>,
+    pub asked: Option<String>,
+    /// Permission requests still open, oldest first: each with whether it was cut to fit, which can then only be
+    /// denied, and what the run shows it needs.
+    pub permissions: Vec<(String, bool, String)>,
     /// The session's events up to `seq` were partly lost; how many times.
     pub lost: u32,
     /// The session closed: nothing more comes from it.

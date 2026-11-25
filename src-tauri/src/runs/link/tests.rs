@@ -235,11 +235,39 @@ async fn a_permission_request_waits_and_its_answer_reaches_the_agent() {
     let bed = Bed::new(PERMISSION).await;
     let (run, session) = bed.started().await;
     let (_, follow) = bed.until(&run, |r, _| r.state == RunState::NeedsPermission).await;
-    let (request, cut) = follow.permissions[0].clone();
+    let (request, cut, _) = follow.permissions[0].clone();
     assert!(!cut);
     bed.link.call(Op::Answer { session, request, decision: Decision::Allow, message: None }).await.unwrap();
     bed.until(&run, |r, _| r.state == RunState::Done).await;
     assert!(bed.rows(&run).await.contains(&("update".into(), "You allowed it".into())));
+    bed.end().await;
+}
+
+// The ask returns "question pending" before the permission request, so the deny that ends the turn holds no call.
+const ASKS_THEN_DENIED: &str = r#"{"capabilities": {"tool_call_limit_ms": 400, "deny_ends_turn": true}}
+{"prompt": null}
+{"call": {"name": "ask", "input": {"question": "Which colour should the button be?"}}}
+{"permission": {"kind": "command", "tool": "Bash", "input": {"command": "rm -rf build"}}}
+{"say": "Removed it."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Blue it is."}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_deny_leaves_a_question_whose_call_returned_open_and_its_answer_comes_as_the_next_prompt() {
+    let bed = Bed::new(ASKS_THEN_DENIED).await;
+    let (run, session) = bed.started().await;
+    let (_, follow) = bed.until(&run, |_, f| f.question.is_some() && !f.permissions.is_empty()).await;
+    let (request, question) = (follow.permissions[0].0.clone(), follow.question.unwrap());
+    bed.link.call(Op::Answer { session: session.clone(), request, decision: Decision::Deny, message: None }).await.unwrap();
+    let (denied, follow) = bed.until(&run, |_, f| f.turns == 1).await;
+    assert_eq!((denied.state, denied.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour should the button be?")));
+    assert_eq!(follow.question.as_deref(), Some(question.as_str()), "the deny closed no question");
+    bed.link.call(Op::AnswerQuestion { session, question, text: "Blue".into() }).await.unwrap();
+    let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert_eq!((done.needs, follow.question, done.last_detail.as_deref()), (None, None, Some("Blue it is.")));
     bed.end().await;
 }
 

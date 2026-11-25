@@ -86,7 +86,7 @@ fn a_permission_request_waits_then_its_answer_goes_back_to_work() {
     p.play(started());
     p.play([Body::Permission { id: "p1".into(), kind: harness::event::PermissionKind::Command, tool: "Bash".into(), input: json!({ "command": "rm -rf build" }) }]);
     assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::NeedsPermission, Some("Wants to use Bash: rm -rf build")));
-    assert_eq!(p.follow.permissions, vec![("p1".to_owned(), false)]);
+    assert_eq!(p.follow.permissions, vec![("p1".to_owned(), false, "Wants to use Bash: rm -rf build".to_owned())]);
     p.play([Body::Answered { id: "p1".into(), decision: Decision::Allow, message: None }]);
     assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::Working, None));
 }
@@ -98,7 +98,7 @@ fn a_cut_permission_request_is_kept_as_one_that_can_only_be_denied() {
     let body = Body::Permission { id: "p1".into(), kind: harness::event::PermissionKind::Command, tool: "Bash".into(), input: json!("cut") };
     let event = Event { seq: 9, ms: 0, body, cut: Some(40) };
     fold(&mut p.run, &mut p.follow, &event, Utc::now());
-    assert_eq!(p.follow.permissions, vec![("p1".to_owned(), true)]);
+    assert_eq!(p.follow.permissions, vec![("p1".to_owned(), true, "Wants to use Bash".to_owned())]);
 }
 
 #[test]
@@ -193,4 +193,30 @@ fn a_loss_names_the_events_it_skipped_and_reads_on_after_them() {
     assert_eq!((one[0].text.as_str(), p.follow.lost), (format!("{LOST}: event 10 was skipped").as_str(), 2));
     let none = lost(&mut p.run, &mut p.follow, "behind", 3, Utc::now());
     assert_eq!((none[0].text.as_str(), p.follow.seq), (format!("{LOST}: no stored event was skipped").as_str(), 10), "never back");
+}
+
+#[test]
+fn a_deny_that_closes_the_held_question_before_the_turn_ends_reads_stopped_after_a_deny() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([
+        Body::Question { id: "q1".into(), text: "Which colour?".into() },
+        Body::QuestionClosed { id: "q1".into(), how: QuestionEnd::Denied },
+        Body::TurnEnded { how: TurnEnd::Denied },
+    ]);
+    assert_eq!((p.run.state, p.run.needs.as_deref(), p.follow.question.as_deref()), (RunState::Stopped, None, None));
+    assert_eq!(p.run.last_detail.as_deref(), Some(STOPPED_AFTER_DENY));
+}
+
+#[test]
+fn a_run_shows_what_it_still_waits_on_once_one_of_its_requests_is_answered() {
+    let mut p = Played::new();
+    p.play(started());
+    let wants = |id: &str, command: &str| Body::Permission { id: id.into(), kind: harness::event::PermissionKind::Command, tool: "Bash".into(), input: json!({ "command": command }) };
+    p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }, wants("p1", "rm a"), wants("p2", "rm b")]);
+    assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::NeedsPermission, Some("Wants to use Bash: rm a")), "the oldest request first");
+    p.play([Body::Answered { id: "p1".into(), decision: Decision::Allow, message: None }]);
+    assert_eq!(p.run.needs.as_deref(), Some("Wants to use Bash: rm b"));
+    p.play([Body::Answered { id: "p2".into(), decision: Decision::Deny, message: None }]);
+    assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour?")), "then the question");
 }
