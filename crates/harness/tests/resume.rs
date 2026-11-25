@@ -277,3 +277,57 @@ async fn resume_over_the_api_takes_back_resumes_and_refuses_with_the_reason() {
     assert_eq!(resumed["session"], id.as_str());
     task.abort();
 }
+
+/// The events a watch pushes, up to its end.
+async fn watched(client: &mut harness::client::Client) -> Vec<Event> {
+    use harness::client::Push;
+    let mut got = vec![];
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(10), client.push()).await.expect("a push within 10 s").unwrap() {
+            Some(Push::Event { event, .. }) => got.push(event),
+            Some(Push::End { .. }) => return got,
+            Some(Push::Lost { reason, .. }) => panic!("{reason}"),
+            None => panic!("the connection ended"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn watch_a_resumed_session_reads_past_its_earlier_closed_and_ends_at_the_resumed_starts() {
+    use harness::api::Op;
+    let (_tmp, dir) = data_dir();
+    let (token, mock) = (harness::auth::Token::random(), mock(TURNS));
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+    let first = token.clone();
+    let server = harness::server::Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap();
+    let served = server.harness().clone();
+    let task = tokio::spawn(server.run());
+    let (id, mut events) = open(&served, false).await;
+    next(&mut events).await;
+    closed(&served, &id, &mut events).await;
+    let earlier = served.events(&id, 0).unwrap().iter().find(|event| event.body == Body::Closed).unwrap().seq;
+    let mut client = harness::client::Client::connect(&dir, &token).await.unwrap();
+    client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap();
+    let resumed = |got: &[Event]| got.iter().any(|event| matches!(event.body, Body::Started { resumed: true, .. }) && event.seq > earlier);
+    // While it runs, and once it has closed again: from the start, and from just before the earlier `closed`.
+    let mut watchers = vec![];
+    for after in [0, earlier - 1] {
+        let mut watcher = harness::client::Client::connect(&dir, &token).await.unwrap();
+        watcher.call(Op::Watch { session: id.clone(), after }).await.unwrap();
+        watchers.push(watcher);
+    }
+    let mut events = served.subscribe(&id).unwrap();
+    closed(&served, &id, &mut events).await;
+    for after in [0, earlier - 1] {
+        let mut watcher = harness::client::Client::connect(&dir, &token).await.unwrap();
+        watcher.call(Op::Watch { session: id.clone(), after }).await.unwrap();
+        watchers.push(watcher);
+    }
+    for (at, watcher) in watchers.iter_mut().enumerate() {
+        let got = watched(watcher).await;
+        assert!(resumed(&got), "{at}: the resumed start's events: {:?}", types(&got));
+        let last = got.last().unwrap();
+        assert!(last.body == Body::Closed && last.seq > earlier, "{at}: ends at the resumed start's `closed`: {:?}", types(&got));
+    }
+    task.abort();
+}

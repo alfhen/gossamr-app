@@ -463,11 +463,21 @@ impl Client {
             Op::Cancel { session } => done(harness.cancel(&session)),
             Op::Answer { session, request, decision, message } => done(harness.answer(&session, &request, decision, message)),
             Op::ToolResult { session, call, output, error } => done(harness.tool_result(&session, &call, output, error)),
-            Op::AnswerQuestion { session, question, text } => done(harness.answer_question(&session, &question, text).await),
+            // It may resume the session, which waits for the shell as an open does.
+            Op::AnswerQuestion { session, question, text } => {
+                self.captured().await;
+                done(harness.answer_question(&session, &question, text).await)
+            }
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
-            Op::Resume { session, carry_on } => harness.resume_with(&session, carry_on).await.map(|_| json!({ "session": session })),
-            Op::TakeBack { session } => harness.take_back(&session).await.map(|_| json!({ "session": session })),
+            Op::Resume { session, carry_on } => {
+                self.captured().await;
+                harness.resume_with(&session, carry_on).await.map(|_| json!({ "session": session }))
+            }
+            Op::TakeBack { session } => {
+                self.captured().await;
+                harness.take_back(&session).await.map(|_| json!({ "session": session }))
+            }
             Op::CleanUp { session } => done(harness.clean_up(&session).await),
             Op::Sessions => Ok(serde_json::to_value(harness.sessions()?)?),
             Op::Providers { logins } => {
@@ -531,8 +541,9 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
     let (page, more, upto) = stored;
     let mut lost = None;
     match pages(&harness, &session, page, more, upto, &mut last, &out).await {
-        Some(Paged::Done) => {}
-        Some(Paged::Closed) => return finish(&out, session).await,
+        // A resumed session's earlier start closed too: the watch reads on while it runs.
+        Some(Paged::Closed) if live.is_none() => return finish(&out, session).await,
+        Some(Paged::Done | Paged::Closed) => {}
         Some(Paged::Short) => {
             lost = Some(format!("events were lost: the sweep deleted the stored events of session {session} after {last}, up to {upto}, before they were read"));
             live = None;
@@ -588,7 +599,7 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
 }
 
 enum Paged {
-    /// It pushed `closed`.
+    /// The last event it pushed is a `closed`: a resumed session's earlier ones are read past.
     Closed,
     /// The store has no more up to `upto`.
     Done,
@@ -599,19 +610,21 @@ enum Paged {
 /// Pushes `page`, then, while `more`, the store's next pages after `last` and up to `upto`. None when the client has
 /// gone.
 async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more: bool, upto: u64, last: &mut u64, out: &Sender<Reply>) -> Option<Paged> {
+    let mut closed = false;
     loop {
         for event in page {
             *last = event.seq;
-            let closed = event.body == Body::Closed;
+            closed = event.body == Body::Closed;
             if !push(out, session, event).await {
                 return None;
             }
-            if closed {
-                return Some(Paged::Closed);
-            }
         }
         if !more {
-            return Some(if upto != u64::MAX && *last < upto { Paged::Short } else { Paged::Done });
+            return Some(match () {
+                _ if closed => Paged::Closed,
+                _ if upto != u64::MAX && *last < upto => Paged::Short,
+                _ => Paged::Done,
+            });
         }
         (page, more) = harness.events_page(session, *last, upto, PAGE_BYTES).ok()?;
     }

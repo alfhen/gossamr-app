@@ -1123,10 +1123,11 @@ impl Task {
                             self.open_requests().clear();
                             release(&mut held_ask);
                         }
-                        self.emit(body);
-                        if denied {
-                            self.forbid_carry_on(Some("a deny ended its last turn"), &mut blocked);
+                        // Kept before the turn's end is, so no record shows the deny without it.
+                        if denied && !self.forbid_carry_on(Some("a deny ended its last turn"), &mut blocked) {
+                            continue 'run;
                         }
+                        self.emit(body);
                     }
                     None => {
                         if turn != Turn::Idle {
@@ -1386,6 +1387,10 @@ impl Task {
                             continue;
                         }
                         going.turn = Turn::Idle;
+                        // A deny answered just before the stop ends the turn here.
+                        if *body == (Body::TurnEnded { how: TurnEnd::Denied }) && !self.forbid_carry_on(Some("a deny ended its last turn"), &mut true) {
+                            continue;
+                        }
                     }
                     _ => {}
                 }
@@ -1762,6 +1767,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn carry_on_a_deny_that_ends_the_turn_while_the_agent_goes_at_a_shutdown_forbids_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        let drivers = || vec![("hand".to_owned(), Arc::new(hand.clone()) as Arc<dyn Driver>)];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers(), Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        events_until(&mut events, |body| *body == Body::TurnStarted).await;
+        // A deny answered just before the shutdown: the agent's end of that turn comes as it goes.
+        hand.on_stop.lock().unwrap().push(Body::TurnEnded { how: TurnEnd::Denied });
+        assert!(harness.shutdown().await.is_empty());
+        drop(harness);
+        let harness = Harness::new(reopened(&tmp.path().join("data")).await, drivers(), Settings::default());
+        match harness.resume_with(&id, Some("carry on".into())).await {
+            Err(Error::Refused(why)) => assert!(why.contains("a deny ended its last turn"), "{why}"),
+            other => panic!("carry on allowed: {:?}", other.is_ok()),
+        }
+    }
+
+    #[tokio::test]
+    async fn carry_on_a_denys_mark_is_kept_before_its_turn_end_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        events_until(&mut events, |body| *body == Body::TurnStarted).await;
+        // The task dies once the turn's end is stored, as a harness that stops between two writes.
+        set(&harness.inner.hooks.before_publish, Box::new(|| -> () { panic!("the test's stop after the turn's end is stored") }) as Hook);
+        hand.say(Body::TurnEnded { how: TurnEnd::Denied });
+        let given = std::time::Instant::now() + Duration::from_secs(10);
+        while !harness.events(&id, 0).unwrap().iter().any(|event| event.body == Body::TurnEnded { how: TurnEnd::Denied }) {
+            assert!(std::time::Instant::now() < given, "the turn's end was stored within 10 s");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(harness.inner.with_store(|store| store.session(&id)).unwrap().no_carry_on.as_deref(), Some("a deny ended its last turn"));
+    }
+
+    /// The store, once the harness that had it has let its lock go.
+    async fn reopened(dir: &std::path::Path) -> Store {
+        let given = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match Store::open(dir) {
+                Err(Error::InUse(_)) if std::time::Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+                opened => break opened.unwrap(),
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn carry_on_a_question_between_the_check_and_the_send_stops_it() {
         for raised in [Body::Question { id: "q9".into(), text: "which?".into() }, Body::Permission { id: "x".into(), kind: crate::event::PermissionKind::Command, tool: "Bash".into(), input: json!({}) }] {
             let tmp = tempfile::tempdir().unwrap();
@@ -1833,12 +1891,13 @@ mod tests {
     }
 
     /// A driver the test speaks for: it keeps each start's output and tools endpoint, records every command, and goes
-    /// on a stop.
+    /// on a stop, saying `on_stop` first.
     #[derive(Clone, Default)]
     struct Hand {
         output: Arc<Mutex<Option<mpsc::UnboundedSender<Body>>>>,
         commands: Arc<Mutex<Vec<Command>>>,
         tools: Arc<Mutex<Option<(crate::tools::ToolsEndpoint, String)>>>,
+        on_stop: Arc<Mutex<Vec<Body>>>,
     }
 
     impl Hand {
@@ -1858,13 +1917,17 @@ mod tests {
             output.send(Body::Started { provider_session: "hand".into(), resumed: launch.resume.is_some() }).unwrap();
             *self.output.lock().unwrap() = Some(output);
             *self.tools.lock().unwrap() = Some((launch.tools.clone(), launch.tools_token.expose().to_owned()));
-            let (kept, seen) = (self.output.clone(), self.commands.clone());
+            let (kept, seen, last) = (self.output.clone(), self.commands.clone(), self.on_stop.clone());
             tokio::spawn(async move {
                 while let Some(command) = received.recv().await {
                     let stop = matches!(command, Command::Stop | Command::Kill);
                     seen.lock().unwrap().push(command);
                     if stop {
-                        kept.lock().unwrap().take();
+                        if let Some(output) = kept.lock().unwrap().take() {
+                            for body in last.lock().unwrap().drain(..) {
+                                let _ = output.send(body);
+                            }
+                        }
                         return;
                     }
                 }
