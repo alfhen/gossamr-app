@@ -20,6 +20,12 @@ use tokio::sync::broadcast;
 
 const REPLAY: &str = env!("CARGO_BIN_EXE_wire-replay");
 
+/// How long the replay waits for quiet before it writes a line a prompt or interrupt follows. A driver line sent in
+/// reaction to an earlier line is caught only if it comes within this. Here a reaction goes from the replay's pipe
+/// through the driver's reader, the session and the driver's writer, four tasks a loaded machine can each hold back:
+/// five times the replay's default leaves room for that. Each prompt after the first costs one wait.
+const QUIET_MS: &str = "500";
+
 fn native() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/acp/fixtures/claude/native")
 }
@@ -71,6 +77,7 @@ fn rig(fixture: &Path, extra: &[(&str, &str)]) -> Rig {
     // SAFETY: a valid path and mode.
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
     env.push(("WIRE_REPLAY_PROGRESS".into(), fifo.display().to_string()));
+    env.push(("WIRE_REPLAY_QUIET_MS".into(), QUIET_MS.into()));
     let (seen, written) = tokio::sync::watch::channel(0);
     // Opening blocks until the replay opens its end, and the read ends when the replay goes.
     std::thread::spawn(move || {
@@ -324,7 +331,7 @@ async fn claude_the_normal_profiles_argv_is_exactly_the_stream_flags_a_model_and
         if let Some(model) = model {
             want.extend(["--model".into(), model.into()]);
         }
-        want.extend(["--append-system-prompt".into(), harness::driver::GUARD.into()]);
+        want.extend(["--append-system-prompt".into(), harness::driver::guard(&["result".to_owned()])]);
         assert_eq!(rig.argv(), want);
         assert_eq!(&want[..9], ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio"]);
     }
@@ -368,7 +375,7 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
     // macOS adds `__CF_USER_TEXT_ENCODING` to every process it starts.
     names.retain(|name| name != "__CF_USER_TEXT_ENCODING");
     names.sort();
-    assert_eq!(names, ["PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS"]);
+    assert_eq!(names, ["PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS", "WIRE_REPLAY_QUIET_MS"]);
     let (locked, _) = {
         let fixture = native().join("11-locked.jsonl");
         let rig = rig(&fixture, &[]);
@@ -380,7 +387,7 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
     let mut names: Vec<String> = locked.env().keys().cloned().collect();
     names.retain(|name| name != "__CF_USER_TEXT_ENCODING");
     names.sort();
-    assert_eq!(names, ["CLAUDE_CODE_DISABLE_AUTO_MEMORY", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS"]);
+    assert_eq!(names, ["CLAUDE_CODE_DISABLE_AUTO_MEMORY", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS", "WIRE_REPLAY_QUIET_MS"]);
 }
 
 #[tokio::test]
@@ -585,4 +592,29 @@ async fn claude_a_declared_tool_is_allowed_by_its_exact_name_beside_result() {
     let mut tools: Vec<&str> = allowed.split(',').collect();
     tools.sort();
     assert_eq!(tools, [format!("mcp__{name}__find"), format!("mcp__{name}__result")]);
+}
+
+#[tokio::test]
+async fn claude_prompts_sent_at_once_each_reach_claude_after_the_result_before_it() {
+    // The session holds them and sends each when the driver ends a turn; the replay refuses one that comes before the
+    // `result` it follows, and one sent on the line before it is caught by the quiet wait.
+    let fixture = native().join("11-locked.jsonl");
+    let rig = rig(&fixture, &[]);
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let (id, mut events) = rig.open(true, None).await;
+    for act in acts {
+        let Act::Prompt(text, _) = act else { panic!("11-locked only prompts") };
+        rig.harness.send(&id, text).unwrap();
+    }
+    // Until the agent has ended as many turns as the recording, or the session closed because the replay refused.
+    let mut seen: Vec<Event> = vec![];
+    while ends(&seen) < results && !seen.iter().any(|event| event.body == Body::Closed) {
+        match tokio::time::timeout(Duration::from_secs(30), events.recv()).await.expect("an event within 30 s") {
+            Ok(event) => seen.push(event),
+            Err(_) => break,
+        }
+    }
+    let _ = rig.harness.close(&id);
+    assert_eq!(rig.report(), "", "each prompt came after the result before it");
+    assert_eq!(rig.sent().iter().filter(|line| line["type"] == "user").count(), 4);
 }

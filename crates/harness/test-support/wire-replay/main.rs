@@ -28,7 +28,7 @@
 //! proves it follows. The first prompt follows nothing: every recording sends it after `initialize`'s answer, but none
 //! shows what the CLI does with one sent before it, so it is not refused.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -434,7 +434,8 @@ impl Replay {
             Some("control_response") => {
                 // Exactly the recorded fields at each level: a field more can widen what was allowed
                 // (`updatedPermissions`) or end the turn (`interrupt`).
-                let keys = |value: &Value| value.as_object().map(|fields| fields.keys().cloned().collect::<Vec<_>>());
+                // As sets: whatever order a map keeps its keys in, the same keys compare equal.
+                let keys = |value: &Value| value.as_object().map(|fields| fields.keys().cloned().collect::<BTreeSet<_>>());
                 let fields = Err(format!("line {at}: the answer's fields differ from the recording's {}", what(want)));
                 if keys(want) != keys(sent) {
                     return fields;

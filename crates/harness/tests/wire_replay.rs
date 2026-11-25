@@ -682,6 +682,14 @@ fn wire_replay_config_a_server_that_is_not_http_with_a_url_is_refused_never_answ
 }
 
 #[test]
+fn wire_replay_a_line_that_is_not_json_is_reported_with_the_line_the_replay_waited_for() {
+    let mut run = start(&native().join("2-permission.jsonl"), &[], &[]);
+    let _ = writeln!(run.stdin.as_mut().unwrap(), "not json");
+    let (code, _, out) = run.end();
+    assert_eq!((code, report(&out)), (Some(3), "line 2: the driver sent a line that is not JSON\n".to_owned()));
+}
+
+#[test]
 fn wire_replay_config_a_reused_request_id_is_refused() {
     let set = json!({"type": "control_request", "request_id": "client-2", "request": {"subtype": "mcp_set_servers", "servers": {"abc": {"type": "http", "url": "http://127.0.0.1:9/mcp"}}}});
     // The client's initialize then takes the same id, `client-2`.

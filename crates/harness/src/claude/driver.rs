@@ -20,7 +20,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
-use crate::driver::{Capabilities, Command, Driver, GUARD, Launch, Link, OpenError};
+use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, guard};
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::process::{self, Process};
 
@@ -76,7 +76,8 @@ pub fn args(launch: &Launch) -> Vec<String> {
         args.extend(["--resume".to_owned(), session.clone()]);
     }
     if !launch.locked {
-        args.extend(["--append-system-prompt".to_owned(), GUARD.to_owned()]);
+        // On every start, a resume's included.
+        args.extend(["--append-system-prompt".to_owned(), guard(&launch.tools.tools)]);
     }
     args
 }
@@ -415,6 +416,7 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::driver::GUARD;
 
     struct Wire {
         stream: Stream,
@@ -671,5 +673,20 @@ mod tests {
     fn the_guard_says_never_to_turn_off_signing_or_hooks_and_to_report_it() {
         assert!(GUARD.contains("Never turn off commit signing or hooks"), "{GUARD}");
         assert!(GUARD.contains("report"), "{GUARD}");
+    }
+
+    #[test]
+    fn the_guard_names_the_sessions_own_tools_as_declared_and_asks_for_one_result() {
+        let tools: Vec<String> = ["find", "read_ticket", "result"].map(String::from).to_vec();
+        let said = guard(&tools);
+        assert!(said.starts_with(GUARD), "it keeps the guard");
+        assert!(said.contains("Your session's own tools are find, read_ticket and result."), "{said}");
+        assert!(said.ends_with("Call result once when you are done."), "{said}");
+        assert!(!said.contains("mcp__"), "by the declared names, the same on every provider");
+        let mut launch = launch(false, None, Some("s-1"));
+        launch.tools.tools = tools;
+        assert_eq!(args(&launch).last(), Some(&said), "a resume gets it too");
+        launch.locked = true;
+        assert!(!args(&launch).iter().any(|arg| arg == "--append-system-prompt"), "a locked session never does");
     }
 }

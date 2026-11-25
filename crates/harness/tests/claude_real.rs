@@ -1,7 +1,8 @@
 //! The Claude driver on the real `claude`, on the person's own login. Ignored: `cargo test -p harness -- --ignored
 //! claude_real`, from any terminal, a Claude Code session's included: the shell is captured from a cleared
-//! environment, so none of the test process's own variables reach the agent. Each test runs in a scratch folder,
-//! records the login folders' config before and after, and fails if one changed or a process of the session is left.
+//! environment, so none of the test process's own variables reach the agent. Each test runs in a scratch repo whose
+//! remote is a local bare repo, records the login folders' config before and after, and fails if one changed or a
+//! process of the session is left.
 
 mod common;
 
@@ -113,8 +114,11 @@ async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
     eprintln!("claude --version: {}", String::from_utf8_lossy(&version.stdout).trim());
 
     let tmp = tempfile::tempdir().unwrap();
-    let (scratch, data) = (tmp.path().join("scratch"), tmp.path().join("data"));
-    std::fs::create_dir_all(&scratch).unwrap();
+    let (scratch, remote, data) = (tmp.path().join("scratch"), tmp.path().join("remote.git"), tmp.path().join("data"));
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).output().unwrap().status.success(), "git {}", args[0]);
+    git(&["init", "-q", "--bare", remote.to_str().unwrap()]);
+    git(&["init", "-q", scratch.to_str().unwrap()]);
+    git(&["-C", scratch.to_str().unwrap(), "remote", "add", "origin", remote.to_str().unwrap()]);
     let scratch = scratch.canonicalize().unwrap();
     let setup = Setup::of_this_machine(data.clone());
     setup.capture().await.expect("the shell's environment is read");
@@ -142,6 +146,7 @@ async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
     assert!(text.to_lowercase().contains("ready"), "the agent's text arrived ({} characters)", text.len());
     assert_eq!(seen.last().map(|event| &event.body), Some(&Body::TurnEnded { how: TurnEnd::Done }), "the turn ends by its result");
     assert!(!kinds.iter().any(|kind| kind == "tool_call" || kind == "permission"), "no tool: {kinds:?}");
+    assert!(!seen.iter().any(|event| matches!(event.body, Body::Notice { .. })), "Claude took the session's tools endpoint: {kinds:?}");
     assert!(!rest.iter().any(|event| matches!(event.body, Body::Failed { .. })), "the stop fails nothing: {:?}", types(&rest));
     assert!(working_in(&scratch).is_empty(), "no process of the session is left");
 
