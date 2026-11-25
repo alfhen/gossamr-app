@@ -654,3 +654,82 @@ async fn tools_endpoint_limits_calls_waiting_on_their_clients_never_shut_another
         assert_eq!(call.await.unwrap().1["result"]["content"][0]["text"], "the session has ended");
     }
 }
+
+#[tokio::test]
+async fn tools_endpoint_result_with_no_schema_takes_any_object_and_nothing_else() {
+    let (_tmp, dir) = data_dir();
+    let (harness, id, _events, port, path, token) = with_schema(&dir, None).await;
+    for not_an_object in [json!("done"), json!([1]), json!(3)] {
+        let (_, answer) = call(port, &path, &token, "result", not_an_object.clone()).await;
+        assert_eq!(answer["result"]["isError"], true, "{not_an_object}");
+        assert!(answer["result"]["content"][0]["text"].as_str().unwrap().contains("at /: expected object"), "{answer}");
+    }
+    let (_, answer) = call(port, &path, &token, "result", json!({"anything": [1, {}]})).await;
+    assert_eq!(answer["result"]["isError"], false);
+    assert_eq!(harness.events(&id, 0).unwrap().iter().filter(|event| event.body.type_name() == "result").count(), 1);
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_each_one_taken_is_an_event_in_order() {
+    let (_tmp, dir) = data_dir();
+    let (harness, id, mut events, port, path, token) = with_schema(&dir, Some(verdict())).await;
+    for verdict in ["fail", "pass"] {
+        call(port, &path, &token, "result", json!({ "verdict": verdict })).await;
+        until(&mut events, |body| matches!(body, Body::Result { .. })).await;
+    }
+    let results: Vec<Body> = harness.events(&id, 0).unwrap().into_iter().map(|event| event.body).filter(|body| matches!(body, Body::Result { .. })).collect();
+    assert_eq!(results, [Body::Result { data: json!({"verdict": "fail"}) }, Body::Result { data: json!({"verdict": "pass"}) }], "the last one counts");
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_a_stored_schema_the_harness_cannot_check_is_not_resumed() {
+    let (_tmp, dir) = data_dir();
+    let (harness, recorder) = recording(&dir, Settings::default());
+    let (id, mut events) = harness.open(Open { result_schema: Some(verdict()), ..spec() }).await.unwrap();
+    harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    // As a row from before the check could hold it.
+    let old = json!({"type": "object", "properties": {"verdict": {"pattern": "^p"}}}).to_string();
+    rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE sessions SET result_schema = ?1", [old]).unwrap();
+    let starts = recorder.launches.lock().unwrap().len();
+    match harness.resume(&id).await {
+        Err(harness::error::Error::Refused(why)) => assert!(why.contains("`pattern`") && why.contains("not resumed"), "{why}"),
+        other => panic!("resumed: {:?}", other.is_ok()),
+    }
+    assert_eq!(recorder.launches.lock().unwrap().len(), starts, "no agent started");
+}
+
+/// A token shape the harness masks, from its own list.
+fn secret() -> String {
+    (harness::redact::SHAPES.iter().find(|shape| shape.name == "GitHub token").expect("a shape of that name").example)()
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_is_masked_before_it_is_kept_and_refused_when_masked_it_no_longer_fits() {
+    let (_tmp, dir) = data_dir();
+    let long = json!({"type": "object", "properties": {"key": {"type": "string", "minLength": 30}}});
+    let (harness, id, mut events, port, path, token) = with_schema(&dir, Some(long)).await;
+    let (_, answer) = call(port, &path, &token, "result", json!({ "key": secret() })).await;
+    assert_eq!(answer["result"]["isError"], true, "masked, it is too short for its schema");
+    assert!(answer["result"]["content"][0]["text"].as_str().unwrap().contains("masked it does not fit its schema"), "{answer}");
+    let (_, answer) = call(port, &path, &token, "result", json!({ "key": "a key long enough to fit its schema", "note": secret() })).await;
+    assert_eq!(answer["result"]["isError"], false, "{answer}");
+    let seen = until(&mut events, |body| matches!(body, Body::Result { .. })).await;
+    let Body::Result { data } = &seen.last().unwrap().body else { unreachable!() };
+    assert!(!data.to_string().contains(&secret()), "the kept result holds no secret: {data}");
+    assert_eq!(harness.events(&id, 0).unwrap().iter().filter(|event| event.body.type_name() == "result").count(), 1);
+}
+
+#[tokio::test]
+async fn tools_endpoint_result_of_a_locked_session_reaches_its_client_whole_and_is_withheld_in_the_store() {
+    let (_tmp, dir) = data_dir();
+    let (harness, recorder) = recording(&dir, Settings::default());
+    let (id, mut events) = harness.open(Open { locked: true, ..spec() }).await.unwrap();
+    let (endpoint, token, _) = recorder.last();
+    let (port, path) = place(&endpoint);
+    call(port, &path, &token, "result", json!({"verdict": "private text"})).await;
+    let seen = until(&mut events, |body| matches!(body, Body::Result { .. })).await;
+    assert_eq!(seen.last().unwrap().body, Body::Result { data: json!({"verdict": "private text"}) }, "the client gets it whole");
+    let stored = harness.events(&id, 0).unwrap().pop().unwrap();
+    assert!(matches!(&stored.body, Body::Withheld { of, kept } if of == "result" && kept.is_empty()), "{:?}", stored.body);
+}

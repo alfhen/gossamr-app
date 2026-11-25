@@ -122,8 +122,12 @@ pub enum Op {
         /// `properties`, `required`, `additionalProperties` (a boolean or a schema), `items` (one schema), `enum`,
         /// `const`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`; it reads `title`,
         /// `description`, `default`, `examples`, `$schema` and `$comment` as notes. Any other keyword is refused here,
-        /// with where it is. A result that does not fit goes back to the agent with the reasons; one that fits is a
-        /// `result` event. `result` is refused while a question is open.
+        /// with where it is; `schema`'s first comment lists the forms it refuses that JSON Schema allows. A result that
+        /// does not fit goes back to the agent with the reasons; one that fits is a `result` event. Each `result` the
+        /// harness takes is an event, and the last one before the session ends is the one that counts. `result` is
+        /// refused while a question is open: a `question` event no one has answered (an open permission request does
+        /// not count). Text that looks like a secret is masked before it is kept, and a result that no longer fits once
+        /// masked is refused with the reason. A session whose stored schema no longer passes the check is not resumed.
         #[serde(default)]
         result_schema: Option<Value>,
     },

@@ -484,14 +484,22 @@ async fn call(state: &State, entry: &Opened, params: &Value) -> std::result::Res
     if entry.made.fetch_add(1, Ordering::Relaxed) >= u64::from(state.call_cap) {
         return Ok(Reply::failed(format!("this session has made the {} calls it may make to these tools", state.call_cap)).result());
     }
-    if name == RESULT
-        && let Some(schema) = &entry.result_schema
-    {
-        let misfits = crate::schema::misfits(schema, &input);
-        if !misfits.is_empty() {
-            return Ok(Reply::failed(format!("the result does not fit its schema, so it was not taken: {}", misfits.join("; "))).result());
+    let input = match name {
+        // Off the async task: a large result against a large schema takes a while, and `serve` runs on one thread.
+        RESULT => {
+            let schema = entry.result_schema.clone().unwrap_or_else(|| Arc::new(any_object()));
+            let checked = tokio::task::spawn_blocking(move || {
+                let misfits = crate::schema::misfits(&schema, &input);
+                (input, misfits)
+            });
+            let Ok((input, misfits)) = checked.await else { return Ok(Reply::failed("the harness could not check the result").result()) };
+            if !misfits.is_empty() {
+                return Ok(Reply::failed(format!("the result does not fit its schema, so it was not taken: {}", misfits.join("; "))).result());
+            }
+            input
         }
-    }
+        _ => input,
+    };
     let (reply, answer) = oneshot::channel();
     let ended = || Reply::failed("the session has ended");
     let reply = match entry.calls.send(ToolCall { name: name.to_owned(), input, reply }) {
