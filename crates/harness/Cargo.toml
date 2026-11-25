@@ -28,6 +28,11 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 # Test helpers for crates that use these modules: a fake git and constructors of test values. It adds items only.
 testing = []
 
+[[bin]]
+name = "wire-replay"
+path = "test-support/wire-replay/main.rs"
+required-features = ["testing"]
+
 [dev-dependencies]
 # Its own fakes (`testing`) for the integration tests.
 harness = { path = ".", features = ["testing"] }
