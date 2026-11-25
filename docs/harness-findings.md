@@ -219,7 +219,7 @@ No "stop" row of section 5 failed on what was seen: Claude's own setup is honour
   - MCP calls are cut at 180 s with no setting on this path, so `ask` returns early and the answer comes as the next prompt.
   - Stop stops the process tree, and does not wait for `agy acp` to exit promptly while a command runs.
   - agy keeps the MCP header, token included, in its conversation database: the token must stop working when the session ends.
-  - Feature-detect HTTP MCP (no `mcpCapabilities`) and agy's own `tool_call` fields (`name`, `args`, snake_case copies). Answer GET requests without the Authorization header with 401 and do not count them as abuse.
+  - Feature-detect HTTP MCP (no `mcpCapabilities`) and agy's own `tool_call` fields (`name`, `args`, snake_case copies). Answer GET requests without the Authorization header with 401 and do not count them as abuse. (H5a: the harness's endpoint answers every GET with 405, as MCP 2025-06-18 asks of a server with no event stream, whatever the header; H8 checks that agy goes on after a 405 as it did after the spike's 401.)
 - **All providers.** A commit the person's signing agent refuses fails unattended. Claude, Gemini and Codex on app-server reported it; Codex on exec and ACP turned signing or hooks off by themselves. The guard says never to do that.
 
 ### Decisions taken by the orchestrator (22 Nov 2026)

@@ -52,6 +52,9 @@ pub enum Body {
         message: Option<String>,
     },
     Question { id: String, text: String },
+    /// What the agent gave as its work's result, through the endpoint's `result` tool, after it fit the session's
+    /// result schema.
+    Result { data: Value },
     TurnEnded { how: TurnEnd },
     /// The turn failed, or the session could not start or go on. Either way no turn is running after it.
     Failed { kind: FailKind, reason: String },
@@ -78,7 +81,7 @@ pub enum Body {
 pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
-pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message"];
+pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message", "data"];
 
 /// The body within `max` bytes of JSON, and how many bytes were cut to get there, if any. Only private fields are cut,
 /// the largest first, from their end; a field that held JSON then holds the start of its text. A body that is still
@@ -215,12 +218,13 @@ mod tests {
             Body::PermissionClosed { .. } => 10,
             Body::Answered { .. } => 11,
             Body::Question { .. } => 12,
-            Body::TurnEnded { .. } => 13,
-            Body::Failed { .. } => 14,
-            Body::Notice { .. } => 15,
-            Body::HandedOver => 16,
-            Body::Closed => 17,
-            Body::Withheld { .. } => 18,
+            Body::Result { .. } => 13,
+            Body::TurnEnded { .. } => 14,
+            Body::Failed { .. } => 15,
+            Body::Notice { .. } => 16,
+            Body::HandedOver => 17,
+            Body::Closed => 18,
+            Body::Withheld { .. } => 19,
         }
     }
 
@@ -241,6 +245,7 @@ mod tests {
             Body::PermissionClosed { id: "i".into() },
             Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
+            Body::Result { data: json!({}) },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
             Body::Notice { text: "t".into() },

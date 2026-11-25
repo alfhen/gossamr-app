@@ -1628,11 +1628,16 @@ name = "harness"
 version = "0.1.0"
 dependencies = [
  "aho-corasick",
+ "bytes",
  "dirs",
  "futures-util",
  "getrandom 0.4.3",
  "harness",
  "hmac",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "regex",
  "rusqlite",

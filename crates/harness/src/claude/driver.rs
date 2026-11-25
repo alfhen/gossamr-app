@@ -530,7 +530,8 @@ mod tests {
             effort: None,
             resume: resume.map(str::to_owned),
             tools_token: crate::driver::Secret::random(),
-            tools: std::sync::Arc::new(crate::tools::Endpoint::unattached("t")),
+            tools: crate::tools::ToolsEndpoint::unattached(),
+            result_schema: None,
             env: vec![],
         }
     }

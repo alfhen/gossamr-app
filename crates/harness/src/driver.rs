@@ -4,13 +4,12 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::event::{Body, Decision, FailKind};
-use crate::tools::Endpoint;
+use crate::tools::ToolsEndpoint;
 
 /// What every agent of a normal session is told, beside its own instructions. H0 saw agents turn signing off to get a
 /// commit through (`docs/harness-findings.md`, "All providers").
@@ -75,10 +74,13 @@ pub struct Launch {
     pub effort: Option<String>,
     /// The provider's own session id, to resume it.
     pub resume: Option<String>,
-    /// The session's tools token. Every start and every resume gets a new one, and the endpoint refuses the old.
+    /// The session's tools token, for the `Authorization: Bearer` header. Every start and every resume gets a new one,
+    /// and the endpoint refuses the old. A driver hands it to the agent on stdin only, never in argv or the environment.
     pub tools_token: Secret,
-    /// The session's tools endpoint. A real agent reaches it over HTTP at its URL; the mock calls it in-process.
-    pub tools: Arc<Endpoint>,
+    /// The session's tools endpoint: its URL, its per-session name, its tools and the names allowed without asking.
+    pub tools: ToolsEndpoint,
+    /// The JSON Schema the session's `result` must fit, if the client gave one.
+    pub result_schema: Option<serde_json::Value>,
     /// The agent's whole environment. A driver starts its process with this and nothing else.
     pub env: Vec<(OsString, OsString)>,
 }

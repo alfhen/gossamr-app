@@ -109,6 +109,27 @@ pub enum Op {
         /// The session is closed when this connection ends, and is never resumed.
         #[serde(default)]
         ends_with_client: bool,
+        /// The tools this client offers the agent, on the session's tools endpoint. Each call is a `client_tool_call`
+        /// event the client answers with `tool_result`; while no client listens to the session, a call fails at once.
+        /// Refused: more than `tools::MAX_TOOLS`, a name that is not 1 to `tools::TOOL_NAME_MAX` (43) letters, digits, `_`
+        /// and `-` (so the full name a provider sees stays within its 64), a name twice,
+        /// `result` or `ask`, an input schema that is not an object.
+        #[serde(default)]
+        tools: Vec<crate::tools::ToolSpec>,
+        /// A JSON Schema the session's `result` must fit; left out, any object. It is the input schema of the endpoint's
+        /// `result` tool, so its top level is `"type": "object"`. The harness checks this part of JSON Schema (`schema`):
+        /// `type` (`object`, `array`, `string`, `number`, `integer`, `boolean`, `null`, or a list of them),
+        /// `properties`, `required`, `additionalProperties` (a boolean or a schema), `items` (one schema), `enum`,
+        /// `const`, `minLength`, `maxLength`, `minimum`, `maximum`, `minItems`, `maxItems`; it reads `title`,
+        /// `description`, `default`, `examples`, `$schema` and `$comment` as notes. Any other keyword is refused here,
+        /// with where it is; `schema`'s first comment lists the forms it refuses that JSON Schema allows. A result that
+        /// does not fit goes back to the agent with the reasons; one that fits is a `result` event. Each `result` the
+        /// harness takes is an event, and the last one before the session ends is the one that counts. `result` is
+        /// refused while a question is open: a `question` event no one has answered (an open permission request does
+        /// not count). Text that looks like a secret is masked before it is kept, and a result that no longer fits once
+        /// masked is refused with the reason. A session whose stored schema no longer passes the check is not resumed.
+        #[serde(default)]
+        result_schema: Option<Value>,
     },
     Send { session: String, text: String },
     Cancel { session: String },

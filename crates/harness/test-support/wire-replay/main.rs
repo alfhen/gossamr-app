@@ -5,37 +5,58 @@
 //!
 //! `WIRE_REPLAY_FIXTURE` names the recording. `WIRE_REPLAY_OUT` names a folder that gets `argv.json`, `env.json` (every
 //! variable's name, and the values of `SHOWN` and `WIRE_REPLAY_*` only), `pid`, `stdin` (whether fd 0 is a pipe),
-//! `sent.jsonl` (each line received, a server's header values written `<redacted>`) and, on a mismatch, `report.txt`,
-//! which names the recorded line and the field and never a payload. A mismatch exits 3. With `WIRE_REPLAY_SECRET_FILE`
-//! naming a file that holds a secret, `secret.json` names the variables whose value holds it and counts the arguments
-//! that do. `WIRE_REPLAY_DEADLINE_MS` and `WIRE_REPLAY_PROGRESS` (a FIFO that gets the seq of each agent line as it is
-//! written) serve tests. With `WIRE_REPLAY_IGNORE_TERM` set it ignores SIGTERM, as an agent that will not stop does.
+//! `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the field and
+//! never a payload. A mismatch exits 3.
+//! `argv.json` and `sent.jsonl` go through the harness's `redact`, and a server's header values in `sent.jsonl` are
+//! written `<redacted>`. With `WIRE_REPLAY_SECRET_FILE` naming a file that holds a secret, that secret is masked too, and
+//! `secret.json` names the variables whose value holds it and counts the arguments that do. `WIRE_REPLAY_DEADLINE_MS`,
+//! `WIRE_REPLAY_QUIET_MS` and `WIRE_REPLAY_PROGRESS` (a FIFO that gets the seq of each agent line as it is written) serve
+//! tests. With `WIRE_REPLAY_IGNORE_TERM` set it ignores SIGTERM, as an agent that will not stop does.
 //!
-//! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, an
-//! answer's decision, and every id by the mapping. The config requests named in `CONFIG` are not compared: the replay
-//! answers each one it is sent with success and skips the recording's own, with their answers. Where the recording
-//! gives the tools endpoint before its first prompt, the driver must too, with an HTTP server and its URL. A recorded endpoint's server name becomes the driver's when both
-//! name exactly one server. Codex's and Gemini's wires add their rules with H7a and H8.
+//! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, role
+//! and image types, an answer's fields, and every id by the mapping. The config requests named in `CONFIG` are not
+//! compared: the replay answers each one it is sent with success and skips the recording's own, with their answers.
+//! Where the recording gives the tools endpoint before its first prompt, the driver must too, with an HTTP server and its
+//! URL. A recorded endpoint's server name becomes the driver's when both name exactly one server. Codex's and Gemini's
+//! wires add their rules with H7a and H8.
+//!
+//! When a line may come: a prompt follows the `result` before it, and an interrupt the last agent line before it that is
+//! not a `stream_event`. Before the replay writes such a line it waits until stdin has been quiet for
+//! `WIRE_REPLAY_QUIET_MS` (100 ms by default), so a prompt or interrupt the driver sends on reading an earlier line comes
+//! before it and is refused, on every run. An answer may come at any time after its request, which the id mapping
+//! proves it follows. The first prompt follows nothing: every recording sends it after `initialize`'s answer, but none
+//! shows what the CLI does with one sent before it, so it is not refused.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use harness::redact;
 
 use serde_json::{Map, Value, json};
 
 /// How long the replay waits for a line the recording expects from the driver, unless `WIRE_REPLAY_DEADLINE_MS` says.
 const DEADLINE: Duration = Duration::from_secs(30);
 
-/// A line the driver sent, and how many agent lines the replay had written when it arrived.
+/// How long stdin must be quiet before the replay writes a line that a later prompt or interrupt follows, unless
+/// `WIRE_REPLAY_QUIET_MS` says.
+const QUIET: Duration = Duration::from_millis(100);
+
+/// A line the driver sent: how many agent lines the replay had written when its first byte was read, and when its
+/// last was.
 struct Arrived {
     text: String,
     stamp: usize,
+    at: Instant,
 }
+
+/// When the reader last read from stdin.
+type Heard = Arc<Mutex<Option<Instant>>>;
 
 /// The line the replay writes on stderr when it stays.
 const STAYING: &str = "wire-replay: staying until signalled";
@@ -60,12 +81,20 @@ fn main() -> ExitCode {
         // SAFETY: setting a signal's disposition to ignore runs no handler code.
         unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
     }
-    let written = std::fs::write(out.join("argv.json"), Value::from(argv.clone()).to_string())
+    let secret = match std::env::var_os("WIRE_REPLAY_SECRET_FILE").map(std::fs::read_to_string) {
+        Some(Ok(secret)) => Some(secret.trim().to_owned()).filter(|secret| !secret.is_empty()),
+        Some(Err(e)) => return refuse(&out, &format!("cannot read the secret file: {e}")),
+        None => None,
+    };
+    // The secret is counted where it is and kept out of every file written, with any token shape.
+    let secrets: Vec<String> = secret.iter().cloned().collect();
+    let shown: Vec<String> = argv.iter().map(|arg| redact::text(arg, &secrets)).collect();
+    let written = std::fs::write(out.join("argv.json"), Value::from(shown).to_string())
         .and_then(|()| std::fs::write(out.join("env.json"), Value::Object(environment(&vars)).to_string()))
         .and_then(|()| std::fs::write(out.join("pid"), std::process::id().to_string()))
         .and_then(|()| std::fs::write(out.join("stdin"), stdin_kind()))
-        .and_then(|()| match std::env::var_os("WIRE_REPLAY_SECRET_FILE") {
-            Some(file) => std::fs::read_to_string(file).and_then(|secret| std::fs::write(out.join("secret.json"), holding(secret.trim(), &vars, &argv).to_string())),
+        .and_then(|()| match &secret {
+            Some(secret) => std::fs::write(out.join("secret.json"), holding(secret, &vars, &argv).to_string()),
             None => Ok(()),
         });
     let recording = match (written, load(Path::new(&fixture))) {
@@ -74,7 +103,8 @@ fn main() -> ExitCode {
         (_, Err(e)) => return refuse(&out, &e),
     };
     let Ok(sent) = std::fs::File::create(out.join("sent.jsonl")) else { return refuse(&out, "cannot write sent.jsonl") };
-    let deadline = std::env::var("WIRE_REPLAY_DEADLINE_MS").ok().and_then(|ms| ms.parse().ok()).map_or(DEADLINE, Duration::from_millis);
+    let ms = |name: &str, default: Duration| std::env::var(name).ok().and_then(|ms| ms.parse().ok()).map_or(default, Duration::from_millis);
+    let (deadline, quiet) = (ms("WIRE_REPLAY_DEADLINE_MS", DEADLINE), ms("WIRE_REPLAY_QUIET_MS", QUIET));
     // A FIFO the test made, to learn which agent lines the replay has written without waiting on a timer.
     let progress = match std::env::var_os("WIRE_REPLAY_PROGRESS") {
         Some(path) => match std::fs::OpenOptions::new().write(true).open(path) {
@@ -85,11 +115,11 @@ fn main() -> ExitCode {
     };
     let written = Arc::new(AtomicUsize::new(0));
     let (lines, input) = std::sync::mpsc::channel();
-    let reading = written.clone();
-    std::thread::spawn(move || read_stdin(&reading, sent, &lines));
+    let (reading, heard) = (written.clone(), Heard::default());
+    let hearing = heard.clone();
+    std::thread::spawn(move || read_stdin(&reading, &hearing, sent, &secrets, &lines));
     let mut replay = Replay::new(recording);
-    replay.deadline = deadline;
-    replay.progress = progress;
+    (replay.deadline, replay.quiet, replay.heard, replay.progress) = (deadline, quiet, heard, progress);
     match replay.play(&input, &written, &mut std::io::stdout().lock(), &mut std::io::stderr().lock()) {
         Ok(End::Exit) => ExitCode::SUCCESS,
         Ok(End::Stay) => {
@@ -116,15 +146,24 @@ fn stdin_kind() -> &'static str {
     if mode & libc::S_IFMT == libc::S_IFIFO { "pipe" } else { "not a pipe" }
 }
 
-/// Reads the driver's lines as they come and stamps each with how many agent lines the replay had written. Every line
-/// one read completes gets the stamp of that read, taken before the replay hears of any of them, so a line the driver
-/// wrote together with the one before it is never stamped later than it came. Each line is kept in `sent` first: a
-/// line that cannot be kept fails the replay, so a test never reads a partial `sent.jsonl` as the whole.
-fn read_stdin(written: &AtomicUsize, mut sent: std::fs::File, lines: &Sender<Result<Arrived, String>>) {
+/// Reads the driver's lines as they come. Each is stamped with how many agent lines the replay had written when the
+/// read that brought its first byte returned, so a line is never stamped later than it began to come, and with the
+/// moment its last byte was read, which its deadline is judged by. Each line is kept in `sent` first: a line that
+/// cannot be kept fails the replay, so a test never reads a partial `sent.jsonl` as the whole.
+fn read_stdin(written: &AtomicUsize, heard: &Heard, mut sent: std::fs::File, secrets: &[String], lines: &Sender<Result<Arrived, String>>) {
     let (mut stdin, mut pending, mut chunk) = (std::io::stdin().lock(), Vec::new(), vec![0u8; 64 * 1024]);
+    let mut deliver = |line: &[u8], stamp: usize, at: Instant| {
+        let text = String::from_utf8_lossy(line).into_owned();
+        if let Err(e) = writeln!(sent, "{}", kept(&text, secrets)).and_then(|()| sent.flush()) {
+            let _ = lines.send(Err(format!("cannot write sent.jsonl: {e}")));
+            return false;
+        }
+        lines.send(Ok(Arrived { text, stamp, at })).is_ok()
+    };
+    // The stamp of the read that brought the first byte of what is pending.
+    let mut began = None;
     loop {
         let n = match stdin.read(&mut chunk) {
-            Ok(0) => break,
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
@@ -132,18 +171,27 @@ fn read_stdin(written: &AtomicUsize, mut sent: std::fs::File, lines: &Sender<Res
                 return;
             }
         };
+        let at = Instant::now();
+        *heard.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
         let stamp = written.load(Ordering::SeqCst);
+        if n == 0 {
+            // A last line with no newline is still a line: dropped, an extra message would pass unseen.
+            if !pending.is_empty() {
+                deliver(&pending, began.unwrap_or(stamp), at);
+            }
+            return;
+        }
+        if pending.is_empty() {
+            began = Some(stamp);
+        }
         pending.extend_from_slice(&chunk[..n]);
         while let Some(end) = pending.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
-            let text = String::from_utf8_lossy(&line[..end]).into_owned();
-            if let Err(e) = writeln!(sent, "{}", kept(&text)).and_then(|()| sent.flush()) {
-                let _ = lines.send(Err(format!("cannot write sent.jsonl: {e}")));
+            if !deliver(&line[..end], began.unwrap_or(stamp), at) {
                 return;
             }
-            if lines.send(Ok(Arrived { text, stamp })).is_err() {
-                return;
-            }
+            // What follows in this read began in it.
+            began = Some(stamp);
         }
     }
 }
@@ -158,21 +206,20 @@ fn environment(vars: &[(String, String)]) -> Map<String, Value> {
 
 /// Where the test's secret is: the names of the variables whose value holds it, and how many arguments do.
 fn holding(secret: &str, vars: &[(String, String)], argv: &[String]) -> Value {
-    if secret.is_empty() {
-        return json!({"env": [], "argv": 0});
-    }
     let env: Vec<&String> = vars.iter().filter(|(name, value)| name != "WIRE_REPLAY_SECRET_FILE" && value.contains(secret)).map(|(name, _)| name).collect();
     json!({"env": env, "argv": argv.iter().filter(|arg| arg.contains(secret)).count()})
 }
 
-/// A line as `sent.jsonl` keeps it: a server's header values, a token among them, are written `<redacted>`.
-fn kept(text: &str) -> String {
+/// A line as `sent.jsonl` keeps it: a server's header values, a token among them, are written `<redacted>`, and every
+/// other string goes through `redact` with the test's secret.
+fn kept(text: &str, secrets: &[String]) -> String {
     let Ok(mut line) = serde_json::from_str::<Value>(text) else { return "<a line that is not JSON>".to_owned() };
     if let Some(servers) = line.get_mut("request").and_then(|request| request.get_mut("servers")).and_then(Value::as_object_mut) {
         for headers in servers.values_mut().filter_map(|server| server.get_mut("headers")).filter_map(Value::as_object_mut) {
-            headers.values_mut().for_each(|value| *value = Value::from("<redacted>"));
+            headers.values_mut().for_each(|value| *value = Value::from(redact::MASK));
         }
     }
+    redact::each_string(&mut line, &mut |text| *text = redact::text(text, secrets));
     line.to_string()
 }
 
@@ -206,6 +253,8 @@ fn load(path: &Path) -> Result<Vec<Recorded>, String> {
 struct Replay {
     lines: Vec<Recorded>,
     deadline: Duration,
+    quiet: Duration,
+    heard: Heard,
     progress: Option<std::fs::File>,
     /// The seq of each agent line written, in order.
     played: Vec<u64>,
@@ -221,7 +270,22 @@ struct Replay {
 
 impl Replay {
     fn new(lines: Vec<Recorded>) -> Replay {
-        Replay { lines, deadline: DEADLINE, progress: None, played: vec![], ids: Ids::default(), skipped: HashSet::new(), asked: HashMap::new(), endpoint: false, prompted: false }
+        let (ids, asked) = (Ids::default(), HashMap::new());
+        Replay { lines, deadline: DEADLINE, quiet: QUIET, heard: Heard::default(), progress: None, played: vec![], ids, skipped: HashSet::new(), asked, endpoint: false, prompted: false }
+    }
+
+    /// Waits until stdin has been quiet for `quiet`, so a driver that reacts to a line already written has sent what it
+    /// sends before the next one is. A driver that never stops writing holds the replay no longer than its deadline.
+    fn hush(&self) {
+        let began = Instant::now();
+        loop {
+            let heard = self.heard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).map_or(began, |heard| heard.max(began));
+            let (now, until) = (Instant::now(), (heard + self.quiet).min(began + self.deadline));
+            if now >= until {
+                return;
+            }
+            std::thread::sleep(until - now);
+        }
     }
 
     fn play(mut self, input: &Receiver<Result<Arrived, String>>, written: &AtomicUsize, stdout: &mut impl Write, stderr: &mut impl Write) -> Result<End, String> {
@@ -230,13 +294,17 @@ impl Replay {
         // Where the recording gives the endpoint before its first prompt, the driver must too.
         let first_prompt = lines.iter().position(|line| line.dir == "to_agent" && line.data["type"] == "user").unwrap_or(lines.len());
         let endpoint_at = lines[..first_prompt].iter().find(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| line.seq);
+        self.skipped = lines.iter().filter(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| request_id(&line.data)).collect();
+        let follows = follows(&lines, &self.skipped);
+        let waited_for: HashSet<u64> = follows.values().copied().collect();
         for line in &lines {
             match (line.dir.as_str(), line.data["note"].as_str()) {
                 ("from_agent", _) => {
-                    // Only an answer to a skipped config request is passed over; an agent's own request never is.
-                    let answers = line.data["type"] == "control_response";
-                    if answers && self.skipped.contains(&request_id(&line.data)) {
+                    if !plays(line, &self.skipped) {
                         continue;
+                    }
+                    if waited_for.contains(&line.seq) {
+                        self.hush();
                     }
                     let mut data = line.data.clone();
                     self.ids.agent(&mut data);
@@ -261,30 +329,28 @@ impl Replay {
                 }
                 ("to_agent", _) if is_config(&line.data) => {
                     // A recorded config request the driver may or may not send; its answer is the replay's own.
-                    self.skipped.insert(request_id(&line.data));
                     self.ids.servers(&line.data);
                 }
                 ("to_agent", _) => {
-                    let never = format!("line {}: the driver never sent {}", line.seq, what(&line.data));
-                    let Some((sent, stamp)) = self.next(input, stdout, Some(&never))? else {
+                    let (place, never) = (format!("line {}", line.seq), format!("line {}: the driver never sent {}", line.seq, what(&line.data)));
+                    let Some((sent, stamp)) = self.next(input, stdout, &place, Some(&never))? else {
                         return Err(format!("line {}: stdin closed where the recording has {}", line.seq, what(&line.data)));
                     };
-                    // Sent before the agent line the recording has it answer was written: a prompt during a turn, an
-                    // answer before its request, an interrupt before the tool started.
-                    if let Some(last) = self.played.get(stamp..).and_then(<[u64]>::last) {
-                        let after = stamp.checked_sub(1).map_or("the start".to_owned(), |at| format!("line {}", self.played[at]));
-                        return Err(format!("line {}: {} came before line {last} was written, after {after}", line.seq, what(&sent)));
-                    }
                     if line.data["type"] == "user" && !std::mem::replace(&mut self.prompted, true)
                         && let Some(at) = endpoint_at.filter(|_| !self.endpoint)
                     {
                         return Err(format!("line {}: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line {at}", line.seq));
                     }
                     self.compare(line, &sent)?;
+                    // A prompt during a turn, or an interrupt before the line it stops.
+                    let written_at = |after: &u64| self.played.iter().position(|seq| seq == after);
+                    if let Some(after) = follows.get(&line.seq).filter(|after| written_at(after).is_some_and(|at| stamp <= at)) {
+                        return Err(format!("line {}: {} came before line {after} was written, the line it follows", line.seq, what(&sent)));
+                    }
                 }
                 ("driver", Some("close_stdin")) => {
-                    let open = format!("line {}: the driver did not close stdin where the recording does", line.seq);
-                    if let Some((sent, _)) = self.next(input, stdout, Some(&open))? {
+                    let (place, open) = (format!("line {}", line.seq), format!("line {}: the driver did not close stdin where the recording does", line.seq));
+                    if let Some((sent, _)) = self.next(input, stdout, &place, Some(&open))? {
                         return Err(format!("line {}: the driver sent {} where the recording closes stdin", line.seq, what(&sent)));
                     }
                     closed = true;
@@ -297,7 +363,7 @@ impl Replay {
         }
         if !closed {
             // The recorded agent was killed or stays: the driver may take as long as it likes to close stdin.
-            if let Some((sent, _)) = self.next(input, stdout, None)? {
+            if let Some((sent, _)) = self.next(input, stdout, "after the recording ended", None)? {
                 return Err(format!("the driver sent {} after the recording ended", what(&sent)));
             }
             stays = true;
@@ -306,13 +372,18 @@ impl Replay {
     }
 
     /// The driver's next line that is not a config request, with its stamp, answering each config request on the way;
-    /// None at EOF. With `late`, a line that does not come within the deadline fails the replay with that report.
-    fn next(&mut self, input: &Receiver<Result<Arrived, String>>, stdout: &mut impl Write, late: Option<&str>) -> Result<Option<(Value, usize)>, String> {
+    /// None at EOF. `place` names, in a report, the recorded line the replay waits for. With `late`, a line that does
+    /// not arrive within the deadline fails the replay with that report.
+    fn next(&mut self, input: &Receiver<Result<Arrived, String>>, stdout: &mut impl Write, place: &str, late: Option<&str>) -> Result<Option<(Value, usize)>, String> {
+        // One deadline for the line, which blank lines and config requests on the way do not move. It is judged by when
+        // a line arrived, so one that came in time is taken however late the replay looks.
+        let until = Instant::now() + self.deadline;
+        let late_by = |late: &str| format!("{late} within {} ms", self.deadline.as_millis());
         loop {
             let arrived = match late {
-                Some(late) => match input.recv_timeout(self.deadline) {
+                Some(late) => match input.recv_timeout(until.saturating_duration_since(Instant::now())) {
                     Ok(arrived) => arrived,
-                    Err(RecvTimeoutError::Timeout) => return Err(format!("{late} within {} ms", self.deadline.as_millis())),
+                    Err(RecvTimeoutError::Timeout) => return Err(late_by(late)),
                     Err(RecvTimeoutError::Disconnected) => return Ok(None),
                 },
                 None => match input.recv() {
@@ -320,20 +391,23 @@ impl Replay {
                     Err(_) => return Ok(None),
                 },
             };
-            let Arrived { text: line, stamp } = arrived?;
+            let Arrived { text: line, stamp, at } = arrived?;
+            if let Some(late) = late.filter(|_| at > until) {
+                return Err(late_by(late));
+            }
             if line.trim().is_empty() {
                 continue;
             }
-            let sent: Value = serde_json::from_str(&line).map_err(|_| "the driver sent a line that is not JSON".to_owned())?;
+            let sent: Value = serde_json::from_str(&line).map_err(|_| format!("{place}: the driver sent a line that is not JSON"))?;
             if !is_config(&sent) {
                 return Ok(Some((sent, stamp)));
             }
-            self.ids.claim(&sent["request_id"])?;
+            self.ids.claim(&sent["request_id"]).map_err(|why| format!("{place}: {why}"))?;
             // A server the agent could not reach is never answered as added.
             let servers = sent["request"]["servers"].as_object().filter(|servers| !servers.is_empty());
             let reachable = |server: &Value| server["type"] == "http" && server["url"].as_str().is_some_and(|url| !url.is_empty());
             if !servers.is_some_and(|servers| servers.values().all(reachable)) {
-                return Err("the driver sent mcp_set_servers with a server that is not http with a url".into());
+                return Err(format!("{place}: the driver sent mcp_set_servers with a server that is not http with a url"));
             }
             self.endpoint = true;
             self.ids.sent_servers(&sent);
@@ -356,12 +430,22 @@ impl Replay {
                 self.ids.bind(&want["request_id"], &sent["request_id"]).map_err(|why| format!("line {at}: {why}"))
             }
             Some("control_response") => {
+                // Exactly the recorded fields at each level: a field more can widen what was allowed
+                // (`updatedPermissions`) or end the turn (`interrupt`).
+                let keys = |value: &Value| value.as_object().map(|fields| fields.keys().cloned().collect::<Vec<_>>());
+                let fields = Err(format!("line {at}: the answer's fields differ from the recording's {}", what(want)));
+                if keys(want) != keys(sent) {
+                    return fields;
+                }
                 let (want, sent) = (&want["response"], &sent["response"]);
                 if !self.ids.maps(&want["request_id"], &sent["request_id"]) {
                     return differs("the request id");
                 }
                 if want["subtype"] != sent["subtype"] {
                     return differs("the answer's subtype");
+                }
+                if keys(want) != keys(sent) {
+                    return fields;
                 }
                 let (want, sent_answer) = (&want["response"], &sent["response"]);
                 if want["behavior"] != sent_answer["behavior"] {
@@ -377,6 +461,11 @@ impl Replay {
                     }
                     _ if want.get("message") != sent_answer.get("message") => return differs("the deny's message"),
                     _ => {}
+                }
+                let compared = ["behavior", "updatedInput", "message"];
+                let other = want.as_object().into_iter().flatten().filter(|(key, _)| !compared.contains(&key.as_str()));
+                if keys(want) != keys(sent_answer) || other.into_iter().any(|(key, value)| sent_answer.get(key) != Some(value)) {
+                    return fields;
                 }
                 Ok(())
             }
@@ -414,6 +503,36 @@ fn what(data: &Value) -> String {
         Some(subtype) => format!("{kind} {}", known(subtype, SUBTYPES, "of an unknown subtype")),
         None => kind.to_owned(),
     }
+}
+
+/// Whether the replay writes this line: an agent line, unless it answers a config request whose answer is the
+/// replay's own. An agent's own request is played whatever its id.
+fn plays(line: &Recorded, skipped: &HashSet<String>) -> bool {
+    line.dir == "from_agent" && !(line.data["type"] == "control_response" && skipped.contains(&request_id(&line.data)))
+}
+
+/// For each prompt and interrupt of the driver's, the agent line it follows: a prompt the `result` before it, an
+/// interrupt the last line before it that is not a `stream_event`. The first prompt follows nothing.
+fn follows(lines: &[Recorded], skipped: &HashSet<String>) -> HashMap<u64, u64> {
+    let (mut follows, mut result, mut last) = (HashMap::new(), None, None);
+    for line in lines {
+        if plays(line, skipped) {
+            if line.data["type"] == "result" {
+                result = Some(line.seq);
+            }
+            if line.data["type"] != "stream_event" {
+                last = Some(line.seq);
+            }
+        } else if line.dir == "to_agent" {
+            let after = match (line.data["type"].as_str(), line.data["request"]["subtype"].as_str()) {
+                (Some("user"), _) => result,
+                (Some("control_request"), Some("interrupt")) => last,
+                _ => None,
+            };
+            follows.extend(after.map(|after| (line.seq, after)));
+        }
+    }
+    follows
 }
 
 fn request_id(data: &Value) -> String {
@@ -657,6 +776,24 @@ mod tests {
         let mut stdout = Seeing { written: &written, seen: vec![] };
         Replay::new(vec![line(1), line(2), line(3)]).play(&input, &written, &mut stdout, &mut vec![]).unwrap();
         assert_eq!(stdout.seen, [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_line_is_judged_by_when_it_arrived_not_by_when_the_replay_looks() {
+        let (lines, input) = std::sync::mpsc::channel();
+        let prompt = r#"{"type":"user","message":{"role":"user","content":"go"}}"#;
+        let (now, line) = (Instant::now(), |text: &str, at: Instant| Ok(Arrived { text: text.into(), stamp: 0, at }));
+        let earlier = now.checked_sub(Duration::from_millis(5)).unwrap_or(now);
+        for text in ["", "", prompt] {
+            lines.send(line(text, earlier)).unwrap();
+        }
+        let mut replay = Replay::new(vec![]);
+        replay.deadline = Duration::ZERO;
+        let got = replay.next(&input, &mut vec![], "line 5", Some("line 5: the driver never sent user"));
+        assert!(matches!(got, Ok(Some(_))), "queued before its deadline, it is taken although the replay looks after it");
+        lines.send(line(prompt, now + Duration::from_secs(60))).unwrap();
+        let got = replay.next(&input, &mut vec![], "line 9", Some("line 9: the driver never sent user"));
+        assert_eq!(got.err().as_deref(), Some("line 9: the driver never sent user within 0 ms"), "one that arrived after it is not");
     }
 
     #[test]

@@ -391,9 +391,9 @@ fn wire_replay_a_prompt_with_another_role_or_other_images_is_refused() {
 
 #[test]
 fn wire_replay_a_line_sent_before_the_agent_line_it_follows_is_refused_with_both_lines() {
-    // A prompt written with `initialize`, before its answer.
-    let prompt = refused("2-permission.jsonl", Client { early: Some(5), ..Client::default() });
-    assert_eq!(prompt, "line 5: user came before line 3 was written, after the start\n");
+    // The first prompt follows nothing: written with `initialize`, before its answer, it is not refused.
+    let (_, code, _, out) = play(&native().join("2-permission.jsonl"), Client { early: Some(5), ..Client::default() });
+    assert_eq!((code, report(&out)), (Some(0), String::new()));
     // An interrupt written with the allow, before the tool started (`task_started`). 3-cancel's own allow is too long
     // to share one write with it, so a short recording of the same shape.
     let tmp = tempfile::tempdir().unwrap();
@@ -413,12 +413,191 @@ fn wire_replay_a_line_sent_before_the_agent_line_it_follows_is_refused_with_both
     ];
     std::fs::write(&short, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
     let (_, code, _, out) = play(&short, Client { early: Some(8), ..Client::default() });
-    assert_eq!((code, report(&out)), (Some(3), "line 8: control_request interrupt came before line 7 was written, after line 5\n".to_owned()));
+    assert_eq!((code, report(&out)), (Some(3), "line 8: control_request interrupt came before line 7 was written, the line it follows\n".to_owned()));
     let (_, code, _, out) = play(&short, Client::default());
     assert_eq!((code, report(&out)), (Some(0), String::new()), "sent after it, the interrupt is in time");
     // The next prompt written with the interrupt, while the cancelled turn still runs: before its `result`, line 33.
     let during = refused("3-cancel.jsonl", Client { early: Some(36), ..Client::default() });
-    assert_eq!(during, "line 36: user came before line 33 was written, after line 27\n");
+    assert_eq!(during, "line 36: user came before line 33 was written, the line it follows\n");
+}
+
+/// A driver that acts on what it reads, as a real one does: each client line goes on reading the agent line `on` names
+/// for it, and otherwise an answer on reading its request, at once, and any other line on reading the agent line before
+/// it. Returns how the replay ended and its report.
+fn react(fixture: &Path, on: &[(u64, u64)]) -> (Option<i32>, String) {
+    let lines = lines_of(fixture);
+    let lines = &lines[..lines.iter().position(|line| line["data"]["note"] == "signal").unwrap_or(lines.len())];
+    let configs: Vec<&Value> = lines.iter().filter(|line| line["dir"] == "to_agent" && is_config(&line["data"])).map(|line| &line["data"]["request_id"]).collect();
+    let plays = |line: &&Value| line["dir"] == "from_agent" && !configs.contains(&&line["data"]["response"]["request_id"]);
+    let seq = |line: &Value| line["seq"].as_u64().unwrap();
+    // Each client line or close, with the agent line it goes on (0: before any).
+    let (mut sends, mut last) = (vec![], 0);
+    for line in lines {
+        if plays(&line) {
+            last = seq(line);
+        } else if line["dir"] == "to_agent" || line["data"]["note"] == "close_stdin" {
+            let request = &line["data"]["response"]["request_id"];
+            let asked = lines.iter().find(|ask| ask["dir"] == "from_agent" && line["data"]["type"] == "control_response" && ask["data"]["request_id"] == *request);
+            let default = asked.map_or(last, seq);
+            sends.push((on.iter().find(|(at, _)| *at == seq(line)).map_or(default, |(_, on)| *on), line));
+        }
+    }
+    let mut run = start(fixture, &[], &[]);
+    let (mut ids, mut mine) = (HashMap::new(), vec![]);
+    let send = |run: &mut Run, ids: &mut HashMap<String, String>, mine: &mut Vec<Value>, after: u64| {
+        for (_, line) in sends.iter().filter(|(on, _)| *on == after) {
+            if line["data"]["note"] == "close_stdin" {
+                run.close();
+                continue;
+            }
+            let mut sent = mapped(&line["data"], "", ids);
+            if sent["type"] == "control_request" {
+                let id = format!("client-{}", line["seq"]);
+                if is_config(&sent) {
+                    mine.push(json!(id));
+                } else {
+                    ids.insert(line["data"]["request_id"].as_str().unwrap().to_owned(), id.clone());
+                }
+                sent["request_id"] = json!(id);
+            }
+            if run.stdin.is_some() {
+                run.send(&sent);
+            }
+        }
+    };
+    send(&mut run, &mut ids, &mut mine, 0);
+    for agent in lines.iter().filter(plays) {
+        // The replay's own answers to config requests are not in the recording.
+        let live = loop {
+            match run.read() {
+                Some(live) if live["type"] == "control_response" && mine.contains(&live["response"]["request_id"]) => {}
+                other => break other,
+            }
+        };
+        let Some(live) = live else { break };
+        learn(&agent["data"], &live, "", &mut ids);
+        send(&mut run, &mut ids, &mut mine, seq(agent));
+    }
+    let (code, _, out) = run.end();
+    (code, report(&out))
+}
+
+#[test]
+fn wire_replay_a_driver_that_answers_each_request_on_sight_plays_clean_every_time() {
+    // Each recording has `stream_event` lines between a request and its answer, which such a driver answers before.
+    for fixture in ["2-permission.jsonl", "5-mcp.jsonl"] {
+        for run in 0..50 {
+            assert_eq!(react(&native().join(fixture), &[]), (Some(0), String::new()), "{fixture}, run {run}");
+        }
+    }
+}
+
+#[test]
+fn wire_replay_an_answer_on_sight_passes_when_a_long_line_follows_its_request() {
+    // A copy of 2-permission with a 300 KB `stream_event` after the first request: the replay is still writing it, or
+    // blocked on it, when the answer comes.
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("long.jsonl");
+    let mut lines = vec![];
+    for mut line in lines_of(&native().join("2-permission.jsonl")) {
+        let seq = line["seq"].as_u64().unwrap() * 10;
+        line["seq"] = json!(seq);
+        lines.push(line.to_string());
+        if seq == 270 {
+            let long = json!({"type": "stream_event", "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x".repeat(300_000)}}});
+            lines.push(json!({"seq": 275, "ms": 0, "dir": "from_agent", "data": long}).to_string());
+        }
+    }
+    std::fs::write(&copy, lines.join("\n")).unwrap();
+    for run in 0..5 {
+        assert_eq!(react(&copy, &[]), (Some(0), String::new()), "run {run}");
+    }
+}
+
+#[test]
+fn wire_replay_a_prompt_or_interrupt_sent_on_reading_a_line_before_the_one_it_follows_is_refused_every_time() {
+    let fixture = native().join("11-locked.jsonl");
+    let lines = lines_of(&fixture);
+    let seq = |line: &Value| line["seq"].as_u64().unwrap();
+    // Each later prompt, sent on reading the agent line just before the `result` it follows.
+    let early: Vec<(u64, u64, u64)> = lines
+        .iter()
+        .filter(|line| line["dir"] == "to_agent" && line["data"]["type"] == "user")
+        .skip(1)
+        .map(|prompt| {
+            let before: Vec<&Value> = lines.iter().take_while(|line| seq(line) < seq(prompt)).filter(|line| line["dir"] == "from_agent").collect();
+            let result = before.iter().rposition(|line| line["data"]["type"] == "result").unwrap();
+            (seq(prompt), seq(before[result]), seq(before[result - 1]))
+        })
+        .collect();
+    assert_eq!(early.len(), 3, "11-locked has three later prompts");
+    for run in 0..20 {
+        let (prompt, result, on) = early[run % early.len()];
+        let want = format!("line {prompt}: user came before line {result} was written, the line it follows\n");
+        assert_eq!(react(&fixture, &[(prompt, on)]), (Some(3), want), "run {run}");
+    }
+    // r2-ask's second prompt on reading line 31, a status line in the middle of the first turn.
+    for run in 0..20 {
+        let want = "line 76: user came before line 73 was written, the line it follows\n".to_owned();
+        assert_eq!(react(&native().join("r2-ask.jsonl"), &[(76, 31)]), (Some(3), want), "run {run}");
+    }
+    // 3-cancel's interrupt on reading line 24, before the tool started at line 27.
+    for run in 0..20 {
+        let want = "line 28: control_request interrupt came before line 27 was written, the line it follows\n".to_owned();
+        assert_eq!(react(&native().join("3-cancel.jsonl"), &[(28, 24)]), (Some(3), want), "run {run}");
+    }
+    // Each sent where it belongs plays clean.
+    for fixture in ["11-locked.jsonl", "r2-ask.jsonl", "3-cancel.jsonl"] {
+        assert_eq!(react(&native().join(fixture), &[]), (Some(0), String::new()), "{fixture}");
+    }
+}
+
+#[test]
+fn wire_replay_a_prompt_begun_before_the_line_it_follows_is_early_though_it_ends_after() {
+    let tmp = tempfile::tempdir().unwrap();
+    let line = |seq: u64, dir: &str, data: Value| json!({"seq": seq, "ms": seq, "dir": dir, "data": data});
+    let prompt = |text: &str| json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}});
+    let short = tmp.path().join("split.jsonl");
+    let lines = [
+        line(1, "to_agent", json!({"type": "control_request", "request_id": "spike-1", "request": {"subtype": "initialize"}})),
+        line(2, "from_agent", json!({"type": "control_response", "response": {"subtype": "success", "request_id": "spike-1", "response": {}}})),
+        line(3, "to_agent", prompt("go")),
+        line(4, "from_agent", json!({"type": "system", "subtype": "status"})),
+        line(5, "from_agent", json!({"type": "result", "subtype": "success", "is_error": false})),
+        line(6, "to_agent", prompt("more")),
+        line(7, "from_agent", json!({"type": "result", "subtype": "success", "is_error": false})),
+        line(8, "driver", json!({"note": "close_stdin"})),
+    ];
+    std::fs::write(&short, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+    let mut run = start(&short, &[], &[]);
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize"}}));
+    run.read().unwrap();
+    run.send(&prompt("go"));
+    assert_eq!(run.read().unwrap()["subtype"], "status");
+    // Half of the next prompt mid-turn, the rest once the turn's `result` is out.
+    let more = format!("{}\n", prompt("more"));
+    let (half, rest) = more.split_at(more.len() / 2);
+    let stdin = run.stdin.as_mut().unwrap();
+    stdin.write_all(half.as_bytes()).unwrap();
+    stdin.flush().unwrap();
+    assert_eq!(run.read().unwrap()["type"], "result");
+    let _ = run.stdin.as_mut().unwrap().write_all(rest.as_bytes());
+    let (code, _, out) = run.end();
+    assert_eq!((code, report(&out)), (Some(3), "line 6: user came before line 5 was written, the line it follows\n".to_owned()));
+}
+
+#[test]
+fn wire_replay_an_answer_with_a_field_the_recording_lacks_is_refused() {
+    // An allow that would allow every later Bash command, and a deny that would end the turn.
+    let wider = |sent: &mut Value| {
+        sent["response"]["response"]["updatedPermissions"] = json!([{"type": "addRules", "rules": [{"toolName": "Bash"}], "behavior": "allow", "destination": "session"}])
+    };
+    let report = refused("2-permission.jsonl", Client { change: Some((30, wider)), ..Client::default() });
+    assert_eq!(report, "line 30: the answer's fields differ from the recording's control_response\n");
+    let report = refused("2-permission.jsonl", Client { change: Some((55, |sent| sent["response"]["response"]["interrupt"] = json!(true))), ..Client::default() });
+    assert_eq!(report, "line 55: the answer's fields differ from the recording's control_response\n");
+    let report = refused("2-permission.jsonl", Client { change: Some((55, |sent| sent["response"]["error"] = json!("no"))), ..Client::default() });
+    assert_eq!(report, "line 55: the answer's fields differ from the recording's control_response\n");
 }
 
 #[test]
@@ -494,7 +673,7 @@ fn wire_replay_config_a_server_that_is_not_http_with_a_url_is_refused_never_answ
         let set = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {"abc": server}}});
         let (read, code, _, out) = play(&native().join("2-permission.jsonl"), Client { first: Some(set), ..Client::default() });
         assert_eq!(code, Some(3), "{server}");
-        assert_eq!(report(&out), "the driver sent mcp_set_servers with a server that is not http with a url\n");
+        assert_eq!(report(&out), "line 2: the driver sent mcp_set_servers with a server that is not http with a url\n", "it names the line the replay waited for");
         assert!(!read.iter().any(|line| line["response"]["response"]["added"].is_array()), "no success is made up for it");
     }
     let none = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {}}});
@@ -589,12 +768,80 @@ fn wire_replay_records_where_a_secret_is_and_never_a_header_value() {
     assert_eq!(held, json!({"env": ["LEAKED"], "argv": 1}));
     let env: Value = serde_json::from_slice(&std::fs::read(out.path().join("env.json")).unwrap()).unwrap();
     assert_eq!(env["CLAUDE_CONFIG_DIR"], "/a/b", "a login folder is shown");
-    for file in ["env.json", "sent.jsonl", "report.txt"] {
+    for file in ["argv.json", "env.json", "sent.jsonl", "report.txt"] {
         let text = std::fs::read_to_string(out.path().join(file)).unwrap_or_default();
         assert!(!text.contains("tok-5f2a9c"), "{file} holds the secret");
     }
     let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
     assert!(sent.contains("\"Authorization\":\"<redacted>\""), "the header is kept, its value is not");
+}
+
+#[test]
+fn wire_replay_masks_a_token_or_the_named_secret_in_argv_and_in_every_line_sent() {
+    let token = (harness::redact::SHAPES[0].example)();
+    let fixture = native().join("2-permission.jsonl");
+    // No secret file: a token shape is masked anyway.
+    let mut run = start(&fixture, &["--key", &token], &[]);
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize", "note": token}}));
+    run.read().unwrap();
+    let (_, _, out) = run.end();
+    for file in ["argv.json", "sent.jsonl"] {
+        let text = std::fs::read_to_string(out.path().join(file)).unwrap();
+        assert!(!text.contains(&token) && text.contains("<redacted>"), "{file} holds the token");
+    }
+    // The named secret, outside any header: in a server's URL, in `initialize` and in a prompt.
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("secret");
+    std::fs::write(&secret, "tok-5f2a9c\n").unwrap();
+    let secret_file = secret.display().to_string();
+    let mut run = start(&fixture, &[], &[("WIRE_REPLAY_SECRET_FILE", secret_file.as_str())]);
+    run.send(&json!({"type": "control_request", "request_id": "s-1", "request": {"subtype": "mcp_set_servers", "servers": {"abc": {"type": "http", "url": "http://127.0.0.1:9/mcp?t=tok-5f2a9c"}}}}));
+    run.read().unwrap();
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize", "hooks": {"tok-5f2a9c": "tok-5f2a9c"}}}));
+    run.read().unwrap();
+    run.send(&json!({"type": "user", "message": {"role": "user", "content": "use tok-5f2a9c"}}));
+    let (_, _, out) = run.end();
+    let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
+    assert_eq!(sent.lines().count(), 3);
+    assert!(!sent.contains("tok-5f2a9c"), "sent.jsonl holds the secret");
+}
+
+#[test]
+fn wire_replay_a_last_line_with_no_newline_is_still_a_line() {
+    let fixture = native().join("4-kill.jsonl");
+    let mut run = start(&fixture, &[], &[]);
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize"}}));
+    run.read().unwrap();
+    let prompt = lines_of(&fixture).into_iter().find(|line| line["dir"] == "to_agent" && line["data"]["type"] == "user").unwrap();
+    run.send(&prompt["data"]);
+    while let Some(line) = run.read() {
+        if line["request"]["subtype"] == "can_use_tool" {
+            break;
+        }
+    }
+    // Not the answer the recording has: a prompt, with no newline, then stdin closes.
+    let _ = write!(run.stdin.as_mut().unwrap(), "{}", json!({"type": "user", "message": {"role": "user", "content": "more"}}));
+    let (code, _, out) = run.end();
+    assert_eq!((code, report(&out).contains("the driver sent user where the recording has control_response")), (Some(3), true), "{}", report(&out));
+}
+
+#[test]
+fn wire_replay_lines_on_the_way_do_not_move_the_deadline() {
+    let mut run = start(&native().join("2-permission.jsonl"), &[], &[("WIRE_REPLAY_DEADLINE_MS", "400")]);
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize"}}));
+    run.read().unwrap();
+    // Blank lines every 100 ms, never the prompt: the replay still gives up 400 ms after it began to wait.
+    let started = std::time::Instant::now();
+    let mut blanks = run.stdin.take().unwrap();
+    let blanking = std::thread::spawn(move || {
+        while started.elapsed() < Duration::from_secs(5) && blanks.write_all(b"\n").is_ok() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let (code, _, out) = run.end_open();
+    assert_eq!((code, report(&out)), (Some(3), "line 5: the driver never sent user within 400 ms\n".to_owned()));
+    assert!(started.elapsed() < Duration::from_secs(4), "it did not wait past its deadline");
+    blanking.join().unwrap();
 }
 
 #[test]

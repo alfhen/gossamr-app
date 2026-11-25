@@ -215,7 +215,9 @@ mod tests {
     /// it did there: no crate of the workspace turns on its `preserve_order`.
     #[test]
     fn pips_argv_is_todays_byte_for_byte() {
-        let (_, prompt, turn) = split(request(Some("s-1")));
+        let req = request(Some("s-1"));
+        let sandbox = req.sandbox.path().to_path_buf();
+        let (_, prompt, turn) = split(req);
         let today = [
             "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--effort", "medium",
             "--permission-mode", "dontAsk", "--tools", "", "--allowedTools", "mcp__gossamr", "--setting-sources", "", "--disable-slash-commands",
@@ -226,6 +228,7 @@ mod tests {
         let cmd = pip::command(&turn);
         let argv: Vec<String> = cmd.as_std().get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
         assert_eq!(argv, today, "the argv the spawned command has, the only way the app reaches it");
+        assert_eq!(cmd.as_std().get_current_dir(), Some(sandbox.as_path()), "Pip runs in the request's sandbox");
         assert_eq!(prompt, "p");
         let envs: Vec<_> = cmd.as_std().get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
         let expected = [("CLAUDECODE", None), ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", Some("1")), ("GOSSAMR_MCP_TOKEN", Some("tok"))];
