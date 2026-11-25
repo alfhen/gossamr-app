@@ -51,7 +51,8 @@ export function HarnessSection() {
 }
 
 export function HarnessView({ status, busy, onAction }: { status: HarnessStatus | null; busy: boolean; onAction(action: HarnessAction): void }) {
-  const [asking, setAsking] = useState(false);
+  /** Both stop every agent the harness runs, so each asks first. */
+  const [asking, setAsking] = useState<"stop" | "restart" | null>(null);
   if (!status) return <p className="m-0 text-ws-ink2">Checking…</p>;
   const running = status.state === "running";
   return (
@@ -69,25 +70,25 @@ export function HarnessView({ status, busy, onAction }: { status: HarnessStatus 
       )}
       {asking ? (
         <div className="flex flex-wrap items-center gap-2">
-          <span>This stops every agent the harness runs.</span>
+          <span>{asking === "stop" ? "This stops every agent the harness runs." : "Restarting stops every agent the harness runs."}</span>
           <Button
             destructive
             disabled={busy}
             onClick={() => {
-              setAsking(false);
-              onAction("stop");
+              setAsking(null);
+              onAction(asking);
             }}
           >
-            Stop all
+            {asking === "stop" ? "Stop all" : "Restart"}
           </Button>
-          <Button variant="quiet" onClick={() => setAsking(false)}>
+          <Button variant="quiet" onClick={() => setAsking(null)}>
             Cancel
           </Button>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
           {status.update && (
-            <Button disabled={busy} onClick={() => onAction("restart")}>
+            <Button disabled={busy} onClick={() => setAsking("restart")}>
               Restart the harness to update
             </Button>
           )}
@@ -97,7 +98,7 @@ export function HarnessView({ status, busy, onAction }: { status: HarnessStatus 
             </Button>
           )}
           {running && (
-            <Button destructive disabled={busy} onClick={() => setAsking(true)}>
+            <Button destructive disabled={busy} onClick={() => setAsking("stop")}>
               Stop all agents and the harness
             </Button>
           )}

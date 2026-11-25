@@ -27,6 +27,9 @@ test.describe("The harness in Settings", () => {
     const harness = await openSettings(page, "runs=empty&mockHarness=older");
     await expect(harness).toContainText("Gossamr has build 2f6c1a9e04b7.");
     await harness.getByRole("button", { name: "Restart the harness to update" }).click();
+    await expect(harness).toContainText("Restarting stops every agent the harness runs.");
+    await expect(harness.locator("[data-harness-state]")).toHaveText("Running");
+    await harness.getByRole("button", { name: "Restart", exact: true }).click();
     await expect(harness).toContainText("Restarted.");
     await expect(harness.getByRole("button", { name: "Restart the harness to update" })).toHaveCount(0);
   });

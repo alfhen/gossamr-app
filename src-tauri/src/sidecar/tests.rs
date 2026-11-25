@@ -559,3 +559,20 @@ async fn a_harness_that_takes_shutdown_and_never_answers_leaves_stop_waiting_onl
     assert_eq!(sidecar.act(Action::Start).await.state, State::Running, "the manager is free again");
     bed.none_left().await;
 }
+
+#[tokio::test]
+async fn stop_while_a_harness_is_stopping_without_its_socket_waits_for_the_folder_and_never_says_stopped_early() {
+    let bed = Bed::new();
+    bed.token();
+    DirBuilder::new().recursive(true).mode(0o700).create(&bed.dir).unwrap();
+    let lock = OpenOptions::new().create(true).truncate(false).write(true).open(bed.dir.join("lock")).unwrap();
+    lock.try_lock().unwrap();
+    let limits = Limits { stopping_within: Duration::from_millis(300), ..Limits::default() };
+    let sidecar = Sidecar::new(bed.dir.clone(), bed.fake("harness", PROTOCOL, "new"), Box::new(bed.vault()), limits);
+    let held = sidecar.act(Action::Stop).await;
+    assert_eq!(held.state, State::Failed, "{held:?}");
+    assert!(held.message.as_deref().is_some_and(|m| m.contains("still stopping")), "{held:?}");
+    drop(lock);
+    assert_eq!(sidecar.act(Action::Stop).await.state, State::Stopped, "once the folder is free");
+    assert!(bed.pids("serving").is_empty());
+}

@@ -375,22 +375,29 @@ impl Sidecar {
     async fn stop(&self, token: &Token) -> Result<Vec<String>, String> {
         let mut client = match Client::connect_any_protocol(&self.dir, token, self.limits.prove_within).await {
             Ok(client) => client,
-            Err(e) if nothing_serving(&e) => return Ok(vec![]),
+            // One that is stopping has taken its socket away and still holds the folder: wait for it below.
+            Err(e) if nothing_serving(&e) => return self.until_free().await.map(|()| vec![]),
             Err(e) if harness::client::not_proven(&e) => return Err("A harness is running that doesn't know this Gossamr's key, so Gossamr leaves it alone.".into()),
             Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
-        let stopping = "The harness is still stopping. Try again in a minute.";
-        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown)).await.map_err(|_| stopping.to_owned())?;
+        let stopping = || "The harness is still stopping. Try again in a minute.".to_owned();
+        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown)).await.map_err(|_| stopping())?;
         let answer = answer.map_err(|e| format!("Gossamr couldn't stop the harness: {e}"))?;
         drop(client);
+        self.until_free().await?;
+        Ok(left_of(&answer))
+    }
+
+    /// Until no harness holds the data folder, or `stopping_within` passes.
+    async fn until_free(&self) -> Result<(), String> {
         let until = Instant::now() + self.limits.stopping_within;
         while held(&self.dir.join("lock")) {
             if Instant::now() > until {
-                return Err(stopping.into());
+                return Err("The harness is still stopping. Try again in a minute.".into());
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        Ok(left_of(&answer))
+        Ok(())
     }
 
     /// What the bundled harness says its build is, asked once per run.
