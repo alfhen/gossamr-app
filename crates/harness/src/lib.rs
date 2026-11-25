@@ -8,6 +8,7 @@ pub mod api;
 pub mod ask;
 pub mod auth;
 pub mod binary;
+pub mod claude;
 pub mod cli;
 pub mod client;
 pub mod codex_models;
