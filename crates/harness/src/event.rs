@@ -187,8 +187,12 @@ pub enum QuestionEnd {
     /// The session was stopped. A harness that shuts down closes none: they are answered after it starts again.
     Stopped,
     HandedOver,
-    /// A deny ended the turn that asked it.
+    /// A deny ended the turn whose `ask` call held it.
     Denied,
+    /// The session was cleaned up with it open.
+    CleanedUp,
+    /// The session can never be resumed (it ended with its client, or cannot be), so no answer can reach it.
+    NotResumable,
 }
 
 /// Why a turn or a session failed, so a client can say what to do about it.
