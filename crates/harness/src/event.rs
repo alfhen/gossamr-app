@@ -43,6 +43,8 @@ pub enum Body {
     ToolResult { id: String, output: Value, error: bool },
     /// The id is the harness's own, unique in the session across restarts and resumes, not the provider's.
     Permission { id: String, kind: PermissionKind, tool: String, input: Value },
+    /// The agent withdrew a permission request before it was answered; an answer to it is refused from now on.
+    PermissionClosed { id: String },
     Answered {
         id: String,
         decision: Decision,
@@ -210,14 +212,15 @@ mod tests {
             Body::ClientToolCall { .. } => 7,
             Body::ToolResult { .. } => 8,
             Body::Permission { .. } => 9,
-            Body::Answered { .. } => 10,
-            Body::Question { .. } => 11,
-            Body::TurnEnded { .. } => 12,
-            Body::Failed { .. } => 13,
-            Body::Notice { .. } => 14,
-            Body::HandedOver => 15,
-            Body::Closed => 16,
-            Body::Withheld { .. } => 17,
+            Body::PermissionClosed { .. } => 10,
+            Body::Answered { .. } => 11,
+            Body::Question { .. } => 12,
+            Body::TurnEnded { .. } => 13,
+            Body::Failed { .. } => 14,
+            Body::Notice { .. } => 15,
+            Body::HandedOver => 16,
+            Body::Closed => 17,
+            Body::Withheld { .. } => 18,
         }
     }
 
@@ -235,6 +238,7 @@ mod tests {
             Body::ClientToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
             Body::ToolResult { id: "i".into(), output: json!("o"), error: false },
             Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
+            Body::PermissionClosed { id: "i".into() },
             Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
             Body::TurnEnded { how: TurnEnd::Done },

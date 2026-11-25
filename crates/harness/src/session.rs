@@ -900,6 +900,18 @@ impl Task {
                             }
                         }
                     }
+                    Some(Body::PermissionClosed { id: driver_id }) => {
+                        let closed = {
+                            let mut open = self.open_requests();
+                            let id = open.iter().find(|(_, request)| request.driver_id == driver_id).map(|(id, _)| id.clone());
+                            id.inspect(|id| {
+                                open.remove(id);
+                            })
+                        };
+                        if let Some(id) = closed {
+                            self.emit(Body::PermissionClosed { id });
+                        }
+                    }
                     Some(question @ Body::Question { .. }) => {
                         // The id the client sees, after redaction, is the one its answer names.
                         let question = redact::body(question, &self.secrets);
@@ -1093,7 +1105,7 @@ impl Task {
         let gone = async {
             while let Some(body) = link.output.recv().await {
                 match &body {
-                    Body::Permission { .. } => continue,
+                    Body::Permission { .. } | Body::PermissionClosed { .. } => continue,
                     Body::Started { .. } => {
                         self.started(body);
                         continue;

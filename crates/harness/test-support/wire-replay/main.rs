@@ -4,8 +4,9 @@
 //! H2's converter. Only test builds have it (`required-features = ["testing"]`).
 //!
 //! `WIRE_REPLAY_FIXTURE` names the recording. `WIRE_REPLAY_OUT` names a folder that gets `argv.json`, `env.json`,
-//! `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the field and
-//! never a payload. A mismatch exits 3.
+//! `pid`, `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the
+//! field and never a payload. A mismatch exits 3. With `WIRE_REPLAY_IGNORE_TERM` set it ignores SIGTERM, as an agent
+//! that will not stop does.
 //!
 //! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, an
 //! answer's decision, and every id by the mapping. The config requests named in `CONFIG` are not compared: the replay
@@ -35,7 +36,13 @@ fn main() -> ExitCode {
     let out = PathBuf::from(out);
     let argv: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
     let env: Map<String, Value> = std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), Value::from(v.to_string_lossy().into_owned()))).collect();
-    let written = std::fs::write(out.join("argv.json"), Value::from(argv).to_string()).and_then(|()| std::fs::write(out.join("env.json"), Value::Object(env).to_string()));
+    if std::env::var_os("WIRE_REPLAY_IGNORE_TERM").is_some() {
+        // SAFETY: setting a signal's disposition to ignore runs no handler code.
+        unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+    }
+    let written = std::fs::write(out.join("argv.json"), Value::from(argv).to_string())
+        .and_then(|()| std::fs::write(out.join("env.json"), Value::Object(env).to_string()))
+        .and_then(|()| std::fs::write(out.join("pid"), std::process::id().to_string()));
     let recording = match (written, load(Path::new(&fixture))) {
         (Ok(()), Ok(recording)) => recording,
         (Err(e), _) => return refuse(&out, &format!("cannot write the out folder: {e}")),
