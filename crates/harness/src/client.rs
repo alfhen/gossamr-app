@@ -158,8 +158,9 @@ pub fn not_proven(e: &Error) -> bool {
     matches!(e, Error::Said(said) if said == NOT_PROVEN)
 }
 
-/// A reply, with its event read on its own: one of a type this build does not know, from a newer harness of the same
-/// protocol, comes as `withheld` with nothing kept, so a client moves past its number instead of losing the connection.
+/// A reply, with its event read on its own: one this build cannot read, from a newer harness of the same protocol,
+/// comes as `withheld` with the fields every event may keep, so a client moves past its number instead of losing the
+/// connection. A known event with a value this build does not know reads as that event, with the enum's `Other`.
 fn decode_reply(text: &str) -> Result<Reply> {
     let mut value: Value = serde_json::from_str(text)?;
     let event = value.as_object_mut().and_then(|reply| reply.remove("event"));
@@ -172,7 +173,10 @@ fn readable_event(value: Value) -> Result<Event> {
     match serde_json::from_value::<Event>(value.clone()) {
         Ok(event) => Ok(event),
         Err(e) => match (value["seq"].as_u64(), value["type"].as_str()) {
-            (Some(seq), Some(of)) => Ok(Event { seq, ms: value["ms"].as_i64().unwrap_or(0), body: Body::Withheld { of: of.to_owned(), kept: Default::default() }, cut: None }),
+            (Some(seq), Some(of)) => {
+                let kept = value.as_object().map(|fields| fields.iter().filter(|(field, _)| crate::event::KEPT_FIELDS.contains(&field.as_str())).map(|(field, v)| (field.clone(), v.clone())).collect()).unwrap_or_default();
+                Ok(Event { seq, ms: value["ms"].as_i64().unwrap_or(0), body: Body::Withheld { of: of.to_owned(), kept }, cut: None })
+            }
             _ => Err(e.into()),
         },
     }
@@ -199,5 +203,20 @@ mod tests {
         let known = decode_reply(r#"{"session":"s1","event":{"seq":6,"ms":8,"type":"text","text":"hi"}}"#).unwrap();
         assert_eq!(known.event.map(|e| e.body), Some(Body::Text { text: "hi".into() }));
         assert!(decode_reply(r#"{"session":"s1","event":{"type":"progress"}}"#).is_err(), "with no number there is nothing to move past");
+    }
+
+    #[test]
+    fn a_known_event_with_a_value_this_build_does_not_know_is_still_read_as_that_event() {
+        let ended = decode_reply(r#"{"session":"s1","event":{"seq":7,"ms":1,"type":"turn_ended","how":"limit"}}"#).unwrap();
+        assert_eq!(ended.event.map(|e| e.body), Some(Body::TurnEnded { how: crate::event::TurnEnd::Other }));
+        let closed = decode_reply(r#"{"session":"s1","event":{"seq":8,"ms":1,"type":"question_closed","id":"q1","how":"expired"}}"#).unwrap();
+        assert_eq!(closed.event.map(|e| e.body), Some(Body::QuestionClosed { id: "q1".into(), how: crate::event::QuestionEnd::Other }));
+        let asked = decode_reply(r#"{"session":"s1","event":{"seq":9,"ms":1,"type":"permission","id":"p1","kind":"network","tool":"Fetch","input":{}}}"#).unwrap();
+        assert!(matches!(asked.event.map(|e| e.body), Some(Body::Permission { kind: crate::event::PermissionKind::Other, .. })));
+        let failed = decode_reply(r#"{"session":"s1","event":{"seq":10,"ms":1,"type":"failed","kind":"quota","reason":"over"}}"#).unwrap();
+        assert_eq!(failed.event.map(|e| e.body), Some(Body::Failed { kind: crate::event::FailKind::Other, reason: "over".into() }));
+        let odd = decode_reply(r#"{"session":"s1","event":{"seq":11,"ms":1,"type":"brand_new","id":"x1","how":"soon","text":"private"}}"#).unwrap();
+        let Some(Body::Withheld { kept, .. }) = odd.event.map(|e| e.body) else { panic!("withheld") };
+        assert_eq!((kept.get("id"), kept.get("how"), kept.get("text")), (Some(&serde_json::json!("x1")), Some(&serde_json::json!("soon")), None), "the kept fields, never a private one");
     }
 }

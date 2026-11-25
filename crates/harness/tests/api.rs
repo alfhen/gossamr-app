@@ -1352,3 +1352,11 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket() {
     assert_eq!(std::fs::read_to_string(out.join("report.txt")).unwrap_or_default(), "", "the replay took every line");
     task.abort();
 }
+
+#[tokio::test]
+async fn api_an_answer_that_is_neither_allow_nor_deny_is_refused() {
+    let served = serve(SCRIPT);
+    let mut client = Client::connect(&served.dir, &served.token).await.unwrap();
+    let answered = client.call(Op::Answer { session: "s1".into(), request: "p1".into(), decision: harness::event::Decision::Other, message: None }).await;
+    assert!(answered.is_err_and(|e| e.to_string().contains("an answer is allow or deny")));
+}

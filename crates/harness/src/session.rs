@@ -400,6 +400,9 @@ impl Harness {
     /// loses the race with its turn's end (accepted here, but the turn ended before the session dispatched it) is
     /// dropped: it is neither recorded nor sent, and the client hears nothing more of it than the turn's end.
     pub fn answer(&self, id: &str, request: &str, decision: Decision, message: Option<String>) -> Result<()> {
+        if decision == Decision::Other {
+            return Err(Error::Refused("an answer is allow or deny".into()));
+        }
         let live = self.taking(id)?;
         {
             let mut open = live.open.lock().unwrap_or_else(|p| p.into_inner());

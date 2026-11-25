@@ -506,3 +506,37 @@ async fn the_same_loss_at_one_place_is_asked_about_once() {
     assert_eq!(losses, 1, "a loss at the same place again is not asked about again");
     bed.end().await;
 }
+
+/// Answers once it is let go, counting the calls it took.
+#[derive(Default)]
+struct Slow {
+    calls: Mutex<u32>,
+    go: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ClientTools for Slow {
+    async fn call(&self, _run: &Run, _name: &str, input: &Value) -> (Value, bool) {
+        *self.calls.lock().unwrap() += 1;
+        self.go.notified().await;
+        (json!({ "key": input["key"], "text": "Fix the login page" }), false)
+    }
+}
+
+#[tokio::test]
+async fn a_call_whose_answer_is_on_its_way_is_not_answered_again_on_a_reconnect() {
+    let mut bed = Bed::new(READS).await;
+    let slow = Arc::new(Slow::default());
+    bed.link = link_with(&bed.rig, &bed.direct, slow.clone());
+    let (run, _) = bed.started().await;
+    bed.until(&run, |_, f| !f.calls.is_empty()).await;
+    let mut client = bed.served.client().await;
+    follow_all(&bed.link.inner, &mut client).await.unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(*slow.calls.lock().unwrap(), 1, "the call in flight was not taken again");
+    slow.go.notify_one();
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.end().await;
+}

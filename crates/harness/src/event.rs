@@ -162,6 +162,9 @@ pub enum PermissionKind {
     Permissions,
     /// A call of a named tool, an MCP tool among them.
     Tool,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// An answer to a permission request. It holds for that one request: no answer is ever "always".
@@ -170,6 +173,9 @@ pub enum PermissionKind {
 pub enum Decision {
     Allow,
     Deny,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +185,9 @@ pub enum TurnEnd {
     Cancelled,
     /// A deny ended the turn, so no "carry on" may follow it.
     Denied,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// What closed a question.
@@ -195,6 +204,9 @@ pub enum QuestionEnd {
     CleanedUp,
     /// The session can never be resumed (it ended with its client, or cannot be), so no answer can reach it.
     NotResumable,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// Why a turn or a session failed, so a client can say what to do about it.
@@ -213,6 +225,9 @@ pub enum FailKind {
     Driver,
     /// The harness itself could not go on, for example its store.
     Harness,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[cfg(test)]
