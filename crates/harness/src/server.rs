@@ -463,7 +463,7 @@ impl Client {
             Op::Cancel { session } => done(harness.cancel(&session)),
             Op::Answer { session, request, decision, message } => done(harness.answer(&session, &request, decision, message)),
             Op::ToolResult { session, call, output, error } => done(harness.tool_result(&session, &call, output, error)),
-            Op::AnswerQuestion { session, question, text } => done(harness.answer_question(&session, &question, text)),
+            Op::AnswerQuestion { session, question, text } => done(harness.answer_question(&session, &question, text).await),
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
             Op::CleanUp { session } => done(harness.clean_up(&session).await),

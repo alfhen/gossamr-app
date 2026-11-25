@@ -70,6 +70,7 @@ pub const USAGE: &str = "usage: harness --version
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
        harness answer <session> <request> allow|deny [--message <text>]
+       harness answer <session> <question> --text <answer>
        harness token new
   One place to keep the token is a Keychain item that trusts no app; check that reading it asks you first:
        security add-generic-password -s gossamr-harness -a client -T \"\" -w     (paste the token when asked)

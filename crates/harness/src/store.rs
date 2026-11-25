@@ -64,7 +64,17 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     // the schema its result must fit, both as JSON.
     "ALTER TABLE sessions ADD COLUMN endpoint TEXT;
     ALTER TABLE sessions ADD COLUMN tools TEXT;
-    ALTER TABLE sessions ADD COLUMN result_schema TEXT;"];
+    ALTER TABLE sessions ADD COLUMN result_schema TEXT;",
+    // Questions the agent asked through `ask`, so one asked before a restart is still open after it. Its text is in
+    // its `question` event only.
+    "CREATE TABLE questions (
+        session TEXT NOT NULL REFERENCES sessions (id),
+        id TEXT NOT NULL,
+        asked_ms INTEGER NOT NULL,
+        closed_ms INTEGER,
+        closed TEXT,
+        PRIMARY KEY (session, id)
+    );"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -272,6 +282,30 @@ impl Store {
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    /// Keeps that the agent asked question `id`, open until it is closed.
+    pub fn ask(&self, session: &str, id: &str, ms: i64) -> Result<()> {
+        self.conn.execute("INSERT INTO questions (session, id, asked_ms) VALUES (?1, ?2, ?3)", params![session, id, ms])?;
+        Ok(())
+    }
+
+    /// The session's open question, if it has one: its id.
+    pub fn open_question(&self, session: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT id FROM questions WHERE session = ?1 AND closed_ms IS NULL ORDER BY asked_ms DESC LIMIT 1", [session], |row| row.get(0))
+            .optional()?)
+    }
+
+    /// Closes an open question, saying how; one already closed, or never kept, is left as it is.
+    pub fn close_question(&self, session: &str, id: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let how = serde_json::to_value(how)?;
+        self.conn.execute(
+            "UPDATE questions SET closed_ms = ?3, closed = ?4 WHERE session = ?1 AND id = ?2 AND closed_ms IS NULL",
+            params![session, id, ms, how.as_str()],
+        )?;
+        Ok(())
     }
 
     /// The session ends when the client that opened it leaves, and is never resumed.

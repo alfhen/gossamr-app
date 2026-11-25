@@ -147,8 +147,9 @@ pub enum Op {
         #[serde(default)]
         error: bool,
     },
-    /// Answers an open question. Until `ask` holds the agent's call (H5b), the answer reaches the agent as its next
-    /// prompt.
+    /// Answers an open question, once: to the agent's `ask` call if the harness still holds it, else as the next prompt
+    /// after the running turn. A session that is not running is resumed first, with a new tools token. A question that
+    /// Stop, a hand-over or a deny-ended turn closed is refused.
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
     /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.

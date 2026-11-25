@@ -260,15 +260,15 @@ async fn tools_endpoint_declared_tools_are_listed_and_each_call_is_an_event_the_
     let (harness, recorder) = recording(&dir, Settings::default());
     let (id, mut events) = harness.open(spec()).await.unwrap();
     let (endpoint, token, _) = recorder.last();
-    assert_eq!(endpoint.tools, ["choose", "read_ticket", "result"]);
+    assert_eq!(endpoint.tools, ["choose", "read_ticket", "result", "ask"]);
     let exact = |tool: &str| format!("mcp__{}__{tool}", endpoint.name);
-    assert_eq!(endpoint.allowed, [exact("choose"), exact("read_ticket"), exact("result")], "exact names for Claude");
+    assert_eq!(endpoint.allowed, [exact("choose"), exact("read_ticket"), exact("result"), exact("ask")], "exact names for Claude");
     let (port, path) = place(&endpoint);
     let (status, listed) = post(port, &path, &[("authorization", &format!("Bearer {token}"))], &rpc("tools/list", json!({}))).await.unwrap();
     let listed: Value = serde_json::from_slice(&listed).unwrap();
     assert_eq!(status, 200);
     let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["choose", "read_ticket", "result"]);
+    assert_eq!(names, ["choose", "read_ticket", "result", "ask"]);
     assert_eq!(listed["result"]["tools"][1]["inputSchema"], json!({"type": "object"}));
 
     let calling = tokio::spawn(async move { call(port, &path, &token, "read_ticket", json!({"key": "T-1"})).await });
@@ -607,7 +607,7 @@ async fn tools_endpoint_result_is_refused_while_a_question_is_open() {
     assert_eq!(answer["result"]["isError"], true);
     assert_eq!(answer["result"]["content"][0]["text"], "a question is open (q1): wait for its answer, then give your result");
     assert!(!harness.events(&id, 0).unwrap().iter().any(|event| event.body.type_name() == "result"), "no result event");
-    harness.answer_question(&id, "q1", "blue".into()).unwrap();
+    harness.answer_question(&id, "q1", "blue".into()).await.unwrap();
     let (_, answer) = call(port, &path, &token, "result", json!({"done": true})).await;
     assert_eq!(answer["result"]["isError"], false, "taken once the question is answered: {answer}");
 }

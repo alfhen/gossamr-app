@@ -20,10 +20,10 @@ use tokio::sync::{Notify, broadcast, oneshot};
 
 use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secret, random_hex};
 use crate::error::{Error, Result};
-use crate::event::{Body, Decision, Event, FailKind};
+use crate::event::{Body, Decision, Event, FailKind, QuestionEnd, TurnEnd};
 use crate::redact;
 use crate::store::{Listed, NewSession, Store, now_ms};
-use crate::tools::{Endpoints, RESULT, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
+use crate::tools::{ASK, Endpoints, RESULT, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
 use crate::work::{Setup, Work, valid_effort};
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +58,13 @@ pub const LOCKED_BACKLOG_BYTES: usize = 64 << 20;
 
 /// The reason of the `failed` a session records when it cannot be resumed; the session's row is marked with it.
 pub const CANNOT_RESUME: &str = "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops";
+
+/// What `ask` returns when the provider would cut the call before the answer comes.
+pub const QUESTION_PENDING: &str = "question pending, end your turn: the answer comes as your next prompt";
+/// How long before a provider's limit on a call `ask` returns: this, or a quarter of the limit when that is less.
+pub const ASK_MARGIN: Duration = Duration::from_secs(10);
+/// The longest question `ask` takes, in characters.
+pub const QUESTION_CHARS: usize = 4000;
 
 /// What a call still held when its session ends gets back.
 const ENDED: &str = "the session has ended";
@@ -153,13 +160,15 @@ struct OpenRequest {
 
 enum Request {
     Prompt(String),
-    /// An answer to a question, which goes before the prompts already queued.
-    Reply(String),
+    /// An answer to an open question: to its held `ask` call, or else as the next prompt, before those already queued.
+    AnswerAsk { question: String, text: String },
     Answer { id: String, decision: Decision, message: Option<String> },
     ToolResult { id: String, reply: Reply },
     Cancel,
     Stop,
     HandOver,
+    /// The harness shuts down: the session stops, and its open question stays open for after the restart.
+    Shutdown,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -352,14 +361,39 @@ impl Harness {
         live.requests.send(answer).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
-    /// Answers an open question, once. Until `ask` holds the agent's call (H5b), the answer goes to the agent as the
-    /// next prompt, before any sent while the question was open.
-    pub fn answer_question(&self, id: &str, question: &str, text: String) -> Result<()> {
-        let live = self.taking(id)?;
+    /// Answers an open question, once. The answer goes to the agent's `ask` call if the session still holds it, and
+    /// otherwise as the next prompt, after the running turn and before any prompt sent while the question was open. A
+    /// session that is not running is resumed first, with a new tools token, when the question is still open in the
+    /// store.
+    pub async fn answer_question(&self, id: &str, question: &str, text: String) -> Result<()> {
+        let live = match self.taking(id) {
+            Ok(live) => live,
+            Err(_) if self.inner.with_store(|store| store.open_question(id))?.as_deref() == Some(question) => {
+                drop(self.resume(id).await?);
+                self.taking(id)?
+            }
+            Err(e) => return Err(e),
+        };
         if !live.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(question) {
             return Err(Error::NoQuestion(question.to_owned()));
         }
-        live.requests.send(Request::Reply(text)).map_err(|_| Error::NotRunning(id.to_owned()))
+        let answer = Request::AnswerAsk { question: question.to_owned(), text };
+        live.requests.send(answer).map_err(|_| Error::NotRunning(id.to_owned()))
+    }
+
+    /// The session's open question, asked through `ask` and kept in the store: its id.
+    pub fn open_question(&self, id: &str) -> Result<Option<String>> {
+        self.inner.with_store(|store| store.open_question(id))
+    }
+
+    /// Whether the harness may send the session "carry on" (H10): never while a question is open, since its answer is
+    /// the next prompt. The refusal names the question.
+    pub fn may_carry_on(&self, id: &str) -> Result<()> {
+        let live = self.live(id).ok().and_then(|live| live.questions.lock().unwrap_or_else(|p| p.into_inner()).iter().next().cloned());
+        match live.or(self.open_question(id)?) {
+            Some(question) => Err(Error::Refused(format!("question {question} is open: its answer is the next prompt, not \"carry on\""))),
+            None => Ok(()),
+        }
     }
 
     /// Posts the result of a client tool call. A call that was already cut is passed over.
@@ -412,7 +446,7 @@ impl Harness {
         // As in `stop`, the first stop wins: a hand over already on its way is not overtaken.
         for live in running {
             if !live.stopping.swap(true, Ordering::Relaxed) {
-                let _ = live.requests.send(Request::Stop);
+                let _ = live.requests.send(Request::Shutdown);
             }
         }
         #[cfg(test)]
@@ -642,6 +676,10 @@ impl Harness {
                 return Err(Error::Running(id.to_owned()));
             }
             let plan = self.inner.with_store(plan)?;
+            // A question asked before the last stop of the harness is still open.
+            if let Some(asked) = self.inner.with_store(|store| store.open_question(id))? {
+                questions.lock().unwrap_or_else(|p| p.into_inner()).insert(asked);
+            }
             let entry = Live {
                 requests,
                 events: events.clone(),
@@ -917,6 +955,9 @@ impl Task {
         let mut slot: Option<Slot> = None;
         let mut waiting: Option<oneshot::Receiver<()>> = None;
         let mut held_calls: HashMap<String, oneshot::Sender<Reply>> = HashMap::new();
+        // The `ask` call held for the open question, and when it must return by.
+        let mut held_ask: Option<(String, oneshot::Sender<Reply>)> = None;
+        let (ask_cut, mut ask_cuts) = mpsc::unbounded_channel::<String>();
         let (cut, mut cuts) = mpsc::unbounded_channel::<String>();
         let mut calls_open = true;
         let stopped = 'run: loop {
@@ -1005,7 +1046,11 @@ impl Task {
                             slot = None;
                             self.open_requests().clear();
                         }
+                        let denied = body == Body::TurnEnded { how: TurnEnd::Denied };
                         self.emit(body);
+                        if denied {
+                            self.close_questions(QuestionEnd::Denied, &mut held_ask);
+                        }
                     }
                     None => {
                         if turn != Turn::Idle {
@@ -1031,10 +1076,25 @@ impl Task {
                     }
                 }
                 call = calls.recv(), if calls_open => match call {
-                    Some(ToolCall { name, input, reply }) if name == RESULT => {
+                    Some(ToolCall { name, input, reply, .. }) if name == RESULT => {
                         let _ = reply.send(self.result(input));
                     }
-                    Some(ToolCall { name, input, reply }) => {
+                    Some(ToolCall { name, input, reply, arrived }) if name == ASK => {
+                        #[cfg(test)]
+                        self.inner.hooks.before_ask();
+                        if let Some(id) = self.ask(input, reply, &mut held_ask) {
+                            let wait = caps.tool_call_limit_ms.map_or(crate::ask::ASK_WAIT, |limit| {
+                                let limit = Duration::from_millis(limit);
+                                crate::ask::ASK_WAIT.min(limit - ASK_MARGIN.min(limit / 4))
+                            });
+                            let ask_cut = ask_cut.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep_until(arrived + wait).await;
+                                let _ = ask_cut.send(id);
+                            });
+                        }
+                    }
+                    Some(ToolCall { name, input, reply, arrived }) => {
                         let id = format!("c{}", random_hex(8));
                         let called = redact::body(Body::ClientToolCall { id: id.clone(), name, input }, &self.secrets);
                         let (called, cut_by) = crate::event::fit(called, crate::event::EVENT_MAX);
@@ -1059,7 +1119,7 @@ impl Task {
                         if let Some(limit) = caps.tool_call_limit_ms {
                             let cut = cut.clone();
                             tokio::spawn(async move {
-                                tokio::time::sleep(Duration::from_millis(limit)).await;
+                                tokio::time::sleep_until(arrived + Duration::from_millis(limit)).await;
                                 let _ = cut.send(id);
                             });
                         }
@@ -1076,9 +1136,25 @@ impl Task {
                         }
                     }
                 }
+                Some(id) = ask_cuts.recv() => {
+                    // The question stays open: its answer comes as the next prompt.
+                    if let Some((_, reply)) = held_ask.take_if(|(held, _)| *held == id) {
+                        let _ = reply.send(Reply { output: json!(QUESTION_PENDING), error: false });
+                    }
+                }
                 request = requests.recv() => match request {
                     Some(Request::Prompt(text)) => queued.push_back(text),
-                    Some(Request::Reply(text)) => queued.push_front(text),
+                    Some(Request::AnswerAsk { question, text }) => {
+                        if !self.close_question(&question, QuestionEnd::Answered) {
+                            continue 'run;
+                        }
+                        match held_ask.take_if(|(held, _)| *held == question) {
+                            Some((_, reply)) => {
+                                let _ = reply.send(Reply { output: json!(text), error: false });
+                            }
+                            None => queued.push_front(text),
+                        }
+                    }
                     Some(Request::Cancel) => match waiting.take() {
                         Some(granted) if turn == Turn::Idle => {
                             turns.give_up(granted);
@@ -1106,6 +1182,7 @@ impl Task {
                         }
                     }
                     Some(Request::HandOver) => {
+                        self.close_questions(QuestionEnd::HandedOver, &mut held_ask);
                         // Marked before it is said, so a resume never starts a session Terminal now holds.
                         match self.inner.with_store(|store| store.set_handed_over(&self.id, true)) {
                             Ok(()) => {
@@ -1115,7 +1192,11 @@ impl Task {
                         }
                         break 'run true;
                     }
-                    Some(Request::Stop) | None => break 'run true,
+                    Some(Request::Stop) => {
+                        self.close_questions(QuestionEnd::Stopped, &mut held_ask);
+                        break 'run true;
+                    }
+                    Some(Request::Shutdown) | None => break 'run true,
                 },
             }
         };
@@ -1126,7 +1207,7 @@ impl Task {
         requests.close();
         let mut unsent = !queued.is_empty();
         while let Ok(request) = requests.try_recv() {
-            unsent |= matches!(request, Request::Prompt(_) | Request::Reply(_));
+            unsent |= matches!(request, Request::Prompt(_) | Request::AnswerAsk { .. });
         }
         if unsent {
             self.emit(Body::PromptsDropped);
@@ -1138,6 +1219,9 @@ impl Task {
         }
         for (id, reply) in held_calls {
             self.emit(Body::ToolResult { id, output: json!(ENDED), error: true });
+            let _ = reply.send(Reply::failed(ENDED));
+        }
+        if let Some((_, reply)) = held_ask.take() {
             let _ = reply.send(Reply::failed(ENDED));
         }
         if let Some(granted) = waiting.take() {
@@ -1254,6 +1338,61 @@ impl Task {
             }
         }
         false
+    }
+
+    /// Puts up the agent's question, kept in the store and said in a `question` event, and gives its id for the call to
+    /// be held. A question while one is open, or one that is empty or too long, is refused at once, with no event.
+    fn ask(&self, input: Value, reply: oneshot::Sender<Reply>, held: &mut Option<(String, oneshot::Sender<Reply>)>) -> Option<String> {
+        let refused = match input["question"].as_str().map(str::trim).filter(|text| !text.is_empty()) {
+            None => Err("question: required, what you need decided or answered".to_owned()),
+            Some(text) if text.chars().count() > QUESTION_CHARS => Err(format!("a question is at most {QUESTION_CHARS} characters")),
+            Some(text) => match self.questions.lock().unwrap_or_else(|p| p.into_inner()).iter().next() {
+                Some(open) => Err(format!("question {open} is open: wait for its answer, or end your turn; its answer comes as your next prompt")),
+                None => Ok(text.to_owned()),
+            },
+        };
+        let text = match refused {
+            Ok(text) => text,
+            Err(why) => {
+                let _ = reply.send(Reply::failed(why));
+                return None;
+            }
+        };
+        let id = format!("q{}", random_hex(8));
+        if let Err(e) = self.inner.with_store(|store| store.ask(&self.id, &id, now_ms())) {
+            self.store_failed(&e);
+            let _ = reply.send(Reply::failed(ENDED));
+            return None;
+        }
+        self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone());
+        if !self.emit(Body::Question { id: id.clone(), text }) {
+            let _ = reply.send(Reply::failed(ENDED));
+            return None;
+        }
+        *held = Some((id.clone(), reply));
+        Some(id)
+    }
+
+    /// Closes a question: in the store, in the open set and in a `question_closed` event. False when the store could
+    /// not take it, and the session stops.
+    fn close_question(&self, id: &str, how: QuestionEnd) -> bool {
+        self.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
+        if let Err(e) = self.inner.with_store(|store| store.close_question(&self.id, id, how, now_ms())) {
+            self.store_failed(&e);
+            return false;
+        }
+        self.emit(Body::QuestionClosed { id: id.to_owned(), how })
+    }
+
+    /// Closes every open question, and tells a held `ask` call why.
+    fn close_questions(&self, how: QuestionEnd, held: &mut Option<(String, oneshot::Sender<Reply>)>) {
+        let open: Vec<String> = self.questions.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
+        for id in open {
+            self.close_question(&id, how);
+        }
+        if let Some((_, reply)) = held.take() {
+            let _ = reply.send(Reply::failed(format!("the question was closed: {}", serde_json::to_value(how).ok().and_then(|how| how.as_str().map(str::to_owned)).unwrap_or_default())));
+        }
     }
 
     /// Takes the agent's result, which the endpoint has checked against the schema: a `result` event, unless a question
@@ -1413,6 +1552,8 @@ mod tests {
         after_stop_flag: Mutex<Option<Hook>>,
         /// Just after `shutdown` has told the sessions to stop.
         after_shutdown_stops: Mutex<Option<Hook>>,
+        /// Just as the session takes an `ask` call off the endpoint.
+        before_ask: Mutex<Option<Hook>>,
     }
 
     fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
@@ -1424,6 +1565,12 @@ mod tests {
     }
 
     impl Hooks {
+        pub(super) fn before_ask(&self) {
+            if let Some(hook) = take(&self.before_ask) {
+                hook();
+            }
+        }
+
         pub(super) fn before_closed(&self) {
             if let Some(hook) = take(&self.before_closed) {
                 hook();
@@ -1481,6 +1628,26 @@ mod tests {
     fn starts_and_closes(harness: &Harness, id: &str) -> Vec<String> {
         let events = harness.events(id, 0).unwrap_or_default();
         events.into_iter().map(|event| event.body.type_name()).filter(|kind| kind == "started" || kind == "closed").collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ask_the_early_return_is_measured_from_the_calls_start_not_from_when_the_session_took_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let limit = 3000;
+        let script = format!("{{\"capabilities\": {{\"tool_call_limit_ms\": {limit}}}}}\n{{\"prompt\": null}}\n{{\"call\": {{\"name\": \"ask\", \"input\": {{\"question\": \"q?\"}}}}}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}");
+        let mock = Mock::new(Script::parse(&script).unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        let Ok(Event { body: Body::Started { provider_session, .. }, .. }) = events.recv().await else { panic!("started first") };
+        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
+        set(&harness.inner.hooks.before_ask, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
+        let sent = std::time::Instant::now();
+        harness.send(&id, "go").unwrap();
+        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::TurnEnded { .. })) {}
+        assert_eq!(mock.replies(&provider_session), [Ok(Reply { output: json!(QUESTION_PENDING), error: false })]);
+        // From the session's own moment it would return at 1500 + 2250 ms, past the limit.
+        assert!(sent.elapsed() < Duration::from_millis(limit), "returned before the limit, from the call's start: {:?}", sent.elapsed());
     }
 
     #[tokio::test]
