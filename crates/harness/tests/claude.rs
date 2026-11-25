@@ -120,7 +120,8 @@ impl Rig {
 #[derive(Debug, Clone, PartialEq)]
 enum Act {
     Prompt(String, u64),
-    Answer(Decision, u64),
+    /// Sent as soon as its request is seen, as a driver does: the real CLI takes an answer any time after its request.
+    Answer(Decision),
     Cancel(u64),
 }
 
@@ -140,7 +141,7 @@ fn recorded_client(lines: &[Value]) -> (Vec<Act>, usize) {
         match (line["dir"].as_str(), data["type"].as_str()) {
             (Some("to_agent"), Some("user")) => acts.push(Act::Prompt(texts(&data["message"]["content"]), after)),
             (Some("to_agent"), Some("control_response")) => {
-                acts.push(Act::Answer(if data["response"]["response"]["behavior"] == "allow" { Decision::Allow } else { Decision::Deny }, after))
+                acts.push(Act::Answer(if data["response"]["response"]["behavior"] == "allow" { Decision::Allow } else { Decision::Deny }))
             }
             (Some("to_agent"), Some("control_request")) if data["request"]["subtype"] == "interrupt" => acts.push(Act::Cancel(after)),
             (Some("to_agent"), Some("control_request")) => config.push(data["request_id"].clone()),
@@ -179,7 +180,7 @@ fn ends(seen: &[Event]) -> usize {
 }
 
 /// Plays the recorded client through the session: prompts are sent at once (the session holds them while a turn runs),
-/// each answer waits for its request, a cancel waits for a running turn. Once the agent has sent as many `result`s as
+/// each answer goes as soon as its request is seen, a cancel waits for a running turn. Once the agent has sent as many `result`s as
 /// the recording, the session is closed. Every event up to `closed`.
 async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, acts: Vec<Act>, results: usize) -> (Vec<Event>, Process) {
     let (mut seen, mut agent) = (vec![], None);
@@ -190,8 +191,7 @@ async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, act
                 played(rig, after).await;
                 rig.harness.send(id, text).unwrap()
             }
-            Act::Answer(decision, after) => loop {
-                played(rig, after).await;
+            Act::Answer(decision) => loop {
                 let asked: Vec<&str> = seen.iter().filter_map(|event: &Event| match &event.body { Body::Permission { id, .. } => Some(id.as_str()), _ => None }).collect();
                 if let Some(request) = asked.get(answered) {
                     rig.harness.answer(id, request, decision, None).unwrap();
