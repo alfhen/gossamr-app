@@ -250,6 +250,16 @@ async fn a_finished_run_whose_instance_was_removed_is_cleaned_up_with_git_alone(
 }
 
 #[tokio::test]
+async fn a_git_clean_up_waits_for_the_repo_lock() {
+    let (rig, run) = finished_on_a_removed_instance().await;
+    let held = crate::runs::fresh::lock_repo(&rig.fx.home, &run.spec.repo).await.unwrap();
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(500), rig.svc.cleanup(&run.id)).await.is_err(), "it waits while another holds the lock");
+    assert!(run.expected_worktree.exists() && git_calls(&rig).is_empty(), "and has done nothing");
+    drop(held);
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+}
+
+#[tokio::test]
 async fn a_run_cleaned_up_through_claude_does_not_say_its_session_was_left() {
     let (rig, run) = stopped().await;
     rig.svc.cleanup(&run.id).await.unwrap();

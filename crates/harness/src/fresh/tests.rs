@@ -19,11 +19,13 @@ if [ "$1" = -C ]; then
   case "$1" in
     config)
       case "$*" in
-        "config --get remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
+        "config --get-all remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
+        "config --get-all remote.origin.pushurl") exit 1 ;;
         *--name-only*) sed 's/=.*//' "$dir/.fake-config" 2>/dev/null | tr '\n' '\0' ;;
         *--get-all*) sed -n "s/^$4=//p" "$dir/.fake-config" 2>/dev/null ;;
       esac ;;
-    fetch) [ -f "$dir/.fake-fetch-fails" ] && { echo "fatal: unable to access: Could not resolve host" >&2; exit 128; }; echo fetched >> "$dir/.fetched" ;;
+    fetch) [ -f "$dir/.fake-fetch-refused" ] && { printf 'error: cannot lock ref\nfatal: the remote refused it\n' >&2; exit 1; }
+      [ -f "$dir/.fake-fetch-fails" ] && { echo "fatal: unable to access: Could not resolve host" >&2; exit 128; }; echo fetched >> "$dir/.fetched" ;;
   esac
   exit 0
 fi
@@ -350,8 +352,12 @@ async fn a_fetch_that_fails_is_reported_and_the_clone_is_still_returned() {
     std::fs::write(path.join(".fake-origin"), "https://github.com/acme/webshop.git").unwrap();
     std::fs::write(path.join(".fake-fetch-fails"), "").unwrap();
     let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
-    assert_eq!(ensured.fetched, Some(Fetched::Not("fatal: unable to access: Could not resolve host".into())));
+    assert_eq!(ensured.fetched, Some(Fetched::Not("the remote couldn't be reached; git said: fatal: unable to access: Could not resolve host".into())));
     assert_eq!(ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", false).await.unwrap().fetched, None, "no fetch when none is due");
+    std::fs::remove_file(path.join(".fake-fetch-fails")).unwrap();
+    std::fs::write(path.join(".fake-fetch-refused"), "").unwrap();
+    let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
+    assert_eq!(ensured.fetched, Some(Fetched::Not("the fetch failed; git said: error: cannot lock ref fatal: the remote refused it".into())), "an answer that refused is no unreachable remote, and every line is kept");
 }
 
 #[tokio::test]
@@ -408,4 +414,14 @@ fn a_symlink_inside_the_root_that_points_out_is_not_contained() {
     std::fs::create_dir_all(&outside).unwrap();
     std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
     assert_eq!(contained(&root, &root.join("link")), None);
+}
+
+#[test]
+fn identity_keys_are_the_only_settings_an_agent_may_add_without_stopping_the_fetch() {
+    for key in ["user.name", "user.email", "User.Email", "core.hooksPath", "branch.feature/x.gh-merge-base"] {
+        assert!(written_by_gossamr_tools(key), "{key}");
+    }
+    for key in ["user.signingkey", "credential.helper", "url.https://evil.example/.insteadof", "core.sshcommand", "gpg.program", "include.path", "remote.origin.pushurl", "user", "branch.gh-merge-base", "core.hookspath.x", "remote.origin.gh-merge-base"] {
+        assert!(!written_by_gossamr_tools(key), "{key}");
+    }
 }
