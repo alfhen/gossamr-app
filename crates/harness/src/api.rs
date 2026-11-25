@@ -111,7 +111,8 @@ pub enum Op {
         ends_with_client: bool,
         /// The tools this client offers the agent, on the session's tools endpoint. Each call is a `client_tool_call`
         /// event the client answers with `tool_result`; while no client listens to the session, a call fails at once.
-        /// Refused: more than `tools::MAX_TOOLS`, a name that is not 1 to 64 letters, digits, `_` and `-`, a name twice,
+        /// Refused: more than `tools::MAX_TOOLS`, a name that is not 1 to `tools::TOOL_NAME_MAX` (43) letters, digits, `_`
+        /// and `-` (so the full name a provider sees stays within its 64), a name twice,
         /// `result` or `ask`, an input schema that is not an object.
         #[serde(default)]
         tools: Vec<crate::tools::ToolSpec>,
