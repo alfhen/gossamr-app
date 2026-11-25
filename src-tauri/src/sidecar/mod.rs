@@ -107,6 +107,9 @@ pub struct Status {
     pub update: bool,
     /// What the person should know, in the app's words.
     pub message: Option<String>,
+    /// The harness serves the mock a debug build's `GOSSAMR_MOCK_SCRIPT` names, and the app's agents run on that.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mock: bool,
 }
 
 impl Status {
@@ -115,7 +118,7 @@ impl Status {
     }
 
     fn new(state: State, message: Option<String>) -> Status {
-        Status { state, build: None, bundled_build: None, update: false, message }
+        Status { state, build: None, bundled_build: None, update: false, message, mock: false }
     }
 }
 
@@ -191,11 +194,17 @@ impl Sidecar {
         self.run(&mut inner, Some(action)).await
     }
 
+    /// Whether the running harness offers `provider`, as its `providers` says.
+    pub async fn serves(&self, provider: &str) -> bool {
+        let Ok(mut client) = self.client().await else { return false };
+        let Ok(offered) = client.call(Op::Providers { logins: Vec::new() }).await else { return false };
+        offers(&offered, provider)
+    }
+
     /// A client of the harness, proven with the app's token, which never leaves the manager. It starts and stops
     /// nothing: with no harness serving, one of another protocol, or one that doesn't know the token, it says why, and
     /// starting or restarting stays with `ensure` and Settings. Before the first start it reads the vault but makes no
     /// token.
-    #[cfg_attr(not(test), expect(dead_code, reason = "H10's runs are its first caller"))]
     pub async fn client(&self) -> Result<Client, String> {
         let token = {
             let mut inner = self.work.lock().await;
@@ -457,7 +466,7 @@ impl Sidecar {
 /// the app's without `HARNESS_TOKEN`, which `serve` refuses.
 fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
     let log = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(dir.join(LOG))?;
-    let mut command = serve_command(program, dir);
+    let mut command = serve_command(program, dir, mock_script().as_deref());
     command.stderr(log);
     // SAFETY: sysconf has no preconditions.
     let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) }.clamp(256, 1 << 16) as libc::c_int;
@@ -504,10 +513,35 @@ fn build_of(program: &Path, within: Duration) -> Option<String> {
 }
 
 /// Runs in the data folder, so the harness holds no other folder of the person's open as its working folder.
-fn serve_command(program: &Path, dir: &Path) -> Command {
+fn serve_command(program: &Path, dir: &Path, mock: Option<&Path>) -> Command {
     let mut command = Command::new(program);
     command.arg("serve").arg("--data").arg(dir).current_dir(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
+    // The person's "Agents running at once" is the app's to hold: the harness may never hold back fewer.
+    command.arg("--turn-limit").arg(crate::config::MAX_RUNS.end().to_string());
+    if let Some(script) = mock {
+        command.arg("--mock-script").arg(script);
+    }
     command
+}
+
+/// Whether a `providers` answer names `provider` among its drivers.
+fn offers(offered: &serde_json::Value, provider: &str) -> bool {
+    offered["drivers"].as_array().is_some_and(|drivers| drivers.iter().any(|driver| driver["name"] == provider))
+}
+
+/// The variable that makes a debug build serve the harness's mock provider from the script it names, and open its
+/// runs on it, so a run can be tried with no provider. A release build has no such code.
+#[cfg(debug_assertions)]
+pub const MOCK_SCRIPT_VARIABLE: &str = "GOSSAMR_MOCK_SCRIPT";
+
+/// The mock script a debug build was started with, as a full path, since the harness runs in its data folder.
+pub fn mock_script() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os(MOCK_SCRIPT_VARIABLE).filter(|path| !path.is_empty()) {
+        let path = PathBuf::from(path);
+        return Some(std::fs::canonicalize(&path).unwrap_or(path));
+    }
+    None
 }
 
 /// Waits for the child in the background, so it leaves no zombie while the app runs; once the app quits, launchd does.

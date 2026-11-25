@@ -47,6 +47,8 @@ pnpm dev          # the UI in a browser on the mock backend, port 1420. No Jira,
 pnpm tauri dev    # the desktop app (macOS)
 ```
 
+To try a run with no provider, start a debug build with `GOSSAMR_MOCK_SCRIPT="$PWD/scripts/mock-agent.jsonl" HARNESS_DATA=/tmp/gossamr-mock pnpm tauri dev`: the app starts its own harness serving that mock script, and agents run on it. Add `GOSSAMR_APP_DATA=/tmp/gossamr-try/app GOSSAMR_TEST_VAULT=/tmp/gossamr-try/vault.json` to keep the app's data (drafts, runs, connections) and the Keychain out of it; that app starts empty. The page's own storage is not moved: WebKit keeps it in `~/Library/WebKit/gossamr` and `~/Library/Caches/gossamr`, shared with every `pnpm tauri dev` run. A release build has none of these switches.
+
 The desktop app starts the harness beside it (`target/debug/harness` under `tauri dev`, `Contents/MacOS/harness` in a build) on `~/Library/Application Support/gossamr-harness`, or `HARNESS_DATA`, and leaves it running when you quit. Settings > Harness stops it.
 
 Most UI work can be done and checked in `pnpm dev`. The mock is a full fake backend with sample data and a scripted Pip, so keep it in step with the real one.

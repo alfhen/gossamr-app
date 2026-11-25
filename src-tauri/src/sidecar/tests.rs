@@ -85,7 +85,7 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
         return 0;
     }
     let seen = fake.log.with_file_name(format!("seen-{}", std::process::id()));
-    let ["serve", "--data", dir] = args[..] else { return 2 };
+    let ["serve", "--data", dir, "--turn-limit", _] = args[..] else { return 2 };
     if fake.serves_until.as_ref().is_some_and(|marker| marker.exists()) {
         eprintln!("harness: it can't start now");
         return 1;
@@ -567,11 +567,18 @@ async fn the_token_is_in_the_vault_and_in_no_file_under_the_data_folder_nor_the_
 
 #[test]
 fn the_harness_starts_without_the_variable_serve_refuses() {
-    let command = serve_command(Path::new("harness"), Path::new("data"));
+    let command = serve_command(Path::new("harness"), Path::new("data"), None);
     assert!(command.get_envs().any(|(name, value)| name == harness::cli::TOKEN_VARIABLE && value.is_none()), "HARNESS_TOKEN is taken out of its environment");
     let args: Vec<_> = command.get_args().collect();
-    assert_eq!(args, ["serve", "--data", "data"]);
+    assert_eq!(args, ["serve", "--data", "data", "--turn-limit", "6"], "a limit the app's setting never goes over");
     assert_eq!(command.get_current_dir(), Some(Path::new("data")), "it runs in the data folder");
+}
+
+#[test]
+fn a_mock_script_is_served_only_when_one_is_given() {
+    let command = serve_command(Path::new("harness"), Path::new("data"), Some(Path::new("/scripts/demo.jsonl")));
+    let args: Vec<_> = command.get_args().collect();
+    assert_eq!(args, ["serve", "--data", "data", "--turn-limit", "6", "--mock-script", "/scripts/demo.jsonl"]);
 }
 
 #[tokio::test]
@@ -634,10 +641,10 @@ async fn stop_while_a_harness_is_stopping_without_its_socket_waits_for_the_folde
 
 #[test]
 fn a_restart_that_finds_a_harness_it_cannot_use_keeps_why_and_still_names_the_agents_left() {
-    let failed = Status { state: State::Failed, build: None, bundled_build: None, update: true, message: Some("Older.".into()) };
+    let failed = Status { state: State::Failed, build: None, bundled_build: None, update: true, message: Some("Older.".into()), mock: false };
     let said = restarted(Ok(failed), &["s1".into()]).unwrap().message.unwrap();
     assert!(said.starts_with("Older.") && said.contains("s1"), "{said}");
-    let running = Status { state: State::Running, build: None, bundled_build: None, update: false, message: None };
+    let running = Status { state: State::Running, build: None, bundled_build: None, update: false, message: None, mock: false };
     assert_eq!(restarted(Ok(running), &[]).unwrap().message.as_deref(), Some("Restarted."));
 }
 
@@ -752,4 +759,12 @@ async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_st
     assert!(gone.starts_with("Gossamr couldn't reach the harness: ") && !gone.contains(&hex), "{gone}");
     check(&log);
     bed.none_left().await;
+}
+
+#[test]
+fn the_mock_line_comes_from_the_drivers_the_harness_names() {
+    let served = serde_json::json!({ "drivers": [{ "name": "claude" }, { "name": "mock" }], "logins": [] });
+    assert!(offers(&served, "mock") && offers(&served, "claude"));
+    assert!(!offers(&serde_json::json!({ "drivers": [{ "name": "claude" }] }), "mock"), "an adopted harness that serves no mock");
+    assert!(!offers(&serde_json::json!({}), "mock"));
 }

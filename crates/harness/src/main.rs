@@ -11,13 +11,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Request::Run(args) => block_on(harness::run::run(args)),
-        Request::Serve { data, mock_script } => {
+        Request::Serve { data, mock_script, turn_limit } => {
             if std::env::var_os(harness::cli::TOKEN_VARIABLE).is_some() {
                 let variable = harness::cli::TOKEN_VARIABLE;
                 eprintln!("harness: {variable} is set, so serve does not start: any program of yours, an agent too, can read the environment a process started with. Unset it and give the first token on stdin.");
                 return ExitCode::FAILURE;
             }
-            let served = harness::serve_runtime().expect("a runtime starts").block_on(serve(data, mock_script));
+            let served = harness::serve_runtime().expect("a runtime starts").block_on(serve(data, mock_script, turn_limit));
             match served {
                 Err(e) if harness::server::unknown_token(&e) => {
                     eprintln!("harness: {e}");
@@ -53,7 +53,7 @@ fn exit(result: harness::error::Result<bool>) -> ExitCode {
     }
 }
 
-async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::PathBuf>) -> harness::error::Result<bool> {
+async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::PathBuf>, turn_limit: Option<usize>) -> harness::error::Result<bool> {
     use harness::error::Error;
     let dir = data.or_else(harness::store::default_dir).ok_or_else(|| Error::Refused("no data folder: set HARNESS_DATA".into()))?;
     let script = mock_script.map(|path| harness::mock::Script::load(&path)).transpose().map_err(Error::Driver)?;
@@ -65,7 +65,7 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     let setup = harness::work::Setup::of_this_machine(dir.clone());
     // The mock provider is there only when a script is given. Claude is found where `providers` looks, at each open.
     let drivers = harness::serve_drivers(script, harness::claude::driver::ClaudeDriver::found(setup.places().clone()));
-    let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings::default(), setup)?;
+    let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings { turn_limit: turn_limit.unwrap_or(harness::session::Settings::default().turn_limit), ..harness::session::Settings::default() }, setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
     Ok(true)

@@ -30,6 +30,9 @@ const NO_SLOT: &str = "Every agent slot is taken; try again when one finishes.";
 /// How many times a queued message's wake may fail before the message is dropped.
 const WAKE_TRIES: u8 = 3;
 
+/// Why a message to a run handed over to Terminal waits on the person, as `HANDED_OVER_ASK` in `src/types.ts`.
+pub const HANDED_OVER_ASK: &str = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
+
 const IN_TERMINAL: &str = "A session is open on it in Terminal, so the person is in it.";
 const NOT_WAITING: &str = "It isn't waiting for an answer any more. Look again in a moment.";
 
@@ -60,6 +63,19 @@ impl RunService {
         let run = self.load(run_id).await?;
         if by == Actor::Pip && self.core.run_message_author(run_id).await? == Some(Actor::Person) {
             return Err(refuse("The person's message is waiting to be sent to it; message it once that is sent."));
+        }
+        if run.handed_over {
+            return Err(refuse(HANDED_OVER_ASK));
+        }
+        if run.harness_session.is_some() {
+            if let Some(why) = self.workstream_hold(&run).await.filter(|_| by == Actor::Pip) {
+                return Err(refuse(why));
+            }
+            let _turn = self.launching.lock().await;
+            let run = self.load(run_id).await?;
+            if let Some(sent) = self.send_on_harness(&run, text).await {
+                return sent.map(|(run, answered)| (run, if answered { Delivery::Answered } else { Delivery::Queued }));
+            }
         }
         let asking = !at_rest(run.state) && self.core.asks().question(run_id).is_some();
         let wakes = asking || matches!(run.state, RunState::NeedsAnswer | RunState::Done | RunState::Stopped);
@@ -96,6 +112,9 @@ impl RunService {
     async fn resume_with(&self, run_id: &str, text: &str, by: Actor) -> Result<Run> {
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
+        if run.handed_over {
+            return Err(refuse(HANDED_OVER_ASK));
+        }
         if !matches!(run.state, RunState::Done | RunState::Stopped) {
             return Err(refuse(format!("This run is {}, so it can't be resumed.", run.state.as_str())));
         }
@@ -106,7 +125,7 @@ impl RunService {
             if let Some(why) = self.workstream_hold(&run).await {
                 return Err(refuse(why));
             }
-            if self.live_elsewhere(&run) >= self.cap() {
+            if self.live_elsewhere(&run).await >= self.cap() {
                 return Err(refuse(NO_SLOT));
             }
         }

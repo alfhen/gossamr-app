@@ -584,3 +584,13 @@ fn client_run_told_to_allow_a_request_that_was_cut_closes_the_session_and_fails(
     let printed = printed(&out);
     assert_eq!(printed.last().map(|event| &event["type"]), Some(&serde_json::json!("closed")), "it read on until the session closed");
 }
+
+#[test]
+fn serve_takes_a_turn_limit_of_one_or_more() {
+    let parse = |args: &[&str]| harness::request(&args.iter().map(std::ffi::OsString::from).collect::<Vec<_>>());
+    assert!(matches!(parse(&["serve", "--turn-limit", "6"]), harness::Request::Serve { turn_limit: Some(6), .. }));
+    assert!(matches!(parse(&["serve"]), harness::Request::Serve { turn_limit: None, .. }));
+    for bad in [["serve", "--turn-limit", "0"], ["serve", "--turn-limit", "many"]] {
+        assert!(matches!(parse(&bad), harness::Request::Usage), "{bad:?}");
+    }
+}

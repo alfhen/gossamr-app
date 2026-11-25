@@ -46,6 +46,9 @@ impl ClientTools for NoTools {
     }
 }
 
+/// Why a second answer or a message waits: the harness took the person's answer, and the agent has not had it yet.
+pub const ANSWER_ON_ITS_WAY: &str = "Your answer is on its way to the agent. Send more once it has arrived.";
+
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
 
@@ -106,11 +109,23 @@ impl Link {
 
     /// Opens a session for `run_id`, makes it the run's, and watches it, in that order: the run follows the session
     /// before any of its events is applied, and the app listens for its tool calls before it is sent a prompt.
+    /// Its error is in the app's words, for the run to show.
     pub async fn open(&self, run_id: &str, op: Op) -> Result<String, String> {
-        let opened = self.call(op).await?;
-        let session = opened["session"].as_str().ok_or("the harness answered an open with no session")?.to_owned();
-        self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| e.to_string())?;
-        self.follow(&session, 0).await?;
+        let opened = self.call(op).await.map_err(|e| format!("it didn't open a session: {e}"))?;
+        let session = opened["session"].as_str().ok_or("it answered an open with no session")?.to_owned();
+        let bound = self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| {
+            eprintln!("couldn't bind session {session} to run {run_id}: {e}");
+            "it opened a session but Gossamr couldn't keep it with its run".to_owned()
+        });
+        let followed = match bound {
+            Ok(()) => self.follow(&session, 0).await.map_err(|e| format!("it opened a session but Gossamr couldn't follow it: {e}")),
+            Err(e) => Err(e),
+        };
+        if let Err(why) = followed {
+            // A session no run follows is one nothing would stop or clean up.
+            let _ = self.call(Op::Close { session }).await;
+            return Err(why);
+        }
         Ok(session)
     }
 
@@ -132,6 +147,39 @@ impl Link {
         closed
     }
 
+    /// The person's one way to reach the agent: the answer to its open question, else a message. Returns whether it
+    /// answered a question. The run waits on its answer no more once the harness took it, though the agent may get it
+    /// only when its turn ends.
+    pub async fn send(&self, session: &str, text: &str) -> Result<bool, String> {
+        let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
+        if follow.answered.is_some() && follow.answered == follow.question {
+            return Err(ANSWER_ON_ITS_WAY.into());
+        }
+        // The harness's own copy, for a question the app has not read yet.
+        let question = match follow.question {
+            Some(question) => Some(question),
+            None => self.open_question(session).await,
+        };
+        let Some(question) = question else {
+            return self.call(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map(|_| false);
+        };
+        self.call(Op::AnswerQuestion { session: session.to_owned(), question: question.clone(), text: text.to_owned() }).await?;
+        let noted = self.inner.core.apply_session(session, |run, follow| {
+            super::consumer::answered(run, follow, &question);
+            Vec::new()
+        });
+        if let Some(applied) = noted.await.map_err(|e| e.to_string())? {
+            self.inner.after(&applied.before, &applied.run);
+        }
+        Ok(true)
+    }
+
+    async fn open_question(&self, session: &str) -> Option<String> {
+        let listed = self.call(Op::Sessions).await.ok()?;
+        let row = listed.as_array()?.iter().find(|row| row["id"] == session)?;
+        row["open_question"].as_str().map(str::to_owned)
+    }
+
     /// Watches a session from after `after`, once the watching connection is up.
     pub async fn follow(&self, session: &str, after: u64) -> Result<(), String> {
         let (done, answered) = oneshot::channel();
@@ -150,6 +198,7 @@ type LostAt = HashMap<String, u64>;
 
 async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedReceiver<Command>) {
     let mut wait = RETRY_FIRST;
+    let mut said: Option<String> = None;
     let mut lost_at = LostAt::new();
     // No strong hold on the link while waiting, so the task ends once the last `Link` is dropped.
     let connect = |inner: &std::sync::Weak<Inner>| inner.upgrade().map(|link| link.connect.clone());
@@ -158,7 +207,12 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
         let mut client = match connector.connect().await {
             Ok(client) => client,
             Err(e) => {
-                eprintln!("couldn't reach the harness: {e}");
+                // At start the manager has not made its key or started the harness yet, so only a failure that
+                // outlasts the backoff is a fault worth a line, and the same one is said once.
+                if wait == RETRY_MOST && said.as_deref() != Some(e.as_str()) {
+                    eprintln!("couldn't reach the harness: {e}");
+                    said = Some(e);
+                }
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(RETRY_MOST);
                 continue;
@@ -173,6 +227,7 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
             wait = (wait * 2).min(RETRY_MOST);
             continue;
         }
+        said = None;
         loop {
             tokio::select! {
                 command = commands.recv() => match command {
@@ -271,9 +326,10 @@ impl Inner {
         let mut fresh = false;
         let applied = self
             .core
-            .apply_session(session, |run, follow| {
+            .apply_session_reporting(session, |run, follow| {
                 fresh = event.seq == 0 || event.seq > follow.seq;
-                consumer::fold(run, follow, &event, now)
+                let report = fresh.then(|| consumer::report_of(&event.body)).flatten();
+                (consumer::fold(run, follow, &event, now), report)
             })
             .await;
         let applied = match applied {
@@ -367,5 +423,7 @@ impl Inner {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod served;
 #[cfg(test)]
 mod tests;

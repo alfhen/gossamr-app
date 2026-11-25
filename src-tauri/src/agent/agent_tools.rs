@@ -57,6 +57,39 @@ pub(super) fn tools() -> Vec<Value> {
     ]
 }
 
+/// What a run on the harness gets from Gossamr: the two tools that read. `ask` and `result` are the harness's own.
+pub fn client_tools() -> Vec<harness::tools::ToolSpec> {
+    let reads = [READ_WORKSTREAM_TOOL, READ_TICKET_TOOL];
+    let spec = |t: &Value| harness::tools::ToolSpec {
+        name: t["name"].as_str().unwrap_or_default().to_owned(),
+        description: t["description"].as_str().unwrap_or_default().to_owned(),
+        input_schema: t["inputSchema"].clone(),
+    };
+    tools().iter().filter(|t| reads.contains(&t["name"].as_str().unwrap_or_default())).map(spec).collect()
+}
+
+/// Answers a harness run's calls of those tools as the MCP server answers them, within the same cap.
+pub struct HarnessReads(pub Arc<Core>);
+
+#[async_trait::async_trait]
+impl crate::runs::link::ClientTools for HarnessReads {
+    async fn call(&self, run: &Run, name: &str, input: &Value) -> (Value, bool) {
+        let side = AgentSide::new(self.0.clone());
+        if !side.within_cap(&run.id) {
+            return (Value::String(TOO_MANY.into()), true);
+        }
+        let reply = match name {
+            READ_WORKSTREAM_TOOL => side.read_workstream(run).await,
+            READ_TICKET_TOOL => side.read_ticket(run, input).await,
+            _ => Err("Unknown tool.".into()),
+        };
+        match reply {
+            Ok(text) => (Value::String(text), false),
+            Err(text) => (Value::String(text), true),
+        }
+    }
+}
+
 pub(super) struct AgentSide {
     core: Arc<Core>,
 }
