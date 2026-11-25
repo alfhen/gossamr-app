@@ -20,6 +20,8 @@ import type {
   RunOutcome,
   RunsChanged,
   AgentSettings,
+  HarnessAction,
+  HarnessStatus,
   WorkFolderGit,
   ModelChoice,
   ModelDefaults,
@@ -473,5 +475,13 @@ export class JiraBackend implements Backend {
 
   openUrl(url: string) {
     return openUrl(url);
+  }
+
+  harnessStatus(action?: HarnessAction) {
+    return invoke<HarnessStatus>("harness_status", { action: action ?? null });
+  }
+
+  onHarnessChanged(listener: () => void) {
+    return onChanged("harness", () => listener());
   }
 }

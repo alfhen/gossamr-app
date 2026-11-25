@@ -810,6 +810,21 @@ export interface RunsChanged {
 }
 
 /** What the person controls about runs. */
+/** How the harness beside the app stands (`harness_status`). */
+export interface HarnessStatus {
+  state: "starting" | "running" | "stopped" | "failed";
+  /** The running harness's build. */
+  build: string | null;
+  /** The build that came with Gossamr. */
+  bundledBuild: string | null;
+  /** The running harness is another build of the same protocol, so a restart updates it. */
+  update: boolean;
+  /** What the person should know, already worded for them. */
+  message: string | null;
+}
+
+export type HarnessAction = "start" | "restart" | "stop";
+
 export interface AgentSettings {
   maxRuns: number;
   terminal: "terminal" | "iTerm";

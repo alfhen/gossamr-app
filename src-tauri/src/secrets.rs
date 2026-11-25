@@ -123,15 +123,17 @@ impl Vault {
         }
     }
 
-    fn read_vault(&self) -> Result<Doc> {
-        match self.backend.read(VAULT_ACCOUNT)? {
-            Some(json) => serde_json::from_str(&json).map_err(|_| {
-                Error::KeychainUnavailable(format!(
-                    "the saved vault is damaged and was left untouched; to start over, delete the \"{VAULT_ACCOUNT}\" item for {SERVICE} in Keychain Access and restart"
-                ))
-            }),
-            None => Ok(Doc::default()),
+    /// Reads the vault item again, so what another app saved since this one read it is not lost by the next write.
+    pub fn reread(&self) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let State::Ready(ready) = &mut *state {
+            ready.doc = self.read_vault()?;
         }
+        Ok(())
+    }
+
+    fn read_vault(&self) -> Result<Doc> {
+        latest(self.backend.as_ref())
     }
 
     pub fn load<T: DeserializeOwned>(&self, account: &str) -> Result<Option<T>> {
@@ -153,7 +155,7 @@ impl Vault {
                 return Ok(());
             }
             let first_touch = !ready.doc.probed.contains(account);
-            let mut next = ready.doc.clone();
+            let mut next = latest(backend)?;
             next.secrets.insert(account.into(), value);
             next.probed.insert(account.into());
             write_vault(backend, &next)?;
@@ -169,7 +171,7 @@ impl Vault {
         self.with_ready(|backend, ready| {
             let first_touch = !ready.doc.probed.contains(account);
             if ready.doc.secrets.contains_key(account) || first_touch {
-                let mut next = ready.doc.clone();
+                let mut next = latest(backend)?;
                 next.secrets.remove(account);
                 next.probed.insert(account.into());
                 write_vault(backend, &next)?;
@@ -185,7 +187,7 @@ impl Vault {
     /// Applies every change in one vault write, so a failure leaves all of them undone.
     pub fn apply(&self, ops: &[Op]) -> Result<()> {
         self.with_ready(|backend, ready| {
-            let mut next = ready.doc.clone();
+            let mut next = latest(backend)?;
             let first_touch: Vec<&str> = ops.iter().map(Op::account).filter(|a| !ready.doc.probed.contains(*a)).collect();
             for op in ops {
                 match op {
@@ -207,6 +209,19 @@ impl Vault {
 
     pub fn keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         self.with_ready(|_, ready| Ok(ready.doc.secrets.keys().filter(|k| k.starts_with(prefix)).cloned().collect()))
+    }
+}
+
+/// The vault item as it is now. Every write starts from it, not from this app's copy: another app may have saved to it
+/// since this one read it, and a write of the older copy would drop what that app saved.
+fn latest(backend: &dyn Backend) -> Result<Doc> {
+    match backend.read(VAULT_ACCOUNT)? {
+        Some(json) => serde_json::from_str(&json).map_err(|_| {
+            Error::KeychainUnavailable(format!(
+                "the saved vault is damaged and was left untouched; to start over, delete the \"{VAULT_ACCOUNT}\" item for {SERVICE} in Keychain Access and restart"
+            ))
+        }),
+        None => Ok(Doc::default()),
     }
 }
 
@@ -232,13 +247,15 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
             return Err(Error::KeychainUnavailable(reason));
         }
     };
-    let mut next = ready.doc.clone();
+    let base = latest(backend);
+    let mut next = base.as_ref().map_or_else(|_| ready.doc.clone(), Clone::clone);
     next.probed.insert(account.into());
     let migrated = value.is_some();
     if let Some(value) = value {
         next.secrets.insert(account.into(), value);
     }
-    let written = write_vault(backend, &next);
+    // Not over a vault this app could not read again.
+    let written = base.and_then(|_| write_vault(backend, &next));
     if let Err(e) = &written {
         eprintln!("couldn't save the Keychain vault: {e}");
     }
@@ -249,10 +266,71 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
     Ok(())
 }
 
+/// The variable that makes a debug build keep its vault in a file instead of the Keychain, for tests and hand runs.
+/// A release build has no such code.
+#[cfg(all(debug_assertions, not(test)))]
+pub const TEST_VAULT_VARIABLE: &str = "GOSSAMR_TEST_VAULT";
+
 #[cfg(not(test))]
 fn with_global<R>(f: impl FnOnce(&Vault) -> R) -> R {
     static VAULT: std::sync::OnceLock<Vault> = std::sync::OnceLock::new();
-    f(VAULT.get_or_init(|| Vault::new(Box::new(Keychain))))
+    f(VAULT.get_or_init(|| {
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os(TEST_VAULT_VARIABLE).filter(|path| !path.is_empty()) {
+            return Vault::new(Box::new(FileVault::new(path.into())));
+        }
+        Vault::new(Box::new(Keychain))
+    }))
+}
+
+/// A vault in a JSON file only you can read: a test's stand-in for the Keychain. Never in a release build.
+#[cfg(any(test, debug_assertions))]
+pub struct FileVault(std::path::PathBuf);
+
+#[cfg(any(test, debug_assertions))]
+impl FileVault {
+    pub fn new(path: std::path::PathBuf) -> Self {
+        Self(path)
+    }
+
+    fn items(&self) -> Result<BTreeMap<String, String>> {
+        match std::fs::read(&self.0) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn store(&self, items: &BTreeMap<String, String>) -> Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut next = self.0.as_os_str().to_owned();
+        next.push(".next");
+        let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&next)?;
+        file.write_all(&serde_json::to_vec(items)?)?;
+        Ok(std::fs::rename(next, &self.0)?)
+    }
+}
+
+#[cfg(any(test, debug_assertions))]
+impl Backend for FileVault {
+    fn read(&self, account: &str) -> Result<Option<String>> {
+        Ok(self.items()?.remove(account))
+    }
+
+    fn write(&self, account: &str, value: &str) -> Result<()> {
+        let mut items = self.items()?;
+        items.insert(account.into(), value.into());
+        self.store(&items)
+    }
+
+    fn remove(&self, account: &str) -> Result<()> {
+        let mut items = self.items()?;
+        if items.remove(account).is_some() {
+            self.store(&items)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -273,6 +351,10 @@ pub fn is_ready() -> bool {
 
 pub fn load<T: DeserializeOwned>(account: &str) -> Result<Option<T>> {
     with_global(|v| v.load(account))
+}
+
+pub fn reread() -> Result<()> {
+    with_global(|v| v.reread())
 }
 
 pub fn save<T: Serialize>(account: &str, value: &T) -> Result<()> {
@@ -622,5 +704,17 @@ mod tests {
         let v = vault(&fake);
         v.save("a", &"hunter2").unwrap();
         assert!(!format!("{v:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn a_write_keeps_what_another_app_saved_after_this_one_read_the_vault() {
+        let fake = Fake::default();
+        let (one, two) = (vault(&fake), vault(&fake));
+        assert_eq!(one.load::<String>("session").unwrap(), None);
+        two.save("harness", &"token").unwrap();
+        one.save("jira:1", &"jira").unwrap();
+        one.delete("session").unwrap();
+        one.apply(&[Op::save("other", &"x").unwrap()]).unwrap();
+        assert_eq!(vault(&fake).load::<String>("harness").unwrap().as_deref(), Some("token"), "the other app's save is kept");
     }
 }

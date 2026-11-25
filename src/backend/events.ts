@@ -10,7 +10,7 @@ export const EVENTS = {
 } as const;
 
 /** What a `changed` event says changed. */
-export type Topic = "cache" | "proposals" | "runs" | "workstreams" | "watch" | "devLinks" | "assignedElsewhere" | "display" | "connections";
+export type Topic = "cache" | "proposals" | "runs" | "workstreams" | "watch" | "devLinks" | "assignedElsewhere" | "display" | "connections" | "harness";
 
 export interface Changed {
   topic: Topic;
