@@ -733,6 +733,30 @@ fn wire_replay_config_the_endpoints_name_and_header_are_the_drivers_and_initiali
 }
 
 #[test]
+fn wire_replay_config_of_two_recorded_servers_the_one_the_recording_allowed_takes_the_drivers_name() {
+    // r1-two-servers recorded the endpoint and a second server, and allowed the endpoint's `ping` by name.
+    let fixture = native().join("r1-two-servers.jsonl");
+    let lines = lines_of(&fixture);
+    let mut run = start(&fixture, &[], &[]);
+    let mut initialize = lines[1]["data"].clone();
+    initialize["request_id"] = json!("i-1");
+    run.send(&initialize);
+    run.read().unwrap();
+    run.send(&json!({"type": "control_request", "request_id": "s-1", "request": {"subtype": "mcp_set_servers", "servers": {"q7w8e9r0t1y2u3": {"type": "http", "url": "http://127.0.0.1:9/mcp/q7w8e9r0t1y2u3"}}}}));
+    run.read().unwrap();
+    run.send(&lines.iter().find(|line| line["dir"] == "to_agent" && line["data"]["type"] == "user").unwrap()["data"]);
+    let mut said = String::new();
+    while let Some(line) = run.read() {
+        said.push_str(&line.to_string());
+        if line["request"]["subtype"] == "can_use_tool" {
+            break;
+        }
+    }
+    assert!(said.contains("mcp__q7w8e9r0t1y2u3__ping") && !said.contains("mcp__spk0f0949ae__"), "the endpoint's tools take the driver's name");
+    assert!(said.contains("\"tool_name\":\"mcp__spkx1be8eb2a__ping\""), "the second server keeps its own");
+}
+
+#[test]
 fn wire_replay_records_its_argv_its_environment_and_each_line_sent() {
     let fixture = native().join("6-model.jsonl");
     let mut run = start(&fixture, &["-p", "--model", "haiku"], &[("ONE_VARIABLE", "its value")]);

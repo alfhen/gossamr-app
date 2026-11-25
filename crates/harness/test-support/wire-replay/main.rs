@@ -17,8 +17,9 @@
 //! and image types, an answer's fields, and every id by the mapping. The config requests named in `CONFIG` are not
 //! compared: the replay answers each one it is sent with success and skips the recording's own, with their answers.
 //! Where the recording gives the tools endpoint before its first prompt, the driver must too, with an HTTP server and its
-//! URL. A recorded endpoint's server name becomes the driver's when both name exactly one server. Codex's and Gemini's
-//! wires add their rules with H7a and H8.
+//! URL. The recorded endpoint's server name becomes the driver's when the driver names one server: the recording's one
+//! server, or of several the one whose tools the recorded `--allowedTools` names. Codex's and Gemini's wires add their
+//! rules with H7a and H8.
 //!
 //! When a line may come: a prompt follows the `result` before it, and an interrupt the last agent line before it that is
 //! not a `stream_event`. Before the replay writes such a line it waits until stdin has been quiet for
@@ -295,6 +296,7 @@ impl Replay {
         let first_prompt = lines.iter().position(|line| line.dir == "to_agent" && line.data["type"] == "user").unwrap_or(lines.len());
         let endpoint_at = lines[..first_prompt].iter().find(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| line.seq);
         self.skipped = lines.iter().filter(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| request_id(&line.data)).collect();
+        self.ids.recorded_allowed = recorded_allowed(&lines);
         let follows = follows(&lines, &self.skipped);
         let waited_for: HashSet<u64> = follows.values().copied().collect();
         for line in &lines {
@@ -505,6 +507,14 @@ fn what(data: &Value) -> String {
     }
 }
 
+/// The tools the recorded run's `--allowedTools` named, from the recording's spawn note.
+fn recorded_allowed(lines: &[Recorded]) -> Vec<String> {
+    let spawned = lines.iter().find(|line| line.dir == "driver" && line.data["note"] == "spawned");
+    let argv: Vec<&str> = spawned.and_then(|line| line.data["detail"]["argv"].as_array()).into_iter().flatten().filter_map(Value::as_str).collect();
+    let after = argv.iter().position(|arg| *arg == "--allowedTools").and_then(|at| argv.get(at + 1));
+    after.into_iter().flat_map(|tools| tools.split([',', ' '])).filter(|tool| !tool.is_empty()).map(str::to_owned).collect()
+}
+
 /// Whether the replay writes this line: an agent line, unless it answers a config request whose answer is the
 /// replay's own. An agent's own request is played whatever its id.
 fn plays(line: &Recorded, skipped: &HashSet<String>) -> bool {
@@ -580,6 +590,8 @@ struct Ids {
     chosen: HashSet<String>,
     /// The recorded config's server names, and the driver's.
     recorded_servers: Vec<String>,
+    /// What the recorded run allowed by `--allowedTools`, which names the endpoint among several servers.
+    recorded_allowed: Vec<String>,
     sent_servers: Vec<String>,
 }
 
@@ -624,10 +636,13 @@ impl Ids {
         }
     }
 
-    /// The recorded endpoint's name and the driver's, when each side names one server.
+    /// The recorded endpoint's name and the driver's, when the driver names one server.
     fn server(&self) -> Option<(&str, &str)> {
-        match (self.recorded_servers.as_slice(), self.sent_servers.as_slice()) {
-            ([recorded], [sent]) => Some((recorded, sent)),
+        let allowed = |server: &&String| self.recorded_allowed.iter().any(|tool| tool.starts_with(&format!("mcp__{server}__")));
+        let endpoint: Vec<&String> = self.recorded_servers.iter().filter(allowed).collect();
+        match (self.recorded_servers.as_slice(), endpoint.as_slice(), self.sent_servers.as_slice()) {
+            ([recorded], _, [sent]) => Some((recorded, sent)),
+            (_, [recorded], [sent]) => Some((recorded, sent)),
             _ => None,
         }
     }

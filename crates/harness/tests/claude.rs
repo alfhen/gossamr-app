@@ -252,33 +252,44 @@ fn as_the_mock_names_the_session(events: &[Event]) -> Vec<Event> {
     serde_json::from_str(&text).unwrap()
 }
 
-/// The recordings that give the tools endpoint by `mcp_set_servers` before their first prompt. The replay requires a
-/// driver to do the same, and the driver gives the endpoint once H5a-1's endpoint is on `harness`; until then each of
-/// these is refused at its first prompt, and only that.
-const AWAIT_THE_ENDPOINT: &[&str] = &[
-    "4-kill-mcp.jsonl", "4-resume-mcp.jsonl", "5-hold-control.jsonl", "5-mcp-control.jsonl", "r1-collision.jsonl", "r1-two-servers.jsonl",
-    "r2-ask.jsonl", "r4-locked-control.jsonl",
-];
+/// The driver's endpoint, as its `mcp_set_servers` gave it: the per-session name and the server.
+fn endpoint(rig: &Rig) -> (String, Value) {
+    let sent = rig.sent();
+    let set = sent.iter().find(|line| line["request"]["subtype"] == "mcp_set_servers").expect("the driver gave the endpoint");
+    let servers = set["request"]["servers"].as_object().unwrap();
+    assert_eq!(servers.len(), 1, "the driver gives its own server and no other");
+    let (name, server) = servers.iter().next().unwrap();
+    (name.clone(), server.clone())
+}
 
-#[tokio::test]
-async fn claude_a_recording_that_gives_the_endpoint_is_refused_until_the_driver_does() {
-    for fixture in AWAIT_THE_ENDPOINT {
-        let rig = rig(&native().join(fixture), &[]);
-        let (id, mut events) = rig.open(false, None).await;
-        rig.harness.send(&id, "go").unwrap();
-        until(&mut events, |body| *body == Body::Closed).await;
-        let want = "line 7: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line 4\n";
-        assert_eq!(rig.report(), want, "{fixture}");
+/// The recorded endpoint's server name, as the replay finds it: the recording's one server, or of several the one the
+/// recorded `--allowedTools` names.
+fn recorded_endpoint(lines: &[Value]) -> Option<String> {
+    let set = lines.iter().find(|line| line["dir"] == "to_agent" && line["data"]["request"]["subtype"] == "mcp_set_servers")?;
+    let servers: Vec<&String> = set["data"]["request"]["servers"].as_object()?.keys().collect();
+    let argv: Vec<&str> = lines[0]["data"]["detail"]["argv"].as_array()?.iter().filter_map(Value::as_str).collect();
+    let allowed = argv.iter().position(|arg| *arg == "--allowedTools").and_then(|at| argv.get(at + 1)).copied().unwrap_or_default();
+    match servers[..] {
+        [one] => Some(one.clone()),
+        _ => servers.into_iter().find(|server| allowed.split(',').any(|tool| tool.starts_with(&format!("mcp__{server}__")))).cloned(),
     }
+}
+
+/// The events with the endpoint's tools under the recorded name: the replay gives them the driver's per-session name.
+fn as_recorded_tools(events: &[Event], ours: &str, recorded: Option<&str>) -> Vec<Event> {
+    let Some(recorded) = recorded else { return events.to_vec() };
+    let text = serde_json::to_string(events).unwrap().replace(&format!("mcp__{ours}__"), &format!("mcp__{recorded}__"));
+    serde_json::from_str(&text).unwrap()
 }
 
 #[tokio::test]
 async fn claude_every_native_fixture_projects_as_its_golden_file() {
     let goldens = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/claude/native");
     let mut differ = vec![];
-    for fixture in fixtures().into_iter().filter(|fixture| !AWAIT_THE_ENDPOINT.contains(&name(fixture).as_str())) {
+    for fixture in fixtures() {
         let (rig, seen) = play(&fixture).await;
         assert_eq!(rig.report(), "", "{}: the replay refused a line", name(&fixture));
+        let seen = as_recorded_tools(&seen, &endpoint(&rig).0, recorded_endpoint(&lines_of(&fixture)).as_deref());
         let got = as_the_mock_orders_it(project(&as_the_mock_names_the_session(&seen))).join("\n") + "\n";
         let want = std::fs::read_to_string(goldens.join(name(&fixture)).with_extension("txt")).unwrap();
         if got != want {
@@ -309,6 +320,7 @@ async fn claude_the_normal_profiles_argv_is_exactly_the_stream_flags_a_model_and
         let (id, mut events) = rig.open(false, model).await;
         drive(&rig, &id, &mut events, acts, results).await;
         let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
+        want.extend(["--allowedTools".into(), format!("mcp__{}__result", endpoint(&rig).0)]);
         if let Some(model) = model {
             want.extend(["--model".into(), model.into()]);
         }
@@ -323,12 +335,14 @@ async fn claude_the_normal_profile_passes_no_restricting_flag() {
     let (rig, _) = play(&native().join("6-model.jsonl")).await;
     let argv = rig.argv();
     for flag in [
-        "--tools", "--disallowedTools", "--allowedTools", "--permission-mode", "--setting-sources", "--strict-mcp-config", "--disable-slash-commands",
+        "--tools", "--disallowedTools", "--permission-mode", "--setting-sources", "--strict-mcp-config", "--disable-slash-commands",
         "--settings", "--agents", "--agent", "--add-dir", "--plugin-dir", "--mcp-config", "--bare", "--safe-mode", "--restricted",
         "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
     ] {
         assert!(!argv.iter().any(|arg| arg == flag), "{flag}");
     }
+    let allowed = argv.iter().position(|arg| arg == "--allowedTools").map(|at| argv[at + 1].clone());
+    assert_eq!(allowed, Some(format!("mcp__{}__result", endpoint(&rig).0)), "it allows the endpoint's own tool and nothing else");
 }
 
 #[tokio::test]
@@ -339,9 +353,11 @@ async fn claude_the_locked_profiles_argv_is_pips_lockdown_without_a_config_file_
     let (id, mut events) = rig.open(true, Some("haiku")).await;
     drive(&rig, &id, &mut events, acts, results).await;
     let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
-    want.extend(["--permission-mode", "dontAsk", "--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config", "--model", "haiku"].map(String::from));
-    assert_eq!(rig.argv(), want);
-    assert!(!rig.argv().iter().any(|arg| arg.contains("mcp__")), "no prefix rule");
+    want.extend(["--permission-mode", "dontAsk", "--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"].map(String::from));
+    let (name, _) = endpoint(&rig);
+    want.extend(["--allowedTools".into(), format!("mcp__{name}__result"), "--model".into(), "haiku".into()]);
+    assert_eq!(rig.argv(), want, "no `--mcp-config`: the endpoint goes on stdin");
+    assert!(!rig.argv().iter().any(|arg| arg == "mcp__gossamr" || arg.ends_with("__")), "no prefix rule");
     assert_eq!(rig.env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
 }
 
@@ -381,7 +397,8 @@ async fn claude_initialize_goes_first() {
     let sent = rig.sent();
     assert_eq!(sent[0]["type"], "control_request");
     assert_eq!(sent[0]["request"]["subtype"], "initialize");
-    assert_eq!(sent[1]["type"], "user", "then the prompt");
+    assert_eq!(sent[1]["request"]["subtype"], "mcp_set_servers", "then the endpoint");
+    assert_eq!(sent[2]["type"], "user", "then the prompt");
 }
 
 #[tokio::test]
@@ -460,4 +477,112 @@ async fn claude_kill_ends_an_agent_that_ignores_sigterm() {
     let failed: Vec<&Body> = seen.iter().map(|event| &event.body).filter(|body| matches!(body, Body::Failed { .. })).collect();
     assert!(matches!(failed[..], [Body::Failed { kind: FailKind::AgentStopped, .. }]), "the session told the driver to kill: {failed:?}");
     assert!(!process::alive(&agent), "the agent is gone once the session is closed");
+}
+
+#[tokio::test]
+async fn claude_the_endpoint_goes_by_mcp_set_servers_in_both_profiles_with_its_header_and_the_call_limit() {
+    for (fixture, locked) in [("6-model.jsonl", false), ("11-locked.jsonl", true)] {
+        let fixture = native().join(fixture);
+        let rig = rig(&fixture, &[]);
+        let (acts, results) = recorded_client(&lines_of(&fixture));
+        let (id, mut events) = rig.open(locked, None).await;
+        drive(&rig, &id, &mut events, acts, results).await;
+        assert_eq!(rig.report(), "");
+        let (name, server) = endpoint(&rig);
+        assert!(name.len() == 14 && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()), "a per-session name of letters and digits");
+        assert_eq!(server["type"], "http");
+        assert!(server["url"].as_str().is_some_and(|url| url.starts_with("http://127.0.0.1:") && url.ends_with(&format!("/mcp/{name}"))), "on loopback");
+        assert_eq!(server["headers"]["Authorization"], "<redacted>", "the token goes in its header, which the replay keeps out of its files");
+        assert_eq!(server["timeout"], 600_000, "a call can outwait a question");
+        assert!(!rig.argv().iter().any(|arg| arg.contains("--mcp-config")));
+    }
+}
+
+#[tokio::test]
+async fn claude_the_token_is_in_no_argument_and_no_variable_of_the_agent() {
+    use harness::driver::{Command, Driver, Launch, Secret};
+    let tmp = tempfile::tempdir().unwrap();
+    let (out, secret) = (tmp.path().join("out"), tmp.path().join("secret"));
+    std::fs::create_dir_all(&out).unwrap();
+    let token = Secret::random();
+    std::fs::write(&secret, token.expose()).unwrap();
+    let fixture = native().join("6-model.jsonl");
+    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
+        ("PATH", "/usr/bin:/bin".to_owned()),
+        ("WIRE_REPLAY_FIXTURE", fixture.display().to_string()),
+        ("WIRE_REPLAY_OUT", out.display().to_string()),
+        ("WIRE_REPLAY_SECRET_FILE", secret.display().to_string()),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.into(), v.into()))
+    .collect();
+    let mut tools = harness::tools::ToolsEndpoint::unattached();
+    tools.allowed = vec![format!("mcp__{}__result", tools.name)];
+    let launch = Launch { cwd: tmp.path().into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: token, tools, result_schema: None, env };
+    let mut link = ClaudeDriver::new(REPLAY.into()).open(launch).unwrap();
+    let Some(Act::Prompt(prompt, _)) = recorded_client(&lines_of(&fixture)).0.into_iter().next() else { panic!("6-model prompts") };
+    link.commands.send(Command::Prompt(prompt)).unwrap();
+    while let Some(body) = tokio::time::timeout(Duration::from_secs(30), link.output.recv()).await.expect("the turn ends") {
+        if body.ends_turn() {
+            break;
+        }
+    }
+    link.commands.send(Command::Stop).unwrap();
+    while tokio::time::timeout(Duration::from_secs(30), link.output.recv()).await.expect("the agent goes").is_some() {}
+    let held: Value = serde_json::from_slice(&std::fs::read(out.join("secret.json")).unwrap()).unwrap();
+    assert_eq!(held, json!({"env": [], "argv": 0}), "no variable and no argument holds the token");
+    assert_eq!(std::fs::read_to_string(out.join("report.txt")).unwrap_or_default(), "");
+    let sent = std::fs::read_to_string(out.join("sent.jsonl")).unwrap();
+    assert!(sent.contains("\"Authorization\":\"<redacted>\""), "it went on stdin, in the endpoint's header");
+}
+
+#[tokio::test]
+async fn claude_a_second_servers_tool_and_a_colliding_name_are_left_to_the_person() {
+    // R1: Claude asks for a tool that `--allowedTools` does not name exactly, and the driver never answers for the person.
+    for (fixture, other) in [("r1-two-servers.jsonl", "mcp__spkx1be8eb2a__ping"), ("r1-collision.jsonl", "mcp__spka__b_c")] {
+        let (rig, seen) = play(&native().join(fixture)).await;
+        assert_eq!(rig.report(), "", "{fixture}");
+        let (name, _) = endpoint(&rig);
+        let allowed = rig.argv().iter().position(|arg| arg == "--allowedTools").map(|at| rig.argv()[at + 1].clone());
+        assert_eq!(allowed, Some(format!("mcp__{name}__result")), "{fixture}: only the endpoint's own tool");
+        let asked: Vec<String> = seen.iter().filter_map(|event| match &event.body { Body::Permission { tool, .. } => Some(tool.clone()), _ => None }).collect();
+        assert_eq!(asked, [other], "{fixture}: the other server's tool reached the person");
+        let answers = rig.sent().iter().filter(|line| line["type"] == "control_response").count();
+        assert_eq!(answers, 1, "{fixture}: answered once, as the client said");
+        let calls: Vec<String> = seen.iter().filter_map(|event| match &event.body { Body::ToolCall { name, .. } => Some(name.clone()), _ => None }).collect();
+        assert!(calls.iter().any(|call| call.starts_with(&format!("mcp__{name}__"))), "{fixture}: the endpoint's own tool ran under its name: {calls:?}");
+    }
+}
+
+#[tokio::test]
+async fn claude_on_the_locked_profile_a_call_to_the_sessions_own_tool_runs_unasked() {
+    let fixture = native().join("r4-locked-control.jsonl");
+    let rig = rig(&fixture, &[]);
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let (id, mut events) = rig.open(true, None).await;
+    let (seen, _) = drive(&rig, &id, &mut events, acts, results).await;
+    assert_eq!(rig.report(), "");
+    let (name, _) = endpoint(&rig);
+    assert!(!seen.iter().any(|event| matches!(event.body, Body::Permission { .. })), "nothing asked");
+    let call = seen.iter().find_map(|event| match &event.body { Body::ToolCall { id, name: tool, .. } if *tool == format!("mcp__{name}__ping") => Some(id.clone()), _ => None });
+    let call = call.expect("the session's own tool was called");
+    assert!(seen.iter().any(|event| matches!(&event.body, Body::ToolResult { id, error: false, .. } if *id == call)), "and it answered, not denied");
+    let allowed = rig.argv().iter().position(|arg| arg == "--allowedTools").map(|at| rig.argv()[at + 1].clone()).unwrap();
+    assert!(allowed.split(',').all(|tool| tool.starts_with(&format!("mcp__{name}__")) && !tool.ends_with("__")), "no prefix rule: {allowed}");
+}
+
+#[tokio::test]
+async fn claude_a_declared_tool_is_allowed_by_its_exact_name_beside_result() {
+    let fixture = native().join("6-model.jsonl");
+    let rig = rig(&fixture, &[]);
+    let find = harness::tools::ToolSpec { name: "find".into(), description: "Finds a ticket.".into(), input_schema: json!({"type": "object"}) };
+    let spec = Open { provider: "claude".into(), cwd: rig.tmp.path().to_path_buf(), tools: vec![find], ..Open::default() };
+    let (id, mut events) = rig.harness.open(spec).await.unwrap();
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    drive(&rig, &id, &mut events, acts, results).await;
+    let (name, _) = endpoint(&rig);
+    let allowed = rig.argv().iter().position(|arg| arg == "--allowedTools").map(|at| rig.argv()[at + 1].clone()).unwrap();
+    let mut tools: Vec<&str> = allowed.split(',').collect();
+    tools.sort();
+    assert_eq!(tools, [format!("mcp__{name}__find"), format!("mcp__{name}__result")]);
 }

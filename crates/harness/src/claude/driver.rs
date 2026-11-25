@@ -5,6 +5,10 @@
 //! is counted by `result`: Claude may start one by itself after a background task ends, and lines that come after a
 //! `result` (a task's notice) start no turn. Stop closes stdin; Claude stays while a background task runs, so after
 //! `term_after` the driver ends the agent's process group.
+//!
+//! The session's tools endpoint goes by the `mcp_set_servers` control request on stdin, after `initialize`'s answer and
+//! before the first prompt, so its token is in no argv and not in the agent's environment. Both profiles name exactly
+//! the endpoint's tools in `--allowedTools`, never a prefix (H0, R1 and R4).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -34,6 +38,10 @@ pub const TERM_AFTER: Duration = Duration::from_secs(3);
 /// How long the session waits for a stopped agent before it says kill.
 pub const STOP_TAKES_UP_TO: Duration = Duration::from_secs(10);
 
+/// How long Claude lets a call to the session's tools run: the endpoint's `timeout`. Without one Claude cuts a call at
+/// 60 s; with it a call held 10 minutes came back (H0, `5-hold-600`). `ask` returns before this.
+pub const TOOL_CALL_LIMIT_MS: u64 = 600_000;
+
 pub struct ClaudeDriver {
     binary: PathBuf,
     term_after: Duration,
@@ -57,6 +65,10 @@ pub fn args(launch: &Launch) -> Vec<String> {
     if launch.locked {
         args.extend(LOCKED.iter().map(|flag| (*flag).to_owned()));
     }
+    // Tool names are letters, digits, `_` and `-`, so the list Claude splits at commas holds exactly these.
+    if !launch.tools.allowed.is_empty() {
+        args.extend(["--allowedTools".to_owned(), launch.tools.allowed.join(",")]);
+    }
     if let Some(model) = &launch.model {
         args.extend(["--model".to_owned(), model.clone()]);
     }
@@ -69,11 +81,22 @@ pub fn args(launch: &Launch) -> Vec<String> {
     args
 }
 
+/// The `servers` of the `mcp_set_servers` request: the session's endpoint under its per-session name, with its token.
+fn servers(launch: &Launch) -> Value {
+    let server = json!({
+        "type": "http",
+        "url": launch.tools.url,
+        "headers": {"Authorization": format!("Bearer {}", launch.tools_token.expose())},
+        "timeout": TOOL_CALL_LIMIT_MS,
+    });
+    json!({ launch.tools.name.clone(): server })
+}
+
 impl Driver for ClaudeDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             deny_ends_turn: false,
-            tool_call_limit_ms: Some(600_000),
+            tool_call_limit_ms: Some(TOOL_CALL_LIMIT_MS),
             stop_kills_process_tree: true,
             runs_locked_profile: true,
             starts_turns_unprompted: true,
@@ -106,7 +129,7 @@ impl Driver for ClaudeDriver {
             while let Ok(Some(_)) = stderr.next_line().await {}
         });
         let stream = Stream::new(lines, output, launch.resume.as_deref());
-        let agent = Agent { child, process: Process { pid, started }, stream, term_after: self.term_after };
+        let agent = Agent { child, process: Process { pid, started }, stream, servers: servers(&launch), term_after: self.term_after };
         tokio::spawn(agent.run(BufReader::new(stdout), commands_rx));
         Ok(Link { commands, output: output_rx })
     }
@@ -125,6 +148,7 @@ struct Agent {
     child: Child,
     process: Process,
     stream: Stream,
+    servers: Value,
     term_after: Duration,
 }
 
@@ -143,13 +167,17 @@ pub struct Stream {
     /// Open `can_use_tool` requests and the input each asked to run with.
     asked: HashMap<String, Value>,
     requests: u64,
-    /// What waits for `initialize`'s answer: nothing else is written before it, as the Agent SDK does.
+    /// What waits for the setup's answers: nothing else is written before them, as the Agent SDK does.
     waiting: Option<Vec<String>>,
+    /// The endpoint, sent once `initialize` is answered.
+    servers: Option<Value>,
+    /// The setup request whose answer the waiting lines wait for, and the servers it must add.
+    setup: Option<(String, Vec<String>)>,
 }
 
 impl Agent {
     async fn run(mut self, stdout: BufReader<tokio::process::ChildStdout>, mut commands: UnboundedReceiver<Command>) {
-        self.stream.initialize();
+        self.stream.initialize(Some(std::mem::take(&mut self.servers)));
         let mut stdout = stdout.lines();
         let mut term_at: Option<tokio::time::Instant> = None;
         let mut listening = true;
@@ -201,7 +229,8 @@ impl Stream {
             let _ = output.send(Body::Started { provider_session: session.to_owned(), resumed: true });
         }
         let (turn, cancelled, held, asked, requests) = (false, false, VecDeque::new(), HashMap::new(), 0);
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting: Some(vec![]) }
+        let (waiting, servers, setup) = (Some(vec![]), None, None);
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -219,11 +248,38 @@ impl Stream {
         }
     }
 
-    /// The first line Claude reads. What is sent before its answer comes waits for it.
-    pub fn initialize(&mut self) {
+    /// The first line Claude reads, then `servers` once it is answered. What is sent before the last answer comes
+    /// waits for it.
+    pub fn initialize(&mut self, servers: Option<Value>) {
+        self.servers = servers;
+        self.setup(json!({"subtype": "initialize"}), vec![]);
+    }
+
+    /// A setup request, written at once while the rest waits.
+    fn setup(&mut self, request: Value, adds: Vec<String>) {
         self.requests += 1;
+        let id = format!("gossamr-{}", self.requests);
         if let Some(lines) = &self.lines {
-            let _ = lines.send(json!({"type": "control_request", "request_id": "gossamr-1", "request": {"subtype": "initialize"}}).to_string());
+            let _ = lines.send(json!({"type": "control_request", "request_id": id, "request": request}).to_string());
+        }
+        self.setup = Some((id, adds));
+    }
+
+    /// The answer to a setup request: the next one goes, or what waited does.
+    fn set_up(&mut self, answer: &Value) {
+        let adds = self.setup.take().map(|(_, adds)| adds).unwrap_or_default();
+        let added: Vec<&str> = answer["response"]["response"]["added"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        if !adds.iter().all(|name| added.contains(&name.as_str())) || (!adds.is_empty() && answer["response"]["subtype"] != "success") {
+            self.emit(Body::Notice { text: "Claude did not take the session's tools endpoint, so its tools will not work.".into() });
+        }
+        if let Some(servers) = self.servers.take() {
+            let adds = servers.as_object().map(|servers| servers.keys().cloned().collect()).unwrap_or_default();
+            return self.setup(json!({"subtype": "mcp_set_servers", "servers": servers}), adds);
+        }
+        if let (Some(waiting), Some(lines)) = (self.waiting.take(), &self.lines) {
+            for line in waiting {
+                let _ = lines.send(line);
+            }
         }
     }
 
@@ -302,14 +358,8 @@ impl Stream {
                     self.emit(Body::ToolResult { id, output: block["content"].clone(), error: block["is_error"] == true });
                 }
             }
-            // `initialize`'s answer, success or not: Claude reads the rest either way and reports what fails.
-            Some("control_response") if line["response"]["request_id"] == "gossamr-1" => {
-                if let (Some(waiting), Some(lines)) = (self.waiting.take(), &self.lines) {
-                    for line in waiting {
-                        let _ = lines.send(line);
-                    }
-                }
-            }
+            // A setup answer, success or not: Claude reads the rest either way and reports what fails.
+            Some("control_response") if self.setup.as_ref().is_some_and(|(id, _)| line["response"]["request_id"] == id.as_str()) => self.set_up(&line),
             Some("control_request") => self.asks(&line),
             Some("control_cancel_request") => {
                 if let Some(id) = line["request_id"].as_str()
@@ -376,7 +426,7 @@ mod tests {
     fn wire() -> Wire {
         let ((lines, lines_rx), (output, output_rx)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
         let mut w = Wire { stream: Stream::new(lines, output, None), lines: lines_rx, output: output_rx };
-        w.stream.initialize();
+        w.stream.initialize(None);
         w.agent(json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-1", "response": {}}}));
         w.sent();
         w
@@ -550,7 +600,7 @@ mod tests {
     fn nothing_is_written_before_initializes_answer() {
         let ((lines, mut sent), (output, _said)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
         let mut stream = Stream::new(lines, output, None);
-        stream.initialize();
+        stream.initialize(None);
         stream.prompt("go".into());
         let first: Value = serde_json::from_str(&sent.try_recv().unwrap()).unwrap();
         assert_eq!(first["request"]["subtype"], "initialize");
@@ -558,6 +608,63 @@ mod tests {
         stream.read(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-1", "response": {}}}).to_string());
         let prompt: Value = serde_json::from_str(&sent.try_recv().unwrap()).unwrap();
         assert_eq!(prompt["type"], "user", "then it goes");
+    }
+
+    #[test]
+    fn both_profiles_allow_exactly_the_endpoints_own_tool_names() {
+        let with = |locked: bool| {
+            let mut launch = launch(locked, None, None);
+            launch.tools.allowed = vec!["mcp__k3x9q2w7e5r1t8__result".into(), "mcp__k3x9q2w7e5r1t8__find".into()];
+            args(&launch)
+        };
+        let names = "mcp__k3x9q2w7e5r1t8__result,mcp__k3x9q2w7e5r1t8__find";
+        assert_eq!(with(false)[STREAM.len()..], ["--allowedTools", names, "--append-system-prompt", GUARD]);
+        assert_eq!(with(true)[STREAM.len() + LOCKED.len()..], ["--allowedTools", names]);
+        assert!(!args(&launch(false, None, None)).iter().any(|arg| arg == "--allowedTools"), "none when nothing is allowed");
+    }
+
+    #[test]
+    fn the_endpoint_is_its_name_its_url_its_token_header_and_the_call_limit() {
+        let mut launch = launch(false, None, None);
+        launch.tools.name = "k3x9q2w7e5r1t8".into();
+        launch.tools.url = "http://127.0.0.1:9/mcp/k3x9q2w7e5r1t8".into();
+        let bearer = format!("Bearer {}", launch.tools_token.expose());
+        let want = json!({"k3x9q2w7e5r1t8": {"type": "http", "url": "http://127.0.0.1:9/mcp/k3x9q2w7e5r1t8", "headers": {"Authorization": bearer}, "timeout": 600_000}});
+        assert!(servers(&launch) == want, "the endpoint differs");
+        assert!(!args(&launch).iter().any(|arg| arg.contains(launch.tools_token.expose())), "and its token is in no argument");
+    }
+
+    #[test]
+    fn the_endpoint_goes_once_initialize_is_answered_and_the_prompt_once_the_endpoint_is() {
+        let ((lines, mut sent), (output, mut said)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
+        let mut stream = Stream::new(lines, output, None);
+        let servers = json!({"k3x9q2w7e5r1t8": {"type": "http", "url": "http://127.0.0.1:9/mcp/k3x9q2w7e5r1t8"}});
+        stream.initialize(Some(servers.clone()));
+        stream.prompt("go".into());
+        let mut next = || sent.try_recv().ok().map(|line| serde_json::from_str::<Value>(&line).unwrap());
+        assert_eq!(next().unwrap()["request"]["subtype"], "initialize");
+        assert_eq!(next(), None, "nothing before initialize's answer");
+        stream.read(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-1", "response": {}}}).to_string());
+        assert_eq!(next(), Some(json!({"type": "control_request", "request_id": "gossamr-2", "request": {"subtype": "mcp_set_servers", "servers": servers}})));
+        assert_eq!(next(), None, "the prompt waits for the endpoint");
+        let added = json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-2", "response": {"added": ["k3x9q2w7e5r1t8"], "removed": [], "errors": {}}}});
+        stream.read(&added.to_string());
+        assert_eq!(next().unwrap()["type"], "user");
+        assert!(!std::iter::from_fn(|| said.try_recv().ok()).any(|body| matches!(body, Body::Notice { .. })), "no notice");
+    }
+
+    #[test]
+    fn an_endpoint_claude_did_not_add_gives_a_notice_and_the_prompt_still_goes() {
+        let ((lines, mut sent), (output, mut said)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
+        let mut stream = Stream::new(lines, output, None);
+        stream.initialize(Some(json!({"k3x9q2w7e5r1t8": {"type": "http", "url": "http://127.0.0.1:9/mcp/k3x9q2w7e5r1t8"}})));
+        stream.prompt("go".into());
+        stream.read(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-1", "response": {}}}).to_string());
+        let refused = json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-2", "response": {"added": [], "removed": [], "errors": {"k3x9q2w7e5r1t8": "failed"}}}});
+        stream.read(&refused.to_string());
+        let lines: Vec<Value> = std::iter::from_fn(|| sent.try_recv().ok()).map(|line| serde_json::from_str(&line).unwrap()).collect();
+        assert_eq!(lines.last().unwrap()["type"], "user");
+        assert!(std::iter::from_fn(|| said.try_recv().ok()).any(|body| matches!(body, Body::Notice { .. })));
     }
 
     #[test]
