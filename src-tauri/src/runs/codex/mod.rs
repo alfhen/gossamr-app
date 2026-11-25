@@ -4,7 +4,7 @@ mod control;
 mod events;
 mod launch;
 mod observe;
-pub mod process;
+pub use harness::process;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;

@@ -4,20 +4,22 @@
 //! H2's converter. Only test builds have it (`required-features = ["testing"]`).
 //!
 //! `WIRE_REPLAY_FIXTURE` names the recording. `WIRE_REPLAY_OUT` names a folder that gets `argv.json`, `env.json` (every
-//! variable's name, and the values of `SHOWN` and `WIRE_REPLAY_*` only), `sent.jsonl` (each line received) and, on a
-//! mismatch, `report.txt`, which names the recorded line and the field and never a payload. A mismatch exits 3.
+//! variable's name, and the values of `SHOWN` and `WIRE_REPLAY_*` only), `pid`, `stdin` (whether fd 0 is a pipe),
+//! `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the field and
+//! never a payload. A mismatch exits 3.
 //! `argv.json` and `sent.jsonl` go through the harness's `redact`, and a server's header values in `sent.jsonl` are
 //! written `<redacted>`. With `WIRE_REPLAY_SECRET_FILE` naming a file that holds a secret, that secret is masked too, and
 //! `secret.json` names the variables whose value holds it and counts the arguments that do. `WIRE_REPLAY_DEADLINE_MS`,
 //! `WIRE_REPLAY_QUIET_MS` and `WIRE_REPLAY_PROGRESS` (a FIFO that gets the seq of each agent line as it is written) serve
-//! tests.
+//! tests. With `WIRE_REPLAY_IGNORE_TERM` set it ignores SIGTERM, as an agent that will not stop does.
 //!
 //! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, role
 //! and image types, an answer's fields, and every id by the mapping. The config requests named in `CONFIG` are not
 //! compared: the replay answers each one it is sent with success and skips the recording's own, with their answers.
 //! Where the recording gives the tools endpoint before its first prompt, the driver must too, with an HTTP server and its
-//! URL. A recorded endpoint's server name becomes the driver's when both name exactly one server. Codex's and Gemini's
-//! wires add their rules with H7a and H8.
+//! URL. The recorded endpoint's server name becomes the driver's when the driver names one server: the recording's one
+//! server, or of several the one whose tools the recorded `--allowedTools` names. Codex's and Gemini's wires add their
+//! rules with H7a and H8.
 //!
 //! When a line may come: a prompt follows the `result` before it, and an interrupt the last agent line before it that is
 //! not a `stream_event`. Before the replay writes such a line it waits until stdin has been quiet for
@@ -26,7 +28,7 @@
 //! proves it follows. The first prompt follows nothing: every recording sends it after `initialize`'s answer, but none
 //! shows what the CLI does with one sent before it, so it is not refused.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -76,6 +78,10 @@ fn main() -> ExitCode {
     let out = PathBuf::from(out);
     let argv: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
     let vars: Vec<(String, String)> = std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned())).collect();
+    if std::env::var_os("WIRE_REPLAY_IGNORE_TERM").is_some() {
+        // SAFETY: setting a signal's disposition to ignore runs no handler code.
+        unsafe { libc::signal(libc::SIGTERM, libc::SIG_IGN) };
+    }
     let secret = match std::env::var_os("WIRE_REPLAY_SECRET_FILE").map(std::fs::read_to_string) {
         Some(Ok(secret)) => Some(secret.trim().to_owned()).filter(|secret| !secret.is_empty()),
         Some(Err(e)) => return refuse(&out, &format!("cannot read the secret file: {e}")),
@@ -86,6 +92,8 @@ fn main() -> ExitCode {
     let shown: Vec<String> = argv.iter().map(|arg| redact::text(arg, &secrets)).collect();
     let written = std::fs::write(out.join("argv.json"), Value::from(shown).to_string())
         .and_then(|()| std::fs::write(out.join("env.json"), Value::Object(environment(&vars)).to_string()))
+        .and_then(|()| std::fs::write(out.join("pid"), std::process::id().to_string()))
+        .and_then(|()| std::fs::write(out.join("stdin"), stdin_kind()))
         .and_then(|()| match &secret {
             Some(secret) => std::fs::write(out.join("secret.json"), holding(secret, &vars, &argv).to_string()),
             None => Ok(()),
@@ -125,6 +133,18 @@ fn main() -> ExitCode {
         }
         Err(mismatch) => refuse(&out, &mismatch),
     }
+}
+
+/// What fd 0 is: a driver must give its agent a pipe it owns, never the harness's own stdin.
+fn stdin_kind() -> &'static str {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    // SAFETY: `stat` is as large as the call writes.
+    if unsafe { libc::fstat(0, stat.as_mut_ptr()) } != 0 {
+        return "closed";
+    }
+    // SAFETY: the call filled it.
+    let mode = unsafe { stat.assume_init() }.st_mode;
+    if mode & libc::S_IFMT == libc::S_IFIFO { "pipe" } else { "not a pipe" }
 }
 
 /// Reads the driver's lines as they come. Each is stamped with how many agent lines the replay had written when the
@@ -276,6 +296,7 @@ impl Replay {
         let first_prompt = lines.iter().position(|line| line.dir == "to_agent" && line.data["type"] == "user").unwrap_or(lines.len());
         let endpoint_at = lines[..first_prompt].iter().find(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| line.seq);
         self.skipped = lines.iter().filter(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| request_id(&line.data)).collect();
+        self.ids.recorded_allowed = recorded_allowed(&lines);
         let follows = follows(&lines, &self.skipped);
         let waited_for: HashSet<u64> = follows.values().copied().collect();
         for line in &lines {
@@ -413,7 +434,8 @@ impl Replay {
             Some("control_response") => {
                 // Exactly the recorded fields at each level: a field more can widen what was allowed
                 // (`updatedPermissions`) or end the turn (`interrupt`).
-                let keys = |value: &Value| value.as_object().map(|fields| fields.keys().cloned().collect::<Vec<_>>());
+                // As sets: whatever order a map keeps its keys in, the same keys compare equal.
+                let keys = |value: &Value| value.as_object().map(|fields| fields.keys().cloned().collect::<BTreeSet<_>>());
                 let fields = Err(format!("line {at}: the answer's fields differ from the recording's {}", what(want)));
                 if keys(want) != keys(sent) {
                     return fields;
@@ -484,6 +506,14 @@ fn what(data: &Value) -> String {
         Some(subtype) => format!("{kind} {}", known(subtype, SUBTYPES, "of an unknown subtype")),
         None => kind.to_owned(),
     }
+}
+
+/// The tools the recorded run's `--allowedTools` named, from the recording's spawn note.
+fn recorded_allowed(lines: &[Recorded]) -> Vec<String> {
+    let spawned = lines.iter().find(|line| line.dir == "driver" && line.data["note"] == "spawned");
+    let argv: Vec<&str> = spawned.and_then(|line| line.data["detail"]["argv"].as_array()).into_iter().flatten().filter_map(Value::as_str).collect();
+    let after = argv.iter().position(|arg| *arg == "--allowedTools").and_then(|at| argv.get(at + 1));
+    after.into_iter().flat_map(|tools| tools.split([',', ' '])).filter(|tool| !tool.is_empty()).map(str::to_owned).collect()
 }
 
 /// Whether the replay writes this line: an agent line, unless it answers a config request whose answer is the
@@ -561,6 +591,8 @@ struct Ids {
     chosen: HashSet<String>,
     /// The recorded config's server names, and the driver's.
     recorded_servers: Vec<String>,
+    /// What the recorded run allowed by `--allowedTools`, which names the endpoint among several servers.
+    recorded_allowed: Vec<String>,
     sent_servers: Vec<String>,
 }
 
@@ -605,10 +637,13 @@ impl Ids {
         }
     }
 
-    /// The recorded endpoint's name and the driver's, when each side names one server.
+    /// The recorded endpoint's name and the driver's, when the driver names one server.
     fn server(&self) -> Option<(&str, &str)> {
-        match (self.recorded_servers.as_slice(), self.sent_servers.as_slice()) {
-            ([recorded], [sent]) => Some((recorded, sent)),
+        let allowed = |server: &&String| self.recorded_allowed.iter().any(|tool| tool.starts_with(&format!("mcp__{server}__")));
+        let endpoint: Vec<&String> = self.recorded_servers.iter().filter(allowed).collect();
+        match (self.recorded_servers.as_slice(), endpoint.as_slice(), self.sent_servers.as_slice()) {
+            ([recorded], _, [sent]) => Some((recorded, sent)),
+            (_, [recorded], [sent]) => Some((recorded, sent)),
             _ => None,
         }
     }

@@ -1,6 +1,14 @@
 //! Finding a process again by its pid, and telling it from a later process that reused the number.
 
-use crate::domain::RunProcess;
+use serde::{Deserialize, Serialize};
+
+/// A process the harness or the app started itself, and so has to find again by its pid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Process {
+    pub pid: u32,
+    /// The process start time in seconds, to tell a reused pid from the original.
+    pub started: u64,
+}
 
 /// The process start time in seconds, or none when there is no such process.
 #[cfg(target_os = "macos")]
@@ -34,14 +42,14 @@ pub fn started_of(pid: u32) -> Option<u64> {
 }
 
 /// Whether the run's own process is still there: the pid answers and started when the run says it did.
-pub fn alive(process: &RunProcess) -> bool {
+pub fn alive(process: &Process) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
     let answers = unsafe { libc::kill(process.pid as libc::pid_t, 0) } == 0;
     answers && started_of(process.pid).is_some_and(|started| started == process.started)
 }
 
 /// Sends `signal` to the process alone. Returns false, and sends nothing, when the pid is no longer the run's.
-pub fn signal(process: &RunProcess, signal: libc::c_int) -> std::io::Result<bool> {
+pub fn signal(process: &Process, signal: libc::c_int) -> std::io::Result<bool> {
     if !alive(process) {
         return Ok(false);
     }
@@ -49,7 +57,7 @@ pub fn signal(process: &RunProcess, signal: libc::c_int) -> std::io::Result<bool
 }
 
 /// Sends `signal` to the process group the run's process leads, when the process is still the run's.
-pub fn signal_group(process: &RunProcess, signal: libc::c_int) -> std::io::Result<bool> {
+pub fn signal_group(process: &Process, signal: libc::c_int) -> std::io::Result<bool> {
     if !alive(process) {
         return Ok(false);
     }
@@ -59,7 +67,7 @@ pub fn signal_group(process: &RunProcess, signal: libc::c_int) -> std::io::Resul
 
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
 /// group. Only for a stop that found the leader alive and the run's own at its start, so the group id is still the run's.
-pub fn kill_group(process: &RunProcess) -> std::io::Result<()> {
+pub fn kill_group(process: &Process) -> std::io::Result<()> {
     let group = process.pid as libc::pid_t;
     match deliver(-group, libc::SIGKILL) {
         Err(e) if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
@@ -131,7 +139,7 @@ fn member(pid: libc::pid_t) -> Member {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Listing {
+pub enum Listing {
     Members(Vec<libc::pid_t>),
     /// The call listed nobody, or failed: libproc answers 0 for both.
     Nothing,
@@ -139,14 +147,18 @@ pub(crate) enum Listing {
     Full,
 }
 
-const MEMBERS_MAX: usize = 256;
-
-#[cfg(target_os = "macos")]
+/// The members of the group `group` leads, or what a test said they are.
 fn group_members(group: libc::pid_t) -> Listing {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     if let Some(listing) = seam::listing(group) {
         return listing;
     }
+    members_of(group)
+}
+
+#[cfg(target_os = "macos")]
+fn members_of(group: libc::pid_t) -> Listing {
+    const MEMBERS_MAX: usize = 256;
     let mut members = [0 as libc::pid_t; MEMBERS_MAX];
     let size = std::mem::size_of_val(&members) as libc::c_int;
     // SAFETY: `members` is as large as `size` says, and the call fills at most that much.
@@ -160,12 +172,12 @@ fn group_members(group: libc::pid_t) -> Listing {
 
 /// Only macOS refuses a group of zombies, so elsewhere a refusal stands.
 #[cfg(not(target_os = "macos"))]
-fn group_members(_group: libc::pid_t) -> Listing {
+fn members_of(_group: libc::pid_t) -> Listing {
     Listing::Full
 }
 
 fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     if let Some(result) = seam::intercept(target, signal) {
         return result;
     }
@@ -178,7 +190,7 @@ fn deliver(target: libc::pid_t, signal: libc::c_int) -> std::io::Result<()> {
 
 /// Lets a test see which signals were sent to a pid and make them fail. State is per thread: each test runs on its
 /// own thread, and a pid freed by one test can be reused by another.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub mod seam {
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
