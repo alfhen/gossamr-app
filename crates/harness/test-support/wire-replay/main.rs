@@ -306,6 +306,8 @@ impl Replay {
         let until = std::time::Instant::now() + self.deadline;
         loop {
             let arrived = match late {
+                // Past the deadline the replay gives up, even with lines still queued.
+                Some(late) if std::time::Instant::now() >= until => return Err(format!("{late} within {} ms", self.deadline.as_millis())),
                 Some(late) => match input.recv_timeout(until.saturating_duration_since(std::time::Instant::now())) {
                     Ok(arrived) => arrived,
                     Err(RecvTimeoutError::Timeout) => return Err(format!("{late} within {} ms", self.deadline.as_millis())),
@@ -653,6 +655,18 @@ mod tests {
         let mut stdout = Seeing { written: &written, seen: vec![] };
         Replay::new(vec![line(1), line(2), line(3)]).play(&input, &written, &mut stdout, &mut vec![]).unwrap();
         assert_eq!(stdout.seen, [1, 2, 3]);
+    }
+
+    #[test]
+    fn lines_queued_past_the_deadline_are_not_taken() {
+        let (lines, input) = std::sync::mpsc::channel();
+        for text in ["", "", r#"{"type":"user","message":{"role":"user","content":"go"}}"#] {
+            lines.send(Ok(Arrived { text: text.into(), stamp: 0 })).unwrap();
+        }
+        let mut replay = Replay::new(vec![]);
+        replay.deadline = Duration::ZERO;
+        let got = replay.next(&input, &mut vec![], Some("line 5: the driver never sent user"));
+        assert_eq!(got.err().as_deref(), Some("line 5: the driver never sent user within 0 ms"));
     }
 
     #[test]
