@@ -1432,12 +1432,30 @@ fn closed_by_an_older_reader_reads_it_and_a_newer_one_reads_what_it_does_not_kno
 }
 
 #[tokio::test]
-async fn closed_by_a_signal_from_outside_says_signal_and_an_exit_of_its_own_says_agent() {
-    for (end, by) in [("{\"killed\": 15}", ClosedBy::Signal), ("{\"exit\": 1}", ClosedBy::Agent)] {
+async fn closed_by_says_signal_only_for_what_a_logout_sends_and_agent_for_a_crash_a_kill_or_an_exit() {
+    let killed = |signal: i32| format!("{{\"killed\": {signal}}}");
+    let cases = [
+        (killed(libc::SIGTERM), ClosedBy::Signal, "signal 15 (SIGTERM)".to_owned()),
+        (killed(libc::SIGHUP), ClosedBy::Signal, "(SIGHUP)".into()),
+        (killed(libc::SIGINT), ClosedBy::Signal, "(SIGINT)".into()),
+        // A Node out of heap aborts: the agent's own crash, and the turn's `failed` says which signal.
+        (killed(libc::SIGABRT), ClosedBy::Agent, format!("signal {} (SIGABRT)", libc::SIGABRT)),
+        (killed(libc::SIGSEGV), ClosedBy::Agent, "(SIGSEGV)".into()),
+        (killed(libc::SIGKILL), ClosedBy::Agent, "signal 9 (SIGKILL)".into()),
+        (killed(libc::SIGUSR1), ClosedBy::Agent, format!("signal {}", libc::SIGUSR1)),
+        ("{\"exit\": 1}".to_owned(), ClosedBy::Agent, "the agent stopped in the middle of a turn".into()),
+    ];
+    for (end, by, said) in cases {
         let served = serve(&format!("{{\"prompt\": null}}\n{{\"say\": \"working\"}}\n{end}"));
         let mut client = connect(&served).await;
         let id = open(&mut client).await;
         client.call(Op::Send { session: id, text: "go".into() }).await.unwrap();
-        assert_eq!(closed_by(&mut client).await, by, "{end}");
+        let seen = events_until(&mut client, |body| matches!(body, Body::Closed { .. })).await;
+        let failed = seen.iter().find_map(|event| match &event.body {
+            Body::Failed { reason, .. } => Some(reason.clone()),
+            _ => None,
+        });
+        assert!(failed.as_deref().is_some_and(|reason| reason.contains(&said)), "{end}: {failed:?}");
+        assert_eq!(seen.last().unwrap().body, Body::Closed { by }, "{end}");
     }
 }

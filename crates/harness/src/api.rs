@@ -10,8 +10,8 @@
 //!
 //! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
 //! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
-//! exited by itself, or its driver failed), `signal` (a signal the harness did not send ended the agent's process, at a
-//! logout say), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
+//! exited or crashed by itself, a fault signal or a SIGKILL from outside among them, or its driver failed), `signal`
+//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
 //! needs a driver that says how its agent ended (`Driver::open_reporting`); with one that does not, such an end reads
 //! as `agent`. When more than one holds, a request the harness took (`stop`, `shutdown`, `hand_over`, `client_left`)
 //! wins, even one the agent's going overtook, then `harness`, then `signal`, then `agent`. A locked session's `closed`, and one the sweep reached, arrives as `withheld` with `of: "closed"` and
@@ -167,9 +167,10 @@ pub enum Op {
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
     /// Closes the session as handed over to Terminal, keeping its provider id for a later resume. It answers once the
-    /// hand-over is taken, and then it is done even if the agent goes before the session reads it: the session is
-    /// marked as handed over, says `handed_over`, then closes `by: hand_over`. It is refused for a session already
-    /// stopping.
+    /// hand-over is taken, even if the agent goes before the session reads it, but only the `handed_over` event
+    /// confirms it: the session is marked as handed over, says `handed_over`, then closes `by: hand_over`. A `closed`
+    /// with `by: harness` and no `handed_over` after an Ok answer means the store would not keep the mark, and it was
+    /// not done. It is refused for a session already stopping.
     HandOver { session: String },
     /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token, and
     /// watches it on this connection from its next event, as `open` does, so a locked session's client misses none.

@@ -1031,6 +1031,24 @@ fn release(held: &mut Option<(String, oneshot::Sender<Reply>)>) {
     }
 }
 
+/// The name of a signal that ends a process, after its number: " (SIGABRT)".
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        libc::SIGTERM => " (SIGTERM)",
+        libc::SIGHUP => " (SIGHUP)",
+        libc::SIGINT => " (SIGINT)",
+        libc::SIGKILL => " (SIGKILL)",
+        libc::SIGABRT => " (SIGABRT)",
+        libc::SIGSEGV => " (SIGSEGV)",
+        libc::SIGBUS => " (SIGBUS)",
+        libc::SIGILL => " (SIGILL)",
+        libc::SIGFPE => " (SIGFPE)",
+        libc::SIGTRAP => " (SIGTRAP)",
+        libc::SIGSYS => " (SIGSYS)",
+        _ => "",
+    }
+}
+
 /// Why no "carry on" may follow a turn that ended so: a deny, and a cancel, which it would undo.
 fn no_carry_on_after(body: &Body) -> Option<&'static str> {
     match body {
@@ -1207,12 +1225,19 @@ impl Task {
                         self.emit(body);
                     }
                     None => {
-                        // A signal the harness did not send, at a logout or a restart say, is not the agent's own end.
-                        if let Ok(AgentEnd::Signalled { sent: false, .. }) = self.ended.try_recv() {
+                        let ended = self.ended.try_recv().ok();
+                        // What a logout or a restart sends first, and the harness did not, is not the agent's own end.
+                        // A fault signal (a Node out of heap aborts) is its own crash, and so is a SIGKILL from outside:
+                        // a shutdown already taken wins over it.
+                        if let Some(AgentEnd::Signalled { signal: libc::SIGTERM | libc::SIGHUP | libc::SIGINT, sent: false }) = ended {
                             by = ClosedBy::Signal;
                         }
                         if turn != Turn::Idle {
-                            self.fail(FailKind::AgentStopped, "the agent stopped in the middle of a turn");
+                            let why = match ended {
+                                Some(AgentEnd::Signalled { signal, .. }) => format!(": signal {signal}{}", signal_name(signal)),
+                                _ => String::new(),
+                            };
+                            self.fail(FailKind::AgentStopped, &format!("the agent stopped in the middle of a turn{why}"));
                         }
                         break 'run false;
                     }

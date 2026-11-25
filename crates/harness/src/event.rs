@@ -91,12 +91,14 @@ pub enum ClosedBy {
     Stop,
     /// It was handed over to Terminal.
     HandOver,
-    /// The agent exited by itself, or its driver failed, or it went and its driver did not say how.
+    /// The agent exited by itself, or crashed (a fault signal, or a SIGKILL from outside), or its driver failed, or
+    /// it went and its driver did not say how. A turn it cut says the signal in its `failed`.
     Agent,
     /// It ended with its client, which left.
     ClientLeft,
-    /// Its agent's process was ended by a signal the harness did not send: a logout, a kill from outside, the
-    /// out-of-memory killer. Only a driver that says how its agent ended tells this from `agent`.
+    /// Its agent's process was ended by a signal the harness did not send of those a logout or a restart sends first:
+    /// SIGTERM, SIGHUP or SIGINT. A fault signal (SIGABRT, SIGSEGV and the like) or a SIGKILL from outside is the
+    /// agent's own end, `agent`. Only a driver that says how its agent ended tells this from `agent`.
     Signal,
     /// The harness could not go on with it: its store failed, or it stopped an agent whose session id looks like a
     /// secret.
