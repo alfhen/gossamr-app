@@ -180,11 +180,14 @@ fn use_freed_slot(service: &RunsState) {
 /// Starts or adopts the harness, unless you stopped it, and says how it stands; or does `action`.
 #[tauri::command]
 async fn harness_status(sidecar: State<'_, SidecarState>, action: Option<sidecar::Action>) -> Result<sidecar::Status> {
-    Ok(match (sidecar.as_ref().as_ref(), action) {
-        (None, _) => sidecar::Status::no_folder(),
-        (Some(sidecar), None) => sidecar.ensure().await,
-        (Some(sidecar), Some(action)) => sidecar.act(action).await,
-    })
+    let Some(sidecar) = sidecar.as_ref().as_ref() else { return Ok(sidecar::Status::no_folder()) };
+    let mut status = match action {
+        None => sidecar.ensure().await,
+        Some(action) => sidecar.act(action).await,
+    };
+    // What the harness serves, not what this app was started with: an adopted harness may serve no mock.
+    status.mock = sidecar::mock_script().is_some() && sidecar.serves(runs::on_harness::MOCK).await;
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1108,11 +1111,12 @@ pub fn run() {
             app.manage::<AgentState>(agent);
 
             app.manage(sidecar.clone());
-            let harness_handle = app.handle().clone();
+            let (harness_handle, sweeping) = (app.handle().clone(), app.state::<RunsState>().inner().clone());
             tauri::async_runtime::spawn(async move {
                 if let Some(sidecar) = sidecar.as_ref() {
                     sidecar.ensure().await;
                     wire::changed(&harness_handle, wire::Topic::Harness, "");
+                    sweeping.sweep_harness().await;
                 }
             });
 

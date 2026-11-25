@@ -7,7 +7,6 @@ use super::*;
 use crate::domain::RunState;
 use crate::inbox::testing::fixture_watching;
 use crate::runs::link::served::{Direct, Served, WAIT};
-use crate::runs::link::NoTools;
 use crate::runs::rig::{ready_on, Notices, Rig};
 
 const FINISHES: &str = r#"{"prompt": null}
@@ -16,12 +15,21 @@ const FINISHES: &str = r#"{"prompt": null}
 {"prompt": null}"#;
 
 async fn on_harness(served: &Served) -> Rig {
+    on_harness_as(served, "mock", 6).await
+}
+
+/// The app on `served`, opening runs on `provider`, with `cap` agents at once.
+async fn on_harness_as(served: &Served, provider: &str, cap: usize) -> Rig {
     let fx = fixture_watching(&["acme/webshop"]).await;
     let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
     let reads = Arc::new(crate::agent::agent_tools::HarnessReads(fx.core.clone()));
     let link = Arc::new(Link::start(fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed));
-    ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: "mock".into() })).await
+    ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap)).await
+}
+
+async fn sessions(served: &Served) -> Vec<serde_json::Value> {
+    served.client().await.call(Op::Sessions).await.unwrap().as_array().unwrap().clone()
 }
 
 /// The run once the link applied the event that left it in `state`.
@@ -106,21 +114,92 @@ async fn the_persons_answer_reaches_the_agent_a_later_message_wakes_it_and_a_sto
     let asked = rig.svc.stop(&run.id).await.unwrap();
     assert_ne!(asked.state, RunState::Stopped, "not before the harness closed it");
     until_state(&rig, &run, RunState::Stopped).await;
-    assert!(rig.svc.answer(&run.id, "More?").await.is_err(), "a closed session takes no message");
+    let refused = rig.svc.answer(&run.id, "More?").await.unwrap_err().to_string();
+    assert!(refused.contains("stopped"), "a session the app stopped takes no message: {refused}");
+}
+
+const ASKS_THEN_WORKS: &str = r#"{"capabilities": {"tool_call_limit_ms": 300}}
+{"prompt": null}
+{"call": {"name": "ask", "input": {"question": "Which colour should the button be?"}}}
+{"say": "Carrying on while you think."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn while_your_answer_waits_for_the_turn_a_message_or_a_second_answer_is_refused_in_the_apps_words() {
+    let served = Served::new(ASKS_THEN_WORKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Carrying on while you think.").await;
+    let answered = rig.svc.answer(&run.id, "Blue").await.unwrap();
+    assert_eq!((answered.state, answered.answer_waits, answered.last_detail.as_deref()), (RunState::Working, true, Some(crate::runs::consumer::ANSWER_WAITS)));
+    let pip = rig.svc.message_agent(&run.id, "Use the brand blue.", crate::domain::Actor::Pip).await.unwrap_err().to_string();
+    let again = rig.svc.answer(&run.id, "Navy").await.unwrap_err().to_string();
+    for refused in [pip, again] {
+        assert_eq!(refused, crate::runs::link::ANSWER_ON_ITS_WAY, "no harness id in it");
+    }
 }
 
 #[tokio::test]
-async fn runs_on_the_harness_hold_no_slot_of_the_apps_so_more_than_its_cap_open_sessions() {
+async fn a_failed_run_that_opened_a_session_is_not_retried_into_a_second_one() {
     let served = Served::new(ASKS, 4);
-    let fx = fixture_watching(&["acme/webshop"]).await;
-    let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
-    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
-    let link = Arc::new(Link::start(fx.core.clone(), direct, Arc::new(NoTools), Arc::new(Notices::default()), changed));
-    let rig = ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: "mock".into() }).with_cap(1)).await;
-    let (first, second) = (rig.launched(1).await, rig.launched(2).await);
-    for run in [&first, &second] {
-        assert!(rig.get(run).await.harness_session.is_some(), "each opened a session");
-    }
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::NeedsAnswer).await;
+    rig.set(&run, |r| r.state = RunState::Failed).await;
+    assert!(rig.svc.retry_launch(&run.id).await.is_err());
+    assert_eq!(sessions(&served).await.len(), 1, "no second session");
+}
+
+#[tokio::test]
+async fn a_session_the_app_could_not_bind_to_its_run_is_closed_and_not_left_running() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::NeedsAnswer).await;
+    let link = &rig.svc.harness.as_ref().unwrap().link;
+    assert!(link.open(&run.id, open_op(&run, MOCK, None, None)).await.is_err(), "a run follows one session");
+    let mut client = served.client().await;
+    let second = sessions(&served).await.into_iter().find(|s| s["id"] != run.harness_session.as_deref().unwrap_or_default()).unwrap();
+    let closed = client.call(Op::Events { session: second["id"].as_str().unwrap().into(), after: 0 }).await.unwrap();
+    assert!(closed["events"].as_array().unwrap().iter().any(|e| e["type"] == "closed"), "the unbound session was closed: {second}");
+}
+
+#[tokio::test]
+async fn at_start_a_run_whose_session_never_got_its_brief_fails_and_its_session_closes() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    let run = rig.set(&run, |r| r.state = RunState::Launching).await;
+    let link = &rig.svc.harness.as_ref().unwrap().link;
+    let session = link.open(&run.id, open_op(&run, MOCK, None, None)).await.unwrap();
+    rig.svc.sweep_harness().await;
+    let failed = rig.get(&run).await;
+    assert_eq!((failed.state, failed.error.as_deref().is_some_and(|e| e.contains("before it sent the agent its brief"))), (RunState::Failed, true));
+    let row = sessions(&served).await.into_iter().find(|s| s["id"] == session.as_str()).unwrap();
+    assert_eq!(row["running"], false, "closed: {row}");
+}
+
+#[tokio::test]
+async fn a_provider_the_harness_does_not_serve_fails_the_run_naming_the_harness_and_the_cause() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let failed = rig.get(&run).await;
+    let error = failed.error.unwrap_or_default();
+    assert!(error.starts_with("The harness couldn't start the agent") && error.contains("no claude driver"), "{error}");
+}
+
+#[tokio::test]
+async fn the_persons_agents_at_once_holds_for_runs_on_the_harness_too() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness_as(&served, MOCK, 1).await;
+    let first = rig.launched(1).await;
+    until_state(&rig, &first, RunState::NeedsAnswer).await;
+    let second = rig.get(&rig.launched(2).await).await;
+    assert_eq!((second.state, second.harness_session.is_none(), second.slot_wait_since.is_some()), (RunState::Queued, true, true), "it waits in the app's queue");
+    assert_eq!(sessions(&served).await.len(), 1);
 }
 
 const READS_THEN_REPORTS: &str = r#"{"capabilities": {"tool_call_limit_ms": 600000}}
@@ -166,13 +245,18 @@ async fn at_the_harnesss_limit_a_run_waits_for_a_slot_and_starts_in_order_once_o
     let rig = on_harness(&served).await;
     let first = rig.launched(1).await;
     until_state(&rig, &first, RunState::Working).await;
-    let second = rig.launched(2).await;
-    let waiting = until_detail(&rig, &second, crate::runs::consumer::SLOT_WAIT).await;
-    assert_eq!(waiting.state, RunState::Launching, "it waits at the harness, not failed and not working");
+    let (second, third) = (rig.launched(2).await, rig.launched(3).await);
+    for run in [&second, &third] {
+        let waiting = until_detail(&rig, run, crate::runs::consumer::SLOT_WAIT).await;
+        assert_eq!(waiting.state, RunState::Launching, "it waits at the harness, not failed and not working");
+    }
     rig.svc.stop(&first.id).await.unwrap();
     until_state(&rig, &first, RunState::Stopped).await;
     let started = until_state(&rig, &second, RunState::Working).await;
     assert_ne!(started.last_detail.as_deref(), Some(crate::runs::consumer::SLOT_WAIT));
+    assert_eq!(rig.get(&third).await.last_detail.as_deref(), Some(crate::runs::consumer::SLOT_WAIT), "the later one still waits");
+    rig.svc.stop(&second.id).await.unwrap();
+    until_state(&rig, &third, RunState::Working).await;
 }
 
 /// The run once the link applied the event that gave it `detail`.

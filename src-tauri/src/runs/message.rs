@@ -125,7 +125,7 @@ impl RunService {
             if let Some(why) = self.workstream_hold(&run).await {
                 return Err(refuse(why));
             }
-            if self.live_elsewhere(&run) >= self.cap() {
+            if self.live_elsewhere(&run).await >= self.cap() {
                 return Err(refuse(NO_SLOT));
             }
         }

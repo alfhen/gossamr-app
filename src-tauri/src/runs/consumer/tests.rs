@@ -316,3 +316,26 @@ fn an_event_of_a_type_this_build_cannot_read_moves_its_number_and_nothing_else()
     assert_eq!((p.follow.seq, p.run.state), (9, before.state));
     assert_eq!(unreadable(&Body::Text { text: "x".into() }.withheld()), None, "a withheld event of a known type is read");
 }
+
+#[test]
+fn a_waiting_answer_ends_with_a_failed_turn_or_a_stop_and_outlasts_a_close_a_resume_takes_up() {
+    let asked = || {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }]);
+        answered(&mut p.run, &mut p.follow, "q1");
+        p
+    };
+    let mut failed = asked();
+    failed.play([Body::Failed { kind: FailKind::Provider, reason: "overloaded".into() }]);
+    assert_eq!((failed.run.answer_waits, failed.run.last_detail.as_deref()), (false, None));
+    let mut stopped = asked();
+    stopped.follow.stop_asked = true;
+    stopped.play([Body::Closed]);
+    assert_eq!((stopped.run.state, stopped.run.answer_waits, stopped.run.last_detail.as_deref()), (RunState::Stopped, false, None));
+    let mut shut = asked();
+    shut.play([Body::Closed]);
+    assert_eq!((shut.run.state, shut.run.answer_waits, shut.run.last_detail.as_deref()), (RunState::Stopped, true, Some(ANSWER_WAITS_RESUME)));
+    shut.play([Body::Started { provider_session: "p".into(), resumed: true }]);
+    assert_eq!((shut.run.state, shut.run.last_detail.as_deref()), (RunState::Working, Some(ANSWER_WAITS)));
+}

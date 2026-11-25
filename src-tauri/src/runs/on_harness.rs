@@ -35,6 +35,8 @@ impl Connect for ViaSidecar {
 /// The provider of a debug build's mock switch.
 pub const MOCK: &str = "mock";
 
+const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
+
 /// The run sheet says it, so a mock run is never taken for a real one.
 pub const ON_THE_MOCK: &str = "This run is on a mock script, not on Claude. Nothing it says is real.";
 
@@ -60,6 +62,18 @@ pub fn open_op(run: &Run, provider: &str, model: Option<String>, login: Option<S
     }
 }
 
+/// Why the harness opened no session, in the app's words where the cause is known.
+fn no_session(why: &str, provider: &str) -> String {
+    if !why.contains(&format!("no provider {provider}")) {
+        return format!("it didn't open a session: {why}");
+    }
+    if provider == MOCK {
+        "the harness serves no mock script. It was started without GOSSAMR_MOCK_SCRIPT: stop it in Settings > Harness, or give HARNESS_DATA a folder of its own, and start Gossamr again.".into()
+    } else {
+        format!("the harness has no {provider} driver: it found no {provider} CLI when it started. Install it, then restart the harness in Settings > Harness.")
+    }
+}
+
 /// The first prompt: the brief the person approved. The harness adds its own guard as system text.
 pub fn first_prompt(run: &Run) -> String {
     render_prompt(&run.spec)
@@ -74,23 +88,58 @@ impl RunService {
     /// Opens `run`'s session and sends it the brief. The run is read again after, since the link stores what the
     /// session's first events said as they come.
     pub(super) async fn open_on_harness(&self, run: &mut Run, model: Option<String>) -> Result<std::result::Result<(), Failure>> {
-        let Some(on) = &self.harness else { return Ok(Err(Failure::CommandFailed("Gossamr has no harness to run agents on.".into()))) };
+        let Some(on) = &self.harness else { return Ok(Err(Failure::Harness("Gossamr has no harness to run agents on.".into()))) };
         if on.provider == MOCK {
             let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "update".into(), text: ON_THE_MOCK.into(), detail: None };
             self.core.append_run_events(&run.id, &[row]).await?;
         }
         let config = crate::config::AppConfig::load(&self.core.data_dir());
         let login = config.providers.iter().find(|p| p.id == run.instance_id()).and_then(|p| p.config.config_dir.clone());
-        let session = match on.link.open(&run.id, open_op(run, &on.provider, model, login)).await {
-            Ok(session) => session,
-            Err(why) => return Ok(Err(Failure::CommandFailed(format!("The harness didn't open a session: {why}")))),
-        };
+        let opened = on.link.open(&run.id, open_op(run, &on.provider, model, login)).await;
+        // The link may have bound the session, and applied its first events, before a later step failed.
         *run = self.load(&run.id).await?;
+        let session = match opened {
+            Ok(session) => session,
+            Err(why) => return Ok(Err(Failure::Harness(no_session(&why, &on.provider)))),
+        };
         if let Err(why) = on.link.call(Op::Send { session: session.clone(), text: first_prompt(run) }).await {
             let _ = on.link.stop(&session).await;
-            return Ok(Err(Failure::CommandFailed(format!("The harness didn't take the brief: {why}"))));
+            *run = self.load(&run.id).await?;
+            return Ok(Err(Failure::Harness(format!("it didn't take the brief: {why}"))));
         }
         Ok(Ok(()))
+    }
+
+    /// At start, before any run launches: closes each session the harness runs on one of the app's own runs' branches
+    /// that no run follows (an open the app quit in the middle of), and the session of a run that never got its brief,
+    /// which fails. Either would be an agent no run can stop or clean up.
+    pub async fn sweep_harness(&self) {
+        let Some(on) = &self.harness else { return };
+        let Ok(runs) = self.core.runs_list(&crate::domain::RunQuery::default()).await else { return };
+        let Ok(listed) = on.link.call(Op::Sessions).await else { return };
+        for row in listed.as_array().into_iter().flatten().filter(|row| row["running"] == true) {
+            let (Some(id), Some(repo), Some(branch)) = (row["id"].as_str(), row["repo"].as_str(), row["branch"].as_str()) else { continue };
+            let ours = runs.iter().any(|run| run.spec.repo == repo && run.spec.name == branch);
+            if ours && matches!(self.core.session_run(id).await, Ok(None)) {
+                let _ = on.link.call(Op::Close { session: id.to_owned() }).await;
+            }
+        }
+        for run in runs.iter().filter(|run| run.state == RunState::Launching) {
+            let Some(session) = &run.harness_session else { continue };
+            if !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.prompts == 0) {
+                continue;
+            }
+            let _ = on.link.stop(session).await;
+            let _turn = self.launching.lock().await;
+            if let Ok(mut run) = self.load(&run.id).await {
+                // A failed write is tried again at the next start, which finds the run as it was.
+                if run.state == RunState::Launching {
+                    if let Err(e) = self.fail(&mut run, &Failure::Harness(NO_BRIEF.into())).await {
+                        eprintln!("couldn't fail run {} that never got its brief: {e}", run.id);
+                    }
+                }
+            }
+        }
     }
 
     /// The link of a run that is a harness session, and its session.
@@ -107,6 +156,7 @@ impl RunService {
         }
         Some(match link.send(session, text).await {
             Ok(answered) => self.load(&run.id).await.map(|run| (run, answered)),
+            Err(why) if why == super::link::ANSWER_ON_ITS_WAY => Err(Error::Proposal(why)),
             Err(why) => Err(Error::Proposal(format!("The harness didn't take it: {why}"))),
         })
     }

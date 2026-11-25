@@ -107,7 +107,7 @@ pub struct Status {
     pub update: bool,
     /// What the person should know, in the app's words.
     pub message: Option<String>,
-    /// A debug build serves the mock script `GOSSAMR_MOCK_SCRIPT` names, and its agents run on that, not on Claude.
+    /// The harness serves the mock a debug build's `GOSSAMR_MOCK_SCRIPT` names, and the app's agents run on that.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub mock: bool,
 }
@@ -118,7 +118,7 @@ impl Status {
     }
 
     fn new(state: State, message: Option<String>) -> Status {
-        Status { state, build: None, bundled_build: None, update: false, message, mock: mock_script().is_some() }
+        Status { state, build: None, bundled_build: None, update: false, message, mock: false }
     }
 }
 
@@ -190,11 +190,17 @@ impl Sidecar {
         self.run(&mut inner, Some(action)).await
     }
 
+    /// Whether the running harness offers `provider`, as its `providers` says.
+    pub async fn serves(&self, provider: &str) -> bool {
+        let Ok(mut client) = self.client().await else { return false };
+        let Ok(offered) = client.call(Op::Providers { logins: Vec::new() }).await else { return false };
+        offered["drivers"].as_array().is_some_and(|drivers| drivers.iter().any(|driver| driver["name"] == provider))
+    }
+
     /// A client of the harness, proven with the app's token, which never leaves the manager. It starts and stops
     /// nothing: with no harness serving, one of another protocol, or one that doesn't know the token, it says why, and
     /// starting or restarting stays with `ensure` and Settings. Before the first start it reads the vault but makes no
     /// token.
-    #[cfg_attr(not(test), expect(dead_code, reason = "H10's runs are its first caller"))]
     pub async fn client(&self) -> Result<Client, String> {
         let token = {
             let mut inner = self.work.lock().await;
@@ -487,6 +493,8 @@ fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
 fn serve_command(program: &Path, dir: &Path, mock: Option<&Path>) -> Command {
     let mut command = Command::new(program);
     command.arg("serve").arg("--data").arg(dir).current_dir(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
+    // The person's "Agents running at once" is the app's to hold: the harness may never hold back fewer.
+    command.arg("--turn-limit").arg(crate::config::MAX_RUNS.end().to_string());
     if let Some(script) = mock {
         command.arg("--mock-script").arg(script);
     }

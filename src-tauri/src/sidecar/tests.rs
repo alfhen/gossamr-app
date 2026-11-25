@@ -60,7 +60,7 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
         return 0;
     }
     let seen = fake.log.with_file_name(format!("seen-{}", std::process::id()));
-    let ["serve", "--data", dir] = args[..] else { return 2 };
+    let ["serve", "--data", dir, "--turn-limit", _] = args[..] else { return 2 };
     let dir = PathBuf::from(dir);
     let root = fake.log.parent().unwrap().to_owned();
     let pid = std::process::id();
@@ -531,7 +531,7 @@ fn the_harness_starts_without_the_variable_serve_refuses() {
     let command = serve_command(Path::new("harness"), Path::new("data"), None);
     assert!(command.get_envs().any(|(name, value)| name == harness::cli::TOKEN_VARIABLE && value.is_none()), "HARNESS_TOKEN is taken out of its environment");
     let args: Vec<_> = command.get_args().collect();
-    assert_eq!(args, ["serve", "--data", "data"]);
+    assert_eq!(args, ["serve", "--data", "data", "--turn-limit", "6"], "a limit the app's setting never goes over");
     assert_eq!(command.get_current_dir(), Some(Path::new("data")), "it runs in the data folder");
 }
 
@@ -539,7 +539,7 @@ fn the_harness_starts_without_the_variable_serve_refuses() {
 fn a_mock_script_is_served_only_when_one_is_given() {
     let command = serve_command(Path::new("harness"), Path::new("data"), Some(Path::new("/scripts/demo.jsonl")));
     let args: Vec<_> = command.get_args().collect();
-    assert_eq!(args, ["serve", "--data", "data", "--mock-script", "/scripts/demo.jsonl"]);
+    assert_eq!(args, ["serve", "--data", "data", "--turn-limit", "6", "--mock-script", "/scripts/demo.jsonl"]);
 }
 
 #[tokio::test]

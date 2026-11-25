@@ -46,6 +46,9 @@ impl ClientTools for NoTools {
     }
 }
 
+/// Why a second answer or a message waits: the harness took the person's answer, and the agent has not had it yet.
+pub const ANSWER_ON_ITS_WAY: &str = "Your answer is on its way to the agent. Send more once it has arrived.";
+
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
 
@@ -94,8 +97,16 @@ impl Link {
     pub async fn open(&self, run_id: &str, op: Op) -> Result<String, String> {
         let opened = self.call(op).await?;
         let session = opened["session"].as_str().ok_or("the harness answered an open with no session")?.to_owned();
-        self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| e.to_string())?;
-        self.follow(&session, 0).await?;
+        let bound = self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| e.to_string());
+        let followed = match bound {
+            Ok(()) => self.follow(&session, 0).await,
+            Err(e) => Err(e),
+        };
+        if let Err(why) = followed {
+            // A session no run follows is one nothing would stop or clean up.
+            let _ = self.call(Op::Close { session }).await;
+            return Err(why);
+        }
         Ok(session)
     }
 
@@ -121,8 +132,16 @@ impl Link {
     /// answered a question. The run waits on its answer no more once the harness took it, though the agent may get it
     /// only when its turn ends.
     pub async fn send(&self, session: &str, text: &str) -> Result<bool, String> {
-        let open = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?;
-        let Some(question) = open.and_then(|(_, follow)| follow.question) else {
+        let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
+        if follow.answered.is_some() && follow.answered == follow.question {
+            return Err(ANSWER_ON_ITS_WAY.into());
+        }
+        // The harness's own copy, for a question the app has not read yet.
+        let question = match follow.question {
+            Some(question) => Some(question),
+            None => self.open_question(session).await,
+        };
+        let Some(question) = question else {
             return self.call(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map(|_| false);
         };
         self.call(Op::AnswerQuestion { session: session.to_owned(), question: question.clone(), text: text.to_owned() }).await?;
@@ -134,6 +153,12 @@ impl Link {
             self.inner.after(&applied.before, &applied.run);
         }
         Ok(true)
+    }
+
+    async fn open_question(&self, session: &str) -> Option<String> {
+        let listed = self.call(Op::Sessions).await.ok()?;
+        let row = listed.as_array()?.iter().find(|row| row["id"] == session)?;
+        row["open_question"].as_str().map(str::to_owned)
     }
 
     /// Watches a session from after `after`, once the watching connection is up.
