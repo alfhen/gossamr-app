@@ -841,24 +841,45 @@ fn stop_leftovers(store: &Store) -> std::result::Result<(), String> {
         "the store could not list them".to_owned()
     })?;
     for (id, agent) in agents {
+        let (stopped, found_gone) = ("the harness that ran this agent went, and the next one stopped it", "the harness that ran this agent went, and the agent was gone too");
         let gone = if crate::process::alive(&agent) {
-            crate::process::kill_group(&agent).is_ok() && gone_within(std::slice::from_ref(&agent), LEFTOVER_EXIT)
+            (crate::process::kill_group(&agent).is_ok() && gone_within(std::slice::from_ref(&agent), LEFTOVER_EXIT)).then_some(stopped)
         } else {
             // A group outlives its leader: what the agent started may still work in its worktree.
             match crate::process::left_of(&agent) {
-                crate::process::Left::Nothing => true,
+                crate::process::Left::Nothing => Some(found_gone),
                 crate::process::Left::Ours(members) => {
                     for member in &members {
                         let _ = crate::process::signal(member, libc::SIGKILL);
                     }
-                    gone_within(&members, LEFTOVER_EXIT)
+                    gone_within(&members, LEFTOVER_EXIT).then_some(stopped)
                 }
-                crate::process::Left::Unknown => false,
+                crate::process::Left::Unknown => None,
             }
         };
-        let _ = if gone { store.set_agent(&id, None) } else { store.set_given_up(&id) };
+        match gone {
+            Some(how) => {
+                end_left_start(store, &id, how);
+                let _ = store.set_agent(&id, None);
+            }
+            None => {
+                let _ = store.set_given_up(&id);
+            }
+        }
     }
     Ok(())
+}
+
+/// Ends a leftover's start in its events as its own harness would have, so a client that reads them sees the start end:
+/// a `failed` and a `closed`, unless the start had already closed.
+fn end_left_start(store: &Store, id: &str, how: &str) {
+    let Ok(last) = store.last_seq(id) else { return };
+    let closed = last > 0 && store.events(id, last - 1).ok().and_then(|events| events.last().map(|event| matches!(event.body, Body::Closed { .. }))).unwrap_or(false);
+    if !closed {
+        let ms = now_ms();
+        let _ = store.append(id, &Body::Failed { kind: FailKind::AgentStopped, reason: how.to_owned() }, ms);
+        let _ = store.append(id, &Body::Closed { by: ClosedBy::Harness }, ms);
+    }
 }
 
 /// How long a killed leftover has to be gone before its session stays given up.

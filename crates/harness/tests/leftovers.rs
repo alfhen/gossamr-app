@@ -53,6 +53,17 @@ fn started_harness(dir: &Path) -> Harness {
     Harness::new(Store::open(dir).unwrap(), vec![], settings(4))
 }
 
+/// Session `s`'s events, read once the harness is gone.
+fn said(dir: &Path) -> Vec<harness::event::Body> {
+    Store::open(dir).unwrap().events("s", 0).unwrap().into_iter().map(|event| event.body).collect()
+}
+
+/// What a start that its next harness ended says last: a `failed` that says how, and a `closed` by the harness.
+fn ended_by_the_next_harness(said: &[harness::event::Body], how: &str) -> bool {
+    use harness::event::{Body, ClosedBy, FailKind};
+    matches!(said, [.., Body::Failed { kind: FailKind::AgentStopped, reason }, Body::Closed { by: ClosedBy::Harness }] if reason.contains(how))
+}
+
 fn row(harness: Harness, dir: &Path) -> (bool, Vec<(String, Process)>) {
     drop(harness);
     let store = Store::open(dir).unwrap();
@@ -67,6 +78,21 @@ fn leftover_a_new_harness_stops_an_agent_on_record_and_its_session_may_be_resume
     let harness = started_harness(&dir);
     assert_eq!(ended(child), Some(libc::SIGKILL), "the leftover was killed, by its group");
     assert_eq!(row(harness, &dir), (false, vec![]), "no agent on record, and the session is no longer given up on");
+    assert!(ended_by_the_next_harness(&said(&dir), "stopped it"), "its start ends in its events: {:?}", said(&dir));
+}
+
+#[test]
+fn leftover_a_start_that_already_closed_gets_no_second_end() {
+    let (_tmp, dir) = data_dir();
+    let (child, agent) = agent();
+    left_by_a_shutdown(&dir, Some(&agent));
+    let closed = harness::event::Body::Closed { by: harness::event::ClosedBy::Shutdown };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    Store::open(&dir).unwrap().append("s", &closed, now).unwrap();
+    let harness = started_harness(&dir);
+    assert_eq!(ended(child), Some(libc::SIGKILL));
+    drop(harness);
+    assert_eq!(said(&dir), [closed], "the shutdown's closed stays the last word");
 }
 
 #[test]
@@ -79,6 +105,7 @@ fn leftover_a_pid_that_another_process_took_is_never_signalled() {
     assert!(running(&mut child), "the process that has the pid now runs on");
     assert_eq!(process::seam::sent_to(agent.pid), Vec::<i32>::new(), "no signal was sent to it or its group");
     assert_eq!(row(harness, &dir), (false, vec![]), "the agent on record is gone, since its pid is another's");
+    assert!(ended_by_the_next_harness(&said(&dir), "was gone too"), "{:?}", said(&dir));
     child.kill().unwrap();
     child.wait().unwrap();
 }
@@ -182,6 +209,7 @@ fn leftover_whose_leader_is_gone_has_what_it_left_in_its_group_stopped_before_it
     let harness = started_harness(&dir);
     assert!(!process::alive(&work), "the work its group kept was killed");
     assert_eq!(row(harness, &dir), (false, vec![]), "and only then is the session free");
+    assert!(ended_by_the_next_harness(&said(&dir), "stopped it"), "{:?}", said(&dir));
 }
 
 #[test]

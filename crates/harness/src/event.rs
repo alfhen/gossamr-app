@@ -104,7 +104,7 @@ pub enum ClosedBy {
     /// agent's own end, `agent`. Only a driver that says how its agent ended tells this from `agent`.
     Signal,
     /// The harness could not go on with it: its store failed, or it stopped an agent whose session id looks like a
-    /// secret.
+    /// secret, or it went without a shutdown and the next one stopped the agent it left, or found it gone.
     Harness,
     /// A value this build does not know, or a `closed` from a harness that did not say.
     #[default]
