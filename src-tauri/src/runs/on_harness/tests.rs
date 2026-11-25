@@ -541,3 +541,46 @@ async fn a_run_handed_over_to_terminal_takes_your_message_only_once_you_say_you_
     assert!(!back.handed_over, "taken back");
     until_state(&rig, &run, RunState::Done).await;
 }
+
+#[tokio::test]
+async fn attach_hands_a_harness_run_to_terminal_to_resume_there_and_the_run_reads_handed_over() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Working).await;
+    rig.svc.attach(&run.id).await.unwrap();
+    let handed = until_state(&rig, &run, RunState::Stopped).await;
+    assert!(handed.handed_over, "{:?}", handed.last_detail);
+    assert_eq!(handed.last_detail.as_deref(), Some(crate::runs::consumer::HANDED_OVER), "the app's own end, not a cut");
+    let opened = rig.opened.0.lock().unwrap().clone();
+    assert_eq!(opened.len(), 1, "Terminal opened once");
+    let script = std::fs::read_to_string(&opened[0]).unwrap();
+    let (_, follow) = rig.fx.core.session_run(&handed.harness_session.unwrap()).await.unwrap().unwrap();
+    assert!(script.contains(&format!("--resume {}", follow.provider_session.unwrap())), "{script}");
+    assert!(script.contains(&format!("cd '{}'", run.spec.clone_path.display())), "in the mock's folder: {script}");
+}
+
+#[tokio::test]
+async fn the_move_is_safe_to_run_again_after_a_crash_between_the_stop_and_its_marker() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    let going = rig
+        .set(&run, |r| {
+            r.state = RunState::Working;
+            r.short_id = Some(crate::runs::cli::ShortId::parse("00000001").unwrap());
+        })
+        .await;
+    rig.svc.move_to_harness().await;
+    // As if the app had quit after the stop and before it stored the run and the marker.
+    rig.set(&going, |r| {
+        r.state = RunState::Working;
+        r.failure = None;
+    }).await;
+    rusqlite::Connection::open(rig.fx.dir.join("app.sqlite")).unwrap().execute("DELETE FROM harness_move", []).unwrap();
+    rig.svc.move_to_harness().await;
+    let after = rig.get(&going).await;
+    assert_eq!((after.state, after.failure), (RunState::Failed, Some(crate::domain::RunFailure::Interrupted)));
+    assert!(rig.fx.core.harness_moved().await.unwrap(), "done the second time");
+    assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 2, "a second stop of a stopped agent harms nothing");
+}

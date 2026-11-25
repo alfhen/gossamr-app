@@ -93,6 +93,18 @@ fn no_session(why: &str, provider: &str) -> String {
     }
 }
 
+/// The folder a run's session works in: the clone for the mock, else the worktree the harness makes beside the clone,
+/// `<clone>+worktrees/<branch>`, as `harness::work` names it.
+fn session_folder(run: &Run, provider: &str) -> std::path::PathBuf {
+    let clone = &run.spec.clone_path;
+    if provider == MOCK {
+        return clone.clone();
+    }
+    let mut folder = clone.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
+    folder.push("+worktrees");
+    clone.with_file_name(folder).join(&run.spec.name)
+}
+
 /// The first prompt: the brief the person approved. The harness adds its own guard as system text.
 pub fn first_prompt(run: &Run) -> String {
     render_prompt(&run.spec)
@@ -277,6 +289,38 @@ impl RunService {
             Ok(()) => self.load(&run.id).await,
             Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {why}"))),
         })
+    }
+
+    /// Hands a run's session to Terminal: the harness closes it as handed over, so nothing resumes it until you take it
+    /// back, and Terminal opens the provider's resume of it in its worktree, on the run's login. `None` for a run not on
+    /// the harness.
+    pub(super) async fn hand_over_on_harness(&self, run: &Run) -> Option<Result<()>> {
+        let (link, session) = self.on_harness_of(run)?;
+        let provider = self.harness.as_ref()?.provider.clone();
+        Some(async {
+            let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
+            let resumed_by = follow.provider_session.clone().ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to open.".into()))?;
+            if !follow.closed {
+                // The app's own end of the turn, so it is not a cut that "carry on" would take up.
+                let asked = |asked: bool| {
+                    self.core.apply_session(session, move |_, follow| {
+                        follow.stop_asked = asked;
+                        Vec::new()
+                    })
+                };
+                asked(true).await?;
+                if let Err(why) = link.call(Op::HandOver { session: session.to_owned() }).await {
+                    asked(false).await?;
+                    return Err(Error::Proposal(format!("The harness didn't hand the session over: {why}")));
+                }
+            }
+            let tc = self.observing_toolchain(run).await?;
+            let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
+            let dir = self.core.data_dir().join(super::control::ATTACH_DIR);
+            let words = vec!["--resume".to_owned(), resumed_by];
+            let file = super::control::write_attach_file(&dir, tc.login.as_ref(), &program, &session_folder(run, &provider), &words)?;
+            self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
+        }.await)
     }
 
     /// Asks the harness to stop a run's session; the run reads stopped once it closed. `None` for a run not on it.

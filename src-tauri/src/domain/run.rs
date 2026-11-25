@@ -712,6 +712,9 @@ pub struct SessionFollow {
     /// A commit in this turn failed because the person's signing agent refused it, as git reported it.
     #[serde(default)]
     pub signing_refused: bool,
+    /// The provider's own id of the session, from its `started`: what a person resumes it by in Terminal.
+    #[serde(default)]
+    pub provider_session: Option<String>,
     /// The app took the session back from Terminal; it is starting again until its `started` comes.
     #[serde(default)]
     pub taken_back: bool,

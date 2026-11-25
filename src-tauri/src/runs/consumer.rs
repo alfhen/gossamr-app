@@ -39,7 +39,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     let mut rows = Rows { run_id: run.id.clone(), at, rows: Vec::new() };
     let before = run.state;
     match body {
-        Body::Started { resumed: true, .. } => {
+        Body::Started { resumed: true, provider_session } => {
+            follow.provider_session = Some(provider_session);
             follow.closed = false;
             follow.stop_asked = false;
             follow.ended = false;
@@ -51,7 +52,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             }
             rows.add("follow_up", "Resumed", None);
         }
-        Body::Started { .. } => rows.add("start", "Started", None),
+        Body::Started { provider_session, .. } => {
+            follow.provider_session = Some(provider_session);
+            rows.add("start", "Started", None);
+        }
         Body::Prompted { text } => {
             follow.prompts += 1;
             // The first prompt is the brief the person approved; each later one is a message to the agent.
