@@ -98,11 +98,13 @@ struct Replay {
     ids: Ids,
     /// Recorded request ids whose answers are not played: answers to config requests.
     skipped: HashSet<String>,
+    /// The input of each `can_use_tool` the replay sent, by its live id: an allow must run exactly that.
+    asked: HashMap<String, Value>,
 }
 
 impl Replay {
     fn new(lines: Vec<Recorded>) -> Replay {
-        Replay { lines, ids: Ids::default(), skipped: HashSet::new() }
+        Replay { lines, ids: Ids::default(), skipped: HashSet::new(), asked: HashMap::new() }
     }
 
     fn play(mut self, mut stdin: impl Iterator<Item = Result<String, String>>, stdout: &mut impl Write, stderr: &mut impl Write) -> Result<End, String> {
@@ -118,6 +120,11 @@ impl Replay {
                     }
                     let mut data = line.data.clone();
                     self.ids.agent(&mut data);
+                    if data["request"]["subtype"] == "can_use_tool"
+                        && let Some(id) = data["request_id"].as_str()
+                    {
+                        self.asked.insert(id.to_owned(), data["request"]["input"].clone());
+                    }
                     writeln!(stdout, "{data}").and_then(|()| stdout.flush()).map_err(|e| format!("cannot write stdout: {e}"))?;
                 }
                 ("stderr", _) => {
@@ -196,15 +203,36 @@ impl Replay {
                 if want["subtype"] != sent["subtype"] {
                     return differs("the answer's subtype");
                 }
-                if want["response"]["behavior"] != sent["response"]["behavior"] {
+                let (want, sent_answer) = (&want["response"], &sent["response"]);
+                if want["behavior"] != sent_answer["behavior"] {
                     return differs("the decision");
+                }
+                match want["behavior"].as_str() {
+                    // An allow runs exactly what was asked, as the replay sent it.
+                    Some("allow") => {
+                        let asked = sent["request_id"].as_str().and_then(|id| self.asked.get(id));
+                        if asked.is_none() || sent_answer.get("updatedInput") != asked {
+                            return differs("the allowed input");
+                        }
+                    }
+                    _ if want.get("message") != sent_answer.get("message") => return differs("the deny's message"),
+                    _ => {}
                 }
                 Ok(())
             }
-            Some("user") => match texts(&want["message"]["content"]) == texts(&sent["message"]["content"]) {
-                true => Ok(()),
-                false => differs("the prompt's text"),
-            },
+            Some("user") => {
+                let (want, sent) = (&want["message"], &sent["message"]);
+                if want["role"] != sent["role"] {
+                    return differs("the prompt's role");
+                }
+                if texts(&want["content"]) != texts(&sent["content"]) {
+                    return differs("the prompt's text");
+                }
+                if images(&want["content"]) != images(&sent["content"]) {
+                    return differs("the prompt's set of images");
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -248,6 +276,11 @@ fn config_answer(sent: &Value) -> Value {
         }
         _ => json!({}),
     }
+}
+
+/// A user message's image blocks, by their media types in order.
+fn images(content: &Value) -> Vec<Value> {
+    content.as_array().into_iter().flatten().filter(|block| block["type"] == "image").map(|block| block["source"]["media_type"].clone()).collect()
 }
 
 /// A user message's text: its string content, or its text blocks joined.

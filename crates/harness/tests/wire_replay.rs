@@ -324,6 +324,30 @@ fn wire_replay_a_decision_other_than_the_recordings_is_refused() {
 }
 
 #[test]
+fn wire_replay_an_allow_with_another_input_or_none_is_refused() {
+    let changed = refused("2-permission.jsonl", Client { change: Some((30, |sent| sent["response"]["response"]["updatedInput"]["command"] = json!("rm -rf ."))), ..Client::default() });
+    assert_eq!(changed, "line 30: the allowed input differs from the recording's control_response\n");
+    assert!(!changed.contains("rm -rf"), "the report holds no payload");
+    let missing = refused("2-permission.jsonl", Client { change: Some((30, |sent| _ = sent["response"]["response"].as_object_mut().unwrap().remove("updatedInput"))), ..Client::default() });
+    assert_eq!(missing, "line 30: the allowed input differs from the recording's control_response\n");
+}
+
+#[test]
+fn wire_replay_a_deny_with_another_message_is_refused() {
+    let report = refused("2-permission.jsonl", Client { change: Some((55, |sent| sent["response"]["response"]["message"] = json!("no"))), ..Client::default() });
+    assert_eq!(report, "line 55: the deny's message differs from the recording's control_response\n");
+}
+
+#[test]
+fn wire_replay_a_prompt_with_another_role_or_other_images_is_refused() {
+    let role = refused("2-permission.jsonl", Client { change: Some((5, |sent| sent["message"]["role"] = json!("assistant"))), ..Client::default() });
+    assert_eq!(role, "line 5: the prompt's role differs from the recording's user\n");
+    let image = |sent: &mut Value| sent["message"]["content"].as_array_mut().unwrap().push(json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}));
+    let images = refused("2-permission.jsonl", Client { change: Some((5, image)), ..Client::default() });
+    assert_eq!(images, "line 5: the prompt's set of images differs from the recording's user\n");
+}
+
+#[test]
 fn wire_replay_a_line_of_another_type_or_subtype_is_refused() {
     // Where the recording interrupts, the client prompts instead.
     let prompt = |sent: &mut Value| *sent = json!({"type": "user", "message": {"role": "user", "content": "go on"}});
