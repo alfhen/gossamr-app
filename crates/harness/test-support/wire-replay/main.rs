@@ -9,7 +9,8 @@
 //!
 //! What is compared, for Claude's native stream: the line's `type`, a control request's subtype, a prompt's text, an
 //! answer's decision, and every id by the mapping. The config requests named in `CONFIG` are not compared: the replay
-//! answers each one it is sent with success and skips the recording's own, with their answers. A recorded endpoint's server name becomes the driver's when both
+//! answers each one it is sent with success and skips the recording's own, with their answers. Where the recording
+//! gives the tools endpoint before its first prompt, the driver must too, with an HTTP server and its URL. A recorded endpoint's server name becomes the driver's when both
 //! name exactly one server. Codex's and Gemini's wires add their rules with H7a and H8.
 
 use std::collections::{HashMap, HashSet};
@@ -163,16 +164,22 @@ struct Replay {
     skipped: HashSet<String>,
     /// The input of each `can_use_tool` the replay sent, by its live id: an allow must run exactly that.
     asked: HashMap<String, Value>,
+    /// The driver gave the tools endpoint, by a well-formed `mcp_set_servers`.
+    endpoint: bool,
+    prompted: bool,
 }
 
 impl Replay {
     fn new(lines: Vec<Recorded>) -> Replay {
-        Replay { lines, deadline: DEADLINE, progress: None, played: vec![], ids: Ids::default(), skipped: HashSet::new(), asked: HashMap::new() }
+        Replay { lines, deadline: DEADLINE, progress: None, played: vec![], ids: Ids::default(), skipped: HashSet::new(), asked: HashMap::new(), endpoint: false, prompted: false }
     }
 
     fn play(mut self, input: &Receiver<Result<Arrived, String>>, written: &AtomicUsize, stdout: &mut impl Write, stderr: &mut impl Write) -> Result<End, String> {
         let (mut closed, mut stays) = (false, false);
         let lines = std::mem::take(&mut self.lines);
+        // Where the recording gives the endpoint before its first prompt, the driver must too.
+        let first_prompt = lines.iter().position(|line| line.dir == "to_agent" && line.data["type"] == "user").unwrap_or(lines.len());
+        let endpoint_at = lines[..first_prompt].iter().find(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| line.seq);
         for line in &lines {
             match (line.dir.as_str(), line.data["note"].as_str()) {
                 ("from_agent", _) => {
@@ -215,6 +222,11 @@ impl Replay {
                     if let Some(last) = self.played.get(stamp..).and_then(<[u64]>::last) {
                         let after = stamp.checked_sub(1).map_or("the start".to_owned(), |at| format!("line {}", self.played[at]));
                         return Err(format!("line {}: {} came before line {last} was written, after {after}", line.seq, what(&sent)));
+                    }
+                    if line.data["type"] == "user" && !std::mem::replace(&mut self.prompted, true)
+                        && let Some(at) = endpoint_at.filter(|_| !self.endpoint)
+                    {
+                        return Err(format!("line {}: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line {at}", line.seq));
                     }
                     self.compare(line, &sent)?;
                 }
@@ -264,6 +276,14 @@ impl Replay {
             if !is_config(&sent) {
                 return Ok(Some((sent, stamp)));
             }
+            self.ids.claim(&sent["request_id"])?;
+            // A server the agent could not reach is never answered as added.
+            let servers = sent["request"]["servers"].as_object().filter(|servers| !servers.is_empty());
+            let reachable = |server: &Value| server["type"] == "http" && server["url"].as_str().is_some_and(|url| !url.is_empty());
+            if !servers.is_some_and(|servers| servers.values().all(reachable)) {
+                return Err("the driver sent mcp_set_servers with a server that is not http with a url".into());
+            }
+            self.endpoint = true;
             self.ids.sent_servers(&sent);
             let answer = json!({"type": "control_response", "response": {"subtype": "success", "request_id": sent["request_id"], "response": config_answer(&sent)}});
             writeln!(stdout, "{answer}").and_then(|()| stdout.flush()).map_err(|e| format!("cannot write stdout: {e}"))?;
@@ -409,6 +429,12 @@ impl Ids {
         }
         self.to.insert(recorded.to_owned(), sent.to_owned());
         Ok(())
+    }
+
+    /// Takes an id the driver chose for a request the recording does not compare: like any other, used once.
+    fn claim(&mut self, sent: &Value) -> Result<(), String> {
+        let fresh = sent.as_str().is_some_and(|sent| !self.to.values().any(|live| live == sent) && self.chosen.insert(sent.to_owned()));
+        if fresh { Ok(()) } else { Err("the driver used a request id twice, or one that is not a string".into()) }
     }
 
     fn maps(&self, recorded: &Value, sent: &Value) -> bool {

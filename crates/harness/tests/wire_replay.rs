@@ -451,16 +451,41 @@ fn wire_replay_a_stdin_closed_early_or_a_line_after_the_end_is_refused() {
 }
 
 #[test]
-fn wire_replay_config_lines_the_recording_lacks_are_answered_and_recorded_ones_may_be_left_out() {
+fn wire_replay_config_lines_the_recording_lacks_are_answered() {
     // 2-permission has no config line: the client sends one first and gets a success naming its server.
     let set = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {"abc123def456": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer t"}, "timeout": 600000}}}});
     let (read, code, _, out) = play(&native().join("2-permission.jsonl"), Client { first: Some(set), ..Client::default() });
     assert_eq!((code, report(&out)), (Some(0), String::new()));
     assert_eq!(read[0], json!({"type": "control_response", "response": {"subtype": "success", "request_id": "mine", "response": {"added": ["abc123def456"], "removed": [], "errors": {}}}}));
-    // 5-mcp-control has one: a client that does not send it plays clean, and the recorded answer is not played.
-    let (read, code, _, out) = play(&native().join("5-mcp-control.jsonl"), Client { skip_config: true, ..Client::default() });
-    assert_eq!((code, report(&out)), (Some(0), String::new()));
-    assert!(!read.iter().any(|line| line["response"]["response"]["added"].is_array()), "no answer to a request never sent");
+}
+
+#[test]
+fn wire_replay_config_a_driver_that_gives_no_endpoint_where_the_recording_does_is_refused() {
+    // 5-mcp-control gives the endpoint at line 4, before its first prompt at line 7.
+    let report = refused("5-mcp-control.jsonl", Client { skip_config: true, ..Client::default() });
+    assert_eq!(report, "line 7: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line 4\n");
+}
+
+#[test]
+fn wire_replay_config_a_server_that_is_not_http_with_a_url_is_refused_never_answered() {
+    for server in [json!({"type": "stdio", "command": "x"}), json!({"type": "http"}), json!({"type": "http", "url": ""})] {
+        let set = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {"abc": server}}});
+        let (read, code, _, out) = play(&native().join("2-permission.jsonl"), Client { first: Some(set), ..Client::default() });
+        assert_eq!(code, Some(3), "{server}");
+        assert_eq!(report(&out), "the driver sent mcp_set_servers with a server that is not http with a url\n");
+        assert!(!read.iter().any(|line| line["response"]["response"]["added"].is_array()), "no success is made up for it");
+    }
+    let none = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {}}});
+    let (_, code, _, _) = play(&native().join("2-permission.jsonl"), Client { first: Some(none), ..Client::default() });
+    assert_eq!(code, Some(3), "no server at all");
+}
+
+#[test]
+fn wire_replay_config_a_reused_request_id_is_refused() {
+    let set = json!({"type": "control_request", "request_id": "client-2", "request": {"subtype": "mcp_set_servers", "servers": {"abc": {"type": "http", "url": "http://127.0.0.1:9/mcp"}}}});
+    // The client's initialize then takes the same id, `client-2`.
+    let report = refused("2-permission.jsonl", Client { first: Some(set), ..Client::default() });
+    assert_eq!(report, "line 2: the driver used a request id twice\n");
 }
 
 #[test]
