@@ -1739,7 +1739,16 @@ mod tests {
             let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
             events.recv().await.unwrap();
             assert!(harness.shutdown().await.is_empty());
-            let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), vec![("hand".into(), Arc::new(hand.clone()) as Arc<dyn Driver>)], Settings::default());
+            drop(harness);
+            // The lock outlives the shutdown by a moment while the session's task ends.
+            let given = std::time::Instant::now() + Duration::from_secs(10);
+            let store = loop {
+                match Store::open(&tmp.path().join("data")) {
+                    Err(Error::InUse(_)) if std::time::Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+                    opened => break opened.unwrap(),
+                }
+            };
+            let harness = Harness::new(store, vec![("hand".into(), Arc::new(hand.clone()) as Arc<dyn Driver>)], Settings::default());
             // The agent raises it after the resume's check passed, and before "carry on" is sent.
             let speaking = hand.output.clone();
             let body = raised.clone();
