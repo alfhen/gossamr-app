@@ -197,20 +197,10 @@ async fn ask_result_is_refused_while_a_question_is_open() {
 }
 
 #[tokio::test]
-async fn ask_stop_hand_over_and_a_deny_ended_turn_each_close_the_open_question_and_say_so() {
-    for how in [QuestionEnd::Stopped, QuestionEnd::HandedOver, QuestionEnd::Denied] {
+async fn ask_stop_and_hand_over_each_close_the_open_question_and_say_so() {
+    for how in [QuestionEnd::Stopped, QuestionEnd::HandedOver] {
         let (_tmp, dir) = data_dir();
-        let script = match how {
-            QuestionEnd::Denied => r#"{"capabilities": {"tool_call_limit_ms": 400, "deny_ends_turn": true}}
-{"prompt": null}
-{"call": {"name": "ask", "input": {"question": "Which colour?"}}}
-{"permission": {"kind": "command", "tool": "Bash"}}
-{"end": "done"}
-{"prompt": null}"#
-                .to_owned(),
-            _ => asking(None),
-        };
-        let mock = mock(&script);
+        let mock = mock(&asking(None));
         let harness = harness(&dir, &mock, 4);
         let (id, mut events) = open(&harness, false).await;
         next(&mut events).await;
@@ -218,20 +208,11 @@ async fn ask_stop_hand_over_and_a_deny_ended_turn_each_close_the_open_question_a
         let q = question(&mut events).await;
         match how {
             QuestionEnd::Stopped => harness.close(&id).unwrap(),
-            QuestionEnd::HandedOver => harness.hand_over(&id).unwrap(),
-            _ => {
-                let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await.pop().unwrap();
-                let Body::Permission { id: request, .. } = asked.body else { unreachable!() };
-                harness.answer(&id, &request, Decision::Deny, None).unwrap();
-            }
+            _ => harness.hand_over(&id).unwrap(),
         }
         let seen = until(&mut events, |body| matches!(body, Body::QuestionClosed { .. })).await;
         assert_eq!(seen.last().unwrap().body, Body::QuestionClosed { id: q.clone(), how }, "{how:?}");
-        if how == QuestionEnd::Denied {
-            assert!(seen.iter().any(|event| event.body == Body::TurnEnded { how: TurnEnd::Denied }));
-        } else {
-            until(&mut events, |body| *body == Body::Closed).await;
-        }
+        until(&mut events, |body| *body == Body::Closed).await;
         assert_eq!(harness.open_question(&id).unwrap(), None, "{how:?}: closed in the store");
         assert!(harness.answer_question(&id, &q, "late".into()).await.is_err(), "{how:?}: its answer is refused");
     }
@@ -249,4 +230,127 @@ async fn ask_a_locked_sessions_question_reaches_its_client_whole_and_is_withheld
     assert!(matches!(&asked.body, Body::Question { text, .. } if text == "Which colour?"));
     let stored = harness.events(&id, 0).unwrap().into_iter().find(|event| event.seq == asked.seq).unwrap();
     assert!(matches!(&stored.body, Body::Withheld { of, .. } if of == "question"), "{:?}", stored.body);
+}
+
+/// The answer's turn has come once the mock said "with the answer", read from the store since a resume may have come.
+async fn answer_comes(harness: &harness::session::Harness, id: &str) {
+    let given = std::time::Instant::now() + Duration::from_secs(10);
+    while !harness.events(id, 0).unwrap().iter().any(|event| event.body == Body::Text { text: "with the answer".into() }) {
+        assert!(std::time::Instant::now() < given, "the answer's turn came within 10 s");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn ask_an_answer_waiting_behind_a_turn_when_the_harness_shuts_down_leaves_the_question_open_to_answer_after_the_restart() {
+    let (_tmp, dir) = data_dir();
+    let script = r#"{"capabilities": {"tool_call_limit_ms": 400}}
+{"prompt": null}
+{"call": {"name": "ask", "input": {"question": "Which colour?"}}}
+{"sleep": 5000}
+{"end": "done"}
+{"prompt": null}
+{"say": "with the answer"}
+{"end": "done"}
+{"prompt": null}"#;
+    let mock = mock(script);
+    let (id, q, ps) = {
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        let ps = provider_session(&next(&mut events).await.body);
+        harness.send(&id, "pick one").unwrap();
+        let q = question(&mut events).await;
+        received(&mut events).await;
+        harness.answer_question(&id, &q, "blue".into()).await.unwrap();
+        assert_eq!(harness.open_question(&id).unwrap().as_deref(), Some(q.as_str()), "open until the answer is sent");
+        assert!(harness.shutdown().await.is_empty());
+        (id, q, ps)
+    };
+    let harness = harness_on(reopen(&dir).await, &mock, 4);
+    assert!(!harness.events(&id, 0).unwrap().iter().any(|event| event.body.type_name() == "question_closed"));
+    assert_eq!(harness.open_question(&id).unwrap().as_deref(), Some(q.as_str()), "still open after the restart");
+    harness.answer_question(&id, &q, "blue".into()).await.unwrap();
+    answer_comes(&harness, &id).await;
+    assert!(mock.received(&ps).contains(&Command::Prompt("blue".into())));
+    assert_eq!(harness.open_question(&id).unwrap(), None);
+}
+
+#[tokio::test]
+async fn ask_after_a_cancel_the_answer_comes_as_the_next_prompt() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(&asking(None));
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false).await;
+    let ps = provider_session(&next(&mut events).await.body);
+    harness.send(&id, "pick one").unwrap();
+    let q = question(&mut events).await;
+    harness.cancel(&id).unwrap();
+    until(&mut events, |body| *body == Body::TurnEnded { how: TurnEnd::Cancelled }).await;
+    assert_eq!(harness.open_question(&id).unwrap().as_deref(), Some(q.as_str()), "the cancel left it open");
+    harness.answer_question(&id, &q, "blue".into()).await.unwrap();
+    let seen = until(&mut events, |body| *body == Body::Text { text: "with the answer".into() }).await;
+    let at = |body: &Body| seen.iter().position(|event| event.body == *body).unwrap();
+    assert!(at(&Body::QuestionClosed { id: q.clone(), how: QuestionEnd::Answered }) < at(&Body::Prompted { text: "blue".into() }));
+    assert!(mock.received(&ps).contains(&Command::Prompt("blue".into())), "the agent got the answer");
+}
+
+#[tokio::test]
+async fn ask_a_deny_in_a_later_turn_leaves_an_earlier_turns_question_open() {
+    let (_tmp, dir) = data_dir();
+    let script = r#"{"capabilities": {"tool_call_limit_ms": 400, "deny_ends_turn": true}}
+{"prompt": null}
+{"call": {"name": "ask", "input": {"question": "Which colour?"}}}
+{"end": "done"}
+{"prompt": null}
+{"permission": {"kind": "command", "tool": "Bash"}}
+{"end": "done"}
+{"prompt": null}
+{"say": "with the answer"}
+{"end": "done"}
+{"prompt": null}"#;
+    let mock = mock(script);
+    let harness = harness(&dir, &mock, 4);
+    let (id, mut events) = open(&harness, false).await;
+    let ps = provider_session(&next(&mut events).await.body);
+    harness.send(&id, "pick one").unwrap();
+    let q = question(&mut events).await;
+    until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+    harness.send(&id, "and run it").unwrap();
+    let asked = until(&mut events, |body| matches!(body, Body::Permission { .. })).await.pop().unwrap();
+    let Body::Permission { id: request, .. } = asked.body else { unreachable!() };
+    harness.answer(&id, &request, Decision::Deny, None).unwrap();
+    let seen = until(&mut events, |body| *body == Body::TurnEnded { how: TurnEnd::Denied }).await;
+    assert!(!seen.iter().any(|event| event.body.type_name() == "question_closed"), "{:?}", types(&seen));
+    assert_eq!(harness.open_question(&id).unwrap().as_deref(), Some(q.as_str()));
+    harness.answer_question(&id, &q, "blue".into()).await.unwrap();
+    until(&mut events, |body| *body == Body::Text { text: "with the answer".into() }).await;
+    assert!(mock.received(&ps).contains(&Command::Prompt("blue".into())));
+}
+
+#[tokio::test]
+async fn ask_clean_up_and_a_resume_refused_for_good_close_the_open_question_and_sessions_names_it_until_then() {
+    for ends_with_client in [false, true] {
+        let (_tmp, dir) = data_dir();
+        let mock = mock(&asking(None));
+        let (id, q) = {
+            let harness = harness(&dir, &mock, 4);
+            let open = Open { provider: "mock".into(), cwd: "/nowhere".into(), tools: tools(), ends_with_client, ..Open::default() };
+            let (id, mut events) = harness.open(open).await.unwrap();
+            next(&mut events).await;
+            harness.send(&id, "pick one").unwrap();
+            let q = question(&mut events).await;
+            let listed = harness.sessions().unwrap().into_iter().find(|row| row.id == id).unwrap();
+            assert_eq!(listed.open_question.as_deref(), Some(q.as_str()), "`sessions` names it");
+            assert!(harness.shutdown().await.is_empty());
+            (id, q)
+        };
+        let harness = harness_on(reopen(&dir).await, &mock, 4);
+        match ends_with_client {
+            false => harness.clean_up(&id).await.unwrap(),
+            true => assert!(matches!(harness.answer_question(&id, &q, "blue".into()).await, Err(Error::EndedWithClient(_)))),
+        }
+        assert_eq!(harness.open_question(&id).unwrap(), None, "ends with its client: {ends_with_client}");
+        assert_eq!(harness.sessions().unwrap().into_iter().find(|row| row.id == id).unwrap().open_question, None);
+        assert!(harness.may_carry_on(&id).is_ok());
+    }
 }

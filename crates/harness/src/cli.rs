@@ -10,7 +10,7 @@ use crate::api::Op;
 use crate::auth::{Token, encode};
 use crate::client::{Client, Push};
 use crate::error::{Error, Result};
-use crate::event::{Body, Decision};
+use crate::event::{Body, Decision, QuestionEnd};
 use crate::providers::{Asked, Standing, check, line, with_usual};
 use crate::store::default_dir;
 
@@ -165,17 +165,23 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
     // Done only once a turn has ended, and not in a failure: a connection that drops before then is not done.
     let (mut answers, mut ok, mut ended) = (answers.into_iter(), true, false);
     // A turn that ends while a question is open is not the end: the answer comes as the next prompt.
-    let mut asking = std::collections::HashSet::new();
+    let (mut asking, mut turn_on) = (std::collections::HashSet::new(), false);
     while let Some(event) = next_event(client).await? {
         println!("{}", serde_json::to_string(&event)?);
         match event.body {
             Body::Question { id, .. } => {
                 asking.insert(id);
             }
-            Body::QuestionClosed { id, .. } => {
-                asking.remove(&id);
+            Body::TurnStarted => turn_on = true,
+            // No answer will come as a prompt, and no turn runs: the run is over.
+            Body::QuestionClosed { id, how } => {
+                if asking.remove(&id) && asking.is_empty() && how != QuestionEnd::Answered && !turn_on {
+                    ended = true;
+                    let _ = client.call(Op::Close { session: session.clone() }).await;
+                }
             }
             Body::TurnEnded { .. } if !asking.is_empty() => {
+                turn_on = false;
                 eprintln!("harness: the turn ended with a question open; answer it with `harness answer <session> <question> --text <answer>`");
             }
             Body::Permission { id, .. } => match answers.next() {
@@ -191,7 +197,7 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
                 None => {}
             },
             body if body.ends_turn() => {
-                ended = true;
+                (ended, turn_on) = (true, false);
                 ok &= !matches!(body, Body::Failed { .. });
                 // A session that is already stopping refuses it, and its `closed` comes anyway.
                 let _ = client.call(Op::Close { session: session.clone() }).await;
