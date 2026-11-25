@@ -313,3 +313,112 @@ fn what_a_run_says_of_a_harness_without_the_mock_names_no_debug_switch() {
         assert!(!said.contains(name), "{name} would be in the release build: {said}");
     }
 }
+
+#[tokio::test]
+async fn at_start_a_run_whose_brief_waits_for_a_slot_is_left_to_run() {
+    let served = Served::new(WORKS_LONG, 1);
+    let rig = on_harness(&served).await;
+    let first = rig.launched(1).await;
+    until_state(&rig, &first, RunState::Working).await;
+    let second = rig.launched(2).await;
+    until_detail(&rig, &second, crate::runs::consumer::SLOT_WAIT).await;
+    rig.svc.sweep_harness().await;
+    let after = rig.get(&second).await;
+    assert_eq!((after.state, after.error), (RunState::Launching, None), "its brief is the harness's, waiting for the slot");
+    rig.svc.stop(&first.id).await.unwrap();
+    until_state(&rig, &second, RunState::Working).await;
+}
+
+#[tokio::test]
+async fn at_start_the_session_of_a_failed_run_that_never_got_its_brief_closes_and_the_run_keeps_its_reason() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    let run = rig.set(&run, |r| r.state = RunState::Launching).await;
+    let session = rig.svc.harness.as_ref().unwrap().link.open(&run.id, open_op(&run, MOCK, None, None)).await.unwrap();
+    let failed = rig.set(&run, |r| {
+        r.state = RunState::Failed;
+        r.error = Some("its own reason".into());
+    }).await;
+    rig.svc.sweep_harness().await;
+    let row = sessions(&served).await.into_iter().find(|s| s["id"] == session.as_str()).unwrap();
+    assert_eq!(row["running"], false, "closed: {row}");
+    assert_eq!(rig.get(&failed).await.error.as_deref(), Some("its own reason"));
+}
+
+#[tokio::test]
+async fn a_failed_bind_says_so_in_the_apps_words_and_shows_no_database_text() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::NeedsAnswer).await;
+    let refused = rig.svc.harness.as_ref().unwrap().link.open(&run.id, open_op(&run, MOCK, None, None)).await.unwrap_err();
+    assert_eq!(refused, "it opened a session but Gossamr couldn't keep it with its run");
+}
+
+/// A home folder whose git sends `https://github.com/` to a bare `acme/webshop` on disk with one commit on `main`, and
+/// the harness's setup for it.
+fn on_a_bare_repo() -> (tempfile::TempDir, harness::work::Setup) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (home, data, remote, config) = (root.join("home"), root.join("data"), root.join("remote/github.com"), root.join("gitconfig"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(&config, format!("[url \"file://{}/\"]\n\tinsteadOf = https://github.com/\n[user]\n\tname = Test\n\temail = test@example.invalid\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n", remote.display())).unwrap();
+    let env = vec![
+        ("PATH".to_owned(), "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin".to_owned()),
+        ("HOME".to_owned(), home.display().to_string()),
+        ("GIT_CONFIG_GLOBAL".to_owned(), config.display().to_string()),
+        ("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned()),
+        ("GIT_ALLOW_PROTOCOL".to_owned(), "file".to_owned()),
+    ];
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = std::process::Command::new("git").current_dir(dir).args(args).env_clear().envs(env.clone()).output().unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    let bare = remote.join("acme/webshop.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--quiet", "--bare", "--initial-branch=main"]);
+    git(&root, &["clone", "--quiet", &format!("file://{}", bare.display()), "seed"]);
+    std::fs::write(root.join("seed/README"), "hello\n").unwrap();
+    git(&root.join("seed"), &["add", "README"]);
+    git(&root.join("seed"), &["commit", "--quiet", "-m", "first"]);
+    git(&root.join("seed"), &["push", "--quiet", "origin", "main"]);
+    let setup = harness::work::Setup::new(Some(home), data).with_shell_env(crate::runs::env::RunEnv::from_pairs(env));
+    (tmp, setup)
+}
+
+#[tokio::test]
+async fn at_start_a_session_an_interrupted_open_left_on_its_runs_branch_closes_and_no_other_does() {
+    let (_repo, setup) = on_a_bare_repo();
+    let mut served = Served::idle();
+    served.serve_on(WORKS_LONG, 4, setup);
+    let rig = on_harness(&served).await;
+    let mut client = served.client().await;
+    let open = |branch: &str| Op::Open { provider: MOCK.into(), cwd: None, repo: Some("acme/webshop".into()), base: Some("main".into()), branch: Some(branch.into()), locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
+    let interrupted = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    let interrupted = rig.set(&interrupted, |r| {
+        r.state = RunState::Launching;
+        r.launched_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    }).await;
+    let old = rig.fx.core.queue_test_run(rig.spec(2), None).await.unwrap();
+    let old = rig.set(&old, |r| {
+        r.state = RunState::Launching;
+        r.launched_at = Some(chrono::Utc::now() - chrono::Duration::hours(2));
+    }).await;
+    let done = rig.fx.core.queue_test_run(rig.spec(3), None).await.unwrap();
+    let done = rig.set(&done, |r| {
+        r.state = RunState::Done;
+        r.launched_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    }).await;
+    let mut ids = vec![];
+    for run in [&interrupted, &old, &done] {
+        let opened = client.call(open(&run.spec.name)).await.unwrap();
+        ids.push(opened["session"].as_str().unwrap().to_owned());
+    }
+    rig.svc.sweep_harness().await;
+    let running = |id: &str, listed: &[serde_json::Value]| listed.iter().find(|s| s["id"] == id).unwrap()["running"] == true;
+    let listed = sessions(&served).await;
+    assert!(!running(&ids[0], &listed), "the interrupted open's session closed");
+    assert!(running(&ids[1], &listed), "not one on an old run's branch");
+    assert!(running(&ids[2], &listed), "nor one opened by hand on a finished run's branch");
+}

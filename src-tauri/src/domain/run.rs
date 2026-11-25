@@ -709,6 +709,9 @@ pub struct SessionFollow {
     /// It closed after a stop the app asked for: nothing resumes it, so it is followed no more.
     #[serde(default)]
     pub ended: bool,
+    /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
+    #[serde(default)]
+    pub briefed: bool,
     /// Calls of the app's tools with no result yet: id, name and input. One a quit left unanswered is answered on the
     /// next start.
     #[serde(default)]

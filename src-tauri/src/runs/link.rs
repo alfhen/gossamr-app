@@ -96,12 +96,16 @@ impl Link {
 
     /// Opens a session for `run_id`, makes it the run's, and watches it, in that order: the run follows the session
     /// before any of its events is applied, and the app listens for its tool calls before it is sent a prompt.
+    /// Its error is in the app's words, for the run to show.
     pub async fn open(&self, run_id: &str, op: Op) -> Result<String, String> {
-        let opened = self.call(op).await?;
-        let session = opened["session"].as_str().ok_or("the harness answered an open with no session")?.to_owned();
-        let bound = self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| e.to_string());
+        let opened = self.call(op).await.map_err(|e| format!("it didn't open a session: {e}"))?;
+        let session = opened["session"].as_str().ok_or("it answered an open with no session")?.to_owned();
+        let bound = self.inner.core.bind_run_session(run_id, &session).await.map_err(|e| {
+            eprintln!("couldn't bind session {session} to run {run_id}: {e}");
+            "it opened a session but Gossamr couldn't keep it with its run".to_owned()
+        });
         let followed = match bound {
-            Ok(()) => self.follow(&session, 0).await,
+            Ok(()) => self.follow(&session, 0).await.map_err(|e| format!("it opened a session but Gossamr couldn't follow it: {e}")),
             Err(e) => Err(e),
         };
         if let Err(why) = followed {

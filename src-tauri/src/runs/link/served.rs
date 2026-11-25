@@ -36,11 +36,23 @@ impl Served {
 
     /// Serves the data folder, again after a shutdown.
     pub fn serve(&mut self, script: &str, turn_limit: usize) {
+        self.serve_on(script, turn_limit, harness::work::Setup::default());
+    }
+
+    /// Serves with what the harness knows of the machine: a home folder and a shell, for sessions that name a repo.
+    pub fn serve_on(&mut self, script: &str, turn_limit: usize, setup: harness::work::Setup) {
         let mock = Mock::new(Script::parse(script).unwrap());
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
         let first = self.token.clone();
-        let server = Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }).unwrap();
+        let server = Server::bind_with(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }, setup).unwrap();
         self.task = Some(tokio::spawn(server.run()));
+    }
+
+    /// Not serving yet, for `serve_on`.
+    pub fn idle() -> Served {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("h");
+        Served { _tmp: tmp, dir, token: Token::random(), task: None }
     }
 
     pub async fn client(&self) -> Client {

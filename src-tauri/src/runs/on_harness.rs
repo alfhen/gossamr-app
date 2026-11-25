@@ -35,6 +35,9 @@ impl Connect for ViaSidecar {
 /// The provider of a debug build's mock switch.
 pub const MOCK: &str = "mock";
 
+/// How long after a run launched the harness can create its session: an open waits for the shell and makes a clone.
+const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
+
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
 /// The run sheet says it, so a mock run is never taken for a real one.
@@ -65,7 +68,7 @@ pub fn open_op(run: &Run, provider: &str, model: Option<String>, login: Option<S
 /// Why the harness opened no session, in the app's words where the cause is known.
 fn no_session(why: &str, provider: &str) -> String {
     if !why.contains(&format!("no provider {provider}")) {
-        return format!("it didn't open a session: {why}");
+        return why.to_owned();
     }
     if provider == MOCK {
         // No switch is named: this text is in a release build too, and the release build holds none of their names.
@@ -108,33 +111,51 @@ impl RunService {
             *run = self.load(&run.id).await?;
             return Ok(Err(Failure::Harness(format!("it didn't take the brief: {why}"))));
         }
+        // Kept so the start-up pass never takes a run whose brief waits for a slot for one that never got it.
+        let kept = self.core.apply_session(&session, |_, follow| {
+            follow.briefed = true;
+            Vec::new()
+        });
+        if let Err(e) = kept.await {
+            let _ = on.link.stop(&session).await;
+            *run = self.load(&run.id).await?;
+            return Ok(Err(Failure::Harness(format!("it took the brief, but Gossamr couldn't keep that it did: {e}"))));
+        }
         Ok(Ok(()))
     }
 
-    /// At start, before any run launches: closes each session the harness runs on one of the app's own runs' branches
-    /// that no run follows (an open the app quit in the middle of), and the session of a run that never got its brief,
-    /// which fails. Either would be an agent no run can stop or clean up.
+    /// At start, under the launch lock, so no open runs meanwhile. It closes a session the harness runs for an open
+    /// the app quit in the middle of: on the repo and branch of a run still Launching with no session, created just
+    /// after that run launched, and bound to no run. And it closes the session of a run whose brief the harness never
+    /// took, failing the run if it still launches. Either would be an agent no run can stop or clean up.
     pub async fn sweep_harness(&self) {
         let Some(on) = &self.harness else { return };
+        let _turn = self.launching.lock().await;
         let Ok(runs) = self.core.runs_list(&crate::domain::RunQuery::default()).await else { return };
         let Ok(listed) = on.link.call(Op::Sessions).await else { return };
         for row in listed.as_array().into_iter().flatten().filter(|row| row["running"] == true) {
-            let (Some(id), Some(repo), Some(branch)) = (row["id"].as_str(), row["repo"].as_str(), row["branch"].as_str()) else { continue };
-            let ours = runs.iter().any(|run| run.spec.repo == repo && run.spec.name == branch);
-            if ours && matches!(self.core.session_run(id).await, Ok(None)) {
+            let (Some(id), Some(repo), Some(branch), Some(created)) = (row["id"].as_str(), row["repo"].as_str(), row["branch"].as_str(), row["created_ms"].as_i64()) else { continue };
+            let opened_for = |run: &&Run| {
+                run.state == RunState::Launching
+                    && run.harness_session.is_none()
+                    && run.spec.repo == repo
+                    && run.spec.name == branch
+                    && run.launched_at.is_some_and(|at| (0..=OPEN_TAKES_UP_TO_MS).contains(&(created - at.timestamp_millis())))
+            };
+            if runs.iter().any(|run| opened_for(&run)) && matches!(self.core.session_run(id).await, Ok(None)) {
                 let _ = on.link.call(Op::Close { session: id.to_owned() }).await;
             }
         }
-        for run in runs.iter().filter(|run| run.state == RunState::Launching) {
+        for run in runs.iter().filter(|run| matches!(run.state, RunState::Launching | RunState::Failed)) {
             let Some(session) = &run.harness_session else { continue };
-            if !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.prompts == 0) {
+            let Ok(Some((_, follow))) = self.core.session_run(session).await else { continue };
+            if follow.briefed || follow.closed {
                 continue;
             }
             let _ = on.link.stop(session).await;
-            let _turn = self.launching.lock().await;
-            if let Ok(mut run) = self.load(&run.id).await {
-                // A failed write is tried again at the next start, which finds the run as it was.
-                if run.state == RunState::Launching {
+            if run.state == RunState::Launching {
+                if let Ok(mut run) = self.load(&run.id).await {
+                    // A failed write is tried again at the next start, which finds the run as it was.
                     if let Err(e) = self.fail(&mut run, &Failure::Harness(NO_BRIEF.into())).await {
                         eprintln!("couldn't fail run {} that never got its brief: {e}", run.id);
                     }
