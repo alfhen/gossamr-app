@@ -68,7 +68,8 @@ fn no_session(why: &str, provider: &str) -> String {
         return format!("it didn't open a session: {why}");
     }
     if provider == MOCK {
-        "the harness serves no mock script. It was started without GOSSAMR_MOCK_SCRIPT: stop it in Settings > Harness, or give HARNESS_DATA a folder of its own, and start Gossamr again.".into()
+        // No switch is named: this text is in a release build too, and the release build holds none of their names.
+        "the harness serves no mock script, since it was started without one. Stop it in Settings > Harness, or give it a data folder of its own, and start Gossamr again.".into()
     } else {
         format!("the harness has no {provider} driver: it found no {provider} CLI when it started. Install it, then restart the harness in Settings > Harness.")
     }

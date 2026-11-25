@@ -304,3 +304,12 @@ async fn pips_message_to_a_run_on_the_harness_that_was_handed_over_is_refused() 
     let events = client.call(Op::Events { session: rig.get(&run).await.harness_session.unwrap(), after: 0 }).await.unwrap();
     assert!(!events["events"].as_array().unwrap().iter().any(|e| e["type"] == "prompted" && e["text"] == "Carry on."), "nothing reached the agent");
 }
+
+#[test]
+fn what_a_run_says_of_a_harness_without_the_mock_names_no_debug_switch() {
+    let said = no_session("no provider mock", MOCK);
+    assert!(said.contains("serves no mock script"), "{said}");
+    for name in ["GOSSAMR_MOCK_SCRIPT", "GOSSAMR_APP_DATA", "GOSSAMR_TEST_VAULT", "HARNESS_DATA"] {
+        assert!(!said.contains(name), "{name} would be in the release build: {said}");
+    }
+}
