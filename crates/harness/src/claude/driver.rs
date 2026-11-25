@@ -596,6 +596,15 @@ impl Stream {
         };
         (self.turn, self.cancelled) = (false, false);
         self.asked.clear();
+        if let Some(used) = super::stream::usage_of(result) {
+            self.emit(Body::Usage {
+                input_tokens: used.input_tokens,
+                output_tokens: used.output_tokens,
+                cache_read_tokens: used.cache_read_tokens,
+                cache_creation_tokens: used.cache_creation_tokens,
+                cost_usd: used.cost_usd,
+            });
+        }
         self.emit(body);
         if let Some(text) = self.held.pop_front() {
             self.prompt(text);
@@ -979,6 +988,21 @@ mod tests {
         let mut w = wire();
         w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["Bash", "mcp__other__find"]}));
         assert!(!w.stream.refused, "a normal session may have any tools");
+    }
+
+    #[test]
+    fn a_results_usage_comes_as_a_usage_event_before_its_turns_end() {
+        let mut w = wire();
+        w.stream.prompt("go".into());
+        w.agent(init());
+        let usage = json!({"input_tokens": 2, "cache_creation_input_tokens": 7099, "cache_read_input_tokens": 9, "output_tokens": 61});
+        w.agent(json!({"type": "result", "subtype": "success", "is_error": false, "result": "ok", "usage": usage, "total_cost_usd": 0.0023}));
+        let said: Vec<Body> = w.said().into_iter().filter(|body| matches!(body, Body::Usage { .. } | Body::TurnEnded { .. })).collect();
+        let used = Body::Usage { input_tokens: 2, output_tokens: 61, cache_read_tokens: 9, cache_creation_tokens: 7099, cost_usd: Some(0.0023) };
+        assert_eq!(said, [used, Body::TurnEnded { how: TurnEnd::Done }]);
+        w.stream.prompt("again".into());
+        w.agent(result());
+        assert!(!w.said().iter().any(|body| matches!(body, Body::Usage { .. })), "a result with no usage gives none");
     }
 
     #[test]

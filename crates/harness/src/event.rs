@@ -58,6 +58,9 @@ pub enum Body {
     /// What the agent gave as its work's result, through the endpoint's `result` tool, after it fit the session's
     /// result schema.
     Result { data: Value },
+    /// What a turn used, by the provider's own count: tokens in and out, those read from and written to its prompt
+    /// cache, and the cost in US dollars when the provider gives one. Sent before the turn's end.
+    Usage { input_tokens: u64, output_tokens: u64, cache_read_tokens: u64, cache_creation_tokens: u64, cost_usd: Option<f64> },
     TurnEnded { how: TurnEnd },
     /// The turn failed, or the session could not start or go on. Either way no turn is running after it.
     Failed { kind: FailKind, reason: String },
@@ -81,7 +84,10 @@ pub enum Body {
 /// list is dropped, so a new one stays private until someone adds it here; `PRIVATE_FIELDS` lists those that must be.
 /// `name` and `tool` are tool identifiers (`Bash`, `run_command`, `mcp__x__ask`), never a title or a command line: a
 /// driver puts those in `input`.
-pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
+pub const KEPT_FIELDS: &[&str] = &[
+    "provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error", "input_tokens", "output_tokens", "cache_read_tokens",
+    "cache_creation_tokens", "cost_usd",
+];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
 pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message", "data"];
@@ -239,12 +245,13 @@ mod tests {
             Body::Question { .. } => 12,
             Body::QuestionClosed { .. } => 13,
             Body::Result { .. } => 14,
-            Body::TurnEnded { .. } => 15,
-            Body::Failed { .. } => 16,
-            Body::Notice { .. } => 17,
-            Body::HandedOver => 18,
-            Body::Closed => 19,
-            Body::Withheld { .. } => 20,
+            Body::Usage { .. } => 15,
+            Body::TurnEnded { .. } => 16,
+            Body::Failed { .. } => 17,
+            Body::Notice { .. } => 18,
+            Body::HandedOver => 19,
+            Body::Closed => 20,
+            Body::Withheld { .. } => 21,
         }
     }
 
@@ -267,6 +274,7 @@ mod tests {
             Body::Question { id: "i".into(), text: "t".into() },
             Body::QuestionClosed { id: "i".into(), how: QuestionEnd::Stopped },
             Body::Result { data: json!({}) },
+            Body::Usage { input_tokens: 1, output_tokens: 2, cache_read_tokens: 3, cache_creation_tokens: 4, cost_usd: None },
             Body::TurnEnded { how: TurnEnd::Done },
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
             Body::Notice { text: "t".into() },

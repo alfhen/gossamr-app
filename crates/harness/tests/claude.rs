@@ -323,6 +323,8 @@ async fn claude_every_native_fixture_projects_as_its_golden_file() {
         let (rig, seen) = play(&fixture).await;
         assert_eq!(rig.report(), "", "{}: the replay refused a line", name(&fixture));
         let seen = as_recorded_tools(&seen, &endpoint(&rig).0, recorded_endpoint(&lines_of(&fixture)).as_deref());
+        // The driver adds usage on purpose; H2's converter gives none, and it has a test of its own.
+        let seen: Vec<Event> = seen.into_iter().filter(|event| !matches!(event.body, Body::Usage { .. })).collect();
         let got = as_the_mock_orders_it(project(&as_the_mock_names_the_session(&seen))).join("\n") + "\n";
         let want = std::fs::read_to_string(goldens.join(name(&fixture)).with_extension("txt")).unwrap();
         if got != want {
@@ -799,4 +801,17 @@ async fn claude_an_agent_that_exits_before_any_prompt_fails_with_its_last_stderr
         "{said:?}"
     );
     while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
+
+#[tokio::test]
+async fn claude_each_result_gives_a_usage_event_before_its_turns_end() {
+    for fixture in fixtures() {
+        let results: Vec<Value> = lines_of(&fixture).into_iter().filter(|line| line["dir"] == "from_agent" && line["data"]["type"] == "result").map(|line| line["data"].clone()).collect();
+        let (_, seen) = play(&fixture).await;
+        let used: Vec<(u64, u64)> = seen.iter().filter_map(|event| match event.body { Body::Usage { input_tokens, output_tokens, .. } => Some((input_tokens, output_tokens)), _ => None }).collect();
+        let want: Vec<(u64, u64)> = results.iter().filter(|result| result["usage"].is_object()).map(|result| (result["usage"]["input_tokens"].as_u64().unwrap(), result["usage"]["output_tokens"].as_u64().unwrap())).collect();
+        assert_eq!(used, want, "{}: one usage per result that has one, as counted", name(&fixture));
+        for (at, _) in seen.iter().enumerate().filter(|(_, event)| matches!(event.body, Body::Usage { .. })) {
+            assert!(seen[at + 1].body.ends_turn(), "{}: usage comes just before its turn's end", name(&fixture));
+        }
+    }
 }
