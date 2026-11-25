@@ -12,6 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::os::unix::process::ExitStatusExt;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -22,7 +23,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::binary::CliPlaces;
-use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, guard};
+use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, guard};
 use crate::env::RunEnv;
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::process::{self, Process};
@@ -200,6 +201,16 @@ impl Driver for ClaudeDriver {
     }
 
     fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        self.start(launch, None)
+    }
+
+    fn open_reporting(&self, launch: Launch, end: EndReport) -> Result<Link, OpenError> {
+        self.start(launch, Some(end))
+    }
+}
+
+impl ClaudeDriver {
+    fn start(&self, launch: Launch, end: Option<EndReport>) -> Result<Link, OpenError> {
         let mut command = tokio::process::Command::new(self.binary(&launch)?);
         command.args(args(&launch)).env_clear().envs(launch.env.iter().map(|(k, v)| (k, v))).current_dir(&launch.cwd);
         if launch.locked {
@@ -248,6 +259,8 @@ impl Driver for ClaudeDriver {
             setup_within: self.setup_within,
             stderr: (stderr, last_said),
             secret: launch.tools_token.expose().to_owned(),
+            end,
+            sent: vec![],
         };
         tokio::spawn(agent.run(BufReader::new(stdout), commands_rx));
         Ok(Link { commands, output: output_rx, process: Some(process) })
@@ -276,6 +289,10 @@ struct Agent {
     stderr: (tokio::task::JoinHandle<()>, Arc<Mutex<Option<String>>>),
     /// The session's tools token, kept out of what a failure says.
     secret: String,
+    /// Where the session hears how the agent's process ended.
+    end: Option<EndReport>,
+    /// The signals the driver sent the agent's group, so an end by one of them is the harness's own.
+    sent: Vec<libc::c_int>,
 }
 
 /// What the agent and the client say to each other, apart from the process: lines in, events and lines out.
@@ -362,6 +379,7 @@ impl Agent {
                 () = until(term_at) => {
                     term_at = None;
                     // A background task keeps Claude after stdin closes; the group goes with it.
+                    self.sent.push(libc::SIGTERM);
                     let _ = process::signal_group(&self.process, libc::SIGTERM);
                 }
                 () = until(kill_at) => {
@@ -376,23 +394,36 @@ impl Agent {
                 }
             }
         }
-        // Whatever of the group is left goes too. The child is not reaped yet, so its group id is still the agent's.
-        self.kill();
+        // Whatever of the group is left goes too. The child is not reaped yet, so its group id is still the agent's. Not
+        // counted as sent: the agent is most likely gone already, and its end is its own.
+        let _ = process::kill_group(&self.process);
+        let ended = self.child.wait().await.ok().and_then(|status| match (status.code(), status.signal()) {
+            (Some(code), _) => Some(AgentEnd::Exited(code)),
+            (None, Some(signal)) => Some(AgentEnd::Signalled { signal, sent: self.sent.contains(&signal) }),
+            (None, None) => None,
+        });
         // Unasked, in a turn or not: an older CLI that lacks one of the flags says so on stderr before any prompt.
         if !going {
             let _ = tokio::time::timeout(Duration::from_secs(1), &mut self.stderr.0).await;
             let said = self.stderr.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             let secrets = [self.secret.clone()];
-            let how = if self.stream.turn { "claude exited in the middle of a turn" } else { "claude exited" };
+            let mut how = if self.stream.turn { "claude exited in the middle of a turn" } else { "claude exited" }.to_owned();
+            if let Some(AgentEnd::Signalled { signal, sent: false }) = ended {
+                how.push_str(&format!(", ended by signal {signal}"));
+            }
             self.stream.fail(match said {
                 Some(said) => format!("{how}: {}", crate::redact::text(&said, &secrets)),
-                None => how.into(),
+                None => how,
             });
         }
-        let _ = self.child.wait().await;
+        // Before `output` closes with the agent, as the session reads it then.
+        if let (Some(end), Some(ended)) = (self.end.take(), ended) {
+            end.send(ended);
+        }
     }
 
-    fn kill(&self) {
+    fn kill(&mut self) {
+        self.sent.push(libc::SIGKILL);
         let _ = process::kill_group(&self.process);
     }
 }
@@ -980,6 +1011,32 @@ mod tests {
         let mut w = wire();
         w.agent(json!({"type": "system", "subtype": "init", "session_id": "0b9e6c3a-6f0e-4a8f-9d0c-3c1f2e4b5a6d"}));
         assert!(!w.stream.refused && w.said().iter().any(|body| matches!(body, Body::Started { .. })));
+    }
+
+    #[tokio::test]
+    async fn the_agents_end_is_reported_with_whether_the_driver_sent_its_signal() {
+        // A fake that holds its output and goes only by a signal: the driver's own SIGTERM after a stop, or one from
+        // outside.
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = crate::testing::fake_cli(&tmp.path().join("claude"), "exec sleep 30");
+        for outside in [false, true] {
+            let driver = ClaudeDriver::new(claude.clone()).with_graces(Duration::from_millis(100), Duration::from_secs(5));
+            let mut launch = launch(false, None, None);
+            launch.env = vec![("PATH".into(), "/usr/bin:/bin".into())];
+            launch.cwd = tmp.path().into();
+            let (report, ended) = tokio::sync::oneshot::channel();
+            let mut link = driver.open_reporting(launch, EndReport(report)).unwrap();
+            let agent = link.process.clone().unwrap();
+            if outside {
+                // SAFETY: the fake's own pid, which the driver has not reaped.
+                assert_eq!(unsafe { libc::kill(agent.pid as libc::pid_t, libc::SIGTERM) }, 0);
+            } else {
+                link.commands.send(Command::Stop).unwrap();
+            }
+            while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
+            let ended = ended.await.expect("the driver said how it ended");
+            assert_eq!(ended, AgentEnd::Signalled { signal: libc::SIGTERM, sent: !outside });
+        }
     }
 
     fn locked_wire() -> Wire {

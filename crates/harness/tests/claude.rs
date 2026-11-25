@@ -516,6 +516,8 @@ async fn claude_stop_closes_stdin_and_a_background_task_gets_its_group_ended() {
         assert_eq!(rig.report(), "", "{fixture}");
         assert!(!seen.iter().any(|event| matches!(event.body, Body::Failed { .. })), "{fixture}: {:?}", types(&seen));
         assert!(!process::alive(&agent), "{fixture}: the agent is gone once the session is closed");
+        // 3-background-exit's agent goes only by the driver's own SIGTERM, which is the stop's, not a logout's.
+        assert_eq!(seen.last().map(|event| &event.body), Some(&Body::Closed { by: harness::event::ClosedBy::Stop }), "{fixture}");
     }
 }
 
@@ -972,4 +974,23 @@ async fn claude_a_usage_events_cost_is_its_turns_not_the_processes_total() {
         assert!((got - want).abs() < 1e-12, "{costs:?} against {turns:?}");
     }
     assert!((costs.iter().sum::<f64>() - totals[3]).abs() < 1e-12, "they add up to what the process cost");
+}
+
+#[tokio::test]
+async fn claude_an_agent_killed_from_outside_says_by_which_signal_and_a_term_closes_as_signal() {
+    // In 2-permission's turn, while it waits for an answer: a logout's SIGTERM is not the agent's own end, a SIGKILL
+    // from outside is.
+    for (signal, by) in [(libc::SIGTERM, harness::event::ClosedBy::Signal), (libc::SIGKILL, harness::event::ClosedBy::Agent)] {
+        let rig = rig(&native().join("2-permission.jsonl"), &[]);
+        let (id, mut events) = rig.open(false, None).await;
+        rig.harness.send(&id, prompts(&native().join("2-permission.jsonl")).remove(0)).unwrap();
+        until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+        let agent = rig.process();
+        // SAFETY: the replay's own pid, read while it runs; the agent alone, not its group.
+        assert_eq!(unsafe { libc::kill(agent.pid as libc::pid_t, signal) }, 0);
+        let seen = until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+        let failed: Vec<&String> = seen.iter().filter_map(|event| match &event.body { Body::Failed { reason, .. } => Some(reason), _ => None }).collect();
+        assert!(matches!(&failed[..], [reason] if reason.contains(&format!("ended by signal {signal}"))), "{signal}: {failed:?}");
+        assert_eq!(seen.last().map(|event| &event.body), Some(&Body::Closed { by }), "{signal}");
+    }
 }
