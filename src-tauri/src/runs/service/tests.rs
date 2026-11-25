@@ -796,7 +796,7 @@ mod through_the_real_spawner {
     use super::*;
     use std::collections::BTreeSet;
 
-    const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/fake-claude.sh");
+    const FAKE: &str = harness::testing::FAKE_CLAUDE;
     /// Never passed: none of these would make a run safer than the person's own setup, and some would loosen it.
     const FORBIDDEN: [&str; 4] = [
         "--dangerously-skip-permissions",

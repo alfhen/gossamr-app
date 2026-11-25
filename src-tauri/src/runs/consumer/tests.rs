@@ -220,3 +220,14 @@ fn a_run_shows_what_it_still_waits_on_once_one_of_its_requests_is_answered() {
     p.play([Body::Answered { id: "p2".into(), decision: Decision::Deny, message: None }]);
     assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour?")), "then the question");
 }
+
+#[test]
+fn a_question_closed_by_a_clean_up_or_a_session_that_cannot_resume_waits_on_no_one_and_says_why() {
+    for (how, says) in [(QuestionEnd::CleanedUp, "the run was cleaned up"), (QuestionEnd::NotResumable, "no answer can reach the agent now")] {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }, Body::QuestionClosed { id: "q1".into(), how }]);
+        assert_eq!((p.run.state, p.run.needs.as_deref(), p.follow.question.as_deref()), (RunState::Working, None, None), "{how:?}");
+        assert!(p.rows.last().unwrap().text.ends_with(says), "{how:?}");
+    }
+}

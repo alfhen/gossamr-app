@@ -93,6 +93,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 QuestionEnd::Stopped => rows.add("stop", "Its question was closed: the run was stopped", None),
                 QuestionEnd::HandedOver => rows.add("stop", "Its question was closed: the run was handed over", None),
                 QuestionEnd::Denied => rows.add("stop", "Its question was closed: a deny ended its turn", None),
+                QuestionEnd::CleanedUp => rows.add("stop", "Its question was closed: the run was cleaned up", None),
+                QuestionEnd::NotResumable => rows.add("stop", "Its question was closed: no answer can reach the agent now", None),
             }
         }
         Body::Result { data } => {
