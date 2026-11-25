@@ -88,8 +88,9 @@ impl Driver for ClaudeDriver {
             // `--setting-sources` does not cover auto memory, which Claude would otherwise put in its prompt.
             command.env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
         }
-        // Its own group, so a stop reaches the commands and background tasks it starts.
-        command.process_group(0).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // Its own group, so a stop reaches the commands and background tasks it starts. Its stdin is the driver's own
+        // pipe, never the harness's. A driver dropped without a stop, as when its runtime ends, still kills the agent.
+        command.process_group(0).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let mut child = command.spawn().map_err(|e| OpenError { kind: FailKind::Provider, message: format!("claude could not be started: {e}") })?;
         let pid = child.id().expect("a child that was just spawned has a pid");
         let started = process::started_of(pid).unwrap_or_default();
