@@ -210,7 +210,8 @@ impl Sidecar {
         let client = match Client::connect_any_protocol(&self.dir, &token, self.limits.prove_within).await {
             Ok(client) => client,
             Err(e) if harness::client::not_proven(&e) => return Err(self.not_this_key()),
-            Err(_) => return Err("The harness isn't running. Start it in Settings > Harness.".into()),
+            Err(e) if nothing_serving(&e) => return Err("The harness isn't running. Start it in Settings > Harness.".into()),
+            Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
         match client.hello.protocol {
             PROTOCOL => Ok(client),
@@ -341,7 +342,11 @@ impl Sidecar {
                 }
                 Err(e) if nothing_serving(&e) => {
                     if let Some(mut child) = started.take() {
-                        if let Ok(Some(_)) = child.try_wait() {
+                        if let Ok(Some(exit)) = child.try_wait() {
+                            // A store of another install's key: starting it again would only be refused again.
+                            if exit.code() == Some(i32::from(harness::server::UNKNOWN_TOKEN_EXIT)) {
+                                return Err(self.not_this_key());
+                            }
                             failures += 1;
                         } else {
                             started = Some(child);

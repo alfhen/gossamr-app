@@ -82,9 +82,14 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
     // The stored keys, in the file the real harness keeps its store in.
     let store = dir.join(STORE);
     let mut keys: Vec<[u8; 32]> = std::fs::read_to_string(&store).unwrap_or_default().lines().filter_map(decode).collect();
+    // Read on every start, as the real harness does, which refuses a token its store does not know.
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).unwrap();
+    if Token::parse(&line).is_some_and(|token| !keys.is_empty() && !keys.contains(&token.stored_key())) {
+        note("refused");
+        return i32::from(harness::server::UNKNOWN_TOKEN_EXIT);
+    }
     if keys.is_empty() {
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line).unwrap();
         let Some(token) = Token::parse(&line) else { return 1 };
         let in_env = std::env::vars().any(|(_, value)| value.contains(&token.hex()));
         let named = std::env::var_os(harness::cli::TOKEN_VARIABLE).is_some();
@@ -396,7 +401,7 @@ async fn a_harness_that_refuses_the_apps_token_is_never_killed_and_none_starts_b
 }
 
 #[tokio::test]
-async fn a_harness_that_refuses_the_apps_token_after_the_app_started_it_is_stopped_alone() {
+async fn a_harness_that_refuses_the_apps_token_as_it_starts_is_started_once_and_the_app_says_why() {
     let bed = Bed::new();
     bed.token();
     // A folder another install set up: a store whose key is not the vault's, and no harness serving it.
@@ -405,8 +410,9 @@ async fn a_harness_that_refuses_the_apps_token_after_the_app_started_it_is_stopp
     let status = bed.sidecar(&bed.fake("harness", PROTOCOL, "new")).ensure().await;
     assert_eq!(status.state, State::Failed);
     assert!(status.message.as_deref().is_some_and(|m| m.contains("holds a key this Gossamr doesn't have")), "{status:?}");
-    assert_eq!(bed.pids("serving").len(), 1, "it started one, and not again");
-    bed.until_ended(&bed.pids("serving"), "the one it started was not stopped").await;
+    assert_eq!(bed.pids("refused").len(), 1, "it started one, which refused the token, and not again");
+    assert!(bed.pids("serving").is_empty());
+    bed.none_left().await;
 }
 
 #[tokio::test]
@@ -625,5 +631,12 @@ async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_st
     let other = sidecar.client().await.err().unwrap();
     assert!(other.contains(&format!("protocol {}", PROTOCOL - 1)) && !other.contains(&hex), "{other}");
     assert!(bed.running(old), "not stopped for it");
+    bed.end(old).await;
+
+    // One that answers and goes is there but can't be reached, which is not the same as not running.
+    let dying = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), mute: false };
+    bed.serve_by_hand(&bed.fake_with("dying", dying), &bed.token()).await;
+    let gone = sidecar.client().await.err().unwrap();
+    assert!(gone.starts_with("Gossamr couldn't reach the harness: ") && !gone.contains(&hex), "{gone}");
     bed.none_left().await;
 }

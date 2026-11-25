@@ -93,6 +93,16 @@ pub struct Server {
     sweep_every: Duration,
 }
 
+/// Why `serve` does not start when the token on stdin is not one the store knows. `serve` then exits with
+/// `UNKNOWN_TOKEN_EXIT`, so the app that started it can tell this from a harness that failed.
+const UNKNOWN_TOKEN: &str = "the token on stdin is not one this data folder knows, so the harness does not start; the folder keeps the tokens it has";
+pub const UNKNOWN_TOKEN_EXIT: u8 = 3;
+
+/// Whether `bind` refused the token on stdin as one the store does not know.
+pub fn unknown_token(e: &Error) -> bool {
+    matches!(e, Error::Refused(why) if why == UNKNOWN_TOKEN)
+}
+
 impl Server {
     /// Takes the data folder and listens on its socket. A store with no client token yet takes `first_token`'s, the
     /// one the client that starts the harness hands over; with none, the harness does not start. A store that has
@@ -110,7 +120,7 @@ impl Server {
             let token = first_token().ok_or_else(|| Error::Refused("no client token yet: give the first one on stdin".into()))?;
             store.add_client_token(&token.stored_key())?;
         } else if first_token().is_some_and(|token| !tokens.iter().any(|known| known.stored_key == token.stored_key())) {
-            return Err(Error::Refused("the token on stdin is not one this data folder knows, so the harness does not start; the folder keeps the tokens it has".into()));
+            return Err(Error::Refused(UNKNOWN_TOKEN.into()));
         }
         let harness = Harness::with_setup(store, drivers, settings, Arc::new(setup));
         // The store's lock is ours, so a socket or a descriptor left here is a dead harness's.
