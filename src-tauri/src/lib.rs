@@ -1057,15 +1057,25 @@ pub fn run() {
                 Arc::new(move |connection_id| workstreams_changed(&changed_handle, connection_id)),
             );
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
-            let service = runs::service::RunService::new(
+            let notifier: Arc<dyn runs::tracker::RunNotifier> = Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()]));
+            let runs_changed_too = runs_handle.clone();
+            let mut service = runs::service::RunService::new(
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::new(core.clone())),
                     runs::index::RunIndex::load(&core.data_dir()),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
-                .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
+                .with_notifier(notifier.clone())
                 .with_settings(config.agents)
                 .with_agent_channel(bound.channel());
+            let sidecar: SidecarState = Arc::new(sidecar::Sidecar::bundled(sidecar::Limits::default()));
+            // Until the harness has Claude's driver, only a debug build started with a mock script runs agents on it.
+            if sidecar::mock_script().is_some() {
+                let connect = Arc::new(runs::on_harness::ViaSidecar(sidecar.clone()));
+                let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |connection_id| runs_changed(&runs_changed_too, connection_id));
+                let link = tauri::async_runtime::block_on(async { runs::link::Link::start(core.clone(), connect, Arc::new(runs::link::NoTools), notifier, changed) });
+                service = service.with_harness(runs::on_harness::OnHarness { link: Arc::new(link), provider: "mock".into() });
+            }
             let service = Arc::new(service);
             let handle = app.handle().clone();
             let (view_handle, ws_handle) = (handle.clone(), handle.clone());
@@ -1091,7 +1101,6 @@ pub fn run() {
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
 
-            let sidecar: SidecarState = Arc::new(sidecar::Sidecar::bundled(sidecar::Limits::default()));
             app.manage(sidecar.clone());
             let harness_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

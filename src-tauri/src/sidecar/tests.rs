@@ -528,11 +528,18 @@ async fn the_token_is_in_the_vault_and_in_no_file_under_the_data_folder_nor_the_
 
 #[test]
 fn the_harness_starts_without_the_variable_serve_refuses() {
-    let command = serve_command(Path::new("harness"), Path::new("data"));
+    let command = serve_command(Path::new("harness"), Path::new("data"), None);
     assert!(command.get_envs().any(|(name, value)| name == harness::cli::TOKEN_VARIABLE && value.is_none()), "HARNESS_TOKEN is taken out of its environment");
     let args: Vec<_> = command.get_args().collect();
     assert_eq!(args, ["serve", "--data", "data"]);
     assert_eq!(command.get_current_dir(), Some(Path::new("data")), "it runs in the data folder");
+}
+
+#[test]
+fn a_mock_script_is_served_only_when_one_is_given() {
+    let command = serve_command(Path::new("harness"), Path::new("data"), Some(Path::new("/scripts/demo.jsonl")));
+    let args: Vec<_> = command.get_args().collect();
+    assert_eq!(args, ["serve", "--data", "data", "--mock-script", "/scripts/demo.jsonl"]);
 }
 
 #[tokio::test]

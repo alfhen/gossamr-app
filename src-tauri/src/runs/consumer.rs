@@ -20,6 +20,7 @@ pub const SLOT_WAIT: &str = "Waits for a free slot: the harness runs as many age
 pub const HANDED_OVER: &str = "Handed over to Terminal";
 pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
+pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 
 /// Applies `event` to `run` and `follow`, and returns the timeline rows it adds. An event the app already applied
 /// (numbered at or below `follow.seq`) changes nothing; one numbered 0 was never stored, so it is applied and moves
@@ -88,6 +89,12 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 follow.question = None;
                 follow.asked = None;
             }
+            if follow.answered.as_deref() == Some(id.as_str()) {
+                follow.answered = None;
+                if run.last_detail.as_deref() == Some(ANSWER_WAITS) {
+                    run.last_detail = None;
+                }
+            }
             match how {
                 QuestionEnd::Answered => rows.add("update", "Its question was answered", None),
                 QuestionEnd::Stopped => rows.add("stop", "Its question was closed: the run was stopped", None),
@@ -143,6 +150,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.in_turn = false;
             follow.question = None;
             follow.asked = None;
+            follow.answered = None;
             follow.permissions.clear();
             if !matches!(run.state, RunState::Done | RunState::Failed) {
                 run.state = RunState::Stopped;
@@ -183,6 +191,21 @@ pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, last: u64, 
     rows.rows
 }
 
+/// Notes that the person answered the open `question`: the run goes back to work while the answer waits to reach the
+/// agent, and an answer to a question that has closed since changes nothing.
+pub fn answered(run: &mut Run, follow: &mut SessionFollow, question: &str) {
+    if follow.question.as_deref() != Some(question) {
+        return;
+    }
+    follow.answered = Some(question.to_owned());
+    settle(run, follow);
+    if run.state == RunState::Working && follow.permissions.is_empty() {
+        run.asking = false;
+        run.needs = None;
+        run.last_detail = Some(ANSWER_WAITS.into());
+    }
+}
+
 /// What the open requests leave the run waiting on, while it is not over.
 fn settle(run: &mut Run, follow: &SessionFollow) {
     if follow.closed || run.state == RunState::Failed {
@@ -190,7 +213,7 @@ fn settle(run: &mut Run, follow: &SessionFollow) {
     }
     if !follow.permissions.is_empty() {
         run.state = RunState::NeedsPermission;
-    } else if follow.question.is_some() {
+    } else if follow.question.is_some() && follow.answered != follow.question {
         run.state = RunState::NeedsAnswer;
     } else if follow.in_turn || matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission) {
         run.state = RunState::Working;

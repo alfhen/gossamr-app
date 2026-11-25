@@ -80,6 +80,9 @@ impl RunService {
         if run.handed_over && !took_back {
             return Err(refuse(super::message::HANDED_OVER_ASK));
         }
+        if let Some(sent) = self.send_on_harness(&run, text).await {
+            return sent.map(|(run, _)| run);
+        }
         if self.core.asks().question(run_id).is_some() {
             if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
                 return self.answer_ask(run, text, by).await;

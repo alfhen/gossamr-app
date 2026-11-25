@@ -100,6 +100,8 @@ pub struct RunService {
     pub focus: tokio::sync::Notify,
     /// When this service was made, so recovery can tell a slot wait from before a restart from one of this session's.
     pub(super) started_at: DateTime<Utc>,
+    /// Set once the app has a harness: Claude runs open sessions there from then on.
+    pub(super) harness: Option<super::on_harness::OnHarness>,
 }
 
 pub(super) use super::fresh::real;
@@ -158,6 +160,7 @@ impl RunService {
             folders: Mutex::new(HashMap::new()),
             focus: tokio::sync::Notify::new(),
             started_at: Utc::now(),
+            harness: None,
         }
     }
 
@@ -352,6 +355,16 @@ impl RunService {
         self.store(run).await?;
         self.remember(run);
 
+        if self.harness.is_some() && tc.driver == crate::connections::Driver::Claude {
+            // The harness keeps its own limit, and a session past it waits there in order, so the run holds no slot here.
+            if let Err(e) = self.index.mark_terminal(&run.id) {
+                eprintln!("couldn't update the run index: {e}");
+            }
+            if let Err(why) = self.open_on_harness(run, model).await? {
+                self.fail(run, &why).await?;
+            }
+            return Ok(true);
+        }
         let tools = self.offer_tools(run).await;
         let spec = &run.spec;
         let fresh_id = match self.fresh_short_id().await {

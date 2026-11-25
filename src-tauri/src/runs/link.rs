@@ -107,6 +107,25 @@ impl Link {
         self.call(Op::Close { session: session.to_owned() }).await.map(drop)
     }
 
+    /// The person's one way to reach the agent: the answer to its open question, else a message. Returns whether it
+    /// answered a question. The run waits on its answer no more once the harness took it, though the agent may get it
+    /// only when its turn ends.
+    pub async fn send(&self, session: &str, text: &str) -> Result<bool, String> {
+        let open = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?;
+        let Some(question) = open.and_then(|(_, follow)| follow.question) else {
+            return self.call(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map(|_| false);
+        };
+        self.call(Op::AnswerQuestion { session: session.to_owned(), question: question.clone(), text: text.to_owned() }).await?;
+        let noted = self.inner.core.apply_session(session, |run, follow| {
+            super::consumer::answered(run, follow, &question);
+            Vec::new()
+        });
+        if let Some(applied) = noted.await.map_err(|e| e.to_string())? {
+            self.inner.after(&applied.before, &applied.run);
+        }
+        Ok(true)
+    }
+
     /// Watches a session from after `after`, once the watching connection is up.
     pub async fn follow(&self, session: &str, after: u64) -> Result<(), String> {
         let (done, answered) = oneshot::channel();
@@ -313,5 +332,7 @@ impl Inner {
     }
 }
 
+#[cfg(test)]
+pub(crate) mod served;
 #[cfg(test)]
 mod tests;

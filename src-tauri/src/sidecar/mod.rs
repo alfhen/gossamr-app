@@ -452,7 +452,7 @@ impl Sidecar {
 /// the app's without `HARNESS_TOKEN`, which `serve` refuses.
 fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
     let log = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(dir.join(LOG))?;
-    let mut command = serve_command(program, dir);
+    let mut command = serve_command(program, dir, mock_script().as_deref());
     command.stderr(log);
     // SAFETY: sysconf has no preconditions.
     let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) }.clamp(256, 1 << 16) as libc::c_int;
@@ -481,10 +481,28 @@ fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
 }
 
 /// Runs in the data folder, so the harness holds no other folder of the person's open as its working folder.
-fn serve_command(program: &Path, dir: &Path) -> Command {
+fn serve_command(program: &Path, dir: &Path, mock: Option<&Path>) -> Command {
     let mut command = Command::new(program);
     command.arg("serve").arg("--data").arg(dir).current_dir(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
+    if let Some(script) = mock {
+        command.arg("--mock-script").arg(script);
+    }
     command
+}
+
+/// The variable that makes a debug build serve the harness's mock provider from the script it names, and open its
+/// runs on it, so a run can be tried with no provider. A release build has no such code.
+#[cfg(debug_assertions)]
+pub const MOCK_SCRIPT_VARIABLE: &str = "GOSSAMR_MOCK_SCRIPT";
+
+/// The mock script a debug build was started with, as a full path, since the harness runs in its data folder.
+pub fn mock_script() -> Option<PathBuf> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os(MOCK_SCRIPT_VARIABLE).filter(|path| !path.is_empty()) {
+        let path = PathBuf::from(path);
+        return Some(std::fs::canonicalize(&path).unwrap_or(path));
+    }
+    None
 }
 
 /// Waits for the child in the background, so it leaves no zombie while the app runs; once the app quits, launchd does.
