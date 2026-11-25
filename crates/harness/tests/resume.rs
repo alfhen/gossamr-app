@@ -96,7 +96,7 @@ impl Driver for Stuck {
 }
 
 #[tokio::test]
-async fn resume_of_a_session_a_shutdown_gave_up_on_is_refused() {
+async fn resume_and_clean_up_of_a_session_a_shutdown_gave_up_on_are_refused() {
     let (_tmp, dir) = data_dir();
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stuck".into(), Arc::new(Stuck))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
@@ -108,6 +108,11 @@ async fn resume_of_a_session_a_shutdown_gave_up_on_is_refused() {
     match harness.resume_with(&id, None).await {
         Err(Error::Refused(why)) => assert!(why.contains("gave up") && why.contains("may still run"), "{why}"),
         other => panic!("resumed: {:?}", other.is_ok()),
+    }
+    // Its agent may still work in the worktree.
+    match harness.clean_up(&id).await {
+        Err(Error::Refused(why)) => assert!(why.contains("gave up") && why.contains("not cleaned up"), "{why}"),
+        other => panic!("cleaned up: {:?}", other.is_ok()),
     }
 }
 
@@ -139,6 +144,7 @@ async fn carry_on_is_refused_after_a_stop_a_deny_ended_turn_an_open_request_or_q
         ("a deny ended its last turn", "{\"capabilities\": {\"deny_ends_turn\": true}}\n{\"prompt\": null}\n{\"permission\": {\"kind\": \"command\", \"tool\": \"Bash\"}}\n{\"end\": \"done\"}\n{\"prompt\": null}".to_owned()),
         ("a permission request was open", "{\"prompt\": null}\n{\"permission\": {\"kind\": \"command\", \"tool\": \"Bash\"}}\n{\"end\": \"done\"}\n{\"prompt\": null}".to_owned()),
         ("is open, and its answer is the next prompt", "{\"prompt\": null}\n{\"call\": {\"name\": \"ask\", \"input\": {\"question\": \"Which?\"}}}\n{\"end\": \"done\"}\n{\"prompt\": null}".to_owned()),
+        ("its last turn was cancelled", "{\"prompt\": null}\n{\"permission\": {\"kind\": \"command\", \"tool\": \"Bash\"}}\n{\"end\": \"done\"}\n{\"prompt\": null}".to_owned()),
     ];
     for (why, script) in cases {
         let (_tmp, dir) = data_dir();
@@ -162,6 +168,12 @@ async fn carry_on_is_refused_after_a_stop_a_deny_ended_turn_an_open_request_or_q
                 }
                 "a permission request was open" => {
                     until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+                    assert!(harness.shutdown().await.is_empty());
+                }
+                "its last turn was cancelled" => {
+                    until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+                    harness.cancel(&id).unwrap();
+                    until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
                     assert!(harness.shutdown().await.is_empty());
                 }
                 _ => {
@@ -329,5 +341,69 @@ async fn watch_a_resumed_session_reads_past_its_earlier_closed_and_ends_at_the_r
         let last = got.last().unwrap();
         assert!(last.body == Body::Closed && last.seq > earlier, "{at}: ends at the resumed start's `closed`: {:?}", types(&got));
     }
+    task.abort();
+}
+
+#[tokio::test]
+async fn take_back_of_a_session_never_handed_over_and_a_blank_carry_on_are_refused() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let (id, ps) = {
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        let ps = provider_session(&next(&mut events).await.body);
+        turn(&harness, &id, &mut events, "go").await;
+        assert!(harness.shutdown().await.is_empty());
+        (id, ps)
+    };
+    let harness = harness_on(reopen(&dir).await, &mock, 4);
+    match harness.take_back(&id).await {
+        Err(Error::Refused(why)) => assert!(why.contains("was not handed over"), "{why}"),
+        other => panic!("taken back: {:?}", other.is_ok()),
+    }
+    match harness.resume_with(&id, Some("  ".into())).await {
+        Err(Error::Refused(why)) => assert!(why.contains("give the text"), "{why}"),
+        other => panic!("resumed: {:?}", other.is_ok()),
+    }
+    assert_eq!(mock.tokens(&ps).len(), 1, "no agent started");
+}
+
+#[tokio::test]
+async fn resume_over_the_api_watches_a_locked_sessions_new_start_so_the_carry_on_turns_text_arrives() {
+    use harness::api::Op;
+    use harness::client::Push;
+    let (_tmp, dir) = data_dir();
+    let (token, mock) = (harness::auth::Token::random(), mock(TURNS));
+    let serve = || {
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+        let first = token.clone();
+        harness::server::Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap()
+    };
+    let id = {
+        let server = serve();
+        let served = server.harness().clone();
+        let task = tokio::spawn(server.run());
+        let (id, mut events) = open(&served, true).await;
+        next(&mut events).await;
+        turn(&served, &id, &mut events, "go").await;
+        assert!(served.shutdown().await.is_empty());
+        task.abort();
+        id
+    };
+    drop(reopen(&dir).await);
+    let server = serve();
+    let task = tokio::spawn(server.run());
+    let mut client = harness::client::Client::connect(&dir, &token).await.unwrap();
+    client.call(Op::Resume { session: id.clone(), carry_on: Some("go on".into()) }).await.unwrap();
+    // No `watch`: the resume watches the new start from its first event, whole, as it is a locked session's.
+    let mut got = vec![];
+    while !got.contains(&Body::Text { text: "two".into() }) {
+        match tokio::time::timeout(std::time::Duration::from_secs(10), client.push()).await.expect("the carry-on turn's text within 10 s").unwrap() {
+            Some(Push::Event { event, .. }) => got.push(event.body),
+            other => panic!("{:?}", other.is_some()),
+        }
+    }
+    assert!(matches!(got[0], Body::Started { resumed: true, .. }), "from the new start's first event");
+    assert!(got.contains(&Body::Prompted { text: "go on".into() }));
     task.abort();
 }

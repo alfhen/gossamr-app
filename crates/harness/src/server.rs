@@ -470,13 +470,18 @@ impl Client {
             }
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
+            // Watched in the same step, as an open is, so a locked session's client misses none of the new start.
             Op::Resume { session, carry_on } => {
                 self.captured().await;
-                harness.resume_with(&session, carry_on).await.map(|_| json!({ "session": session }))
+                let (feed, after) = harness.resume_watched(&session, carry_on, false)?;
+                self.watch(session.clone(), (vec![], false, 0), Some(feed), after);
+                Ok(json!({ "session": session }))
             }
             Op::TakeBack { session } => {
                 self.captured().await;
-                harness.take_back(&session).await.map(|_| json!({ "session": session }))
+                let (feed, after) = harness.resume_watched(&session, None, true)?;
+                self.watch(session.clone(), (vec![], false, 0), Some(feed), after);
+                Ok(json!({ "session": session }))
             }
             Op::CleanUp { session } => done(harness.clean_up(&session).await),
             Op::Sessions => Ok(serde_json::to_value(harness.sessions()?)?),
