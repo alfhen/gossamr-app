@@ -687,7 +687,7 @@ async fn a_bundled_harness_that_never_says_its_build_is_killed_and_the_status_go
     let status = tokio::time::timeout(WAIT, sidecar.ensure()).await.expect("the status came back");
     assert_eq!((status.state, status.build.as_deref(), status.bundled_build.as_deref(), status.update), (State::Running, Some("new"), None, false), "{status:?}");
     assert_eq!(sidecar.ensure().await.bundled_build, None);
-    assert!(bed.pids("asked").len() <= 1, "asked once per run");
+    assert_eq!(bed.pids("asked").len(), 1, "asked once per run");
     // Before the stop file, which would also end a probe that was never killed: only the serving fake still runs.
     let serving = bed.pids("serving");
     for entry in std::fs::read_dir(&bed.root).unwrap() {

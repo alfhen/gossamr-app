@@ -31,7 +31,7 @@ const TURNS: &str = r#"{"prompt": null}
 
 async fn closed(harness: &Harness, id: &str, events: &mut broadcast::Receiver<Event>) {
     harness.close(id).unwrap();
-    until(events, |body| *body == Body::Closed).await;
+    until(events, |body| matches!(*body, Body::Closed { .. })).await;
 }
 
 async fn turn(harness: &Harness, id: &str, events: &mut broadcast::Receiver<Event>, text: &str) {
@@ -52,7 +52,7 @@ async fn resume_each_state_that_cannot_be_resumed_gives_its_own_reason_and_start
         match state {
             "handed over" => {
                 harness.hand_over(&id).unwrap();
-                until(&mut events, |body| *body == Body::Closed).await;
+                until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
             }
             _ => closed(&harness, &id, &mut events).await,
         }
@@ -251,7 +251,7 @@ async fn take_back_then_resume_works_and_resume_without_it_is_refused() {
     let (id, mut events) = open(&harness, false).await;
     next(&mut events).await;
     harness.hand_over(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(matches!(harness.resume_with(&id, None).await, Err(Error::HandedOver(_))));
     let mut events = harness.take_back(&id).await.unwrap();
     until(&mut events, |body| matches!(body, Body::Started { .. })).await;
@@ -275,14 +275,14 @@ async fn resume_over_the_api_takes_back_resumes_and_refuses_with_the_reason() {
     let (id, mut events) = open(&served, false).await;
     next(&mut events).await;
     served.hand_over(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let refused = client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap_err().to_string();
     assert!(refused.contains("handed over"), "{refused}");
     let taken = client.call(Op::TakeBack { session: id.clone() }).await.unwrap();
     assert_eq!(taken["session"], id.as_str());
     served.close(&id).unwrap();
     let mut events = served.subscribe(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let stopped = client.call(Op::Resume { session: id.clone(), carry_on: Some("carry on".into()) }).await.unwrap_err().to_string();
     assert!(stopped.contains("may not carry on: it was stopped"), "{stopped}");
     let resumed = client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap();
@@ -317,7 +317,7 @@ async fn watch_a_resumed_session_reads_past_its_earlier_closed_and_ends_at_the_r
     let (id, mut events) = open(&served, false).await;
     next(&mut events).await;
     closed(&served, &id, &mut events).await;
-    let earlier = served.events(&id, 0).unwrap().iter().find(|event| event.body == Body::Closed).unwrap().seq;
+    let earlier = served.events(&id, 0).unwrap().iter().find(|event| matches!(event.body, Body::Closed { .. })).unwrap().seq;
     let mut client = harness::client::Client::connect(&dir, &token).await.unwrap();
     client.call(Op::Resume { session: id.clone(), carry_on: None }).await.unwrap();
     let resumed = |got: &[Event]| got.iter().any(|event| matches!(event.body, Body::Started { resumed: true, .. }) && event.seq > earlier);
@@ -339,7 +339,7 @@ async fn watch_a_resumed_session_reads_past_its_earlier_closed_and_ends_at_the_r
         let got = watched(watcher).await;
         assert!(resumed(&got), "{at}: the resumed start's events: {:?}", types(&got));
         let last = got.last().unwrap();
-        assert!(last.body == Body::Closed && last.seq > earlier, "{at}: ends at the resumed start's `closed`: {:?}", types(&got));
+        assert!(matches!(last.body, Body::Closed { .. }) && last.seq > earlier, "{at}: ends at the resumed start's `closed`: {:?}", types(&got));
     }
     task.abort();
 }
