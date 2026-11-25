@@ -88,10 +88,23 @@ impl Link {
         Link { inner }
     }
 
-    /// Makes a call on a connection of its own and waits for its answer.
+    /// Makes a call on a connection of its own and waits for its answer. A call that can start a session again has the
+    /// harness watch it on that connection, which goes with this call, so the watching connection follows the session
+    /// from what was applied: none of the new start's events is missed, and none applied twice.
     pub async fn call(&self, op: Op) -> Result<Value, String> {
+        let resumes = match &op {
+            Op::AnswerQuestion { session, .. } | Op::Resume { session, .. } | Op::TakeBack { session } | Op::Send { session, .. } => Some(session.clone()),
+            _ => None,
+        };
         let mut client = self.inner.connect.connect().await?;
-        client.call(op).await.map_err(|e| e.to_string())
+        let answered = client.call(op).await.map_err(|e| e.to_string())?;
+        if let Some(session) = resumes {
+            let applied = self.inner.core.session_run(&session).await.map_err(|e| e.to_string())?;
+            if let Some((_, follow)) = applied.filter(|(_, follow)| !follow.ended) {
+                self.follow(&session, follow.seq).await?;
+            }
+        }
+        Ok(answered)
     }
 
     /// Opens a session for `run_id`, makes it the run's, and watches it, in that order: the run follows the session

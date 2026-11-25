@@ -351,8 +351,10 @@ fn a_resumed_start_takes_up_a_session_the_app_had_stopped() {
     p.follow.stop_asked = true;
     p.play([Body::TurnEnded { how: TurnEnd::Cancelled }, Body::Closed]);
     assert!(p.follow.ended);
+    assert!(p.follow.stop_asked);
     p.play([Body::Started { provider_session: "p".into(), resumed: true }]);
     assert!(!p.follow.ended && !p.follow.closed, "followed again");
+    assert!(!p.follow.stop_asked, "a later end of the agent is its own, not that stop's");
 }
 
 #[test]
