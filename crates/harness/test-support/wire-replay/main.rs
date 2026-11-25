@@ -4,7 +4,7 @@
 //! H2's converter. Only test builds have it (`required-features = ["testing"]`).
 //!
 //! `WIRE_REPLAY_FIXTURE` names the recording. `WIRE_REPLAY_OUT` names a folder that gets `argv.json`, `env.json`,
-//! `pid`, `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the
+//! `pid`, `stdin` (whether fd 0 is a pipe), `sent.jsonl` (each line received) and, on a mismatch, `report.txt`, which names the recorded line and the
 //! field and never a payload. A mismatch exits 3. With `WIRE_REPLAY_IGNORE_TERM` set it ignores SIGTERM, as an agent
 //! that will not stop does.
 //!
@@ -45,7 +45,8 @@ fn main() -> ExitCode {
     }
     let written = std::fs::write(out.join("argv.json"), Value::from(argv).to_string())
         .and_then(|()| std::fs::write(out.join("env.json"), Value::Object(env).to_string()))
-        .and_then(|()| std::fs::write(out.join("pid"), std::process::id().to_string()));
+        .and_then(|()| std::fs::write(out.join("pid"), std::process::id().to_string()))
+        .and_then(|()| std::fs::write(out.join("stdin"), stdin_kind()));
     let recording = match (written, load(Path::new(&fixture))) {
         (Ok(()), Ok(recording)) => recording,
         (Err(e), _) => return refuse(&out, &format!("cannot write the out folder: {e}")),
@@ -71,6 +72,18 @@ fn main() -> ExitCode {
         }
         Err(mismatch) => refuse(&out, &mismatch),
     }
+}
+
+/// What fd 0 is: a driver must give its agent a pipe it owns, never the harness's own stdin.
+fn stdin_kind() -> &'static str {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+    // SAFETY: `stat` is as large as the call writes.
+    if unsafe { libc::fstat(0, stat.as_mut_ptr()) } != 0 {
+        return "closed";
+    }
+    // SAFETY: the call filled it.
+    let mode = unsafe { stat.assume_init() }.st_mode;
+    if mode & libc::S_IFMT == libc::S_IFIFO { "pipe" } else { "not a pipe" }
 }
 
 fn refuse(out: &Path, why: &str) -> ExitCode {

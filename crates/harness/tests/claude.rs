@@ -310,6 +310,14 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
 }
 
 #[tokio::test]
+async fn claude_the_agents_stdin_is_the_drivers_own_pipe() {
+    // Run from a test whose own stdin is whatever cargo gives it: the agent must not get that.
+    let (rig, _) = play(&native().join("2-permission.jsonl")).await;
+    assert_eq!(std::fs::read_to_string(rig.out.join("stdin")).unwrap(), "pipe");
+    assert_eq!(rig.sent()[0]["request"]["subtype"], "initialize", "and the driver writes to it");
+}
+
+#[tokio::test]
 async fn claude_initialize_goes_first() {
     let (rig, _) = play(&native().join("2-permission.jsonl")).await;
     let sent = rig.sent();
