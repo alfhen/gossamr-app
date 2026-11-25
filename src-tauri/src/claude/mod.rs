@@ -223,9 +223,10 @@ mod tests {
             r#"{"mcpServers":{"gossamr":{"headers":{"Authorization":"Bearer ${GOSSAMR_MCP_TOKEN}"},"type":"http","url":"http://127.0.0.1:1/mcp/r"}}}"#,
             "--append-system-prompt", "sys", "--resume", "s-1",
         ];
-        assert_eq!(pip::args(&turn), today);
-        assert_eq!(prompt, "p");
         let cmd = pip::command(&turn);
+        let argv: Vec<String> = cmd.as_std().get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+        assert_eq!(argv, today, "the argv the spawned command has, the only way the app reaches it");
+        assert_eq!(prompt, "p");
         let envs: Vec<_> = cmd.as_std().get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect();
         let expected = [("CLAUDECODE", None), ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", Some("1")), ("GOSSAMR_MCP_TOKEN", Some("tok"))];
         let expected: Vec<_> = expected.iter().map(|(k, v)| (k.to_string(), v.map(String::from))).collect();
