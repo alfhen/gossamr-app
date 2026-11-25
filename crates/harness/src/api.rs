@@ -11,13 +11,16 @@
 //! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
 //! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
 //! exited or crashed by itself, a fault signal or a SIGKILL from outside among them, or its driver failed), `signal`
-//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
+//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it, or went without a shutdown and the next one ended the start). `signal`
 //! needs a driver that says how its agent ended (`Driver::open_reporting`); with one that does not, such an end reads
 //! as `agent`. When more than one holds, a request the harness took (`stop`, `shutdown`, `hand_over`, `client_left`)
 //! wins, even one the agent's going overtook, then `harness`, then `signal`, then `agent`. A locked session's `closed`, and one the sweep reached, arrives as `withheld` with `of: "closed"` and
 //! `kept.by`. A reader takes a value it does not know, or a `closed` from a harness that did not say, as `unknown`, so
 //! a later value needs no new protocol. Some starts end with no stored `closed`: one a shutdown gave up on, whose last
 //! event is `failed` with kind `stuck` (its agent may still run), and one whose harness was killed or crashed.
+//! A start whose harness was killed or crashed gets its end later: when the next harness stops the agent it left, or
+//! finds it and its group gone, it appends `failed` (kind `agent_stopped`) and `closed` with `by: harness` to that old
+//! start's events, so a client reading them after a restart sees them arrive after events from before it.
 
 use std::path::{Path, PathBuf};
 

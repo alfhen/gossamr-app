@@ -2378,6 +2378,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_endpoint_a_closed_sessions_token_is_refused_before_its_closed_is_recorded() {
+        // With no resume after it, so no new start's token takes the old one's place.
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        let name = harness.inner.live().get(&id).unwrap().endpoint.clone();
+        let endpoints = harness.inner.endpoints().unwrap();
+        assert!(endpoints.serves(&name));
+        let served = Arc::new(Mutex::new(None));
+        let (seen, checking) = (served.clone(), endpoints.clone());
+        set(&harness.inner.hooks.before_closed, Box::new(move || *seen.lock().unwrap() = Some(checking.serves(&name))) as Hook);
+        harness.close(&id).unwrap();
+        events_until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+        assert_eq!(*served.lock().unwrap(), Some(false), "a client that has seen `closed` finds the token refused");
+    }
+
+    #[tokio::test]
     async fn tools_endpoint_a_session_task_that_panics_stops_serving_its_endpoint() {
         let tmp = tempfile::tempdir().unwrap();
         let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());

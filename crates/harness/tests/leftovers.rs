@@ -106,8 +106,10 @@ fn leftover_a_pid_that_another_process_took_is_never_signalled() {
     assert_eq!(process::seam::sent_to(agent.pid), Vec::<i32>::new(), "no signal was sent to it or its group");
     assert_eq!(row(harness, &dir), (false, vec![]), "the agent on record is gone, since its pid is another's");
     assert!(ended_by_the_next_harness(&said(&dir), "was gone too"), "{:?}", said(&dir));
-    child.kill().unwrap();
-    child.wait().unwrap();
+    // Ended by the test's own SIGTERM: a SIGKILL the harness sent past the seam would have come first.
+    // SAFETY: our own child, not yet reaped.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    assert_eq!(ended(child), Some(libc::SIGTERM), "nothing else ended it");
 }
 
 #[test]
