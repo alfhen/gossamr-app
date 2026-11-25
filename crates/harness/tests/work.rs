@@ -495,3 +495,76 @@ async fn a_failed_open_whose_worktree_was_not_discarded_is_removed_by_its_own_cl
     clean_up(&mut client, &failed).await.unwrap();
     assert!(!rig.worktree("harness-3").exists() && rig.git(&rig.clone(), &["branch", "--list", "harness-3"]).is_empty(), "then worktree and branch go");
 }
+
+#[tokio::test]
+async fn an_origin_with_two_urls_or_a_push_url_is_no_clone_of_the_repo() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let first = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-1"))).await.unwrap();
+    close(&mut client, &first).await;
+    for (key, value) in [("remote.origin.url", "https://evil.example/acme/webshop.git"), ("remote.origin.pushurl", "https://evil.example/acme/webshop.git")] {
+        rig.git(&rig.clone(), &["config", "--add", key, value]);
+        let refused = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-2"))).await;
+        assert!(matches!(&refused, Err(Error::Said(why)) if why.contains("isn't a clone of")), "{key}: taken");
+        let kept = clean_up(&mut client, &first).await;
+        assert!(kept.is_err() && rig.worktree("harness-1").exists(), "{key}: clean-up trusts no such origin");
+        if key == "remote.origin.url" {
+            rig.git(&rig.clone(), &["config", "--unset", key, "evil"]);
+        } else {
+            rig.git(&rig.clone(), &["config", "--unset", key]);
+        }
+    }
+    clean_up(&mut client, &first).await.unwrap();
+}
+
+#[tokio::test]
+async fn clean_up_waits_for_the_repo_lock() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let session = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-1"))).await.unwrap();
+    close(&mut client, &session).await;
+    let held = harness::fresh::lock_repo(&rig.home, "acme/webshop").await.unwrap();
+    let mut other = connect(&served).await;
+    let id = session.clone();
+    let cleaning = tokio::spawn(async move { clean_up(&mut other, &id).await.is_ok() });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!cleaning.is_finished() && rig.worktree("harness-1").exists(), "nothing is done while another holds the lock");
+    drop(held);
+    assert!(cleaning.await.unwrap(), "then it goes ahead");
+    assert!(!rig.worktree("harness-1").exists());
+}
+
+#[tokio::test]
+async fn an_agents_commit_identity_in_the_clone_blocks_no_clean_up() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let session = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-1"))).await.unwrap();
+    close(&mut client, &session).await;
+    rig.git(&rig.clone(), &["config", "--local", "user.email", "agent@example.invalid"]);
+    rig.git(&rig.clone(), &["config", "--local", "user.name", "Agent"]);
+    clean_up(&mut client, &session).await.unwrap();
+    assert!(!rig.worktree("harness-1").exists());
+    rig.git(&rig.clone(), &["config", "--local", "user.signingkey", "ABC"]);
+    let second = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-2"))).await.unwrap();
+    close(&mut client, &second).await;
+    let kept = clean_up(&mut client, &second).await;
+    assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("nothing was removed") && why.contains("user.signingkey")), "any other key still stops it");
+}
+
+#[tokio::test]
+async fn an_upstream_on_another_remote_is_not_trusted() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let session = committed(&rig, &mut client, "elsewhere", None).await;
+    let bare = rig.tmp.path().canonicalize().unwrap().join("remote/github.com/acme/webshop.git");
+    rig.git(&rig.clone(), &["remote", "add", "upstream", &format!("file://{}", bare.display())]);
+    rig.git(&rig.worktree("elsewhere"), &["push", "--quiet", "-u", "upstream", "elsewhere"]);
+    rig.git(&seed(&rig), &["push", "--quiet", "origin", "--delete", "elsewhere"]);
+    let kept = clean_up(&mut client, &session).await;
+    assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("not fully merged")), "only origin's refs count");
+    assert!(rig.worktree("elsewhere").join("elsewhere").exists());
+}

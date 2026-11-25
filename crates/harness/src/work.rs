@@ -141,8 +141,9 @@ impl Setup {
         };
         if let (Some(typed), Some(home)) = (login, self.home.as_deref()) {
             let folder = expand(typed, home);
-            if real(&folder).starts_with(real(&agents_root(home))) {
-                return Err(refused("it is inside the harness's work root, where the clones are".into()));
+            let (folder_real, root) = (real(&folder), real(&agents_root(home)));
+            if folder_real.starts_with(&root) || root.starts_with(&folder_real) {
+                return Err(refused("it is the harness's work root, where the clones are, or inside it or holds it".into()));
             }
             if !folder.is_dir() {
                 return Err(refused("the folder isn't there, and the harness never makes a login folder".into()));
@@ -195,6 +196,9 @@ impl Setup {
     /// Removes a session's worktree and branch through git alone, never forcing. What git refuses (changes not
     /// committed, commits not merged or pushed) stays, and is the refusal.
     pub async fn remove(&self, work: &Work, worktree: &Path) -> Result<()> {
+        // In turns with an open of the same repo, whose fetch and worktree add would race this fetch and removal.
+        let home = self.home.as_deref().ok_or_else(|| Error::Refused("the harness doesn't know the home folder, so it has no work root".into()))?;
+        let _lock = lock_repo(home, &work.repo).await.map_err(|e| self.clone_refused(e))?;
         let at = Worktree { repo: &work.repo, clone: &work.clone, path: worktree, branch: &work.branch, base: &work.base };
         match remove_with_git(&self.git(), self.home.as_deref(), at).await {
             Ok(None) => Ok(()),

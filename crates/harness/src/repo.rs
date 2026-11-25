@@ -121,8 +121,16 @@ impl Git {
 
     /// The origin URL as the clone's config has it. `git remote get-url` would give it rewritten by an `insteadOf`
     /// rule, which may name another host.
+    /// One URL only, and no push URL: `git config --get` gives the last of several and `git fetch` uses the first,
+    /// and a push URL sends pushes to a remote the fetch never reads, so either could make a check trust another host.
     pub async fn origin_or_why(&self, dir: &Path) -> Result<String, String> {
-        self.out_or_why(dir, &["config", "--get", "remote.origin.url"]).await
+        let urls = self.out_or_why(dir, &["config", "--get-all", "remote.origin.url"]).await?;
+        let mut urls = urls.lines();
+        let (Some(url), None) = (urls.next(), urls.next()) else { return Err("the clone's origin has more than one URL".into()) };
+        if self.out(dir, &["config", "--get-all", "remote.origin.pushurl"]).await.is_some_and(|push| !push.is_empty()) {
+            return Err("the clone's origin has a push URL of its own".into());
+        }
+        Ok(url.to_owned())
     }
 
     pub(crate) fn git_program(&self) -> &Path {
@@ -355,8 +363,14 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<
     };
     // The remote-tracking refs say what the last fetch saw. A branch deleted on the remote since, or a base pushed
     // over, would pass for kept: so the origin is asked now, and a clone that can't be fetched keeps its branch.
+    // The fetch below and the refs it updates prove something only for the one origin on GitHub.
+    match git.origin_or_why(clone).await {
+        Ok(url) if origin_matches(&url, repo) => {}
+        Ok(_) => return Ok(Some(format!("nothing was removed: the clone's origin isn't {repo} on GitHub"))),
+        Err(why) => return Ok(Some(format!("nothing was removed: {why}"))),
+    }
     if let crate::fresh::Fetched::Not(why) = crate::fresh::fetch(git, clone).await {
-        return Ok(Some(format!("the clone couldn't be fetched to check that the branch's commits are on the remote, so they stay: {why}")));
+        return Ok(Some(format!("nothing was removed: the clone couldn't be fetched to check that the branch's commits are on the remote, because {why}")));
     }
     let kept_in = match git.check_branch_deletable(clone, branch, base).await {
         Ok(kept_in) => kept_in,
@@ -476,7 +490,8 @@ dir=.
 [ "$1" = -C ] && { dir=$2; shift 2; }
 [ "$1" = --no-optional-locks ] && shift
 case "$*" in
-  "config --get remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
+  "config --get-all remote.origin.url") cat "$dir/.fake-origin" 2>/dev/null || exit 1 ;;
+  "config --get-all remote.origin.pushurl") exit 1 ;;
   "rev-parse --abbrev-ref HEAD") cat "$dir/.fake-branch" 2>/dev/null || echo main ;;
   "status --porcelain") cat "$dir/.fake-dirty" 2>/dev/null ;;
   "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/main ;;

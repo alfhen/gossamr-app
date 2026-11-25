@@ -220,6 +220,8 @@ fn written_by_gossamr_tools(key: &str) -> bool {
         ["core", var] => matches!(*var, "repositoryformatversion" | "filemode" | "bare" | "logallrefupdates" | "ignorecase" | "precomposeunicode"),
         ["remote", "origin" | "upstream", "url" | "fetch"] => true,
         ["remote", middle @ .., "gh-resolved"] | ["branch", middle @ .., "remote" | "merge"] => !middle.is_empty(),
+        // Who an agent commits as: neither runs a program nor names a host, so a fetch reads the same with them.
+        ["user", "name" | "email"] => true,
         _ => false,
     }
 }
@@ -269,7 +271,7 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     args.extend(["-C".into(), path.into(), "fetch".into(), "--prune".into(), "--quiet".into(), "origin".into(), "+refs/heads/*:refs/remotes/origin/*".into()]);
     match git.run(git.git_program(), args, &[NO_PROMPT], FETCH_LIMIT).await {
         Ok(()) => Fetched::Done,
-        Err(line) => Fetched::Not(line),
+        Err(line) => Fetched::Not(format!("the remote couldn't be reached ({line})")),
     }
 }
 
