@@ -90,9 +90,10 @@ async fn until_quiet_ok(events: &mut tokio::sync::broadcast::Receiver<Event>, la
     }
 }
 
-#[tokio::test]
-#[ignore]
-async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
+/// One real session: `spec` opened in a scratch repo whose remote is a local bare repo, `prompt` sent, its first turn
+/// run, then the session closed. The login folders' config is checked while it runs and after, and nothing of the
+/// session may be left. The first turn's events, and those after it.
+async fn real_session(locked: bool, result_schema: Option<serde_json::Value>, prompt: &str) -> (Vec<Event>, Vec<Event>) {
     let home = dirs::home_dir().expect("a home folder");
     let before = login_snapshot(&home);
     let watching = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -129,25 +130,16 @@ async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
     }
     let driver = ClaudeDriver::new(binary);
     let harness = Harness::with_setup(Store::open(&data).unwrap(), vec![("claude".into(), Arc::new(driver))], settings(4), Arc::new(setup));
-    let spec = Open { provider: "claude".into(), cwd: scratch.clone(), model: Some("haiku".into()), ..Open::default() };
+    let spec = Open { provider: "claude".into(), cwd: scratch.clone(), locked, model: Some("haiku".into()), result_schema, ..Open::default() };
     let (id, mut events) = harness.open(spec).await.unwrap();
-    harness.send(&id, "Reply with the single word ready, and use no tool.").unwrap();
+    harness.send(&id, prompt).unwrap();
     let seen = until_within(&mut events, 180, |body| body.ends_turn()).await;
     assert!(!working_in(&scratch).is_empty(), "the agent runs in the scratch folder while the session is open");
     harness.close(&id).unwrap();
     let rest = until_within(&mut events, 60, |body| *body == Body::Closed).await;
-
-    let kinds = types(&seen);
-    eprintln!("events: {kinds:?} then {:?}", types(&rest));
-    let started = seen.iter().find_map(|event| match &event.body { Body::Started { provider_session, resumed } => Some((provider_session.clone(), *resumed)), _ => None });
-    let (session, resumed) = started.expect("init named the session");
-    assert!(session.len() == 36 && session.matches('-').count() == 4 && !resumed, "a new session's id, from init");
-    let text: String = seen.iter().filter_map(|event| match &event.body { Body::Text { text } => Some(text.as_str()), _ => None }).collect();
-    assert!(text.to_lowercase().contains("ready"), "the agent's text arrived ({} characters)", text.len());
-    assert_eq!(seen.last().map(|event| &event.body), Some(&Body::TurnEnded { how: TurnEnd::Done }), "the turn ends by its result");
-    assert!(!kinds.iter().any(|kind| kind == "tool_call" || kind == "permission"), "no tool: {kinds:?}");
-    assert!(!seen.iter().any(|event| matches!(event.body, Body::Notice { .. })), "Claude took the session's tools endpoint: {kinds:?}");
-    assert!(!rest.iter().any(|event| matches!(event.body, Body::Failed { .. })), "the stop fails nothing: {:?}", types(&rest));
+    eprintln!("events: {:?} then {:?}", types(&seen), types(&rest));
+    assert!(!seen.iter().chain(&rest).any(|event| matches!(event.body, Body::Failed { .. })), "nothing failed");
+    assert!(!seen.iter().any(|event| matches!(event.body, Body::Notice { .. })), "Claude took the session's tools endpoint");
     assert!(working_in(&scratch).is_empty(), "no process of the session is left");
 
     watching.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -155,4 +147,39 @@ async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
     let after = login_snapshot(&home);
     let changed: Vec<&String> = after.iter().filter(|line| !before.contains(line)).collect();
     assert!(unchanged_while_running && changed.is_empty(), "a login's config changed: {changed:?}");
+    (seen, rest)
+}
+
+#[tokio::test]
+#[ignore]
+async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
+    let (seen, _) = real_session(false, None, "Reply with the single word ready, and use no tool.").await;
+    let kinds = types(&seen);
+    let started = seen.iter().find_map(|event| match &event.body { Body::Started { provider_session, resumed } => Some((provider_session.clone(), *resumed)), _ => None });
+    let (session, resumed) = started.expect("init named the session");
+    assert!(session.len() == 36 && session.matches('-').count() == 4 && !resumed, "a new session's id, from init");
+    let text: String = seen.iter().filter_map(|event| match &event.body { Body::Text { text } => Some(text.as_str()), _ => None }).collect();
+    assert!(text.to_lowercase().contains("ready"), "the agent's text arrived ({} characters)", text.len());
+    assert_eq!(seen.last().map(|event| &event.body), Some(&Body::TurnEnded { how: TurnEnd::Done }), "the turn ends by its result");
+    assert!(!kinds.iter().any(|kind| kind == "tool_call" || kind == "permission"), "no tool: {kinds:?}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn claude_real_a_locked_session_runs_its_own_result_tool_unasked_and_is_offered_nothing_else() {
+    // Pip's profile: `dontAsk`, no built-in tool, the endpoint by `mcp_set_servers`, its tools allowed by exact name.
+    let schema = serde_json::json!({"type": "object", "properties": {"tools": {"type": "array", "items": {"type": "string"}}}, "required": ["tools"]});
+    let prompt = "Call your result tool exactly once, with `tools` set to the name of every tool you are able to call, \
+        each exactly as it is given to you. Call no other tool, then reply with the word done.";
+    let (seen, _) = real_session(true, Some(schema), prompt).await;
+    assert!(!seen.iter().any(|event| matches!(event.body, Body::Permission { .. })), "nothing asked: {:?}", types(&seen));
+    let call = seen.iter().find_map(|event| match &event.body { Body::ToolCall { id, name, .. } if name.ends_with("__result") => Some((id.clone(), name.clone())), _ => None });
+    let (call, name) = call.expect("the result tool was called");
+    let ran = seen.iter().any(|event| matches!(&event.body, Body::ToolResult { id, error: false, .. } if *id == call));
+    assert!(ran, "and it ran, not denied: {:?}", types(&seen));
+    let given = seen.iter().find_map(|event| match &event.body { Body::Result { data } => Some(data.clone()), _ => None }).expect("the result was taken");
+    let server = name.trim_end_matches("__result");
+    let mut tools: Vec<String> = given["tools"].as_array().unwrap().iter().filter_map(|tool| tool.as_str()).map(|tool| tool.trim_start_matches(&format!("{server}__")).to_owned()).collect();
+    tools.sort();
+    assert_eq!(tools, ["ask", "result"], "it was offered the session's own tools and nothing else: {given}");
 }

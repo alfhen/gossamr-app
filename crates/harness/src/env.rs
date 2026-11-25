@@ -112,7 +112,13 @@ fn valid_key(key: &[u8]) -> bool {
 /// What a login session gets from the system and a shell does not set itself. The shell starts with these and nothing
 /// else of the process that captures it, so an agent never gets what that process happened to inherit (a Claude Code
 /// session's own variables, a terminal's one-off exports): what the person's start files set, it sets again.
-const KEPT: &[&str] = &["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING"];
+/// The proxy and CA variables are kept too: set with `launchctl setenv` and in no start file, they would otherwise
+/// not reach an agent, whose requests then fail behind a TLS-inspecting proxy. Any other variable set that way does not.
+const KEPT: &[&str] = &[
+    "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+];
 
 /// The PATH a login shell starts from; its start files and `path_helper` build the person's from it.
 const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -319,6 +325,23 @@ mod tests {
         assert_eq!(env.get("HOME").unwrap(), "/Users/someone");
         assert_eq!(env.get("LC_CTYPE").unwrap(), "UTF-8");
         assert_eq!(env.get("PATH").unwrap(), SYSTEM_PATH, "the shell builds PATH from the system's");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn the_proxy_and_ca_variables_reach_the_capture_and_another_launchd_one_does_not() {
+        let dir = scratch("proxy");
+        let sh = script(&dir, "fakeshell", "printf '\\0GOSSAMR_ENV_BEGIN\\0'; env -0");
+        let proxies = [
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy", "NODE_EXTRA_CA_CERTS",
+            "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+        ];
+        let inherited = proxies.iter().map(|name| (OsString::from(name), OsString::from(format!("value of {name}")))).chain([("SOME_LAUNCHD_ONLY".into(), "x".into())]);
+        let env = capture_from(&sh, inherited.collect()).await.unwrap();
+        for name in proxies {
+            assert_eq!(env.get(name).and_then(OsStr::to_str), Some(format!("value of {name}").as_str()), "{name} is kept");
+        }
+        assert!(env.get("SOME_LAUNCHD_ONLY").is_none(), "a variable on no list is not");
         let _ = std::fs::remove_dir_all(dir);
     }
 

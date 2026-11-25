@@ -618,3 +618,85 @@ async fn claude_prompts_sent_at_once_each_reach_claude_after_the_result_before_i
     assert_eq!(rig.report(), "", "each prompt came after the result before it");
     assert_eq!(rig.sent().iter().filter(|line| line["type"] == "user").count(), 4);
 }
+
+/// The text of the recording's prompts, in order.
+fn prompts(fixture: &Path) -> Vec<String> {
+    recorded_client(&lines_of(fixture)).0.into_iter().filter_map(|act| match act { Act::Prompt(text, _) => Some(text), _ => None }).collect()
+}
+
+/// The driver on its own against the replay of `fixture`, with `extra` in the agent's environment.
+fn direct(fixture: &Path, extra: &[(&str, &str)], driver: ClaudeDriver) -> (harness::driver::Link, PathBuf, tempfile::TempDir) {
+    use harness::driver::{Driver, Launch, Secret};
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+        [("PATH", "/usr/bin:/bin".to_owned()), ("WIRE_REPLAY_FIXTURE", fixture.display().to_string()), ("WIRE_REPLAY_OUT", out.display().to_string())].into_iter().map(|(k, v)| (k.into(), v.into())).collect();
+    env.extend(extra.iter().map(|(k, v)| ((*k).into(), (*v).into())));
+    let tools = harness::tools::ToolsEndpoint::unattached();
+    let launch = Launch { cwd: tmp.path().into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
+    (driver.open(launch).unwrap(), out, tmp)
+}
+
+async fn said_until(link: &mut harness::driver::Link, last: impl Fn(&Body) -> bool) -> Vec<Body> {
+    let mut said = vec![];
+    while let Some(body) = tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the driver says more within 10 s") {
+        let done = last(&body);
+        said.push(body);
+        if done {
+            break;
+        }
+    }
+    said
+}
+
+fn replay_process(out: &Path) -> Process {
+    let pid: u32 = std::fs::read_to_string(out.join("pid")).unwrap().parse().unwrap();
+    Process { pid, started: process::started_of(pid).expect("the replay runs") }
+}
+
+#[tokio::test]
+async fn claude_a_driver_whose_commands_are_dropped_kills_the_agent_after_its_grace() {
+    // 3-background-exit's agent stays after its turn, and this one ignores SIGTERM.
+    let fixture = native().join("3-background-exit.jsonl");
+    let driver = ClaudeDriver::new(REPLAY.into()).with_graces(Duration::from_millis(200), Duration::from_millis(500));
+    let (mut link, out, _tmp) = direct(&fixture, &[("WIRE_REPLAY_IGNORE_TERM", "1")], driver);
+    link.commands.send(harness::driver::Command::Prompt(prompts(&fixture).remove(0))).unwrap();
+    let asked = said_until(&mut link, |body| matches!(body, Body::Permission { .. })).await;
+    let Some(Body::Permission { id, .. }) = asked.last() else { unreachable!() };
+    link.commands.send(harness::driver::Command::Answer { id: id.clone(), decision: Decision::Allow, message: None }).unwrap();
+    said_until(&mut link, |body| body.ends_turn()).await;
+    let agent = replay_process(&out);
+    drop(link.commands);
+    while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent is killed, and the output closes").is_some() {}
+    assert!(!process::alive(&agent), "the agent is gone");
+}
+
+#[tokio::test]
+async fn claude_a_setup_never_answered_fails_the_session_with_a_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let silent = written(tmp.path(), &[json!({"seq": 1, "ms": 1, "dir": "to_agent", "data": {"type": "control_request", "request_id": "spike-1", "request": {"subtype": "initialize"}}})]);
+    let driver = ClaudeDriver::new(REPLAY.into()).with_setup_within(Duration::from_millis(300));
+    let (mut link, _out, _tmp) = direct(&silent, &[], driver);
+    link.commands.send(harness::driver::Command::Prompt("go".into())).unwrap();
+    let said = said_until(&mut link, |body| matches!(body, Body::Failed { .. })).await;
+    assert!(matches!(said.last(), Some(Body::Failed { kind: FailKind::Provider, reason }) if reason.contains("setup")), "{said:?}");
+    while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
+}
+
+#[tokio::test]
+async fn claude_an_agent_that_exits_mid_turn_fails_with_its_last_stderr_line() {
+    // The replay refuses a deny where the recording allows, says why on stderr and exits, in the middle of the turn.
+    let fixture = native().join("2-permission.jsonl");
+    let (mut link, _out, _tmp) = direct(&fixture, &[], ClaudeDriver::new(REPLAY.into()));
+    link.commands.send(harness::driver::Command::Prompt(prompts(&fixture).remove(0))).unwrap();
+    let asked = said_until(&mut link, |body| matches!(body, Body::Permission { .. })).await;
+    let Some(Body::Permission { id, .. }) = asked.last() else { unreachable!() };
+    link.commands.send(harness::driver::Command::Answer { id: id.clone(), decision: Decision::Deny, message: None }).unwrap();
+    let said = said_until(&mut link, |body| matches!(body, Body::Failed { .. })).await;
+    let reason = match said.last() {
+        Some(Body::Failed { kind: FailKind::Provider, reason }) => reason.clone(),
+        other => panic!("no failure: {other:?}"),
+    };
+    assert!(reason.starts_with("claude exited in the middle of a turn: ") && reason.contains("the decision differs"), "{reason}");
+}

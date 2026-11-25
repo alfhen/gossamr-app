@@ -45,6 +45,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Which build this is; `build.rs` says how it is chosen.
 pub const BUILD_ID: &str = env!("HARNESS_BUILD_ID");
 
+/// The providers `harness serve` offers: the mock when a script is given, and Claude when its CLI is found.
+pub fn serve_drivers(script: Option<mock::Script>, claude: Option<std::path::PathBuf>) -> Vec<(String, std::sync::Arc<dyn driver::Driver>)> {
+    let mock = script.map(|script| ("mock".to_owned(), std::sync::Arc::new(mock::Mock::new(script)) as std::sync::Arc<dyn driver::Driver>));
+    let claude = claude.map(|binary| ("claude".to_owned(), std::sync::Arc::new(claude::driver::ClaudeDriver::new(binary)) as std::sync::Arc<dyn driver::Driver>));
+    mock.into_iter().chain(claude).collect()
+}
+
 /// What `harness --version` prints.
 pub fn version_line() -> String {
     format!("harness {VERSION} (build {BUILD_ID})")
@@ -133,6 +140,15 @@ fn value<'a>(args: &mut impl Iterator<Item = Option<&'a str>>) -> Option<&'a str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_offers_the_mock_with_a_script_and_claude_when_its_cli_is_found() {
+        let names = |drivers: Vec<(String, std::sync::Arc<dyn driver::Driver>)>| drivers.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert_eq!(names(serve_drivers(None, None)), Vec::<String>::new());
+        assert_eq!(names(serve_drivers(None, Some("/usr/local/bin/claude".into()))), ["claude"]);
+        let script = mock::Script::parse("{\"prompt\": null}\n{\"end\": \"done\"}").unwrap();
+        assert_eq!(names(serve_drivers(Some(script), Some("/usr/local/bin/claude".into()))), ["mock", "claude"]);
+    }
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(OsString::from).collect()

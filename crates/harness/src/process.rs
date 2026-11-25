@@ -147,14 +147,18 @@ pub enum Listing {
     Full,
 }
 
-const MEMBERS_MAX: usize = 256;
-
-#[cfg(target_os = "macos")]
+/// The members of the group `group` leads, or what a test said they are.
 fn group_members(group: libc::pid_t) -> Listing {
     #[cfg(any(test, feature = "testing"))]
     if let Some(listing) = seam::listing(group) {
         return listing;
     }
+    members_of(group)
+}
+
+#[cfg(target_os = "macos")]
+fn members_of(group: libc::pid_t) -> Listing {
+    const MEMBERS_MAX: usize = 256;
     let mut members = [0 as libc::pid_t; MEMBERS_MAX];
     let size = std::mem::size_of_val(&members) as libc::c_int;
     // SAFETY: `members` is as large as `size` says, and the call fills at most that much.
@@ -168,7 +172,7 @@ fn group_members(group: libc::pid_t) -> Listing {
 
 /// Only macOS refuses a group of zombies, so elsewhere a refusal stands.
 #[cfg(not(target_os = "macos"))]
-fn group_members(_group: libc::pid_t) -> Listing {
+fn members_of(_group: libc::pid_t) -> Listing {
     Listing::Full
 }
 

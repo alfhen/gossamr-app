@@ -13,10 +13,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -38,6 +39,15 @@ pub const TERM_AFTER: Duration = Duration::from_secs(3);
 /// How long the session waits for a stopped agent before it says kill.
 pub const STOP_TAKES_UP_TO: Duration = Duration::from_secs(10);
 
+/// How long Claude has to answer its setup, `initialize` and then the endpoint, before the session fails.
+pub const SETUP_WITHIN: Duration = Duration::from_secs(60);
+
+/// The longest line read from Claude. The rest of a longer one is skipped, so one line cannot fill the harness's memory.
+pub const LINE_MAX: usize = 32 << 20;
+
+/// How much of Claude's last line on stderr a failure keeps.
+const STDERR_KEPT: usize = 500;
+
 /// How long Claude lets a call to the session's tools run: the endpoint's `timeout`. Without one Claude cuts a call at
 /// 60 s; with it a call held 10 minutes came back (H0, `5-hold-600`). `ask` returns before this.
 pub const TOOL_CALL_LIMIT_MS: u64 = 600_000;
@@ -46,16 +56,67 @@ pub struct ClaudeDriver {
     binary: PathBuf,
     term_after: Duration,
     stop_takes_up_to: Duration,
+    setup_within: Duration,
 }
 
 impl ClaudeDriver {
     pub fn new(binary: PathBuf) -> ClaudeDriver {
-        ClaudeDriver { binary, term_after: TERM_AFTER, stop_takes_up_to: STOP_TAKES_UP_TO }
+        ClaudeDriver { binary, term_after: TERM_AFTER, stop_takes_up_to: STOP_TAKES_UP_TO, setup_within: SETUP_WITHIN }
     }
 
     /// Shorter waits before SIGTERM and before the session says kill, for tests.
     pub fn with_graces(self, term_after: Duration, stop_takes_up_to: Duration) -> ClaudeDriver {
         ClaudeDriver { term_after, stop_takes_up_to, ..self }
+    }
+
+    /// A shorter wait for the setup's answers, for tests.
+    pub fn with_setup_within(self, setup_within: Duration) -> ClaudeDriver {
+        ClaudeDriver { setup_within, ..self }
+    }
+}
+
+/// The agent's process, or why the session cannot run it: without its start time a stop could not tell it from a
+/// process that took its pid since, and would send no signal at all.
+fn agent_process(pid: u32, started: Option<u64>) -> Result<Process, OpenError> {
+    match started {
+        Some(started) => Ok(Process { pid, started }),
+        None => Err(OpenError { kind: FailKind::Provider, message: "claude started, but its start time could not be read, so it could not be stopped safely".into() }),
+    }
+}
+
+/// Lines from a reader, cut at `max` bytes, as UTF-8 with any invalid byte replaced. A partial line is kept between
+/// reads, so a read that `select!` drops loses nothing.
+struct Lines<R> {
+    reader: R,
+    line: Vec<u8>,
+    cut: bool,
+}
+
+impl<R: AsyncBufRead + Unpin> Lines<R> {
+    fn new(reader: R) -> Lines<R> {
+        Lines { reader, line: Vec::new(), cut: false }
+    }
+
+    /// The next line and whether it was cut; None at the end. A last line with no newline is still a line.
+    async fn next(&mut self, max: usize) -> std::io::Result<Option<(String, bool)>> {
+        let Lines { reader, line, cut } = self;
+        loop {
+            let chunk = reader.fill_buf().await?;
+            let (take, end) = match chunk.iter().position(|b| *b == b'\n') {
+                Some(at) => (at, true),
+                None if chunk.is_empty() && line.is_empty() && !*cut => return Ok(None),
+                None => (chunk.len(), chunk.is_empty()),
+            };
+            let room = max.saturating_sub(line.len());
+            *cut |= take > room;
+            line.extend_from_slice(&chunk[..take.min(room)]);
+            let used = take + usize::from(end && !chunk.is_empty());
+            reader.consume(used);
+            if end {
+                let text = String::from_utf8_lossy(&std::mem::take(line)).into_owned();
+                return Ok(Some((text, std::mem::take(cut))));
+            }
+        }
     }
 }
 
@@ -117,20 +178,44 @@ impl Driver for ClaudeDriver {
         command.process_group(0).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let mut child = command.spawn().map_err(|e| OpenError { kind: FailKind::Provider, message: format!("claude could not be started: {e}") })?;
         let pid = child.id().expect("a child that was just spawned has a pid");
-        let started = process::started_of(pid).unwrap_or_default();
+        let process = match agent_process(pid, process::started_of(pid)) {
+            Ok(process) => process,
+            Err(refused) => {
+                let _ = child.start_kill();
+                return Err(refused);
+            }
+        };
         let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
         let (stdin, stdout, stderr) = (stdin.expect("piped"), stdout.expect("piped"), stderr.expect("piped"));
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let (output, output_rx) = mpsc::unbounded_channel();
         let (lines, lines_rx) = mpsc::unbounded_channel();
         tokio::spawn(write(stdin, lines_rx));
-        // Read and dropped, so a CLI that writes much to stderr never blocks on it.
-        tokio::spawn(async move {
-            let mut stderr = BufReader::new(stderr).lines();
-            while let Ok(Some(_)) = stderr.next_line().await {}
+        // Read as it comes, so a CLI that writes much to stderr never blocks on it; only its last line is kept, for a
+        // failure to give a reason by.
+        let last_said = Arc::new(Mutex::new(None::<String>));
+        let keeping = last_said.clone();
+        let stderr = tokio::spawn(async move {
+            let mut stderr = Lines::new(BufReader::new(stderr));
+            while let Ok(Some((line, _))) = stderr.next(LINE_MAX).await {
+                if !line.trim().is_empty() {
+                    *keeping.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(line.chars().take(STDERR_KEPT).collect());
+                }
+            }
         });
-        let stream = Stream::new(lines, output, launch.resume.as_deref());
-        let agent = Agent { child, process: Process { pid, started }, stream, servers: servers(&launch), term_after: self.term_after };
+        let mut stream = Stream::new(lines, output, launch.resume.as_deref());
+        stream.locked = launch.locked;
+        let agent = Agent {
+            child,
+            process,
+            stream,
+            servers: servers(&launch),
+            term_after: self.term_after,
+            kill_after: self.stop_takes_up_to,
+            setup_within: self.setup_within,
+            stderr: (stderr, last_said),
+            secret: launch.tools_token.expose().to_owned(),
+        };
         tokio::spawn(agent.run(BufReader::new(stdout), commands_rx));
         Ok(Link { commands, output: output_rx })
     }
@@ -151,6 +236,13 @@ struct Agent {
     stream: Stream,
     servers: Value,
     term_after: Duration,
+    /// How long after its commands are dropped the agent's group is killed.
+    kill_after: Duration,
+    setup_within: Duration,
+    /// The task reading stderr, and its last line.
+    stderr: (tokio::task::JoinHandle<()>, Arc<Mutex<Option<String>>>),
+    /// The session's tools token, kept out of what a failure says.
+    secret: String,
 }
 
 /// What the agent and the client say to each other, apart from the process: lines in, events and lines out.
@@ -174,47 +266,92 @@ pub struct Stream {
     servers: Option<Value>,
     /// The setup request whose answer the waiting lines wait for, and the servers it must add.
     setup: Option<(String, Vec<String>)>,
+    /// A locked session: Claude may offer it no built-in tool.
+    locked: bool,
+    /// Claude offered a locked session a built-in tool, so the agent must go.
+    refused: bool,
 }
 
 impl Agent {
     async fn run(mut self, stdout: BufReader<tokio::process::ChildStdout>, mut commands: UnboundedReceiver<Command>) {
+        let at = |after: Duration| Some(tokio::time::Instant::now() + after);
         self.stream.initialize(Some(std::mem::take(&mut self.servers)));
-        let mut stdout = stdout.lines();
-        let mut term_at: Option<tokio::time::Instant> = None;
-        let mut listening = true;
+        let mut stdout = Lines::new(stdout);
+        let (mut term_at, mut kill_at, mut setup_until) = (None, None, at(self.setup_within));
+        // The agent was told to go, so a session that asked knows why it went.
+        let (mut going, mut listening) = (false, true);
+        let until = |when: Option<tokio::time::Instant>| async move {
+            match when {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
         loop {
-            let term = async {
-                match term_at {
-                    Some(at) => tokio::time::sleep_until(at).await,
-                    None => std::future::pending().await,
-                }
-            };
+            if !self.stream.setting_up() {
+                setup_until = None;
+            }
             tokio::select! {
                 biased;
-                line = stdout.next_line() => match line {
-                    Ok(Some(line)) => self.stream.read(&line),
+                line = stdout.next(LINE_MAX) => match line {
+                    Ok(Some((_, true))) => self.stream.emit(Body::Notice { text: format!("Claude wrote a line over {} MiB, which was skipped.", LINE_MAX >> 20) }),
+                    Ok(Some((line, false))) => {
+                        self.stream.read(&line);
+                        if std::mem::take(&mut self.stream.refused) {
+                            going = true;
+                            self.kill();
+                        }
+                    }
                     Ok(None) | Err(_) => break,
                 },
                 command = commands.recv(), if listening => match command {
                     Some(Command::Prompt(text)) => self.stream.prompt(text),
                     Some(Command::Answer { id, decision, message }) => self.stream.answer(&id, decision, message),
                     Some(Command::Cancel) => self.stream.cancel(),
-                    Some(Command::Stop) | None => {
-                        listening &= command.is_some();
+                    Some(Command::Stop) => {
+                        going = true;
                         self.stream.close();
-                        term_at.get_or_insert(tokio::time::Instant::now() + self.term_after);
+                        term_at = term_at.or(at(self.term_after));
                     }
-                    Some(Command::Kill) => self.kill(),
+                    // Dropped without a stop, as when the session's task ended: no kill would ever come.
+                    None => {
+                        (going, listening) = (true, false);
+                        self.stream.close();
+                        term_at = term_at.or(at(self.term_after));
+                        kill_at = at(self.kill_after);
+                    }
+                    Some(Command::Kill) => {
+                        going = true;
+                        self.kill();
+                    }
                 },
-                () = term => {
+                () = until(term_at) => {
                     term_at = None;
                     // A background task keeps Claude after stdin closes; the group goes with it.
                     let _ = process::signal_group(&self.process, libc::SIGTERM);
+                }
+                () = until(kill_at) => {
+                    kill_at = None;
+                    self.kill();
+                }
+                () = until(setup_until) => {
+                    setup_until = None;
+                    going = true;
+                    self.stream.fail(format!("Claude did not answer its setup within {} s", self.setup_within.as_secs_f32()));
+                    self.kill();
                 }
             }
         }
         // Whatever of the group is left goes too. The child is not reaped yet, so its group id is still the agent's.
         self.kill();
+        if !going && self.stream.turn {
+            let _ = tokio::time::timeout(Duration::from_secs(1), &mut self.stderr.0).await;
+            let said = self.stderr.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            let secrets = [self.secret.clone()];
+            self.stream.fail(match said {
+                Some(said) => format!("claude exited in the middle of a turn: {}", crate::redact::text(&said, &secrets)),
+                None => "claude exited in the middle of a turn".into(),
+            });
+        }
         let _ = self.child.wait().await;
     }
 
@@ -231,7 +368,8 @@ impl Stream {
         }
         let (turn, cancelled, held, asked, requests) = (false, false, VecDeque::new(), HashMap::new(), 0);
         let (waiting, servers, setup) = (Some(vec![]), None, None);
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup }
+        let (locked, refused) = (false, false);
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -293,6 +431,19 @@ impl Stream {
         let _ = self.output.send(body);
     }
 
+    /// Whether a setup answer is still awaited.
+    fn setting_up(&self) -> bool {
+        self.setup.is_some()
+    }
+
+    /// Ends the session's run with `reason`: the running turn, if any, ends with it, and nothing waits any more.
+    fn fail(&mut self, reason: String) {
+        (self.turn, self.cancelled) = (false, false);
+        self.asked.clear();
+        self.held.clear();
+        self.emit(Body::Failed { kind: FailKind::Provider, reason });
+    }
+
     /// Opens a turn the agent started by itself, so what it says has one to belong to.
     fn begin(&mut self) {
         if !self.turn {
@@ -330,6 +481,13 @@ impl Stream {
         let Ok(line) = serde_json::from_str::<Value>(line) else { return };
         match line["type"].as_str() {
             Some("system") if line["subtype"] == "init" => {
+                // `--tools ""` and `--strict-mcp-config` leave a locked session only its own server's tools.
+                let builtin: Vec<&str> = line["tools"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|tool| !tool.starts_with("mcp__")).collect();
+                if self.locked && !builtin.is_empty() {
+                    let named = builtin.iter().take(8).copied().collect::<Vec<_>>().join(", ");
+                    self.refused = true;
+                    return self.fail(format!("Claude offered this locked session built-in tools ({named}), so it was stopped"));
+                }
                 if !self.started
                     && let Some(session) = line["session_id"].as_str()
                 {
@@ -667,6 +825,39 @@ mod tests {
         let lines: Vec<Value> = std::iter::from_fn(|| sent.try_recv().ok()).map(|line| serde_json::from_str(&line).unwrap()).collect();
         assert_eq!(lines.last().unwrap()["type"], "user");
         assert!(std::iter::from_fn(|| said.try_recv().ok()).any(|body| matches!(body, Body::Notice { .. })));
+    }
+
+    #[tokio::test]
+    async fn lines_are_cut_at_their_limit_with_invalid_bytes_replaced_and_a_last_one_kept() {
+        let mut lines = Lines::new(&b"one\n\xff two\nlong line here\nlast"[..]);
+        assert_eq!(lines.next(8).await.unwrap(), Some(("one".into(), false)));
+        assert_eq!(lines.next(8).await.unwrap(), Some(("\u{fffd} two".into(), false)), "an invalid byte is replaced, and the line kept");
+        assert_eq!(lines.next(8).await.unwrap(), Some(("long lin".into(), true)), "cut at the limit, the rest skipped");
+        assert_eq!(lines.next(8).await.unwrap(), Some(("last".into(), false)), "a last line with no newline");
+        assert_eq!(lines.next(8).await.unwrap(), None);
+    }
+
+    #[test]
+    fn an_agent_whose_start_time_cannot_be_read_is_refused() {
+        assert!(agent_process(7, Some(1_700_000_000)).is_ok());
+        let refused = agent_process(7, None).unwrap_err();
+        assert_eq!(refused.kind, FailKind::Provider);
+        assert!(refused.message.contains("start time"), "{}", refused.message);
+    }
+
+    #[test]
+    fn a_locked_session_offered_a_builtin_tool_fails_and_its_agent_must_go() {
+        let mut w = wire();
+        w.stream.locked = true;
+        w.stream.prompt("go".into());
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["mcp__k3x9q2w7e5r1t8__result"]}));
+        assert!(!w.stream.refused && !w.said().iter().any(|body| matches!(body, Body::Failed { .. })), "its own tools only: it runs");
+        w.agent(result());
+        w.stream.prompt("again".into());
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["Bash", "mcp__k3x9q2w7e5r1t8__result"]}));
+        assert!(w.stream.refused);
+        let failed: Vec<Body> = w.said().into_iter().filter(|body| matches!(body, Body::Failed { .. })).collect();
+        assert!(matches!(&failed[..], [Body::Failed { kind: FailKind::Provider, reason }] if reason.contains("Bash")), "{failed:?}");
     }
 
     #[test]
