@@ -76,6 +76,11 @@ impl Run {
         let _ = writeln!(self.stdin.as_mut().expect("stdin is open"), "{line}");
     }
 
+    /// Both lines in one write, so the replay reads them at once.
+    fn send_together(&mut self, first: &Value, second: &Value) {
+        let _ = write!(self.stdin.as_mut().expect("stdin is open"), "{first}\n{second}\n");
+    }
+
     fn read(&mut self) -> Option<Value> {
         let mut line = String::new();
         (self.stdout.read_line(&mut line).unwrap() > 0).then(|| serde_json::from_str(&line).expect("the replay writes JSON lines"))
@@ -88,6 +93,11 @@ impl Run {
     /// Its exit code, or None when it says it stays; a staying replay is then killed.
     fn end(mut self) -> (Option<i32>, String, tempfile::TempDir) {
         self.close();
+        self.end_open()
+    }
+
+    /// As `end`, with stdin left as it is.
+    fn end_open(mut self) -> (Option<i32>, String, tempfile::TempDir) {
         let mut stderr = BufReader::new(self.child.lock().unwrap().stderr.take().unwrap());
         let (mut said, mut line) = (String::new(), String::new());
         while stderr.read_line(&mut line).unwrap() > 0 {
@@ -170,14 +180,27 @@ struct Client {
     close_before: Option<u64>,
     /// Sent after the recording's last line.
     after: Option<Value>,
+    /// The client line at this seq goes in one write with the client line before it, as a driver that does not wait
+    /// for what the agent says in between.
+    early: Option<u64>,
+    /// Stops before the line at this seq and keeps stdin open.
+    stall_before: Option<u64>,
+    /// Added to the replay's environment.
+    env: &'static [(&'static str, &'static str)],
 }
 
 /// Plays `fixture`'s client against the replay: each agent line is read and its ids learned, and each client line is
 /// sent with them mapped and with the client's own request ids. Returns what was read and how the replay ended.
 fn play(fixture: &Path, client: Client) -> (Vec<Value>, Option<i32>, String, tempfile::TempDir) {
     let lines = lines_of(fixture);
-    let mut run = start(fixture, &[], &[]);
+    let mut run = start(fixture, &[], client.env);
     let (mut ids, mut read, mut config_ids) = (HashMap::new(), vec![], vec![]);
+    // The client line written early, which is then not sent again at its place.
+    let early = client.early.and_then(|seq| lines.iter().find(|line| line["seq"] == seq).cloned());
+    let before_early = early.as_ref().and_then(|early| {
+        let at = lines.iter().position(|line| line["seq"] == early["seq"]).unwrap();
+        lines[..at].iter().rev().find(|line| line["dir"] == "to_agent" && !is_config(&line["data"])).map(|line| line["seq"].clone())
+    });
     if let Some(first) = &client.first {
         run.send(first);
         read.extend(run.read());
@@ -190,6 +213,13 @@ fn play(fixture: &Path, client: Client) -> (Vec<Value>, Option<i32>, String, tem
         if client.close_before == Some(seq) {
             run.close();
             break;
+        }
+        if client.stall_before == Some(seq) {
+            let (code, said, out) = run.end_open();
+            return (read, code, said, out);
+        }
+        if early.as_ref().is_some_and(|early| early["seq"] == seq) {
+            continue;
         }
         match dir {
             "from_agent" if config_ids.contains(&data["response"]["request_id"]) => {}
@@ -218,7 +248,16 @@ fn play(fixture: &Path, client: Client) -> (Vec<Value>, Option<i32>, String, tem
                 if let Some((_, change)) = client.change.filter(|(at, _)| *at == seq) {
                     change(&mut sent);
                 }
-                run.send(&sent);
+                match early.as_ref().filter(|_| before_early.as_ref() == Some(&line["seq"])) {
+                    Some(early) => {
+                        let mut next = mapped(&early["data"], "", &ids);
+                        if next["type"] == "control_request" {
+                            next["request_id"] = json!(format!("client-{}", early["seq"]));
+                        }
+                        run.send_together(&sent, &next);
+                    }
+                    None => run.send(&sent),
+                }
             }
             "driver" if data["note"] == "close_stdin" => {
                 if let Some(after) = &client.after {
@@ -324,6 +363,73 @@ fn wire_replay_a_decision_other_than_the_recordings_is_refused() {
 }
 
 #[test]
+fn wire_replay_an_allow_with_another_input_or_none_is_refused() {
+    let changed = refused("2-permission.jsonl", Client { change: Some((30, |sent| sent["response"]["response"]["updatedInput"]["command"] = json!("rm -rf ."))), ..Client::default() });
+    assert_eq!(changed, "line 30: the allowed input differs from the recording's control_response\n");
+    assert!(!changed.contains("rm -rf"), "the report holds no payload");
+    let missing = refused("2-permission.jsonl", Client { change: Some((30, |sent| _ = sent["response"]["response"].as_object_mut().unwrap().remove("updatedInput"))), ..Client::default() });
+    assert_eq!(missing, "line 30: the allowed input differs from the recording's control_response\n");
+}
+
+#[test]
+fn wire_replay_a_deny_with_another_message_is_refused() {
+    let report = refused("2-permission.jsonl", Client { change: Some((55, |sent| sent["response"]["response"]["message"] = json!("no"))), ..Client::default() });
+    assert_eq!(report, "line 55: the deny's message differs from the recording's control_response\n");
+}
+
+#[test]
+fn wire_replay_a_prompt_with_another_role_or_other_images_is_refused() {
+    let role = refused("2-permission.jsonl", Client { change: Some((5, |sent| sent["message"]["role"] = json!("assistant"))), ..Client::default() });
+    assert_eq!(role, "line 5: the prompt's role differs from the recording's user\n");
+    let image = |sent: &mut Value| sent["message"]["content"].as_array_mut().unwrap().push(json!({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AA=="}}));
+    let images = refused("2-permission.jsonl", Client { change: Some((5, image)), ..Client::default() });
+    assert_eq!(images, "line 5: the prompt's set of images differs from the recording's user\n");
+}
+
+#[test]
+fn wire_replay_a_line_sent_before_the_agent_line_it_follows_is_refused_with_both_lines() {
+    // A prompt written with `initialize`, before its answer.
+    let prompt = refused("2-permission.jsonl", Client { early: Some(5), ..Client::default() });
+    assert_eq!(prompt, "line 5: user came before line 3 was written, after the start\n");
+    // An interrupt written with the allow, before the tool started (line 27, `task_started`).
+    let interrupt = refused("3-cancel.jsonl", Client { early: Some(28), ..Client::default() });
+    assert_eq!(interrupt, "line 28: control_request interrupt came before line 27 was written, after line 21\n");
+    // The next prompt written with the interrupt, while the cancelled turn still runs: before its `result`, line 33.
+    let during = refused("3-cancel.jsonl", Client { early: Some(36), ..Client::default() });
+    assert_eq!(during, "line 36: user came before line 33 was written, after line 27\n");
+}
+
+#[test]
+fn wire_replay_a_line_never_sent_or_a_stdin_never_closed_is_reported_by_its_deadline() {
+    const SHORT: &[(&str, &str)] = &[("WIRE_REPLAY_DEADLINE_MS", "300")];
+    let never = refused("2-permission.jsonl", Client { stall_before: Some(5), env: SHORT, ..Client::default() });
+    assert_eq!(never, "line 5: the driver never sent user within 300 ms\n");
+    let open = refused("2-permission.jsonl", Client { stall_before: Some(130), env: SHORT, ..Client::default() });
+    assert_eq!(open, "line 130: the driver did not close stdin where the recording does within 300 ms\n");
+}
+
+#[test]
+fn wire_replay_writes_each_agent_line_to_the_progress_fifo_as_it_plays_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("progress");
+    let path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    // SAFETY: a valid path and mode.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read_to_string(fifo).unwrap())
+    };
+    let fixture = native().join("2-permission.jsonl");
+    let progress: &'static str = Box::leak(fifo.display().to_string().into_boxed_str());
+    let env: &'static [(&'static str, &'static str)] = Box::leak(vec![("WIRE_REPLAY_PROGRESS", progress)].into_boxed_slice());
+    let (_, code, _, out) = play(&fixture, Client { env, ..Client::default() });
+    assert_eq!((code, report(&out)), (Some(0), String::new()));
+    let seqs: Vec<u64> = reader.join().unwrap().lines().map(|line| line.parse().unwrap()).collect();
+    let agent: Vec<u64> = lines_of(&fixture).iter().filter(|line| line["dir"] == "from_agent").map(|line| line["seq"].as_u64().unwrap()).collect();
+    assert_eq!(seqs, agent, "every agent line, in order, as it is written");
+}
+
+#[test]
 fn wire_replay_a_line_of_another_type_or_subtype_is_refused() {
     // Where the recording interrupts, the client prompts instead.
     let prompt = |sent: &mut Value| *sent = json!({"type": "user", "message": {"role": "user", "content": "go on"}});
@@ -345,16 +451,41 @@ fn wire_replay_a_stdin_closed_early_or_a_line_after_the_end_is_refused() {
 }
 
 #[test]
-fn wire_replay_config_lines_the_recording_lacks_are_answered_and_recorded_ones_may_be_left_out() {
+fn wire_replay_config_lines_the_recording_lacks_are_answered() {
     // 2-permission has no config line: the client sends one first and gets a success naming its server.
     let set = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {"abc123def456": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer t"}, "timeout": 600000}}}});
     let (read, code, _, out) = play(&native().join("2-permission.jsonl"), Client { first: Some(set), ..Client::default() });
     assert_eq!((code, report(&out)), (Some(0), String::new()));
     assert_eq!(read[0], json!({"type": "control_response", "response": {"subtype": "success", "request_id": "mine", "response": {"added": ["abc123def456"], "removed": [], "errors": {}}}}));
-    // 5-mcp-control has one: a client that does not send it plays clean, and the recorded answer is not played.
-    let (read, code, _, out) = play(&native().join("5-mcp-control.jsonl"), Client { skip_config: true, ..Client::default() });
-    assert_eq!((code, report(&out)), (Some(0), String::new()));
-    assert!(!read.iter().any(|line| line["response"]["response"]["added"].is_array()), "no answer to a request never sent");
+}
+
+#[test]
+fn wire_replay_config_a_driver_that_gives_no_endpoint_where_the_recording_does_is_refused() {
+    // 5-mcp-control gives the endpoint at line 4, before its first prompt at line 7.
+    let report = refused("5-mcp-control.jsonl", Client { skip_config: true, ..Client::default() });
+    assert_eq!(report, "line 7: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line 4\n");
+}
+
+#[test]
+fn wire_replay_config_a_server_that_is_not_http_with_a_url_is_refused_never_answered() {
+    for server in [json!({"type": "stdio", "command": "x"}), json!({"type": "http"}), json!({"type": "http", "url": ""})] {
+        let set = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {"abc": server}}});
+        let (read, code, _, out) = play(&native().join("2-permission.jsonl"), Client { first: Some(set), ..Client::default() });
+        assert_eq!(code, Some(3), "{server}");
+        assert_eq!(report(&out), "the driver sent mcp_set_servers with a server that is not http with a url\n");
+        assert!(!read.iter().any(|line| line["response"]["response"]["added"].is_array()), "no success is made up for it");
+    }
+    let none = json!({"type": "control_request", "request_id": "mine", "request": {"subtype": "mcp_set_servers", "servers": {}}});
+    let (_, code, _, _) = play(&native().join("2-permission.jsonl"), Client { first: Some(none), ..Client::default() });
+    assert_eq!(code, Some(3), "no server at all");
+}
+
+#[test]
+fn wire_replay_config_a_reused_request_id_is_refused() {
+    let set = json!({"type": "control_request", "request_id": "client-2", "request": {"subtype": "mcp_set_servers", "servers": {"abc": {"type": "http", "url": "http://127.0.0.1:9/mcp"}}}});
+    // The client's initialize then takes the same id, `client-2`.
+    let report = refused("2-permission.jsonl", Client { first: Some(set), ..Client::default() });
+    assert_eq!(report, "line 2: the driver used a request id twice\n");
 }
 
 #[test]
@@ -412,9 +543,36 @@ fn wire_replay_records_its_argv_its_environment_and_each_line_sent() {
     let argv: Value = serde_json::from_slice(&std::fs::read(out.path().join("argv.json")).unwrap()).unwrap();
     assert_eq!(argv, json!(["-p", "--model", "haiku"]));
     let env: Value = serde_json::from_slice(&std::fs::read(out.path().join("env.json")).unwrap()).unwrap();
-    assert_eq!(env["ONE_VARIABLE"], "its value");
+    assert_eq!(env["ONE_VARIABLE"], Value::Null, "its name only: a value can be a secret");
+    assert!(env.as_object().unwrap().contains_key("ONE_VARIABLE"));
+    assert!(env["WIRE_REPLAY_FIXTURE"].as_str().is_some_and(|fixture| fixture.ends_with("6-model.jsonl")), "the replay's own are shown");
     let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
     assert_eq!(sent, format!("{initialize}\n"));
+}
+
+#[test]
+fn wire_replay_records_where_a_secret_is_and_never_a_header_value() {
+    let fixture = native().join("2-permission.jsonl");
+    let dir = tempfile::tempdir().unwrap();
+    let secret = dir.path().join("secret");
+    std::fs::write(&secret, "tok-5f2a9c\n").unwrap();
+    let secret_file = secret.display().to_string();
+    let env = [("WIRE_REPLAY_SECRET_FILE", secret_file.as_str()), ("LEAKED", "Bearer tok-5f2a9c"), ("CLAUDE_CONFIG_DIR", "/a/b")];
+    let mut run = start(&fixture, &["--token", "tok-5f2a9c"], &env);
+    let set = json!({"type": "control_request", "request_id": "s-1", "request": {"subtype": "mcp_set_servers", "servers": {"abc": {"type": "http", "url": "http://127.0.0.1:9/mcp", "headers": {"Authorization": "Bearer tok-5f2a9c"}}}}});
+    run.send(&set);
+    run.read().unwrap();
+    let (_, _, out) = run.end();
+    let held: Value = serde_json::from_slice(&std::fs::read(out.path().join("secret.json")).unwrap()).unwrap();
+    assert_eq!(held, json!({"env": ["LEAKED"], "argv": 1}));
+    let env: Value = serde_json::from_slice(&std::fs::read(out.path().join("env.json")).unwrap()).unwrap();
+    assert_eq!(env["CLAUDE_CONFIG_DIR"], "/a/b", "a login folder is shown");
+    for file in ["env.json", "sent.jsonl", "report.txt"] {
+        let text = std::fs::read_to_string(out.path().join(file)).unwrap_or_default();
+        assert!(!text.contains("tok-5f2a9c"), "{file} holds the secret");
+    }
+    let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
+    assert!(sent.contains("\"Authorization\":\"<redacted>\""), "the header is kept, its value is not");
 }
 
 #[test]

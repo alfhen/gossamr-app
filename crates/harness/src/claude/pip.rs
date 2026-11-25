@@ -56,7 +56,12 @@ fn mcp_config(url: &str) -> String {
     .to_string()
 }
 
-pub fn args(turn: &Turn) -> Vec<String> {
+/// Pip's argv. Only `command` reaches it, so no caller can add a flag after the lockdown its tests check:
+///
+/// ```compile_fail,E0603
+/// let _ = harness::claude::pip::args;
+/// ```
+pub(crate) fn args(turn: &Turn) -> Vec<String> {
     // Images can only ride in a structured user message, so the prompt is sent that way when there are any.
     // Kept ahead of `--mcp-config`, which takes every argument up to the next flag.
     let input: &[&str] = if turn.images.is_empty() { &[] } else { &["--input-format", "stream-json"] };
