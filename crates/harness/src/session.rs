@@ -234,7 +234,7 @@ impl Harness {
         let id = random_hex(8);
         let endpoint = endpoint_name();
         // The row is made where the start checks for a shutdown, so a refused open leaves none.
-        let (events, second) = self.start(&id, watcher, false, |store| {
+        let (events, second) = self.start(&id, watcher, false, |store, _| {
             let new = NewSession {
                 provider: &spec.provider,
                 locked: spec.locked,
@@ -280,7 +280,7 @@ impl Harness {
     }
 
     fn resume_from(&self, id: &str, taken_back: bool) -> Result<broadcast::Receiver<Event>> {
-        self.start(id, None, taken_back, |store| {
+        self.start(id, None, taken_back, |store, live| {
             let row = store.session(id)?;
             if row.cleaned {
                 return Err(Error::CleanedUp(id.to_owned()));
@@ -302,7 +302,7 @@ impl Harness {
             }
             // A later session may have the same branch, and so the same folder, again: it is that session's now.
             if let Some(work) = &row.work
-                && store.worktree_owner(work)?.as_deref() != Some(id)
+                && store.worktree_owner(work, |other| live.contains_key(other))?.as_deref() != Some(id)
             {
                 return Err(Error::Refused(format!("another session works in session {id}'s worktree now, so it can't be resumed")));
             }
@@ -522,7 +522,7 @@ impl Harness {
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
             // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.
             let owned = match &row.work {
-                Some(work) if !row.cleaned => self.inner.with_store(|store| store.worktree_owner(work))?.as_deref() == Some(id),
+                Some(work) if !row.cleaned => self.inner.with_store(|store| store.worktree_owner(work, |other| live.contains_key(other)))?.as_deref() == Some(id),
                 _ => false,
             };
             let mut cleaning = self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner());
@@ -616,7 +616,7 @@ impl Harness {
         id: &str,
         watcher: Option<Watcher>,
         taken_back: bool,
-        plan: impl FnOnce(&Store) -> Result<Plan>,
+        plan: impl FnOnce(&Store, &HashMap<String, Live>) -> Result<Plan>,
     ) -> Result<(broadcast::Receiver<Event>, broadcast::Receiver<Event>)> {
         let token = Secret::random();
         let secrets = vec![token.expose().to_owned()];
@@ -641,7 +641,7 @@ impl Harness {
             if live.contains_key(id) || self.inner.cleaning.lock().unwrap_or_else(|p| p.into_inner()).contains(id) {
                 return Err(Error::Running(id.to_owned()));
             }
-            let plan = self.inner.with_store(plan)?;
+            let plan = self.inner.with_store(|store| plan(store, &live))?;
             let entry = Live {
                 requests,
                 events: events.clone(),

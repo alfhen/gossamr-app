@@ -1890,6 +1890,9 @@ async fn login_the_work_root_is_refused_and_no_agent_starts_before_the_shell_was
     std::fs::create_dir_all(&clone).unwrap();
     let harness = on(&m, Store::open(&m.dir).unwrap(), setup_of(&m));
     assert!(matches!(harness.open(claude(Some("~/Gossamr/agents/acme/webshop"), None)).await, Err(Error::Refused(_))), "a clone is not a login");
+    for holder in ["~/Gossamr", "~/Gossamr/agents"] {
+        assert!(matches!(harness.open(claude(Some(holder), None)).await, Err(Error::Refused(_))), "{holder} holds the work root");
+    }
     drop(harness);
     let unread = harness::work::Setup::new(Some(m.home.clone()), m.dir.clone()).with_shell_program("/nonexistent/shell");
     let harness = on(&m, reopen(&m.dir).await, unread);
@@ -1917,7 +1920,7 @@ impl Driver for NoGo {
 }
 
 #[tokio::test]
-async fn the_session_that_ran_owns_a_worktree_a_failed_start_also_names() {
+async fn the_latest_start_owns_a_worktree_even_one_that_failed_after_an_earlier_session_lost_it() {
     let m = machine();
     let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
     std::fs::create_dir_all(&worktree).unwrap();
@@ -1928,11 +1931,15 @@ async fn the_session_that_ran_owns_a_worktree_a_failed_start_also_names() {
     next(&mut events).await;
     harness.close(&ran).unwrap();
     until(&mut events, |body| *body == Body::Closed).await;
+    std::fs::remove_dir_all(&worktree).unwrap();
+    std::fs::create_dir_all(&worktree).unwrap();
     let later = harness::session::Open { provider: "nogo".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() };
-    assert!(harness.open(later).await.is_err(), "a later start that fails, naming the same worktree");
-    let mut events = harness.resume(&ran).await.unwrap();
-    next(&mut events).await;
-    assert_eq!(m.seer.starts().len(), 2, "the session that ran still owns its worktree");
+    assert!(harness.open(later).await.is_err(), "a later start on the same branch, whose worktree stays on disk, fails");
+    let failed = harness.sessions().unwrap().into_iter().map(|s| s.id).find(|id| *id != ran).unwrap();
+    let cleaned = harness.clean_up(&failed).await;
+    assert!(cleaned.is_err() || !worktree.exists(), "the failed start's clean-up doesn't say done while its worktree is there");
+    assert!(matches!(harness.resume(&ran).await, Err(Error::Refused(_))), "the earlier session doesn't resume into a worktree it no longer had");
+    assert_eq!(m.seer.starts().len(), 1);
 }
 
 #[tokio::test]
@@ -1955,4 +1962,45 @@ async fn resume_refuses_a_session_whose_worktree_another_session_holds_now() {
     let (_later, mut events) = harness.open(spec()).await.unwrap();
     next(&mut events).await;
     assert!(matches!(harness.resume(&old).await, Err(Error::Refused(_))), "the old session doesn't take the later one's worktree");
+}
+
+/// Opens and then says nothing, as an agent that has not named its session yet.
+struct Mute;
+
+impl Driver for Mute {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel();
+        let (output, receiver) = mpsc::unbounded_channel::<Body>();
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                if matches!(command, Command::Stop | Command::Kill) {
+                    break;
+                }
+            }
+            drop(output);
+        });
+        Ok(Link { commands, output: receiver })
+    }
+}
+
+#[tokio::test]
+async fn a_live_session_owns_its_worktree_before_its_provider_id_comes() {
+    let m = machine();
+    let worktree = m.home.join("Gossamr/agents/acme/webshop+worktrees/harness-1");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let work = harness::work::Work { repo: "acme/webshop".into(), base: "main".into(), branch: "harness-1".into(), clone: m.home.join("Gossamr/agents/acme/webshop") };
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("claude".into(), Arc::new(m.seer.clone())), ("mute".into(), Arc::new(Mute))];
+    let harness = Harness::with_setup(Store::open(&m.dir).unwrap(), drivers, settings(4), Arc::new(setup_of(&m)));
+    let (older, mut events) = harness.open(harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) }).await.unwrap();
+    next(&mut events).await;
+    harness.close(&older).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    let (_newer, _events) = harness.open(harness::session::Open { provider: "mute".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() }).await.unwrap();
+    assert!(matches!(harness.resume(&older).await, Err(Error::Refused(_))), "the older session doesn't resume into a live one's worktree");
+    harness.clean_up(&older).await.unwrap();
+    assert!(worktree.exists(), "and its clean-up leaves the live session's worktree alone");
 }
