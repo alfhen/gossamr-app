@@ -422,3 +422,8 @@ async fn at_start_a_session_an_interrupted_open_left_on_its_runs_branch_closes_a
     assert!(running(&ids[1], &listed), "not one on an old run's branch");
     assert!(running(&ids[2], &listed), "nor one opened by hand on a finished run's branch");
 }
+
+#[test]
+fn claude_runs_open_on_the_harnesss_claude_driver_unless_a_debug_build_serves_the_mock() {
+    assert_eq!((provider(false), provider(true)), ("claude", MOCK));
+}

@@ -40,6 +40,15 @@ const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
 
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
+/// What Claude runs open on: the harness's `claude` driver, or the mock a debug build was started with.
+pub fn provider(mock: bool) -> &'static str {
+    if mock {
+        MOCK
+    } else {
+        "claude"
+    }
+}
+
 /// The run sheet says it, so a mock run is never taken for a real one.
 pub const ON_THE_MOCK: &str = "This run is on a mock script, not on Claude. Nothing it says is real.";
 

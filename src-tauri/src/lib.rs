@@ -1078,12 +1078,13 @@ pub fn run() {
                 .with_settings(config.agents)
                 .with_agent_channel(bound.channel());
             let sidecar: SidecarState = Arc::new(sidecar::Sidecar::bundled(sidecar::Limits::default()));
-            // Until the harness has Claude's driver, only a debug build started with a mock script runs agents on it.
-            if sidecar::mock_script().is_some() {
+            // Claude runs open sessions on the harness; Codex stays on its own path until H12.
+            {
                 let connect = Arc::new(runs::on_harness::ViaSidecar(sidecar.clone()));
                 let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |connection_id| runs_changed(&runs_changed_too, connection_id));
                 let link = tauri::async_runtime::block_on(async { runs::link::Link::start(core.clone(), connect, Arc::new(agent::agent_tools::HarnessReads(core.clone())), notifier, changed) });
-                service = service.with_harness(runs::on_harness::OnHarness { link: Arc::new(link), provider: runs::on_harness::MOCK.into() });
+                let provider = runs::on_harness::provider(sidecar::mock_script().is_some());
+                service = service.with_harness(runs::on_harness::OnHarness { link: Arc::new(link), provider: provider.into() });
             }
             let service = Arc::new(service);
             let handle = app.handle().clone();
