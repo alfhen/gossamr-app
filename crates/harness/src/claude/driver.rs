@@ -166,7 +166,8 @@ pub fn args(launch: &Launch) -> Vec<String> {
         args.extend(["--effort".to_owned(), effort]);
     }
     if let Some(session) = &launch.resume {
-        args.extend(["--resume".to_owned(), session.clone()]);
+        // One argument, so no id could be read as a flag of its own.
+        args.push(format!("--resume={session}"));
     }
     if !launch.locked {
         // On every start, a resume's included.
@@ -302,6 +303,8 @@ pub struct Stream {
     locked: Option<Vec<String>>,
     /// Claude offered a locked session another tool, so the agent must go and nothing more it says is passed on.
     refused: bool,
+    /// The cost Claude's last `result` gave: a total for this process, which a resume starts again.
+    cost_so_far: f64,
 }
 
 impl Agent {
@@ -403,7 +406,8 @@ impl Stream {
         let (turn, cancelled, held, asked, requests) = (false, false, VecDeque::new(), HashMap::new(), 0);
         let (waiting, servers, setup) = (Some(vec![]), None, None);
         let (locked, refused) = (None, false);
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused }
+        let cost_so_far = 0.0;
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, cost_so_far }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -528,6 +532,12 @@ impl Stream {
                 if !self.started
                     && let Some(session) = line["session_id"].as_str()
                 {
+                    // It goes back to Claude as `--resume=<id>` and is stored: only the form Claude's ids have.
+                    if !is_session_id(session) {
+                        self.fail("Claude named its session in a form it does not use, so it was stopped".into());
+                        self.refused = true;
+                        return;
+                    }
                     self.started = true;
                     self.emit(Body::Started { provider_session: session.to_owned(), resumed: false });
                 }
@@ -601,13 +611,16 @@ impl Stream {
         };
         (self.turn, self.cancelled) = (false, false);
         self.asked.clear();
+        let total = result["total_cost_usd"].as_f64().filter(|total| total.is_finite() && *total >= 0.0);
+        // Claude's cost is the process's so far, where its tokens are the turn's: the turn's cost is what it added.
+        let turn_cost = total.map(|total| (total - std::mem::replace(&mut self.cost_so_far, total)).max(0.0));
         if let Some(used) = super::stream::usage_of(result) {
             self.emit(Body::Usage {
                 input_tokens: used.input_tokens,
                 output_tokens: used.output_tokens,
                 cache_read_tokens: used.cache_read_tokens,
                 cache_creation_tokens: used.cache_creation_tokens,
-                cost_usd: used.cost_usd,
+                cost_usd: used.cost_usd.and(turn_cost),
             });
         }
         self.emit(body);
@@ -615,6 +628,11 @@ impl Stream {
             self.prompt(text);
         }
     }
+}
+
+/// A session id as Claude writes one: letters, digits, `-` and `_`, not starting with `-`, at most 128.
+fn is_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.starts_with('-') && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Why a locked session cannot run with what `init` says Claude offers it, if it cannot: `--tools ""` and
@@ -830,10 +848,10 @@ mod tests {
     fn the_argv_names_a_model_only_when_chosen_and_a_session_only_on_a_resume() {
         let tail = |launch: &Launch| args(launch)[STREAM.len()..].to_vec();
         assert_eq!(tail(&launch(false, None, None)), ["--append-system-prompt", GUARD]);
-        assert_eq!(tail(&launch(false, Some("haiku"), Some("s-1"))), ["--model", "haiku", "--resume", "s-1", "--append-system-prompt", GUARD]);
+        assert_eq!(tail(&launch(false, Some("haiku"), Some("s-1"))), ["--model", "haiku", "--resume=s-1", "--append-system-prompt", GUARD]);
         let locked = tail(&launch(true, None, Some("s-1")));
         assert_eq!(locked[..LOCKED.len()], *LOCKED);
-        assert_eq!(locked[LOCKED.len()..], ["--resume", "s-1"], "a locked session gets no guard: it has no tool to commit with");
+        assert_eq!(locked[LOCKED.len()..], ["--resume=s-1"], "a locked session gets no guard: it has no tool to commit with");
     }
 
     #[test]
@@ -948,6 +966,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_session_id_not_of_claudes_form_is_refused_before_it_is_named() {
+        for id in ["--dangerously-skip-permissions", "a b", "", "x/../y"] {
+            let mut w = wire();
+            w.stream.prompt("go".into());
+            w.agent(json!({"type": "system", "subtype": "init", "session_id": id}));
+            let said = w.said();
+            assert!(w.stream.refused, "{id:?}");
+            assert!(!said.iter().any(|body| matches!(body, Body::Started { .. })), "{id:?}: never named, so never stored");
+            assert!(said.iter().any(|body| matches!(body, Body::Failed { reason, .. } if reason.contains("form"))), "{id:?}");
+        }
+        let mut w = wire();
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "0b9e6c3a-6f0e-4a8f-9d0c-3c1f2e4b5a6d"}));
+        assert!(!w.stream.refused && w.said().iter().any(|body| matches!(body, Body::Started { .. })));
+    }
+
     fn locked_wire() -> Wire {
         let mut w = wire();
         w.stream.locked = Some(vec!["mcp__k3x9q2w7e5r1t8__result".into(), "mcp__k3x9q2w7e5r1t8__ask".into()]);
@@ -1025,6 +1059,10 @@ mod tests {
         w.stream.prompt("again".into());
         w.agent(result());
         assert!(!w.said().iter().any(|body| matches!(body, Body::Usage { .. })), "a result with no usage gives none");
+        w.stream.prompt("once more".into());
+        w.agent(json!({"type": "result", "subtype": "success", "is_error": false, "result": "ok", "usage": usage, "total_cost_usd": 0.0030}));
+        let cost = w.said().into_iter().find_map(|body| match body { Body::Usage { cost_usd, .. } => cost_usd, _ => None });
+        assert!(cost.is_some_and(|cost| (cost - 0.0007).abs() < 1e-12), "what this turn added to the total: {cost:?}");
     }
 
     #[test]

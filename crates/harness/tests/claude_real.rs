@@ -156,16 +156,21 @@ async fn real_session(real: Real<'_>) -> Ran {
     let spec = Open { provider: "claude".into(), cwd: scratch.clone(), locked: real.locked, model: Some("haiku".into()), result_schema: real.result_schema, tools: real.tools, ..Open::default() };
     let (id, mut events) = harness.open(spec).await.unwrap();
     harness.send(&id, real.prompt).unwrap();
-    let mut seen = vec![];
-    while !seen.last().is_some_and(|event: &Event| event.body.ends_turn()) {
-        let event = tokio::time::timeout(Duration::from_secs(300), events.recv()).await.expect("the agent answers in time").unwrap();
-        match &event.body {
-            Body::Permission { id: asked, .. } => harness.answer(&id, asked, harness::event::Decision::Allow, None).unwrap(),
-            Body::Question { id: asked, .. } => harness.answer_question(&id, asked, real.answer.expect("no question was expected").into()).await.unwrap(),
-            _ => {}
+    // One deadline for the whole turn, so an agent that keeps talking cannot hold the test open.
+    let turn = async {
+        let mut seen = vec![];
+        while !seen.last().is_some_and(|event: &Event| event.body.ends_turn()) {
+            let event = events.recv().await.unwrap();
+            match &event.body {
+                Body::Permission { id: asked, .. } => harness.answer(&id, asked, harness::event::Decision::Allow, None).unwrap(),
+                Body::Question { id: asked, .. } => harness.answer_question(&id, asked, real.answer.expect("no question was expected").into()).await.unwrap(),
+                _ => {}
+            }
+            seen.push(event);
         }
-        seen.push(event);
-    }
+        seen
+    };
+    let seen = tokio::time::timeout(Duration::from_secs(300), turn).await.expect("the turn ends within 300 s");
     assert!(!working_in(&scratch).is_empty(), "the agent runs in the scratch folder while the session is open");
     harness.close(&id).unwrap();
     let rest = until_within(&mut events, 60, |body| *body == Body::Closed).await;

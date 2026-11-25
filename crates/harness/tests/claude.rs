@@ -856,9 +856,9 @@ async fn replay_gone(rig: &Rig) {
     tokio::time::timeout(Duration::from_secs(10), async { while written.changed().await.is_ok() {} }).await.expect("the replay goes");
 }
 
-/// The argv's `--resume` values.
+/// The argv's `--resume=` values.
 fn resumes(argv: &[String]) -> Vec<String> {
-    argv.windows(2).filter(|pair| pair[0] == "--resume").map(|pair| pair[1].clone()).collect()
+    argv.iter().filter_map(|arg| arg.strip_prefix("--resume=")).map(str::to_owned).collect()
 }
 
 #[tokio::test]
@@ -954,4 +954,22 @@ async fn claude_no_carry_on_after_a_cancelled_turn() {
     let second = rig_after(&fixture, &[], &data).await;
     let refused = second.harness.resume_with(&id, Some("carry on".into())).await;
     assert!(matches!(&refused, Err(harness::error::Error::Refused(why)) if why.contains("cancelled")), "{:?}", refused.err());
+}
+
+#[tokio::test]
+async fn claude_a_usage_events_cost_is_its_turns_not_the_processes_total() {
+    // 11-locked's `result`s give the process's total so far: 0.00098, 0.00118, 0.00138, 0.00149.
+    let fixture = native().join("11-locked.jsonl");
+    let totals: Vec<f64> = lines_of(&fixture).into_iter().filter(|line| line["dir"] == "from_agent" && line["data"]["type"] == "result").filter_map(|line| line["data"]["total_cost_usd"].as_f64()).collect();
+    let rig = rig(&fixture, &[]);
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let (id, mut events) = rig.open(true, None).await;
+    let (seen, _) = drive(&rig, &id, &mut events, acts, results).await;
+    let costs: Vec<f64> = seen.iter().filter_map(|event| match event.body { Body::Usage { cost_usd, .. } => cost_usd, _ => None }).collect();
+    let turns: Vec<f64> = totals.iter().scan(0.0, |before, total| Some(total - std::mem::replace(before, *total))).collect();
+    assert_eq!(costs.len(), 4);
+    for (got, want) in costs.iter().zip(&turns) {
+        assert!((got - want).abs() < 1e-12, "{costs:?} against {turns:?}");
+    }
+    assert!((costs.iter().sum::<f64>() - totals[3]).abs() < 1e-12, "they add up to what the process cost");
 }

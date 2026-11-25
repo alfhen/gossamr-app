@@ -166,7 +166,8 @@ pub enum Op {
     /// question, permission request, stop or hand-over gets in between; a blank one is refused. Refused with the
     /// reason: a session cleaned up, one that ended with its client, one marked as one that cannot be resumed, one
     /// handed over and not taken back, one whose worktree another session holds, one a shutdown gave up on (its agent
-    /// may still run); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
+    /// may still run), and every session while the harness could not check for agents an earlier harness left running
+    /// (each resume checks again, and the reason is the rows' `held`); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
     /// cancelled turn or open permission request forbids it. A cancel forbids it because "carry on" would undo it;
     /// the next turn lifts each mark.
     Resume {
@@ -176,12 +177,14 @@ pub enum Op {
     },
     /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
     /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
-    /// over is refused: resume it.
+    /// over is refused: resume it. Refused, as `resume` is, while the rows say `held`.
     TakeBack { session: String },
     /// Refused while the session runs, and for one a shutdown gave up on, whose agent may still work in its worktree.
     CleanUp { session: String },
     /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
     /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.
+    /// A row's `held`, left out when there is none, says why no session may be resumed now: the harness could not check
+    /// for agents an earlier harness left running, so one may still run. It is the text `resume` refuses with.
     Sessions,
     /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
     /// (`providers::Standing`): the usual setup of every provider of the table, then each of `logins`. A login is

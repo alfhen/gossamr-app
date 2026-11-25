@@ -25,12 +25,31 @@ pub fn started_of(pid: u32) -> Option<u64> {
     Some(info.pbi_start_tvsec)
 }
 
-/// Field 22 of `/proc/<pid>/stat`, in clock ticks since boot. Unlike `etimes`, it does not move between calls.
+/// Field 22 of `/proc/<pid>/stat`, in clock ticks since boot, plus the boot time in ticks, so a record kept across a
+/// reboot never matches a process of the next boot. Unlike `etimes`, it does not move between calls. None for a
+/// zombie, as macOS gives, so a process that has exited is never taken for a running one.
 #[cfg(target_os = "linux")]
 pub fn started_of(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after_name = &stat[stat.rfind(')')? + 2..];
-    after_name.split_whitespace().nth(19)?.parse().ok()
+    let mut fields = stat[stat.rfind(')')? + 2..].split_whitespace();
+    if fields.next()? == "Z" {
+        return None;
+    }
+    let since_boot: u64 = fields.nth(18)?.parse().ok()?;
+    Some(booted_ticks()? + since_boot)
+}
+
+/// When the machine booted, in clock ticks since the epoch: `btime` of `/proc/stat`, which is in seconds.
+#[cfg(target_os = "linux")]
+fn booted_ticks() -> Option<u64> {
+    static BOOTED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *BOOTED.get_or_init(|| {
+        let stat = std::fs::read_to_string("/proc/stat").ok()?;
+        let btime: u64 = stat.lines().find_map(|line| line.strip_prefix("btime "))?.trim().parse().ok()?;
+        // SAFETY: sysconf has no preconditions.
+        let per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok().filter(|ticks| *ticks > 0)?;
+        Some(btime * per_second)
+    })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -63,6 +82,67 @@ pub fn signal_group(process: &Process, signal: libc::c_int) -> std::io::Result<b
     }
     // The process was started with `setsid`, so its pid is its group's id.
     deliver(-(process.pid as libc::pid_t), signal).map(|()| true)
+}
+
+/// What is left of the group a leader led, once the leader is gone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Left {
+    /// Nothing that runs.
+    Nothing,
+    /// Members that run, each started at or after the leader, so the agent's own work: a background task or a command.
+    Ours(Vec<Process>),
+    /// A listing that proves nothing, or a member that started before the leader and so is not the agent's.
+    Unknown,
+}
+
+/// What runs on in the group `leader` led, once it is gone. Its group is never signalled for this: the leader's pid may
+/// lead another group by now.
+pub fn left_of(leader: &Process) -> Left {
+    let group = leader.pid as libc::pid_t;
+    #[cfg(any(test, feature = "testing"))]
+    let listing = seam::listing(group).unwrap_or_else(|| members_left(group));
+    #[cfg(not(any(test, feature = "testing")))]
+    let listing = members_left(group);
+    let pids = match listing {
+        Listing::Full => return Left::Unknown,
+        Listing::Nothing => return Left::Nothing,
+        Listing::Members(pids) => pids,
+    };
+    let mut ours = vec![];
+    for pid in pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()) {
+        match started_of(pid) {
+            // A zombie, or reaped since the listing.
+            None => {}
+            // The leader's pid is another process's: no pid is given out while it names a group that has members, so
+            // the agent's group is gone and this one is another's.
+            Some(started) if pid == leader.pid && started != leader.started => return Left::Nothing,
+            Some(started) if started >= leader.started => ours.push(Process { pid, started }),
+            Some(_) => return Left::Unknown,
+        }
+    }
+    if ours.is_empty() { Left::Nothing } else { Left::Ours(ours) }
+}
+
+#[cfg(target_os = "macos")]
+fn members_left(group: libc::pid_t) -> Listing {
+    members_of(group)
+}
+
+/// Every process whose group, field 5 of `/proc/<pid>/stat`, is `group`.
+#[cfg(target_os = "linux")]
+fn members_left(group: libc::pid_t) -> Listing {
+    let Ok(all) = std::fs::read_dir("/proc") else { return Listing::Full };
+    let in_group = |pid: libc::pid_t| {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat[stat.rfind(')')? + 2..].split_whitespace().nth(2)?.parse::<libc::pid_t>().ok().filter(|of| *of == group)
+    };
+    let members: Vec<libc::pid_t> = all.flatten().filter_map(|entry| entry.file_name().to_str()?.parse().ok()).filter(|pid| in_group(*pid).is_some()).collect();
+    if members.is_empty() { Listing::Nothing } else { Listing::Members(members) }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn members_left(_group: libc::pid_t) -> Listing {
+    Listing::Full
 }
 
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
@@ -202,6 +282,7 @@ pub mod seam {
         static FAILING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
         static REFUSED_GROUPS: RefCell<HashMap<libc::pid_t, usize>> = RefCell::new(HashMap::new());
         static LISTINGS: RefCell<Vec<(libc::pid_t, Listing)>> = const { RefCell::new(Vec::new()) };
+        static SWALLOWED: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
     }
 
     pub(super) fn intercept(target: libc::pid_t, signal: libc::c_int) -> Option<std::io::Result<()>> {
@@ -210,7 +291,16 @@ pub mod seam {
         let refused = signal == libc::SIGKILL
             && target < 0
             && REFUSED_GROUPS.with(|left| left.borrow_mut().get_mut(&-target).is_some_and(|n| n.checked_sub(1).map(|rest| *n = rest).is_some()));
+        if signal == libc::SIGKILL && target < 0 && SWALLOWED.with(|swallowed| swallowed.borrow().contains(&-target)) {
+            return Some(Ok(()));
+        }
         (fails || refused).then(|| Err(std::io::Error::from_raw_os_error(libc::EPERM)))
+    }
+
+    /// Makes every SIGKILL to the group `pid` leads succeed without reaching it, as a process stuck in the kernel goes
+    /// only later.
+    pub fn swallow_group_kills(pid: u32) {
+        SWALLOWED.with(|swallowed| swallowed.borrow_mut().insert(pid as libc::pid_t));
     }
 
     pub(super) fn listing(group: libc::pid_t) -> Option<Listing> {

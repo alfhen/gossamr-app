@@ -83,6 +83,9 @@ pub struct Harness {
 struct Inner {
     /// None once the harness has shut down, which frees the data folder.
     store: Mutex<Option<Store>>,
+    /// Why the agents a harness before this one left running are not known to be stopped: until they are, no session
+    /// is resumed, as one of them may still run.
+    leftovers: Mutex<Option<String>>,
     drivers: HashMap<String, Arc<dyn Driver>>,
     turns: Arc<Turns>,
     live: Mutex<HashMap<String, Live>>,
@@ -206,10 +209,11 @@ impl Harness {
     /// A harness whose sessions take their environment, logins and clones from `setup`. Agents a harness before it
     /// left running are stopped first, before any session can be resumed.
     pub fn with_setup(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings, setup: Arc<Setup>) -> Harness {
-        stop_leftovers(&store);
+        let leftovers = stop_leftovers(&store).err();
         Harness {
             inner: Arc::new(Inner {
                 store: Mutex::new(Some(store)),
+                leftovers: Mutex::new(leftovers),
                 drivers: drivers.into_iter().collect(),
                 turns: Arc::new(Turns { limit: settings.turn_limit, state: Mutex::new(TurnsState::default()) }),
                 live: Mutex::new(HashMap::new()),
@@ -331,6 +335,7 @@ impl Harness {
         let first = carry_on.clone().map(Request::CarryOn);
         let carry_on = carry_on.is_some();
         let (events, second) = self.start(id, watcher, taken_back, first, |store, live| {
+            self.inner.leftovers_stopped(store)?;
             let row = store.session(id)?;
             after = store.last_seq(id)?;
             let never = match () {
@@ -566,8 +571,10 @@ impl Harness {
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let live = self.inner.live();
         let mut listed = self.inner.with_store(Store::sessions)?;
+        let held = self.inner.leftovers.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|why| leftovers_unchecked(why));
         for session in &mut listed {
             session.running = live.contains_key(&session.id);
+            session.held = held.clone();
         }
         Ok(listed)
     }
@@ -778,11 +785,19 @@ impl Harness {
         let link = driver.open(launch).map_err(|OpenError { kind, message }| Error::Open { kind, message: redact::text(&message, &secrets) })?;
         // While the session is still taken: a take-back that failed to open keeps the mark, and a later hand over's
         // mark is never cleared by this one.
-        if taken_back {
-            self.inner.with_store(|store| store.set_handed_over(id, false))?;
-        }
-        self.inner.with_store(|store| store.set_agent(id, link.process.as_ref()))?;
+        let handed_back = if taken_back { self.inner.with_store(|store| store.set_handed_over(id, false)) } else { Ok(()) };
+        let recorded = handed_back.and_then(|()| self.inner.with_store(|store| store.set_agent(id, link.process.as_ref())));
         reserved.keep();
+        if let Err(e) = recorded {
+            // Its agent runs and nothing names it for the next harness: the session stays taken until it has gone.
+            let (inner, id, mut link) = (self.inner.clone(), id.to_owned(), link);
+            let _ = link.commands.send(Command::Kill);
+            tokio::spawn(async move {
+                while link.output.recv().await.is_some() {}
+                inner.forget(&id, start);
+            });
+            return Err(e);
+        }
         let task = Task {
             inner: self.inner.clone(),
             id: id.to_owned(),
@@ -812,12 +827,49 @@ impl Harness {
 /// Stops each agent a harness before this one started and did not see go: its process group, when the pid still
 /// answers and started when the record says, so a pid another process took since is never signalled. One that will
 /// not stop stays on record, and its session stays given up on, so no resume starts a second agent beside it.
-fn stop_leftovers(store: &Store) {
-    let Ok(agents) = store.agents() else { return };
+fn stop_leftovers(store: &Store) -> std::result::Result<(), String> {
+    let agents = store.agents().map_err(|_| {
+        let _ = store.give_up_on_recorded();
+        "the store could not list them".to_owned()
+    })?;
     for (id, agent) in agents {
-        let gone = !crate::process::alive(&agent) || crate::process::kill_group(&agent).is_ok();
+        let gone = if crate::process::alive(&agent) {
+            crate::process::kill_group(&agent).is_ok() && gone_within(std::slice::from_ref(&agent), LEFTOVER_EXIT)
+        } else {
+            // A group outlives its leader: what the agent started may still work in its worktree.
+            match crate::process::left_of(&agent) {
+                crate::process::Left::Nothing => true,
+                crate::process::Left::Ours(members) => {
+                    for member in &members {
+                        let _ = crate::process::signal(member, libc::SIGKILL);
+                    }
+                    gone_within(&members, LEFTOVER_EXIT)
+                }
+                crate::process::Left::Unknown => false,
+            }
+        };
         let _ = if gone { store.set_agent(&id, None) } else { store.set_given_up(&id) };
     }
+    Ok(())
+}
+
+/// How long a killed leftover has to be gone before its session stays given up.
+const LEFTOVER_EXIT: Duration = Duration::from_secs(2);
+
+/// Whether every one of `processes` has exited within `within`: a SIGKILL sent is not yet a process gone.
+fn gone_within(processes: &[crate::process::Process], within: Duration) -> bool {
+    let until = std::time::Instant::now() + within;
+    while processes.iter().any(crate::process::alive) {
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+fn leftovers_unchecked(why: &str) -> String {
+    format!("the harness could not check for agents an earlier harness left running ({why}), so no session is resumed until it can")
 }
 
 fn given_up(id: &str, what: &str) -> Error {
@@ -903,6 +955,19 @@ impl Inner {
     }
 
     /// Removes the session's live entry if it is still this start's, and stops serving its tools endpoint.
+    /// Refuses while the agents a harness before this one left running are not known to be stopped. Each call tries
+    /// again, under the store's lock.
+    fn leftovers_stopped(&self, store: &Store) -> Result<()> {
+        let mut unchecked = self.leftovers.lock().unwrap_or_else(|p| p.into_inner());
+        if unchecked.is_some() {
+            *unchecked = stop_leftovers(store).err();
+        }
+        match unchecked.as_deref() {
+            Some(why) => Err(Error::Refused(leftovers_unchecked(why))),
+            None => Ok(()),
+        }
+    }
+
     fn forget(&self, id: &str, start: u64) {
         let mut live = self.live();
         if let Some(entry) = live.get(id).filter(|entry| entry.start == start) {

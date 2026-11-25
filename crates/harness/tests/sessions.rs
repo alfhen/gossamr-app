@@ -8,7 +8,7 @@ use common::*;
 use harness::driver::{Capabilities, Command, Driver, Launch, Link, OpenError};
 use harness::error::Error;
 use harness::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
-use harness::session::Harness;
+use harness::session::{Harness, Open};
 use harness::store::Store;
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -2047,4 +2047,53 @@ async fn a_slow_driver_open_stalls_no_other_session() {
     assert!(!opening.is_finished(), "another session ran a whole turn while the slow open still blocked");
     go.send(()).unwrap();
     opening.await.unwrap();
+}
+
+/// An agent that starts and goes only when the test lets it, whatever it is told: one still stopping.
+struct Lingering {
+    let_go: Arc<tokio::sync::Notify>,
+}
+
+impl Driver for Lingering {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+        let (output, receiver) = mpsc::unbounded_channel();
+        let _ = output.send(Body::Started { provider_session: "lingering".into(), resumed: false });
+        let let_go = self.let_go.clone();
+        tokio::spawn(async move {
+            let commands = async { while commands_rx.recv().await.is_some() {} };
+            tokio::join!(let_go.notified(), commands);
+            drop(output);
+        });
+        Ok(Link { commands, output: receiver, process: None })
+    }
+}
+
+#[tokio::test]
+async fn no_resume_while_a_start_whose_agent_could_not_be_recorded_may_still_run() {
+    // The rule, from a start's side: an agent nothing names for the next harness keeps its session taken until it goes.
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let harness = Harness::new(Store::open(&dir).unwrap(), vec![("lingering".into(), Arc::new(Lingering { let_go: let_go.clone() }))], settings(4));
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    let opened = harness.open(Open { provider: "lingering".into(), cwd: "/nowhere".into(), ..Open::default() }).await;
+    assert!(opened.is_err(), "recording its agent failed");
+    let id = harness.sessions().unwrap().into_iter().next().expect("the session's row").id;
+    raw.execute_batch("DROP TRIGGER refuse_agent;").unwrap();
+    assert!(matches!(harness.resume(&id).await, Err(Error::Running(_))), "taken while its agent may run");
+    let_go.notify_one();
+    let given = Instant::now() + Duration::from_secs(10);
+    let resumed = loop {
+        match harness.resume(&id).await {
+            Err(Error::Running(_)) if Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+            resumed => break resumed,
+        }
+    };
+    // Free once its agent had gone; what refuses it now is its own (no provider session was ever named).
+    assert!(!matches!(resumed, Err(Error::Running(_))), "still taken after its agent went");
 }

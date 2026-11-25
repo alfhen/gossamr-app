@@ -105,3 +105,95 @@ fn leftover_an_agent_whose_kill_is_refused_stays_on_record_and_given_up() {
     child.kill().unwrap();
     child.wait().unwrap();
 }
+
+/// A store with session `s`, left by a harness that crashed: not given up on, its agent on record.
+fn left_by_a_crash(dir: &Path, agent: &Process) {
+    let store = Store::open(dir).unwrap();
+    store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
+    store.set_agent("s", Some(agent)).unwrap();
+}
+
+#[tokio::test]
+async fn leftover_no_resume_while_a_leftover_that_was_sent_its_kill_may_still_run() {
+    // The rule, from the leftover stop's side: a kill sent is not an agent gone.
+    let (_tmp, dir) = data_dir();
+    let (mut child, agent) = agent();
+    left_by_a_crash(&dir, &agent);
+    process::seam::swallow_group_kills(agent.pid);
+    let harness = started_harness(&dir);
+    assert!(running(&mut child), "the kill did not reach it");
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("gave up"), "no resume beside it: {refused}");
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), agent)]), "still on record, and given up on");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[tokio::test]
+async fn leftover_no_resume_while_the_leftovers_could_not_be_listed_and_a_client_sees_why() {
+    let (_tmp, dir) = data_dir();
+    let (child, agent) = agent();
+    left_by_a_crash(&dir, &agent);
+    // A record the store cannot read back as a process.
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET agent_pid = -1 WHERE id = 's'", []).unwrap();
+    let harness = started_harness(&dir);
+    let given_up: bool = raw.query_row("SELECT given_up FROM sessions WHERE id = 's'", [], |row| row.get(0)).unwrap();
+    assert!(given_up, "a session whose record could not be read is given up on");
+    let held = harness.sessions().unwrap().into_iter().map(|session| session.held).collect::<Vec<_>>();
+    assert!(matches!(&held[..], [Some(why)] if why.contains("could not check")), "{held:?}");
+    for refused in [harness.resume("s").await.err(), harness.take_back("s").await.err()] {
+        let refused = refused.map(|e| e.to_string()).unwrap_or_default();
+        assert!(refused.contains("could not check for agents an earlier harness left running"), "{refused}");
+    }
+    // Once the store reads again, the next resume checks, stops the leftover and goes on to its own reasons.
+    raw.execute("UPDATE sessions SET agent_pid = ?1 WHERE id = 's'", [agent.pid]).unwrap();
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!refused.contains("could not check"), "{refused}");
+    assert_eq!(harness.sessions().unwrap()[0].held, None);
+    assert_eq!(ended(child), Some(libc::SIGKILL), "the leftover was stopped by that check");
+}
+
+/// The reviewer's probe: a leader in a group of its own starts `sleep 60` in the background and exits, reaped. Its
+/// record, taken while it ran, and the sleep, which keeps the group.
+fn a_leader_gone_with_its_work_left() -> (Process, Process) {
+    let mut leader = Command::new("/bin/sh")
+        .args(["-c", "sleep 60 & echo $!; read go"])
+        .process_group(0)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let record = Process { pid: leader.id(), started: process::started_of(leader.id()).expect("it runs") };
+    let mut said = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(leader.stdout.take().unwrap()), &mut said).unwrap();
+    let pid: u32 = said.trim().parse().unwrap();
+    let work = Process { pid, started: process::started_of(pid).expect("the sleep runs") };
+    drop(leader.stdin.take());
+    leader.wait().unwrap();
+    (record, work)
+}
+
+#[test]
+fn leftover_whose_leader_is_gone_has_what_it_left_in_its_group_stopped_before_its_session_is_freed() {
+    let (_tmp, dir) = data_dir();
+    let (leader, work) = a_leader_gone_with_its_work_left();
+    left_by_a_shutdown(&dir, Some(&leader));
+    let harness = started_harness(&dir);
+    assert!(!process::alive(&work), "the work its group kept was killed");
+    assert_eq!(row(harness, &dir), (false, vec![]), "and only then is the session free");
+}
+
+#[test]
+fn leftover_whose_leader_is_gone_and_whose_group_cannot_be_read_stays_given_up_and_nothing_is_signalled() {
+    let (_tmp, dir) = data_dir();
+    let (leader, work) = a_leader_gone_with_its_work_left();
+    left_by_a_shutdown(&dir, Some(&leader));
+    process::seam::list_group_as(leader.pid, Listing::Full);
+    let harness = started_harness(&dir);
+    assert!(process::alive(&work), "a listing that proves nothing signals nothing");
+    assert_eq!(process::seam::sent_to(leader.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+    // SAFETY: the sleep's own pid, read while it runs.
+    unsafe { libc::kill(work.pid as libc::pid_t, libc::SIGKILL) };
+}

@@ -54,9 +54,15 @@ pub fn serve_drivers(script: Option<mock::Script>, claude: claude::driver::Claud
 }
 
 /// The runtime `harness serve` runs on. A driver's open starts a process and can block, so it takes several threads:
-/// one slow open stalls no client and no other session.
+/// one slow open stalls no client and no other session. Set here, so `TOKIO_WORKER_THREADS=1` cannot make it one.
 pub fn serve_runtime() -> std::io::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_multi_thread().enable_all().build()
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    tokio::runtime::Builder::new_multi_thread().worker_threads(serve_workers(available)).enable_all().build()
+}
+
+/// At least two, whatever the machine has.
+fn serve_workers(available: usize) -> usize {
+    available.max(2)
 }
 
 /// What `harness --version` prints.
@@ -163,6 +169,9 @@ mod tests {
     fn serve_runs_on_a_runtime_of_several_threads() {
         let runtime = serve_runtime().unwrap();
         assert_eq!(runtime.handle().runtime_flavor(), tokio::runtime::RuntimeFlavor::MultiThread);
+        let available = std::thread::available_parallelism().unwrap().get();
+        assert_eq!(runtime.metrics().num_workers(), serve_workers(available), "its workers are set, not left to the environment");
+        assert_eq!(serve_workers(1), 2, "two on a machine of one core");
     }
 
     fn args(list: &[&str]) -> Vec<OsString> {

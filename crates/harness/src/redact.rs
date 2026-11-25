@@ -241,11 +241,20 @@ impl Scans {
     }
 }
 
-/// A URL's `user:password@`, as a proxy URL carries it. A user alone (`ssh://git@host`) is no secret and stays.
-static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#@:"'<>]*:[^\s/?#@"'<>]*@"#).expect("a valid pattern"));
+/// A URL's `user:password@`, as a proxy URL carries it, to the last `@` before the host: a password may hold `@`, `/`
+/// or `#` unescaped, as proxy settings often do. A user alone (`ssh://git@host`) is no secret and stays.
+static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#@:"<>]*:([^\s"<>]*)@"#).expect("a valid pattern"));
+
+/// A host's port and path (`host:8080/x@y`), which the pattern also matches and which is no password.
+static PORT_THEN_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9]*(/|$)").expect("a valid pattern"));
 
 pub fn text(s: &str, secrets: &[String]) -> String {
-    let mut out = USERINFO.replace_all(s, format!("${{1}}{MASK}@")).into_owned();
+    let mut out = USERINFO
+        .replace_all(s, |found: &regex::Captures| match PORT_THEN_PATH.is_match(&found[2]) {
+            true => found[0].to_owned(),
+            false => format!("{}{MASK}@", &found[1]),
+        })
+        .into_owned();
     for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
         out = out.replace(secret.as_str(), MASK);
         out = mask_partial(&out, secret);
@@ -386,6 +395,10 @@ mod tests {
             ("proxy http://me:hunter2@proxy.test:8080 refused", "proxy http://<redacted>@proxy.test:8080 refused"),
             ("HTTPS_PROXY=https://me:p%40ss@proxy.test", "HTTPS_PROXY=https://<redacted>@proxy.test"),
             ("socks5h://u:pw@127.0.0.1:1080", "socks5h://<redacted>@127.0.0.1:1080"),
+            ("http://o'neil:it's@proxy.test", "http://<redacted>@proxy.test"),
+            ("http://me:p@ss@proxy.test:8080", "http://<redacted>@proxy.test:8080"),
+            ("http://me:pa/ss@proxy.test", "http://<redacted>@proxy.test"),
+            ("http://me:pa#ss@proxy.test/x", "http://<redacted>@proxy.test/x"),
             ("\"ALL_PROXY\":\"socks://:pw@h\"", "\"ALL_PROXY\":\"socks://<redacted>@h\""),
         ] {
             assert_eq!(text(said, &[]), want);

@@ -181,6 +181,9 @@ pub struct Listed {
     /// The question the agent asked through `ask` that is still open: its id.
     #[serde(default)]
     pub open_question: Option<String>,
+    /// Set by the harness: why no session may be resumed now, as `resume` and `take_back` say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
 }
 
 impl Store {
@@ -292,6 +295,12 @@ impl Store {
         Ok(())
     }
 
+    /// Gives up on every session that has an agent on record, read or not: for when the records cannot be read back.
+    pub fn give_up_on_recorded(&self) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET given_up = 1 WHERE agent_pid IS NOT NULL", [])?;
+        Ok(())
+    }
+
     /// The running start's agent, or None once it is gone. Its going also lifts a shutdown's giving up: no agent of the
     /// session runs any more.
     pub fn set_agent(&self, id: &str, agent: Option<&Process>) -> Result<()> {
@@ -390,7 +399,7 @@ impl Store {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
             let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question })
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question, held: None })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
