@@ -470,6 +470,8 @@ impl Client {
             Op::AnswerQuestion { session, question, text } => done(harness.answer_question(&session, &question, text).await),
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
+            Op::Resume { session, carry_on } => harness.resume_with(&session, carry_on).await.map(|_| json!({ "session": session })),
+            Op::TakeBack { session } => harness.take_back(&session).await.map(|_| json!({ "session": session })),
             Op::CleanUp { session } => done(harness.clean_up(&session).await),
             Op::Sessions => Ok(serde_json::to_value(harness.sessions()?)?),
             Op::Providers { logins } => {

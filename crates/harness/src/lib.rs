@@ -69,6 +69,7 @@ pub const USAGE: &str = "usage: harness --version
        harness providers [--login <provider>=<folder>]...   (without --token-stdin it asks the CLIs itself)
        harness events <session> [--after <seq>] [--follow]
        harness send <session> <text>
+       harness resume <session> [--carry-on <text>] | take-back <session>
        harness answer <session> <request> allow|deny [--message <text>]
        harness answer <session> <question> --text <answer>
        harness token new

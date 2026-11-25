@@ -157,6 +157,21 @@ pub enum Op {
     Close { session: String },
     /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
     HandOver { session: String },
+    /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token; follow
+    /// it with `watch`. The harness calls this after a restart (H10), or the app when the person asks. With
+    /// `carry_on`, that text is the next prompt, checked and sent in one step of the session, so no question,
+    /// permission request, stop or hand-over gets in between. Refused with the reason: a session cleaned up, one that
+    /// ended with its client, one marked as one that cannot be resumed, one handed over and not taken back, one whose
+    /// worktree another session holds, one a shutdown gave up on (its agent may still run); and with `carry_on`, one
+    /// with an open question, or one whose last stop, deny-ended turn or open permission request forbids it.
+    Resume {
+        session: String,
+        #[serde(default)]
+        carry_on: Option<String>,
+    },
+    /// Resumes a session handed over to Terminal. The app sends it only on the person's word that they took the
+    /// session back from Terminal; until then `resume` refuses it.
+    TakeBack { session: String },
     CleanUp { session: String },
     Sessions,
     /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
