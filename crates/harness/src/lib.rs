@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub mod api;
+pub mod ask;
 pub mod auth;
 pub mod binary;
 pub mod cli;
