@@ -274,11 +274,37 @@ fn back_up(dir: &Path, bytes: &[u8]) {
     }
 }
 
+/// The variable that makes a debug build keep its app data in the folder it names, for checks and try-outs that must
+/// leave the person's own data alone. A release build has no such code.
+#[cfg(debug_assertions)]
+pub const APP_DATA_VARIABLE: &str = "GOSSAMR_APP_DATA";
+
+/// The app data folder a debug build was started with, if it named a full path.
+pub fn app_data_override() -> Option<std::path::PathBuf> {
+    #[cfg(debug_assertions)]
+    return app_data_from(std::env::var_os(APP_DATA_VARIABLE));
+    #[cfg(not(debug_assertions))]
+    None
+}
+
+#[cfg(debug_assertions)]
+fn app_data_from(value: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    value.map(std::path::PathBuf::from).filter(|path| path.is_absolute())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn a_debug_build_keeps_its_app_data_only_in_a_full_path_it_was_given() {
+        assert_eq!(app_data_from(Some("/tmp/try/app".into())), Some(PathBuf::from("/tmp/try/app")));
+        for ignored in [None, Some("".into()), Some("try/app".into())] {
+            assert_eq!(app_data_from(ignored), None);
+        }
+    }
 
     fn fresh() -> AppConfig {
         AppConfig { providers: vec![connections::default_claude()], ..AppConfig::default() }

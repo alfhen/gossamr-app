@@ -1032,10 +1032,16 @@ pub fn run() {
             let http = net::client();
             let auth = Arc::new(Auth::load(http.clone()));
             let registry = tracker::Registry::jira(http.clone(), auth.clone());
-            let data_dir = app.path().app_data_dir()?;
-            if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
-                eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
-            }
+            let data_dir = match config::app_data_override() {
+                Some(dir) => dir,
+                None => {
+                    let dir = app.path().app_data_dir()?;
+                    if let Err(e) = legacy::adopt_legacy_data(&dir) {
+                        eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
+                    }
+                    dir
+                }
+            };
             let code = inbox::CodeService::new(http.clone());
             let core: CoreState = Arc::new(Core::new(auth, registry, data_dir).with_code(code));
             tauri::async_runtime::block_on(core.adopt_instances());
