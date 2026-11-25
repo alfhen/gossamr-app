@@ -12,30 +12,20 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-/// Why the shell environment could not be read.
+/// Why the shell environment could not be read, and from which shell.
 #[derive(Debug)]
-pub enum CaptureError {
-    /// The shell could not be started.
-    Spawn(std::io::Error),
-    Failed(&'static str),
+pub struct CaptureError {
+    pub shell: String,
+    pub why: String,
 }
 
 impl std::fmt::Display for CaptureError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Spawn(e) => e.fmt(f),
-            Self::Failed(message) => f.write_str(message),
-        }
+        write!(f, "Couldn't read your shell environment from {}: {}", self.shell, self.why)
     }
 }
 
 impl std::error::Error for CaptureError {}
-
-impl From<std::io::Error> for CaptureError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Spawn(e)
-    }
-}
 
 pub type Result<T> = std::result::Result<T, CaptureError>;
 
@@ -122,6 +112,7 @@ fn valid_key(key: &[u8]) -> bool {
 /// `shell` is `$SHELL`; an empty value falls back to zsh. Interactive and login, so `.zshrc` PATH additions count.
 pub async fn capture(shell: &str) -> Result<RunEnv> {
     let shell = if shell.trim().is_empty() { FALLBACK_SHELL } else { shell };
+    let failed = |why: String| CaptureError { shell: shell.to_owned(), why };
     let script = format!("printf '\\0{MARKER}\\0'; env -0");
     let child = Command::new(shell)
         .args(["-ilc", &script])
@@ -129,16 +120,16 @@ pub async fn capture(shell: &str) -> Result<RunEnv> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .spawn()?;
+        .spawn()
+        .map_err(|e| failed(format!("it didn't start ({e})")))?;
     let out = tokio::time::timeout(CAPTURE_TIMEOUT, child.wait_with_output())
         .await
-        .map_err(|_| CaptureError::Failed("Couldn't read your shell environment: your shell took too long to start."))??;
+        .map_err(|_| failed("it took too long to start.".into()))?
+        .map_err(|e| failed(format!("it couldn't be waited for ({e})")))?;
     if !out.status.success() {
-        return Err(CaptureError::Failed("Couldn't read your shell environment: your shell exited with an error."));
+        return Err(failed("it exited with an error.".into()));
     }
-    RunEnv::parse(&out.stdout)
-        .filter(|e| !e.is_empty())
-        .ok_or(CaptureError::Failed("Couldn't read your shell environment: it printed no variables."))
+    RunEnv::parse(&out.stdout).filter(|e| !e.is_empty()).ok_or_else(|| failed("it printed no variables.".into()))
 }
 
 /// Captures the shell environment on first use and keeps it. A failure is tried again next time, so fixing the shell
@@ -246,10 +237,11 @@ mod tests {
     async fn failure_modes_are_errors_not_empty_environments() {
         let dir = scratch("bad");
         let silent = script(&dir, "silent", "exit 0");
-        assert!(capture(&silent).await.is_err());
+        let named = |e: CaptureError, shell: &str| e.to_string().contains(shell);
+        assert!(named(capture(&silent).await.unwrap_err(), &silent), "the message names the shell");
         let failing = script(&dir, "failing", "printf '\\0GOSSAMR_ENV_BEGIN\\0A=1\\0'; exit 3");
-        assert!(capture(&failing).await.is_err());
-        assert!(capture("/nonexistent/shell").await.is_err());
+        assert!(named(capture(&failing).await.unwrap_err(), &failing));
+        assert!(named(capture("/nonexistent/shell").await.unwrap_err(), "/nonexistent/shell"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
