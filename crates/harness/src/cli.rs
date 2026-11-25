@@ -80,6 +80,8 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
             Some(Command::Events { session: session.clone(), after, follow: flag("--follow").is_some() })
         }
         ("send", [session, text]) if known(&[]) => call(Op::Send { session: session.clone(), text: text.clone() }),
+        ("resume", [session]) if known(&["--carry-on"]) => call(Op::Resume { session: session.clone(), carry_on: flag("--carry-on").flatten().map(str::to_owned) }),
+        ("take-back", [session]) if known(&[]) => call(Op::TakeBack { session: session.clone() }),
         ("answer", [session, question]) if known(&["--text"]) => {
             let text = flag("--text")??.to_owned();
             call(Op::AnswerQuestion { session: session.clone(), question: question.clone(), text })

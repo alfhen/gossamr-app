@@ -74,7 +74,11 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
         closed_ms INTEGER,
         closed TEXT,
         PRIMARY KEY (session, id)
-    );"];
+    );",
+    // Why the harness may not send "carry on" to the session, if anything forbids it now; and that a shutdown gave up
+    // on its agent, which may still run, so no resume may start a second one.
+    "ALTER TABLE sessions ADD COLUMN no_carry_on TEXT;
+    ALTER TABLE sessions ADD COLUMN given_up INTEGER NOT NULL DEFAULT 0;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -125,6 +129,10 @@ pub struct SessionRow {
     pub endpoint: Option<String>,
     pub tools: Vec<ToolSpec>,
     pub result_schema: Option<serde_json::Value>,
+    /// Why "carry on" may not be sent now: a stop, a deny-ended turn, a permission request left open.
+    pub no_carry_on: Option<String>,
+    /// A shutdown gave up on its agent, which may still run (#458 item 11).
+    pub given_up: bool,
 }
 
 /// What a new session's row holds besides its id.
@@ -233,7 +241,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over,
-                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema FROM sessions WHERE id = ?1",
+                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema, no_carry_on, given_up FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -256,11 +264,24 @@ impl Store {
                         // Written by `insert_session` only, so a value that does not read is a broken file.
                         tools: json_column(row, 16)?.unwrap_or_default(),
                         result_schema: json_column(row, 17)?,
+                        no_carry_on: row.get(18)?,
+                        given_up: row.get(19)?,
                     })
                 },
             )
             .optional()?
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
+    }
+
+    /// None says "carry on" may be sent again.
+    pub fn set_no_carry_on(&self, id: &str, why: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET no_carry_on = ?2 WHERE id = ?1", params![id, why])?;
+        Ok(())
+    }
+
+    pub fn set_given_up(&self, id: &str) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET given_up = 1 WHERE id = ?1", [id])?;
+        Ok(())
     }
 
     /// Names the tools endpoint of a session made before the store kept the name.
