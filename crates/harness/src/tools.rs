@@ -117,8 +117,14 @@ pub fn check_tools(tools: &[ToolSpec], result_schema: Option<&Value>) -> Result<
             return refused(format!("the input schema of `{name}` is not a JSON object"));
         }
     }
-    if serde_json::to_string(tools)?.len() > MAX_TOOLS_BYTES {
+    let declared = serde_json::to_string(tools)?;
+    if declared.len() > MAX_TOOLS_BYTES {
         return refused(format!("the tools take more than {MAX_TOOLS_BYTES} bytes"));
+    }
+    // They are kept in the store as they are, where no secret may be.
+    let schema = result_schema.map(Value::to_string).unwrap_or_default();
+    if crate::redact::text(&declared, &[]) != declared || crate::redact::text(&schema, &[]) != schema {
+        return refused("a tool or the result schema holds what looks like a secret, which the harness will not keep".into());
     }
     if let Some(schema) = result_schema {
         if !schema.is_object() {

@@ -447,6 +447,12 @@ async fn tools_endpoint_what_open_refuses_of_the_tools_and_the_schema() {
         let open = harness.open(Open { tools: tools.clone(), ..spec() }).await;
         assert!(matches!(open, Err(harness::error::Error::Refused(_))), "{:?}", tools.iter().map(|t| &t.name).collect::<Vec<_>>());
     }
+    let token = (harness::redact::SHAPES.iter().find(|shape| shape.name == "GitHub token").expect("a shape of that name").example)();
+    let holding = ToolSpec { description: format!("call it with {token}"), ..tool("leaky") };
+    let open = harness.open(Open { tools: vec![holding], ..spec() }).await;
+    assert!(matches!(open, Err(harness::error::Error::Refused(why)) if why.contains("looks like a secret")), "a declaration that holds a secret is not kept");
+    let open = harness.open(Open { result_schema: Some(json!({"type": "object", "default": {"key": token}})), ..spec() }).await;
+    assert!(matches!(open, Err(harness::error::Error::Refused(_))), "nor a schema that does");
     let open = harness.open(Open { result_schema: Some(json!([1])), ..spec() }).await;
     assert!(matches!(open, Err(harness::error::Error::Refused(_))), "a schema is an object");
     assert!(recorder.launches.lock().unwrap().is_empty(), "no refused open started an agent");
@@ -482,11 +488,15 @@ async fn tools_endpoint_the_token_is_in_no_event_store_or_output() {
 
 #[tokio::test]
 async fn tools_endpoint_harness_run_prints_the_call_the_clients_answer_and_what_the_mock_received() {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness"))
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_harness"))
         .args(["run", "--provider", "mock", "--script", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/scripts/client-tool.jsonl"), "read T-1"])
         .env_remove("HARNESS_DATA")
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .unwrap();
+    let out = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output()).await.expect("`harness run` ended within 60 s").unwrap();
     assert!(out.status.success(), "exit {:?}", out.status.code());
     let lines: Vec<Value> = String::from_utf8(out.stdout.clone()).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
     let at = |kind: &str, id_prefix: &str| lines.iter().position(|line| line["type"] == kind && line["id"].as_str().is_some_and(|id| id.starts_with(id_prefix)));
@@ -530,4 +540,30 @@ async fn tools_endpoint_limits_calls_waiting_on_their_clients_never_shut_another
     for call in held {
         assert_eq!(call.await.unwrap().1["result"]["content"][0]["text"], "the session has ended");
     }
+}
+
+#[tokio::test]
+async fn tools_endpoint_declared_a_locked_sessions_client_that_fell_behind_is_away_and_the_call_fails_at_once() {
+    let (_tmp, dir) = data_dir();
+    // The four events before the call fill the client's backlog, so sending the call drops the client.
+    let script = "{\"prompt\": null}\n{\"call\": {\"name\": \"choose\", \"input\": {}}}\n{\"end\": \"done\"}\n{\"prompt\": null}";
+    let mock = mock(script);
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, Settings { locked_backlog: 4, ..Settings::default() });
+    let (id, events, _feed) = harness.open_watched(Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), tools: tools(), ..Open::default() }).unwrap();
+    drop(events);
+    harness.send(&id, "go").unwrap();
+    let given = Instant::now() + ANSWER_WITHIN;
+    let ps = loop {
+        if let Some(Body::Withheld { kept, .. }) = harness.events(&id, 0).unwrap().first().map(|event| event.body.clone()) {
+            break kept["provider_session"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < given, "the session started within the wait");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    while mock.replies(&ps).is_empty() {
+        assert!(Instant::now() < given, "the call failed within the wait, not held for a client that is gone");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(mock.replies(&ps), [Ok(harness::tools::Reply::failed(harness::session::CLIENT_AWAY))]);
 }

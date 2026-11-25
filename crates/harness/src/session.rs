@@ -1027,17 +1027,19 @@ impl Task {
                         let id = format!("c{}", random_hex(8));
                         let called = redact::body(Body::ClientToolCall { id: id.clone(), name, input }, &self.secrets);
                         let (called, cut_by) = crate::event::fit(called, crate::event::EVENT_MAX);
-                        let failed = match () {
-                            _ if !self.client_present() => Some(CLIENT_AWAY.to_owned()),
-                            _ if cut_by.is_some() || matches!(called, Body::Withheld { .. }) => {
-                                Some(format!("the call's input is over the {}-byte limit of an event, so the client could not see all of it", crate::event::EVENT_MAX))
-                            }
-                            _ => None,
-                        };
+                        let oversize = cut_by.is_some() || matches!(called, Body::Withheld { .. });
                         // Unrecorded, the agent hears only that the session ended.
                         if !self.keep(called, cut_by) {
                             continue 'run;
                         }
+                        // After the call is sent: sending it drops a locked session's client that fell behind.
+                        let failed = match () {
+                            _ if !self.client_present() => Some(CLIENT_AWAY.to_owned()),
+                            _ if oversize => {
+                                Some(format!("the call's input is over the {}-byte limit of an event, so the client could not see all of it", crate::event::EVENT_MAX))
+                            }
+                            _ => None,
+                        };
                         if let Some(reason) = failed {
                             if self.emit(Body::ToolResult { id, output: json!(reason), error: true }) {
                                 let _ = reply.send(Reply::failed(reason));
