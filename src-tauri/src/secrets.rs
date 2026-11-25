@@ -50,7 +50,11 @@ impl Backend for Keychain {
     }
 
     fn lock_path(&self) -> Option<std::path::PathBuf> {
-        dirs::data_dir().map(|dir| keychain_lock_path(&dir))
+        let dir = dirs::data_dir();
+        if dir.is_none() {
+            eprintln!("{NOT_GUARDED}: there is no data folder to keep its lock in");
+        }
+        dir.map(|dir| keychain_lock_path(&dir))
     }
 }
 
@@ -74,6 +78,8 @@ struct Ready {
     doc: Doc,
     /// Pre-vault items that could not be read this run; they are not asked for again.
     legacy_failed: HashMap<String, String>,
+    /// Pre-vault values in `doc` that the vault write of their move didn't save: the old item still holds them.
+    unsaved: BTreeSet<String>,
 }
 
 enum State {
@@ -126,7 +132,7 @@ impl Vault {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if matches!(*state, State::Unread) {
             *state = match self.read_vault() {
-                Ok(doc) => State::Ready(Ready { doc, legacy_failed: HashMap::new() }),
+                Ok(doc) => State::Ready(Ready { doc, legacy_failed: HashMap::new(), unsaved: BTreeSet::new() }),
                 Err(e) => State::Unavailable(e.to_string()),
             };
         }
@@ -192,9 +198,10 @@ impl Vault {
                 next.probed.insert(account.into());
                 write_vault(backend, &next)?;
                 ready.doc = next;
-            }
-            if first_touch {
-                forget_legacy(backend, account);
+                // Under the lock: the test vault's removal rewrites the whole file.
+                if first_touch {
+                    forget_legacy(backend, account);
+                }
             }
             Ok(())
         })
@@ -219,10 +226,43 @@ impl Vault {
                 write_vault(backend, &next)?;
             }
             ready.doc = next;
-            drop(held);
             for account in first_touch {
                 forget_legacy(backend, account);
             }
+            drop(held);
+            Ok(())
+        })
+    }
+
+    /// Runs `f` on the account's value as the vault item holds it now, under the lock, and saves what it returns; `None`
+    /// leaves it as it is. For a value an app changes from what it holds, such as a list, which another app may have
+    /// changed since this one read the vault: a `load` then `save` would drop that change.
+    pub fn update<T: Serialize + DeserializeOwned>(&self, account: &str, f: impl FnOnce(Option<T>) -> Option<T>) -> Result<()> {
+        // Moves a pre-vault item in first, under its own lock.
+        self.load::<Value>(account)?;
+        self.with_ready(|backend, ready| {
+            let held = hold(backend);
+            let base = latest(backend)?;
+            // A value whose move didn't save is in this app's copy and the old item only: start from it, as `load` does.
+            let unsaved = ready.unsaved.contains(account) && !base.probed.contains(account);
+            let stored = if unsaved { ready.doc.secrets.get(account) } else { base.secrets.get(account) };
+            let current = stored.map(|v| serde_json::from_value(v.clone())).transpose()?;
+            let Some(value) = f(current) else {
+                ready.doc = base;
+                return Ok(());
+            };
+            let mut next = base.clone();
+            next.secrets.insert(account.into(), serde_json::to_value(value)?);
+            next.probed.insert(account.into());
+            if next.secrets != base.secrets || next.probed != base.probed {
+                write_vault(backend, &next)?;
+            }
+            ready.doc = next;
+            if unsaved {
+                ready.unsaved.remove(account);
+                forget_legacy(backend, account);
+            }
+            drop(held);
             Ok(())
         })
     }
@@ -245,19 +285,35 @@ fn latest(backend: &dyn Backend) -> Result<Doc> {
     }
 }
 
+/// How long a write waits for another app to let go of the vault's lock. Writes run before the first window shows, and
+/// the other app may be waiting on a Keychain prompt, or hung.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(if cfg!(test) { 1000 } else { 5000 });
+
 /// Holds the vault's lock until it is dropped. Every write reads the item and writes it whole, so without the lock two
-/// apps that read before either wrote would each write over the other's change. A lock that can't be taken leaves the
-/// write unlocked, as it was before there was one, rather than failing it.
+/// apps that read before either wrote would each write over the other's change. A lock that can't be taken, or that
+/// another app holds past `LOCK_WAIT`, leaves the write unlocked, as it was before there was one, rather than failing
+/// or stalling it.
 fn hold(backend: &dyn Backend) -> Option<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
     let path = backend.lock_path()?;
     let taken = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| {
         let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(&path)?;
-        file.lock()?;
-        Ok(file)
+        let until = std::time::Instant::now() + LOCK_WAIT;
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(file),
+                Err(std::fs::TryLockError::Error(e)) => return Err(e),
+                Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() >= until => {
+                    return Err(std::io::Error::other(format!("another app has held it for {} s", LOCK_WAIT.as_secs_f32())));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
     });
-    taken.map_err(|e| eprintln!("couldn't lock the vault, so this write is not guarded against another app's: {e}")).ok()
+    taken.map_err(|e| eprintln!("{NOT_GUARDED}: {e}")).ok()
 }
+
+const NOT_GUARDED: &str = "couldn't lock the vault, so this write is not guarded against another app's";
 
 fn write_vault(backend: &dyn Backend, doc: &Doc) -> Result<()> {
     backend.write(VAULT_ACCOUNT, &serde_json::to_string(doc)?)
@@ -297,14 +353,16 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
     }
     // Not over a vault this app could not read again.
     let written = base.and_then(|_| write_vault(backend, &next));
-    drop(held);
     if let Err(e) = &written {
         eprintln!("couldn't save the Keychain vault: {e}");
     }
     ready.doc = next;
     if migrated && written.is_ok() {
         forget_legacy(backend, account);
+    } else if migrated {
+        ready.unsaved.insert(account.into());
     }
+    drop(held);
     Ok(())
 }
 
@@ -411,6 +469,10 @@ pub fn save<T: Serialize>(account: &str, value: &T) -> Result<()> {
 
 pub fn delete(account: &str) -> Result<()> {
     with_global(|v| v.delete(account))
+}
+
+pub fn update<T: Serialize + DeserializeOwned>(account: &str, f: impl FnOnce(Option<T>) -> Option<T>) -> Result<()> {
+    with_global(|v| v.update(account, f))
 }
 
 pub fn apply(ops: &[Op]) -> Result<()> {
@@ -534,6 +596,20 @@ mod tests {
 
     fn text(v: &str) -> Value {
         Value::String(v.into())
+    }
+
+    #[test]
+    fn an_update_after_a_move_whose_vault_write_failed_starts_from_the_old_items_value_and_then_moves_it() {
+        let fake = Fake::default();
+        fake.put("logins", r#"["a"]"#);
+        let v = vault(&fake);
+        fake.deny_writes(true);
+        assert_eq!(v.load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned()]), "read from the old item");
+        fake.deny_writes(false);
+        let added = |list: Option<Vec<String>>| Some([list.unwrap_or_default(), vec!["b".to_owned()]].concat());
+        v.update::<Vec<String>>("logins", added).unwrap();
+        assert_eq!(vault(&fake).load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(fake.get("logins"), None, "the old item goes once the vault holds its value");
     }
 
     #[test]
@@ -780,7 +856,8 @@ mod tests {
             let found = self.file.read(account);
             if account == VAULT_ACCOUNT && self.going.load(std::sync::atomic::Ordering::SeqCst) {
                 let _ = self.mine.send(());
-                let _ = self.theirs.lock().unwrap().recv_timeout(std::time::Duration::from_millis(300));
+                // Well under `LOCK_WAIT`, so the other writer still takes the lock.
+                let _ = self.theirs.lock().unwrap().recv_timeout(std::time::Duration::from_millis(100));
             }
             found
         }
@@ -793,6 +870,22 @@ mod tests {
         fn lock_path(&self) -> Option<std::path::PathBuf> {
             self.file.lock_path()
         }
+    }
+
+    #[test]
+    fn a_write_waits_a_while_for_a_lock_another_app_holds_then_goes_ahead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = FileVault::new(tmp.path().join("vault.json"));
+        let held = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(file.lock_path().unwrap()).unwrap();
+        held.lock().unwrap();
+        let vault = Vault::new(Box::new(FileVault::new(tmp.path().join("vault.json"))));
+        let began = std::time::Instant::now();
+        vault.save("harness", &"token").unwrap();
+        assert!(began.elapsed() >= LOCK_WAIT, "it waited for the lock first");
+        assert!(began.elapsed() < LOCK_WAIT * 5, "and not for ever");
+        drop(held);
+        let after = Vault::new(Box::new(FileVault::new(tmp.path().join("vault.json"))));
+        assert_eq!(after.load::<String>("harness").unwrap().as_deref(), Some("token"), "then wrote");
     }
 
     #[test]

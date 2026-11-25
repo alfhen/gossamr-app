@@ -26,8 +26,8 @@ export interface MockOptions {
   reviewAccess?: "none";
   /** 2 adds a second Jira account with its own site, which shares the project key CA and the ticket key CA-402 with the first (`?jira=2`). */
   jira?: 2;
-  /** How the harness stands from the start: another build of the same protocol, or one that can't start (`?mockHarness=older`, `failed` or `unreachable`). */
-  harness?: "older" | "failed" | "unreachable";
+  /** How the harness stands from the start: another build of the same protocol, one that can't start, one the backend can't ask, or one whose every action fails (`?mockHarness=older`, `failed`, `unreachable` or `refuses`). */
+  harness?: "older" | "failed" | "unreachable" | "refuses";
   runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; trustRefused?: boolean; gitRules?: boolean; prSurfaceMs?: number | null };
 }
 
@@ -320,7 +320,7 @@ export function mockOptionsFromUrl(): MockOptions {
   if (pace) options.pipPace = pace;
   if (params.get("mockReviewAccess") === "none") options.reviewAccess = "none";
   const harness = params.get("mockHarness");
-  if (harness === "older" || harness === "failed" || harness === "unreachable") options.harness = harness;
+  if (harness === "older" || harness === "failed" || harness === "unreachable" || harness === "refuses") options.harness = harness;
   const seed = params.get("runs");
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.
