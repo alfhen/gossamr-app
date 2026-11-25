@@ -55,10 +55,17 @@ fn main() -> ExitCode {
     let out = PathBuf::from(out);
     let argv: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
     let vars: Vec<(String, String)> = std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned())).collect();
-    let written = std::fs::write(out.join("argv.json"), Value::from(argv.clone()).to_string())
+    let secret = match std::env::var_os("WIRE_REPLAY_SECRET_FILE").map(std::fs::read_to_string) {
+        Some(Ok(secret)) => Some(secret.trim().to_owned()).filter(|secret| !secret.is_empty()),
+        Some(Err(e)) => return refuse(&out, &format!("cannot read the secret file: {e}")),
+        None => None,
+    };
+    // The secret is counted where it is and kept out of every file written.
+    let shown: Vec<String> = argv.iter().map(|arg| secret.as_deref().map_or_else(|| arg.clone(), |secret| arg.replace(secret, "<redacted>"))).collect();
+    let written = std::fs::write(out.join("argv.json"), Value::from(shown).to_string())
         .and_then(|()| std::fs::write(out.join("env.json"), Value::Object(environment(&vars)).to_string()))
-        .and_then(|()| match std::env::var_os("WIRE_REPLAY_SECRET_FILE") {
-            Some(file) => std::fs::read_to_string(file).and_then(|secret| std::fs::write(out.join("secret.json"), holding(secret.trim(), &vars, &argv).to_string())),
+        .and_then(|()| match &secret {
+            Some(secret) => std::fs::write(out.join("secret.json"), holding(secret, &vars, &argv).to_string()),
             None => Ok(()),
         });
     let recording = match (written, load(Path::new(&fixture))) {
@@ -103,9 +110,16 @@ fn main() -> ExitCode {
 /// line that cannot be kept fails the replay, so a test never reads a partial `sent.jsonl` as the whole.
 fn read_stdin(written: &AtomicUsize, mut sent: std::fs::File, lines: &Sender<Result<Arrived, String>>) {
     let (mut stdin, mut pending, mut chunk) = (std::io::stdin().lock(), Vec::new(), vec![0u8; 64 * 1024]);
+    let mut deliver = |line: &[u8], stamp: usize| {
+        let text = String::from_utf8_lossy(line).into_owned();
+        if let Err(e) = writeln!(sent, "{}", kept(&text)).and_then(|()| sent.flush()) {
+            let _ = lines.send(Err(format!("cannot write sent.jsonl: {e}")));
+            return false;
+        }
+        lines.send(Ok(Arrived { text, stamp })).is_ok()
+    };
     loop {
         let n = match stdin.read(&mut chunk) {
-            Ok(0) => break,
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
@@ -114,15 +128,17 @@ fn read_stdin(written: &AtomicUsize, mut sent: std::fs::File, lines: &Sender<Res
             }
         };
         let stamp = written.load(Ordering::SeqCst);
+        if n == 0 {
+            // A last line with no newline is still a line: dropped, an extra message would pass unseen.
+            if !pending.is_empty() {
+                deliver(&pending, stamp);
+            }
+            return;
+        }
         pending.extend_from_slice(&chunk[..n]);
         while let Some(end) = pending.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = pending.drain(..=end).collect();
-            let text = String::from_utf8_lossy(&line[..end]).into_owned();
-            if let Err(e) = writeln!(sent, "{}", kept(&text)).and_then(|()| sent.flush()) {
-                let _ = lines.send(Err(format!("cannot write sent.jsonl: {e}")));
-                return;
-            }
-            if lines.send(Ok(Arrived { text, stamp })).is_err() {
+            if !deliver(&line[..end], stamp) {
                 return;
             }
         }
@@ -139,9 +155,6 @@ fn environment(vars: &[(String, String)]) -> Map<String, Value> {
 
 /// Where the test's secret is: the names of the variables whose value holds it, and how many arguments do.
 fn holding(secret: &str, vars: &[(String, String)], argv: &[String]) -> Value {
-    if secret.is_empty() {
-        return json!({"env": [], "argv": 0});
-    }
     let env: Vec<&String> = vars.iter().filter(|(name, value)| name != "WIRE_REPLAY_SECRET_FILE" && value.contains(secret)).map(|(name, _)| name).collect();
     json!({"env": env, "argv": argv.iter().filter(|arg| arg.contains(secret)).count()})
 }
@@ -289,9 +302,11 @@ impl Replay {
     /// The driver's next line that is not a config request, with its stamp, answering each config request on the way;
     /// None at EOF. With `late`, a line that does not come within the deadline fails the replay with that report.
     fn next(&mut self, input: &Receiver<Result<Arrived, String>>, stdout: &mut impl Write, late: Option<&str>) -> Result<Option<(Value, usize)>, String> {
+        // One deadline for the line, which blank lines and config requests on the way do not move.
+        let until = std::time::Instant::now() + self.deadline;
         loop {
             let arrived = match late {
-                Some(late) => match input.recv_timeout(self.deadline) {
+                Some(late) => match input.recv_timeout(until.saturating_duration_since(std::time::Instant::now())) {
                     Ok(arrived) => arrived,
                     Err(RecvTimeoutError::Timeout) => return Err(format!("{late} within {} ms", self.deadline.as_millis())),
                     Err(RecvTimeoutError::Disconnected) => return Ok(None),

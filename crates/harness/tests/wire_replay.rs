@@ -589,12 +589,50 @@ fn wire_replay_records_where_a_secret_is_and_never_a_header_value() {
     assert_eq!(held, json!({"env": ["LEAKED"], "argv": 1}));
     let env: Value = serde_json::from_slice(&std::fs::read(out.path().join("env.json")).unwrap()).unwrap();
     assert_eq!(env["CLAUDE_CONFIG_DIR"], "/a/b", "a login folder is shown");
-    for file in ["env.json", "sent.jsonl", "report.txt"] {
+    for file in ["argv.json", "env.json", "sent.jsonl", "report.txt"] {
         let text = std::fs::read_to_string(out.path().join(file)).unwrap_or_default();
         assert!(!text.contains("tok-5f2a9c"), "{file} holds the secret");
     }
     let sent = std::fs::read_to_string(out.path().join("sent.jsonl")).unwrap();
     assert!(sent.contains("\"Authorization\":\"<redacted>\""), "the header is kept, its value is not");
+}
+
+#[test]
+fn wire_replay_a_last_line_with_no_newline_is_still_a_line() {
+    let fixture = native().join("4-kill.jsonl");
+    let mut run = start(&fixture, &[], &[]);
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize"}}));
+    run.read().unwrap();
+    let prompt = lines_of(&fixture).into_iter().find(|line| line["dir"] == "to_agent" && line["data"]["type"] == "user").unwrap();
+    run.send(&prompt["data"]);
+    while let Some(line) = run.read() {
+        if line["request"]["subtype"] == "can_use_tool" {
+            break;
+        }
+    }
+    // Not the answer the recording has: a prompt, with no newline, then stdin closes.
+    let _ = write!(run.stdin.as_mut().unwrap(), "{}", json!({"type": "user", "message": {"role": "user", "content": "more"}}));
+    let (code, _, out) = run.end();
+    assert_eq!((code, report(&out).contains("the driver sent user where the recording has control_response")), (Some(3), true), "{}", report(&out));
+}
+
+#[test]
+fn wire_replay_lines_on_the_way_do_not_move_the_deadline() {
+    let mut run = start(&native().join("2-permission.jsonl"), &[], &[("WIRE_REPLAY_DEADLINE_MS", "400")]);
+    run.send(&json!({"type": "control_request", "request_id": "c-1", "request": {"subtype": "initialize"}}));
+    run.read().unwrap();
+    // Blank lines every 100 ms, never the prompt: the replay still gives up 400 ms after it began to wait.
+    let started = std::time::Instant::now();
+    let mut blanks = run.stdin.take().unwrap();
+    let blanking = std::thread::spawn(move || {
+        while started.elapsed() < Duration::from_secs(5) && blanks.write_all(b"\n").is_ok() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let (code, _, out) = run.end_open();
+    assert_eq!((code, report(&out)), (Some(3), "line 5: the driver never sent user within 400 ms\n".to_owned()));
+    assert!(started.elapsed() < Duration::from_secs(4), "it did not wait past its deadline");
+    blanking.join().unwrap();
 }
 
 #[test]
