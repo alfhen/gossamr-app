@@ -350,7 +350,7 @@ Each test creates its own config directory and repository under `GOSSAMR_SCRATCH
 
 ## Fake `claude`
 
-`src-tauri/test-support/fake-claude.sh` is driven by `FAKE_CLAUDE_SCENARIO` (a `key=value` file; its keys are listed at the top of the script). It keeps sessions and `jobs/<id>/` files next to the scenario, records every call's cwd and arguments in `calls.log` and the names of its environment variables in `env.last`.
+`crates/harness/test-support/fake-claude.sh` (`harness::testing::FAKE_CLAUDE`) is driven by `FAKE_CLAUDE_SCENARIO` (a `key=value` file; its keys are listed at the top of the script). It keeps sessions and `jobs/<id>/` files next to the scenario, records every call's cwd and arguments in `calls.log` and the names of its environment variables in `env.last`.
 
 ## Session names
 
