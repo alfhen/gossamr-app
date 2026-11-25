@@ -365,6 +365,32 @@ impl Core {
         self.with_proposals(|db| db.run_events(run_id)).await
     }
 
+    /// Makes `session` the harness session the run follows from now on.
+    pub async fn bind_run_session(&self, run_id: &str, session: &str) -> Result<()> {
+        self.with_proposals(|db| db.bind_run_session(run_id, session)).await
+    }
+
+    /// The run that follows `session`, and how far.
+    pub async fn session_run(&self, session: &str) -> Result<Option<(String, crate::domain::SessionFollow)>> {
+        self.with_proposals(|db| db.session_run(session)).await
+    }
+
+    /// The sessions of runs that have not closed, with how far each is followed.
+    pub async fn followed_sessions(&self) -> Result<Vec<(String, crate::domain::SessionFollow)>> {
+        self.with_proposals(|db| db.followed_sessions()).await
+    }
+
+    /// Applies `f` to the run that follows `session` and stores the run, the rows `f` returns and how far the session
+    /// is followed, in one transaction. Where the run is filed stays the person's to change meanwhile, as in
+    /// `save_observed_run`: `f` sees the stored run, read in the same transaction.
+    pub async fn apply_session(
+        &self,
+        session: &str,
+        f: impl FnOnce(&mut Run, &mut crate::domain::SessionFollow) -> Vec<RunEvent>,
+    ) -> Result<Option<crate::db::Applied>> {
+        self.with_proposals(|db| db.apply_session(session, f)).await
+    }
+
     /// Adds events after the run's last one; at most 500 are kept per run. Returns how many were stored.
     pub async fn append_run_events(&self, run_id: &str, events: &[RunEvent]) -> Result<usize> {
         self.with_proposals(|db| db.append_events(run_id, events)).await

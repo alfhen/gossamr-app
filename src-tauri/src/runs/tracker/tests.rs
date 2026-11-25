@@ -1301,3 +1301,40 @@ async fn a_held_ask_is_handed_to_the_backend_with_the_run_it_belongs_to() {
     let held = rig.get(&run).await;
     assert_eq!((held.state, held.needs.as_deref()), (RunState::NeedsAnswer, Some("Which database?")));
 }
+
+#[tokio::test]
+async fn a_poll_leaves_a_run_on_the_harness_alone_however_long_no_listing_shows_it() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let run = rig.set(&run, |r| r.state = RunState::Working).await;
+    rig.fx.core.bind_run_session(&run.id, "s1").await.unwrap();
+    let before = rig.get(&run).await;
+    for minutes in [0, 15, 60] {
+        rig.svc.poll_at(Utc::now() + Span::minutes(minutes)).await;
+    }
+    assert_eq!(rig.get(&run).await, before, "its state is its session's events, not the listing's");
+}
+
+#[tokio::test]
+async fn the_old_passes_leave_a_run_on_the_harness_alone_once_it_ended_and_recovery_does_too() {
+    let rig = ready().await;
+    let run = rig.queued(1).await;
+    let ended = rig
+        .set(&run, |r| {
+            r.state = RunState::Done;
+            r.short_id = Some(ShortId::parse("abcd1234").unwrap());
+            r.ended_at = Some(Utc::now());
+            r.result_complete = false;
+        })
+        .await;
+    rig.fx.core.bind_run_session(&ended.id, "s1").await.unwrap();
+    let now = Utc::now();
+    assert!(rig.svc.recently_finished(now).await.is_empty(), "no listing is watched for it");
+    assert!(rig.svc.awaiting_answer(now).await.is_empty(), "its answer is its result, not the old backend's");
+    let launching = rig.queued(2).await;
+    let launching = rig.set(&launching, |r| r.state = RunState::Launching).await;
+    rig.fx.core.bind_run_session(&launching.id, "s2").await.unwrap();
+    let before = rig.get(&launching).await;
+    rig.svc.recover().await;
+    assert_eq!(rig.get(&launching).await, before, "recovery does not fail it as an interrupted launch");
+}

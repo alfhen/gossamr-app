@@ -278,7 +278,7 @@ impl Db {
             if !archived || !db.sees_run(id)? {
                 return Ok(false);
             }
-            for table in ["run_events", "run_reports", "run_report_tokens", "run_messages"] {
+            for table in ["run_events", "run_reports", "run_report_tokens", "run_messages", "run_sessions"] {
                 db.conn.execute(&format!("DELETE FROM {table} WHERE run_id = ?1"), params![id])?;
             }
             Ok(db.conn.execute("DELETE FROM runs WHERE id = ?1", params![id])? > 0)
@@ -301,20 +301,21 @@ impl Db {
         if !self.sees_run(run_id)? {
             return Ok(0);
         }
-        let tx = self.conn.unchecked_transaction()?;
-        let last: Option<u32> = tx.query_row("SELECT max(seq) FROM run_events WHERE run_id = ?1", params![run_id], |r| r.get(0))?;
-        let start = last.map_or(0, |n| n + 1);
-        let room = EVENTS_PER_RUN.saturating_sub(start) as usize;
-        let kept = &events[..events.len().min(room)];
-        for (seq, e) in (start..).zip(kept) {
-            let detail = e.detail.as_deref().map(|d| d.chars().take(DETAIL_LIMIT).collect::<String>());
-            tx.execute(
-                "INSERT INTO run_events (run_id, seq, at, kind, text, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![run_id, seq, stamp(e.at), e.kind, e.text, detail],
-            )?;
-        }
-        tx.commit()?;
-        Ok(kept.len())
+        // Inside a caller's transaction, as when a harness event is applied with its run, it joins that one.
+        self.atomically(|db| {
+            let last: Option<u32> = db.conn.query_row("SELECT max(seq) FROM run_events WHERE run_id = ?1", params![run_id], |r| r.get(0))?;
+            let start = last.map_or(0, |n| n + 1);
+            let room = EVENTS_PER_RUN.saturating_sub(start) as usize;
+            let kept = &events[..events.len().min(room)];
+            for (seq, e) in (start..).zip(kept) {
+                let detail = e.detail.as_deref().map(|d| d.chars().take(DETAIL_LIMIT).collect::<String>());
+                db.conn.execute(
+                    "INSERT INTO run_events (run_id, seq, at, kind, text, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![run_id, seq, stamp(e.at), e.kind, e.text, detail],
+                )?;
+            }
+            Ok(kept.len())
+        })
     }
 
     pub fn run_events(&self, run_id: &str) -> Result<Vec<RunEvent>> {

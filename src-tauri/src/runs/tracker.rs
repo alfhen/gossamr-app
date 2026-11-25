@@ -189,7 +189,9 @@ impl RunService {
         let idle = Polled { busy: false };
         let now = clock();
         let Ok(_not_recovering) = self.recovery.try_lock() else { return Polled { busy: true } };
-        let Ok(runs) = self.core.runs_list(&RunQuery { states: Some(RunState::UNFINISHED.to_vec()), ..RunQuery::default() }).await else { return idle };
+        let Ok(mut runs) = self.core.runs_list(&RunQuery { states: Some(RunState::UNFINISHED.to_vec()), ..RunQuery::default() }).await else { return idle };
+        // A run on the harness is what its session's events say (`runs::link`), never what a listing shows.
+        runs.retain(|r| r.harness_session.is_none());
         let waiting = self.awaiting_answer(now).await;
         let finished = self.recently_finished(now).await;
         if runs.is_empty() && waiting.is_empty() && finished.is_empty() {
@@ -372,7 +374,7 @@ impl RunService {
     async fn recently_finished(&self, now: DateTime<Utc>) -> Vec<Run> {
         let query = RunQuery { states: Some(vec![RunState::Done, RunState::Stopped]), ..RunQuery::default() };
         let Ok(done) = self.core.runs_list(&query).await else { return Vec::new() };
-        done.into_iter().filter(|r| r.short_id.is_some() && r.worktree_removed_at.is_none() && r.ended_at.is_some_and(|at| now - at <= WATCH_FINISHED)).collect()
+        done.into_iter().filter(|r| r.harness_session.is_none() && r.short_id.is_some() && r.worktree_removed_at.is_none() && r.ended_at.is_some_and(|at| now - at <= WATCH_FINISHED)).collect()
     }
 
     /// The runs of `group` as they are now, with what earlier looks counted. A failed run and one whose worktree is gone
