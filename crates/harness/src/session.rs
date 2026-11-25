@@ -203,8 +203,10 @@ impl Harness {
         Harness::with_setup(store, drivers, settings, Arc::new(Setup::default()))
     }
 
-    /// A harness whose sessions take their environment, logins and clones from `setup`.
+    /// A harness whose sessions take their environment, logins and clones from `setup`. Agents a harness before it
+    /// left running are stopped first, before any session can be resumed.
     pub fn with_setup(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings, setup: Arc<Setup>) -> Harness {
+        stop_leftovers(&store);
         Harness {
             inner: Arc::new(Inner {
                 store: Mutex::new(Some(store)),
@@ -779,6 +781,7 @@ impl Harness {
         if taken_back {
             self.inner.with_store(|store| store.set_handed_over(id, false))?;
         }
+        self.inner.with_store(|store| store.set_agent(id, link.process.as_ref()))?;
         reserved.keep();
         let task = Task {
             inner: self.inner.clone(),
@@ -806,6 +809,17 @@ impl Harness {
 }
 
 /// The refusal for a session a shutdown gave up on, which H6 will find and stop by its pid.
+/// Stops each agent a harness before this one started and did not see go: its process group, when the pid still
+/// answers and started when the record says, so a pid another process took since is never signalled. One that will
+/// not stop stays on record, and its session stays given up on, so no resume starts a second agent beside it.
+fn stop_leftovers(store: &Store) {
+    let Ok(agents) = store.agents() else { return };
+    for (id, agent) in agents {
+        let gone = !crate::process::alive(&agent) || crate::process::kill_group(&agent).is_ok();
+        let _ = if gone { store.set_agent(&id, None) } else { store.set_given_up(&id) };
+    }
+}
+
 fn given_up(id: &str, what: &str) -> Error {
     Error::Refused(format!("a shutdown gave up on session {id}'s agent, which may still run, so it is not {what}"))
 }
@@ -1390,6 +1404,9 @@ impl Task {
         let mut live = self.inner.live();
         // Before `closed`, so a client that has seen it finds the token refused.
         self.inner.forget_endpoint(&self.endpoint, self.start);
+        // The driver closed its output, so the agent is gone. A shutdown that gave up on it never gets here, and the
+        // next harness finds it on record.
+        let _ = self.inner.with_store(|store| store.set_agent(&self.id, None));
         #[cfg(test)]
         self.inner.hooks.before_closed();
         self.emit(Body::Closed);
@@ -1985,7 +2002,7 @@ mod tests {
             let (kept, seen, last) = (self.output.clone(), self.commands.clone(), self.on_stop.clone());
             if self.deaf.load(Ordering::Relaxed) {
                 drop(received);
-                return Ok(Link { commands, output: receiver });
+                return Ok(Link { commands, output: receiver, process: None });
             }
             tokio::spawn(async move {
                 while let Some(command) = received.recv().await {
@@ -2001,7 +2018,7 @@ mod tests {
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
 

@@ -11,7 +11,7 @@ use common::*;
 use harness::claude::driver::ClaudeDriver;
 use harness::env::RunEnv;
 use harness::event::{Body, Decision, Event, FailKind, PermissionKind};
-use harness::process::{self, Process};
+use harness::process::{self, Listing, Process};
 use harness::session::{Harness, Open};
 use harness::store::Store;
 use harness::work::Setup;
@@ -63,8 +63,14 @@ struct Rig {
 /// A harness whose `claude` is the wire replay of `fixture`, on a shell environment that holds only what the replay
 /// needs and `extra`.
 fn rig(fixture: &Path, extra: &[(&str, &str)]) -> Rig {
+    rig_on(fixture, extra, None)
+}
+
+/// As `rig`, on the data folder `data` when one is given, so a second harness opens the first one's store.
+fn rig_on(fixture: &Path, extra: &[(&str, &str)], data: Option<&Path>) -> Rig {
     let tmp = tempfile::tempdir().unwrap();
-    let (out, data) = (tmp.path().join("out"), tmp.path().join("data"));
+    let out = tmp.path().join("out");
+    let data = data.map_or_else(|| tmp.path().join("data"), Path::to_path_buf);
     std::fs::create_dir_all(&out).unwrap();
     let mut env: Vec<(String, String)> = vec![
         ("PATH".into(), "/usr/bin:/bin".into()),
@@ -194,6 +200,16 @@ fn ends(seen: &[Event]) -> usize {
 /// each answer goes as soon as its request is seen, a cancel waits for a running turn. Once the agent has sent as many `result`s as
 /// the recording, the session is closed. Every event up to `closed`.
 async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, acts: Vec<Act>, results: usize) -> (Vec<Event>, Process) {
+    let (mut seen, mut agent) = play_turns(rig, id, events, acts, results).await;
+    rig.harness.close(id).unwrap();
+    while !seen.last().is_some_and(|event| event.body == Body::Closed) {
+        next_within(rig, events, &mut seen, &mut agent).await;
+    }
+    (seen, agent.expect("the session started"))
+}
+
+/// As `drive`, up to the agent's last `result`, with the session left running.
+async fn play_turns(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, acts: Vec<Act>, results: usize) -> (Vec<Event>, Option<Process>) {
     let (mut seen, mut agent) = (vec![], None);
     let mut answered = 0;
     for act in acts {
@@ -225,11 +241,7 @@ async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, act
     while ends(&seen) < results {
         next_within(rig, events, &mut seen, &mut agent).await;
     }
-    rig.harness.close(id).unwrap();
-    while !seen.last().is_some_and(|event| event.body == Body::Closed) {
-        next_within(rig, events, &mut seen, &mut agent).await;
-    }
-    (seen, agent.expect("the session started"))
+    (seen, agent)
 }
 
 async fn play(fixture: &Path) -> (Rig, Vec<Event>) {
@@ -814,4 +826,110 @@ async fn claude_each_result_gives_a_usage_event_before_its_turns_end() {
             assert!(seen[at + 1].body.ends_turn(), "{}: usage comes just before its turn's end", name(&fixture));
         }
     }
+}
+
+/// The text of the recording's prompts, in order.
+fn prompts(fixture: &Path) -> Vec<String> {
+    recorded_client(&lines_of(fixture)).0.into_iter().filter_map(|act| match act { Act::Prompt(text, _) => Some(text), _ => None }).collect()
+}
+
+fn provider_session(seen: &[Event]) -> String {
+    seen.iter().find_map(|event| match &event.body { Body::Started { provider_session, .. } => Some(provider_session.clone()), _ => None }).expect("the session started")
+}
+
+/// Until the replay has gone: its progress FIFO closes with it.
+async fn replay_gone(rig: &Rig) {
+    let mut written = rig.written.clone();
+    tokio::time::timeout(Duration::from_secs(10), async { while written.changed().await.is_ok() {} }).await.expect("the replay goes");
+}
+
+/// The argv's `--resume` values.
+fn resumes(argv: &[String]) -> Vec<String> {
+    argv.windows(2).filter(|pair| pair[0] == "--resume").map(|pair| pair[1].clone()).collect()
+}
+
+#[tokio::test]
+async fn claude_a_restart_in_the_middle_of_a_turn_stops_the_leftover_and_resumes_once() {
+    let (_tmp, data) = data_dir();
+    let kill = native().join("4-kill.jsonl");
+    let first = rig_on(&kill, &[("WIRE_REPLAY_IGNORE_TERM", "1")], Some(&data));
+    let (id, mut events) = first.open(false, None).await;
+    first.harness.send(&id, prompts(&kill).remove(0)).unwrap();
+    let seen = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+    let asked = seen.iter().find_map(|event| match &event.body { Body::Permission { id, .. } => Some(id.clone()), _ => None }).unwrap();
+    first.harness.answer(&id, &asked, Decision::Allow, None).unwrap();
+    // The command runs: the recording was cut by a signal there, so the replay stays in the middle of the turn.
+    let lines = lines_of(&kill);
+    let cut = lines.iter().take_while(|line| line["data"]["note"] != "signal").filter(|line| line["dir"] == "from_agent").last().unwrap()["seq"].as_u64().unwrap();
+    played(&first, cut).await;
+    let (session, agent) = (provider_session(&seen), first.process());
+    // An agent the shutdown cannot stop, as a stuck one: it ignores SIGTERM and its group kill is refused.
+    process::seam::refuse_group_kills(agent.pid, 1);
+    process::seam::list_group_as(agent.pid, Listing::Full);
+    assert_eq!(first.harness.shutdown().await, std::slice::from_ref(&id), "the shutdown gave up on it mid-turn");
+    assert!(process::alive(&agent), "and it runs on");
+
+    let resume = native().join("4-resume.jsonl");
+    let second = rig_on(&resume, &[], Some(&data));
+    replay_gone(&first).await;
+    assert!(!process::alive(&agent), "the next harness stopped it as it started");
+    let mut events = second.harness.resume_with(&id, None).await.unwrap();
+    second.harness.send(&id, prompts(&resume).remove(0)).unwrap();
+    let seen = until(&mut events, |body| body.ends_turn()).await;
+    assert!(seen.iter().any(|event| event.body == Body::Started { provider_session: session.clone(), resumed: true }), "{:?}", types(&seen));
+    assert_eq!(resumes(&second.argv()), [session], "one agent, resumed once by its session");
+    second.harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(second.report(), "");
+    second.harness.shutdown().await;
+    assert_eq!(Store::open(&data).unwrap().agents().unwrap(), [], "its agent gone, nothing is on record");
+}
+
+#[tokio::test]
+async fn claude_a_resume_starts_claude_by_its_session_and_carry_on_is_the_first_prompt_it_sends() {
+    let (_tmp, data) = data_dir();
+    // A first start whose turn a deny did not end (Claude goes on after one), then a shutdown: nothing forbids "carry on".
+    let fixture = native().join("2-permission.jsonl");
+    let first = rig_on(&fixture, &[], Some(&data));
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let (id, mut events) = first.open(false, None).await;
+    let (seen, _) = play_turns(&first, &id, &mut events, acts, results).await;
+    assert!(seen.iter().any(|event| matches!(event.body, Body::Answered { decision: Decision::Deny, .. })));
+    let session = provider_session(&seen);
+    assert_eq!(first.harness.shutdown().await, Vec::<String>::new());
+    let resume = native().join("4-resume.jsonl");
+    let second = rig_on(&resume, &[], Some(&data));
+    let carry_on = prompts(&resume).remove(0);
+    let mut events = second.harness.resume_with(&id, Some(carry_on.clone())).await.unwrap();
+    let seen = until(&mut events, |body| body.ends_turn()).await;
+    assert_eq!(seen.iter().find(|event| matches!(event.body, Body::Started { .. })).map(|event| &event.body), Some(&Body::Started { provider_session: session.clone(), resumed: true }));
+    assert_eq!(resumes(&second.argv()), [session]);
+    let sent: Vec<Value> = second.sent().into_iter().filter(|line| line["type"] == "user").collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["message"]["content"][0]["text"], carry_on.as_str(), "carry on is the first prompt");
+    second.harness.close(&id).unwrap();
+    until(&mut events, |body| *body == Body::Closed).await;
+    assert_eq!(second.report(), "");
+}
+
+#[tokio::test]
+async fn claude_no_carry_on_after_a_cancelled_turn() {
+    // 3-cancel up to its cancelled turn's `result`, then stdin closes.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lines: Vec<Value> = lines_of(&native().join("3-cancel.jsonl")).into_iter().take_while(|line| line["seq"].as_u64() <= Some(33)).collect();
+    lines.push(json!({"seq": 34, "ms": 0, "dir": "driver", "data": {"note": "close_stdin"}}));
+    let fixture = written(tmp.path(), &lines);
+    let (_tmp, data) = data_dir();
+    let first = rig_on(&fixture, &[], Some(&data));
+    let (acts, results) = recorded_client(&lines_of(&fixture));
+    let (id, mut events) = first.open(false, None).await;
+    let (seen, _) = play_turns(&first, &id, &mut events, acts, results).await;
+    let ends: Vec<&Body> = seen.iter().map(|event| &event.body).filter(|body| body.ends_turn()).collect();
+    assert_eq!(ends, [&Body::TurnEnded { how: harness::event::TurnEnd::Cancelled }]);
+    // A shutdown, not a stop, so the cancel is what forbids it.
+    first.harness.shutdown().await;
+    assert_eq!(first.report(), "");
+    let second = rig_on(&fixture, &[], Some(&data));
+    let refused = second.harness.resume_with(&id, Some("carry on".into())).await;
+    assert!(matches!(&refused, Err(harness::error::Error::Refused(why)) if why.contains("cancelled")), "{:?}", refused.err());
 }

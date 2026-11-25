@@ -41,7 +41,7 @@ impl Driver for Recorder {
             }
             drop(output);
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -587,7 +587,7 @@ impl Driver for Asker {
     }
 
     fn open(&self, launch: Launch) -> Result<Link, OpenError> {
-        let Link { commands, output } = self.0.open(launch)?;
+        let Link { commands, output, .. } = self.0.open(launch)?;
         let (relay, receiver) = mpsc::unbounded_channel();
         let mut output = output;
         tokio::spawn(async move {
@@ -599,7 +599,7 @@ impl Driver for Asker {
                 let _ = relay.send(body);
             }
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 

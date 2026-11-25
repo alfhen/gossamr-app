@@ -422,7 +422,7 @@ impl Driver for Tattler {
             let _output = output;
             while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -835,7 +835,7 @@ impl Driver for Says {
                 }
             }
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -1132,7 +1132,7 @@ impl Driver for Puppet {
                 }
             }
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -1239,7 +1239,7 @@ async fn stop_a_prompt_the_driver_does_not_take_fails_the_session_where_the_stor
                 close.notified().await;
                 drop(output);
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let close = Arc::new(tokio::sync::Notify::new());
@@ -1281,7 +1281,7 @@ async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("caller".into(), Arc::new(Caller(heard.clone())))];
@@ -1319,7 +1319,7 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("leaky".into(), Arc::new(Leaky(secret.clone(), received.clone())))];
@@ -1354,7 +1354,7 @@ async fn redact_a_resumed_session_whose_agent_names_a_secret_id_drops_the_earlie
                 let _output = output;
                 while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let opens: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
@@ -1414,7 +1414,7 @@ async fn resume_a_session_closed_before_its_agent_said_it_started_keeps_the_id_a
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("late".into(), Arc::new(Late))];
@@ -1543,7 +1543,7 @@ async fn resume_a_locked_session_that_said_it_cannot_be_resumed_stays_refused_af
                 let _output = output;
                 while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("secretive".into(), Arc::new(Secretive(example("GitHub token"))))];
@@ -1650,7 +1650,7 @@ async fn question_one_whose_id_redaction_changes_is_answered_by_the_id_the_clien
                 let _output = output;
                 while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("asker".into(), Arc::new(Asker(example("GitHub token"))))];
@@ -1735,7 +1735,7 @@ async fn question_an_answer_reaches_the_agent_before_prompts_sent_while_it_was_o
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let end = Arc::new(tokio::sync::Notify::new());
@@ -1983,7 +1983,7 @@ impl Driver for Mute {
             }
             drop(output);
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 

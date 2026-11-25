@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::event::{Body, Event, KEPT_FIELDS};
+use crate::process::Process;
 use crate::tools::ToolSpec;
 use crate::work::Work;
 
@@ -78,7 +79,11 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     // Why the harness may not send "carry on" to the session, if anything forbids it now; and that a shutdown gave up
     // on its agent, which may still run, so no resume may start a second one.
     "ALTER TABLE sessions ADD COLUMN no_carry_on TEXT;
-    ALTER TABLE sessions ADD COLUMN given_up INTEGER NOT NULL DEFAULT 0;"];
+    ALTER TABLE sessions ADD COLUMN given_up INTEGER NOT NULL DEFAULT 0;",
+    // The running start's agent, by pid and start time, so a harness after this one can stop it if it outlived its
+    // session: an orphaned `claude` ends its turn alone.
+    "ALTER TABLE sessions ADD COLUMN agent_pid INTEGER;
+    ALTER TABLE sessions ADD COLUMN agent_started INTEGER;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -285,6 +290,24 @@ impl Store {
     pub fn set_given_up(&self, id: &str) -> Result<()> {
         self.conn.execute("UPDATE sessions SET given_up = 1 WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// The running start's agent, or None once it is gone. Its going also lifts a shutdown's giving up: no agent of the
+    /// session runs any more.
+    pub fn set_agent(&self, id: &str, agent: Option<&Process>) -> Result<()> {
+        match agent {
+            Some(agent) => self.conn.execute("UPDATE sessions SET agent_pid = ?2, agent_started = ?3 WHERE id = ?1", params![id, agent.pid, agent.started as i64])?,
+            None => self.conn.execute("UPDATE sessions SET agent_pid = NULL, agent_started = NULL, given_up = 0 WHERE id = ?1", [id])?,
+        };
+        Ok(())
+    }
+
+    /// Each session with an agent on record, which a harness before this one started and did not see go.
+    pub fn agents(&self) -> Result<Vec<(String, Process)>> {
+        let mut statement = self.conn.prepare("SELECT id, agent_pid, agent_started FROM sessions WHERE agent_pid IS NOT NULL AND agent_started IS NOT NULL")?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?, row.get::<_, i64>(2)?)))?;
+        let agents = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(agents.into_iter().map(|(id, pid, started)| (id, Process { pid, started: started as u64 })).collect())
     }
 
     /// Names the tools endpoint of a session made before the store kept the name.

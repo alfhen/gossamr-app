@@ -278,7 +278,7 @@ impl Driver for Mock {
             in_turn: false,
         };
         tokio::spawn(player.play());
-        Ok(Link { commands, output })
+        Ok(Link { commands, output, process: None })
     }
 }
 

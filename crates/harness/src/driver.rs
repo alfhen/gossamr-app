@@ -122,6 +122,9 @@ pub enum Command {
 pub struct Link {
     pub commands: UnboundedSender<Command>,
     pub output: UnboundedReceiver<Body>,
+    /// The agent's process, kept for the session's start so a harness after this one can stop it if it outlives the
+    /// session. None for a driver whose agent is no process of its own.
+    pub process: Option<crate::process::Process>,
 }
 
 /// Why a driver could not open, with the kind a client acts on: signed out, a version it does not support, or another

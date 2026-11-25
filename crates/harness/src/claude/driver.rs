@@ -239,7 +239,7 @@ impl Driver for ClaudeDriver {
         stream.locked = launch.locked.then(|| launch.tools.allowed.clone());
         let agent = Agent {
             child,
-            process,
+            process: process.clone(),
             stream,
             servers: servers(&launch),
             term_after: self.term_after,
@@ -249,7 +249,7 @@ impl Driver for ClaudeDriver {
             secret: launch.tools_token.expose().to_owned(),
         };
         tokio::spawn(agent.run(BufReader::new(stdout), commands_rx));
-        Ok(Link { commands, output: output_rx })
+        Ok(Link { commands, output: output_rx, process: Some(process) })
     }
 }
 

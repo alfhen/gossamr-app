@@ -122,12 +122,12 @@ fn store_a_new_file_gets_every_step_and_a_reopen_runs_none_again() {
     store.create_session("a", "mock", true, Path::new("/a"), Some("haiku")).unwrap();
     store.set_provider_session("a", Some("p-1")).unwrap();
     drop(store);
-    assert_eq!(user_version(&dir), 7, "user_version counts the steps");
+    assert_eq!(user_version(&dir), 8, "user_version counts the steps");
     let store = Store::open(&dir).unwrap();
     let row = store.session("a").unwrap();
     assert_eq!((row.provider.as_str(), row.locked, row.model.as_deref(), row.provider_session.as_deref()), ("mock", true, Some("haiku"), Some("p-1")));
     drop(store);
-    assert_eq!(user_version(&dir), 7);
+    assert_eq!(user_version(&dir), 8);
 
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().pragma_update(None, "user_version", 9).unwrap();
     assert!(matches!(Store::open(&dir), Err(Error::NewerStore(9))), "a store from a newer harness is not opened");
@@ -140,14 +140,14 @@ fn store_a_store_of_three_steps_gets_step_four_and_its_sessions_have_no_login_ef
     store.create_session("old", "mock", false, Path::new("/a"), Some("haiku")).unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
-    conn.execute_batch("DROP TABLE questions; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
+    conn.execute_batch("ALTER TABLE sessions DROP COLUMN agent_pid; ALTER TABLE sessions DROP COLUMN agent_started; DROP TABLE questions; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
     for column in ["login", "effort", "repo", "base", "branch", "clone", "endpoint", "tools", "result_schema"] {
         conn.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column}")).unwrap();
     }
     conn.pragma_update(None, "user_version", 3).unwrap();
     drop(conn);
     let store = Store::open(&dir).unwrap();
-    assert_eq!(user_version(&dir), 7);
+    assert_eq!(user_version(&dir), 8);
     let row = store.session("old").unwrap();
     assert_eq!((row.model.as_deref(), row.login, row.effort, row.work), (Some("haiku"), None, None, None));
 }
@@ -159,14 +159,14 @@ fn tools_endpoint_a_store_of_four_steps_gets_step_five_and_its_sessions_have_no_
     store.create_session("old", "mock", false, Path::new("/a"), Some("haiku")).unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
-    conn.execute_batch("DROP TABLE questions; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
+    conn.execute_batch("ALTER TABLE sessions DROP COLUMN agent_pid; ALTER TABLE sessions DROP COLUMN agent_started; DROP TABLE questions; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
     for column in ["endpoint", "tools", "result_schema"] {
         conn.execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column}")).unwrap();
     }
     conn.pragma_update(None, "user_version", 4).unwrap();
     drop(conn);
     let store = Store::open(&dir).unwrap();
-    assert_eq!(user_version(&dir), 7);
+    assert_eq!(user_version(&dir), 8);
     let row = store.session("old").unwrap();
     assert_eq!((row.model.as_deref(), row.endpoint, row.tools, row.result_schema), (Some("haiku"), None, vec![], None));
     store.set_endpoint("old", "k3x9").unwrap();
@@ -422,11 +422,11 @@ fn ask_a_store_of_five_steps_gets_step_six_and_a_question_stays_open_until_it_is
     store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
-    conn.execute_batch("DROP TABLE questions; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
+    conn.execute_batch("ALTER TABLE sessions DROP COLUMN agent_pid; ALTER TABLE sessions DROP COLUMN agent_started; DROP TABLE questions; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
     conn.pragma_update(None, "user_version", 5).unwrap();
     drop(conn);
     let store = Store::open(&dir).unwrap();
-    assert_eq!(user_version(&dir), 7);
+    assert_eq!(user_version(&dir), 8);
     assert_eq!(store.open_question("s").unwrap(), None);
     store.ask("s", "q1", now_ms()).unwrap();
     drop(store);
@@ -446,15 +446,37 @@ fn carry_on_a_store_of_six_steps_gets_step_seven_with_nothing_forbidden_or_given
     store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
-    conn.execute_batch("ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
+    conn.execute_batch("ALTER TABLE sessions DROP COLUMN agent_pid; ALTER TABLE sessions DROP COLUMN agent_started; ALTER TABLE sessions DROP COLUMN no_carry_on; ALTER TABLE sessions DROP COLUMN given_up").unwrap();
     conn.pragma_update(None, "user_version", 6).unwrap();
     drop(conn);
     let store = Store::open(&dir).unwrap();
-    assert_eq!(user_version(&dir), 7);
+    assert_eq!(user_version(&dir), 8);
     let row = store.session("s").unwrap();
     assert_eq!((row.no_carry_on, row.given_up), (None, false));
     store.set_no_carry_on("s", Some("it was stopped")).unwrap();
     store.set_given_up("s").unwrap();
     let row = store.session("s").unwrap();
     assert_eq!((row.no_carry_on.as_deref(), row.given_up), (Some("it was stopped"), true));
+}
+
+#[test]
+fn leftover_a_store_of_seven_steps_gets_step_eight_and_keeps_an_agent_until_it_is_gone() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("s", "mock", false, Path::new("/a"), None).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    conn.execute_batch("ALTER TABLE sessions DROP COLUMN agent_pid; ALTER TABLE sessions DROP COLUMN agent_started").unwrap();
+    conn.pragma_update(None, "user_version", 7).unwrap();
+    drop(conn);
+    let store = Store::open(&dir).unwrap();
+    assert_eq!(user_version(&dir), 8);
+    assert_eq!(store.agents().unwrap(), [], "a session from before the step has no agent on record");
+    let agent = harness::process::Process { pid: 4242, started: 1_700_000_000 };
+    store.set_agent("s", Some(&agent)).unwrap();
+    store.set_given_up("s").unwrap();
+    assert_eq!(store.agents().unwrap(), [("s".to_owned(), agent)]);
+    store.set_agent("s", None).unwrap();
+    assert_eq!(store.agents().unwrap(), []);
+    assert!(!store.session("s").unwrap().given_up, "its agent gone, the session is no longer given up on");
 }

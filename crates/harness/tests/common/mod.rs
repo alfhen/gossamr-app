@@ -192,7 +192,7 @@ impl Driver for Stopper {
                 }
             }
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -241,7 +241,7 @@ impl Driver for Seer {
             }
             drop(output);
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
