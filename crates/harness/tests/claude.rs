@@ -222,7 +222,7 @@ async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, act
         next_within(rig, events, &mut seen, &mut agent).await;
     }
     rig.harness.close(id).unwrap();
-    while !seen.last().is_some_and(|event| event.body == Body::Closed) {
+    while !seen.last().is_some_and(|event| matches!(event.body, Body::Closed { .. })) {
         next_within(rig, events, &mut seen, &mut agent).await;
     }
     (seen, agent.expect("the session started"))
@@ -453,7 +453,7 @@ async fn claude_a_withdrawn_permission_closes_and_a_later_answer_is_refused() {
     assert_eq!(closed.as_deref(), Some(asked.as_str()), "the close names the harness's id of the request");
     assert!(matches!(rig.harness.answer(&id, &asked, Decision::Allow, None), Err(harness::error::Error::NotOpen(_))));
     rig.harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(rig.report(), "", "no answer reached the agent");
 }
 
@@ -616,7 +616,7 @@ async fn claude_prompts_sent_at_once_each_reach_claude_after_the_result_before_i
     }
     // Until the agent has ended as many turns as the recording, or the session closed because the replay refused.
     let mut seen: Vec<Event> = vec![];
-    while ends(&seen) < results && !seen.iter().any(|event| event.body == Body::Closed) {
+    while ends(&seen) < results && !seen.iter().any(|event| matches!(event.body, Body::Closed { .. })) {
         match tokio::time::timeout(Duration::from_secs(30), events.recv()).await.expect("an event within 30 s") {
             Ok(event) => seen.push(event),
             Err(_) => break,

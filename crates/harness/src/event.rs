@@ -65,7 +65,11 @@ pub enum Body {
     Notice { text: String },
     /// The session was handed over to Terminal; `closed` follows. Its provider id is kept, to resume it there.
     HandedOver,
-    Closed,
+    /// The session's last event of this start. `by` says why it ended.
+    Closed {
+        #[serde(default)]
+        by: ClosedBy,
+    },
     /// What the store gives back for an event whose private fields it does not keep: a locked session's, one dropped
     /// at clean-up or by age, one too large to keep even when cut, or one of a type this build does not know (so a later step can add an event without a
     /// migration). `of` is the event's type, and `kept` its fields that are not private (ids, kinds, decisions, how
@@ -77,11 +81,39 @@ pub enum Body {
     },
 }
 
+/// Why a session's start ended, in its `closed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedBy {
+    /// The harness shut down, and stopped it.
+    Shutdown,
+    /// A client's Stop (`close`).
+    Stop,
+    /// It was handed over to Terminal.
+    HandOver,
+    /// The agent exited by itself, or crashed (a fault signal, or a SIGKILL from outside), or its driver failed, or
+    /// it went and its driver did not say how. A turn it cut says the signal in its `failed`.
+    Agent,
+    /// It ended with its client, which left.
+    ClientLeft,
+    /// Its agent's process was ended by a signal the harness did not send of those a logout or a restart sends first:
+    /// SIGTERM, SIGHUP or SIGINT. A fault signal (SIGABRT, SIGSEGV and the like) or a SIGKILL from outside is the
+    /// agent's own end, `agent`. Only a driver that says how its agent ended tells this from `agent`.
+    Signal,
+    /// The harness could not go on with it: its store failed, or it stopped an agent whose session id looks like a
+    /// secret.
+    Harness,
+    /// A value this build does not know, or a `closed` from a harness that did not say.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// The fields a withheld event keeps, because they hold no text the agent or the person wrote. A field not on this
 /// list is dropped, so a new one stays private until someone adds it here; `PRIVATE_FIELDS` lists those that must be.
 /// `name` and `tool` are tool identifiers (`Bash`, `run_command`, `mcp__x__ask`), never a title or a command line: a
 /// driver puts those in `input`.
-pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
+pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error", "by"];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
 pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message", "data"];
@@ -243,7 +275,7 @@ mod tests {
             Body::Failed { .. } => 16,
             Body::Notice { .. } => 17,
             Body::HandedOver => 18,
-            Body::Closed => 19,
+            Body::Closed { .. } => 19,
             Body::Withheld { .. } => 20,
         }
     }
@@ -271,7 +303,7 @@ mod tests {
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
             Body::Notice { text: "t".into() },
             Body::HandedOver,
-            Body::Closed,
+            Body::Closed { by: ClosedBy::Stop },
         ]
     }
 

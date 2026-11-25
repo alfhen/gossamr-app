@@ -142,12 +142,12 @@ async fn tools_endpoint_a_token_opens_only_its_own_session_and_dies_when_it_clos
     assert_eq!(ping(port, &a_path, &b_token).await.0, 404);
 
     harness.close(&a_id).unwrap();
-    until(&mut a_events, |body| *body == Body::Closed).await;
+    until(&mut a_events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(ping(port, &a_path, &a_token).await.0, 404, "closed with its session");
     assert_eq!(ping(port, &b_path, &b_token).await.0, 200, "another session is not touched");
 
     harness.close(&b_id).unwrap();
-    until(&mut b_events, |body| *body == Body::Closed).await;
+    until(&mut b_events, |body| matches!(*body, Body::Closed { .. })).await;
     let _resumed = harness.resume(&b_id).await.unwrap();
     let (again, new_token) = { let (e, t, _) = recorder.last(); (e, t) };
     assert_eq!(again.name, b.name, "a resume serves the same name");
@@ -233,7 +233,7 @@ async fn tools_endpoint_an_unknown_name_a_closed_session_a_wrong_token_and_no_to
     let (closed_id, mut closed_events) = harness.open(spec()).await.unwrap();
     let (closed, closed_token, _) = recorder.last();
     harness.close(&closed_id).unwrap();
-    until(&mut closed_events, |body| *body == Body::Closed).await;
+    until(&mut closed_events, |body| matches!(*body, Body::Closed { .. })).await;
     let (_id, _events) = harness.open(spec()).await.unwrap();
     let (endpoint, token, _) = recorder.last();
     let (port, path) = place(&endpoint);
@@ -415,7 +415,7 @@ async fn tools_endpoint_survive_a_restart_the_name_tools_and_result_schema_with_
         let (endpoint, token, given) = recorder.last();
         assert_eq!(given, Some(schema.clone()), "the schema reaches the driver");
         harness.close(&id).unwrap();
-        until(&mut events, |body| *body == Body::Closed).await;
+        until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         (id, endpoint, token)
     };
     let (harness, recorder) = recording(&dir, Settings::default());
@@ -697,7 +697,7 @@ async fn tools_endpoint_result_a_stored_schema_the_harness_cannot_check_is_not_r
     let (harness, recorder) = recording(&dir, Settings::default());
     let (id, mut events) = harness.open(Open { result_schema: Some(verdict()), ..spec() }).await.unwrap();
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     // As a row from before the check could hold it.
     let old = json!({"type": "object", "properties": {"verdict": {"pattern": "^p"}}}).to_string();
     rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute("UPDATE sessions SET result_schema = ?1", [old]).unwrap();
