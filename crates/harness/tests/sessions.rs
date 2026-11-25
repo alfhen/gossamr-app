@@ -1658,7 +1658,7 @@ async fn question_one_whose_id_redaction_changes_is_answered_by_the_id_the_clien
     let (id, mut events) = open_on(&harness, "asker", false).await;
     let asked = until(&mut events, |body| matches!(body, Body::Question { .. })).await;
     let Body::Question { id: seen, .. } = &asked.last().unwrap().body else { unreachable!() };
-    harness.answer_question(&id, seen, "this one".into()).expect("the id the client saw is the open one");
+    harness.answer_question(&id, seen, "this one".into()).await.expect("the id the client saw is the open one");
 }
 
 #[tokio::test]
@@ -1750,7 +1750,7 @@ async fn question_an_answer_reaches_the_agent_before_prompts_sent_while_it_was_o
         _ => None,
     });
     harness.send(&id, "later").unwrap();
-    harness.answer_question(&id, &question.expect("the question came first"), "blue".into()).unwrap();
+    harness.answer_question(&id, &question.expect("the question came first"), "blue".into()).await.unwrap();
     // Requests are taken in order, so once this answer is recorded the two before it are queued.
     harness.answer(&id, &request, Decision::Allow, None).unwrap();
     until(&mut events, |body| matches!(body, Body::Answered { .. })).await;

@@ -147,13 +147,18 @@ pub enum Op {
         #[serde(default)]
         error: bool,
     },
-    /// Answers an open question. Until `ask` holds the agent's call (H5b), the answer reaches the agent as its next
-    /// prompt.
+    /// Answers an open question, once: to the agent's `ask` call if the harness still holds it, else as the next prompt
+    /// after the running turn. The question closes as its answer is delivered, so an answer still waiting when the
+    /// harness shuts down leaves it open, to be answered again after the restart. A session that is not running is
+    /// resumed first, with a new tools token. A question that Stop, a hand-over, the deny that ended the turn that
+    /// asked it, a clean-up or a resume refused for good closed is refused.
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
     /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
     HandOver { session: String },
     CleanUp { session: String },
+    /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
+    /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.
     Sessions,
     /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
     /// (`providers::Standing`): the usual setup of every provider of the table, then each of `logins`. A login is
