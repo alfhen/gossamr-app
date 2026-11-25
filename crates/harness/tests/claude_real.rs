@@ -1,8 +1,7 @@
 //! The Claude driver on the real `claude`, on the person's own login. Ignored: `cargo test -p harness -- --ignored
-//! claude_real`, from an environment that is not a Claude Code session's (`env -i HOME="$HOME" PATH=/usr/bin:/bin
-//! SHELL="$SHELL" USER="$USER" …`), since the harness's shell capture keeps the variables it was started with.
-//! Each test runs in a scratch folder, records the login folders' config before and after, and fails if one changed
-//! or a process of the session is left.
+//! claude_real`, from any terminal, a Claude Code session's included: the shell is captured from a cleared
+//! environment, so none of the test process's own variables reach the agent. Each test runs in a scratch folder,
+//! records the login folders' config before and after, and fails if one changed or a process of the session is left.
 
 mod common;
 
@@ -119,6 +118,11 @@ async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
     let scratch = scratch.canonicalize().unwrap();
     let setup = Setup::of_this_machine(data.clone());
     setup.capture().await.expect("the shell's environment is read");
+    // Run from inside a Claude Code session, the test process has that session's variables; none reaches the agent.
+    let shell = setup.shell().expect("a capture");
+    for marker in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"] {
+        assert!(shell.get(marker).is_none(), "{marker} reached the agent's environment");
+    }
     let driver = ClaudeDriver::new(binary);
     let harness = Harness::with_setup(Store::open(&data).unwrap(), vec![("claude".into(), Arc::new(driver))], settings(4), Arc::new(setup));
     let spec = Open { provider: "claude".into(), cwd: scratch.clone(), model: Some("haiku".into()), ..Open::default() };
