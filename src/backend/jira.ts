@@ -234,8 +234,8 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_set_model", { id, choice });
   }
 
-  runsAnswer(id: string, text: string) {
-    return invoke<Run>("runs_answer", { id, text });
+  runsAnswer(id: string, text: string, options?: { tookBack?: boolean }) {
+    return invoke<Run>("runs_answer", { id, text, tookBack: options?.tookBack ?? false });
   }
 
   runsAdoptSession(id: string, session: string) {

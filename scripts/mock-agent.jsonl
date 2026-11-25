@@ -1,0 +1,19 @@
+{"capabilities": {"tool_call_limit_ms": 600000}}
+{"prompt": null}
+{"say": "Reading the ticket and the code."}
+{"sleep": 1500}
+{"tool": {"name": "Read", "input": {"file_path": "README.md"}}}
+{"tool_result": {"output": "read"}}
+{"sleep": 1500}
+{"call": {"name": "ask", "input": {"question": "Should the fix cover the mobile layout too?"}}}
+{"say": "Thanks. Making the change."}
+{"sleep": 1500}
+{"tool": {"name": "Bash", "input": {"command": "git status"}}}
+{"tool_result": {"output": "nothing to commit"}}
+{"sleep": 1500}
+{"say": "Done. This was the mock: it changed nothing in your clone."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Got your message. The mock has nothing more to do."}
+{"end": "done"}
+{"prompt": null}

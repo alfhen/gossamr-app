@@ -401,3 +401,17 @@ async fn a_persons_queued_message_for_a_failed_run_is_dropped_as_the_persons() {
     assert!(audit.iter().any(|e| e.action == "agent_message_dropped" && e.actor == Actor::Person));
     assert!(!audit.iter().any(|e| e.action == "agent_message_dropped" && e.actor == Actor::Pip));
 }
+
+#[tokio::test]
+async fn a_run_handed_over_to_terminal_takes_no_message_until_the_person_says_they_took_it_back() {
+    let (rig, mut run, _) = working().await;
+    let _waiting = rig.fx.core.asks().open(&run.id, "Which database?").unwrap();
+    run.handed_over = true;
+    rig.fx.core.save_run(&run).await.unwrap();
+    for refused in [rig.svc.message_agent(&run.id, "Use staging.", Actor::Pip).await.map(drop), rig.svc.answer(&run.id, "Use staging.").await.map(drop)] {
+        assert_eq!(refused.unwrap_err().to_string(), HANDED_OVER_ASK);
+    }
+    assert!(calls(&rig).is_empty());
+    let answered = rig.svc.answer_took_back(&run.id, "Use staging.", true).await.unwrap();
+    assert_eq!(answered.state, RunState::Working);
+}

@@ -20,6 +20,7 @@ pub mod index;
 pub mod launcher;
 pub mod limits;
 pub mod link;
+pub mod on_harness;
 pub mod notices;
 pub mod pr;
 pub mod redact;

@@ -63,7 +63,8 @@ pub fn version_line() -> String {
 pub enum Request {
     Version,
     Run(RunArgs),
-    Serve { data: Option<PathBuf>, mock_script: Option<PathBuf> },
+    /// `turn_limit`: how many turns run at once, past which a session waits; left out, the harness's own.
+    Serve { data: Option<PathBuf>, mock_script: Option<PathBuf>, turn_limit: Option<usize> },
     Client { command: cli::Command, data: Option<PathBuf>, token_stdin: bool },
     /// Anything else, which gets the usage line and a failing exit code.
     Usage,
@@ -102,16 +103,17 @@ pub fn request(args: &[OsString]) -> Request {
 }
 
 fn serve_args(args: &[OsString]) -> Option<Request> {
-    let (mut data, mut mock_script) = (None, None);
+    let (mut data, mut mock_script, mut turn_limit) = (None, None, None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.to_str()? {
             "--data" => data = Some(args.next()?.into()),
             "--mock-script" => mock_script = Some(args.next()?.into()),
+            "--turn-limit" => turn_limit = Some(args.next()?.to_str()?.parse().ok().filter(|n| *n > 0)?),
             _ => return None,
         }
     }
-    Some(Request::Serve { data, mock_script })
+    Some(Request::Serve { data, mock_script, turn_limit })
 }
 
 fn run_args(args: &[OsString]) -> Option<RunArgs> {

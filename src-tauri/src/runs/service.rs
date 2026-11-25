@@ -100,6 +100,8 @@ pub struct RunService {
     pub focus: tokio::sync::Notify,
     /// When this service was made, so recovery can tell a slot wait from before a restart from one of this session's.
     pub(super) started_at: DateTime<Utc>,
+    /// Set once the app has a harness: Claude runs open sessions there from then on.
+    pub(super) harness: Option<super::on_harness::OnHarness>,
 }
 
 pub(super) use super::fresh::real;
@@ -158,6 +160,7 @@ impl RunService {
             folders: Mutex::new(HashMap::new()),
             focus: tokio::sync::Notify::new(),
             started_at: Utc::now(),
+            harness: None,
         }
     }
 
@@ -239,7 +242,7 @@ impl RunService {
         }
     }
 
-    async fn fail(&self, run: &mut Run, why: &Failure) -> Result<()> {
+    pub(super) async fn fail(&self, run: &mut Run, why: &Failure) -> Result<()> {
         let now = Utc::now();
         run.state = RunState::Failed;
         run.error = Some(redact(&why.to_string()));
@@ -268,8 +271,15 @@ impl RunService {
         self.store(run).await
     }
 
-    pub(super) fn live_elsewhere(&self, run: &Run) -> usize {
-        self.index.live().iter().filter(|e| e.run_id != run.id).count()
+    /// The runs going besides `run`: those the index tracks, and those on the harness, which the index does not.
+    pub(super) async fn live_elsewhere(&self, run: &Run) -> usize {
+        let tracked = self.index.live().iter().filter(|e| e.run_id != run.id).count();
+        if self.harness.is_none() {
+            return tracked;
+        }
+        let going = RunQuery { states: Some(vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission]), ..RunQuery::default() };
+        let on_harness = self.core.runs_list(&going).await.map_or(0, |runs| runs.iter().filter(|r| r.id != run.id && r.harness_session.is_some()).count());
+        tracked + on_harness
     }
 
     /// Everything that can be known to be wrong before a session is spawned. Cheap checks first.
@@ -284,7 +294,7 @@ impl RunService {
         if spec.pr.is_some() {
             self.core.review_current(spec).await.map_err(|e| Failure::Invalid(e.to_string()))?;
         }
-        let live = self.live_elsewhere(run);
+        let live = self.live_elsewhere(run).await;
         if live >= self.cap() {
             return Err(Failure::CapReached(live));
         }
@@ -352,6 +362,16 @@ impl RunService {
         self.store(run).await?;
         self.remember(run);
 
+        if self.harness.is_some() && tc.driver == crate::connections::Driver::Claude {
+            // The harness keeps its own limit, and a session past it waits there in order, so the run holds no slot here.
+            if let Err(e) = self.index.mark_terminal(&run.id) {
+                eprintln!("couldn't update the run index: {e}");
+            }
+            if let Err(why) = self.open_on_harness(run, model).await? {
+                self.fail(run, &why).await?;
+            }
+            return Ok(true);
+        }
         let tools = self.offer_tools(run).await;
         let spec = &run.spec;
         let fresh_id = match self.fresh_short_id().await {
@@ -432,7 +452,7 @@ impl RunService {
             self.store(&run).await?;
         }
         // A free slot goes to the runs already waiting for one first, in approval order; `launch_waiting` starts them.
-        if !retry && (self.live_elsewhere(&run) >= self.cap() || self.waits_behind(&run).await) {
+        if !retry && (self.live_elsewhere(&run).await >= self.cap() || self.waits_behind(&run).await) {
             self.wait_for_slot(&mut run).await?;
             return Ok((run, false));
         }
@@ -460,7 +480,8 @@ impl RunService {
     /// A queued run, or with `retry` a failed one that never got a session.
     fn startable(run: &Run, retry: bool) -> bool {
         if retry {
-            run.state == RunState::Failed && run.short_id.is_none()
+            // A run that opened a harness session keeps it: a second open would leave one no run can reach.
+            run.state == RunState::Failed && run.short_id.is_none() && run.harness_session.is_none()
         } else {
             run.state == RunState::Queued
         }
@@ -505,7 +526,7 @@ impl RunService {
     pub async fn note_slot_wait(&self, run_id: &str) -> Result<Run> {
         let _turn = self.launching.lock().await;
         let mut run = self.load(run_id).await?;
-        if run.state == RunState::Queued && (self.live_elsewhere(&run) >= self.cap() || self.waits_behind(&run).await) {
+        if run.state == RunState::Queued && (self.live_elsewhere(&run).await >= self.cap() || self.waits_behind(&run).await) {
             self.wait_for_slot(&mut run).await?;
         }
         Ok(run)
@@ -587,7 +608,7 @@ impl RunService {
             }
         };
         self.settle_clone_path(&mut run).await?;
-        if self.live_elsewhere(&run) >= self.cap() || skipped || self.held_for_clone(&mut run).await? {
+        if self.live_elsewhere(&run).await >= self.cap() || skipped || self.held_for_clone(&mut run).await? {
             self.wait_for_slot(&mut run).await?;
             return Ok(false);
         }
@@ -599,7 +620,7 @@ impl RunService {
     /// being made or fetched into by someone else: that run stays queued, and the next pass finds the clone ready.
     /// This keeps a slow clone from holding up the runs on other repositories.
     async fn prepare_if_free(&self, run: &Run) -> std::result::Result<(bool, Option<CommitIdentity>), Failure> {
-        if self.live_elsewhere(run) >= self.cap() || self.clone_busy(&run.spec.repo) {
+        if self.live_elsewhere(run).await >= self.cap() || self.clone_busy(&run.spec.repo) {
             return Ok((false, None));
         }
         self.prepare(run).await.map(|who| (true, who))

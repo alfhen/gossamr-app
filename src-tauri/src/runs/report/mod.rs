@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use resolve::{resolve, Resolved};
-pub use tool::{check, definition, MAX_CALLS, MAX_REJECTIONS};
+pub use tool::{check, definition, result_schema, MAX_CALLS, MAX_REJECTIONS};
 
 /// What an agent says about how its run ended. It never changes the run's state: the session listing decides that.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

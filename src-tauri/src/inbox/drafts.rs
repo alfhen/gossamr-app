@@ -391,6 +391,15 @@ impl Core {
         self.with_proposals(|db| db.apply_session(session, f)).await
     }
 
+    /// `apply_session`, keeping the report `f` returns as the run's in the same transaction.
+    pub async fn apply_session_reporting(
+        &self,
+        session: &str,
+        f: impl FnOnce(&mut Run, &mut crate::domain::SessionFollow) -> (Vec<RunEvent>, Option<crate::runs::report::Report>),
+    ) -> Result<Option<crate::db::Applied>> {
+        self.with_proposals(|db| db.apply_session_reporting(session, f)).await
+    }
+
     /// Adds events after the run's last one; at most 500 are kept per run. Returns how many were stored.
     pub async fn append_run_events(&self, run_id: &str, events: &[RunEvent]) -> Result<usize> {
         self.with_proposals(|db| db.append_events(run_id, events)).await

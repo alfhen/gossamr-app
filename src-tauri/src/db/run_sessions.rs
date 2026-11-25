@@ -58,13 +58,25 @@ impl Db {
     /// Applies what `f` makes of the session's run and follow, and the timeline rows it returns, in one transaction:
     /// all of it lands, or none. None when no run this handle sees follows `session`.
     pub fn apply_session(&self, session: &str, f: impl FnOnce(&mut Run, &mut SessionFollow) -> Vec<RunEvent>) -> Result<Option<Applied>> {
+        self.apply_session_reporting(session, |run, follow| (f(run, follow), None))
+    }
+
+    /// `apply_session`, keeping the report `f` returns as the run's in the same transaction.
+    pub fn apply_session_reporting(
+        &self,
+        session: &str,
+        f: impl FnOnce(&mut Run, &mut SessionFollow) -> (Vec<RunEvent>, Option<crate::runs::report::Report>),
+    ) -> Result<Option<Applied>> {
         self.atomically(|db| {
             let Some((run_id, mut follow)) = db.session_run(session)? else { return Ok(None) };
             let Some(before) = db.run(&run_id)? else { return Ok(None) };
             let mut run = before.clone();
-            let rows = f(&mut run, &mut follow);
+            let (rows, report) = f(&mut run, &mut follow);
             if run != before {
                 db.save_run(&run)?;
+            }
+            if let Some(report) = report {
+                db.keep_result(&run_id, report, chrono::Utc::now())?;
             }
             db.append_events(&run_id, &rows)?;
             db.conn.execute("UPDATE run_sessions SET data = ?2 WHERE run_id = ?1", params![run_id, serde_json::to_string(&follow)?])?;

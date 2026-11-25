@@ -20,6 +20,8 @@ pub const SLOT_WAIT: &str = "Waits for a free slot: the harness runs as many age
 pub const HANDED_OVER: &str = "Handed over to Terminal";
 pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
+pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
+pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
@@ -41,6 +43,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.stop_asked = false;
             follow.ended = false;
             reopen(run);
+            if follow.answered.is_some() {
+                run.last_detail = Some(ANSWER_WAITS.into());
+            }
             rows.add("follow_up", "Resumed", None);
         }
         Body::Started { .. } => rows.add("start", "Started", None),
@@ -118,6 +123,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 follow.question = None;
                 follow.asked = None;
             }
+            if follow.answered.as_deref() == Some(id.as_str()) {
+                drop_answer(run, follow);
+            }
             match how {
                 QuestionEnd::Answered => rows.add("update", "Its question was answered", None),
                 QuestionEnd::Stopped => rows.add("stop", "Its question was closed: the run was stopped", None),
@@ -186,6 +194,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.in_turn = false;
             follow.permissions.clear();
             follow.calls.clear();
+            drop_answer(run, follow);
             run.state = RunState::Failed;
             run.error = Some(cut(&redact(&reason), DETAIL_KEPT));
             run.failure = Some(if kind == FailKind::SignedOut { RunFailure::NotSignedIn } else { RunFailure::Other });
@@ -209,6 +218,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             if follow.ended {
                 follow.question = None;
                 follow.asked = None;
+                drop_answer(run, follow);
             }
             if follow.question.is_none() {
                 if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
@@ -221,6 +231,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::Withheld { .. } => {}
     }
     settle(run, follow);
+    run.answer_waits = follow.answered.is_some();
     run.asking = run.state == RunState::NeedsAnswer;
     // What it waits on now: the oldest permission request, else the question, whichever event closed the other.
     run.needs = match run.state {
@@ -251,6 +262,30 @@ pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, last: u64, 
     rows.rows
 }
 
+/// Notes that the person answered the open `question`: the run goes back to work while the answer waits to reach the
+/// agent, and an answer to a question that has closed since changes nothing.
+pub fn answered(run: &mut Run, follow: &mut SessionFollow, question: &str) {
+    if follow.question.as_deref() != Some(question) {
+        return;
+    }
+    follow.answered = Some(question.to_owned());
+    run.answer_waits = true;
+    settle(run, follow);
+    if run.state == RunState::Working && follow.permissions.is_empty() {
+        run.asking = false;
+        run.needs = None;
+        run.last_detail = Some(ANSWER_WAITS.into());
+    }
+}
+
+/// An answer the run waited on that no longer goes anywhere, and the words that said so.
+fn drop_answer(run: &mut Run, follow: &mut SessionFollow) {
+    follow.answered = None;
+    if matches!(run.last_detail.as_deref(), Some(ANSWER_WAITS | ANSWER_WAITS_RESUME)) {
+        run.last_detail = None;
+    }
+}
+
 /// A run its session takes up again, after a failed turn, a stop or a close: no longer over.
 fn reopen(run: &mut Run) {
     run.ended_at = None;
@@ -268,8 +303,12 @@ fn settle(run: &mut Run, follow: &SessionFollow) {
         return;
     }
     if follow.closed {
-        if follow.question.is_some() {
+        if follow.question.is_some() && follow.answered != follow.question {
             run.state = RunState::NeedsAnswer;
+        } else if follow.answered.is_some() {
+            // The answer is the harness's, and reaches the agent once the session is resumed.
+            run.state = RunState::Stopped;
+            run.last_detail = Some(ANSWER_WAITS_RESUME.into());
         } else if matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission) {
             run.state = RunState::Stopped;
         }
@@ -277,7 +316,7 @@ fn settle(run: &mut Run, follow: &SessionFollow) {
     }
     if !follow.permissions.is_empty() {
         run.state = RunState::NeedsPermission;
-    } else if follow.question.is_some() {
+    } else if follow.question.is_some() && follow.answered != follow.question {
         run.state = RunState::NeedsAnswer;
     } else if follow.in_turn || matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission) {
         run.state = RunState::Working;
@@ -369,6 +408,13 @@ fn plain(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     }
+}
+
+/// A `result` as the run's report, for Pip to read as it read `report`: one the harness checked against
+/// `report::result_schema`, so one that does not fit it is none.
+pub fn report_of(body: &Body) -> Option<crate::runs::report::Report> {
+    let Body::Result { data } = body else { return None };
+    crate::runs::report::check(data).ok().map(|checked| checked.report)
 }
 
 /// A result as the run shows it: its `note` when it has one, else the whole of it.
