@@ -212,7 +212,7 @@ async fn ask_stop_and_hand_over_each_close_the_open_question_and_say_so() {
         }
         let seen = until(&mut events, |body| matches!(body, Body::QuestionClosed { .. })).await;
         assert_eq!(seen.last().unwrap().body, Body::QuestionClosed { id: q.clone(), how }, "{how:?}");
-        until(&mut events, |body| *body == Body::Closed).await;
+        until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         assert_eq!(harness.open_question(&id).unwrap(), None, "{how:?}: closed in the store");
         assert!(harness.answer_question(&id, &q, "late".into()).await.is_err(), "{how:?}: its answer is refused");
     }

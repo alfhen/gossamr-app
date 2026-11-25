@@ -108,7 +108,7 @@ async fn life_a_failure_is_an_event_and_ends_the_turn() {
     assert_eq!(failed.last().unwrap().body, Body::Failed { kind: FailKind::Provider, reason });
     // With a limit of one, the next turn starts only if the failure gave its slot back.
     harness.send(&id, "two").unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&rest), ["prompted", "turn_started", "text", "failed", "closed"]);
     let reason = "the agent stopped in the middle of a turn".to_owned();
     assert_eq!(rest[3].body, Body::Failed { kind: FailKind::AgentStopped, reason });
@@ -127,8 +127,9 @@ async fn life_a_store_that_fails_stops_the_session_and_says_so() {
     let failed = next(&mut events).await;
     assert_eq!(failed.seq, 0, "no number could be given");
     assert!(matches!(&failed.body, Body::Failed { kind: FailKind::Harness, reason } if reason.starts_with("the store could not keep")));
-    let closed = until(&mut events, |body| *body == Body::Closed).await;
+    let closed = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(closed.last().unwrap().seq, 0);
+    assert_eq!(closed.last().unwrap().body, Body::Closed { by: harness::event::ClosedBy::Harness }, "it ended because the store did");
     assert!(!mock.received(&ps).iter().any(|c| matches!(c, Command::Prompt(_))), "a prompt that could not be recorded is not sent");
 }
 
@@ -148,7 +149,7 @@ async fn answer_a_late_answer_after_a_resume_is_refused_and_reaches_no_request()
     harness.send(&id, "clean").unwrap();
     let first = ask(&mut events).await;
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let mut events = harness.resume(&id).await.unwrap();
     harness.send(&id, "push").unwrap();
     let second = ask(&mut events).await;
@@ -298,7 +299,7 @@ async fn limit_a_stopped_session_keeps_its_slot_until_its_agent_has_gone() {
     harness.close(&slow).unwrap();
     assert!(matches!(harness.resume(&slow).await, Err(Error::Running(_))), "no resume while the old agent runs");
     assert!(matches!(harness.clean_up(&slow).await, Err(Error::Running(_))), "no clean-up while it runs");
-    let gone = until(&mut slow_events, |body| *body == Body::Closed).await;
+    let gone = until(&mut slow_events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&gone), ["text", "failed", "closed"], "what the agent says while it stops is kept, and its open turn ends");
     until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
     assert!(stopped.elapsed() >= Duration::from_millis(200), "the slot was held until the agent had gone");
@@ -312,7 +313,7 @@ async fn limit_an_agent_that_will_not_stop_is_killed_after_the_grace_and_the_ses
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(1));
     let (id, mut events) = open_on(&harness, "stubborn", false).await;
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(*killed.lock().unwrap(), "the driver was told to kill");
     let reason = "the agent was still running 300 ms after the stop, so the driver was told to kill it".to_owned();
     assert_eq!(types(&rest), ["started", "failed", "closed"]);
@@ -342,7 +343,7 @@ async fn limit_an_agent_that_ignores_stop_and_kill_keeps_its_session_taken_until
     assert!(!harness.events(&other, 0).unwrap().iter().any(|event| matches!(event.body, Body::Prompted { .. })), "its slot is still taken");
 
     let_go.notify_one();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     until(&mut other_events, |body| matches!(body, Body::Prompted { .. })).await;
     assert!(!matches!(harness.resume(&id).await, Err(Error::Running(_))), "free once the agent has gone");
 }
@@ -357,7 +358,7 @@ async fn limit_a_stopping_session_refuses_requests() {
     assert!(matches!(harness.send(&id, "late"), Err(Error::NotRunning(_))));
     assert!(matches!(harness.answer(&id, "p1", Decision::Allow, None), Err(Error::NotRunning(_))));
     assert!(matches!(harness.tool_result(&id, "c1", json!(1), false), Err(Error::NotRunning(_))));
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
 }
 
 #[tokio::test]
@@ -376,7 +377,7 @@ async fn locked_a_locked_sessions_text_is_in_no_table_and_its_other_fields_are_k
     let mut live = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
     let request = permission_id(&live.last().unwrap().body);
     harness.answer(&id, &request, Decision::Deny, Some("marmalade is private".into())).unwrap();
-    live.extend(until(&mut events, |body| *body == Body::Closed).await);
+    live.extend(until(&mut events, |body| matches!(*body, Body::Closed { .. })).await);
     assert!(live.iter().any(|event| event.body == Body::Text { text: "pip-says-marmalade".into() }), "the live client gets the text");
 
     let stored = harness.events(&id, 0).unwrap();
@@ -554,7 +555,7 @@ async fn resume_a_resumed_mock_session_gets_a_new_token_and_goes_on_from_where_i
     harness.send(&id, "first").unwrap();
     until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
     harness.close(&id).unwrap();
-    let closed = until(&mut events, |body| *body == Body::Closed).await;
+    let closed = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     drop(harness);
 
     // The harness restarts on the same data folder; the agent goes on by its provider session id.
@@ -571,7 +572,7 @@ async fn resume_a_resumed_mock_session_gets_a_new_token_and_goes_on_from_where_i
     harness.send(&id, "second").unwrap();
     ask(&mut events).await;
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let mut events = harness.resume(&id).await.unwrap();
     next(&mut events).await;
     harness.send(&id, "third").unwrap();
@@ -588,7 +589,7 @@ async fn resume_two_resumes_at_once_one_wins_and_one_is_refused() {
     let (id, mut events) = open(&harness, false).await;
     let ps = provider_session(&next(&mut events).await.body);
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     for _ in 0..100 {
         let both = [0, 1].map(|_| {
             let (harness, id) = (harness.clone(), id.clone());
@@ -604,7 +605,7 @@ async fn resume_two_resumes_at_once_one_wins_and_one_is_refused() {
         }
         assert_eq!(won.len(), 1, "exactly one resume wins");
         harness.close(&id).unwrap();
-        until(&mut won[0], |body| *body == Body::Closed).await;
+        until(&mut won[0], |body| matches!(*body, Body::Closed { .. })).await;
     }
     assert_eq!(mock.tokens(&ps).len(), 101, "one start and a hundred resumes, never two at once");
 }
@@ -639,7 +640,7 @@ async fn resume_a_cleaned_up_session_is_refused() {
     let (id, mut events) = open(&harness, false).await;
     next(&mut events).await;
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     harness.clean_up(&id).await.unwrap();
     assert!(matches!(harness.resume(&id).await, Err(Error::CleanedUp(_))));
 }
@@ -650,7 +651,7 @@ async fn resume_a_resume_that_cannot_open_leaves_the_session_free() {
     let harness = harness(&dir, &mock(TURNS), 4);
     let (id, mut events) = open(&harness, false).await;
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     drop(harness);
     // A mock that never saw the session cannot resume it.
     let harness = harness_on(reopen(&dir).await, &mock(TURNS), 4);
@@ -766,7 +767,7 @@ async fn life_an_answer_that_cannot_be_recorded_is_not_sent_and_nothing_is_writt
     assert!(matches!(failed.body, Body::Failed { kind: FailKind::Harness, .. }) && failed.seq == 0, "{failed:?}");
     // The store takes writes again before the session has closed.
     raw.execute_batch("ALTER TABLE gone RENAME TO events").unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(rest.iter().all(|event| event.seq == 0), "nothing is numbered after the failure: {rest:?}");
     assert!(!mock.received(&ps).iter().any(|c| matches!(c, Command::Answer { .. })), "an answer that could not be recorded is not sent");
     assert_eq!(harness.events(&id, 0).unwrap().len(), asked.len(), "nothing was written after the failure");
@@ -785,7 +786,7 @@ async fn life_a_store_that_comes_back_after_a_failure_gets_nothing_more_from_the
     assert!(matches!(next(&mut events).await.body, Body::Failed { kind: FailKind::Harness, .. }));
     // Back before the agent, which takes 200 ms to stop, has said its last word.
     raw.execute_batch("ALTER TABLE gone RENAME TO events").unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(rest.iter().all(|event| event.seq == 0), "{rest:?}");
     assert_eq!(harness.events(&id, 0).unwrap().len(), 1, "only `started`, from before the failure, is stored");
 }
@@ -880,7 +881,7 @@ async fn redact_a_secret_glued_straight_onto_an_open_ended_token_is_masked_with_
         }
     }
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let disk = bytes_on_disk(&dir);
     let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
     for ((first, second, glued), body) in pairs.iter().zip(&shown) {
@@ -956,7 +957,7 @@ async fn redact_every_secret_after_any_escape_encoding_letter_or_digit_is_masked
         }
     }
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let disk = bytes_on_disk(&dir);
     let disk: std::collections::HashSet<&[u8]> = disk.windows(8).collect();
     // A failure names the case by its number and shape, never the text or what the client was shown.
@@ -1049,7 +1050,7 @@ async fn hold_a_client_tool_call_ended_by_a_close_gets_its_end() {
     let held = until(&mut events, |body| matches!(body, Body::ClientToolCall { .. })).await;
     let Body::ClientToolCall { id: call, .. } = &held.last().unwrap().body else { unreachable!() };
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let ended = Body::ToolResult { id: call.clone(), output: json!("the session has ended"), error: true };
     assert_eq!(rest[0].body, ended, "{rest:?}");
     // The session answers the call before it stops the agent, but the answer crosses HTTP and the stop does not, so
@@ -1074,7 +1075,7 @@ async fn hold_a_tool_result_or_a_cut_that_cannot_be_recorded_does_not_reach_the_
         if !cut {
             harness.tool_result(&id, call, json!("blue"), false).unwrap();
         }
-        until(&mut events, |body| *body == Body::Closed).await;
+        until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         let replies = mock.replies(&ps);
         let ended = Ok(harness::tools::Reply::failed("the session has ended"));
         assert!(replies.iter().all(|reply| *reply == ended), "cut {cut}: nothing unrecorded reached the agent: {replies:?}");
@@ -1155,7 +1156,7 @@ async fn stop_a_prompt_queued_behind_a_turn_does_not_reach_the_agent_after_close
     harness.send(&id, "two").unwrap();
     puppet.say(0, Body::TurnEnded { how: TurnEnd::Done });
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&rest), ["turn_ended", "prompts_dropped", "closed"], "the client hears the queued prompt was dropped");
     assert_eq!(puppet.prompts(), ["one"], "the queued prompt never reached the agent");
     assert_eq!(*puppet.commands.lock().unwrap(), [Command::Prompt("one".into()), Command::Stop], "Stop is the last command");
@@ -1186,7 +1187,7 @@ async fn stop_a_slot_granted_after_close_sends_no_prompt_and_is_given_back_while
     let asked = until(&mut first_events, |body| matches!(body, Body::Prompted { .. } | Body::Waiting)).await;
     assert!(matches!(asked.last().unwrap().body, Body::Prompted { .. }), "the only slot is free while the second agent stops");
     assert!(!puppet.commands.lock().unwrap().contains(&Command::Kill), "the second agent was still stopping");
-    until(&mut second_events, |body| *body == Body::Closed).await;
+    until(&mut second_events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(puppet.prompts(), ["one", "again"], "the granted prompt never reached the agent");
 }
 
@@ -1202,7 +1203,7 @@ async fn stop_a_turn_open_at_close_gets_exactly_one_end_before_closed() {
     puppet.say(0, Body::TurnStarted);
     until(&mut events, |body| *body == Body::TurnStarted).await;
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&rest), ["failed", "closed"], "the open turn ends once");
     assert!(matches!(&rest[0].body, Body::Failed { kind: FailKind::AgentStopped, .. }));
 
@@ -1216,7 +1217,7 @@ async fn stop_a_turn_open_at_close_gets_exactly_one_end_before_closed() {
     puppet.say(0, Body::TurnStarted);
     until(&mut events, |body| *body == Body::TurnStarted).await;
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&rest), ["failed", "closed"], "one end, not the diagnostic and the agent's own: {rest:?}");
 }
 
@@ -1249,7 +1250,7 @@ async fn stop_a_prompt_the_driver_does_not_take_fails_the_session_where_the_stor
     harness.send(&id, "one").unwrap();
     let mut rest = until(&mut events, |body| matches!(body, Body::Prompted { .. })).await;
     close.notify_one();
-    rest.extend(until(&mut events, |body| *body == Body::Closed).await);
+    rest.extend(until(&mut events, |body| matches!(*body, Body::Closed { .. })).await);
     assert_eq!(types(&rest), ["started", "prompted", "failed", "closed"]);
     assert!(rest.iter().all(|event| event.seq > 0), "every event is recorded: {rest:?}");
     let stored = types(&harness.events(&id, 0).unwrap());
@@ -1289,7 +1290,7 @@ async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and
     let (id, mut events) = open_on(&harness, "caller", false).await;
     let stopped = Instant::now();
     harness.close(&id).unwrap();
-    let rest = until(&mut events, |body| *body == Body::Closed).await;
+    let rest = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(stopped.elapsed() < Duration::from_secs(5), "the agent was not held until the grace ran out");
     assert_eq!(types(&rest), ["started", "closed"]);
     assert_eq!(heard.lock().unwrap().clone(), Some(Ok(harness::tools::Reply::failed("the session has ended"))));
@@ -1327,8 +1328,9 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
     let (id, mut events) = open_on(&harness, "leaky", false).await;
     // A prompt is waiting when the session reads the agent's `started`.
     harness.send(&id, "one").unwrap();
-    let all = until(&mut events, |body| *body == Body::Closed).await;
+    let all = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&all), ["started", "failed", "prompts_dropped", "closed"], "the session stopped, and said the prompt never went");
+    assert_eq!(all.last().unwrap().body, Body::Closed { by: harness::event::ClosedBy::Harness }, "the harness stopped it, not its agent");
     assert_eq!(*received.lock().unwrap(), [Command::Stop], "no prompt reached the agent");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "a session with no kept id cannot be resumed");
@@ -1362,9 +1364,9 @@ async fn redact_a_resumed_session_whose_agent_names_a_secret_id_drops_the_earlie
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "renamed", false).await;
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let mut resumed = harness.resume(&id).await.unwrap();
-    let all = until(&mut resumed, |body| *body == Body::Closed).await;
+    let all = until(&mut resumed, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&all), ["started", "failed", "closed"], "the resumed session stopped");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     let again = harness.resume(&id).await;
@@ -1384,10 +1386,11 @@ async fn resume_a_provider_session_id_the_store_will_not_write_breaks_the_sessio
     raw.execute_batch("CREATE TRIGGER refuse_id BEFORE UPDATE OF provider_session ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;")
         .unwrap();
     let (id, mut events) = open_on(&harness, "puppet", false).await;
-    let all = until(&mut events, |body| *body == Body::Closed).await;
+    let all = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&all), ["failed", "closed"], "the session stops on its broken store");
     assert!(matches!(all[0].body, Body::Failed { kind: FailKind::Harness, .. }));
     assert!(all.iter().all(|event| event.seq == 0), "nothing is stored after the failed write");
+    assert_eq!(all[1].body, Body::Closed { by: harness::event::ClosedBy::Harness }, "it ended because the store did");
     raw.execute_batch("DROP TRIGGER refuse_id").unwrap();
     let again = harness.resume(&id).await;
     assert!(matches!(&again, Err(Error::Driver(reason)) if reason.contains("no provider session id")), "no id was kept");
@@ -1421,10 +1424,10 @@ async fn resume_a_session_closed_before_its_agent_said_it_started_keeps_the_id_a
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     let (id, mut events) = open_on(&harness, "late", false).await;
     harness.close(&id).unwrap();
-    assert_eq!(types(&until(&mut events, |body| *body == Body::Closed).await), ["started", "closed"]);
+    assert_eq!(types(&until(&mut events, |body| matches!(*body, Body::Closed { .. })).await), ["started", "closed"]);
     let mut resumed = harness.resume(&id).await.expect("the id the agent gave as it went was kept");
     harness.close(&id).unwrap();
-    assert_eq!(types(&until(&mut resumed, |body| *body == Body::Closed).await), ["started", "closed"]);
+    assert_eq!(types(&until(&mut resumed, |body| matches!(*body, Body::Closed { .. })).await), ["started", "closed"]);
 }
 
 
@@ -1453,7 +1456,7 @@ async fn race_clean_up_and_resume_of_one_session_are_never_both_taken() {
     for _ in 0..300 {
         let (id, mut events) = open_on(&harness, "puppet", false).await;
         harness.close(&id).unwrap();
-        until(&mut events, |body| *body == Body::Closed).await;
+        until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         let (a, b, id_a, id_b) = (harness.clone(), harness.clone(), id.clone(), id.clone());
         let cleaning = tokio::spawn(async move { a.clean_up(&id_a).await.is_ok() });
         let resuming = tokio::spawn(async move { b.resume(&id_b).await.ok() });
@@ -1461,7 +1464,7 @@ async fn race_clean_up_and_resume_of_one_session_are_never_both_taken() {
         if let Some(mut events) = resumed {
             both += usize::from(cleaned);
             harness.close(&id).unwrap();
-            until(&mut events, |body| *body == Body::Closed).await;
+            until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
         }
     }
     stop.store(true, Ordering::Relaxed);
@@ -1508,7 +1511,7 @@ async fn locked_a_client_that_falls_behind_misses_no_event() {
     // The watcher is not read until the session has closed, far more events than the live channel holds.
     loop {
         match events.recv().await {
-            Ok(event) if event.body == Body::Closed => break,
+            Ok(event) if matches!(event.body, Body::Closed { .. }) => break,
             Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(e) => panic!("{e}"),
         }
@@ -1519,7 +1522,7 @@ async fn locked_a_client_that_falls_behind_misses_no_event() {
     }
     let seqs: Vec<u64> = got.iter().map(|event| event.seq).collect();
     assert_eq!(seqs, (1..=got.len() as u64).collect::<Vec<_>>(), "every event, in order");
-    assert_eq!(got.last().map(|event| &event.body), Some(&Body::Closed), "through to `closed`");
+    assert!(matches!(got.last().map(|event| &event.body), Some(Body::Closed { .. })), "through to `closed`");
     assert_eq!(got.last().unwrap().seq, harness.events(&id, 0).unwrap().last().unwrap().seq, "the feed ends where the session did");
     let texts: Vec<&Body> = got.iter().map(|event| &event.body).filter(|body| matches!(body, Body::Text { .. })).collect();
     assert_eq!(texts.len(), says);
@@ -1549,7 +1552,7 @@ async fn resume_a_locked_session_that_said_it_cannot_be_resumed_stays_refused_af
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("secretive".into(), Arc::new(Secretive(example("GitHub token"))))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers.clone(), settings(4));
     let (id, mut events) = open_on(&harness, "secretive", true).await;
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     harness.shutdown().await;
     drop(harness);
     // A locked session's `failed` keeps no reason, and the sweep can delete the rows: the mark is on the session.
@@ -1588,7 +1591,7 @@ async fn shutdown_stops_waiting_for_an_agent_that_ignores_stop_and_kill_and_free
     let store = Store::open(&dir).expect("the data folder is free");
     let last = store.events(&stuck, 0).unwrap().pop().unwrap();
     assert!(matches!(&last.body, Body::Failed { kind: FailKind::Stuck, reason } if reason.contains("shut down")), "{last:?}");
-    assert_eq!(store.events(&gone, 0).unwrap().pop().unwrap().body, Body::Closed, "the others closed");
+    assert!(matches!(store.events(&gone, 0).unwrap().pop().unwrap().body, Body::Closed { .. }), "the others closed");
     let_go.notify_one();
 }
 
@@ -1614,7 +1617,7 @@ async fn hand_over_a_take_back_that_fails_leaves_the_session_handed_over() {
     let (id, mut events) = open(&harness, false).await;
     next(&mut events).await;
     harness.hand_over(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     harness.shutdown().await;
     drop(harness);
     // A new harness whose mock never had this session, so taking it back cannot open the agent.
@@ -1669,7 +1672,7 @@ async fn hand_over_after_a_close_is_refused_and_the_session_closes_as_closed() {
     next(&mut events).await;
     harness.close(&id).unwrap();
     assert!(harness.hand_over(&id).is_err(), "the close came first, so the hand over would be dropped");
-    let seen = until(&mut events, |body| *body == Body::Closed).await;
+    let seen = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert!(!seen.iter().any(|event| event.body == Body::HandedOver), "{seen:?}");
 }
 
@@ -1862,7 +1865,7 @@ async fn a_sessions_login_effort_and_work_survive_a_restart_and_reach_the_driver
     let (id, mut events) = harness.open(spec).await.unwrap();
     next(&mut events).await;
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     drop(harness);
 
     let store = reopen(&m.dir).await;
@@ -1878,7 +1881,7 @@ async fn a_sessions_login_effort_and_work_survive_a_restart_and_reach_the_driver
     assert_eq!((listed[0].repo.as_deref(), listed[0].branch.as_deref(), listed[0].login.as_deref(), listed[0].effort.as_deref()), (Some("acme/webshop"), Some("harness-1"), Some("~/.claude-work"), Some("xhigh")));
 
     harness.close(&id).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     std::fs::remove_dir_all(&worktree).unwrap();
     assert!(matches!(harness.resume(&id).await, Err(Error::Refused(_))), "a session whose worktree is gone isn't resumed");
 }
@@ -1930,7 +1933,7 @@ async fn the_latest_start_owns_a_worktree_even_one_that_failed_after_an_earlier_
     let (ran, mut events) = harness.open(harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) }).await.unwrap();
     next(&mut events).await;
     harness.close(&ran).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     std::fs::remove_dir_all(&worktree).unwrap();
     std::fs::create_dir_all(&worktree).unwrap();
     let later = harness::session::Open { provider: "nogo".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() };
@@ -1953,11 +1956,11 @@ async fn resume_refuses_a_session_whose_worktree_another_session_holds_now() {
     let (old, mut events) = harness.open(spec()).await.unwrap();
     next(&mut events).await;
     harness.close(&old).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let mut events = harness.resume(&old).await.unwrap();
     next(&mut events).await;
     harness.close(&old).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
 
     let (_later, mut events) = harness.open(spec()).await.unwrap();
     next(&mut events).await;
@@ -1998,7 +2001,7 @@ async fn a_live_session_owns_its_worktree_before_its_provider_id_comes() {
     let (older, mut events) = harness.open(harness::session::Open { cwd: worktree.clone(), work: Some(work.clone()), ..claude(None, None) }).await.unwrap();
     next(&mut events).await;
     harness.close(&older).unwrap();
-    until(&mut events, |body| *body == Body::Closed).await;
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     let (_newer, _events) = harness.open(harness::session::Open { provider: "mute".into(), cwd: worktree.clone(), work: Some(work), ..Default::default() }).await.unwrap();
     assert!(matches!(harness.resume(&older).await, Err(Error::Refused(_))), "the older session doesn't resume into a live one's worktree");
     harness.clean_up(&older).await.unwrap();

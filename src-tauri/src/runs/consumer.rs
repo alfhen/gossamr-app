@@ -208,7 +208,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         // The session's task ended. Only after a stop the app asked for is that the end: a shutdown or a hand-over
         // can be resumed, and its question stays until a `question_closed`.
-        Body::Closed => {
+        // Who closed it (`by`) is read in H10c-2.
+        Body::Closed { .. } => {
             follow.closed = true;
             follow.ended = follow.stop_asked;
             follow.in_turn = false;

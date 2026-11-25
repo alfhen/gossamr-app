@@ -124,6 +124,24 @@ pub struct Link {
     pub output: UnboundedReceiver<Body>,
 }
 
+/// How an agent's process ended, as its driver saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentEnd {
+    /// It exited by itself, with this code.
+    Exited(i32),
+    /// A signal ended it. `sent` when the driver sent it: a stop, an interrupt it escalated, or a kill.
+    Signalled { signal: i32, sent: bool },
+}
+
+/// Where a driver says how its agent's process ended, before it closes `output`.
+pub struct EndReport(pub(crate) tokio::sync::oneshot::Sender<AgentEnd>);
+
+impl EndReport {
+    pub fn send(self, end: AgentEnd) {
+        let _ = self.0.send(end);
+    }
+}
+
 /// Why a driver could not open, with the kind a client acts on: signed out, a version it does not support, or another
 /// provider error.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,4 +158,12 @@ pub trait Driver: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     /// Starts the agent, or resumes it when `launch.resume` names its session.
     fn open(&self, launch: Launch) -> Result<Link, OpenError>;
+
+    /// As `open`, with where to say how the agent's process ended. The session calls this one. A driver that says
+    /// nothing leaves the end taken as the agent's own, so a signal from outside the harness, at a logout say, reads
+    /// as the agent's; one that says tells them apart in `closed`.
+    fn open_reporting(&self, launch: Launch, end: EndReport) -> Result<Link, OpenError> {
+        drop(end);
+        self.open(launch)
+    }
 }
