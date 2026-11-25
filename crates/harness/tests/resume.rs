@@ -183,6 +183,38 @@ async fn carry_on_is_refused_after_a_stop_a_deny_ended_turn_an_open_request_or_q
 }
 
 #[tokio::test]
+async fn carry_on_is_refused_after_a_restart_when_the_answer_was_still_waiting_at_the_shutdown() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(r#"{"capabilities": {"tool_call_limit_ms": 400}}
+{"prompt": null}
+{"call": {"name": "ask", "input": {"question": "Which?"}}}
+{"sleep": 5000}
+{"end": "done"}
+{"prompt": null}"#);
+    let (id, ps, question) = {
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        let ps = provider_session(&next(&mut events).await.body);
+        harness.send(&id, "go").unwrap();
+        let asked = until(&mut events, |body| matches!(body, Body::Question { .. })).await.pop().unwrap();
+        let Body::Question { id: question, .. } = asked.body else { unreachable!() };
+        until(&mut events, |body| matches!(body, Body::ToolResult { .. })).await;
+        // Queued behind the running turn: not delivered, so the question stays open.
+        harness.answer_question(&id, &question, "blue".into()).await.unwrap();
+        assert!(harness.shutdown().await.is_empty());
+        (id, ps, question)
+    };
+    let harness = harness_on(reopen(&dir).await, &mock, 4);
+    let starts = mock.tokens(&ps).len();
+    match harness.resume_with(&id, Some("carry on".into())).await {
+        Err(Error::Refused(said)) => assert!(said.contains(&format!("question {question} is open")), "{said}"),
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
+    assert_eq!(mock.tokens(&ps).len(), starts, "no agent started");
+    assert!(!mock.received(&ps).contains(&Command::Prompt("carry on".into())));
+}
+
+#[tokio::test]
 async fn carry_on_a_turn_after_the_stop_lifts_its_mark() {
     let (_tmp, dir) = data_dir();
     let mock = mock(TURNS);
