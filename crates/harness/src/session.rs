@@ -20,10 +20,10 @@ use tokio::sync::{Notify, broadcast, oneshot};
 
 use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secret, random_hex};
 use crate::error::{Error, Result};
-use crate::event::{Body, Decision, Event, FailKind};
+use crate::event::{Body, Decision, Event, FailKind, QuestionEnd, TurnEnd};
 use crate::redact;
 use crate::store::{Listed, NewSession, Store, now_ms};
-use crate::tools::{Endpoints, RESULT, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
+use crate::tools::{ASK, Endpoints, RESULT, Reply, ToolCall, ToolSpec, check_tools, endpoint_name};
 use crate::work::{Setup, Work, valid_effort};
 
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +58,13 @@ pub const LOCKED_BACKLOG_BYTES: usize = 64 << 20;
 
 /// The reason of the `failed` a session records when it cannot be resumed; the session's row is marked with it.
 pub const CANNOT_RESUME: &str = "the provider's session id looks like a secret, so it is not kept, the session cannot be resumed and it stops";
+
+/// What `ask` returns when the provider would cut the call before the answer comes.
+pub const QUESTION_PENDING: &str = "question pending, end your turn: the answer comes as your next prompt";
+/// How long before a provider's limit on a call `ask` returns: this, or a quarter of the limit when that is less.
+pub const ASK_MARGIN: Duration = Duration::from_secs(10);
+/// The longest question `ask` takes, in characters.
+pub const QUESTION_CHARS: usize = 4000;
 
 /// What a call still held when its session ends gets back.
 const ENDED: &str = "the session has ended";
@@ -122,6 +129,10 @@ impl Feed {
     }
 }
 
+/// The open questions, each with whether its answer is on its way to the agent. Only the session task adds or removes
+/// one, so a stop that comes while an answer is on its way still finds the question to close.
+type Questions = Arc<Mutex<HashMap<String, bool>>>;
+
 #[derive(Clone)]
 struct Live {
     requests: UnboundedSender<Request>,
@@ -132,8 +143,7 @@ struct Live {
     open: Arc<Mutex<HashMap<String, OpenRequest>>>,
     /// Stop was taken: the session takes no more requests while its agent goes.
     stopping: Arc<AtomicBool>,
-    /// Questions the agent asked that no one has answered.
-    questions: Arc<Mutex<HashSet<String>>>,
+    questions: Questions,
     /// A locked session's clients; see `Feed`.
     watchers: Arc<Mutex<Vec<Watcher>>>,
     locked: bool,
@@ -153,13 +163,17 @@ struct OpenRequest {
 
 enum Request {
     Prompt(String),
-    /// An answer to a question, which goes before the prompts already queued.
-    Reply(String),
+    /// An answer to an open question: to its held `ask` call, or else as the next prompt, before those already queued.
+    AnswerAsk { question: String, text: String },
     Answer { id: String, decision: Decision, message: Option<String> },
     ToolResult { id: String, reply: Reply },
     Cancel,
     Stop,
     HandOver,
+    /// The harness shuts down: the session stops, and its open question stays open for after the restart.
+    Shutdown,
+    /// "Carry on" after a resume: sent once nothing forbids it, checked in the step that sends it.
+    CarryOn(String),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -234,7 +248,7 @@ impl Harness {
         let id = random_hex(8);
         let endpoint = endpoint_name();
         // The row is made where the start checks for a shutdown, so a refused open leaves none.
-        let (events, second) = self.start(&id, watcher, false, |store, _| {
+        let (events, second) = self.start(&id, watcher, false, None, |store, _| {
             let new = NewSession {
                 provider: &spec.provider,
                 locked: spec.locked,
@@ -271,28 +285,79 @@ impl Harness {
     /// is refused, and so is one that ends with its client, one marked as one that cannot be resumed, and one handed
     /// over to Terminal: that one only through `take_back`.
     pub async fn resume(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
-        self.resume_from(id, false)
+        Ok(self.resume_from(id, false, None, None)?.0)
+    }
+
+    /// Resumes a session that is not running, and with `carry_on` sends it that prompt. Whether "carry on" may be sent
+    /// is checked under the lock the start takes, and again in the step that sends it: a question, a permission
+    /// request, a stop or a hand-over that comes first means it is not sent, and the session says so.
+    pub async fn resume_with(&self, id: &str, carry_on: Option<String>) -> Result<broadcast::Receiver<Event>> {
+        Ok(self.resume_from(id, false, carry_on, None)?.0)
     }
 
     /// Resumes a session handed over to Terminal, once the person has said they took it back from there.
     pub async fn take_back(&self, id: &str) -> Result<broadcast::Receiver<Event>> {
-        self.resume_from(id, true)
+        Ok(self.resume_from(id, true, None, None)?.0)
     }
 
-    fn resume_from(&self, id: &str, taken_back: bool) -> Result<broadcast::Receiver<Event>> {
-        self.start(id, None, taken_back, |store, live| {
+    /// As `resume_with`, or `take_back` when `taken_back`, with a client's feed of the new start's events from its
+    /// first, made before it starts, and the number of the last event before them.
+    pub fn resume_watched(&self, id: &str, carry_on: Option<String>, taken_back: bool) -> Result<(Feed, u64)> {
+        let (watcher, feed) = match self.inner.with_store(|store| store.session(id))?.locked {
+            true => {
+                let (watcher, feed) = Feed::locked(self.inner.locked_backlog, self.inner.locked_backlog_bytes);
+                (Some(watcher), Some(feed))
+            }
+            false => (None, None),
+        };
+        let (_, second, after) = self.resume_from(id, taken_back, carry_on, watcher)?;
+        Ok((feed.unwrap_or(Feed::Stored(second)), after))
+    }
+
+    fn resume_from(
+        &self,
+        id: &str,
+        taken_back: bool,
+        carry_on: Option<String>,
+        watcher: Option<Watcher>,
+    ) -> Result<(broadcast::Receiver<Event>, broadcast::Receiver<Event>, u64)> {
+        if carry_on.as_deref().is_some_and(|text| text.trim().is_empty()) {
+            return Err(Error::Refused("carry on: give the text to send".into()));
+        }
+        let mut after = 0;
+        // Queued before the session's task starts, so a resume that answers has queued it.
+        let first = carry_on.clone().map(Request::CarryOn);
+        let carry_on = carry_on.is_some();
+        let (events, second) = self.start(id, watcher, taken_back, first, |store, live| {
             let row = store.session(id)?;
-            if row.cleaned {
-                return Err(Error::CleanedUp(id.to_owned()));
-            }
-            if row.ends_with_client {
-                return Err(Error::EndedWithClient(id.to_owned()));
-            }
-            if row.cannot_resume {
-                return Err(Error::CannotResume(id.to_owned()));
+            after = store.last_seq(id)?;
+            let never = match () {
+                _ if row.cleaned => Some(Error::CleanedUp(id.to_owned())),
+                _ if row.ends_with_client => Some(Error::EndedWithClient(id.to_owned())),
+                _ if row.cannot_resume => Some(Error::CannotResume(id.to_owned())),
+                _ => None,
+            };
+            if let Some(refused) = never {
+                // Refused for good, so its open question can never be answered.
+                store.close_questions(id, QuestionEnd::NotResumable, now_ms())?;
+                return Err(refused);
             }
             if row.handed_over && !taken_back {
                 return Err(Error::HandedOver(id.to_owned()));
+            }
+            if taken_back && !row.handed_over {
+                return Err(Error::Refused(format!("session {id} was not handed over, so there is nothing to take back: resume it")));
+            }
+            if row.given_up {
+                return Err(given_up(id, "resumed"));
+            }
+            if carry_on {
+                if let Some(why) = &row.no_carry_on {
+                    return Err(Error::Refused(format!("session {id} may not carry on: {why}")));
+                }
+                if let Some(question) = store.open_question(id)? {
+                    return Err(Error::Refused(format!("session {id} may not carry on: question {question} is open, and its answer is the next prompt")));
+                }
             }
             let provider_session =
                 row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
@@ -322,8 +387,8 @@ impl Harness {
             }
             let (tools, result_schema, resume) = (row.tools, row.result_schema, Some(provider_session));
             Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume, notices: Vec::new(), endpoint, tools, result_schema })
-        })
-        .map(|(events, _)| events)
+        })?;
+        Ok((events, second, after))
     }
 
     /// Sends a prompt. One sent while a turn runs waits for that turn to end.
@@ -352,14 +417,42 @@ impl Harness {
         live.requests.send(answer).map_err(|_| Error::NotRunning(id.to_owned()))
     }
 
-    /// Answers an open question, once. Until `ask` holds the agent's call (H5b), the answer goes to the agent as the
-    /// next prompt, before any sent while the question was open.
-    pub fn answer_question(&self, id: &str, question: &str, text: String) -> Result<()> {
-        let live = self.taking(id)?;
-        if !live.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(question) {
-            return Err(Error::NoQuestion(question.to_owned()));
+    /// Answers an open question, once. The answer goes to the agent's `ask` call if the session still holds it, and
+    /// otherwise as the next prompt, after the running turn and before any prompt sent while the question was open. A
+    /// session that is not running is resumed first, with a new tools token, when the question is still open in the
+    /// store.
+    pub async fn answer_question(&self, id: &str, question: &str, text: String) -> Result<()> {
+        let live = match self.taking(id) {
+            Ok(live) => live,
+            Err(_) if self.inner.with_store(|store| store.open_question(id))?.as_deref() == Some(question) => {
+                drop(self.resume(id).await?);
+                self.taking(id)?
+            }
+            Err(e) => return Err(e),
+        };
+        match live.questions.lock().unwrap_or_else(|p| p.into_inner()).get_mut(question) {
+            Some(taken) if !*taken => *taken = true,
+            _ => return Err(Error::NoQuestion(question.to_owned())),
         }
-        live.requests.send(Request::Reply(text)).map_err(|_| Error::NotRunning(id.to_owned()))
+        #[cfg(test)]
+        self.inner.hooks.after_answer_taken();
+        let answer = Request::AnswerAsk { question: question.to_owned(), text };
+        live.requests.send(answer).map_err(|_| Error::NotRunning(id.to_owned()))
+    }
+
+    /// The session's open question, asked through `ask` and kept in the store: its id.
+    pub fn open_question(&self, id: &str) -> Result<Option<String>> {
+        self.inner.with_store(|store| store.open_question(id))
+    }
+
+    /// Whether the harness may send the session "carry on" (H10): never while a question is open, since its answer is
+    /// the next prompt. The refusal names the question.
+    pub fn may_carry_on(&self, id: &str) -> Result<()> {
+        let live = self.live(id).ok().and_then(|live| live.questions.lock().unwrap_or_else(|p| p.into_inner()).keys().next().cloned());
+        match live.or(self.open_question(id)?) {
+            Some(question) => Err(Error::Refused(format!("question {question} is open: its answer is the next prompt, not \"carry on\""))),
+            None => Ok(()),
+        }
     }
 
     /// Posts the result of a client tool call. A call that was already cut is passed over.
@@ -412,7 +505,7 @@ impl Harness {
         // As in `stop`, the first stop wins: a hand over already on its way is not overtaken.
         for live in running {
             if !live.stopping.swap(true, Ordering::Relaxed) {
-                let _ = live.requests.send(Request::Stop);
+                let _ = live.requests.send(Request::Shutdown);
             }
         }
         #[cfg(test)]
@@ -433,6 +526,7 @@ impl Harness {
             for id in &stuck {
                 let reason = "the harness shut down without waiting longer for this agent, which may still run".to_owned();
                 let _ = store.append(id, &Body::Failed { kind: FailKind::Stuck, reason }, now_ms());
+                let _ = store.set_given_up(id);
             }
         }
         *store = None;
@@ -519,6 +613,10 @@ impl Harness {
                 return Err(Error::Running(id.to_owned()));
             }
             let row = self.inner.with_store(|store| store.session(id))?;
+            // Its agent may still work in the worktree.
+            if row.given_up {
+                return Err(given_up(id, "cleaned up"));
+            }
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
             // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.
             let owned = match &row.work {
@@ -609,6 +707,7 @@ impl Harness {
     /// Takes the session's id before the driver opens, so one session never runs two agents; a failed open frees it.
     /// `plan` reads the session's row under the same lock that clean-up and a task's close take, so a start never
     /// begins from a row being cleaned up, or before the last start's `closed`.
+    /// `first` is queued before the task starts, so it is the task's first request.
     /// Two receivers, both made before the task starts, so neither misses its first events. `taken_back` clears the
     /// hand-over mark once the agent has opened and before the task can end.
     fn start(
@@ -616,6 +715,7 @@ impl Harness {
         id: &str,
         watcher: Option<Watcher>,
         taken_back: bool,
+        first: Option<Request>,
         plan: impl FnOnce(&Store, &HashMap<String, Live>) -> Result<Plan>,
     ) -> Result<(broadcast::Receiver<Event>, broadcast::Receiver<Event>)> {
         let token = Secret::random();
@@ -623,11 +723,14 @@ impl Harness {
         let (events, receiver) = broadcast::channel(1024);
         let second = events.subscribe();
         let (requests, requests_rx) = mpsc::unbounded_channel();
+        if let Some(first) = first {
+            let _ = requests.send(first);
+        }
         let (calls, calls_rx) = mpsc::unbounded_channel();
         let start = self.inner.starts.fetch_add(1, Ordering::Relaxed);
         let open = Arc::new(Mutex::new(HashMap::new()));
         let stopping = Arc::new(AtomicBool::new(false));
-        let questions = Arc::new(Mutex::new(HashSet::new()));
+        let questions: Questions = Arc::default();
         let watchers = Arc::new(Mutex::new(watcher.into_iter().collect()));
         let stuck = Arc::new(AtomicBool::new(false));
         let endpoints = self.inner.endpoints()?;
@@ -642,6 +745,10 @@ impl Harness {
                 return Err(Error::Running(id.to_owned()));
             }
             let plan = self.inner.with_store(|store| plan(store, &live))?;
+            // A question asked before the last stop of the harness is still open.
+            if let Some(asked) = self.inner.with_store(|store| store.open_question(id))? {
+                questions.lock().unwrap_or_else(|p| p.into_inner()).insert(asked, false);
+            }
             let entry = Live {
                 requests,
                 events: events.clone(),
@@ -696,6 +803,11 @@ impl Harness {
         self.inner.hooks.after_spawn(id);
         Ok((receiver, second))
     }
+}
+
+/// The refusal for a session a shutdown gave up on, which H6 will find and stop by its pid.
+fn given_up(id: &str, what: &str) -> Error {
+    Error::Refused(format!("a shutdown gave up on session {id}'s agent, which may still run, so it is not {what}"))
 }
 
 /// The environment an agent gets: the harness's own, without a client token.
@@ -891,7 +1003,7 @@ struct Task {
     start: u64,
     open: Arc<Mutex<HashMap<String, OpenRequest>>>,
     stopping: Arc<AtomicBool>,
-    questions: Arc<Mutex<HashSet<String>>>,
+    questions: Questions,
     watchers: Arc<Mutex<Vec<Watcher>>>,
     stuck: Arc<AtomicBool>,
     endpoint: String,
@@ -899,6 +1011,27 @@ struct Task {
     result_schema: Option<Value>,
     /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
     broken: AtomicBool,
+}
+
+/// Lets a held `ask` call go at a turn's end, which no call outlives, with its question still open: its answer comes as
+/// the next prompt.
+fn release(held: &mut Option<(String, oneshot::Sender<Reply>)>) {
+    if let Some((_, reply)) = held.take() {
+        let _ = reply.send(Reply { output: json!(QUESTION_PENDING), error: false });
+    }
+}
+
+/// Why no "carry on" may follow a turn that ended so: a deny, and a cancel, which it would undo.
+fn no_carry_on_after(body: &Body) -> Option<&'static str> {
+    match body {
+        Body::TurnEnded { how: TurnEnd::Denied } => Some("a deny ended its last turn"),
+        Body::TurnEnded { how: TurnEnd::Cancelled } => Some("its last turn was cancelled"),
+        _ => None,
+    }
+}
+
+fn closed_because(how: QuestionEnd) -> String {
+    format!("the question was closed: {}", serde_json::to_value(how).ok().and_then(|how| how.as_str().map(str::to_owned)).unwrap_or_default())
 }
 
 impl Task {
@@ -912,19 +1045,41 @@ impl Task {
         // A task that panics still stops serving its endpoint, so its token stops working.
         let _serving = Serving { inner: self.inner.clone(), name: self.endpoint.clone(), start: self.start };
         let turns = self.inner.turns.clone();
-        let mut queued: VecDeque<String> = VecDeque::new();
+        // Each with the question it answers, which closes as it is sent.
+        let mut queued: VecDeque<(String, Option<String>)> = VecDeque::new();
         let mut turn = Turn::Idle;
         let mut slot: Option<Slot> = None;
         let mut waiting: Option<oneshot::Receiver<()>> = None;
         let mut held_calls: HashMap<String, oneshot::Sender<Reply>> = HashMap::new();
+        // The `ask` call held for the open question, and when it must return by.
+        let mut held_ask: Option<(String, oneshot::Sender<Reply>)> = None;
+        let (ask_cut, mut ask_cuts) = mpsc::unbounded_channel::<String>();
         let (cut, mut cuts) = mpsc::unbounded_channel::<String>();
         let mut calls_open = true;
+        // "Carry on" waiting to be sent, and whether the store says it may not be.
+        let mut carry_on: Option<String> = None;
+        let mut blocked = self.inner.with_store(|store| store.session(&self.id)).is_ok_and(|row| row.no_carry_on.is_some());
         let stopped = 'run: loop {
             if self.broken.load(Ordering::Relaxed) {
                 break true;
             }
             // Once Stop is taken, no prompt reaches the agent.
             let stopping = self.stopping.load(Ordering::Relaxed);
+            // Checked and queued in one step of this task, which alone opens questions and permission requests.
+            if turn == Turn::Idle && waiting.is_none() && queued.is_empty() && !stopping
+                && let Some(text) = carry_on.take()
+            {
+                let open = self.questions.lock().unwrap_or_else(|p| p.into_inner()).keys().next().cloned();
+                match open.or_else(|| self.open_requests().keys().next().cloned()) {
+                    Some(open) => {
+                        self.emit(Body::Notice { text: format!("\"carry on\" was not sent: {open} is open") });
+                    }
+                    None if blocked => {
+                        self.emit(Body::Notice { text: "\"carry on\" was not sent: the session may not carry on".into() });
+                    }
+                    None => queued.push_back((text, None)),
+                }
+            }
             if turn == Turn::Idle && waiting.is_none() && !queued.is_empty() && !stopping {
                 match turns.take_or_wait() {
                     None => {
@@ -948,6 +1103,10 @@ impl Task {
                 biased;
                 output = link.output.recv() => match output {
                     Some(Body::TurnStarted) => {
+                        // A turn after the one that forbade it: "carry on" may follow this one.
+                        if blocked && !self.forbid_carry_on(None, &mut blocked) {
+                            break 'run true;
+                        }
                         if turn == Turn::Running {
                             self.fail(FailKind::Driver, "the driver started a turn while one was running");
                             self.open_requests().clear();
@@ -967,6 +1126,7 @@ impl Task {
                         turn = Turn::Idle;
                         slot = None;
                         self.open_requests().clear();
+                        release(&mut held_ask);
                         self.fail(FailKind::Driver, "the driver ended a turn it never started");
                     }
                     Some(Body::Permission { id: driver_id, kind, tool, input }) => {
@@ -990,7 +1150,7 @@ impl Task {
                         // The id the client sees, after redaction, is the one its answer names.
                         let question = redact::body(question, &self.secrets);
                         if let Body::Question { id, .. } = &question {
-                            self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone());
+                            self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), false);
                         }
                         self.emit(question);
                     }
@@ -1000,10 +1160,24 @@ impl Task {
                         }
                     }
                     Some(body) => {
+                        let denied = body == Body::TurnEnded { how: TurnEnd::Denied };
+                        // A deny closes only the question this turn's call holds, and says so before the turn's end.
+                        if denied && let Some((question, reply)) = held_ask.take()
+                        {
+                            self.close_question(&question, QuestionEnd::Denied);
+                            let _ = reply.send(Reply::failed(closed_because(QuestionEnd::Denied)));
+                        }
                         if body.ends_turn() {
                             turn = Turn::Idle;
                             slot = None;
                             self.open_requests().clear();
+                            release(&mut held_ask);
+                        }
+                        // Kept before the turn's end is, so no record shows the deny or the cancel without it.
+                        if let Some(why) = no_carry_on_after(&body)
+                            && !self.forbid_carry_on(Some(why), &mut blocked)
+                        {
+                            continue 'run;
                         }
                         self.emit(body);
                     }
@@ -1031,10 +1205,27 @@ impl Task {
                     }
                 }
                 call = calls.recv(), if calls_open => match call {
-                    Some(ToolCall { name, input, reply }) if name == RESULT => {
+                    Some(ToolCall { name, input, reply, .. }) if name == RESULT => {
                         let _ = reply.send(self.result(input));
                     }
-                    Some(ToolCall { name, input, reply }) => {
+                    Some(ToolCall { name, input, reply, arrived }) if name == ASK => {
+                        #[cfg(test)]
+                        self.inner.hooks.before_call();
+                        if let Some(id) = self.ask(input, reply, &mut held_ask) {
+                            let wait = caps.tool_call_limit_ms.map_or(crate::ask::ASK_WAIT, |limit| {
+                                let limit = Duration::from_millis(limit);
+                                crate::ask::ASK_WAIT.min(limit - ASK_MARGIN.min(limit / 4))
+                            });
+                            let ask_cut = ask_cut.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep_until(arrived + wait).await;
+                                let _ = ask_cut.send(id);
+                            });
+                        }
+                    }
+                    Some(ToolCall { name, input, reply, arrived }) => {
+                        #[cfg(test)]
+                        self.inner.hooks.before_call();
                         let id = format!("c{}", random_hex(8));
                         let called = redact::body(Body::ClientToolCall { id: id.clone(), name, input }, &self.secrets);
                         let (called, cut_by) = crate::event::fit(called, crate::event::EVENT_MAX);
@@ -1061,7 +1252,7 @@ impl Task {
                         if let Some(limit) = caps.tool_call_limit_ms {
                             let cut = cut.clone();
                             tokio::spawn(async move {
-                                tokio::time::sleep(Duration::from_millis(limit)).await;
+                                tokio::time::sleep_until(arrived + Duration::from_millis(limit)).await;
                                 let _ = cut.send(id);
                             });
                         }
@@ -1078,13 +1269,34 @@ impl Task {
                         }
                     }
                 }
+                Some(id) = ask_cuts.recv() => {
+                    // The question stays open: its answer comes as the next prompt.
+                    if let Some((_, reply)) = held_ask.take_if(|(held, _)| *held == id) {
+                        let _ = reply.send(Reply { output: json!(QUESTION_PENDING), error: false });
+                    }
+                }
                 request = requests.recv() => match request {
-                    Some(Request::Prompt(text)) => queued.push_back(text),
-                    Some(Request::Reply(text)) => queued.push_front(text),
+                    Some(Request::Prompt(text)) => queued.push_back((text, None)),
+                    Some(Request::AnswerAsk { question, text }) => {
+                        // Closed meanwhile, by a deny.
+                        if !self.questions.lock().unwrap_or_else(|p| p.into_inner()).contains_key(&question) {
+                            continue 'run;
+                        }
+                        // The question closes when its answer is delivered: to the call, or as the prompt it waits as.
+                        let delivered = held_ask
+                            .take_if(|(held, _)| *held == question)
+                            .is_some_and(|(_, reply)| reply.send(Reply { output: json!(text.clone()), error: false }).is_ok());
+                        match delivered {
+                            true => {
+                                self.close_question(&question, QuestionEnd::Answered);
+                            }
+                            false => queued.push_front((text, Some(question))),
+                        }
+                    }
                     Some(Request::Cancel) => match waiting.take() {
                         Some(granted) if turn == Turn::Idle => {
                             turns.give_up(granted);
-                            queued.clear();
+                            self.drop_queued(&mut queued);
                             self.emit(Body::PromptsDropped);
                         }
                         other => {
@@ -1108,6 +1320,7 @@ impl Task {
                         }
                     }
                     Some(Request::HandOver) => {
+                        self.close_questions(QuestionEnd::HandedOver, &mut held_ask);
                         // Marked before it is said, so a resume never starts a session Terminal now holds.
                         match self.inner.with_store(|store| store.set_handed_over(&self.id, true)) {
                             Ok(()) => {
@@ -1117,18 +1330,27 @@ impl Task {
                         }
                         break 'run true;
                     }
-                    Some(Request::Stop) | None => break 'run true,
+                    Some(Request::Stop) => {
+                        self.close_questions(QuestionEnd::Stopped, &mut held_ask);
+                        self.forbid_carry_on(Some("it was stopped"), &mut blocked);
+                        break 'run true;
+                    }
+                    Some(Request::CarryOn(text)) => carry_on = Some(text),
+                    Some(Request::Shutdown) | None => break 'run true,
                 },
             }
         };
         self.stopping.store(true, Ordering::Relaxed);
+        if !blocked && !self.open_requests().is_empty() {
+            self.forbid_carry_on(Some("a permission request was open when it stopped"), &mut blocked);
+        }
         self.open_requests().clear();
         // `send` took these, so the client hears they never reached the agent: those queued here, and those still on
         // their way when the agent went.
         requests.close();
-        let mut unsent = !queued.is_empty();
+        let mut unsent = !queued.is_empty() || carry_on.is_some();
         while let Ok(request) = requests.try_recv() {
-            unsent |= matches!(request, Request::Prompt(_) | Request::Reply(_));
+            unsent |= matches!(request, Request::Prompt(_) | Request::AnswerAsk { .. } | Request::CarryOn(_));
         }
         if unsent {
             self.emit(Body::PromptsDropped);
@@ -1140,6 +1362,9 @@ impl Task {
         }
         for (id, reply) in held_calls {
             self.emit(Body::ToolResult { id, output: json!(ENDED), error: true });
+            let _ = reply.send(Reply::failed(ENDED));
+        }
+        if let Some((_, reply)) = held_ask.take() {
             let _ = reply.send(Reply::failed(ENDED));
         }
         if let Some(granted) = waiting.take() {
@@ -1214,6 +1439,12 @@ impl Task {
                             continue;
                         }
                         going.turn = Turn::Idle;
+                        // A deny or a cancel taken just before the stop ends the turn here.
+                        if let Some(why) = no_carry_on_after(body)
+                            && !self.forbid_carry_on(Some(why), &mut true)
+                        {
+                            continue;
+                        }
                     }
                     _ => {}
                 }
@@ -1258,10 +1489,82 @@ impl Task {
         false
     }
 
+    /// Puts up the agent's question, kept in the store and said in a `question` event, and gives its id for the call to
+    /// be held. A question while one is open, or one that is empty or too long, is refused at once, with no event.
+    fn ask(&self, input: Value, reply: oneshot::Sender<Reply>, held: &mut Option<(String, oneshot::Sender<Reply>)>) -> Option<String> {
+        let refused = match input["question"].as_str().map(str::trim).filter(|text| !text.is_empty()) {
+            None => Err("question: required, what you need decided or answered".to_owned()),
+            Some(text) if text.chars().count() > QUESTION_CHARS => Err(format!("a question is at most {QUESTION_CHARS} characters")),
+            Some(text) => match self.questions.lock().unwrap_or_else(|p| p.into_inner()).keys().next() {
+                Some(open) => Err(format!("question {open} is open: wait for its answer, or end your turn; its answer comes as your next prompt")),
+                None => Ok(text.to_owned()),
+            },
+        };
+        let text = match refused {
+            Ok(text) => text,
+            Err(why) => {
+                let _ = reply.send(Reply::failed(why));
+                return None;
+            }
+        };
+        let id = format!("q{}", random_hex(8));
+        if let Err(e) = self.inner.with_store(|store| store.ask(&self.id, &id, now_ms())) {
+            self.store_failed(&e);
+            let _ = reply.send(Reply::failed(ENDED));
+            return None;
+        }
+        self.questions.lock().unwrap_or_else(|p| p.into_inner()).insert(id.clone(), false);
+        if !self.emit(Body::Question { id: id.clone(), text }) {
+            let _ = reply.send(Reply::failed(ENDED));
+            return None;
+        }
+        *held = Some((id.clone(), reply));
+        Some(id)
+    }
+
+    /// Keeps why "carry on" may not be sent, or that it may again. False when the store could not take it.
+    fn forbid_carry_on(&self, why: Option<&str>, blocked: &mut bool) -> bool {
+        *blocked = why.is_some();
+        match self.inner.with_store(|store| store.set_no_carry_on(&self.id, why)) {
+            Ok(()) => true,
+            Err(e) => {
+                self.store_failed(&e);
+                false
+            }
+        }
+    }
+
+    /// Closes a question: in the store, in the open set and in a `question_closed` event. False when the store could
+    /// not take it, and the session stops.
+    fn close_question(&self, id: &str, how: QuestionEnd) -> bool {
+        self.questions.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
+        if let Err(e) = self.inner.with_store(|store| store.close_question(&self.id, id, how, now_ms())) {
+            self.store_failed(&e);
+            return false;
+        }
+        self.emit(Body::QuestionClosed { id: id.to_owned(), how })
+    }
+
+    /// Closes every open question, those the store has open among them, and tells a held `ask` call why.
+    fn close_questions(&self, how: QuestionEnd, held: &mut Option<(String, oneshot::Sender<Reply>)>) {
+        let mut open: Vec<String> = self.questions.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect();
+        if let Ok(Some(stored)) = self.inner.with_store(|store| store.open_question(&self.id))
+            && !open.contains(&stored)
+        {
+            open.push(stored);
+        }
+        for id in open {
+            self.close_question(&id, how);
+        }
+        if let Some((_, reply)) = held.take() {
+            let _ = reply.send(Reply::failed(closed_because(how)));
+        }
+    }
+
     /// Takes the agent's result, which the endpoint has checked against the schema: a `result` event, unless a question
     /// is open, or the result is too large to keep whole. A result that could not be recorded is not taken.
     fn result(&self, data: Value) -> Reply {
-        let open: Vec<String> = self.questions.lock().unwrap_or_else(|p| p.into_inner()).iter().cloned().collect();
+        let open: Vec<String> = self.questions.lock().unwrap_or_else(|p| p.into_inner()).keys().cloned().collect();
         if !open.is_empty() {
             return Reply::failed(format!("a question is open ({}): wait for its answer, then give your result", open.join(", ")));
         }
@@ -1298,8 +1601,8 @@ impl Task {
     /// Sends the next queued prompt once it is recorded; the turn is then prompted until the driver starts it. A prompt
     /// the store would not take is not sent, and the session stops on its broken store. None when the driver no longer
     /// takes commands: the session says so and stops.
-    fn prompt(&self, link: &Link, queued: &mut VecDeque<String>) -> Option<Turn> {
-        let text = queued.pop_front().expect("a prompt is queued");
+    fn prompt(&self, link: &Link, queued: &mut VecDeque<(String, Option<String>)>) -> Option<Turn> {
+        let (text, answers) = queued.pop_front().expect("a prompt is queued");
         if !self.emit(Body::Prompted { text: text.clone() }) {
             return Some(Turn::Idle);
         }
@@ -1307,7 +1610,21 @@ impl Task {
             self.fail(FailKind::AgentStopped, "the agent did not take the prompt: its driver no longer reads commands");
             return None;
         }
+        // Closed only once the driver has it: an answer dropped or not taken leaves its question open.
+        if let Some(question) = answers {
+            self.close_question(&question, QuestionEnd::Answered);
+        }
         Some(Turn::Prompted)
+    }
+
+    /// Drops the queued prompts. A question whose answer was among them stays open, to be answered again.
+    fn drop_queued(&self, queued: &mut VecDeque<(String, Option<String>)>) {
+        let mut open = self.questions.lock().unwrap_or_else(|p| p.into_inner());
+        for (_, answers) in queued.drain(..) {
+            if let Some(taken) = answers.and_then(|question| open.get_mut(&question)) {
+                *taken = false;
+            }
+        }
     }
 
     fn fail(&self, kind: FailKind, reason: &str) {
@@ -1415,6 +1732,10 @@ mod tests {
         after_stop_flag: Mutex<Option<Hook>>,
         /// Just after `shutdown` has told the sessions to stop.
         after_shutdown_stops: Mutex<Option<Hook>>,
+        /// Just as the session takes an `ask` or a client tool call off the endpoint.
+        before_call: Mutex<Option<Hook>>,
+        /// Just after `answer_question` marked the question as being answered, before it sends the answer.
+        after_answer_taken: Mutex<Option<Hook>>,
     }
 
     fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
@@ -1426,6 +1747,18 @@ mod tests {
     }
 
     impl Hooks {
+        pub(super) fn before_call(&self) {
+            if let Some(hook) = take(&self.before_call) {
+                hook();
+            }
+        }
+
+        pub(super) fn after_answer_taken(&self) {
+            if let Some(hook) = take(&self.after_answer_taken) {
+                hook();
+            }
+        }
+
         pub(super) fn before_closed(&self) {
             if let Some(hook) = take(&self.before_closed) {
                 hook();
@@ -1483,6 +1816,287 @@ mod tests {
     fn starts_and_closes(harness: &Harness, id: &str) -> Vec<String> {
         let events = harness.events(id, 0).unwrap_or_default();
         events.into_iter().map(|event| event.body.type_name()).filter(|kind| kind == "started" || kind == "closed").collect()
+    }
+
+    #[tokio::test]
+    async fn carry_on_a_deny_that_ends_the_turn_while_the_agent_goes_at_a_shutdown_forbids_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        let drivers = || vec![("hand".to_owned(), Arc::new(hand.clone()) as Arc<dyn Driver>)];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers(), Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        events_until(&mut events, |body| *body == Body::TurnStarted).await;
+        // A deny answered just before the shutdown: the agent's end of that turn comes as it goes.
+        hand.on_stop.lock().unwrap().push(Body::TurnEnded { how: TurnEnd::Denied });
+        assert!(harness.shutdown().await.is_empty());
+        drop(harness);
+        let harness = Harness::new(reopened(&tmp.path().join("data")).await, drivers(), Settings::default());
+        match harness.resume_with(&id, Some("carry on".into())).await {
+            Err(Error::Refused(why)) => assert!(why.contains("a deny ended its last turn"), "{why}"),
+            other => panic!("carry on allowed: {:?}", other.is_ok()),
+        }
+    }
+
+    #[tokio::test]
+    async fn carry_on_a_denys_mark_is_kept_before_its_turn_end_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        events_until(&mut events, |body| *body == Body::TurnStarted).await;
+        // The task dies once the turn's end is stored, as a harness that stops between two writes.
+        set(&harness.inner.hooks.before_publish, Box::new(|| -> () { panic!("the test's stop after the turn's end is stored") }) as Hook);
+        hand.say(Body::TurnEnded { how: TurnEnd::Denied });
+        let given = std::time::Instant::now() + Duration::from_secs(10);
+        while !harness.events(&id, 0).unwrap().iter().any(|event| event.body == Body::TurnEnded { how: TurnEnd::Denied }) {
+            assert!(std::time::Instant::now() < given, "the turn's end was stored within 10 s");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(harness.inner.with_store(|store| store.session(&id)).unwrap().no_carry_on.as_deref(), Some("a deny ended its last turn"));
+    }
+
+    /// The store, once the harness that had it has let its lock go.
+    async fn reopened(dir: &std::path::Path) -> Store {
+        let given = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match Store::open(dir) {
+                Err(Error::InUse(_)) if std::time::Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+                opened => break opened.unwrap(),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn carry_on_a_question_between_the_check_and_the_send_stops_it() {
+        for raised in [Body::Question { id: "q9".into(), text: "which?".into() }, Body::Permission { id: "x".into(), kind: crate::event::PermissionKind::Command, tool: "Bash".into(), input: json!({}) }] {
+            let tmp = tempfile::tempdir().unwrap();
+            let hand = Hand::default();
+            let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+            let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+            let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+            events.recv().await.unwrap();
+            assert!(harness.shutdown().await.is_empty());
+            drop(harness);
+            // The lock outlives the shutdown by a moment while the session's task ends.
+            let given = std::time::Instant::now() + Duration::from_secs(10);
+            let store = loop {
+                match Store::open(&tmp.path().join("data")) {
+                    Err(Error::InUse(_)) if std::time::Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+                    opened => break opened.unwrap(),
+                }
+            };
+            let harness = Harness::new(store, vec![("hand".into(), Arc::new(hand.clone()) as Arc<dyn Driver>)], Settings::default());
+            // The agent raises it after the resume's check passed, and before "carry on" is sent.
+            let speaking = hand.output.clone();
+            let body = raised.clone();
+            set(&harness.inner.hooks.after_spawn, Box::new(move |_: &str| {
+                speaking.lock().unwrap().as_ref().unwrap().send(body).ok();
+            }) as IdHook);
+            let mut events = harness.resume_with(&id, Some("carry on".into())).await.unwrap();
+            let said = loop {
+                let event = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("an event").unwrap();
+                if let Body::Notice { text } = event.body {
+                    break text;
+                }
+            };
+            assert!(said.starts_with("\"carry on\" was not sent"), "{said}");
+            assert!(!hand.commands.lock().unwrap().iter().any(|command| matches!(command, Command::Prompt(_))), "{raised:?}: nothing was sent");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ask_the_early_return_is_measured_from_the_calls_start_not_from_when_the_session_took_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let limit = 3000;
+        let script = format!("{{\"capabilities\": {{\"tool_call_limit_ms\": {limit}}}}}\n{{\"prompt\": null}}\n{{\"call\": {{\"name\": \"ask\", \"input\": {{\"question\": \"q?\"}}}}}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}");
+        let mock = Mock::new(Script::parse(&script).unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        let Ok(Event { body: Body::Started { provider_session, .. }, .. }) = events.recv().await else { panic!("started first") };
+        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
+        set(&harness.inner.hooks.before_call, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
+        let sent = std::time::Instant::now();
+        harness.send(&id, "go").unwrap();
+        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::TurnEnded { .. })) {}
+        assert_eq!(mock.replies(&provider_session), [Ok(Reply { output: json!(QUESTION_PENDING), error: false })]);
+        // From the session's own moment it would return at 1500 + 2250 ms, past the limit.
+        assert!(sent.elapsed() < Duration::from_millis(limit), "returned before the limit, from the call's start: {:?}", sent.elapsed());
+    }
+
+    /// The session's events until `last` takes one, each within 10 s.
+    async fn events_until(events: &mut broadcast::Receiver<Event>, last: impl Fn(&Body) -> bool) -> Vec<Body> {
+        let mut seen = vec![];
+        loop {
+            let body = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("an event within 10 s").unwrap().body;
+            let done = last(&body);
+            seen.push(body);
+            if done {
+                return seen;
+            }
+        }
+    }
+
+    /// A driver the test speaks for: it keeps each start's output and tools endpoint, records every command, and goes
+    /// on a stop, saying `on_stop` first. A `deaf` one reads no commands at all.
+    #[derive(Clone, Default)]
+    struct Hand {
+        output: Arc<Mutex<Option<mpsc::UnboundedSender<Body>>>>,
+        commands: Arc<Mutex<Vec<Command>>>,
+        tools: Arc<Mutex<Option<(crate::tools::ToolsEndpoint, String)>>>,
+        on_stop: Arc<Mutex<Vec<Body>>>,
+        deaf: Arc<AtomicBool>,
+    }
+
+    impl Hand {
+        fn say(&self, body: Body) {
+            self.output.lock().unwrap().as_ref().unwrap().send(body).unwrap();
+        }
+    }
+
+    impl Driver for Hand {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+
+        fn open(&self, launch: Launch) -> std::result::Result<Link, OpenError> {
+            let (commands, mut received) = mpsc::unbounded_channel();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "hand".into(), resumed: launch.resume.is_some() }).unwrap();
+            *self.output.lock().unwrap() = Some(output);
+            *self.tools.lock().unwrap() = Some((launch.tools.clone(), launch.tools_token.expose().to_owned()));
+            let (kept, seen, last) = (self.output.clone(), self.commands.clone(), self.on_stop.clone());
+            if self.deaf.load(Ordering::Relaxed) {
+                drop(received);
+                return Ok(Link { commands, output: receiver });
+            }
+            tokio::spawn(async move {
+                while let Some(command) = received.recv().await {
+                    let stop = matches!(command, Command::Stop | Command::Kill);
+                    seen.lock().unwrap().push(command);
+                    if stop {
+                        if let Some(output) = kept.lock().unwrap().take() {
+                            for body in last.lock().unwrap().drain(..) {
+                                let _ = output.send(body);
+                            }
+                        }
+                        return;
+                    }
+                }
+            });
+            Ok(Link { commands, output: receiver })
+        }
+    }
+
+    #[tokio::test]
+    async fn ask_a_deny_closes_the_question_whose_call_the_turn_holds_and_says_so_before_the_turn_ends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        let (tools, token) = hand.tools.lock().unwrap().clone().unwrap();
+        let call = tokio::spawn(async move { tools.call(&token, ASK, json!({"question": "which?"})).await });
+        let Some(Body::Question { id: question, .. }) = events_until(&mut events, |body| matches!(body, Body::Question { .. })).await.pop() else { unreachable!() };
+        hand.say(Body::TurnEnded { how: TurnEnd::Denied });
+        let seen = events_until(&mut events, |body| body.ends_turn()).await;
+        assert_eq!(seen[seen.len() - 2..], [Body::QuestionClosed { id: question.clone(), how: QuestionEnd::Denied }, Body::TurnEnded { how: TurnEnd::Denied }]);
+        let reply = tokio::time::timeout(Duration::from_secs(10), call).await.expect("the call returned").unwrap().unwrap();
+        assert_eq!(reply, Reply::failed("the question was closed: denied"));
+        assert_eq!(harness.open_question(&id).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn ask_a_turn_end_lets_a_held_call_go_and_the_answer_comes_as_the_next_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        let (tools, token) = hand.tools.lock().unwrap().clone().unwrap();
+        // The agent still waits on its call when the turn ends, as when a provider cut it on its side.
+        let call = tokio::spawn(async move { tools.call(&token, ASK, json!({"question": "which?"})).await });
+        let Some(Body::Question { id: question, .. }) = events_until(&mut events, |body| matches!(body, Body::Question { .. })).await.pop() else { unreachable!() };
+        hand.say(Body::TurnEnded { how: TurnEnd::Done });
+        let reply = tokio::time::timeout(Duration::from_secs(10), call).await.expect("the call returned").unwrap().unwrap();
+        assert_eq!(reply, Reply { output: json!(QUESTION_PENDING), error: false });
+        harness.answer_question(&id, &question, "blue".into()).await.unwrap();
+        events_until(&mut events, |body| *body == Body::Prompted { text: "blue".into() }).await;
+        assert_eq!(harness.open_question(&id).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn ask_an_answer_whose_prompt_the_driver_did_not_take_leaves_the_question_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hand = Hand::default();
+        hand.deaf.store(true, Ordering::Relaxed);
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        let (tools, token) = hand.tools.lock().unwrap().clone().unwrap();
+        let call = tokio::spawn(async move { tools.call(&token, ASK, json!({"question": "which?"})).await });
+        let Some(Body::Question { id: question, .. }) = events_until(&mut events, |body| matches!(body, Body::Question { .. })).await.pop() else { unreachable!() };
+        hand.say(Body::TurnEnded { how: TurnEnd::Done });
+        call.await.unwrap().unwrap();
+        // The answer is the next prompt, which the driver no longer takes.
+        harness.answer_question(&id, &question, "blue".into()).await.unwrap();
+        events_until(&mut events, |body| matches!(body, Body::Failed { kind: FailKind::AgentStopped, .. })).await;
+        hand.output.lock().unwrap().take();
+        events_until(&mut events, |body| *body == Body::Closed).await;
+        assert_eq!(harness.open_question(&id).unwrap().as_deref(), Some(question.as_str()), "still open, to be answered again");
+    }
+
+    #[tokio::test]
+    async fn ask_a_stop_taken_while_an_answer_is_on_its_way_closes_the_question_and_the_answer_resumes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}\n{\"call\": {\"name\": \"ask\", \"input\": {\"question\": \"which?\"}}}\n{\"end\": \"done\"}\n{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        let Ok(Event { body: Body::Started { provider_session, .. }, .. }) = events.recv().await else { panic!("started first") };
+        harness.send(&id, "go").unwrap();
+        let Some(Body::Question { id: question, .. }) = events_until(&mut events, |body| matches!(body, Body::Question { .. })).await.pop() else { unreachable!() };
+        // The Stop is taken after the answer marked the question, and before the session has the answer.
+        let (stopping, session) = (harness.clone(), id.clone());
+        set(&harness.inner.hooks.after_answer_taken, Box::new(move || stopping.close(&session).unwrap()) as Hook);
+        let _ = harness.answer_question(&id, &question, "red".into()).await;
+        let seen = events_until(&mut events, |body| *body == Body::Closed).await;
+        assert!(seen.contains(&Body::QuestionClosed { id: question.clone(), how: QuestionEnd::Stopped }), "{seen:?}");
+        assert_eq!(harness.open_question(&id).unwrap(), None, "closed in the store");
+        assert!(harness.answer_question(&id, &question, "red".into()).await.is_err());
+        assert_eq!(mock.tokens(&provider_session).len(), 1, "a later answer resumed nothing");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tools_endpoint_a_client_calls_cut_is_measured_from_its_arrival_not_from_when_the_session_took_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let limit = 3000;
+        let script = format!("{{\"capabilities\": {{\"tool_call_limit_ms\": {limit}}}}}\n{{\"prompt\": null}}\n{{\"call\": {{\"name\": \"read_ticket\", \"input\": {{}}}}}}\n{{\"end\": \"done\"}}\n{{\"prompt\": null}}");
+        let mock = Mock::new(Script::parse(&script).unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let tools = vec![ToolSpec { name: "read_ticket".into(), description: "Read a ticket.".into(), input_schema: json!({"type": "object"}) }];
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), tools, ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
+        set(&harness.inner.hooks.before_call, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
+        let sent = std::time::Instant::now();
+        harness.send(&id, "go").unwrap();
+        let seen = events_until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
+        assert!(seen.iter().any(|body| matches!(body, Body::ToolResult { output, error: true, .. } if output == &json!(format!("timed out after {limit} ms")))), "{seen:?}");
+        // From the session's own moment the cut would come at 1500 + 3000 ms.
+        assert!(sent.elapsed() < Duration::from_millis(4000), "cut at the limit from the call's arrival: {:?}", sent.elapsed());
     }
 
     #[tokio::test]
