@@ -56,7 +56,8 @@ fn mcp_config(url: &str) -> String {
     .to_string()
 }
 
-/// Pip's argv. Only `command` reaches it, so no caller can add a flag after the lockdown its tests check:
+/// Pip's argv. Only `command` reaches it, so no caller builds Pip's argv without the lockdown its tests check. The
+/// `Command` it returns still takes more arguments; the app's one caller spawns it as it is.
 ///
 /// ```compile_fail,E0603
 /// let _ = harness::claude::pip::args;
