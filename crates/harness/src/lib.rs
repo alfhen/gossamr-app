@@ -53,6 +53,12 @@ pub fn serve_drivers(script: Option<mock::Script>, claude: claude::driver::Claud
     mock.into_iter().chain([claude]).collect()
 }
 
+/// The runtime `harness serve` runs on. A driver's open starts a process and can block, so it takes several threads:
+/// one slow open stalls no client and no other session.
+pub fn serve_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread().enable_all().build()
+}
+
 /// What `harness --version` prints.
 pub fn version_line() -> String {
     format!("harness {VERSION} (build {BUILD_ID})")
@@ -151,6 +157,12 @@ mod tests {
         assert_eq!(names(serve_drivers(None, claude())), ["claude"], "found at open, so one on the shell's PATH counts");
         let script = mock::Script::parse("{\"prompt\": null}\n{\"end\": \"done\"}").unwrap();
         assert_eq!(names(serve_drivers(Some(script), claude())), ["mock", "claude"]);
+    }
+
+    #[test]
+    fn serve_runs_on_a_runtime_of_several_threads() {
+        let runtime = serve_runtime().unwrap();
+        assert_eq!(runtime.handle().runtime_flavor(), tokio::runtime::RuntimeFlavor::MultiThread);
     }
 
     fn args(list: &[&str]) -> Vec<OsString> {

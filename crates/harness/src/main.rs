@@ -17,7 +17,7 @@ fn main() -> ExitCode {
                 eprintln!("harness: {variable} is set, so serve does not start: any program of yours, an agent too, can read the environment a process started with. Unset it and give the first token on stdin.");
                 return ExitCode::FAILURE;
             }
-            let served = runtime().block_on(serve(data, mock_script));
+            let served = harness::serve_runtime().expect("a runtime starts").block_on(serve(data, mock_script));
             match served {
                 Err(e) if harness::server::unknown_token(&e) => {
                     eprintln!("harness: {e}");

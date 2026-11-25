@@ -2004,3 +2004,47 @@ async fn a_live_session_owns_its_worktree_before_its_provider_id_comes() {
     harness.clean_up(&older).await.unwrap();
     assert!(worktree.exists(), "and its clean-up leaves the live session's worktree alone");
 }
+
+/// A driver whose open blocks its thread until the test lets it go, as one that starts a slow process does.
+struct SlowOpen {
+    mock: harness::mock::Mock,
+    entered: Mutex<std::sync::mpsc::Sender<()>>,
+    go: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Driver for SlowOpen {
+    fn capabilities(&self) -> Capabilities {
+        self.mock.capabilities()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let _ = self.entered.lock().unwrap().send(());
+        let _ = self.go.lock().unwrap().recv_timeout(Duration::from_secs(30));
+        self.mock.open(launch)
+    }
+}
+
+/// On the kind of runtime `harness serve` runs on (`harness::serve_runtime`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_driver_open_stalls_no_other_session() {
+    let (_tmp, dir) = data_dir();
+    let quick = mock(LIFE);
+    let ((entered, was_entered), (go, wait)) = (std::sync::mpsc::channel(), std::sync::mpsc::channel());
+    let slow = SlowOpen { mock: quick.clone(), entered: Mutex::new(entered), go: Mutex::new(wait) };
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(slow)), ("mock".into(), Arc::new(quick))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let opening = {
+        let harness = harness.clone();
+        tokio::spawn(async move { open_on(&harness, "slow", false).await })
+    };
+    tokio::task::spawn_blocking(move || was_entered.recv_timeout(Duration::from_secs(10))).await.unwrap().expect("the slow open began");
+    let (id, mut events) = open_on(&harness, "mock", false).await;
+    harness.send(&id, "go").unwrap();
+    let seen = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+    let asked = seen.iter().find_map(|event| match &event.body { Body::Permission { id, .. } => Some(id.clone()), _ => None }).unwrap();
+    harness.answer(&id, &asked, Decision::Allow, None).unwrap();
+    until(&mut events, |body| body.ends_turn()).await;
+    assert!(!opening.is_finished(), "another session ran a whole turn while the slow open still blocked");
+    go.send(()).unwrap();
+    opening.await.unwrap();
+}
