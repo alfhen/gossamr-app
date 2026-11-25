@@ -13,4 +13,11 @@ describe("the harness section in Settings", () => {
     expect(view("start")).toContain("start the harness. Try again.");
     expect(view(null)).not.toContain("role=\"alert\"");
   });
+
+  it("keeps the last status and says a later read failed, with Try again", () => {
+    const html = renderToStaticMarkup(<HarnessView status={RUNNING} busy={false} unread onRetry={vi.fn()} onAction={vi.fn()} />);
+    expect(html).toContain("Running");
+    expect(html).toContain("couldn&#x27;t ask how the harness stands now.");
+    expect(html).toContain("Try again");
+  });
 });
