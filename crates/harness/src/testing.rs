@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 /// The one executable every fake CLI links to. It runs the script kept beside the link as `<link>.body`.
 pub const RUN_BODY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/run-body.sh");
 
+/// A stand-in for `claude --bg` and its session commands, driven by `FAKE_CLAUDE_SCENARIO`; its keys are listed at its
+/// top. The app's run tests use it.
+pub const FAKE_CLAUDE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/fake-claude.sh");
+
 /// A launcher that starts the way an npm-installed CLI does: `env` runs `node` with it.
 pub const NODE_LAUNCHER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test-support/node-launcher");
 
