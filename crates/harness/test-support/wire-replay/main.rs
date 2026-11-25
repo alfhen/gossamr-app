@@ -43,11 +43,11 @@ fn main() -> ExitCode {
     };
     let sent = std::fs::File::create(out.join("sent.jsonl"));
     let Ok(mut sent) = sent else { return refuse(&out, "cannot write sent.jsonl") };
-    let stdin = std::io::stdin().lock().lines().map(|line| line.map_err(|e| e.to_string()));
-    let stdin = stdin.inspect(|line| {
-        if let Ok(line) = line {
-            let _ = writeln!(sent, "{line}");
-        }
+    // A line that cannot be kept fails the replay, so a test never reads a partial `sent.jsonl` as the whole.
+    let stdin = std::io::stdin().lock().lines().map(|line| {
+        let line = line.map_err(|e| format!("cannot read stdin: {e}"))?;
+        writeln!(sent, "{line}").and_then(|()| sent.flush()).map_err(|e| format!("cannot write sent.jsonl: {e}"))?;
+        Ok(line)
     });
     match Replay::new(recording).play(stdin, &mut std::io::stdout().lock(), &mut std::io::stderr().lock()) {
         Ok(End::Exit) => ExitCode::SUCCESS,
@@ -107,7 +107,9 @@ impl Replay {
         for line in &lines {
             match (line.dir.as_str(), line.data["note"].as_str()) {
                 ("from_agent", _) => {
-                    if self.skipped.contains(&request_id(&line.data)) {
+                    // Only an answer to a skipped config request is passed over; an agent's own request never is.
+                    let answers = line.data["type"] == "control_response";
+                    if answers && self.skipped.contains(&request_id(&line.data)) {
                         continue;
                     }
                     let mut data = line.data.clone();
@@ -203,11 +205,20 @@ impl Replay {
     }
 }
 
+/// The line types and control subtypes a report may name. Anything else is named by a fixed label, so a report
+/// never holds text a driver put in those fields.
+const TYPES: &[&str] = &["user", "control_request", "control_response", "control_cancel_request", "assistant", "system", "result", "stream_event"];
+const SUBTYPES: &[&str] = &["initialize", "interrupt", "can_use_tool", "mcp_set_servers", "set_model", "set_permission_mode"];
+
 /// A line's kind, for a report: its type and a control line's subtype. Never its payload.
 fn what(data: &Value) -> String {
-    let kind = data["type"].as_str().unwrap_or("a line with no type");
-    match data["request"]["subtype"].as_str() {
-        Some(subtype) => format!("{kind} {subtype}"),
+    let known = |value: &Value, list: &[&'static str], other: &'static str| match value.as_str() {
+        Some(word) => list.iter().find(|known| **known == word).copied().unwrap_or(other),
+        None => other,
+    };
+    let kind = known(&data["type"], TYPES, "a line of an unknown type");
+    match data["request"].get("subtype") {
+        Some(subtype) => format!("{kind} {}", known(subtype, SUBTYPES, "of an unknown subtype")),
         None => kind.to_owned(),
     }
 }
@@ -267,7 +278,7 @@ impl Ids {
                 false => Err("the request id differs in kind".into()),
             };
         };
-        if !self.chosen.insert(sent.to_owned()) {
+        if self.to.values().any(|live| live == sent) || !self.chosen.insert(sent.to_owned()) {
             return Err("the driver used a request id twice".into());
         }
         self.to.insert(recorded.to_owned(), sent.to_owned());
@@ -308,14 +319,29 @@ impl Ids {
         rewrite(value, "", &known, server.as_ref());
     }
 
+    /// A fresh id for `recorded` that is neither it nor any id already live, so no two requests share one. A short id
+    /// whose draws keep colliding gets a numbered suffix instead.
+    fn unused(&mut self, recorded: &str) -> String {
+        let taken = |ids: &Ids, live: &str| live == recorded || ids.chosen.contains(live) || ids.to.values().any(|seen| seen == live);
+        let live = (0..64).map(|_| fresh(recorded)).find(|live| !taken(self, live));
+        live.unwrap_or_else(|| (1..).map(|n| format!("{recorded}-{n}")).find(|live| !taken(self, live)).expect("a free suffix"))
+    }
+
     /// Gives every id in an id field its live id, a fresh one where the recording first names it here.
     fn name(&mut self, value: &mut Value, key: &str) {
         match value {
             Value::Object(fields) => fields.iter_mut().for_each(|(key, field)| self.name(field, key)),
             Value::Array(items) => items.iter_mut().for_each(|item| self.name(item, key)),
             Value::String(text) if is_id_field(key) && !text.is_empty() => {
-                let live = self.to.entry(text.clone()).or_insert_with(|| fresh(text));
-                *text = live.clone();
+                let live = match self.to.get(text) {
+                    Some(live) => live.clone(),
+                    None => {
+                        let live = self.unused(text);
+                        self.to.insert(text.clone(), live.clone());
+                        live
+                    }
+                };
+                *text = live;
             }
             _ => {}
         }
@@ -397,5 +423,38 @@ mod tests {
     fn a_report_names_the_kind_and_never_the_payload() {
         assert_eq!(what(&json!({"type": "control_request", "request": {"subtype": "interrupt"}})), "control_request interrupt");
         assert_eq!(what(&json!({"type": "user", "message": {"content": "a secret prompt"}})), "user");
+        assert_eq!(what(&json!({"type": "a secret in the type"})), "a line of an unknown type");
+        assert_eq!(what(&json!({"type": "control_request", "request": {"subtype": "a secret"}})), "control_request of an unknown subtype");
+        assert_eq!(what(&json!({"type": "control_request", "request": {"subtype": 7}})), "control_request of an unknown subtype");
+    }
+
+    #[test]
+    fn short_recorded_ids_never_share_a_live_one() {
+        let mut ids = Ids::default();
+        let mut line = json!({"request_id": "1", "other": {"request_id": "2"}, "more": [{"id": "3"}, {"id": "4"}, {"id": "5"}, {"id": "6"}, {"id": "7"}, {"id": "8"}, {"id": "9"}, {"id": "0"}, {"id": "x"}]});
+        ids.agent(&mut line);
+        let live: Vec<&String> = ids.to.values().collect();
+        let mut unique = live.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), live.len(), "every recorded id has a live id of its own");
+        assert!(ids.to.iter().all(|(recorded, live)| recorded != live), "and none is its recorded one");
+        assert!(ids.bind(&json!("spike-1"), &json!(ids.to["1"].clone())).is_err(), "a driver id that is already live is refused");
+    }
+
+    #[test]
+    fn an_agents_request_with_a_skipped_config_id_is_still_played() {
+        let line = |seq: u64, dir: &str, data: Value| Recorded { seq, dir: dir.into(), data };
+        let recording = vec![
+            line(1, "to_agent", json!({"type": "control_request", "request_id": "same", "request": {"subtype": "mcp_set_servers", "servers": {}}})),
+            line(2, "from_agent", json!({"type": "control_response", "response": {"subtype": "success", "request_id": "same", "response": {}}})),
+            line(3, "from_agent", json!({"type": "control_request", "request_id": "same", "request": {"subtype": "can_use_tool"}})),
+        ];
+        let mut out = vec![];
+        let end = Replay::new(recording).play(std::iter::empty(), &mut out, &mut vec![]).unwrap();
+        let played = String::from_utf8(out).unwrap();
+        assert_eq!(played.lines().count(), 1, "the answer to the config request is not played; the agent's request is");
+        assert!(played.contains("can_use_tool"));
+        assert_eq!(end, End::Stay, "a recording that never closes stdin stays");
     }
 }

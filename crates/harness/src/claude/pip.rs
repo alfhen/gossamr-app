@@ -287,8 +287,12 @@ mod tests {
         });
         let mut req = request(None);
         (req.mcp_url, req.mcp_token) = (format!("http://127.0.0.1:{port}/mcp/r"), "tok-probe-5d1e".into());
-        let config = std::env::temp_dir().join(format!("gossamr-claude-token-cfg-{}", std::process::id()));
+        // A logged-out config folder of its own and a working folder that exists, both removed with `scratch`.
+        let scratch = tempfile::tempdir().unwrap();
+        let (config, work) = (scratch.path().join("config"), scratch.path().join("work"));
         std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        req.cwd = work;
         req.launch.binary = crate::binary::find_claude().expect("claude installed");
         let mut cmd = command(&req);
         let mut child = cmd.env("CLAUDE_CONFIG_DIR", &config).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn().unwrap();
@@ -296,7 +300,6 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(60), child.wait()).await;
         let _ = child.kill().await;
         server.abort();
-        let _ = std::fs::remove_dir_all(&config);
         assert!(seen.lock().unwrap().contains("authorization: bearer tok-probe-5d1e"));
     }
 }
