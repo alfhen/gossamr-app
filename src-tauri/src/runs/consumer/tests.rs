@@ -181,3 +181,16 @@ fn a_turn_cut_by_a_stop_the_app_asked_for_reads_stopped_and_one_it_did_not_reads
     not.play([cut(), Body::Closed]);
     assert_eq!(not.run.state, RunState::Failed);
 }
+
+#[test]
+fn a_loss_names_the_events_it_skipped_and_reads_on_after_them() {
+    let mut p = Played::new();
+    p.play(started());
+    let rows = lost(&mut p.run, &mut p.follow, "events were lost: swept", 9, Utc::now());
+    assert_eq!((rows[0].text.as_str(), p.follow.seq, p.follow.lost), (format!("{LOST}: events 4 to 9 were skipped").as_str(), 9, 1));
+    assert_eq!(rows[0].detail.as_deref(), Some("events were lost: swept"));
+    let one = lost(&mut p.run, &mut p.follow, "again", 10, Utc::now());
+    assert_eq!((one[0].text.as_str(), p.follow.lost), (format!("{LOST}: event 10 was skipped").as_str(), 2));
+    let none = lost(&mut p.run, &mut p.follow, "behind", 3, Utc::now());
+    assert_eq!((none[0].text.as_str(), p.follow.seq), (format!("{LOST}: no stored event was skipped").as_str(), 10), "never back");
+}

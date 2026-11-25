@@ -162,12 +162,20 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     rows.rows
 }
 
-/// Notes that the session's events between what the app applied and what the harness still holds were lost, once.
-pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, now: DateTime<Utc>) -> Vec<RunEvent> {
+/// Notes, once, that the session's events after what the app applied and up to `last` were lost, and reads on after
+/// `last`. The row names the events skipped, so the person sees a hole in the record and not a silent jump.
+pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, last: u64, now: DateTime<Utc>) -> Vec<RunEvent> {
+    let (from, to) = (follow.seq + 1, last.max(follow.seq));
+    follow.seq = to;
     follow.lost += 1;
     run.last_progress_at = now;
+    let skipped = match to.cmp(&from) {
+        std::cmp::Ordering::Less => "no stored event was skipped".to_owned(),
+        std::cmp::Ordering::Equal => format!("event {from} was skipped"),
+        std::cmp::Ordering::Greater => format!("events {from} to {to} were skipped"),
+    };
     let mut rows = Rows { run_id: run.id.clone(), at: now, rows: Vec::new() };
-    rows.add("error", LOST, Some(reason));
+    rows.add("error", &format!("{LOST}: {skipped}"), Some(reason));
     rows.rows
 }
 

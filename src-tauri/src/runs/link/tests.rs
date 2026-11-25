@@ -307,42 +307,70 @@ fn drop_events_after(dir: &Path, session: &str, seq: u64) {
     conn.execute("DELETE FROM events WHERE session = ?1 AND seq > ?2", rusqlite::params![session, seq as i64]).unwrap();
 }
 
-const TWO_TURNS: &str = r#"{"prompt": null}
+const THREE_TURNS: &str = r#"{"prompt": null}
 {"say": "One."}
 {"end": "done"}
 {"prompt": null}
 {"say": "Two."}
 {"end": "done"}
+{"prompt": null}
+{"say": "Three."}
+{"end": "done"}
 {"prompt": null}"#;
 
+/// Sends a prompt on a client of the test's and waits on it for the turn's end.
+async fn turn_away(client: &mut Client, session: &str, text: &str) {
+    client.call(Op::Send { session: session.to_owned(), text: text.into() }).await.unwrap();
+    loop {
+        if let Some(harness::client::Push::Event { event, .. }) = tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap() {
+            if event.body.ends_turn() {
+                return;
+            }
+        }
+    }
+}
+
+fn lost_rows(rows: &[(String, String)]) -> Vec<String> {
+    rows.iter().filter(|(_, text)| text.starts_with(consumer::LOST)).map(|(_, text)| text.clone()).collect()
+}
+
 #[tokio::test]
-async fn events_the_harness_lost_are_said_once_and_the_run_reads_on_without_asking_again() {
-    let bed = Bed::new(TWO_TURNS).await;
+async fn events_the_harness_lost_are_named_once_each_time_and_the_run_reads_on_without_asking_again() {
+    let mut bed = Bed::new(THREE_TURNS).await;
     // The first turn plays out before the app follows the session, and its record is then cut short.
     let mut client = bed.served.client().await;
     let cwd = bed.served._tmp.path().to_path_buf();
     let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
     let session = client.call(open).await.unwrap()["session"].as_str().unwrap().to_owned();
-    client.call(Op::Send { session: session.clone(), text: "the brief".into() }).await.unwrap();
-    loop {
-        if let Some(harness::client::Push::Event { event, .. }) = tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap() {
-            if event.body.ends_turn() {
-                break;
-            }
-        }
-    }
+    turn_away(&mut client, &session, "the brief").await;
+    let first_end = bed.served.client().await.call(Op::Sessions).await.unwrap().as_array().unwrap().iter().find(|s| s["id"] == session.as_str()).unwrap()["last_seq"].as_u64().unwrap();
     drop_events_after(&bed.served.dir, &session, 1);
     let run = bed.rig.queued(1).await;
     bed.rig.fx.core.bind_run_session(&run.id, &session).await.unwrap();
     bed.link.follow(&session, 0).await.unwrap();
     let (_, follow) = bed.until(&run, |_, f| f.lost == 1).await;
-    assert!(follow.seq > 1, "it reads on past what was lost");
-    let lost: Vec<_> = bed.rows(&run).await.into_iter().filter(|(_, text)| text == consumer::LOST).collect();
-    assert_eq!(lost.len(), 1);
+    assert_eq!(follow.seq, first_end, "it reads on past what was lost");
+    assert_eq!(lost_rows(&bed.rows(&run).await), [format!("{}: events 2 to {first_end} were skipped", consumer::LOST)]);
+
+    // The second turn plays while the app is away, and the harness loses its record past the turn's first event.
+    let dropped = std::mem::replace(&mut bed.link, link(&bed.rig, &Arc::new(Direct { dir: PathBuf::from("/nowhere"), token: Token::random() }), &bed.tickets));
+    drop(dropped);
+    turn_away(&mut client, &session, "again").await;
+    let second_end = bed.served.client().await.call(Op::Sessions).await.unwrap().as_array().unwrap().iter().find(|s| s["id"] == session.as_str()).unwrap()["last_seq"].as_u64().unwrap();
+    drop_events_after(&bed.served.dir, &session, first_end + 1);
+    bed.relink();
+    let (_, follow) = bed.until(&run, |_, f| f.lost == 2).await;
+    assert_eq!(follow.seq, second_end);
+    assert_eq!(
+        lost_rows(&bed.rows(&run).await),
+        [format!("{}: events 2 to {first_end} were skipped", consumer::LOST), format!("{}: events {} to {second_end} were skipped", consumer::LOST, first_end + 2)],
+        "each loss once, with what it skipped"
+    );
+
     // It still follows the session: the next turn's events arrive.
-    bed.link.call(Op::Send { session: session.clone(), text: "again".into() }).await.unwrap();
-    let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done && r.last_detail.as_deref() == Some("Two.")).await;
-    assert_eq!((follow.lost, done.state), (1, RunState::Done));
+    bed.link.call(Op::Send { session: session.clone(), text: "and again".into() }).await.unwrap();
+    let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done && r.last_detail.as_deref() == Some("Three.")).await;
+    assert_eq!((follow.lost, done.state), (2, RunState::Done));
     bed.end().await;
 }
 

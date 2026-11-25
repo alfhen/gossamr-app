@@ -272,8 +272,7 @@ impl Inner {
         let applied = self
             .core
             .apply_session(session, move |run, follow| {
-                follow.seq = follow.seq.max(last);
-                consumer::lost(run, follow, &reason, now)
+                consumer::lost(run, follow, &reason, last, now)
             })
             .await;
         match applied {
