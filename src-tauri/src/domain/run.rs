@@ -690,10 +690,17 @@ pub struct SessionFollow {
     pub permissions: Vec<(String, bool, String)>,
     /// The session's events up to `seq` were partly lost; how many times.
     pub lost: u32,
-    /// The session closed: nothing more comes from it.
+    /// The session's task ended. A shutdown or a hand-over ends it too, and a resume's `started` opens it again.
     pub closed: bool,
     /// The app asked the harness to stop the session, so the end of a turn the stop cut is a stop, not a failure.
     pub stop_asked: bool,
+    /// It closed after a stop the app asked for: nothing resumes it, so it is followed no more.
+    #[serde(default)]
+    pub ended: bool,
+    /// Calls of the app's tools with no result yet: id, name and input. One a quit left unanswered is answered on the
+    /// next start.
+    #[serde(default)]
+    pub calls: Vec<(String, String, serde_json::Value)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

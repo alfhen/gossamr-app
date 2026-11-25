@@ -169,17 +169,72 @@ fn a_hand_over_reads_handed_over() {
 }
 
 #[test]
-fn a_turn_cut_by_a_stop_the_app_asked_for_reads_stopped_and_one_it_did_not_reads_failed() {
+fn a_turn_cut_by_a_stop_the_app_asked_for_reads_stopped_and_one_nobody_asked_for_reads_stopped_without_failing() {
     let cut = || Body::Failed { kind: FailKind::AgentStopped, reason: "the agent stopped in the middle of a turn".into() };
     let mut asked = Played::new();
     asked.play(started());
     asked.follow.stop_asked = true;
     asked.play([cut(), Body::Closed]);
     assert_eq!(asked.run.state, RunState::Stopped);
+    assert!(asked.follow.ended, "a stop the app asked for is the end");
     let mut not = Played::new();
     not.play(started());
     not.play([cut(), Body::Closed]);
-    assert_eq!(not.run.state, RunState::Failed);
+    assert_eq!((not.run.state, not.run.last_detail.as_deref(), not.run.error.as_deref()), (RunState::Stopped, Some(CUT), None), "a shutdown's cut fails nothing");
+    assert!(!not.follow.ended, "and can be resumed");
+}
+
+#[test]
+fn a_shutdown_keeps_the_question_open_and_a_resumed_start_takes_the_session_up_again() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }]);
+    p.play([Body::Failed { kind: FailKind::AgentStopped, reason: "the agent stopped in the middle of a turn".into() }, Body::Closed]);
+    assert_eq!((p.run.state, p.run.needs.as_deref(), p.follow.closed), (RunState::NeedsAnswer, Some("Which colour?"), true), "the question outlasts the shutdown");
+    p.play([Body::Started { provider_session: "p".into(), resumed: true }]);
+    assert!(!p.follow.closed && !p.follow.stop_asked);
+    p.play([Body::QuestionClosed { id: "q1".into(), how: QuestionEnd::Answered }, Body::Prompted { text: "Blue".into() }, Body::TurnStarted, Body::Text { text: "Blue it is.".into() }]);
+    assert_eq!((p.run.state, p.run.last_detail.as_deref()), (RunState::Working, Some("Blue it is.")));
+    let mut stopped = Played::new();
+    stopped.play(started());
+    stopped.play([Body::TurnEnded { how: TurnEnd::Cancelled }, Body::Closed, Body::Started { provider_session: "p".into(), resumed: true }, Body::Prompted { text: "carry on".into() }, Body::TurnStarted]);
+    assert_eq!((stopped.run.state, stopped.run.ended_at), (RunState::Working, None), "a resumed session is followed out of Stopped");
+}
+
+#[test]
+fn a_new_turn_after_a_failed_one_takes_the_run_out_of_failed_and_its_requests_show() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::Failed { kind: FailKind::Provider, reason: "overloaded".into() }]);
+    assert_eq!(p.run.state, RunState::Failed);
+    p.play([Body::Prompted { text: "try again".into() }, Body::TurnStarted]);
+    assert_eq!((p.run.state, p.run.error.as_deref(), p.run.failure.clone()), (RunState::Working, None, None));
+    p.play([Body::Question { id: "q1".into(), text: "Which colour?".into() }]);
+    assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour?")));
+}
+
+#[test]
+fn a_withheld_question_keeps_what_was_read_of_it_and_a_withheld_result_leaves_the_result_alone() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::Question { id: "q1".into(), text: "x".into() }.withheld()]);
+    assert_eq!((p.run.state, p.run.needs.as_deref()), (RunState::NeedsAnswer, Some(NOT_KEPT)));
+    p.play([Body::Question { id: "q2".into(), text: "Which colour?".into() }, Body::Question { id: "q2".into(), text: "x".into() }.withheld()]);
+    assert_eq!(p.run.needs.as_deref(), Some("Which colour?"), "a question read before keeps its text");
+    let mut r = Played::new();
+    r.play(started());
+    r.play([Body::Result { data: json!({ "status": "done", "note": "Fixed." }) }, Body::Result { data: json!({ "note": "x" }) }.withheld()]);
+    assert_eq!((r.run.result.as_deref(), r.run.result_complete), (Some("Fixed."), true));
+}
+
+#[test]
+fn a_call_of_the_apps_tools_waits_for_its_result_in_the_follow() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::ClientToolCall { id: "c1".into(), name: "read_ticket".into(), input: json!({ "key": "CA-1" }) }]);
+    assert_eq!(p.follow.calls, vec![("c1".to_owned(), "read_ticket".to_owned(), json!({ "key": "CA-1" }))]);
+    p.play([Body::ToolResult { id: "c1".into(), output: json!("ok"), error: false }]);
+    assert!(p.follow.calls.is_empty());
 }
 
 #[test]
@@ -230,4 +285,16 @@ fn a_question_closed_by_a_clean_up_or_a_session_that_cannot_resume_waits_on_no_o
         assert_eq!((p.run.state, p.run.needs.as_deref(), p.follow.question.as_deref()), (RunState::Working, None, None), "{how:?}");
         assert!(p.rows.last().unwrap().text.ends_with(says), "{how:?}");
     }
+}
+
+#[test]
+fn an_event_of_a_type_this_build_cannot_read_moves_its_number_and_nothing_else() {
+    let mut p = Played::new();
+    p.play(started());
+    let before = p.run.clone();
+    let unknown = Event { seq: 9, ms: 0, body: Body::Withheld { of: "progress".into(), kept: Default::default() }, cut: None };
+    assert_eq!(unreadable(&unknown.body), Some("progress"));
+    assert!(fold(&mut p.run, &mut p.follow, &unknown, Utc::now()).is_empty());
+    assert_eq!((p.follow.seq, p.run.state), (9, before.state));
+    assert_eq!(unreadable(&Body::Text { text: "x".into() }.withheld()), None, "a withheld event of a known type is read");
 }

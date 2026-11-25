@@ -99,8 +99,22 @@ impl ClientTools for Tickets {
 }
 
 fn link(rig: &Rig, direct: &Arc<Direct>, tickets: &Arc<Tickets>) -> Link {
+    link_with(rig, direct, tickets.clone())
+}
+
+fn link_with(rig: &Rig, direct: &Arc<Direct>, tools: Arc<dyn ClientTools>) -> Link {
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
-    Link::start(rig.fx.core.clone(), direct.clone(), tickets.clone(), rig.notices.clone(), changed)
+    Link::start(rig.fx.core.clone(), direct.clone(), tools, rig.notices.clone(), changed)
+}
+
+/// Never answers, as an app that quits while it reads.
+struct Hangs;
+
+#[async_trait]
+impl ClientTools for Hangs {
+    async fn call(&self, _run: &Run, _name: &str, _input: &Value) -> (Value, bool) {
+        std::future::pending().await
+    }
 }
 
 struct Bed {
@@ -284,9 +298,30 @@ async fn a_stopped_run_reads_stopped_only_once_the_harness_closed_it() {
     let (run, session) = bed.started().await;
     bed.until(&run, |r, _| r.last_detail.as_deref() == Some("Starting a long build.")).await;
     bed.link.stop(&session).await.unwrap();
+    let asked = bed.rig.get(&run).await;
+    let (_, follow) = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert!(asked.state != RunState::Stopped || follow.closed, "stopped only once the harness said it closed");
     let (stopped, _) = bed.until(&run, |_, f| f.closed).await;
     assert_eq!(stopped.state, RunState::Stopped);
-    assert!(bed.rig.fx.core.followed_sessions().await.unwrap().is_empty(), "a closed session is followed no more");
+    assert!(bed.rig.fx.core.followed_sessions().await.unwrap().is_empty(), "a session the app stopped is followed no more");
+    assert!(bed.link.stop(&session).await.is_err(), "a closed session takes no second stop");
+    let (_, follow) = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert!(!follow.stop_asked, "and a stop the harness refused is not one it will read later");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_harness_shutdown_while_the_agent_asks_keeps_the_question_and_the_session_followed_and_wakes_no_one() {
+    let mut bed = Bed::new(ASKS).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::NeedsAnswer).await;
+    bed.served.shut_down().await;
+    bed.served.serve(ASKS, 4);
+    let (after, follow) = bed.until(&run, |_, f| f.closed).await;
+    assert_eq!((after.state, after.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour should the button be?")));
+    assert!(follow.question.is_some() && !follow.ended);
+    assert!(!bed.rig.noticed().iter().any(|(why, _)| *why == Attention::Failed), "Pip hears of no failure");
+    assert!(bed.rig.fx.core.followed_sessions().await.unwrap().iter().any(|(s, _)| *s == session), "a resume takes it up again");
     bed.end().await;
 }
 
@@ -310,6 +345,8 @@ async fn a_harness_restart_in_the_middle_of_a_turn_loses_nothing_and_repeats_not
     let (replayed, from_start, rows) = bed.replayed(&run, &session).await;
     assert_eq!((after.state, follow.clone()), (replayed.state, from_start), "caught up as if it had read every event once");
     assert_eq!(bed.rows(&run).await.len(), rows, "no row twice, none missing");
+    assert_eq!((after.state, after.last_detail.as_deref(), after.error.as_deref()), (RunState::Stopped, Some(consumer::CUT), None), "a shutdown's cut fails nothing");
+    assert!(!bed.rig.noticed().iter().any(|(why, _)| *why == Attention::Failed));
     bed.end().await;
 }
 
@@ -422,5 +459,18 @@ async fn an_event_the_app_could_not_store_is_read_again_and_nothing_after_it_is_
     assert!(stuck < follow.seq);
     assert_eq!((now.state, follow), (replayed.state, from_start));
     assert_eq!(bed.rows(&run).await.len(), rows, "the refused event's rows are there, once");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_call_of_the_apps_tools_a_quit_left_unanswered_is_answered_on_the_next_start() {
+    let mut bed = Bed::new(READS).await;
+    bed.link = link_with(&bed.rig, &bed.direct, Arc::new(Hangs));
+    let (run, _) = bed.started().await;
+    bed.until(&run, |_, f| !f.calls.is_empty()).await;
+    bed.relink();
+    let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert!(follow.calls.is_empty(), "{:?}", done.last_detail);
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1, "answered once, by the app that started again");
     bed.end().await;
 }

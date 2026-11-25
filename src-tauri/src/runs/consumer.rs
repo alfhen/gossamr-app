@@ -20,6 +20,8 @@ pub const SLOT_WAIT: &str = "Waits for a free slot: the harness runs as many age
 pub const HANDED_OVER: &str = "Handed over to Terminal";
 pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
+pub const CUT: &str = "The agent stopped in the middle of a turn";
+const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
 /// Applies `event` to `run` and `follow`, and returns the timeline rows it adds. An event the app already applied
 /// (numbered at or below `follow.seq`) changes nothing; one numbered 0 was never stored, so it is applied and moves
@@ -34,7 +36,13 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     let mut rows = Rows { run_id: run.id.clone(), at, rows: Vec::new() };
     let before = run.state;
     match body {
-        Body::Started { resumed, .. } => rows.add(if resumed { "follow_up" } else { "start" }, if resumed { "Resumed" } else { "Started" }, None),
+        Body::Started { resumed: true, .. } => {
+            follow.closed = false;
+            follow.stop_asked = false;
+            reopen(run);
+            rows.add("follow_up", "Resumed", None);
+        }
+        Body::Started { .. } => rows.add("start", "Started", None),
         Body::Prompted { text } => {
             follow.prompts += 1;
             // The first prompt is the brief the person approved; each later one is a message to the agent.
@@ -52,7 +60,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::PromptsDropped => rows.add("update", "Messages it had not read yet were dropped", None),
         Body::TurnStarted => {
             follow.in_turn = true;
-            run.ended_at = None;
+            reopen(run);
             if run.last_detail.as_deref() == Some(SLOT_WAIT) {
                 run.last_detail = None;
             }
@@ -66,9 +74,16 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.last_detail = Some(what.clone());
             rows.add(tool_kind(&name), &what, None);
         }
-        Body::ClientToolCall { name, .. } => rows.add("read", &format!("Asked Gossamr: {name}"), None),
-        Body::ToolResult { error: true, output, .. } => rows.add("error", "A tool call failed", Some(&plain(&output))),
-        Body::ToolResult { .. } => {}
+        Body::ClientToolCall { id, name, input } => {
+            rows.add("read", &format!("Asked Gossamr: {name}"), None);
+            follow.calls.push((id, name, input));
+        }
+        Body::ToolResult { id, error, output } => {
+            follow.calls.retain(|(open, ..)| *open != id);
+            if error {
+                rows.add("error", "A tool call failed", Some(&plain(&output)));
+            }
+        }
         Body::Permission { id, tool, input, .. } => {
             let what = describe(&tool, &input);
             follow.permissions.push((id, event.cut.is_some(), cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
@@ -79,6 +94,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             rows.add("update", if decision == Decision::Allow { "You allowed it" } else { "You denied it" }, None);
         }
         Body::Question { id, text } => {
+            // A withheld question keeps no text: keep what was read of it, or say so.
+            let kept = follow.asked.clone().filter(|_| follow.question.as_deref() == Some(id.as_str()));
+            let text = if text.trim().is_empty() { kept.unwrap_or_else(|| NOT_KEPT.into()) } else { text };
             follow.question = Some(id);
             follow.asked = Some(cut(&redact(&text), NEEDS_KEPT));
             rows.add("ask", &text, None);
@@ -97,6 +115,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 QuestionEnd::NotResumable => rows.add("stop", "Its question was closed: no answer can reach the agent now", None),
             }
         }
+        // A withheld result kept nothing to show; the run keeps what it had.
+        Body::Result { data: Value::Null } => rows.add("done", "Gave its result", None),
         Body::Result { data } => {
             run.result = cleaned_answer(&result_text(&data));
             run.result_complete = run.result.is_some();
@@ -106,6 +126,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.in_turn = false;
             follow.turns += 1;
             follow.permissions.clear();
+            follow.calls.clear();
             match how {
                 TurnEnd::Done => {
                     follow.carry_ons = 0;
@@ -123,12 +144,25 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::Failed { kind: FailKind::AgentStopped, .. } if follow.stop_asked => {
             follow.in_turn = false;
             follow.permissions.clear();
+            follow.calls.clear();
             run.state = RunState::Stopped;
             run.ended_at = Some(now);
+        }
+        // Nobody asked for it: a shutdown of the harness, or the agent's own end. Neither fails the run or wakes Pip;
+        // an open question stays for after a resume.
+        Body::Failed { kind: FailKind::AgentStopped, reason } => {
+            follow.in_turn = false;
+            follow.permissions.clear();
+            follow.calls.clear();
+            run.state = RunState::Stopped;
+            run.last_detail = Some(CUT.into());
+            run.ended_at = Some(now);
+            rows.add("stop", CUT, Some(&reason));
         }
         Body::Failed { kind, reason } => {
             follow.in_turn = false;
             follow.permissions.clear();
+            follow.calls.clear();
             run.state = RunState::Failed;
             run.error = Some(cut(&redact(&reason), DETAIL_KEPT));
             run.failure = Some(if kind == FailKind::SignedOut { RunFailure::NotSignedIn } else { RunFailure::Other });
@@ -140,17 +174,25 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.last_detail = Some(HANDED_OVER.into());
             rows.add("stop", HANDED_OVER, None);
         }
+        // The session's task ended. Only after a stop the app asked for is that the end: a shutdown or a hand-over
+        // can be resumed, and its question stays until a `question_closed`.
         Body::Closed => {
             follow.closed = true;
+            follow.ended = follow.stop_asked;
             follow.in_turn = false;
-            follow.question = None;
-            follow.asked = None;
             follow.permissions.clear();
-            if !matches!(run.state, RunState::Done | RunState::Failed) {
-                run.state = RunState::Stopped;
-                rows.add("stop", "Stopped", None);
+            follow.calls.clear();
+            if follow.ended {
+                follow.question = None;
+                follow.asked = None;
             }
-            run.ended_at.get_or_insert(now);
+            if follow.question.is_none() {
+                if !matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) {
+                    run.state = RunState::Stopped;
+                    rows.add("stop", "Stopped", None);
+                }
+                run.ended_at.get_or_insert(now);
+            }
         }
         Body::Withheld { .. } => {}
     }
@@ -185,9 +227,26 @@ pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, last: u64, 
     rows.rows
 }
 
-/// What the open requests leave the run waiting on, while it is not over.
+/// A run its session takes up again, after a failed turn, a stop or a close: no longer over.
+fn reopen(run: &mut Run) {
+    run.ended_at = None;
+    if matches!(run.state, RunState::Failed | RunState::Stopped | RunState::Done) {
+        run.state = RunState::Working;
+        run.error = None;
+        run.failure = None;
+    }
+}
+
+/// What the open requests leave the run waiting on, while it is not over. A question outlasts a close it was not
+/// closed by.
 fn settle(run: &mut Run, follow: &SessionFollow) {
-    if follow.closed || run.state == RunState::Failed {
+    if follow.ended || run.state == RunState::Failed {
+        return;
+    }
+    if follow.closed {
+        if follow.question.is_some() {
+            run.state = RunState::NeedsAnswer;
+        }
         return;
     }
     if !follow.permissions.is_empty() {
@@ -196,6 +255,14 @@ fn settle(run: &mut Run, follow: &SessionFollow) {
         run.state = RunState::NeedsAnswer;
     } else if follow.in_turn || matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission) {
         run.state = RunState::Working;
+    }
+}
+
+/// The type of an event this build cannot read, which moves its number and nothing else.
+pub fn unreadable(body: &Body) -> Option<&str> {
+    match body {
+        Body::Withheld { of, .. } if readable(body).is_none() => Some(of),
+        _ => None,
     }
 }
 
