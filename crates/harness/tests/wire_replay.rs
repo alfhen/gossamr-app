@@ -76,9 +76,12 @@ impl Run {
         let _ = writeln!(self.stdin.as_mut().expect("stdin is open"), "{line}");
     }
 
-    /// Both lines in one write, so the replay reads them at once.
+    /// Both lines in one write, so the replay reads them at once. A pipe keeps a write whole only up to `PIPE_BUF`, 512
+    /// bytes on macOS: past that the pipe may split it, and the second line may then truly come later.
     fn send_together(&mut self, first: &Value, second: &Value) {
-        let _ = write!(self.stdin.as_mut().expect("stdin is open"), "{first}\n{second}\n");
+        let both = format!("{first}\n{second}\n");
+        assert!(both.len() <= 512, "a pair of {} bytes may be split by the pipe", both.len());
+        let _ = self.stdin.as_mut().expect("stdin is open").write_all(both.as_bytes());
     }
 
     fn read(&mut self) -> Option<Value> {
@@ -391,9 +394,28 @@ fn wire_replay_a_line_sent_before_the_agent_line_it_follows_is_refused_with_both
     // A prompt written with `initialize`, before its answer.
     let prompt = refused("2-permission.jsonl", Client { early: Some(5), ..Client::default() });
     assert_eq!(prompt, "line 5: user came before line 3 was written, after the start\n");
-    // An interrupt written with the allow, before the tool started (line 27, `task_started`).
-    let interrupt = refused("3-cancel.jsonl", Client { early: Some(28), ..Client::default() });
-    assert_eq!(interrupt, "line 28: control_request interrupt came before line 27 was written, after line 21\n");
+    // An interrupt written with the allow, before the tool started (`task_started`). 3-cancel's own allow is too long
+    // to share one write with it, so a short recording of the same shape.
+    let tmp = tempfile::tempdir().unwrap();
+    let request = "0c0d0e0f-1a2b-4c3d-8e9f-a0b1c2d3e4f5";
+    let line = |seq: u64, dir: &str, data: Value| json!({"seq": seq, "ms": seq, "dir": dir, "data": data});
+    let short = tmp.path().join("interrupt.jsonl");
+    let lines = [
+        line(1, "to_agent", json!({"type": "control_request", "request_id": "spike-1", "request": {"subtype": "initialize"}})),
+        line(2, "from_agent", json!({"type": "control_response", "response": {"subtype": "success", "request_id": "spike-1", "response": {}}})),
+        line(3, "to_agent", json!({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "go"}]}})),
+        line(5, "from_agent", json!({"type": "control_request", "request_id": request, "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ping"}}})),
+        line(6, "to_agent", json!({"type": "control_response", "response": {"subtype": "success", "request_id": request, "response": {"behavior": "allow", "updatedInput": {"command": "ping"}}}})),
+        line(7, "from_agent", json!({"type": "system", "subtype": "task_started"})),
+        line(8, "to_agent", json!({"type": "control_request", "request_id": "spike-2", "request": {"subtype": "interrupt"}})),
+        line(9, "from_agent", json!({"type": "result", "subtype": "error_during_execution", "is_error": true})),
+        line(10, "driver", json!({"note": "close_stdin"})),
+    ];
+    std::fs::write(&short, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+    let (_, code, _, out) = play(&short, Client { early: Some(8), ..Client::default() });
+    assert_eq!((code, report(&out)), (Some(3), "line 8: control_request interrupt came before line 7 was written, after line 5\n".to_owned()));
+    let (_, code, _, out) = play(&short, Client::default());
+    assert_eq!((code, report(&out)), (Some(0), String::new()), "sent after it, the interrupt is in time");
     // The next prompt written with the interrupt, while the cancelled turn still runs: before its `result`, line 33.
     let during = refused("3-cancel.jsonl", Client { early: Some(36), ..Client::default() });
     assert_eq!(during, "line 36: user came before line 33 was written, after line 27\n");
