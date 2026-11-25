@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Notify, broadcast, oneshot};
 
-use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, Secret, random_hex};
+use crate::driver::{AgentEnd, Capabilities, Command, Driver, EndReport, Launch, Link, OpenError, Secret, random_hex};
 use crate::error::{Error, Result};
 use crate::event::{Body, ClosedBy, Decision, Event, FailKind, QuestionEnd, TurnEnd};
 use crate::redact;
@@ -779,7 +779,8 @@ impl Harness {
         let caps = driver.capabilities();
         // A first start that fails keeps its row's work: the caller discards the worktree, and if that fails, the
         // failed session's own clean-up removes it, as the owner while no session that ran names it.
-        let link = driver.open(launch).map_err(|OpenError { kind, message }| Error::Open { kind, message: redact::text(&message, &secrets) })?;
+        let (end, ended) = oneshot::channel();
+        let link = driver.open_reporting(launch, EndReport(end)).map_err(|OpenError { kind, message }| Error::Open { kind, message: redact::text(&message, &secrets) })?;
         // While the session is still taken: a take-back that failed to open keeps the mark, and a later hand over's
         // mark is never cleared by this one.
         if taken_back {
@@ -800,6 +801,7 @@ impl Harness {
             endpoint,
             result_schema: schema,
             broken: AtomicBool::new(false),
+            ended,
         };
         for text in notices {
             task.emit(Body::Notice { text });
@@ -1017,6 +1019,8 @@ struct Task {
     result_schema: Option<Value>,
     /// The store failed to take an event. The session stops: nothing more is sent that could not be recorded.
     broken: AtomicBool,
+    /// How the agent's process ended, if its driver says.
+    ended: oneshot::Receiver<AgentEnd>,
 }
 
 /// Lets a held `ask` call go at a turn's end, which no call outlives, with its question still open: its answer comes as
@@ -1042,7 +1046,7 @@ fn closed_because(how: QuestionEnd) -> String {
 
 impl Task {
     async fn run(
-        self,
+        mut self,
         mut link: Link,
         caps: Capabilities,
         mut requests: UnboundedReceiver<Request>,
@@ -1176,6 +1180,7 @@ impl Task {
                     }
                     Some(body @ Body::Started { .. }) => {
                         if !self.started(body) {
+                            by = ClosedBy::Harness;
                             break 'run true;
                         }
                     }
@@ -1202,6 +1207,10 @@ impl Task {
                         self.emit(body);
                     }
                     None => {
+                        // A signal the harness did not send, at a logout or a restart say, is not the agent's own end.
+                        if let Ok(AgentEnd::Signalled { sent: false, .. }) = self.ended.try_recv() {
+                            by = ClosedBy::Signal;
+                        }
                         if turn != Turn::Idle {
                             self.fail(FailKind::AgentStopped, "the agent stopped in the middle of a turn");
                         }
@@ -1374,8 +1383,16 @@ impl Task {
         // their way when the agent went.
         requests.close();
         let mut unsent = !queued.is_empty() || carry_on.is_some();
+        // A stop the harness took but did not reach, because the agent's output closed first.
+        let mut taken = None;
         while let Ok(request) = requests.try_recv() {
             unsent |= matches!(request, Request::Prompt(_) | Request::AnswerAsk { .. } | Request::CarryOn(_));
+            taken = taken.or(match request {
+                Request::Stop(who) => Some(who),
+                Request::Shutdown => Some(ClosedBy::Shutdown),
+                Request::HandOver => Some(ClosedBy::HandOver),
+                _ => None,
+            });
         }
         if unsent {
             self.emit(Body::PromptsDropped);
@@ -1405,8 +1422,13 @@ impl Task {
         self.inner.forget_endpoint(&self.endpoint, self.start);
         #[cfg(test)]
         self.inner.hooks.before_closed();
-        if by == ClosedBy::Agent && self.broken.load(Ordering::Relaxed) {
-            by = ClosedBy::Harness;
+        // A request the harness took wins, then the harness's own failure, then a signal from outside, then the agent.
+        if !matches!(by, ClosedBy::Stop | ClosedBy::Shutdown | ClosedBy::HandOver | ClosedBy::ClientLeft) {
+            by = match taken {
+                Some(taken) => taken,
+                None if self.broken.load(Ordering::Relaxed) => ClosedBy::Harness,
+                None => by,
+            };
         }
         self.emit(Body::Closed { by });
         if live.get(&self.id).is_some_and(|entry| entry.start == self.start) {
@@ -1979,17 +2001,29 @@ mod tests {
         tools: Arc<Mutex<Option<(crate::tools::ToolsEndpoint, String)>>>,
         on_stop: Arc<Mutex<Vec<Body>>>,
         deaf: Arc<AtomicBool>,
+        end: Arc<Mutex<Option<EndReport>>>,
     }
 
     impl Hand {
         fn say(&self, body: Body) {
             self.output.lock().unwrap().as_ref().unwrap().send(body).unwrap();
         }
+
+        /// The agent's process ends so, and its driver says how before its output closes.
+        fn gone(&self, end: AgentEnd) {
+            self.end.lock().unwrap().take().unwrap().send(end);
+            self.output.lock().unwrap().take();
+        }
     }
 
     impl Driver for Hand {
         fn capabilities(&self) -> Capabilities {
             Capabilities::default()
+        }
+
+        fn open_reporting(&self, launch: Launch, end: EndReport) -> std::result::Result<Link, OpenError> {
+            *self.end.lock().unwrap() = Some(end);
+            self.open(launch)
         }
 
         fn open(&self, launch: Launch) -> std::result::Result<Link, OpenError> {
@@ -2019,6 +2053,67 @@ mod tests {
             });
             Ok(Link { commands, output: receiver })
         }
+    }
+
+    /// A hand-driven session in a turn, its events, and the harness.
+    async fn in_a_turn(tmp: &tempfile::TempDir, hand: &Hand) -> (Harness, broadcast::Receiver<Event>, String) {
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("hand".into(), Arc::new(hand.clone()))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "hand".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        hand.say(Body::TurnStarted);
+        events_until(&mut events, |body| *body == Body::TurnStarted).await;
+        (harness, events, id)
+    }
+
+    async fn closed_by(events: &mut broadcast::Receiver<Event>) -> ClosedBy {
+        match events_until(events, |body| matches!(body, Body::Closed { .. })).await.pop() {
+            Some(Body::Closed { by }) => by,
+            _ => unreachable!(),
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_by_an_agent_a_signal_from_outside_ended_before_a_shutdown_never_reads_as_its_own_end() {
+        for gap in [0, 5, 50] {
+            let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+            let (harness, mut events, _) = in_a_turn(&tmp, &hand).await;
+            // A logout: the system ends the agent and the harness at about the same time.
+            hand.gone(AgentEnd::Signalled { signal: 15, sent: false });
+            tokio::time::sleep(Duration::from_millis(gap)).await;
+            harness.shutdown().await;
+            let by = closed_by(&mut events).await;
+            assert!(matches!(by, ClosedBy::Signal | ClosedBy::Shutdown), "{gap} ms: {by:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_by_a_stop_or_shutdown_taken_after_the_agent_went_but_before_the_session_read_it_wins() {
+        for shutdown in [false, true] {
+            let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+            let (harness, mut events, id) = in_a_turn(&tmp, &hand).await;
+            // On this one thread the session runs only once both are queued, and it reads the output first.
+            hand.output.lock().unwrap().take();
+            match shutdown {
+                true => drop(harness.shutdown().await),
+                false => harness.close(&id).unwrap(),
+            }
+            let by = closed_by(&mut events).await;
+            assert_eq!(by, if shutdown { ClosedBy::Shutdown } else { ClosedBy::Stop });
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_by_an_agent_that_exits_by_itself_reads_agent_and_one_the_harness_stops_reads_stop() {
+        let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+        let (_harness, mut events, _) = in_a_turn(&tmp, &hand).await;
+        hand.gone(AgentEnd::Exited(1));
+        assert_eq!(closed_by(&mut events).await, ClosedBy::Agent);
+        let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+        let (harness, mut events, id) = in_a_turn(&tmp, &hand).await;
+        hand.on_stop.lock().unwrap().push(Body::TurnEnded { how: TurnEnd::Cancelled });
+        harness.close(&id).unwrap();
+        assert_eq!(closed_by(&mut events).await, ClosedBy::Stop);
     }
 
     #[tokio::test]

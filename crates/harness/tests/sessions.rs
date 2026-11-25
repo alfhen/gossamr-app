@@ -129,6 +129,7 @@ async fn life_a_store_that_fails_stops_the_session_and_says_so() {
     assert!(matches!(&failed.body, Body::Failed { kind: FailKind::Harness, reason } if reason.starts_with("the store could not keep")));
     let closed = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(closed.last().unwrap().seq, 0);
+    assert_eq!(closed.last().unwrap().body, Body::Closed { by: harness::event::ClosedBy::Harness }, "it ended because the store did");
     assert!(!mock.received(&ps).iter().any(|c| matches!(c, Command::Prompt(_))), "a prompt that could not be recorded is not sent");
 }
 
@@ -1329,6 +1330,7 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
     harness.send(&id, "one").unwrap();
     let all = until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
     assert_eq!(types(&all), ["started", "failed", "prompts_dropped", "closed"], "the session stopped, and said the prompt never went");
+    assert_eq!(all.last().unwrap().body, Body::Closed { by: harness::event::ClosedBy::Harness }, "the harness stopped it, not its agent");
     assert_eq!(*received.lock().unwrap(), [Command::Stop], "no prompt reached the agent");
     assert!(!every_row(&dir).contains(&secret[4..]), "the id's secret is in no table");
     assert!(matches!(harness.resume(&id).await, Err(Error::CannotResume(_))), "a session with no kept id cannot be resumed");

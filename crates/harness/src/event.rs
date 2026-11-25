@@ -91,11 +91,15 @@ pub enum ClosedBy {
     Stop,
     /// It was handed over to Terminal.
     HandOver,
-    /// The agent ended or died by itself, or its driver failed.
+    /// The agent exited by itself, or its driver failed, or it went and its driver did not say how.
     Agent,
     /// It ended with its client, which left.
     ClientLeft,
-    /// The harness could not go on with it: its store failed.
+    /// Its agent's process was ended by a signal the harness did not send: a logout, a kill from outside, the
+    /// out-of-memory killer. Only a driver that says how its agent ended tells this from `agent`.
+    Signal,
+    /// The harness could not go on with it: its store failed, or it stopped an agent whose session id looks like a
+    /// secret.
     Harness,
     /// A value this build does not know, or a `closed` from a harness that did not say.
     #[default]

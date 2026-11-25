@@ -8,11 +8,16 @@
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 //!
-//! Each start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the
-//! harness went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the
-//! agent ended or died by itself, or its driver failed), `client_left` (it ended with its client), or `harness` (its
-//! store failed). It is kept when the event is withheld. A reader takes a value it does not know, or a `closed` from a
-//! harness that did not say, as `unknown`, so a later value needs no new protocol.
+//! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
+//! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
+//! exited by itself, or its driver failed), `signal` (a signal the harness did not send ended the agent's process, at a
+//! logout say), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
+//! needs a driver that says how its agent ended (`Driver::open_reporting`); with one that does not, such an end reads
+//! as `agent`. When more than one holds, a request the harness took (`stop`, `shutdown`, `hand_over`, `client_left`)
+//! wins, even one the agent's going overtook, then `harness`, then `signal`, then `agent`. A locked session's `closed`, and one the sweep reached, arrives as `withheld` with `of: "closed"` and
+//! `kept.by`. A reader takes a value it does not know, or a `closed` from a harness that did not say, as `unknown`, so
+//! a later value needs no new protocol. Some starts end with no stored `closed`: one a shutdown gave up on, whose last
+//! event is `failed` with kind `stuck` (its agent may still run), and one whose harness was killed or crashed.
 
 use std::path::{Path, PathBuf};
 

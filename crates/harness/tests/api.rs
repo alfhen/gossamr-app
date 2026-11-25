@@ -1430,3 +1430,14 @@ fn closed_by_an_older_reader_reads_it_and_a_newer_one_reads_what_it_does_not_kno
         assert_eq!(serde_json::from_str::<Body>(text).unwrap(), Body::Closed { by }, "{text}");
     }
 }
+
+#[tokio::test]
+async fn closed_by_a_signal_from_outside_says_signal_and_an_exit_of_its_own_says_agent() {
+    for (end, by) in [("{\"killed\": 15}", ClosedBy::Signal), ("{\"exit\": 1}", ClosedBy::Agent)] {
+        let served = serve(&format!("{{\"prompt\": null}}\n{{\"say\": \"working\"}}\n{end}"));
+        let mut client = connect(&served).await;
+        let id = open(&mut client).await;
+        client.call(Op::Send { session: id, text: "go".into() }).await.unwrap();
+        assert_eq!(closed_by(&mut client).await, by, "{end}");
+    }
+}
