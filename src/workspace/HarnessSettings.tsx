@@ -10,13 +10,19 @@ export function HarnessSection() {
   const backend = useBackend();
   const [status, setStatus] = useState<HarnessStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [unread, setUnread] = useState(false);
+  const [asks, setAsks] = useState(0);
   useEffect(() => {
     if (!backend) return;
     let live = true;
     const read = () =>
       backend.harnessStatus().then(
-        (next) => live && setStatus(next),
-        () => {},
+        (next) => {
+          if (!live) return;
+          setStatus(next);
+          setUnread(false);
+        },
+        () => live && setUnread(true),
       );
     void read();
     const off = backend.onHarnessChanged(() => void read());
@@ -24,7 +30,7 @@ export function HarnessSection() {
       live = false;
       off();
     };
-  }, [backend]);
+  }, [backend, asks]);
   const act = (action: HarnessAction) => {
     if (!backend) return;
     setBusy(true);
@@ -33,6 +39,14 @@ export function HarnessSection() {
       .then(setStatus, () => {})
       .finally(() => setBusy(false));
   };
+  if (unread && !status) {
+    return (
+      <div data-harness className="flex flex-wrap items-center gap-2">
+        <span className="text-ws-ink2">Gossamr couldn't ask how the harness stands.</span>
+        <Button onClick={() => setAsks((n) => n + 1)}>Try again</Button>
+      </div>
+    );
+  }
   return <HarnessView status={status} busy={busy} onAction={act} />;
 }
 

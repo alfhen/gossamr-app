@@ -123,6 +123,15 @@ impl Vault {
         }
     }
 
+    /// Reads the vault item again, so what another app saved since this one read it is not lost by the next write.
+    pub fn reread(&self) -> Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let State::Ready(ready) = &mut *state {
+            ready.doc = self.read_vault()?;
+        }
+        Ok(())
+    }
+
     fn read_vault(&self) -> Result<Doc> {
         match self.backend.read(VAULT_ACCOUNT)? {
             Some(json) => serde_json::from_str(&json).map_err(|_| {
@@ -334,6 +343,10 @@ pub fn is_ready() -> bool {
 
 pub fn load<T: DeserializeOwned>(account: &str) -> Result<Option<T>> {
     with_global(|v| v.load(account))
+}
+
+pub fn reread() -> Result<()> {
+    with_global(|v| v.reread())
 }
 
 pub fn save<T: Serialize>(account: &str, value: &T) -> Result<()> {

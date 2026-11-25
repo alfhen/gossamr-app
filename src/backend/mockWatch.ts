@@ -26,8 +26,8 @@ export interface MockOptions {
   reviewAccess?: "none";
   /** 2 adds a second Jira account with its own site, which shares the project key CA and the ticket key CA-402 with the first (`?jira=2`). */
   jira?: 2;
-  /** How the harness stands from the start: another build of the same protocol, or one that can't start (`?mockHarness=older` or `failed`). */
-  harness?: "older" | "failed";
+  /** How the harness stands from the start: another build of the same protocol, or one that can't start (`?mockHarness=older`, `failed` or `unreachable`). */
+  harness?: "older" | "failed" | "unreachable";
   runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; trustRefused?: boolean; gitRules?: boolean; prSurfaceMs?: number | null };
 }
 
@@ -151,6 +151,8 @@ export interface MockHandle {
   editTicket(item: string | ItemRef, change: TicketEdit): void;
   /** Has the sync of a Jira account after the first fail (`refused` is a token Jira turned down, `offline` a network failure), or recover with null. */
   failJira(instanceId: string, problem: "refused" | "offline" | null): void;
+  /** Lets the harness answer again after `?mockHarness=unreachable`. */
+  reachHarness(): void;
   /** Marks pending draft `id` as edited by the person, so a newer draft of the same kind stays beside it. */
   noteEdited(id: string): void;
   /** Every review the sample GitHub was sent, oldest first: the only writes it takes, each from a draft the person approved. */
@@ -196,6 +198,7 @@ export interface MockClockParts {
   pip?: { hold(on: boolean): void; idle(): boolean };
   tickets?: { edit(item: string | ItemRef, change: TicketEdit): void };
   jira?: { fail(instanceId: string, problem: "refused" | "offline" | null): void };
+  harness?: { reach(): void };
   terminals?: readonly string[];
   providers?: { addClaude(name: string, folder: string, state: GithubProbeState): void };
   revealedFolders?: readonly string[];
@@ -216,7 +219,7 @@ declare global {
  * `movePullHead(repo, number)` force-pushes a pull request, `githubPostsTried()` counts the posts asked for and
  * `loseNextReviewAnswer(kept)` loses the next post's answer, and `probeGithub(state)` has the GitHub probe find `ready`, `notSignedIn`, `notFound`, `error` or `off`, and `refuseGithubToken()` has GitHub turn down the stored token. The last sample backend made wins.
  */
-export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, github, providers, terminals, revealedFolders, draftReview }: MockClockParts) {
+export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, jira, harness, github, providers, terminals, revealedFolders, draftReview }: MockClockParts) {
   if (!import.meta.env.DEV || typeof window === "undefined") return;
   globalThis.__gossamrMock = {
     advanceRuns: (id) => runs.advance(id),
@@ -260,6 +263,7 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     pipIdle: () => pip?.idle() ?? true,
     editTicket: (item, change) => tickets?.edit(item, change),
     failJira: (instanceId, problem) => jira?.fail(instanceId, problem),
+    reachHarness: () => harness?.reach(),
     noteEdited: (id) => {
       if (!proposals) throw new Error("the sample clock has no drafts");
       proposals.noteEdited(id);
@@ -316,7 +320,7 @@ export function mockOptionsFromUrl(): MockOptions {
   if (pace) options.pipPace = pace;
   if (params.get("mockReviewAccess") === "none") options.reviewAccess = "none";
   const harness = params.get("mockHarness");
-  if (harness === "older" || harness === "failed") options.harness = harness;
+  if (harness === "older" || harness === "failed" || harness === "unreachable") options.harness = harness;
   const seed = params.get("runs");
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.

@@ -31,6 +31,14 @@ test.describe("The harness in Settings", () => {
     await expect(harness.getByRole("button", { name: "Restart the harness to update" })).toHaveCount(0);
   });
 
+  test("says so when it can't ask how the harness stands, and asks again", async ({ page }) => {
+    const harness = await openSettings(page, "runs=empty&mockHarness=unreachable");
+    await expect(harness).toContainText("Gossamr couldn't ask how the harness stands.");
+    await page.evaluate(() => (globalThis as unknown as { __gossamrMock: { reachHarness(): void } }).__gossamrMock.reachHarness());
+    await harness.getByRole("button", { name: "Try again" }).click();
+    await expect(harness.locator("[data-harness-state]")).toHaveText("Running");
+  });
+
   test("says plainly why it can't start, and lets you try again", async ({ page }) => {
     const harness = await openSettings(page, "runs=empty&mockHarness=failed");
     await expect(harness.locator("[data-harness-state]")).toHaveText("Failed");

@@ -27,10 +27,14 @@ const WAIT: Duration = Duration::from_secs(20);
 struct Fake {
     protocol: u32,
     build: String,
-    /// Where each life writes `serving <pid>`, `in-use <pid>` and `died <pid>`, and `seen-<pid>` its argv and env.
+    /// Where each life writes `serving <pid>`, `in-use <pid>` and `died <pid>`, and `seen-<pid>` its argv and what it
+    /// found in its environment: never the environment itself, which may hold a credential of the person's.
     log: PathBuf,
     /// Dies after its first hello, once: the file says it already has.
     die_once: Option<PathBuf>,
+    /// Takes `shutdown` and never answers it.
+    #[serde(default)]
+    mute: bool,
 }
 
 /// Is the fake harness when its variable is set, and a test that passes otherwise.
@@ -50,8 +54,6 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
         return 0;
     }
     let seen = fake.log.with_file_name(format!("seen-{}", std::process::id()));
-    let env: Vec<String> = std::env::vars().filter(|(name, _)| name != FAKE).map(|(name, value)| format!("{name}={value}")).collect();
-    std::fs::write(seen, format!("{argv}\n{}", env.join("\n"))).unwrap();
     let ["serve", "--data", dir] = args[..] else { return 2 };
     let dir = PathBuf::from(dir);
     let root = fake.log.parent().unwrap().to_owned();
@@ -78,6 +80,9 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line).unwrap();
         let Some(token) = Token::parse(&line) else { return 1 };
+        let in_env = std::env::vars().any(|(_, value)| value.contains(&token.hex()));
+        let named = std::env::var_os(harness::cli::TOKEN_VARIABLE).is_some();
+        std::fs::write(&seen, format!("{argv}\ntoken in environment: {in_env}\n{}: {named}", harness::cli::TOKEN_VARIABLE)).unwrap();
         keys.push(token.stored_key());
         std::fs::write(&store, encode(&token.stored_key())).unwrap();
     }
@@ -112,6 +117,9 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
                 while let Some(Ok(Message::Text(text))) = ws.next().await {
                     let call: Value = serde_json::from_str(text.as_str()).unwrap();
                     let shutdown = call["op"] == "shutdown";
+                    if shutdown && fake.mute {
+                        continue;
+                    }
                     let ok = if shutdown { json!({ "left": [] }) } else { json!([]) };
                     if shutdown {
                         let _ = std::fs::remove_file(dir.join(SOCKET));
@@ -150,7 +158,7 @@ impl Bed {
 
     /// A fake harness at `bin/<name>`, a link to the checked script, with its behaviour in its body.
     fn fake(&self, name: &str, protocol: u32, build: &str) -> PathBuf {
-        self.fake_with(name, Fake { protocol, build: build.into(), log: self.log.clone(), die_once: None })
+        self.fake_with(name, Fake { protocol, build: build.into(), log: self.log.clone(), die_once: None, mute: false })
     }
 
     fn fake_with(&self, name: &str, fake: Fake) -> PathBuf {
@@ -351,8 +359,13 @@ async fn two_managers_starting_at_once_end_with_one_harness_both_adopt() {
 async fn two_managers_at_a_first_start_never_write_over_the_token_the_harness_knows() {
     let bed = Bed::new();
     let program = bed.fake("harness", PROTOCOL, "new");
-    // Each read the empty vault before either saved, as two apps opened at once do.
-    let (one, two) = (bed.sidecar(&program), bed.sidecar(&program));
+    // Each read the empty vault before either saved, as two apps opened at once do at launch.
+    let warm = || {
+        let vault = bed.vault();
+        assert_eq!(vault.load::<String>("jira:1").unwrap(), None);
+        Sidecar::new(bed.dir.clone(), program.clone(), Box::new(vault), Limits::default())
+    };
+    let (one, two) = (warm(), warm());
     let (a, b) = tokio::join!(one.ensure(), two.ensure());
     let states = [a.state, b.state];
     assert!(states.contains(&State::Running), "{a:?} {b:?}");
@@ -423,7 +436,7 @@ async fn a_harness_still_stopping_holds_the_folder_and_the_manager_waits_then_st
 #[tokio::test]
 async fn a_harness_that_dies_between_its_hello_and_the_proof_is_started_again() {
     let bed = Bed::new();
-    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")) };
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), mute: false };
     let status = bed.sidecar(&bed.fake_with("harness", fake)).ensure().await;
     assert_eq!(status.state, State::Running, "{status:?}");
     assert_eq!(bed.lines(), ["serving", "died", "serving"]);
@@ -446,6 +459,9 @@ async fn a_data_folder_too_long_for_the_socket_is_refused_before_anything_starts
 struct Refusing;
 
 impl Keep for Refusing {
+    fn reread(&self) -> crate::error::Result<()> {
+        Err(crate::error::Error::KeychainUnavailable("denied".into()))
+    }
     fn load(&self) -> crate::error::Result<Option<String>> {
         Err(crate::error::Error::KeychainUnavailable("denied".into()))
     }
@@ -490,7 +506,8 @@ async fn the_token_is_in_the_vault_and_in_no_file_under_the_data_folder_nor_the_
     let pid = bed.pids("serving")[0];
     let seen = std::fs::read_to_string(bed.root.join(format!("seen-{pid}"))).unwrap();
     assert!(seen.starts_with("serve --data "), "its argv");
-    assert!(!seen.contains(&hex), "neither its argv nor its environment holds the token");
+    assert!(!seen.contains(&hex), "its argv does not hold the token");
+    assert!(seen.contains("token in environment: false") && seen.contains("HARNESS_TOKEN: false"), "nor its environment");
     bed.none_left().await;
 }
 
@@ -526,5 +543,19 @@ async fn stop_stops_the_harness_through_shutdown_and_it_stays_stopped_until_aske
     assert_eq!(bed.pids("serving").len(), 1);
     assert_eq!(sidecar.act(Action::Start).await.state, State::Running);
     assert_eq!(bed.pids("serving").len(), 2);
+    bed.none_left().await;
+}
+
+#[tokio::test]
+async fn a_harness_that_takes_shutdown_and_never_answers_leaves_stop_waiting_only_its_limit() {
+    let bed = Bed::new();
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: None, mute: true };
+    let limits = Limits { stopping_within: Duration::from_millis(500), ..Limits::default() };
+    let sidecar = Sidecar::new(bed.dir.clone(), bed.fake_with("harness", fake), Box::new(bed.vault()), limits);
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    let stopped = tokio::time::timeout(WAIT, sidecar.act(Action::Stop)).await.expect("Stop came back");
+    assert_eq!(stopped.state, State::Failed);
+    assert!(stopped.message.as_deref().is_some_and(|m| m.contains("still stopping")), "{stopped:?}");
+    assert_eq!(sidecar.act(Action::Start).await.state, State::Running, "the manager is free again");
     bed.none_left().await;
 }

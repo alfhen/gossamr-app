@@ -476,6 +476,7 @@ export class MockBackend implements Backend {
       pip: { hold: holdMockPip, idle: mockPipIdle },
       tickets: { edit: (item, change) => this.editTicket(item, change) },
       jira: { fail: (instanceId, problem) => this.failJira(instanceId, problem) },
+      harness: { reach: () => this.harness.reach() },
       terminals: this.terminals,
       providers: { addClaude: (name, folder, state) => { this.providers.add("claude", name, folder).probe = state; this.connectionsListeners.forEach((l) => l()); } },
       revealedFolders: this.revealedFolders,

@@ -52,6 +52,8 @@ impl Default for Limits {
 
 /// Where the client token is kept: the vault item, or a test's vault.
 pub trait Keep: Send + Sync {
+    /// Reads the store again: another app may have saved the token since this one read it.
+    fn reread(&self) -> crate::error::Result<()>;
     fn load(&self) -> crate::error::Result<Option<String>>;
     fn save(&self, hex: &str) -> crate::error::Result<()>;
 }
@@ -60,6 +62,9 @@ pub trait Keep: Send + Sync {
 pub struct VaultItem;
 
 impl Keep for VaultItem {
+    fn reread(&self) -> crate::error::Result<()> {
+        crate::secrets::reread()
+    }
     fn load(&self) -> crate::error::Result<Option<String>> {
         crate::secrets::load(TOKEN_ACCOUNT)
     }
@@ -69,6 +74,9 @@ impl Keep for VaultItem {
 }
 
 impl Keep for crate::secrets::Vault {
+    fn reread(&self) -> crate::error::Result<()> {
+        crate::secrets::Vault::reread(self)
+    }
     fn load(&self) -> crate::error::Result<Option<String>> {
         crate::secrets::Vault::load(self, TOKEN_ACCOUNT)
     }
@@ -228,13 +236,15 @@ impl Sidecar {
     }
 
     /// The token from the vault, or a new one saved there first, so a harness never learns a token the app could lose.
-    /// A new one only for a folder with no store yet: a store with tokens takes no new one on stdin, and a second app
-    /// that read the vault before the first saved its token must not write over it.
+    /// A new one only for a folder with no store yet: a store with tokens takes no new one on stdin. Read again under
+    /// the app lock first: a second app that read the vault before the first saved its token would otherwise miss it
+    /// and write its older copy over it.
     fn token(&self, inner: &mut Inner) -> Result<Token, String> {
         if let Some(token) = &inner.token {
             return Ok(token.clone());
         }
         let refused = |e: crate::error::Error| format!("The harness needs Gossamr's key from the Keychain, which couldn't be read or saved: {e}");
+        self.keep.reread().map_err(refused)?;
         let token = match self.keep.load().map_err(refused)? {
             Some(hex) => Token::parse(&hex).ok_or("The harness key in Gossamr's Keychain item is damaged.")?,
             None if self.dir.join(STORE).exists() => return Err(self.not_this_key()),
@@ -277,7 +287,7 @@ impl Sidecar {
                 Ok(client) => {
                     let hello = client.hello.clone();
                     if hello.protocol != PROTOCOL && started.is_some() {
-                        stop_child(started.take().expect("a child was started"), self.limits.prove_within);
+                        stop_started(started.take().expect("a child was started"), self.limits.prove_within).await;
                         return Err(format!("The harness that came with Gossamr speaks protocol {}, and Gossamr {PROTOCOL}. Reinstall Gossamr.", hello.protocol));
                     }
                     if hello.protocol == PROTOCOL {
@@ -296,7 +306,7 @@ impl Sidecar {
                 }
                 Err(e) if harness::client::not_proven(&e) => {
                     if let Some(child) = started.take() {
-                        stop_child(child, self.limits.prove_within);
+                        stop_started(child, self.limits.prove_within).await;
                         return Err(self.not_this_key());
                     }
                     return Err("A harness is running that doesn't know this Gossamr's key, so Gossamr leaves it alone. Stop it with `harness shutdown`, then try again.".into());
@@ -329,14 +339,14 @@ impl Sidecar {
                     let child = started.as_mut().expect("a child was just started");
                     if !self.wait_ready(child, socket).await && matches!(child.try_wait(), Ok(None)) {
                         failures += 1;
-                        stop_child(started.take().expect("a child was just started"), self.limits.prove_within);
+                        stop_started(started.take().expect("a child was just started"), self.limits.prove_within).await;
                     }
                 }
                 Err(e) => {
                     // It answered and went: a harness that died before the proof, or one still starting.
                     failures += 1;
                     if let Some(child) = started.take() {
-                        stop_child(child, self.limits.prove_within);
+                        stop_started(child, self.limits.prove_within).await;
                     }
                     if failures >= 3 {
                         return Err(format!("Gossamr couldn't reach the harness: {e}"));
@@ -369,12 +379,14 @@ impl Sidecar {
             Err(e) if harness::client::not_proven(&e) => return Err("A harness is running that doesn't know this Gossamr's key, so Gossamr leaves it alone.".into()),
             Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
-        let answer = client.call(Op::Shutdown).await.map_err(|e| format!("Gossamr couldn't stop the harness: {e}"))?;
+        let stopping = "The harness is still stopping. Try again in a minute.";
+        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown)).await.map_err(|_| stopping.to_owned())?;
+        let answer = answer.map_err(|e| format!("Gossamr couldn't stop the harness: {e}"))?;
         drop(client);
         let until = Instant::now() + self.limits.stopping_within;
         while held(&self.dir.join("lock")) {
             if Instant::now() > until {
-                return Err("The harness is still stopping. Try again in a minute.".into());
+                return Err(stopping.into());
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
@@ -430,6 +442,11 @@ fn reap(mut child: Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
+}
+
+/// `stop_child` off the async worker, which its wait would hold for up to `within`.
+async fn stop_started(child: Child, within: Duration) {
+    let _ = tokio::task::spawn_blocking(move || stop_child(child, within)).await;
 }
 
 /// Stops a child this app started and has not reaped, so its pid is still its own.

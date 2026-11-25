@@ -9,9 +9,12 @@ export class MockHarness {
   private status: HarnessStatus;
   private stoppedByYou = false;
   private listeners = new Set<() => void>();
+  /** Every read fails until `reach`, as when the desktop backend can't answer. */
+  private unreachable: boolean;
 
-  /** "older" runs another build of the same protocol; "failed" can't start, and says why. */
-  constructor(start?: "older" | "failed") {
+  /** "older" runs another build of the same protocol; "failed" can't start, and says why; "unreachable" fails until `reach`. */
+  constructor(start?: "older" | "failed" | "unreachable") {
+    this.unreachable = start === "unreachable";
     this.status =
       start === "failed"
         ? { state: "failed", build: null, bundledBuild: MOCK_HARNESS_BUILD, update: false, message: MOCK_HARNESS_FAILURE }
@@ -19,17 +22,22 @@ export class MockHarness {
   }
 
   act(action?: HarnessAction): HarnessStatus {
+    if (this.unreachable) throw new Error("the backend didn't answer");
     if (action === "stop") {
       this.stoppedByYou = true;
       this.status = { ...this.status, state: "stopped", build: null, update: false, message: "Stopped." };
     } else if (action || (!this.stoppedByYou && this.status.state === "running")) {
       if (action) this.stoppedByYou = false;
       if (action || this.status.state !== "failed") {
-        const message = action === "restart" ? "Restarted." : this.status.message;
+        const message = action === "restart" ? "Restarted." : action ? null : this.status.message;
         this.status = { state: "running", build: action ? MOCK_HARNESS_BUILD : this.status.build, bundledBuild: MOCK_HARNESS_BUILD, update: action ? false : this.status.update, message };
       }
     }
     return { ...this.status };
+  }
+
+  reach() {
+    this.unreachable = false;
   }
 
   onChanged(listener: () => void) {
