@@ -50,6 +50,8 @@ struct Rig {
     tmp: tempfile::TempDir,
     out: PathBuf,
     harness: Harness,
+    /// The seq of the last agent line the replay has written, from its progress FIFO.
+    written: tokio::sync::watch::Receiver<u64>,
 }
 
 /// A harness whose `claude` is the wire replay of `fixture`, on a shell environment that holds only what the replay
@@ -64,10 +66,25 @@ fn rig(fixture: &Path, extra: &[(&str, &str)]) -> Rig {
         ("WIRE_REPLAY_OUT".into(), out.display().to_string()),
     ];
     env.extend(extra.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+    let fifo = tmp.path().join("progress");
+    let path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    // SAFETY: a valid path and mode.
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    env.push(("WIRE_REPLAY_PROGRESS".into(), fifo.display().to_string()));
+    let (seen, written) = tokio::sync::watch::channel(0);
+    // Opening blocks until the replay opens its end, and the read ends when the replay goes.
+    std::thread::spawn(move || {
+        let Ok(file) = std::fs::File::open(fifo) else { return };
+        for line in std::io::BufRead::lines(std::io::BufReader::new(file)).map_while(Result::ok) {
+            if let Ok(seq) = line.parse() {
+                seen.send_replace(seq);
+            }
+        }
+    });
     let setup = Setup::new(None, data.clone()).with_shell_env(RunEnv::from_pairs(env));
     let driver = ClaudeDriver::new(REPLAY.into()).with_graces(Duration::from_millis(300), Duration::from_millis(1_500));
     let harness = Harness::with_setup(Store::open(&data).unwrap(), vec![("claude".into(), Arc::new(driver))], settings(4), Arc::new(setup));
-    Rig { tmp, out, harness }
+    Rig { tmp, out, harness, written }
 }
 
 impl Rig {
@@ -99,12 +116,12 @@ impl Rig {
     }
 }
 
-/// What the recorded client did, in order.
+/// What the recorded client did, in order, each with the seq of the agent line the recording has it follow.
 #[derive(Debug, Clone, PartialEq)]
 enum Act {
-    Prompt(String),
-    Answer(Decision),
-    Cancel,
+    Prompt(String, u64),
+    Answer(Decision, u64),
+    Cancel(u64),
 }
 
 fn texts(content: &Value) -> String {
@@ -117,20 +134,34 @@ fn texts(content: &Value) -> String {
 
 /// The recorded client's acts and how many `result`s the agent sent, up to a signal the recording's driver sent.
 fn recorded_client(lines: &[Value]) -> (Vec<Act>, usize) {
-    let (mut acts, mut results) = (vec![], 0);
+    let (mut acts, mut results, mut after, mut config) = (vec![], 0, 0, vec![]);
     for line in lines.iter().take_while(|line| line["data"]["note"] != "signal") {
         let data = &line["data"];
         match (line["dir"].as_str(), data["type"].as_str()) {
-            (Some("to_agent"), Some("user")) => acts.push(Act::Prompt(texts(&data["message"]["content"]))),
+            (Some("to_agent"), Some("user")) => acts.push(Act::Prompt(texts(&data["message"]["content"]), after)),
             (Some("to_agent"), Some("control_response")) => {
-                acts.push(Act::Answer(if data["response"]["response"]["behavior"] == "allow" { Decision::Allow } else { Decision::Deny }))
+                acts.push(Act::Answer(if data["response"]["response"]["behavior"] == "allow" { Decision::Allow } else { Decision::Deny }, after))
             }
-            (Some("to_agent"), Some("control_request")) if data["request"]["subtype"] == "interrupt" => acts.push(Act::Cancel),
-            (Some("from_agent"), Some("result")) => results += 1,
+            (Some("to_agent"), Some("control_request")) if data["request"]["subtype"] == "interrupt" => acts.push(Act::Cancel(after)),
+            (Some("to_agent"), Some("control_request")) => config.push(data["request_id"].clone()),
+            // The replay does not play the answer to a config request the driver did not send.
+            (Some("from_agent"), Some("control_response")) if config.contains(&data["response"]["request_id"]) => {}
+            (Some("from_agent"), kind) => {
+                after = line["seq"].as_u64().unwrap();
+                results += usize::from(kind == Some("result"));
+            }
             _ => {}
         }
     }
     (acts, results)
+}
+
+/// Until the replay has written the agent line `seq`: what the recorded client did next came after it.
+async fn played(rig: &Rig, seq: u64) {
+    let mut written = rig.written.clone();
+    let waited = tokio::time::timeout(Duration::from_secs(30), written.wait_for(|at| *at >= seq)).await.expect("the replay plays on");
+    // The progress ends with the replay: what it refused is in its report, which names a line and never a payload.
+    assert!(waited.is_ok(), "the replay ended before line {seq}: {}", rig.report());
 }
 
 /// The next event into `seen`. The replay's process is read at the session's `started`, while it surely runs: it
@@ -155,8 +186,12 @@ async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, act
     let mut answered = 0;
     for act in acts {
         match act {
-            Act::Prompt(text) => rig.harness.send(id, text).unwrap(),
-            Act::Answer(decision) => loop {
+            Act::Prompt(text, after) => {
+                played(rig, after).await;
+                rig.harness.send(id, text).unwrap()
+            }
+            Act::Answer(decision, after) => loop {
+                played(rig, after).await;
                 let asked: Vec<&str> = seen.iter().filter_map(|event: &Event| match &event.body { Body::Permission { id, .. } => Some(id.as_str()), _ => None }).collect();
                 if let Some(request) = asked.get(answered) {
                     rig.harness.answer(id, request, decision, None).unwrap();
@@ -165,7 +200,10 @@ async fn drive(rig: &Rig, id: &str, events: &mut broadcast::Receiver<Event>, act
                 }
                 next_within(rig, events, &mut seen, &mut agent).await;
             },
-            Act::Cancel => {
+            Act::Cancel(after) => {
+                // Not before the agent line the recording interrupts after (a tool that started), which may give the
+                // driver nothing to say: the replay's progress tells it.
+                played(rig, after).await;
                 while !seen.iter().rev().find(|event| matches!(event.body, Body::TurnStarted) || event.body.ends_turn()).is_some_and(|event| event.body == Body::TurnStarted) {
                     next_within(rig, events, &mut seen, &mut agent).await;
                 }
@@ -214,11 +252,31 @@ fn as_the_mock_names_the_session(events: &[Event]) -> Vec<Event> {
     serde_json::from_str(&text).unwrap()
 }
 
+/// The recordings that give the tools endpoint by `mcp_set_servers` before their first prompt. The replay requires a
+/// driver to do the same, and the driver gives the endpoint once H5a-1's endpoint is on `harness`; until then each of
+/// these is refused at its first prompt, and only that.
+const AWAIT_THE_ENDPOINT: &[&str] = &[
+    "4-kill-mcp.jsonl", "4-resume-mcp.jsonl", "5-hold-control.jsonl", "5-mcp-control.jsonl", "r1-collision.jsonl", "r1-two-servers.jsonl",
+    "r2-ask.jsonl", "r4-locked-control.jsonl",
+];
+
+#[tokio::test]
+async fn claude_a_recording_that_gives_the_endpoint_is_refused_until_the_driver_does() {
+    for fixture in AWAIT_THE_ENDPOINT {
+        let rig = rig(&native().join(fixture), &[]);
+        let (id, mut events) = rig.open(false, None).await;
+        rig.harness.send(&id, "go").unwrap();
+        until(&mut events, |body| *body == Body::Closed).await;
+        let want = "line 7: the driver sent its first prompt before it gave the tools endpoint, which the recording gives at line 4\n";
+        assert_eq!(rig.report(), want, "{fixture}");
+    }
+}
+
 #[tokio::test]
 async fn claude_every_native_fixture_projects_as_its_golden_file() {
     let goldens = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/claude/native");
     let mut differ = vec![];
-    for fixture in fixtures() {
+    for fixture in fixtures().into_iter().filter(|fixture| !AWAIT_THE_ENDPOINT.contains(&name(fixture).as_str())) {
         let (rig, seen) = play(&fixture).await;
         assert_eq!(rig.report(), "", "{}: the replay refused a line", name(&fixture));
         let got = as_the_mock_orders_it(project(&as_the_mock_names_the_session(&seen))).join("\n") + "\n";
@@ -294,7 +352,7 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
     // macOS adds `__CF_USER_TEXT_ENCODING` to every process it starts.
     names.retain(|name| name != "__CF_USER_TEXT_ENCODING");
     names.sort();
-    assert_eq!(names, ["PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT"]);
+    assert_eq!(names, ["PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS"]);
     let (locked, _) = {
         let fixture = native().join("11-locked.jsonl");
         let rig = rig(&fixture, &[]);
@@ -306,7 +364,7 @@ async fn claude_the_child_gets_the_launch_environment_and_nothing_else() {
     let mut names: Vec<String> = locked.env().keys().cloned().collect();
     names.retain(|name| name != "__CF_USER_TEXT_ENCODING");
     names.sort();
-    assert_eq!(names, ["CLAUDE_CODE_DISABLE_AUTO_MEMORY", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT"]);
+    assert_eq!(names, ["CLAUDE_CODE_DISABLE_AUTO_MEMORY", "PATH", "WIRE_REPLAY_FIXTURE", "WIRE_REPLAY_OUT", "WIRE_REPLAY_PROGRESS"]);
 }
 
 #[tokio::test]

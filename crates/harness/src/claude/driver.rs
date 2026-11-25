@@ -143,11 +143,13 @@ pub struct Stream {
     /// Open `can_use_tool` requests and the input each asked to run with.
     asked: HashMap<String, Value>,
     requests: u64,
+    /// What waits for `initialize`'s answer: nothing else is written before it, as the Agent SDK does.
+    waiting: Option<Vec<String>>,
 }
 
 impl Agent {
     async fn run(mut self, stdout: BufReader<tokio::process::ChildStdout>, mut commands: UnboundedReceiver<Command>) {
-        self.stream.request(json!({"subtype": "initialize"}));
+        self.stream.initialize();
         let mut stdout = stdout.lines();
         let mut term_at: Option<tokio::time::Instant> = None;
         let mut listening = true;
@@ -199,7 +201,7 @@ impl Stream {
             let _ = output.send(Body::Started { provider_session: session.to_owned(), resumed: true });
         }
         let (turn, cancelled, held, asked, requests) = (false, false, VecDeque::new(), HashMap::new(), 0);
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests }
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting: Some(vec![]) }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -207,9 +209,21 @@ impl Stream {
         self.lines = None;
     }
 
-    fn send(&self, line: Value) {
+    fn send(&mut self, line: Value) {
+        match (&mut self.waiting, &self.lines) {
+            (Some(waiting), _) => waiting.push(line.to_string()),
+            (None, Some(lines)) => {
+                let _ = lines.send(line.to_string());
+            }
+            (None, None) => {}
+        }
+    }
+
+    /// The first line Claude reads. What is sent before its answer comes waits for it.
+    pub fn initialize(&mut self) {
+        self.requests += 1;
         if let Some(lines) = &self.lines {
-            let _ = lines.send(line.to_string());
+            let _ = lines.send(json!({"type": "control_request", "request_id": "gossamr-1", "request": {"subtype": "initialize"}}).to_string());
         }
     }
 
@@ -288,6 +302,14 @@ impl Stream {
                     self.emit(Body::ToolResult { id, output: block["content"].clone(), error: block["is_error"] == true });
                 }
             }
+            // `initialize`'s answer, success or not: Claude reads the rest either way and reports what fails.
+            Some("control_response") if line["response"]["request_id"] == "gossamr-1" => {
+                if let (Some(waiting), Some(lines)) = (self.waiting.take(), &self.lines) {
+                    for line in waiting {
+                        let _ = lines.send(line);
+                    }
+                }
+            }
             Some("control_request") => self.asks(&line),
             Some("control_cancel_request") => {
                 if let Some(id) = line["request_id"].as_str()
@@ -350,9 +372,14 @@ mod tests {
         output: UnboundedReceiver<Body>,
     }
 
+    /// A stream whose `initialize` Claude has answered.
     fn wire() -> Wire {
         let ((lines, lines_rx), (output, output_rx)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
-        Wire { stream: Stream::new(lines, output, None), lines: lines_rx, output: output_rx }
+        let mut w = Wire { stream: Stream::new(lines, output, None), lines: lines_rx, output: output_rx };
+        w.stream.initialize();
+        w.agent(json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-1", "response": {}}}));
+        w.sent();
+        w
     }
 
     impl Wire {
@@ -516,6 +543,20 @@ mod tests {
         let locked = tail(&launch(true, None, Some("s-1")));
         assert_eq!(locked[..LOCKED.len()], *LOCKED);
         assert_eq!(locked[LOCKED.len()..], ["--resume", "s-1"], "a locked session gets no guard: it has no tool to commit with");
+    }
+
+    #[test]
+    fn nothing_is_written_before_initializes_answer() {
+        let ((lines, mut sent), (output, _said)) = (mpsc::unbounded_channel(), mpsc::unbounded_channel());
+        let mut stream = Stream::new(lines, output, None);
+        stream.initialize();
+        stream.prompt("go".into());
+        let first: Value = serde_json::from_str(&sent.try_recv().unwrap()).unwrap();
+        assert_eq!(first["request"]["subtype"], "initialize");
+        assert!(sent.try_recv().is_err(), "the prompt waits for the answer");
+        stream.read(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": "gossamr-1", "response": {}}}).to_string());
+        let prompt: Value = serde_json::from_str(&sent.try_recv().unwrap()).unwrap();
+        assert_eq!(prompt["type"], "user", "then it goes");
     }
 
     #[test]
