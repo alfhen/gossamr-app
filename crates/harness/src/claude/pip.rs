@@ -1,30 +1,16 @@
-//! Claude Code as Pip's agent: the user's installed `claude` run headlessly with Pip's MCP tools and nothing else.
+//! Pip's Claude Code: the person's installed `claude` run headlessly with Pip's MCP tools and nothing else. The app
+//! runs it; this builds its flags, its environment and the message it reads on stdin.
 
-pub mod stream;
-
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Stdio;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-#[cfg(test)]
-use async_trait::async_trait;
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
 
-use crate::agent::images::ImageInput;
-use crate::agent::{AgentEvent, AgentRequest, EventStream};
-use crate::error::Result;
-use crate::runs::provider_env::ProviderEnv;
-use stream::parse_line;
+use crate::provider_env::ProviderEnv;
 
-const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 /// Claude may use the gossamr MCP server and no built-in tool. Ticket text is untrusted, so anything that reaches
 /// files, a shell or the network would let it exfiltrate; loosening a flag here re-opens that.
-const ALLOWED: &str = "mcp__gossamr";
+pub const ALLOWED: &str = "mcp__gossamr";
 
 /// Where and as whom a turn runs. Pip always passes a model: without `--model` the CLI would use its own default, which
 /// may be a slower, costlier one.
@@ -36,25 +22,30 @@ pub struct Launch {
     pub effort: Option<String>,
 }
 
-#[derive(Default)]
-pub struct ClaudeCodeProvider {
-    running: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
-    #[cfg(test)]
-    stand_in: Option<Arc<dyn StandIn>>,
+/// One turn of Pip's, as the flags and the stdin message need it.
+#[derive(Debug)]
+pub struct Turn {
+    pub launch: Launch,
+    pub system: String,
+    pub mcp_url: String,
+    pub mcp_token: String,
+    /// The working folder, which the app prepares.
+    pub cwd: PathBuf,
+    /// Continues an earlier session.
+    pub session: Option<String>,
+    pub images: Vec<Image>,
 }
 
-/// A scripted agent that tests put where the `claude` process would be.
-#[cfg(test)]
-#[async_trait]
-pub(crate) trait StandIn: Send + Sync {
-    async fn run(&self, req: AgentRequest) -> Result<EventStream>;
-
-    fn cancel(&self, run_id: &str);
+/// A screenshot sent with the prompt, inline: standard base64 with padding and no line breaks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Image {
+    pub media_type: String,
+    pub data: String,
 }
 
 /// The token is named, not included: Claude expands `${...}` in header values from its own environment, and argv is
 /// readable by every process of the same user through `ps`.
-const TOKEN_ENV: &str = "GOSSAMR_MCP_TOKEN";
+pub const TOKEN_ENV: &str = "GOSSAMR_MCP_TOKEN";
 
 fn mcp_config(url: &str) -> String {
     json!({
@@ -65,15 +56,15 @@ fn mcp_config(url: &str) -> String {
     .to_string()
 }
 
-fn args(req: &AgentRequest) -> Vec<String> {
+pub fn args(turn: &Turn) -> Vec<String> {
     // Images can only ride in a structured user message, so the prompt is sent that way when there are any.
     // Kept ahead of `--mcp-config`, which takes every argument up to the next flag.
-    let input: &[&str] = if req.images.is_empty() { &[] } else { &["--input-format", "stream-json"] };
+    let input: &[&str] = if turn.images.is_empty() { &[] } else { &["--input-format", "stream-json"] };
     let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
         .into_iter()
         .chain(input.iter().copied())
-        .chain(req.launch.model.iter().flat_map(|m| ["--model", m.as_str()]))
-        .chain(req.launch.effort.iter().flat_map(|e| ["--effort", e.as_str()]))
+        .chain(turn.launch.model.iter().flat_map(|m| ["--model", m.as_str()]))
+        .chain(turn.launch.effort.iter().flat_map(|e| ["--effort", e.as_str()]))
         // `--tools ""` removes every built-in tool, so `dontAsk` refuses whatever isn't in the allowlist.
         .chain(["--permission-mode", "dontAsk", "--tools", "", "--allowedTools", ALLOWED])
         // No user or project settings (hooks, plugins, CLAUDE.md rules, MCP servers) and no skills or slash commands.
@@ -81,152 +72,54 @@ fn args(req: &AgentRequest) -> Vec<String> {
         .chain(["--strict-mcp-config", "--mcp-config"])
         .map(String::from)
         .collect();
-    a.extend([mcp_config(&req.mcp.url), "--append-system-prompt".into(), req.system.clone()]);
-    if let Some(id) = &req.session {
+    a.extend([mcp_config(&turn.mcp_url), "--append-system-prompt".into(), turn.system.clone()]);
+    if let Some(id) = &turn.session {
         a.extend(["--resume".into(), id.clone()]);
     }
     a
 }
 
 /// The one stdin line of a stream-json run: the prompt, then each image as an inline base64 block.
-fn user_message(prompt: &str, images: &[ImageInput]) -> String {
+pub fn user_message(prompt: &str, images: &[Image]) -> String {
     let blocks: Vec<_> = std::iter::once(json!({ "type": "text", "text": prompt }))
         .chain(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.media_type, "data": i.data } })))
         .collect();
     format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": blocks } }))
 }
 
-fn command(req: &AgentRequest) -> Command {
-    let mut cmd = Command::new(&req.launch.binary);
-    req.launch.env.apply(&mut cmd);
-    cmd.args(args(req))
-        .current_dir(req.sandbox.path())
+pub fn command(turn: &Turn) -> Command {
+    let mut cmd = Command::new(&turn.launch.binary);
+    turn.launch.env.apply(&mut cmd);
+    cmd.args(args(turn))
+        .current_dir(&turn.cwd)
         // Launched from inside a Claude Code session, the child would otherwise think it's nested.
         .env_remove("CLAUDECODE")
-        .env(TOKEN_ENV, &req.mcp.token)
+        .env(TOKEN_ENV, &turn.mcp_token)
         // `--setting-sources` doesn't cover auto memory, which Claude would otherwise put in its prompt.
         .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1");
     cmd
 }
 
-impl ClaudeCodeProvider {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn standing_in(stand_in: Arc<dyn StandIn>) -> Self {
-        Self { stand_in: Some(stand_in), ..Self::default() }
-    }
-
-    /// `claude` as the environment `shell` finds it. A stand-in is always found.
-    pub fn find(&self, shell: &crate::runs::env::RunEnv) -> Option<PathBuf> {
-        #[cfg(test)]
-        if self.stand_in.is_some() {
-            return Some(PathBuf::from("claude"));
-        }
-        crate::runs::toolchain::find_binary(crate::connections::Driver::Claude, shell)
-    }
-
-    /// Starts a run. The stream ends with exactly one `Done`, including after a cancel or a crash, and once it has
-    /// ended nothing of the run is still executing.
-    pub async fn run(&self, req: AgentRequest) -> Result<EventStream> {
-        #[cfg(test)]
-        if let Some(stand_in) = &self.stand_in {
-            return stand_in.run(req).await;
-        }
-        let mut child = command(&req)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
-
-        // The prompt goes through stdin so long ticket context never hits argument limits or shell quoting.
-        let mut stdin = child.stdin.take().expect("piped");
-        let input = if req.images.is_empty() { req.prompt.clone() } else { user_message(&req.prompt, &req.images) };
-        stdin.write_all(input.as_bytes()).await?;
-
-        // Registered before stdin closes, since Claude starts work (and may call the MCP tools) on EOF.
-        let (cancel_tx, cancel_rx) = oneshot::channel();
-        self.running.lock().expect("lock poisoned").insert(req.run_id.clone(), cancel_tx);
-        drop(stdin);
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        let running = self.running.clone();
-        let run_id = req.run_id.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(child.stdout.take().expect("piped")).lines();
-            let stderr = child.stderr.take().expect("piped");
-            let stderr_tail = tokio::spawn(async move {
-                let mut tail = String::new();
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(l)) = lines.next_line().await {
-                    tail = l;
-                }
-                tail
-            });
-
-            let mut session: Option<String> = None;
-            let mut finished = false;
-            let read = async {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let Some(ev) = parse_line(&line) else { continue };
-                    match &ev {
-                        AgentEvent::Started { session_id } => session = Some(session_id.clone()),
-                        AgentEvent::Done { session_id, .. } => {
-                            session = session_id.clone().or(session.take());
-                            finished = true;
-                        }
-                        _ => {}
-                    }
-                    let _ = tx.send(ev);
-                }
-            };
-            let outcome = tokio::select! {
-                _ = read => None,
-                _ = cancel_rx => Some("Stopped"),
-                _ = tokio::time::sleep(RUN_TIMEOUT) => Some("Claude took longer than 10 minutes and was stopped"),
-            };
-            if outcome.is_some() {
-                let _ = child.kill().await;
-            }
-            let _ = child.wait().await;
-            running.lock().expect("lock poisoned").remove(&run_id);
-            if !finished {
-                let tail = stderr_tail.await.unwrap_or_default();
-                let message = outcome.map(String::from).unwrap_or(if tail.is_empty() { "Claude exited unexpectedly".into() } else { tail });
-                let _ = tx.send(AgentEvent::Done { session_id: session, ok: false, message: Some(message), usage: None });
-            }
-        });
-        Ok(rx)
-    }
-
-    /// Stops the run; its stream then ends with a failed `Done`. Unknown or finished runs are ignored.
-    pub fn cancel(&self, run_id: &str) {
-        #[cfg(test)]
-        if let Some(stand_in) = &self.stand_in {
-            return stand_in.cancel(run_id);
-        }
-        if let Some(tx) = self.running.lock().expect("lock poisoned").remove(run_id) {
-            let _ = tx.send(());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::McpEndpoint;
-    use crate::agent::sandbox::Sandbox;
+    use std::process::Stdio;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
-    fn request(session: Option<&str>) -> AgentRequest {
-        AgentRequest {
-            run_id: "r".into(),
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+    fn png() -> Image {
+        Image { media_type: "image/png".into(), data: PNG.into() }
+    }
+
+    fn request(session: Option<&str>) -> Turn {
+        Turn {
             system: "sys".into(),
-            prompt: "p".into(),
-            mcp: McpEndpoint { url: "http://127.0.0.1:1/mcp/r".into(), token: "tok".into() },
-            sandbox: Sandbox::prepare(&std::env::temp_dir().join(format!("gossamr-claude-args-{}", std::process::id()))).unwrap(),
+            mcp_url: "http://127.0.0.1:1/mcp/r".into(),
+            mcp_token: "tok".into(),
+            cwd: std::env::temp_dir().join(format!("gossamr-claude-args-{}", std::process::id())),
             session: session.map(String::from),
             images: Vec::new(),
             launch: Launch { binary: PathBuf::from("claude"), env: ProviderEnv::none(), model: Some("sonnet".into()), effort: Some("medium".into()) },
@@ -239,7 +132,7 @@ mod tests {
     ];
 
     /// An instance with its own folder: its folder variable set, and the key the shell holds removed.
-    fn in_a_folder(mut req: AgentRequest) -> AgentRequest {
+    fn in_a_folder(mut req: Turn) -> Turn {
         req.launch.env = ProviderEnv::for_test(&[("CLAUDE_CONFIG_DIR", Some("/Users/x/.claude-work")), ("ANTHROPIC_API_KEY", None)]);
         req
     }
@@ -304,8 +197,8 @@ mod tests {
     #[test]
     fn the_token_is_in_the_childs_environment_and_nowhere_in_its_arguments() {
         let mut req = request(Some("s-1"));
-        req.mcp.token = "tok-7f3a91c2".into();
-        req.images = vec![crate::agent::images::tests::png()];
+        req.mcp_token = "tok-7f3a91c2".into();
+        req.images = vec![png()];
         let cmd = command(&req);
         let cmd = cmd.as_std();
         let argv: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -318,7 +211,7 @@ mod tests {
     fn images_change_only_how_the_prompt_is_sent() {
         let plain = args(&request(Some("s-1")));
         let mut with = request(Some("s-1"));
-        with.images = vec![crate::agent::images::tests::png()];
+        with.images = vec![png()];
         let mut a = args(&with);
         let at = a.iter().position(|x| x == "--input-format").unwrap();
         assert_eq!(a[at + 1], "stream-json");
@@ -333,7 +226,7 @@ mod tests {
 
     #[test]
     fn the_stream_json_message_is_the_text_then_inline_base64_images() {
-        let line = user_message("What is this?", &[crate::agent::images::tests::png()]);
+        let line = user_message("What is this?", &[png()]);
         assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["type"], "user");
@@ -343,7 +236,7 @@ mod tests {
         assert_eq!(content[0], json!({ "type": "text", "text": "What is this?" }));
         assert_eq!(
             content[1],
-            json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": crate::agent::images::tests::PNG } })
+            json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": PNG } })
         );
     }
 
@@ -352,7 +245,7 @@ mod tests {
         let req = request(None);
         let cmd = command(&req);
         let cmd = cmd.as_std();
-        assert_eq!(cmd.get_current_dir(), Some(req.sandbox.path()));
+        assert_eq!(cmd.get_current_dir(), Some(req.cwd.as_path()));
         assert!(cmd.get_envs().any(|(k, v)| k == "CLAUDE_CODE_DISABLE_AUTO_MEMORY" && v == Some("1".as_ref())));
     }
 
@@ -393,10 +286,10 @@ mod tests {
             }
         });
         let mut req = request(None);
-        req.mcp = McpEndpoint { url: format!("http://127.0.0.1:{port}/mcp/r"), token: "tok-probe-5d1e".into() };
+        (req.mcp_url, req.mcp_token) = (format!("http://127.0.0.1:{port}/mcp/r"), "tok-probe-5d1e".into());
         let config = std::env::temp_dir().join(format!("gossamr-claude-token-cfg-{}", std::process::id()));
         std::fs::create_dir_all(&config).unwrap();
-        req.launch.binary = crate::runs::binary::find_claude().expect("claude installed");
+        req.launch.binary = crate::binary::find_claude().expect("claude installed");
         let mut cmd = command(&req);
         let mut child = cmd.env("CLAUDE_CONFIG_DIR", &config).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn().unwrap();
         child.stdin.take().unwrap().write_all(b"hi").await.unwrap();
@@ -405,28 +298,5 @@ mod tests {
         server.abort();
         let _ = std::fs::remove_dir_all(&config);
         assert!(seen.lock().unwrap().contains("authorization: bearer tok-probe-5d1e"));
-    }
-
-    /// A real run with a screenshot attached, sent the way the app sends it. Same prerequisites as above.
-    #[tokio::test]
-    #[ignore]
-    async fn claude_code_sees_an_attached_image() {
-        let mut req = request(None);
-        req.prompt = "What single colour fills this image? Reply with just the colour name.".into();
-        req.launch.binary = crate::runs::binary::find_claude().expect("claude installed");
-        req.images = vec![ImageInput { media_type: "image/png".into(), data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGO4IyJCU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAJ3LED3QqzauAAAAAElFTkSuQmCC".into() }];
-        let events = ClaudeCodeProvider::new().run(req).await.unwrap();
-        let mut text = String::new();
-        let mut events = events;
-        let mut ok = false;
-        let mut why = None;
-        while let Some(e) = events.recv().await {
-            match e {
-                AgentEvent::Text { text: t } => text.push_str(&t),
-                AgentEvent::Done { ok: o, message, .. } => (ok, why) = (o, message),
-                _ => {}
-            }
-        }
-        assert!(ok && text.to_lowercase().contains("red"), "{text} {why:?}");
     }
 }

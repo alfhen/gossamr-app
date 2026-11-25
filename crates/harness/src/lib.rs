@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub mod api;
 pub mod auth;
 pub mod binary;
+pub mod claude;
 pub mod cli;
 pub mod client;
 pub mod codex_models;
