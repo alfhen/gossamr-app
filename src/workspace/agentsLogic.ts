@@ -76,9 +76,10 @@ export function stateView(run: Pick<Run, "state" | "lastProgressAt" | "slotWaitS
 }
 
 /** What a stopped run says it was left at: that it may have carried on elsewhere, or where it stopped. */
-export function stoppedText(run: Pick<Run, "error" | "lastDetail" | "possibleContinuations"> & Partial<Pick<Run, "launchedAt">>): string {
+export function stoppedText(run: Pick<Run, "error" | "lastDetail" | "possibleContinuations"> & Partial<Pick<Run, "launchedAt" | "handedOver">>): string {
   // Stopped while it waited for a slot: it never had a session, and the reason says so.
   if (run.launchedAt === null && run.error?.trim()) return run.error.trim();
+  if (run.handedOver) return "Handed over to Terminal";
   return run.possibleContinuations?.length ? "May have continued in another session" : run.lastDetail?.trim() || "Stopped before it finished";
 }
 

@@ -14,13 +14,14 @@ import { useStateView } from "./useStateView";
 import { openTicket } from "./jump";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { CloneActions } from "./CloneActions";
+import { FailureStep } from "./FailureSteps";
 import { failureAction } from "./failureActions";
 import { PromptParts } from "./RunPrompt";
 import { RunTimeline } from "./RunTimeline";
 import { RunWhere, useDisk } from "./RunWhere";
 import { RunCleanup } from "./RunCleanup";
 import { cleanupReason } from "./cleanupLogic";
-import { answerable, sheetTopOn, canStartNow, stopControl } from "./runSheetLogic";
+import { answerable, answerSentText, sheetTopOn, canStartNow, stopControl } from "./runSheetLogic";
 import { RunAnswer } from "./RunAnswer";
 import { PermissionAsk } from "./PermissionAsk";
 import { RunContinuation } from "./RunContinuation";
@@ -40,7 +41,7 @@ export interface RunSheetActions extends ResultActions {
   cancelStop(): void;
   stop(): void;
   startNow(): void;
-  answer(text: string): Promise<boolean> | void;
+  answer(text: string, options?: { tookBack?: boolean }): Promise<boolean> | void;
   adoptSession(session: string): Promise<void>;
   retry(): void;
   fix(act: FailureAct): void;
@@ -91,7 +92,7 @@ export interface RunSheetViewProps {
  * The line that says the person's answer went through. The answer box it replaces had the keyboard; once that box has
  * gone, the keyboard lands here rather than on the page.
  */
-function AnswerSent() {
+function AnswerSent({ run }: { run: Run }) {
   const line = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -103,7 +104,7 @@ function AnswerSent() {
   return (
     <p ref={line} tabIndex={-1} role="status" data-answer-sent className="m-0 flex items-center gap-1.5 text-sm font-semibold text-ws-pip outline-none">
       <Icon name="check" className="size-3.5" />
-      Answer sent. The agent is picking it back up.
+      {answerSentText(run)}
     </p>
   );
 }
@@ -199,7 +200,7 @@ function FailureBox({ run, opened, trust, on }: { run: Run; opened: boolean; tru
   return (
     <Box tone="failed" label="Failure">
       <BoxTitle icon="alert" tone="failed">
-        {run.shortId ? "The run stopped without finishing" : "It didn't start"}
+        {run.shortId || run.harnessSession ? "The run stopped without finishing" : "It didn't start"}
       </BoxTitle>
       {help ? (
         <>
@@ -212,14 +213,7 @@ function FailureBox({ run, opened, trust, on }: { run: Run; opened: boolean; tru
           )}
           <div className="flex flex-wrap items-center gap-2">
             {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
-            {[help.primary, help.secondary].map(
-              (step, i) =>
-                step && (
-                  <Btn key={step.act} tone={i === 0 && !stepDone ? "primary" : "plain"} icon={step.act === "terminal" ? "term" : step.act === "trust" ? "shield" : "ext"} disabled={step.act === "trust" && trusting} onClick={() => on.fix(step.act)}>
-                    {step.act === "trust" && trusting ? "Trusting…" : step.label}
-                  </Btn>
-                ),
-            )}
+            {[help.primary, help.secondary].map((step, i) => step && <FailureStep key={step.act} run={run} step={step} primary={i === 0 && !stepDone} size="md" trusting={trusting} onAct={on.fix} />)}
             {help.retry && (
               <Btn tone={stepDone || !help.primary ? "primary" : "plain"} icon="retry" disabled={!ready} title={ready ? undefined : "Do the step above first, then retry"} onClick={on.retry}>
                 Retry
@@ -327,7 +321,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
         <h2 className="font-display m-0 text-[20px] leading-tight font-semibold [overflow-wrap:anywhere]">{title}</h2>
         <Facts run={run} now={now} ticketTitle={ticketTitle} on={on} />
         <RunsOnLine run={run} />
-        {answerSent && <AnswerSent />}
+        {answerSent && <AnswerSent run={run} />}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -472,7 +466,7 @@ export function RunSheet({ id }: { id: string }) {
     stop: () => (setConfirmStop(false), setStoppedHere(true), void store.stop(id)),
     startNow: () => void store.startNow(id),
     archive: () => void store.archive([id]).then((done) => done && store.closeSheet()),
-    answer: (text) => store.answer(id, text),
+    answer: (text, options) => store.answer(id, text, options),
     adoptSession: (session) => store.adoptSession(id, session),
     retry: () => void store.retryLaunch(id),
     fix: (act) => failureAction(id, act),

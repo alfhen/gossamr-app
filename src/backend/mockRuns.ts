@@ -1,4 +1,4 @@
-import { type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { ANSWER_WAITS, HANDED_OVER_ASK, answerWaits, type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -104,6 +104,8 @@ interface Seed {
   over?: Partial<Run>;
   /** What the run's report row says, for a run that was offered the tool. */
   report?: MockReportRow;
+  /** Its worktree has commits that were never pushed, so Clean up is refused. */
+  unpushed?: boolean;
 }
 
 const SEEDS: Seed[] = [
@@ -419,6 +421,17 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
   return { ...run, inWorkFolder: inWork(run.spec.clonePath), ...(inWork(run.spec.clonePath) && run.state !== "queued" && { commitEmail: COMMIT_EMAIL }) };
 }
 
+const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: `4a7e000${i}`, sessionId: null });
+
+/** Runs on the harness in each state the page shows for them: signing needs you, interrupted, handed over, an answer it holds, and a clean-up it refuses. */
+const HARNESS_SEEDS: Seed[] = [
+  { key: "CA-430", name: "ca-430-invoice-pdf-1a2c", state: "failed", minutesAgo: 18, over: { ...harnessOf(1), error: "git commit failed: error: 1Password: agent returned an error. fatal: failed to write commit object", failure: { type: "signingNeedsYou" }, branch: "worktree-ca-430-invoice-pdf-1a2c" } },
+  { key: "WEB-131", name: "web-131-menu-focus-3b4d", state: "failed", minutesAgo: 120, over: { shortId: "01d0b9a1", sessionId: "01d0b9a1-0000-4000-8000-000000000000", error: "Stopped when Gossamr updated how agents run. The worktree is kept.", failure: { type: "interrupted" } } },
+  { key: "SUP-21", name: "sup-21-payout-retry-5c6e", state: "needsAnswer", minutesAgo: 26, over: { ...harnessOf(2), handedOver: true, asking: true, needs: "Should payouts retry on weekends too?", lastDetail: "Waiting for an answer" } },
+  { key: "CA-432", name: "ca-432-promo-codes-7d8f", state: "needsAnswer", minutesAgo: 9, over: { ...harnessOf(3), needs: "Do expired codes show an error or vanish?", lastDetail: "Waiting for an answer" } },
+  { key: "DEVOPS-490", name: "devops-490-log-rotate-9e0a", state: "done", minutesAgo: 21 * 24 * 60, quietMinutes: 20 * 24 * 60, unpushed: true, over: { ...harnessOf(4), result: "Rotation runs nightly now, and old logs are compressed.", branch: "worktree-devops-490-log-rotate-9e0a" } },
+];
+
 /** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
 const CLONE_SEEDS: Seed[] = [
   { key: "CA-417", name: "ca-417-tax-table-4d5e", state: "failed", minutesAgo: 96, over: { error: FAILED_TEXT.outsideWorkFolder, failure: { type: "outsideWorkFolder", path: LEGACY_CLONE }, spec: legacySpec("CA-417", "ca-417-tax-table-4d5e") } },
@@ -426,8 +439,8 @@ const CLONE_SEEDS: Seed[] = [
 ];
 
 export interface MockRunsOptions {
-  /** `busy` is the eight scripted runs and `kinds` adds one of each other role; `many` is twenty-four; `failures` is one failed launch of each kind; `stuck` adds two stopped runs that may have carried on elsewhere. */
-  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones";
+  /** `busy` is the eight scripted runs and `kinds` adds one of each other role; `many` is twenty-four; `failures` is one failed launch of each kind; `stuck` adds two stopped runs that may have carried on elsewhere; `harness` adds runs on the harness in each state the page shows for them. */
+  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones" | "harness";
   /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
   epoch?: number;
   /** How many runs may be live at once; another waits for a slot. */
@@ -563,9 +576,10 @@ export class MockRuns {
     this.trustRefused = !!o.trustRefused;
     this.gitRules = !!o.gitRules;
     this.prSurfaceMs = o.prSurfaceMs === undefined ? PR_SURFACE_MS : o.prSurfaceMs;
-    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : SEEDS;
+    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : o.seed === "harness" ? [...SEEDS, ...HARNESS_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
     seeds.forEach((seed, i) => seed.report && this.reports.set(this.runs[i].id, seed.report));
+    seeds.forEach((seed, i) => seed.unpushed && this.unpushed.add(this.runs[i].id));
     this.proposals.onApplied = (p) => p.origin.type === "run" && p.intent.type === "create" && this.changed();
     for (const r of this.runs) {
       if (r.state === "done" && r.branch && (r.item?.key === "DEVOPS-455" || stepIs(r.spec, "build"))) this.changes.set(r.id, sampleChange(r.spec, "pullRequest"));
@@ -860,6 +874,7 @@ export class MockRuns {
       patch.lastDetail = "Reading the code";
       patch.tokens = (run.tokens ?? 0) + 12_000;
     }
+    if (answerWaits(run)) patch.lastDetail = to === "working" ? "Reading your answer" : null;
     const opened = to === "done" && stepIs(run.spec, "build") && run.spec.workstream ? (this.newCommit(run) ?? this.draftPullRequest(run)) : null;
     if (to === "done") {
       const answered = (run.passes ?? 1) > 1 && stepIs(run.spec, "plan");
@@ -1015,14 +1030,17 @@ export class MockRuns {
   }
 
   /** Answers a run that is asking, or sends again an answer that was stopped on its way, as `answer_as`. */
-  answer(id: string, text: string, actor: "person" | "pip" = "person"): Run {
+  /** `tookBack`: the person says they took a run handed over to Terminal back; without it such a run is refused. */
+  answer(id: string, text: string, actor: "person" | "pip" = "person", tookBack = false): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
+    if (run.handedOver && !tookBack) throw new Error(HANDED_OVER_ASK);
     const again = run.state === "stopped" && !!run.unsentAnswer;
     if (run.state !== "needsAnswer" && !again) throw new Error(run.state === "needsPermission" ? "This run is asking permission, which is answered in Terminal." : `This run is ${run.state}, so it isn't waiting for an answer.`);
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
-    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: null });
+    // The harness holds every answer until the agent's turn ends.
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? `${ANSWER_WAITS}.` : null, handedOver: false });
     this.markStale(id);
     this.answeredAt.set(id, [...(this.answeredAt.get(id) ?? []), next.lastProgressAt]);
     this.changed();
@@ -1038,6 +1056,7 @@ export class MockRuns {
   messageAgent(id: string, text: string): "answered" | "queued" | "resumed" {
     const run = this.get(id);
     if (!run) throw new Error(`There is no agent ${id}.`);
+    if (run.handedOver) throw new Error(HANDED_OVER_ASK);
     const body = withoutMarkers(text).trim();
     const problem = answerProblem(body);
     if (problem) throw new Error(problem);

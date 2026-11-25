@@ -257,7 +257,7 @@ function PermissionBody({ run }: { run: Run }) {
 function AnswerBody({ run }: { run: Run }) {
   const answering = useRuns((s) => s.answering.has(run.id));
   const store = useRuns.getState();
-  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text) => store.answer(run.id, text), attach: () => void store.attach(run.id) }} />;
+  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text, options) => store.answer(run.id, text, options), attach: () => void store.attach(run.id) }} />;
 }
 
 function Dismiss({ run }: { run: Run }) {
@@ -277,7 +277,7 @@ function FailureBody({ run }: { run: Run }) {
   return (
     <Box tone="failed" label="Failure">
       <BoxTitle icon="alert" tone="failed">
-        {run.shortId ? "The run stopped without finishing" : "It didn't start"}
+        {run.shortId || run.harnessSession ? "The run stopped without finishing" : "It didn't start"}
       </BoxTitle>
       {help ? (
         <>

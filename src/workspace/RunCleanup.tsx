@@ -58,7 +58,9 @@ export function RunCleanupView({ run, reason, login, remover = "claude", asking,
             ? "Removes this agent's worktree and branch with claude rm. Claude refuses to remove work that was never pushed, and says why. Gossamr never forces it. The result stays here."
             : remover === "git"
               ? "Removes this agent's worktree and branch with git. Git refuses to remove changes or a branch that isn't merged, and says why. Gossamr never forces it. The result stays here."
-              : "Removes this agent's worktree and branch. Gossamr never forces it; work that isn't pushed or merged stays, and you see why. The result stays here."}
+              : remover === "gossamr"
+                ? "Removes this agent's worktree and branch. Gossamr refuses while work in it isn't pushed, and says why. It never forces it. The result stays here."
+                : "Removes this agent's worktree and branch. Gossamr never forces it; work that isn't pushed or merged stays, and you see why. The result stays here."}
         </p>
         {refused && (
           <p role="alert" data-tone="error" className="selectable m-0 text-ws-danger [overflow-wrap:anywhere] whitespace-pre-wrap">

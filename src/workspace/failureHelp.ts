@@ -7,10 +7,11 @@ export const CODEX_INSTALL_URL = "https://developers.openai.com/codex/cli";
 
 export const installUrl = (instance: Pick<RunInstance, "driver"> | null) => (instance?.driver === "codex" ? CODEX_INSTALL_URL : INSTALL_URL);
 
-export type FailureAct = "terminal" | "install" | "trust";
+/** `pip` asks Pip to start the agent again; `cleanup` removes the run's worktree once you confirm. */
+export type FailureAct = "terminal" | "install" | "trust" | "pip" | "cleanup";
 
 export interface FailureHelp {
-  kind: "untrustedFolder" | "notSignedIn" | "modeRefused" | "claudeMissing" | "noClone" | "outsideWorkFolder" | "cloneOccupied" | "capReached";
+  kind: "untrustedFolder" | "notSignedIn" | "modeRefused" | "claudeMissing" | "noClone" | "outsideWorkFolder" | "cloneOccupied" | "capReached" | "signingNeedsYou" | "interrupted";
   /** One line for a card or row. */
   summary: string;
   /** The sheet's explanation. */
@@ -86,9 +87,41 @@ function occupiedDetail(error: string | null | undefined): string {
   return `${said} Gossamr never removes it.${/move it away/i.test(said) ? "" : " Move it away, then retry."}`;
 }
 
-/** What to offer for a failed run that never got a session. Null for anything else. */
+const START_AGAIN = { label: "Ask Pip to start it again", act: "pip" } as const;
+
+/** The failures of a run that got a session and that you can act on. */
+function endedHelp(run: Run): FailureHelp | null {
+  const ended = { command: null, retryNeedsTerminal: false, retry: false } as const;
+  switch (run.failure?.type) {
+    case "signingNeedsYou":
+      return {
+        ...ended,
+        kind: "signingNeedsYou",
+        summary: "Your signing agent refused a commit, so the agent stopped.",
+        detail: "Git signs each commit with your key, and your signing agent said no or didn't answer. Unlock it or check its settings, then ask Pip to start the agent again. The worktree keeps what it did so far.",
+        primary: START_AGAIN,
+      };
+    case "interrupted":
+      return run.worktreeRemovedAt
+        ? { ...ended, kind: "interrupted", summary: "Gossamr stopped this agent when it updated how agents run.", detail: "Its worktree was removed. Ask Pip to start it again if the work still needs doing.", primary: START_AGAIN }
+        : {
+            ...ended,
+            kind: "interrupted",
+            summary: "Gossamr stopped this agent when it updated how agents run.",
+            detail: "An earlier version of Gossamr started it. Its worktree keeps what it did so far. Clean up removes the worktree with git once you no longer need it, or ask Pip to start it again.",
+            primary: { label: "Clean up", act: "cleanup" },
+            secondary: START_AGAIN,
+          };
+    default:
+      return null;
+  }
+}
+
+/** What to offer for a failed run that never got a session, or one that ended in a failure you can act on. Null for anything else. */
 export function failureHelp(run: Run, refusal: string | null = null, instance: RunInstance | null = null): FailureHelp | null {
-  if (run.state !== "failed" || run.shortId) return null;
+  if (run.state !== "failed") return null;
+  const ended = endedHelp(run);
+  if (ended || run.shortId || run.harnessSession) return ended;
   const failure = run.failure;
   // Every start in a folder outside the work folder is refused, so no retry or step in Terminal would help.
   if (run.inWorkFolder === false) return { ...OUTSIDE_WORK_FOLDER };

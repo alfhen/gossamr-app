@@ -1,6 +1,6 @@
 import { answerProblem } from "../lib/answer";
 import { stepOf } from "../lib/roles";
-import { SUMMARY_ONLY, type CodeChange, type ItemRef, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type Run, type RunOutcome, type RunState } from "../types";
+import { SUMMARY_ONLY, answerWaits, type CodeChange, type ItemRef, type Proposal, type ResultSource, type ReviewSeverity, type ReviewView, type Run, type RunOutcome, type RunState } from "../types";
 import type { IconName } from "./AgentIcons";
 
 export type Flag = "link" | "shell" | "override";
@@ -86,6 +86,9 @@ export const canSendAnswer = (text: string) => answerProblem(text) === null;
 export const answerable = (run: Pick<Run, "state" | "unsentAnswer">) => run.state === "needsAnswer" || (run.state === "stopped" && !!run.unsentAnswer);
 
 export const answerDraft = (run: Pick<Run, "unsentAnswer">) => run.unsentAnswer ?? "";
+
+/** What "Answer sent" says; a run on the harness may hold the answer until the agent's turn ends. */
+export const answerSentText = (run: Pick<Run, "lastDetail">) => (answerWaits(run) ? "Answer sent. The agent gets it when its current turn ends." : "Answer sent. The agent is picking it back up.");
 
 /** What Claude suggested answering, offered beside the box for the person to take, never put in it for them. */
 export const suggestedAnswer = (run: Pick<Run, "suggestedReply" | "unsentAnswer">) => (run.unsentAnswer ? null : run.suggestedReply?.trim() || null);
