@@ -559,6 +559,26 @@ pub fn now_ms() -> i64 {
     i64::try_from(since.as_millis()).expect("milliseconds fit in an i64")
 }
 
+/// Whether the store in `dir` holds a client token, read without its lock, as a harness may be serving it. A store that
+/// can't be read counts as holding one, so a caller that would hand over a first token doesn't. One with no tokens table
+/// yet holds none.
+pub fn holds_client_tokens(dir: &Path) -> bool {
+    let path = dir.join("harness.sqlite");
+    // Only a store that isn't there holds none: one whose folder can't be searched may.
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+        Ok(_) => {}
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return true };
+    let held = |sql: &str| conn.query_row(sql, [], |row| row.get::<_, bool>(0));
+    match held("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'client_tokens')") {
+        Ok(false) => false,
+        Ok(true) => held("SELECT EXISTS (SELECT 1 FROM client_tokens)").unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
 /// The data folder: `$HARNESS_DATA`, else the platform's place for application data.
 pub fn default_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("HARNESS_DATA").filter(|dir| !dir.is_empty()) {

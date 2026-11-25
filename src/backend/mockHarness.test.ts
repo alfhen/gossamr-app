@@ -32,4 +32,12 @@ describe("the mock harness", () => {
     expect(h.act().state).toBe("failed");
     expect(h.act("start")).toMatchObject({ state: "running", message: null });
   });
+
+  it("answers reads and fails every action while it refuses", () => {
+    const h = new MockHarness("refuses");
+    expect(h.act().state).toBe("running");
+    expect(() => h.act("stop")).toThrow();
+    expect(() => h.act("restart")).toThrow();
+    expect(h.act().state).toBe("running");
+  });
 });

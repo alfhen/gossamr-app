@@ -17,7 +17,14 @@ fn main() -> ExitCode {
                 eprintln!("harness: {variable} is set, so serve does not start: any program of yours, an agent too, can read the environment a process started with. Unset it and give the first token on stdin.");
                 return ExitCode::FAILURE;
             }
-            block_on(serve(data, mock_script, turn_limit))
+            let served = runtime().block_on(serve(data, mock_script, turn_limit));
+            match served {
+                Err(e) if harness::server::unknown_token(&e) => {
+                    eprintln!("harness: {e}");
+                    ExitCode::from(harness::server::UNKNOWN_TOKEN_EXIT)
+                }
+                served => exit(served),
+            }
         }
         Request::Client { command, data, token_stdin } => block_on(harness::cli::execute(command, data, token_stdin)),
         Request::Usage => {
@@ -28,8 +35,15 @@ fn main() -> ExitCode {
 }
 
 fn block_on(work: impl Future<Output = harness::error::Result<bool>>) -> ExitCode {
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime starts");
-    match runtime.block_on(work) {
+    exit(runtime().block_on(work))
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime starts")
+}
+
+fn exit(result: harness::error::Result<bool>) -> ExitCode {
+    match result {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(e) => {

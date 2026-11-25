@@ -175,11 +175,15 @@ fn serve_drains_its_stdin_on_a_later_start_and_does_not_start_on_a_token_the_fol
     assert_eq!(stdin_of(again.0.id()), "/dev/null", "its stdin is /dev/null");
     drop(again);
 
-    for (what, line, said) in [("another token", harness::auth::Token::random().hex(), "not one this data folder knows"), ("a line that is not a token", "not a token".into(), "not a client token")] {
+    let unknown = i32::from(harness::server::UNKNOWN_TOKEN_EXIT);
+    for (what, line, said, code) in [
+        ("another token", harness::auth::Token::random().hex(), "not one this data folder knows", unknown),
+        ("a line that is not a token", "not a token".into(), "not a client token", 1),
+    ] {
         let mut other = serve_again(std::process::Stdio::piped()).spawn().unwrap();
         give_token(&mut other, &line);
         let refused = output_within(other, std::time::Duration::from_secs(60));
-        assert_eq!(refused.status.code(), Some(1), "{what} on stdin does not start it");
+        assert_eq!(refused.status.code(), Some(code), "{what} on stdin does not start it, with its own exit code");
         assert!(String::from_utf8_lossy(&refused.stderr).contains(said), "it says why: {:?}", String::from_utf8_lossy(&refused.stderr));
     }
 
