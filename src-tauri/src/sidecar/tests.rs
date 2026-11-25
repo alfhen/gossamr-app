@@ -23,10 +23,12 @@ const FAKE: &str = "GOSSAMR_FAKE_HARNESS";
 const FAKE_ARGV: &str = "GOSSAMR_FAKE_ARGV";
 /// The descriptors above 2 the fake found open when it started.
 static INHERITED: std::sync::OnceLock<Vec<libc::c_int>> = std::sync::OnceLock::new();
+/// The harness's store, which the fake keeps its stored keys in as lines of text.
+const STORE: &str = "harness.sqlite";
 /// Only a failure waits this long.
 const WAIT: Duration = Duration::from_secs(20);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct Fake {
     protocol: u32,
     build: String,
@@ -38,6 +40,18 @@ struct Fake {
     /// Takes `shutdown` and never answers it.
     #[serde(default)]
     mute: bool,
+    /// Takes `shutdown` and goes without answering it, as when the answer is lost.
+    #[serde(default)]
+    goes_silently: bool,
+    /// The sessions its `shutdown` says it left running.
+    #[serde(default)]
+    left: Vec<String>,
+    /// Starts only while this file is missing; then it fails as it starts.
+    #[serde(default)]
+    serves_until: Option<PathBuf>,
+    /// Never answers `--version`.
+    #[serde(default)]
+    version_hangs: bool,
 }
 
 /// Is the fake harness when its variable is set, and a test that passes otherwise.
@@ -56,11 +70,26 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
     let note = |what: &str| note_to(&log, what);
     let args: Vec<&str> = argv.split(' ').collect();
     if args == ["--version"] {
+        if fake.version_hangs {
+            let root = fake.log.parent().unwrap().to_owned();
+            let life = File::create(root.join(format!("life-{}", std::process::id()))).unwrap();
+            life.lock().unwrap();
+            note("asked");
+            // Until it is killed, or its test is over.
+            while root.exists() && !root.join("stop").exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            return 0;
+        }
         println!("harness 0.1.0 (build {})", fake.build);
         return 0;
     }
     let seen = fake.log.with_file_name(format!("seen-{}", std::process::id()));
     let ["serve", "--data", dir] = args[..] else { return 2 };
+    if fake.serves_until.as_ref().is_some_and(|marker| marker.exists()) {
+        eprintln!("harness: it can't start now");
+        return 1;
+    }
     let dir = PathBuf::from(dir);
     let root = fake.log.parent().unwrap().to_owned();
     let pid = std::process::id();
@@ -133,10 +162,14 @@ fn fake_main(fake: Fake, argv: String) -> i32 {
                     if shutdown && fake.mute {
                         continue;
                     }
-                    let ok = if shutdown { json!({ "left": [] }) } else { json!([]) };
+                    let ok = if shutdown { json!({ "left": fake.left }) } else { json!([]) };
                     if shutdown {
                         let _ = std::fs::remove_file(dir.join(SOCKET));
                         let _ = std::fs::remove_file(dir.join(DESCRIPTOR));
+                    }
+                    if shutdown && fake.goes_silently {
+                        note_to(&fake.log, "exit");
+                        std::process::exit(0);
                     }
                     let _ = ws.send(Message::text(json!({ "id": call["id"], "ok": ok }).to_string())).await;
                     if shutdown {
@@ -171,7 +204,7 @@ impl Bed {
 
     /// A fake harness at `bin/<name>`, a link to the checked script, with its behaviour in its body.
     fn fake(&self, name: &str, protocol: u32, build: &str) -> PathBuf {
-        self.fake_with(name, Fake { protocol, build: build.into(), log: self.log.clone(), die_once: None, mute: false })
+        self.fake_with(name, Fake { protocol, build: build.into(), log: self.log.clone(), die_once: None, ..Fake::default() })
     }
 
     fn fake_with(&self, name: &str, fake: Fake) -> PathBuf {
@@ -450,7 +483,7 @@ async fn a_harness_still_stopping_holds_the_folder_and_the_manager_waits_then_st
 #[tokio::test]
 async fn a_harness_that_dies_between_its_hello_and_the_proof_is_started_again() {
     let bed = Bed::new();
-    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), mute: false };
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), ..Fake::default() };
     let status = bed.sidecar(&bed.fake_with("harness", fake)).ensure().await;
     assert_eq!(status.state, State::Running, "{status:?}");
     assert_eq!(bed.lines(), ["serving", "died", "serving"]);
@@ -571,7 +604,7 @@ async fn stop_stops_the_harness_through_shutdown_and_it_stays_stopped_until_aske
 #[tokio::test]
 async fn a_harness_that_takes_shutdown_and_never_answers_leaves_stop_waiting_only_its_limit() {
     let bed = Bed::new();
-    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: None, mute: true };
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: None, mute: true, ..Fake::default() };
     let limits = Limits { stopping_within: Duration::from_millis(500), ..Limits::default() };
     let sidecar = Sidecar::new(bed.dir.clone(), bed.fake_with("harness", fake), Box::new(bed.vault()), limits);
     assert_eq!(sidecar.ensure().await.state, State::Running);
@@ -602,10 +635,75 @@ async fn stop_while_a_harness_is_stopping_without_its_socket_waits_for_the_folde
 #[test]
 fn a_restart_that_finds_a_harness_it_cannot_use_keeps_why_and_still_names_the_agents_left() {
     let failed = Status { state: State::Failed, build: None, bundled_build: None, update: true, message: Some("Older.".into()) };
-    let said = restarted(failed, &["s1".into()]).message.unwrap();
+    let said = restarted(Ok(failed), &["s1".into()]).unwrap().message.unwrap();
     assert!(said.starts_with("Older.") && said.contains("s1"), "{said}");
     let running = Status { state: State::Running, build: None, bundled_build: None, update: false, message: None };
-    assert_eq!(restarted(running, &[]).message.as_deref(), Some("Restarted."));
+    assert_eq!(restarted(Ok(running), &[]).unwrap().message.as_deref(), Some("Restarted."));
+}
+
+#[tokio::test]
+async fn a_restart_whose_new_harness_does_not_start_says_why_and_still_names_the_agents_the_old_one_left() {
+    let bed = Bed::new();
+    let marker = bed.root.join("no-more");
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), left: vec!["s1".into()], serves_until: Some(marker.clone()), ..Fake::default() };
+    let sidecar = Sidecar::new(bed.dir.clone(), bed.fake_with("harness", fake), Box::new(bed.vault()), Limits::default());
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    std::fs::write(&marker, "").unwrap();
+    let restarted = sidecar.act(Action::Restart).await;
+    assert_eq!(restarted.state, State::Failed, "{restarted:?}");
+    let said = restarted.message.unwrap_or_default();
+    assert!(said.contains("it can't start now") && said.contains("may still run: s1."), "{said}");
+    bed.none_left().await;
+}
+
+#[tokio::test]
+async fn a_stop_whose_answer_is_lost_still_keeps_a_later_read_from_starting_one() {
+    let bed = Bed::new();
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), goes_silently: true, ..Fake::default() };
+    let sidecar = Sidecar::new(bed.dir.clone(), bed.fake_with("harness", fake), Box::new(bed.vault()), Limits::default());
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    let stopped = sidecar.act(Action::Stop).await;
+    assert_eq!(stopped.state, State::Failed, "no answer came: {stopped:?}");
+    bed.until_ended(&bed.pids("serving"), "the fake did not go").await;
+    assert_eq!(sidecar.ensure().await, stopped, "a read starts none and says what the Stop did");
+    assert_eq!(bed.pids("serving").len(), 1);
+    assert_eq!(sidecar.act(Action::Start).await.state, State::Running);
+    bed.none_left().await;
+}
+
+#[tokio::test]
+async fn a_bundled_harness_that_never_says_its_build_is_killed_and_the_status_goes_out_without_it() {
+    let bed = Bed::new();
+    let fake = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), version_hangs: true, ..Fake::default() };
+    let limits = Limits { probe_within: Duration::from_secs(2), ..Limits::default() };
+    let sidecar = Sidecar::new(bed.dir.clone(), bed.fake_with("harness", fake), Box::new(bed.vault()), limits);
+    let status = tokio::time::timeout(WAIT, sidecar.ensure()).await.expect("the status came back");
+    assert_eq!((status.state, status.build.as_deref(), status.bundled_build.as_deref(), status.update), (State::Running, Some("new"), None, false), "{status:?}");
+    assert_eq!(sidecar.ensure().await.bundled_build, None);
+    assert!(bed.pids("asked").len() <= 1, "asked once per run");
+    bed.none_left().await;
+    // Every life, the probe's too, has ended: the stop file only ends the serving ones and a probe still waiting.
+    for entry in std::fs::read_dir(&bed.root).unwrap() {
+        let name = entry.unwrap().file_name().into_string().unwrap();
+        let Some(pid) = name.strip_prefix("life-").and_then(|pid| pid.parse().ok()) else { continue };
+        assert!(!bed.running(pid), "{name} still runs");
+    }
+}
+
+#[test]
+fn a_relative_data_folder_is_made_absolute_once_so_the_app_and_the_harness_it_starts_there_name_the_same_one() {
+    let sidecar = Sidecar::new(PathBuf::from("data"), PathBuf::from("harness"), Box::new(Refusing), Limits::default());
+    assert_eq!(sidecar.dir, std::env::current_dir().unwrap().join("data"));
+}
+
+#[tokio::test]
+async fn a_folder_whose_store_a_harness_made_without_a_token_gets_one_and_starts() {
+    let bed = Bed::new();
+    drop(harness::store::Store::open(&bed.dir).unwrap());
+    let status = bed.sidecar(&bed.fake("harness", PROTOCOL, "new")).ensure().await;
+    assert_eq!(status.state, State::Running, "{status:?}");
+    assert!(Keep::load(&bed.vault()).unwrap().is_some(), "a token made and saved first");
+    bed.none_left().await;
 }
 
 #[tokio::test]
@@ -646,7 +744,7 @@ async fn a_client_is_proven_with_the_managers_token_and_nothing_is_started_or_st
     bed.end(old).await;
 
     // One that answers and goes is there but can't be reached, which is not the same as not running.
-    let dying = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), mute: false };
+    let dying = Fake { protocol: PROTOCOL, build: "new".into(), log: bed.log.clone(), die_once: Some(bed.root.join("died")), ..Fake::default() };
     bed.serve_by_hand(&bed.fake_with("dying", dying), &bed.token()).await;
     let check = unstarted(&log);
     let gone = sidecar.client().await.err().unwrap();

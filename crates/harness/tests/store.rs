@@ -35,6 +35,19 @@ fn lock_a_second_harness_on_the_same_data_folder_is_refused() {
 }
 
 #[test]
+fn a_store_holds_client_tokens_only_once_one_is_added_and_one_it_cannot_read_counts_as_holding_some() {
+    let (_tmp, dir) = data_dir();
+    assert!(!harness::store::holds_client_tokens(&dir), "no store");
+    let store = Store::open(&dir).unwrap();
+    assert!(!harness::store::holds_client_tokens(&dir), "a store a harness made and refused to serve, with no token");
+    store.add_client_token(&[7; 32]).unwrap();
+    assert!(harness::store::holds_client_tokens(&dir), "read while the store is open and locked");
+    drop(store);
+    std::fs::write(dir.join("harness.sqlite"), "not a database, but not empty either: sqlite reads its first page").unwrap();
+    assert!(harness::store::holds_client_tokens(&dir));
+}
+
+#[test]
 fn seq_events_are_numbered_from_one_per_session_and_go_on_after_a_reopen() {
     let (_tmp, dir) = data_dir();
     let store = Store::open(&dir).unwrap();
