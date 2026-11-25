@@ -95,8 +95,12 @@ fn rig(fixture: &Path, extra: &[(&str, &str)]) -> Rig {
 }
 
 impl Rig {
+    /// A locked session declares the tools the locked recordings' server served, since the driver refuses a locked
+    /// session whose Claude offers it any tool it does not allow.
     async fn open(&self, locked: bool, model: Option<&str>) -> (String, broadcast::Receiver<Event>) {
-        let spec = Open { provider: "claude".into(), cwd: self.tmp.path().to_path_buf(), locked, model: model.map(str::to_owned), ..Open::default() };
+        let recorded = |name: &&str| harness::tools::ToolSpec { name: (*name).into(), description: "Recorded.".into(), input_schema: json!({"type": "object"}) };
+        let tools = if locked { RECORDED_LOCKED.iter().map(recorded).collect() } else { vec![] };
+        let spec = Open { provider: "claude".into(), cwd: self.tmp.path().to_path_buf(), locked, model: model.map(str::to_owned), tools, ..Open::default() };
         self.harness.open(spec).await.unwrap()
     }
 
@@ -267,6 +271,14 @@ fn allowed_for(name: &str) -> String {
     OWN.iter().map(|tool| format!("mcp__{name}__{tool}")).collect::<Vec<_>>().join(",")
 }
 
+/// The tools beside the harness's own that the server of every locked recording served.
+const RECORDED_LOCKED: &[&str] = &["hold", "ping"];
+
+/// What `--allowedTools` holds for a locked rig's session: the recorded tools it declares, then the harness's own.
+fn locked_allowed_for(name: &str) -> String {
+    RECORDED_LOCKED.iter().chain(OWN).map(|tool| format!("mcp__{name}__{tool}")).collect::<Vec<_>>().join(",")
+}
+
 /// The driver's endpoint, as its `mcp_set_servers` gave it: the per-session name and the server.
 fn endpoint(rig: &Rig) -> (String, Value) {
     let sent = rig.sent();
@@ -277,12 +289,18 @@ fn endpoint(rig: &Rig) -> (String, Value) {
     (name.clone(), server.clone())
 }
 
-/// The recorded endpoint's server name, as the replay finds it: the recording's one server, or of several the one the
-/// recorded `--allowedTools` names.
+/// The recorded endpoint's server name, as the replay finds it: the recording's one server, by `mcp_set_servers` or
+/// else `--mcp-config`, or of several the one the recorded `--allowedTools` names.
 fn recorded_endpoint(lines: &[Value]) -> Option<String> {
-    let set = lines.iter().find(|line| line["dir"] == "to_agent" && line["data"]["request"]["subtype"] == "mcp_set_servers")?;
-    let servers: Vec<&String> = set["data"]["request"]["servers"].as_object()?.keys().collect();
     let argv: Vec<&str> = lines[0]["data"]["detail"]["argv"].as_array()?.iter().filter_map(Value::as_str).collect();
+    let set = lines.iter().find(|line| line["dir"] == "to_agent" && line["data"]["request"]["subtype"] == "mcp_set_servers");
+    let config = argv.iter().position(|arg| *arg == "--mcp-config").and_then(|at| argv.get(at + 1)).and_then(|config| serde_json::from_str::<Value>(config).ok());
+    let servers = match (set, &config) {
+        (Some(set), _) => set["data"]["request"]["servers"].clone(),
+        (None, Some(config)) => config["mcpServers"].clone(),
+        (None, None) => return None,
+    };
+    let servers: Vec<&String> = servers.as_object()?.keys().collect();
     let allowed = argv.iter().position(|arg| *arg == "--allowedTools").and_then(|at| argv.get(at + 1)).copied().unwrap_or_default();
     match servers[..] {
         [one] => Some(one.clone()),
@@ -370,7 +388,7 @@ async fn claude_the_locked_profiles_argv_is_pips_lockdown_without_a_config_file_
     let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
     want.extend(["--permission-mode", "dontAsk", "--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"].map(String::from));
     let (name, _) = endpoint(&rig);
-    want.extend(["--allowedTools".into(), allowed_for(&name), "--model".into(), "haiku".into()]);
+    want.extend(["--allowedTools".into(), locked_allowed_for(&name), "--model".into(), "haiku".into()]);
     assert_eq!(rig.argv(), want, "no `--mcp-config`: the endpoint goes on stdin");
     assert!(!rig.argv().iter().any(|arg| arg == "mcp__gossamr" || arg.ends_with("__")), "no prefix rule");
     assert_eq!(rig.env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
@@ -634,6 +652,11 @@ fn prompts(fixture: &Path) -> Vec<String> {
 
 /// The driver on its own against the replay of `fixture`, with `extra` in the agent's environment.
 fn direct(fixture: &Path, extra: &[(&str, &str)], driver: ClaudeDriver) -> (harness::driver::Link, PathBuf, tempfile::TempDir) {
+    direct_as(fixture, extra, driver, false)
+}
+
+/// [`direct`], on the locked profile when `locked`.
+fn direct_as(fixture: &Path, extra: &[(&str, &str)], driver: ClaudeDriver, locked: bool) -> (harness::driver::Link, PathBuf, tempfile::TempDir) {
     use harness::driver::{Driver, Launch, Secret};
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("out");
@@ -642,7 +665,7 @@ fn direct(fixture: &Path, extra: &[(&str, &str)], driver: ClaudeDriver) -> (harn
         [("PATH", "/usr/bin:/bin".to_owned()), ("WIRE_REPLAY_FIXTURE", fixture.display().to_string()), ("WIRE_REPLAY_OUT", out.display().to_string())].into_iter().map(|(k, v)| (k.into(), v.into())).collect();
     env.extend(extra.iter().map(|(k, v)| ((*k).into(), (*v).into())));
     let tools = harness::tools::ToolsEndpoint::unattached();
-    let launch = Launch { cwd: tmp.path().into(), locked: false, model: None, login: None, effort: None, resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
+    let launch = Launch { cwd: tmp.path().into(), locked, model: None, login: None, effort: None, resume: None, tools_token: Secret::random(), tools, result_schema: None, env };
     (driver.open(launch).unwrap(), out, tmp)
 }
 
@@ -707,4 +730,73 @@ async fn claude_an_agent_that_exits_mid_turn_fails_with_its_last_stderr_line() {
         other => panic!("no failure: {other:?}"),
     };
     assert!(reason.starts_with("claude exited in the middle of a turn: ") && reason.contains("the decision differs"), "{reason}");
+}
+
+#[tokio::test]
+async fn claude_a_locked_refusal_kills_the_agent_at_once() {
+    // The fake offers a built-in tool, then holds its output open for 30 s: only the kill ends it.
+    let bin = tempfile::tempdir().unwrap();
+    let init = r#"{"type":"system","subtype":"init","session_id":"s-1","tools":["Bash"]}"#;
+    let claude = harness::testing::fake_cli(&bin.path().join("claude"), &format!("echo '{init}'; exec sleep 30"));
+    let (mut link, _out, _tmp) = direct_as(&native().join("6-model.jsonl"), &[], ClaudeDriver::new(claude), true);
+    let said = said_until(&mut link, |body| matches!(body, Body::Failed { .. })).await;
+    assert!(matches!(said.last(), Some(Body::Failed { reason, .. }) if reason.contains("Bash")), "{said:?}");
+    let rest = tokio::time::timeout(Duration::from_secs(10), async { while link.output.recv().await.is_some() {} }).await;
+    assert!(rest.is_ok(), "the agent was killed, so its output closed");
+}
+
+#[tokio::test]
+async fn claude_a_line_with_an_invalid_byte_and_one_over_the_limit_are_skipped_and_the_last_stderr_line_is_masked() {
+    // The fake answers `initialize`, writes a line of invalid UTF-8 and one over 32 MiB, then names its session, says
+    // the endpoint's line (its token among it) on stderr and exits.
+    let bin = tempfile::tempdir().unwrap();
+    let body = r#"read -r first
+id=$(printf '%s' "$first" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}\n' "$id"
+read -r servers
+printf '\377\376\n'
+head -c 34000000 /dev/zero | tr '\0' a; echo
+echo '{"type":"system","subtype":"init","session_id":"s-1"}'
+printf 'it was given %s\n' "$servers" >&2
+exit 1"#;
+    let claude = harness::testing::fake_cli(&bin.path().join("claude"), body);
+    let (mut link, _out, _tmp) = direct(&native().join("6-model.jsonl"), &[], ClaudeDriver::new(claude));
+    let said = said_until(&mut link, |body| matches!(body, Body::Failed { .. })).await;
+    assert!(matches!(&said[0], Body::Notice { text } if text.contains("32 MiB")), "the long line gave a notice: {:?}", said.first());
+    assert!(matches!(&said[1], Body::Started { provider_session, .. } if provider_session == "s-1"), "it read on past both lines");
+    let Some(Body::Failed { reason, .. }) = said.last() else { unreachable!() };
+    assert!(reason.starts_with("claude exited") && reason.contains(": it was given ") && reason.contains("Bearer <redacted>"), "the stderr line, masked: {reason}");
+}
+
+#[tokio::test]
+async fn claude_the_setup_deadline_ends_once_setup_is_answered() {
+    let fixture = native().join("6-model.jsonl");
+    // Counted from the open, which includes the system's first check of a newly built replay: seconds, under load.
+    let within = Duration::from_secs(5);
+    let opened = tokio::time::Instant::now();
+    let (mut link, _out, _tmp) = direct(&fixture, &[], ClaudeDriver::new(REPLAY.into()).with_setup_within(within));
+    link.commands.send(harness::driver::Command::Prompt(prompts(&fixture).remove(0))).unwrap();
+    let said = said_until(&mut link, |body| body.ends_turn()).await;
+    assert_eq!(said.last(), Some(&Body::TurnEnded { how: harness::event::TurnEnd::Done }), "{said:?}");
+    // Nothing comes once the deadline has long passed: no failure for a setup that was answered.
+    let quiet = tokio::time::timeout_at(opened + within + Duration::from_secs(1), link.output.recv()).await;
+    assert!(quiet.is_err(), "nothing after the turn: {quiet:?}");
+    link.commands.send(harness::driver::Command::Stop).unwrap();
+    while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
+}
+
+#[tokio::test]
+async fn claude_an_agent_that_exits_before_any_prompt_fails_with_its_last_stderr_line_masked() {
+    // As an older CLI that lacks one of the flags does: it says so on stderr and exits before reading a prompt.
+    let bin = tempfile::tempdir().unwrap();
+    let said = "error: unknown option '--disable-slash-commands' (proxy http://me:hunter2@proxy.test:8080)";
+    let claude = harness::testing::fake_cli(&bin.path().join("claude"), &format!("echo \"{said}\" >&2; exit 1"));
+    let (mut link, _out, _tmp) = direct(&native().join("6-model.jsonl"), &[], ClaudeDriver::new(claude));
+    let said = said_until(&mut link, |body| matches!(body, Body::Failed { .. })).await;
+    assert_eq!(
+        said.last(),
+        Some(&Body::Failed { kind: FailKind::Provider, reason: "claude exited: error: unknown option '--disable-slash-commands' (proxy http://<redacted>@proxy.test:8080)".into() }),
+        "{said:?}"
+    );
+    while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent goes").is_some() {}
 }

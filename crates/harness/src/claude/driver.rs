@@ -21,9 +21,12 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+use crate::binary::CliPlaces;
 use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, guard};
+use crate::env::RunEnv;
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::process::{self, Process};
+use crate::provider::Provider;
 
 /// The stream flags both profiles start with.
 pub const STREAM: &[&str] =
@@ -53,15 +56,39 @@ const STDERR_KEPT: usize = 500;
 pub const TOOL_CALL_LIMIT_MS: u64 = 600_000;
 
 pub struct ClaudeDriver {
-    binary: PathBuf,
+    binary: Binary,
+    /// How the agent's start time is read; a test makes it fail.
+    started_of: fn(u32) -> Option<u64>,
     term_after: Duration,
     stop_takes_up_to: Duration,
     setup_within: Duration,
 }
 
+/// Which `claude` a session runs.
+enum Binary {
+    At(PathBuf),
+    /// Looked for at each open in `places`, then on the session's own PATH, as `providers` looks: a `claude` on a PATH
+    /// that `.zshrc` builds is found only in the captured environment.
+    Found(CliPlaces),
+}
+
 impl ClaudeDriver {
     pub fn new(binary: PathBuf) -> ClaudeDriver {
-        ClaudeDriver { binary, term_after: TERM_AFTER, stop_takes_up_to: STOP_TAKES_UP_TO, setup_within: SETUP_WITHIN }
+        ClaudeDriver { binary: Binary::At(binary), started_of: process::started_of, term_after: TERM_AFTER, stop_takes_up_to: STOP_TAKES_UP_TO, setup_within: SETUP_WITHIN }
+    }
+
+    /// A driver that finds `claude` when a session opens, so one installed after the harness started is found too.
+    pub fn found(places: CliPlaces) -> ClaudeDriver {
+        ClaudeDriver { binary: Binary::Found(places), ..ClaudeDriver::new(PathBuf::new()) }
+    }
+
+    fn binary(&self, launch: &Launch) -> Result<PathBuf, OpenError> {
+        match &self.binary {
+            Binary::At(binary) => Ok(binary.clone()),
+            Binary::Found(places) => places
+                .find(Provider::Claude, &RunEnv::from_pairs(launch.env.iter().cloned()))
+                .ok_or_else(|| OpenError { kind: FailKind::Provider, message: "claude was not found".into() }),
+        }
     }
 
     /// Shorter waits before SIGTERM and before the session says kill, for tests.
@@ -167,7 +194,7 @@ impl Driver for ClaudeDriver {
     }
 
     fn open(&self, launch: Launch) -> Result<Link, OpenError> {
-        let mut command = tokio::process::Command::new(&self.binary);
+        let mut command = tokio::process::Command::new(self.binary(&launch)?);
         command.args(args(&launch)).env_clear().envs(launch.env.iter().map(|(k, v)| (k, v))).current_dir(&launch.cwd);
         if launch.locked {
             // `--setting-sources` does not cover auto memory, which Claude would otherwise put in its prompt.
@@ -178,7 +205,7 @@ impl Driver for ClaudeDriver {
         command.process_group(0).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let mut child = command.spawn().map_err(|e| OpenError { kind: FailKind::Provider, message: format!("claude could not be started: {e}") })?;
         let pid = child.id().expect("a child that was just spawned has a pid");
-        let process = match agent_process(pid, process::started_of(pid)) {
+        let process = match agent_process(pid, (self.started_of)(pid)) {
             Ok(process) => process,
             Err(refused) => {
                 let _ = child.start_kill();
@@ -204,7 +231,7 @@ impl Driver for ClaudeDriver {
             }
         });
         let mut stream = Stream::new(lines, output, launch.resume.as_deref());
-        stream.locked = launch.locked;
+        stream.locked = launch.locked.then(|| launch.tools.allowed.clone());
         let agent = Agent {
             child,
             process,
@@ -266,9 +293,9 @@ pub struct Stream {
     servers: Option<Value>,
     /// The setup request whose answer the waiting lines wait for, and the servers it must add.
     setup: Option<(String, Vec<String>)>,
-    /// A locked session: Claude may offer it no built-in tool.
-    locked: bool,
-    /// Claude offered a locked session a built-in tool, so the agent must go.
+    /// A locked session's allowed tools: Claude may offer it nothing else.
+    locked: Option<Vec<String>>,
+    /// Claude offered a locked session another tool, so the agent must go and nothing more it says is passed on.
     refused: bool,
 }
 
@@ -279,7 +306,7 @@ impl Agent {
         let mut stdout = Lines::new(stdout);
         let (mut term_at, mut kill_at, mut setup_until) = (None, None, at(self.setup_within));
         // The agent was told to go, so a session that asked knows why it went.
-        let (mut going, mut listening) = (false, true);
+        let (mut going, mut listening, mut killed) = (false, true, false);
         let until = |when: Option<tokio::time::Instant>| async move {
             match when {
                 Some(at) => tokio::time::sleep_until(at).await,
@@ -296,8 +323,8 @@ impl Agent {
                     Ok(Some((_, true))) => self.stream.emit(Body::Notice { text: format!("Claude wrote a line over {} MiB, which was skipped.", LINE_MAX >> 20) }),
                     Ok(Some((line, false))) => {
                         self.stream.read(&line);
-                        if std::mem::take(&mut self.stream.refused) {
-                            going = true;
+                        if self.stream.refused && !killed {
+                            (going, killed) = (true, true);
                             self.kill();
                         }
                     }
@@ -343,13 +370,15 @@ impl Agent {
         }
         // Whatever of the group is left goes too. The child is not reaped yet, so its group id is still the agent's.
         self.kill();
-        if !going && self.stream.turn {
+        // Unasked, in a turn or not: an older CLI that lacks one of the flags says so on stderr before any prompt.
+        if !going {
             let _ = tokio::time::timeout(Duration::from_secs(1), &mut self.stderr.0).await;
             let said = self.stderr.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             let secrets = [self.secret.clone()];
+            let how = if self.stream.turn { "claude exited in the middle of a turn" } else { "claude exited" };
             self.stream.fail(match said {
-                Some(said) => format!("claude exited in the middle of a turn: {}", crate::redact::text(&said, &secrets)),
-                None => "claude exited in the middle of a turn".into(),
+                Some(said) => format!("{how}: {}", crate::redact::text(&said, &secrets)),
+                None => how.into(),
             });
         }
         let _ = self.child.wait().await;
@@ -368,7 +397,7 @@ impl Stream {
         }
         let (turn, cancelled, held, asked, requests) = (false, false, VecDeque::new(), HashMap::new(), 0);
         let (waiting, servers, setup) = (Some(vec![]), None, None);
-        let (locked, refused) = (false, false);
+        let (locked, refused) = (None, false);
         Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused }
     }
 
@@ -428,7 +457,9 @@ impl Stream {
     }
 
     fn emit(&self, body: Body) {
-        let _ = self.output.send(body);
+        if !self.refused {
+            let _ = self.output.send(body);
+        }
     }
 
     /// Whether a setup answer is still awaited.
@@ -479,14 +510,15 @@ impl Stream {
 
     pub fn read(&mut self, line: &str) {
         let Ok(line) = serde_json::from_str::<Value>(line) else { return };
+        if self.refused {
+            return;
+        }
         match line["type"].as_str() {
             Some("system") if line["subtype"] == "init" => {
-                // `--tools ""` and `--strict-mcp-config` leave a locked session only its own server's tools.
-                let builtin: Vec<&str> = line["tools"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|tool| !tool.starts_with("mcp__")).collect();
-                if self.locked && !builtin.is_empty() {
-                    let named = builtin.iter().take(8).copied().collect::<Vec<_>>().join(", ");
+                if let Some(refusal) = self.locked.as_deref().and_then(|allowed| offered_beyond(allowed, &line["tools"])) {
+                    self.fail(refusal);
                     self.refused = true;
-                    return self.fail(format!("Claude offered this locked session built-in tools ({named}), so it was stopped"));
+                    return;
                 }
                 if !self.started
                     && let Some(session) = line["session_id"].as_str()
@@ -569,6 +601,23 @@ impl Stream {
             self.prompt(text);
         }
     }
+}
+
+/// Why a locked session cannot run with what `init` says Claude offers it, if it cannot: `--tools ""` and
+/// `--strict-mcp-config` leave it only its own endpoint's tools, all of them allowed, so anything else, or a list that
+/// cannot be read, means the lockdown did not hold.
+fn offered_beyond(allowed: &[String], tools: &Value) -> Option<String> {
+    let Some(tools) = tools.as_array() else { return Some("Claude did not say which tools this locked session has, so it was stopped".into()) };
+    let mut beyond = Vec::new();
+    for tool in tools {
+        match tool.as_str() {
+            Some(tool) if allowed.iter().any(|name| name == tool) => {}
+            Some(tool) => beyond.push(tool),
+            None => return Some("Claude named this locked session's tools in a form it does not use, so it was stopped".into()),
+        }
+    }
+    let named = beyond.iter().take(8).copied().collect::<Vec<_>>().join(", ");
+    (!beyond.is_empty()).then(|| format!("Claude offered this locked session tools beyond its own ({named}), so it was stopped"))
 }
 
 #[cfg(test)]
@@ -845,19 +894,91 @@ mod tests {
         assert!(refused.message.contains("start time"), "{}", refused.message);
     }
 
+    #[tokio::test]
+    async fn an_open_whose_agents_start_time_cannot_be_read_is_refused_and_the_agent_killed() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A duration no other process sleeps for, so the agent can be found by its argv.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+        let marker = format!("30.{nanos:09}{}", std::process::id());
+        let claude = crate::testing::fake_cli(&tmp.path().join("claude"), &format!("exec sleep {marker}"));
+        let driver = ClaudeDriver { started_of: |_| None, ..ClaudeDriver::new(claude) };
+        let mut launch = launch(false, None, None);
+        launch.env = vec![("PATH".into(), "/usr/bin:/bin".into())];
+        launch.cwd = tmp.path().into();
+        let refused = driver.open(launch).err().expect("refused");
+        assert!(refused.message.contains("start time"), "{}", refused.message);
+        // Before its `exec` the fake's argv names its own path, and after it the duration.
+        let pattern = format!("sleep {marker}|{}", tmp.path().display());
+        let running = || std::process::Command::new("pgrep").args(["-f", &pattern]).output().is_ok_and(|out| out.status.success());
+        let given = std::time::Instant::now() + Duration::from_secs(10);
+        while running() {
+            assert!(std::time::Instant::now() < given, "the agent was not killed");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn locked_wire() -> Wire {
+        let mut w = wire();
+        w.stream.locked = Some(vec!["mcp__k3x9q2w7e5r1t8__result".into(), "mcp__k3x9q2w7e5r1t8__ask".into()]);
+        w
+    }
+
+    fn failed(said: &[Body]) -> Vec<String> {
+        said.iter().filter_map(|body| match body { Body::Failed { reason, .. } => Some(reason.clone()), _ => None }).collect()
+    }
+
     #[test]
     fn a_locked_session_offered_a_builtin_tool_fails_and_its_agent_must_go() {
-        let mut w = wire();
-        w.stream.locked = true;
+        let mut w = locked_wire();
         w.stream.prompt("go".into());
-        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["mcp__k3x9q2w7e5r1t8__result"]}));
-        assert!(!w.stream.refused && !w.said().iter().any(|body| matches!(body, Body::Failed { .. })), "its own tools only: it runs");
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["mcp__k3x9q2w7e5r1t8__ask", "mcp__k3x9q2w7e5r1t8__result"]}));
+        assert!(!w.stream.refused && failed(&w.said()).is_empty(), "its own tools only, in any order: it runs");
         w.agent(result());
         w.stream.prompt("again".into());
         w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["Bash", "mcp__k3x9q2w7e5r1t8__result"]}));
         assert!(w.stream.refused);
-        let failed: Vec<Body> = w.said().into_iter().filter(|body| matches!(body, Body::Failed { .. })).collect();
-        assert!(matches!(&failed[..], [Body::Failed { kind: FailKind::Provider, reason }] if reason.contains("Bash")), "{failed:?}");
+        let failed = failed(&w.said());
+        assert!(matches!(&failed[..], [reason] if reason.contains("Bash")), "{failed:?}");
+    }
+
+    #[test]
+    fn a_found_claude_is_the_one_on_the_sessions_path_and_none_there_fails_the_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = crate::testing::fake_cli(&tmp.path().join("claude"), "exit 0");
+        let driver = ClaudeDriver::found(CliPlaces::none());
+        let mut launch = launch(false, None, None);
+        launch.env = vec![("PATH".into(), format!("/nonexistent:{}", tmp.path().display()).into())];
+        assert_eq!(driver.binary(&launch).unwrap(), claude);
+        launch.env = vec![("PATH".into(), "/nonexistent".into())];
+        assert_eq!(driver.binary(&launch).unwrap_err().message, "claude was not found");
+        assert_eq!(driver.open(launch).err().map(|refused| refused.message), Some("claude was not found".into()));
+    }
+
+    #[test]
+    fn after_a_locked_refusal_nothing_claude_already_wrote_reaches_the_client() {
+        let mut w = locked_wire();
+        w.stream.prompt("go".into());
+        w.said();
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["Bash"]}));
+        assert_eq!(failed(&w.said()).len(), 1);
+        w.agent(json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}));
+        w.agent(json!({"type": "control_request", "request_id": "r-1", "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls"}}}));
+        w.agent(result());
+        w.stream.prompt("more".into());
+        assert_eq!(w.said(), [], "no turn, text or permission for an agent that was told to go");
+    }
+
+    #[test]
+    fn a_locked_session_is_refused_a_second_servers_tool_and_a_tool_list_it_cannot_read() {
+        for tools in [json!(["mcp__k3x9q2w7e5r1t8__result", "mcp__other__find"]), json!(null), json!("mcp__k3x9q2w7e5r1t8__result"), json!(["mcp__k3x9q2w7e5r1t8__result", 7])] {
+            let mut w = locked_wire();
+            w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": tools}));
+            assert!(w.stream.refused, "{tools}");
+            assert_eq!(failed(&w.said()).len(), 1, "{tools}");
+        }
+        let mut w = wire();
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "tools": ["Bash", "mcp__other__find"]}));
+        assert!(!w.stream.refused, "a normal session may have any tools");
     }
 
     #[test]

@@ -1318,19 +1318,22 @@ async fn next_text(ws: &mut tokio_tungstenite::WebSocketStream<UnixStream>) -> V
 }
 
 #[tokio::test]
-async fn claude_a_client_opens_a_claude_session_through_the_socket() {
-    // The providers `harness serve` offers, with the wire replay as the `claude` it found.
+async fn claude_a_client_opens_a_claude_session_through_the_socket_with_the_claude_on_its_shells_path() {
+    // The providers `harness serve` offers, with the wire replay as the `claude` only the captured PATH holds.
     let (tmp, dir) = data_dir();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_wire-replay"), bin.join("claude")).unwrap();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spikes/acp/fixtures/claude/native/6-model.jsonl");
     let out = tmp.path().join("out");
     std::fs::create_dir_all(&out).unwrap();
     let env = vec![
-        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        ("PATH".to_owned(), format!("{}:/usr/bin:/bin", bin.display())),
         ("WIRE_REPLAY_FIXTURE".to_owned(), fixture.display().to_string()),
         ("WIRE_REPLAY_OUT".to_owned(), out.display().to_string()),
     ];
     let setup = harness::work::Setup::new(None, dir.clone()).with_shell_env(harness::env::RunEnv::from_pairs(env));
-    let drivers = harness::serve_drivers(None, Some(env!("CARGO_BIN_EXE_wire-replay").into()));
+    let drivers = harness::serve_drivers(None, harness::claude::driver::ClaudeDriver::found(harness::binary::CliPlaces::none()));
     let token = Token::random();
     let first = token.clone();
     let server = Server::bind_with(&dir, move || Some(first), drivers, settings(4), setup).unwrap();
@@ -1339,6 +1342,9 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket() {
     let providers = client.call(Op::Providers { logins: vec![] }).await.unwrap();
     let names: Vec<&str> = providers["drivers"].as_array().unwrap().iter().filter_map(|driver| driver["name"].as_str()).collect();
     assert_eq!(names, ["claude"], "no mock with no script");
+    // The login check ran the same `claude` the session will, which the replay reports as a short read; only the
+    // session's own run is judged.
+    let _ = std::fs::remove_file(out.join("report.txt"));
     let cwd = tmp.path().to_path_buf();
     let open = Op::Open { provider: "claude".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, ends_with_client: false, tools: vec![], result_schema: None };
     let id = client.call(open).await.unwrap()["session"].as_str().unwrap().to_owned();

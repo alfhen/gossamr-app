@@ -57,14 +57,14 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     use harness::error::Error;
     let dir = data.or_else(harness::store::default_dir).ok_or_else(|| Error::Refused("no data folder: set HARNESS_DATA".into()))?;
     let script = mock_script.map(|path| harness::mock::Script::load(&path)).transpose().map_err(Error::Driver)?;
-    // The mock provider is there only when a script is given, and Claude when its CLI is installed.
-    let drivers = harness::serve_drivers(script, harness::binary::find_claude());
     // A token on a pipe is read on every start, the pipe swapped for /dev/null, so none waits behind fd 0 while the
     // harness runs. A terminal is never read: a token typed there stays on the screen, and no prompt holds up a start.
     // SAFETY: isatty has no preconditions.
     let handed = if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 { None } else { drain_stdin()? };
     let first_token = move || handed;
     let setup = harness::work::Setup::of_this_machine(dir.clone());
+    // The mock provider is there only when a script is given. Claude is found where `providers` looks, at each open.
+    let drivers = harness::serve_drivers(script, harness::claude::driver::ClaudeDriver::found(setup.places().clone()));
     let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings::default(), setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
