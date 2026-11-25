@@ -131,17 +131,25 @@ impl Drop for Served {
     }
 }
 
-fn serve(data: &Path, setup: Setup) -> Served {
-    serve_as(data, setup, Token::random())
+fn drivers(seer: &Seer) -> Vec<(String, Arc<dyn Driver>)> {
+    vec![("mock".into(), Arc::new(seer.clone())), ("claude".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser)), ("scribbler".into(), Arc::new(Scribbler))]
 }
 
-/// As `serve`, with `token` as the data folder's first: a folder served again keeps the token it first had.
-fn serve_as(data: &Path, setup: Setup, token: Token) -> Served {
-    let seer = Seer::default();
-    let drivers: Vec<(String, Arc<dyn Driver>)> =
-        vec![("mock".into(), Arc::new(seer.clone())), ("claude".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser)), ("scribbler".into(), Arc::new(Scribbler))];
+fn serve(data: &Path, setup: Setup) -> Served {
+    let (token, seer) = (Token::random(), Seer::default());
     let first = token.clone();
-    let server = Server::bind_with(data, move || Some(first), drivers, settings(4), setup).unwrap();
+    let server = Server::bind_with(data, move || Some(first), drivers(&seer), settings(4), setup).unwrap();
+    Served { token, data: data.to_owned(), seer, task: tokio::spawn(server.run()) }
+}
+
+/// As `serve`, for a data folder served before: it keeps the token it first had.
+async fn serve_again(data: &Path, setup: impl Fn() -> Setup, token: Token) -> Served {
+    let seer = Seer::default();
+    let server = bind_again(|| {
+        let first = token.clone();
+        Server::bind_with(data, move || Some(first), drivers(&seer), settings(4), setup())
+    })
+    .await;
     Served { token, data: data.to_owned(), seer, task: tokio::spawn(server.run()) }
 }
 
@@ -308,7 +316,7 @@ async fn resume_take_back_and_an_answer_that_resumes_wait_for_the_connections_sh
         drop(store);
         // The first client's shell takes a moment to read.
         let shell = harness::testing::fake_cli(&rig.tmp.path().join("slowshell"), "sleep 1; printf '\\0GOSSAMR_ENV_BEGIN\\0PATH=/usr/bin:/bin\\0'");
-        let served = serve_as(&rig.data, Setup::new(Some(rig.home.clone()), rig.data.clone()).with_shell_program(&shell.to_string_lossy()), token);
+        let served = serve_again(&rig.data, || Setup::new(Some(rig.home.clone()), rig.data.clone()).with_shell_program(&shell.to_string_lossy()), token).await;
         let mut client = connect(&served).await;
         let session = id.clone();
         let called = match op {

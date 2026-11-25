@@ -1236,3 +1236,83 @@ fn serve_a_sweep_interval_of_zero_is_refused_before_the_server_runs() {
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![];
     let _ = Server::bind(&dir, move || Some(token), drivers, settings(4)).unwrap().sweep_every(Duration::ZERO);
 }
+
+#[tokio::test]
+async fn client_a_proof_the_harness_does_not_know_is_not_proven() {
+    let served = serve(SCRIPT);
+    let refused = Client::connect(&served.dir, &Token::random()).await;
+    assert!(refused.as_ref().is_err_and(harness::client::not_proven), "{:?}", refused.err());
+    assert!(Client::connect(&served.dir, &served.token).await.is_ok(), "the known token still proves");
+}
+
+#[tokio::test]
+async fn client_proves_and_shuts_down_a_harness_of_another_protocol_and_sends_it_nothing_else() {
+    let tmp = tempfile::tempdir().unwrap();
+    let listener = UnixListener::bind(tmp.path().join(SOCKET)).unwrap();
+    let token = Token::random();
+    let key = token.stored_key();
+    let other = PROTOCOL + 1;
+    let fake = tokio::spawn(async move {
+        let hello = || serde_json::to_string(&Hello { protocol: other, build: "other".into(), challenge: encode(&Token::random().stored_key()) }).unwrap();
+        // The usual client reads the hello and goes.
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        ws.send(Message::text(hello())).await.unwrap();
+        assert!(!matches!(ws.next().await, Some(Ok(Message::Text(_)))), "the usual client sends no proof");
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = hello();
+        ws.send(Message::text(hello.clone())).await.unwrap();
+        let Some(Ok(Message::Text(text))) = ws.next().await else { panic!("no proof") };
+        let proof: Proof = serde_json::from_str(text.as_str()).unwrap();
+        assert_eq!(harness::auth::verify(&[key], hello.as_bytes(), &decode(&proof.proof).unwrap()), Some(0), "the token is proven");
+        ws.send(Message::text(json!({ "ok": true }).to_string())).await.unwrap();
+        let mut calls = vec![];
+        while let Some(Ok(Message::Text(text))) = ws.next().await {
+            let call: Value = serde_json::from_str(text.as_str()).unwrap();
+            ws.send(Message::text(json!({ "id": call["id"], "ok": { "left": [] } }).to_string())).await.unwrap();
+            calls.push(call["op"].as_str().unwrap().to_owned());
+        }
+        calls
+    });
+    assert!(matches!(Client::connect(tmp.path(), &token).await, Err(Error::Protocol(_))), "the usual client refuses it");
+    let mut client = Client::connect_any_protocol(tmp.path(), &token, WAIT).await.unwrap();
+    assert_eq!(client.hello.protocol, other);
+    assert!(matches!(client.call(Op::Sessions).await, Err(Error::Protocol(ref why)) if why.contains("only `shutdown`")), "nothing else is sent");
+    assert_eq!(client.call(Op::Shutdown).await.unwrap(), json!({ "left": [] }));
+    drop(client);
+    assert_eq!(fake.await.unwrap(), vec!["shutdown"], "the fake saw only the shutdown");
+}
+
+/// The messages every protocol keeps, as literal text. A change here breaks every older and newer app: it could no
+/// longer prove a token to, or stop, a harness of another protocol, and would have to kill a process it cannot prove is
+/// that harness. Change `PROTOCOL` for anything else, never these.
+#[tokio::test]
+async fn api_the_hello_the_proof_its_refusal_and_shutdown_keep_their_shape_in_every_protocol() {
+    let served = serve(SCRIPT);
+    let (ws, hello) = raw(&served).await;
+    let said: Value = serde_json::from_str(&hello).unwrap();
+    let (build, challenge) = (said["build"].as_str().unwrap(), said["challenge"].as_str().unwrap());
+    let literal: Value = serde_json::from_str(&format!(r#"{{"protocol": {PROTOCOL}, "build": "{build}", "challenge": "{challenge}"}}"#)).unwrap();
+    assert_eq!(said, literal, "the hello");
+    assert!(said["protocol"].is_u64() && challenge.len() == 64, "a number and 32 bytes in hex");
+
+    let refused = after_first(ws, serde_json::from_str(&format!(r#"{{"proof": "{}"}}"#, "0".repeat(64))).unwrap()).await;
+    let refusal = "refused: the client did not prove a token";
+    assert_eq!(refused, [serde_json::from_str::<Value>(&format!(r#"{{"error": "{refusal}"}}"#)).unwrap()], "the refusal");
+    assert!(harness::client::not_proven(&Error::Said(refusal.into())), "the client reads that refusal as not proven");
+
+    let (mut ws, hello) = raw(&served).await;
+    let answer = encode(&served.token.answer(hello.as_bytes()));
+    ws.send(Message::text(format!(r#"{{"proof": "{answer}"}}"#))).await.unwrap();
+    assert_eq!(next_text(&mut ws).await, serde_json::from_str::<Value>(r#"{"ok": true}"#).unwrap(), "the answer to a proof");
+    ws.send(Message::text(r#"{"id": 1, "op": "shutdown"}"#)).await.unwrap();
+    assert_eq!(next_text(&mut ws).await, serde_json::from_str::<Value>(r#"{"id": 1, "ok": {"left": []}}"#).unwrap(), "shutdown and what it left");
+}
+
+async fn next_text(ws: &mut tokio_tungstenite::WebSocketStream<UnixStream>) -> Value {
+    match tokio::time::timeout(WAIT, ws.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(text.as_str()).unwrap(),
+        other => panic!("no answer: {other:?}"),
+    }
+}
