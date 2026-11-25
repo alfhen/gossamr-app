@@ -3,7 +3,6 @@
 
 pub mod agent_config;
 pub mod answer;
-pub mod ask;
 pub mod archive;
 pub mod backend;
 pub mod cleanup;
@@ -32,7 +31,7 @@ pub mod tracker;
 pub mod trust;
 
 /// Clones, git, the shell environment and the provider logins belong to the harness; the app reaches them by these paths.
-pub use harness::{binary, codex_models, env, fresh, provider_env, provider_folder, repo};
+pub use harness::{ask, binary, codex_models, env, fresh, provider_env, provider_folder, repo};
 
 #[cfg(test)]
 mod real_tests;

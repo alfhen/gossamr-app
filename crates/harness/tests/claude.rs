@@ -259,6 +259,14 @@ fn as_the_mock_names_the_session(events: &[Event]) -> Vec<Event> {
     serde_json::from_str(&text).unwrap()
 }
 
+/// The harness's own tools, which every session's endpoint serves.
+const OWN: &[&str] = &[harness::tools::RESULT, harness::tools::ASK];
+
+/// What `--allowedTools` holds for a session whose endpoint is `name` and serves only the harness's own tools.
+fn allowed_for(name: &str) -> String {
+    OWN.iter().map(|tool| format!("mcp__{name}__{tool}")).collect::<Vec<_>>().join(",")
+}
+
 /// The driver's endpoint, as its `mcp_set_servers` gave it: the per-session name and the server.
 fn endpoint(rig: &Rig) -> (String, Value) {
     let sent = rig.sent();
@@ -327,11 +335,11 @@ async fn claude_the_normal_profiles_argv_is_exactly_the_stream_flags_a_model_and
         let (id, mut events) = rig.open(false, model).await;
         drive(&rig, &id, &mut events, acts, results).await;
         let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
-        want.extend(["--allowedTools".into(), format!("mcp__{}__result", endpoint(&rig).0)]);
+        want.extend(["--allowedTools".into(), allowed_for(&endpoint(&rig).0)]);
         if let Some(model) = model {
             want.extend(["--model".into(), model.into()]);
         }
-        want.extend(["--append-system-prompt".into(), harness::driver::guard(&["result".to_owned()])]);
+        want.extend(["--append-system-prompt".into(), harness::driver::guard(&OWN.iter().map(|tool| (*tool).to_owned()).collect::<Vec<_>>())]);
         assert_eq!(rig.argv(), want);
         assert_eq!(&want[..9], ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio"]);
     }
@@ -349,7 +357,7 @@ async fn claude_the_normal_profile_passes_no_restricting_flag() {
         assert!(!argv.iter().any(|arg| arg == flag), "{flag}");
     }
     let allowed = argv.iter().position(|arg| arg == "--allowedTools").map(|at| argv[at + 1].clone());
-    assert_eq!(allowed, Some(format!("mcp__{}__result", endpoint(&rig).0)), "it allows the endpoint's own tool and nothing else");
+    assert_eq!(allowed, Some(allowed_for(&endpoint(&rig).0)), "it allows the endpoint's own tools and nothing else");
 }
 
 #[tokio::test]
@@ -362,7 +370,7 @@ async fn claude_the_locked_profiles_argv_is_pips_lockdown_without_a_config_file_
     let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
     want.extend(["--permission-mode", "dontAsk", "--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"].map(String::from));
     let (name, _) = endpoint(&rig);
-    want.extend(["--allowedTools".into(), format!("mcp__{name}__result"), "--model".into(), "haiku".into()]);
+    want.extend(["--allowedTools".into(), allowed_for(&name), "--model".into(), "haiku".into()]);
     assert_eq!(rig.argv(), want, "no `--mcp-config`: the endpoint goes on stdin");
     assert!(!rig.argv().iter().any(|arg| arg == "mcp__gossamr" || arg.ends_with("__")), "no prefix rule");
     assert_eq!(rig.env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
@@ -551,7 +559,7 @@ async fn claude_a_second_servers_tool_and_a_colliding_name_are_left_to_the_perso
         assert_eq!(rig.report(), "", "{fixture}");
         let (name, _) = endpoint(&rig);
         let allowed = rig.argv().iter().position(|arg| arg == "--allowedTools").map(|at| rig.argv()[at + 1].clone());
-        assert_eq!(allowed, Some(format!("mcp__{name}__result")), "{fixture}: only the endpoint's own tool");
+        assert_eq!(allowed, Some(allowed_for(&name)), "{fixture}: only the endpoint's own tools");
         let asked: Vec<String> = seen.iter().filter_map(|event| match &event.body { Body::Permission { tool, .. } => Some(tool.clone()), _ => None }).collect();
         assert_eq!(asked, [other], "{fixture}: the other server's tool reached the person");
         let answers = rig.sent().iter().filter(|line| line["type"] == "control_response").count();
@@ -591,7 +599,7 @@ async fn claude_a_declared_tool_is_allowed_by_its_exact_name_beside_result() {
     let allowed = rig.argv().iter().position(|arg| arg == "--allowedTools").map(|at| rig.argv()[at + 1].clone()).unwrap();
     let mut tools: Vec<&str> = allowed.split(',').collect();
     tools.sort();
-    assert_eq!(tools, [format!("mcp__{name}__find"), format!("mcp__{name}__result")]);
+    assert_eq!(tools, [format!("mcp__{name}__ask"), format!("mcp__{name}__find"), format!("mcp__{name}__result")]);
 }
 
 #[tokio::test]

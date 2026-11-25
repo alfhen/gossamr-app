@@ -106,7 +106,7 @@ impl Asks {
         *self.inner.wait.lock().expect("ask wait lock poisoned")
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_wait(&self, wait: Duration) {
         *self.inner.wait.lock().expect("ask wait lock poisoned") = wait;
     }

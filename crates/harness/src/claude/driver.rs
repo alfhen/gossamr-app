@@ -870,10 +870,11 @@ mod tests {
 
     #[test]
     fn the_guard_names_the_sessions_own_tools_as_declared_and_asks_for_one_result() {
-        let tools: Vec<String> = ["find", "read_ticket", "result"].map(String::from).to_vec();
+        let tools: Vec<String> = ["find", "read_ticket", "result", "ask"].map(String::from).to_vec();
         let said = guard(&tools);
         assert!(said.starts_with(GUARD), "it keeps the guard");
-        assert!(said.contains("Your session's own tools are find, read_ticket and result."), "{said}");
+        assert!(said.contains("Your session's own tools are find, read_ticket, result and ask."), "{said}");
+        assert!(said.contains("If you are blocked on a decision, call ask and wait for the answer."), "{said}");
         assert!(said.ends_with("Call result once when you are done."), "{said}");
         assert!(!said.contains("mcp__"), "by the declared names, the same on every provider");
         let mut launch = launch(false, None, Some("s-1"));

@@ -147,13 +147,38 @@ pub enum Op {
         #[serde(default)]
         error: bool,
     },
-    /// Answers an open question. Until `ask` holds the agent's call (H5b), the answer reaches the agent as its next
-    /// prompt.
+    /// Answers an open question, once: to the agent's `ask` call if the harness still holds it, else as the next prompt
+    /// after the running turn. The question closes as its answer is delivered, so an answer still waiting when the
+    /// harness shuts down leaves it open, to be answered again after the restart. A session that is not running is
+    /// resumed first, with a new tools token. A question that Stop, a hand-over, the deny that ended the turn that
+    /// asked it, a clean-up or a resume refused for good closed is refused.
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
     /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
     HandOver { session: String },
+    /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token, and
+    /// watches it on this connection from its next event, as `open` does, so a locked session's client misses none.
+    /// Waits for the connection's shell first. The harness calls this after a restart (H10), or the app when the
+    /// person asks. With `carry_on`, that text is the next prompt, checked and sent in one step of the session, so no
+    /// question, permission request, stop or hand-over gets in between; a blank one is refused. Refused with the
+    /// reason: a session cleaned up, one that ended with its client, one marked as one that cannot be resumed, one
+    /// handed over and not taken back, one whose worktree another session holds, one a shutdown gave up on (its agent
+    /// may still run); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
+    /// cancelled turn or open permission request forbids it. A cancel forbids it because "carry on" would undo it;
+    /// the next turn lifts each mark.
+    Resume {
+        session: String,
+        #[serde(default)]
+        carry_on: Option<String>,
+    },
+    /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
+    /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
+    /// over is refused: resume it.
+    TakeBack { session: String },
+    /// Refused while the session runs, and for one a shutdown gave up on, whose agent may still work in its worktree.
     CleanUp { session: String },
+    /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
+    /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.
     Sessions,
     /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
     /// (`providers::Standing`): the usual setup of every provider of the table, then each of `logins`. A login is

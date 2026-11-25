@@ -1,0 +1,10 @@
+{"capabilities": {"tool_call_limit_ms": 4000}}
+{"prompt": null}
+{"say": "I need one thing from you first."}
+{"call": {"name": "ask", "input": {"question": "Which colour should the button be?"}}}
+{"say": "I will wait for your answer."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Thanks, I will make it that colour."}
+{"end": "done"}
+{"prompt": null}
