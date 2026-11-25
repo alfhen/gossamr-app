@@ -17,6 +17,7 @@ pub mod error;
 pub mod event;
 pub mod fresh;
 pub mod mock;
+pub mod process;
 pub mod provider;
 pub mod provider_env;
 pub mod provider_folder;
