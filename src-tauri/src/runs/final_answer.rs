@@ -87,7 +87,8 @@ impl RunService {
         let query = RunQuery { states: Some(vec![RunState::Done]), ..RunQuery::default() };
         let Ok(done) = self.core.runs_list(&query).await else { return Vec::new() };
         done.into_iter()
-            .filter(|r| !r.result_complete && r.ended_at.is_some_and(|at| (now - at).to_std().is_ok_and(|age| age <= AWAIT_WINDOW)))
+            // A run on the harness has its answer from its session's `result`, never from the old backend.
+            .filter(|r| r.harness_session.is_none() && !r.result_complete && r.ended_at.is_some_and(|at| (now - at).to_std().is_ok_and(|age| age <= AWAIT_WINDOW)))
             .collect()
     }
 

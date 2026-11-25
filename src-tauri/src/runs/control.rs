@@ -272,6 +272,11 @@ impl RunService {
                 other => format!("This run is {}, so there is nothing to stop.", other.as_str()),
             }));
         }
+        if let Some(stopped) = self.stop_on_harness(&run).await {
+            let run = stopped?;
+            self.note_by(&run, by, "run_stopped", None).await;
+            return Ok(run);
+        }
         let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to stop."))?;
         let tc = self.observing_toolchain(&run).await?;
         tc.backend.stop(&session).await?;

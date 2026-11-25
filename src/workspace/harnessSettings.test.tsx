@@ -14,6 +14,12 @@ describe("the harness section in Settings", () => {
     expect(view(null)).not.toContain("role=\"alert\"");
   });
 
+  it("says agents run on a mock script only when the harness serves one", () => {
+    const on = renderToStaticMarkup(<HarnessView status={{ ...RUNNING, mock: true }} busy={false} onAction={vi.fn()} />);
+    expect(on).toContain("Agents run on a mock script, not on Claude.");
+    expect(view(null)).not.toContain("mock script");
+  });
+
   it("keeps the last status and says a later read failed, with Try again", () => {
     const html = renderToStaticMarkup(<HarnessView status={RUNNING} busy={false} unread onRetry={vi.fn()} onAction={vi.fn()} />);
     expect(html).toContain("Running");

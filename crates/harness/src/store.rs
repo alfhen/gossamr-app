@@ -330,11 +330,24 @@ impl Store {
         Ok(())
     }
 
-    /// Closes the session's open questions, which can no longer be answered: it is cleaned up, or it can never be
-    /// resumed.
-    pub fn close_questions(&self, session: &str, ms: i64) -> Result<()> {
-        let how = serde_json::to_value(crate::event::QuestionEnd::Stopped)?;
-        self.conn.execute("UPDATE questions SET closed_ms = ?2, closed = ?3 WHERE session = ?1 AND closed_ms IS NULL", params![session, ms, how.as_str()])?;
+    /// Closes the open questions of a session that is not running, which can no longer be answered, each with its
+    /// `question_closed` event in the same transaction, so the events and `sessions` agree.
+    pub fn close_questions(&self, session: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.close_open_questions(session, how, ms)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `close_questions`; the caller holds the transaction.
+    fn close_open_questions(&self, session: &str, how: crate::event::QuestionEnd, ms: i64) -> Result<()> {
+        let open: Vec<String> = self.conn.prepare("SELECT id FROM questions WHERE session = ?1 AND closed_ms IS NULL ORDER BY asked_ms")?
+            .query_map([session], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for id in open {
+            self.close_question(session, &id, how, ms)?;
+            self.insert_event(session, &Body::QuestionClosed { id, how }, ms, None)?;
+        }
         Ok(())
     }
 
@@ -485,8 +498,8 @@ impl Store {
         self.session(session)?;
         // Both or neither: a session marked clean must not keep its payload.
         let tx = self.conn.unchecked_transaction()?;
+        self.close_open_questions(session, crate::event::QuestionEnd::CleanedUp, now_ms())?;
         tx.execute("UPDATE sessions SET cleaned_ms = ?2 WHERE id = ?1", params![session, now_ms()])?;
-        tx.execute("UPDATE questions SET closed_ms = ?2, closed = 'stopped' WHERE session = ?1 AND closed_ms IS NULL", params![session, now_ms()])?;
         tx.execute(&format!("UPDATE events SET {} WHERE withheld = 0 AND session = ?1", WITHHOLD.as_str()), [session])?;
         tx.commit()?;
         Ok(())
@@ -544,6 +557,26 @@ fn migrate(conn: &mut Connection) -> Result<()> {
 pub fn now_ms() -> i64 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("the clock is after 1970");
     i64::try_from(since.as_millis()).expect("milliseconds fit in an i64")
+}
+
+/// Whether the store in `dir` holds a client token, read without its lock, as a harness may be serving it. A store that
+/// can't be read counts as holding one, so a caller that would hand over a first token doesn't. One with no tokens table
+/// yet holds none.
+pub fn holds_client_tokens(dir: &Path) -> bool {
+    let path = dir.join("harness.sqlite");
+    // Only a store that isn't there holds none: one whose folder can't be searched may.
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+        Ok(_) => {}
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { return true };
+    let held = |sql: &str| conn.query_row(sql, [], |row| row.get::<_, bool>(0));
+    match held("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'client_tokens')") {
+        Ok(false) => false,
+        Ok(true) => held("SELECT EXISTS (SELECT 1 FROM client_tokens)").unwrap_or(true),
+        Err(_) => true,
+    }
 }
 
 /// The data folder: `$HARNESS_DATA`, else the platform's place for application data.

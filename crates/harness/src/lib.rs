@@ -8,6 +8,7 @@ pub mod api;
 pub mod ask;
 pub mod auth;
 pub mod binary;
+pub mod claude;
 pub mod cli;
 pub mod client;
 pub mod codex_models;
@@ -18,6 +19,7 @@ pub mod event;
 pub mod fresh;
 pub mod mcp;
 pub mod mock;
+pub mod process;
 pub mod provider;
 pub mod provider_env;
 pub mod provider_folder;
@@ -44,6 +46,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Which build this is; `build.rs` says how it is chosen.
 pub const BUILD_ID: &str = env!("HARNESS_BUILD_ID");
 
+/// The providers `harness serve` offers: the mock when a script is given, and Claude when its CLI is found.
+pub fn serve_drivers(script: Option<mock::Script>, claude: Option<std::path::PathBuf>) -> Vec<(String, std::sync::Arc<dyn driver::Driver>)> {
+    let mock = script.map(|script| ("mock".to_owned(), std::sync::Arc::new(mock::Mock::new(script)) as std::sync::Arc<dyn driver::Driver>));
+    let claude = claude.map(|binary| ("claude".to_owned(), std::sync::Arc::new(claude::driver::ClaudeDriver::new(binary)) as std::sync::Arc<dyn driver::Driver>));
+    mock.into_iter().chain(claude).collect()
+}
+
 /// What `harness --version` prints.
 pub fn version_line() -> String {
     format!("harness {VERSION} (build {BUILD_ID})")
@@ -54,7 +63,8 @@ pub fn version_line() -> String {
 pub enum Request {
     Version,
     Run(RunArgs),
-    Serve { data: Option<PathBuf>, mock_script: Option<PathBuf> },
+    /// `turn_limit`: how many turns run at once, past which a session waits; left out, the harness's own.
+    Serve { data: Option<PathBuf>, mock_script: Option<PathBuf>, turn_limit: Option<usize> },
     Client { command: cli::Command, data: Option<PathBuf>, token_stdin: bool },
     /// Anything else, which gets the usage line and a failing exit code.
     Usage,
@@ -93,16 +103,17 @@ pub fn request(args: &[OsString]) -> Request {
 }
 
 fn serve_args(args: &[OsString]) -> Option<Request> {
-    let (mut data, mut mock_script) = (None, None);
+    let (mut data, mut mock_script, mut turn_limit) = (None, None, None);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.to_str()? {
             "--data" => data = Some(args.next()?.into()),
             "--mock-script" => mock_script = Some(args.next()?.into()),
+            "--turn-limit" => turn_limit = Some(args.next()?.to_str()?.parse().ok().filter(|n| *n > 0)?),
             _ => return None,
         }
     }
-    Some(Request::Serve { data, mock_script })
+    Some(Request::Serve { data, mock_script, turn_limit })
 }
 
 fn run_args(args: &[OsString]) -> Option<RunArgs> {
@@ -134,6 +145,15 @@ fn value<'a>(args: &mut impl Iterator<Item = Option<&'a str>>) -> Option<&'a str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_offers_the_mock_with_a_script_and_claude_when_its_cli_is_found() {
+        let names = |drivers: Vec<(String, std::sync::Arc<dyn driver::Driver>)>| drivers.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert_eq!(names(serve_drivers(None, None)), Vec::<String>::new());
+        assert_eq!(names(serve_drivers(None, Some("/usr/local/bin/claude".into()))), ["claude"]);
+        let script = mock::Script::parse("{\"prompt\": null}\n{\"end\": \"done\"}").unwrap();
+        assert_eq!(names(serve_drivers(Some(script), Some("/usr/local/bin/claude".into()))), ["mock", "claude"]);
+    }
 
     fn args(list: &[&str]) -> Vec<OsString> {
         list.iter().map(OsString::from).collect()

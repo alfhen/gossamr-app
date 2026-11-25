@@ -31,6 +31,8 @@ pub enum Failure {
     /// `--bg` won't start in the person's permission mode until they accept it once in Terminal; Claude's own words.
     ModeRefused { mode: RefusedMode, message: String },
     CommandFailed(String),
+    /// The harness did not open or start the run's session; its words.
+    Harness(String),
     Unparseable(String),
     Interrupted,
 }
@@ -60,6 +62,7 @@ impl fmt::Display for Failure {
             ),
             Failure::ModeRefused { message, .. } => write!(f, "{message}"),
             Failure::CommandFailed(line) => write!(f, "Claude couldn't start the agent: {line}"),
+            Failure::Harness(why) => write!(f, "The harness couldn't start the agent: {why}"),
             Failure::Unparseable(stdout) => write!(
                 f,
                 "Claude may have started a session, but its answer wasn't recognised. Retry looks for that session before starting another. It printed: {stdout}"
@@ -92,7 +95,7 @@ impl From<&Failure> for RunFailure {
             Failure::CapReached(_) => RunFailure::CapReached,
             Failure::ModeRefused { mode, .. } => RunFailure::ModeRefused { mode: *mode },
             Failure::NeedsTrust { folder, .. } => RunFailure::UntrustedFolder { path: folder.clone() },
-            Failure::TooOld | Failure::NoEnvironment(_) | Failure::Invalid(_) | Failure::CommandFailed(_) | Failure::Unparseable(_) | Failure::Interrupted => RunFailure::Other,
+            Failure::TooOld | Failure::NoEnvironment(_) | Failure::Invalid(_) | Failure::CommandFailed(_) | Failure::Harness(_) | Failure::Unparseable(_) | Failure::Interrupted => RunFailure::Other,
         }
     }
 }

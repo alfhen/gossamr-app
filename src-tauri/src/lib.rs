@@ -180,11 +180,14 @@ fn use_freed_slot(service: &RunsState) {
 /// Starts or adopts the harness, unless you stopped it, and says how it stands; or does `action`.
 #[tauri::command]
 async fn harness_status(sidecar: State<'_, SidecarState>, action: Option<sidecar::Action>) -> Result<sidecar::Status> {
-    Ok(match (sidecar.as_ref().as_ref(), action) {
-        (None, _) => sidecar::Status::no_folder(),
-        (Some(sidecar), None) => sidecar.ensure().await,
-        (Some(sidecar), Some(action)) => sidecar.act(action).await,
-    })
+    let Some(sidecar) = sidecar.as_ref().as_ref() else { return Ok(sidecar::Status::no_folder()) };
+    let mut status = match action {
+        None => sidecar.ensure().await,
+        Some(action) => sidecar.act(action).await,
+    };
+    // What the harness serves, not what this app was started with: an adopted harness may serve no mock.
+    status.mock = sidecar::mock_script().is_some() && sidecar.serves(runs::on_harness::MOCK).await;
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1032,10 +1035,16 @@ pub fn run() {
             let http = net::client();
             let auth = Arc::new(Auth::load(http.clone()));
             let registry = tracker::Registry::jira(http.clone(), auth.clone());
-            let data_dir = app.path().app_data_dir()?;
-            if let Err(e) = legacy::adopt_legacy_data(&data_dir) {
-                eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
-            }
+            let data_dir = match config::app_data_override() {
+                Some(dir) => dir,
+                None => {
+                    let dir = app.path().app_data_dir()?;
+                    if let Err(e) = legacy::adopt_legacy_data(&dir) {
+                        eprintln!("couldn't move data from the previous app name, starting fresh: {e}");
+                    }
+                    dir
+                }
+            };
             let code = inbox::CodeService::new(http.clone());
             let core: CoreState = Arc::new(Core::new(auth, registry, data_dir).with_code(code));
             tauri::async_runtime::block_on(core.adopt_instances());
@@ -1057,15 +1066,25 @@ pub fn run() {
                 Arc::new(move |connection_id| workstreams_changed(&changed_handle, connection_id)),
             );
             let notices: Arc<dyn runs::tracker::RunNotifier> = Arc::new(RunNotices { app: app.handle().clone(), open: open_on_focus });
-            let service = runs::service::RunService::new(
+            let notifier: Arc<dyn runs::tracker::RunNotifier> = Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()]));
+            let runs_changed_too = runs_handle.clone();
+            let mut service = runs::service::RunService::new(
                     core.clone(),
                     Arc::new(runs::toolchain::SystemToolchain::new(core.clone())),
                     runs::index::RunIndex::load(&core.data_dir()),
                     Arc::new(move |connection_id| runs_changed(&runs_handle, connection_id)),
                 )
-                .with_notifier(Arc::new(agent::supervisor::FanoutNotifier(vec![notices, supervisor.clone()])))
+                .with_notifier(notifier.clone())
                 .with_settings(config.agents)
                 .with_agent_channel(bound.channel());
+            let sidecar: SidecarState = Arc::new(sidecar::Sidecar::bundled(sidecar::Limits::default()));
+            // Until the harness has Claude's driver, only a debug build started with a mock script runs agents on it.
+            if sidecar::mock_script().is_some() {
+                let connect = Arc::new(runs::on_harness::ViaSidecar(sidecar.clone()));
+                let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |connection_id| runs_changed(&runs_changed_too, connection_id));
+                let link = tauri::async_runtime::block_on(async { runs::link::Link::start(core.clone(), connect, Arc::new(agent::agent_tools::HarnessReads(core.clone())), notifier, changed) });
+                service = service.with_harness(runs::on_harness::OnHarness { link: Arc::new(link), provider: runs::on_harness::MOCK.into() });
+            }
             let service = Arc::new(service);
             let handle = app.handle().clone();
             let (view_handle, ws_handle) = (handle.clone(), handle.clone());
@@ -1091,13 +1110,13 @@ pub fn run() {
             tauri::async_runtime::spawn(supervisor.clone().run_sweeps());
             app.manage::<AgentState>(agent);
 
-            let sidecar: SidecarState = Arc::new(sidecar::Sidecar::bundled(sidecar::Limits::default()));
             app.manage(sidecar.clone());
-            let harness_handle = app.handle().clone();
+            let (harness_handle, sweeping) = (app.handle().clone(), app.state::<RunsState>().inner().clone());
             tauri::async_runtime::spawn(async move {
                 if let Some(sidecar) = sidecar.as_ref() {
                     sidecar.ensure().await;
                     wire::changed(&harness_handle, wire::Topic::Harness, "");
+                    sweeping.sweep_harness().await;
                 }
             });
 

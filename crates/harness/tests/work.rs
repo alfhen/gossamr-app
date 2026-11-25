@@ -131,11 +131,25 @@ impl Drop for Served {
     }
 }
 
+fn drivers(seer: &Seer) -> Vec<(String, Arc<dyn Driver>)> {
+    vec![("mock".into(), Arc::new(seer.clone())), ("claude".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser)), ("scribbler".into(), Arc::new(Scribbler))]
+}
+
 fn serve(data: &Path, setup: Setup) -> Served {
     let (token, seer) = (Token::random(), Seer::default());
-    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(seer.clone())), ("refuser".into(), Arc::new(Refuser)), ("scribbler".into(), Arc::new(Scribbler))];
     let first = token.clone();
-    let server = Server::bind_with(data, move || Some(first), drivers, settings(4), setup).unwrap();
+    let server = Server::bind_with(data, move || Some(first), drivers(&seer), settings(4), setup).unwrap();
+    Served { token, data: data.to_owned(), seer, task: tokio::spawn(server.run()) }
+}
+
+/// As `serve`, for a data folder served before: it keeps the token it first had.
+async fn serve_again(data: &Path, setup: impl Fn() -> Setup, token: Token) -> Served {
+    let seer = Seer::default();
+    let server = bind_again(|| {
+        let first = token.clone();
+        Server::bind_with(data, move || Some(first), drivers(&seer), settings(4), setup())
+    })
+    .await;
     Served { token, data: data.to_owned(), seer, task: tokio::spawn(server.run()) }
 }
 
@@ -158,7 +172,7 @@ async fn close(client: &mut Client, session: &str) {
     client.call(Op::Close { session: session.into() }).await.unwrap();
     loop {
         match tokio::time::timeout(WAIT, client.push()).await.expect("a push within the wait").unwrap() {
-            Some(Push::Event { event, .. }) if event.body == Body::Closed => return,
+            Some(Push::Event { event, .. }) if matches!(event.body, Body::Closed { .. }) => return,
             Some(_) => continue,
             None => panic!("the connection ended"),
         }
@@ -270,6 +284,49 @@ async fn the_shell_is_captured_again_for_each_client() {
     open(&mut second, open_op("mock", Some("/nowhere"), None, None, None)).await.unwrap();
     let marks: Vec<Option<String>> = served.seer.starts().iter().map(|seen| seen.var("MARK")).collect();
     assert_eq!(marks, [Some("one".to_owned()), Some("two".to_owned())]);
+}
+
+#[tokio::test]
+async fn resume_take_back_and_an_answer_that_resumes_wait_for_the_connections_shell() {
+    for op in ["resume", "take_back", "answer"] {
+        let rig = Rig::new();
+        std::fs::create_dir_all(rig.home.join(".claude-work")).unwrap();
+        // A Claude session from before this harness started, made with no shell to capture.
+        let (id, token) = {
+            let served = serve(&rig.data, Setup::new(Some(rig.home.clone()), rig.data.clone()));
+            let mut client = connect(&served).await;
+            let mut spec = open_op("claude", Some("/nowhere"), None, None, None);
+            if let Op::Open { login, .. } = &mut spec {
+                *login = Some("~/.claude-work".into());
+            }
+            let id = open(&mut client, spec).await.unwrap();
+            match op {
+                "take_back" => {
+                    client.call(Op::HandOver { session: id.clone() }).await.unwrap();
+                    while !matches!(tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap(), Some(Push::Event { event, .. }) if matches!(event.body, Body::Closed { .. })) {}
+                }
+                _ => close(&mut client, &id).await,
+            }
+            (id, served.token.clone())
+        };
+        let store = reopen(&rig.data).await;
+        if op == "answer" {
+            store.ask(&id, "q1", 1).unwrap();
+        }
+        drop(store);
+        // The first client's shell takes a moment to read.
+        let shell = harness::testing::fake_cli(&rig.tmp.path().join("slowshell"), "sleep 1; printf '\\0GOSSAMR_ENV_BEGIN\\0PATH=/usr/bin:/bin\\0'");
+        let served = serve_again(&rig.data, || Setup::new(Some(rig.home.clone()), rig.data.clone()).with_shell_program(&shell.to_string_lossy()), token).await;
+        let mut client = connect(&served).await;
+        let session = id.clone();
+        let called = match op {
+            "resume" => client.call(Op::Resume { session, carry_on: None }).await,
+            "take_back" => client.call(Op::TakeBack { session }).await,
+            _ => client.call(Op::AnswerQuestion { session, question: "q1".into(), text: "blue".into() }).await,
+        };
+        assert!(called.is_ok(), "{op}: {:?}", called.err().map(|e| e.to_string()));
+        assert_eq!(served.seer.starts().len(), 1, "{op}: started once the shell was read");
+    }
 }
 
 fn seed(rig: &Rig) -> PathBuf {

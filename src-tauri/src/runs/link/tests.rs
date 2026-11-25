@@ -9,79 +9,15 @@ use async_trait::async_trait;
 use harness::api::Op;
 use harness::auth::Token;
 use harness::client::Client;
-use harness::driver::Driver;
 use harness::event::{Decision, Event};
-use harness::mock::{Mock, Script};
-use harness::server::Server;
-use harness::session::Settings;
 use serde_json::{json, Value};
 
 use super::*;
+use super::served::{Direct, Served, WAIT};
 use crate::domain::{RunState, SessionFollow};
 use crate::runs::consumer;
 use crate::runs::rig::{ready, Rig};
 use crate::runs::tracker::Attention;
-
-const WAIT: Duration = Duration::from_secs(20);
-
-struct Served {
-    _tmp: tempfile::TempDir,
-    dir: PathBuf,
-    token: Token,
-    task: Option<tokio::task::JoinHandle<harness::error::Result<()>>>,
-}
-
-impl Served {
-    fn new(script: &str, turn_limit: usize) -> Served {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("h");
-        let token = Token::random();
-        let mut served = Served { _tmp: tmp, dir, token, task: None };
-        served.serve(script, turn_limit);
-        served
-    }
-
-    /// Serves the data folder, again after a shutdown.
-    fn serve(&mut self, script: &str, turn_limit: usize) {
-        let mock = Mock::new(Script::parse(script).unwrap());
-        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
-        let first = self.token.clone();
-        let server = Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }).unwrap();
-        self.task = Some(tokio::spawn(server.run()));
-    }
-
-    async fn client(&self) -> Client {
-        Client::connect(&self.dir, &self.token).await.unwrap()
-    }
-
-    /// Stops the harness through its own `shutdown` and waits until it has freed the data folder.
-    async fn shut_down(&mut self) {
-        let mut client = self.client().await;
-        client.call(Op::Shutdown).await.unwrap();
-        tokio::time::timeout(WAIT, self.task.take().unwrap()).await.unwrap().unwrap().unwrap();
-    }
-}
-
-impl Drop for Served {
-    fn drop(&mut self) {
-        if let Some(task) = self.task.take() {
-            task.abort();
-        }
-    }
-}
-
-/// Connects with the test's token.
-struct Direct {
-    dir: PathBuf,
-    token: Token,
-}
-
-#[async_trait]
-impl Connect for Direct {
-    async fn connect(&self) -> Result<Client, String> {
-        Client::connect(&self.dir, &self.token).await.map_err(|e| e.to_string())
-    }
-}
 
 /// Answers `read_ticket` and records what it was asked.
 #[derive(Default)]
@@ -99,8 +35,22 @@ impl ClientTools for Tickets {
 }
 
 fn link(rig: &Rig, direct: &Arc<Direct>, tickets: &Arc<Tickets>) -> Link {
+    link_with(rig, direct, tickets.clone())
+}
+
+fn link_with(rig: &Rig, direct: &Arc<Direct>, tools: Arc<dyn ClientTools>) -> Link {
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
-    Link::start(rig.fx.core.clone(), direct.clone(), tickets.clone(), rig.notices.clone(), changed)
+    Link::start(rig.fx.core.clone(), direct.clone(), tools, rig.notices.clone(), changed)
+}
+
+/// Never answers, as an app that quits while it reads.
+struct Hangs;
+
+#[async_trait]
+impl ClientTools for Hangs {
+    async fn call(&self, _run: &Run, _name: &str, _input: &Value) -> (Value, bool) {
+        std::future::pending().await
+    }
 }
 
 struct Bed {
@@ -284,9 +234,30 @@ async fn a_stopped_run_reads_stopped_only_once_the_harness_closed_it() {
     let (run, session) = bed.started().await;
     bed.until(&run, |r, _| r.last_detail.as_deref() == Some("Starting a long build.")).await;
     bed.link.stop(&session).await.unwrap();
+    let asked = bed.rig.get(&run).await;
+    let (_, follow) = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert!(asked.state != RunState::Stopped || follow.closed, "stopped only once the harness said it closed");
     let (stopped, _) = bed.until(&run, |_, f| f.closed).await;
     assert_eq!(stopped.state, RunState::Stopped);
-    assert!(bed.rig.fx.core.followed_sessions().await.unwrap().is_empty(), "a closed session is followed no more");
+    assert!(bed.rig.fx.core.followed_sessions().await.unwrap().is_empty(), "a session the app stopped is followed no more");
+    assert!(bed.link.stop(&session).await.is_err(), "a closed session takes no second stop");
+    let (_, follow) = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert!(!follow.stop_asked, "and a stop the harness refused is not one it will read later");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_harness_shutdown_while_the_agent_asks_keeps_the_question_and_the_session_followed_and_wakes_no_one() {
+    let mut bed = Bed::new(ASKS).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::NeedsAnswer).await;
+    bed.served.shut_down().await;
+    bed.served.serve(ASKS, 4);
+    let (after, follow) = bed.until(&run, |_, f| f.closed).await;
+    assert_eq!((after.state, after.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour should the button be?")));
+    assert!(follow.question.is_some() && !follow.ended);
+    assert!(!bed.rig.noticed().iter().any(|(why, _)| *why == Attention::Failed), "Pip hears of no failure");
+    assert!(bed.rig.fx.core.followed_sessions().await.unwrap().iter().any(|(s, _)| *s == session), "a resume takes it up again");
     bed.end().await;
 }
 
@@ -310,6 +281,8 @@ async fn a_harness_restart_in_the_middle_of_a_turn_loses_nothing_and_repeats_not
     let (replayed, from_start, rows) = bed.replayed(&run, &session).await;
     assert_eq!((after.state, follow.clone()), (replayed.state, from_start), "caught up as if it had read every event once");
     assert_eq!(bed.rows(&run).await.len(), rows, "no row twice, none missing");
+    assert_eq!((after.state, after.last_detail.as_deref(), after.error.as_deref()), (RunState::Stopped, Some(consumer::CUT), None), "a shutdown's cut fails nothing");
+    assert!(!bed.rig.noticed().iter().any(|(why, _)| *why == Attention::Failed));
     bed.end().await;
 }
 
@@ -422,5 +395,166 @@ async fn an_event_the_app_could_not_store_is_read_again_and_nothing_after_it_is_
     assert!(stuck < follow.seq);
     assert_eq!((now.state, follow), (replayed.state, from_start));
     assert_eq!(bed.rows(&run).await.len(), rows, "the refused event's rows are there, once");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_call_of_the_apps_tools_a_quit_left_unanswered_is_answered_on_the_next_start() {
+    let mut bed = Bed::new(READS).await;
+    bed.link = link_with(&bed.rig, &bed.direct, Arc::new(Hangs));
+    let (run, _) = bed.started().await;
+    bed.until(&run, |_, f| !f.calls.is_empty()).await;
+    bed.relink();
+    let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert!(follow.calls.is_empty(), "{:?}", done.last_detail);
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1, "answered once, by the app that started again");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_tool_call_read_again_is_not_answered_twice() {
+    let bed = Bed::new(READS).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1);
+    let mut client = bed.served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.clone(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    let call = events.into_iter().find(|e| matches!(e.body, harness::event::Body::ClientToolCall { .. })).unwrap();
+    bed.link.inner.take(&session, call).await.unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1, "applied once, answered once");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn the_same_loss_at_one_place_is_asked_about_once() {
+    let bed = Bed::new(STREAM).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    let mut client = bed.served.client().await;
+    let mut lost_at = LostAt::new();
+    for _ in 0..4 {
+        bed.link.inner.lost(&mut client, &session, "events were lost: test", &mut lost_at).await.unwrap();
+    }
+    let losses = bed.rows(&run).await.iter().filter(|(_, text)| text.starts_with(consumer::LOST)).count();
+    assert_eq!(losses, 1, "a loss at the same place again is not asked about again");
+    bed.end().await;
+}
+
+/// Answers once it is let go, counting the calls it took.
+#[derive(Default)]
+struct Slow {
+    calls: Mutex<u32>,
+    go: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ClientTools for Slow {
+    async fn call(&self, _run: &Run, _name: &str, input: &Value) -> (Value, bool) {
+        *self.calls.lock().unwrap() += 1;
+        self.go.notified().await;
+        (json!({ "key": input["key"], "text": "Fix the login page" }), false)
+    }
+}
+
+#[tokio::test]
+async fn a_call_whose_answer_is_on_its_way_is_not_answered_again_on_a_reconnect() {
+    let mut bed = Bed::new(READS).await;
+    let slow = Arc::new(Slow::default());
+    bed.link = link_with(&bed.rig, &bed.direct, slow.clone());
+    let (run, _) = bed.started().await;
+    bed.until(&run, |_, f| !f.calls.is_empty()).await;
+    let mut client = bed.served.client().await;
+    follow_all(&bed.link.inner, &mut client).await.unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(*slow.calls.lock().unwrap(), 1, "the call in flight was not taken again");
+    slow.go.notify_one();
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
+    let mut bed = Bed::new(ASKS).await;
+    let (run, session) = bed.started().await;
+    let (_, follow) = bed.until(&run, |r, _| r.state == RunState::NeedsAnswer).await;
+    bed.served.shut_down().await;
+    bed.served.serve(ASKS, 4);
+    // Answered once the link watches again: a follow it takes after its reconnect's watches is that handshake.
+    let _ = bed.link.follow("no-such-session", 0).await;
+    let (after, _) = bed.until(&run, |r, f| f.closed && r.state == RunState::NeedsAnswer).await;
+    assert_eq!(after.needs.as_deref(), Some("Which colour should the button be?"));
+    // The verifier's quiet spell: long enough for every watch the reconnect made of the closed session to have ended.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let before = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap().1.seq;
+    bed.link.call(Op::AnswerQuestion { session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
+    // At once: the watching connection follows it now, not at some later reconnect, seconds on.
+    let resumed = tokio::time::timeout(std::time::Duration::from_millis(1500), bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1)).await;
+    let (_, resumed) = resumed.expect("the resumed start's events were applied at once");
+    assert!(resumed.seq > before);
+    let rows = bed.rows(&run).await;
+    assert!(rows.iter().any(|(_, text)| text == "Resumed") && rows.iter().any(|(_, text)| text == "Its question was answered"), "{rows:?}");
+    bed.end().await;
+}
+
+/// Connects as `Direct` does, noting when each attempt was made.
+struct Counting {
+    direct: Arc<Direct>,
+    at: Mutex<Vec<std::time::Instant>>,
+}
+
+#[async_trait]
+impl Connect for Counting {
+    async fn connect(&self) -> Result<Client, String> {
+        self.at.lock().unwrap().push(std::time::Instant::now());
+        self.direct.connect().await
+    }
+}
+
+#[tokio::test]
+async fn a_dropped_connection_is_tried_again_only_after_a_wait() {
+    let mut bed = Bed::new(STREAM).await;
+    let counting = Arc::new(Counting { direct: bed.direct.clone(), at: Mutex::new(Vec::new()) });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    let _ = bed.link.follow("no-such-session", 0).await;
+    bed.served.shut_down().await;
+    let dropped = std::time::Instant::now();
+    tokio::time::timeout(WAIT, async {
+        while counting.at.lock().unwrap().iter().all(|at| *at < dropped) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let next = *counting.at.lock().unwrap().iter().find(|at| **at >= dropped).unwrap();
+    assert!(next - dropped >= std::time::Duration::from_millis(60), "tried again after {:?}", next - dropped);
+}
+
+#[tokio::test]
+async fn the_wait_grows_while_watching_the_followed_sessions_keeps_failing() {
+    let mut bed = Bed::new(STREAM).await;
+    let (run, _) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    let app = rusqlite::Connection::open(bed.rig.fx.dir.join("app.sqlite")).unwrap();
+    app.execute_batch("ALTER TABLE run_sessions RENAME TO run_sessions_away").unwrap();
+    let counting = Arc::new(Counting { direct: bed.direct.clone(), at: Mutex::new(Vec::new()) });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    let started = std::time::Instant::now();
+    tokio::time::timeout(WAIT, async {
+        while counting.at.lock().unwrap().len() < 4 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // 100, 200 and 400 ms between the first four tries when the wait doubles; 300 ms at most when it does not.
+    assert!(started.elapsed() >= std::time::Duration::from_millis(600), "four tries in {:?}", started.elapsed());
+    app.execute_batch("ALTER TABLE run_sessions_away RENAME TO run_sessions").unwrap();
     bed.end().await;
 }

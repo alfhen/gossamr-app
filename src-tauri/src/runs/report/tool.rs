@@ -25,6 +25,20 @@ pub fn definition() -> Value {
     })
 }
 
+/// What a harness session's `result` must fit: the report's status and note, in the part of JSON Schema the harness
+/// checks.
+pub fn result_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": { "type": "string", "enum": ["done", "blocked"] },
+            "note": { "type": "string", "minLength": 1, "maxLength": REPORT_LIMIT, "description": "Your full prose report: what you did or found, evidence, and what should happen next." }
+        },
+        "required": ["status", "note"],
+        "additionalProperties": false
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Checked {
     pub report: Report,

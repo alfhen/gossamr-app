@@ -8,7 +8,16 @@
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 //!
-//! No call resumes a session yet: H10 adds resuming after a restart, and H14 adds taking a handed-over session back.
+//! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
+//! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
+//! exited or crashed by itself, a fault signal or a SIGKILL from outside among them, or its driver failed), `signal`
+//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
+//! needs a driver that says how its agent ended (`Driver::open_reporting`); with one that does not, such an end reads
+//! as `agent`. When more than one holds, a request the harness took (`stop`, `shutdown`, `hand_over`, `client_left`)
+//! wins, even one the agent's going overtook, then `harness`, then `signal`, then `agent`. A locked session's `closed`, and one the sweep reached, arrives as `withheld` with `of: "closed"` and
+//! `kept.by`. A reader takes a value it does not know, or a `closed` from a harness that did not say, as `unknown`, so
+//! a later value needs no new protocol. Some starts end with no stored `closed`: one a shutdown gave up on, whose last
+//! event is `failed` with kind `stuck` (its agent may still run), and one whose harness was killed or crashed.
 
 use std::path::{Path, PathBuf};
 
@@ -157,23 +166,32 @@ pub enum Op {
     /// asked it, a clean-up or a resume refused for good closed is refused.
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
-    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
+    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume. It answers once the
+    /// hand-over is taken, even if the agent goes before the session reads it, but only the `handed_over` event
+    /// confirms it: the session is marked as handed over, says `handed_over`, then closes `by: hand_over`. A `closed`
+    /// with `by: harness` and no `handed_over` after an Ok answer means the store would not keep the mark, and it was
+    /// not done. It is refused for a session already stopping.
     HandOver { session: String },
-    /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token; follow
-    /// it with `watch`. The harness calls this after a restart (H10), or the app when the person asks. With
-    /// `carry_on`, that text is the next prompt, checked and sent in one step of the session, so no question,
-    /// permission request, stop or hand-over gets in between. Refused with the reason: a session cleaned up, one that
-    /// ended with its client, one marked as one that cannot be resumed, one handed over and not taken back, one whose
-    /// worktree another session holds, one a shutdown gave up on (its agent may still run); and with `carry_on`, one
-    /// with an open question, or one whose last stop, deny-ended turn or open permission request forbids it.
+    /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token, and
+    /// watches it on this connection from its next event, as `open` does, so a locked session's client misses none.
+    /// Waits for the connection's shell first. The harness calls this after a restart (H10), or the app when the
+    /// person asks. With `carry_on`, that text is the next prompt, checked and sent in one step of the session, so no
+    /// question, permission request, stop or hand-over gets in between; a blank one is refused. Refused with the
+    /// reason: a session cleaned up, one that ended with its client, one marked as one that cannot be resumed, one
+    /// handed over and not taken back, one whose worktree another session holds, one a shutdown gave up on (its agent
+    /// may still run); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
+    /// cancelled turn or open permission request forbids it. A cancel forbids it because "carry on" would undo it;
+    /// the next turn lifts each mark.
     Resume {
         session: String,
         #[serde(default)]
         carry_on: Option<String>,
     },
-    /// Resumes a session handed over to Terminal. The app sends it only on the person's word that they took the
-    /// session back from Terminal; until then `resume` refuses it.
+    /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
+    /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
+    /// over is refused: resume it.
     TakeBack { session: String },
+    /// Refused while the session runs, and for one a shutdown gave up on, whose agent may still work in its worktree.
     CleanUp { session: String },
     /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
     /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.

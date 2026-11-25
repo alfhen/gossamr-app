@@ -38,14 +38,17 @@ impl Db {
         Ok(Some((run_id, serde_json::from_str(&data)?)))
     }
 
-    /// Every session the app still follows, with how far: one that has not closed, of a run this handle sees.
+    /// Every session the app still follows, with how far: one that has not ended, of a run this handle sees. A session
+    /// a shutdown or a hand-over closed is followed while its question is open; one with nothing open is followed again
+    /// when the app resumes it.
     pub fn followed_sessions(&self) -> Result<Vec<(String, SessionFollow)>> {
         let mut stmt = self.conn.prepare("SELECT session, run_id, data FROM run_sessions ORDER BY run_id")?;
         let rows: Vec<(String, String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
         let mut out = Vec::new();
         for (session, run_id, data) in rows {
             let follow: SessionFollow = serde_json::from_str(&data)?;
-            if !follow.closed && self.run(&run_id)?.is_some() {
+            let waits = !follow.closed || follow.question.is_some();
+            if !follow.ended && waits && self.run(&run_id)?.is_some() {
                 out.push((session, follow));
             }
         }
@@ -55,13 +58,25 @@ impl Db {
     /// Applies what `f` makes of the session's run and follow, and the timeline rows it returns, in one transaction:
     /// all of it lands, or none. None when no run this handle sees follows `session`.
     pub fn apply_session(&self, session: &str, f: impl FnOnce(&mut Run, &mut SessionFollow) -> Vec<RunEvent>) -> Result<Option<Applied>> {
+        self.apply_session_reporting(session, |run, follow| (f(run, follow), None))
+    }
+
+    /// `apply_session`, keeping the report `f` returns as the run's in the same transaction.
+    pub fn apply_session_reporting(
+        &self,
+        session: &str,
+        f: impl FnOnce(&mut Run, &mut SessionFollow) -> (Vec<RunEvent>, Option<crate::runs::report::Report>),
+    ) -> Result<Option<Applied>> {
         self.atomically(|db| {
             let Some((run_id, mut follow)) = db.session_run(session)? else { return Ok(None) };
             let Some(before) = db.run(&run_id)? else { return Ok(None) };
             let mut run = before.clone();
-            let rows = f(&mut run, &mut follow);
+            let (rows, report) = f(&mut run, &mut follow);
             if run != before {
                 db.save_run(&run)?;
+            }
+            if let Some(report) = report {
+                db.keep_result(&run_id, report, chrono::Utc::now())?;
             }
             db.append_events(&run_id, &rows)?;
             db.conn.execute("UPDATE run_sessions SET data = ?2 WHERE run_id = ?1", params![run_id, serde_json::to_string(&follow)?])?;
@@ -133,11 +148,23 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_session_is_no_longer_followed() {
+    fn a_session_a_shutdown_closed_is_followed_while_its_question_is_open_and_one_the_app_stopped_is_not() {
         let (_dir, db, _) = db_with_run();
         db.bind_run_session("r1", "s1").unwrap();
         db.apply_session("s1", |_, follow| {
             follow.closed = true;
+            vec![]
+        })
+        .unwrap();
+        assert!(db.followed_sessions().unwrap().is_empty(), "nothing open: followed again once the app resumes it");
+        db.apply_session("s1", |_, follow| {
+            follow.question = Some("q1".into());
+            vec![]
+        })
+        .unwrap();
+        assert_eq!(db.followed_sessions().unwrap().len(), 1, "its question is still open");
+        db.apply_session("s1", |_, follow| {
+            follow.ended = true;
             vec![]
         })
         .unwrap();

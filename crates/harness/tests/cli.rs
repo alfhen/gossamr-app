@@ -175,11 +175,15 @@ fn serve_drains_its_stdin_on_a_later_start_and_does_not_start_on_a_token_the_fol
     assert_eq!(stdin_of(again.0.id()), "/dev/null", "its stdin is /dev/null");
     drop(again);
 
-    for (what, line, said) in [("another token", harness::auth::Token::random().hex(), "not one this data folder knows"), ("a line that is not a token", "not a token".into(), "not a client token")] {
+    let unknown = i32::from(harness::server::UNKNOWN_TOKEN_EXIT);
+    for (what, line, said, code) in [
+        ("another token", harness::auth::Token::random().hex(), "not one this data folder knows", unknown),
+        ("a line that is not a token", "not a token".into(), "not a client token", 1),
+    ] {
         let mut other = serve_again(std::process::Stdio::piped()).spawn().unwrap();
         give_token(&mut other, &line);
         let refused = output_within(other, std::time::Duration::from_secs(60));
-        assert_eq!(refused.status.code(), Some(1), "{what} on stdin does not start it");
+        assert_eq!(refused.status.code(), Some(code), "{what} on stdin does not start it, with its own exit code");
         assert!(String::from_utf8_lossy(&refused.stderr).contains(said), "it says why: {:?}", String::from_utf8_lossy(&refused.stderr));
     }
 
@@ -579,4 +583,14 @@ fn client_run_told_to_allow_a_request_that_was_cut_closes_the_session_and_fails(
     assert!(String::from_utf8_lossy(&out.stderr).contains("can only be denied; closing the session"));
     let printed = printed(&out);
     assert_eq!(printed.last().map(|event| &event["type"]), Some(&serde_json::json!("closed")), "it read on until the session closed");
+}
+
+#[test]
+fn serve_takes_a_turn_limit_of_one_or_more() {
+    let parse = |args: &[&str]| harness::request(&args.iter().map(std::ffi::OsString::from).collect::<Vec<_>>());
+    assert!(matches!(parse(&["serve", "--turn-limit", "6"]), harness::Request::Serve { turn_limit: Some(6), .. }));
+    assert!(matches!(parse(&["serve"]), harness::Request::Serve { turn_limit: None, .. }));
+    for bad in [["serve", "--turn-limit", "0"], ["serve", "--turn-limit", "many"]] {
+        assert!(matches!(parse(&bad), harness::Request::Usage), "{bad:?}");
+    }
 }

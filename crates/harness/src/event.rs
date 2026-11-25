@@ -43,6 +43,8 @@ pub enum Body {
     ToolResult { id: String, output: Value, error: bool },
     /// The id is the harness's own, unique in the session across restarts and resumes, not the provider's.
     Permission { id: String, kind: PermissionKind, tool: String, input: Value },
+    /// The agent withdrew a permission request before it was answered; an answer to it is refused from now on.
+    PermissionClosed { id: String },
     Answered {
         id: String,
         decision: Decision,
@@ -63,7 +65,11 @@ pub enum Body {
     Notice { text: String },
     /// The session was handed over to Terminal; `closed` follows. Its provider id is kept, to resume it there.
     HandedOver,
-    Closed,
+    /// The session's last event of this start. `by` says why it ended.
+    Closed {
+        #[serde(default)]
+        by: ClosedBy,
+    },
     /// What the store gives back for an event whose private fields it does not keep: a locked session's, one dropped
     /// at clean-up or by age, one too large to keep even when cut, or one of a type this build does not know (so a later step can add an event without a
     /// migration). `of` is the event's type, and `kept` its fields that are not private (ids, kinds, decisions, how
@@ -75,11 +81,39 @@ pub enum Body {
     },
 }
 
+/// Why a session's start ended, in its `closed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedBy {
+    /// The harness shut down, and stopped it.
+    Shutdown,
+    /// A client's Stop (`close`).
+    Stop,
+    /// It was handed over to Terminal.
+    HandOver,
+    /// The agent exited by itself, or crashed (a fault signal, or a SIGKILL from outside), or its driver failed, or
+    /// it went and its driver did not say how. A turn it cut says the signal in its `failed`.
+    Agent,
+    /// It ended with its client, which left.
+    ClientLeft,
+    /// Its agent's process was ended by a signal the harness did not send of those a logout or a restart sends first:
+    /// SIGTERM, SIGHUP or SIGINT. A fault signal (SIGABRT, SIGSEGV and the like) or a SIGKILL from outside is the
+    /// agent's own end, `agent`. Only a driver that says how its agent ended tells this from `agent`.
+    Signal,
+    /// The harness could not go on with it: its store failed, or it stopped an agent whose session id looks like a
+    /// secret.
+    Harness,
+    /// A value this build does not know, or a `closed` from a harness that did not say.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
 /// The fields a withheld event keeps, because they hold no text the agent or the person wrote. A field not on this
 /// list is dropped, so a new one stays private until someone adds it here; `PRIVATE_FIELDS` lists those that must be.
 /// `name` and `tool` are tool identifiers (`Bash`, `run_command`, `mcp__x__ask`), never a title or a command line: a
 /// driver puts those in `input`.
-pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error"];
+pub const KEPT_FIELDS: &[&str] = &["provider_session", "resumed", "id", "name", "kind", "tool", "decision", "how", "error", "by"];
 
 /// Fields that can hold what the agent or the person wrote. Every field of every event is on one of the two lists.
 pub const PRIVATE_FIELDS: &[&str] = &["text", "input", "output", "reason", "message", "data"];
@@ -160,6 +194,9 @@ pub enum PermissionKind {
     Permissions,
     /// A call of a named tool, an MCP tool among them.
     Tool,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// An answer to a permission request. It holds for that one request: no answer is ever "always".
@@ -168,6 +205,9 @@ pub enum PermissionKind {
 pub enum Decision {
     Allow,
     Deny,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +217,9 @@ pub enum TurnEnd {
     Cancelled,
     /// A deny ended the turn, so no "carry on" may follow it.
     Denied,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// What closed a question.
@@ -187,8 +230,15 @@ pub enum QuestionEnd {
     /// The session was stopped. A harness that shuts down closes none: they are answered after it starts again.
     Stopped,
     HandedOver,
-    /// A deny ended the turn that asked it.
+    /// A deny ended the turn whose `ask` call held it.
     Denied,
+    /// The session was cleaned up with it open.
+    CleanedUp,
+    /// The session can never be resumed (it ended with its client, or cannot be), so no answer can reach it.
+    NotResumable,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 /// Why a turn or a session failed, so a client can say what to do about it.
@@ -207,6 +257,9 @@ pub enum FailKind {
     Driver,
     /// The harness itself could not go on, for example its store.
     Harness,
+    /// A value a newer harness of the same protocol sends that this build does not know. Never sent.
+    #[serde(other)]
+    Other,
 }
 
 #[cfg(test)]
@@ -228,16 +281,17 @@ mod tests {
             Body::ClientToolCall { .. } => 7,
             Body::ToolResult { .. } => 8,
             Body::Permission { .. } => 9,
-            Body::Answered { .. } => 10,
-            Body::Question { .. } => 11,
-            Body::QuestionClosed { .. } => 12,
-            Body::Result { .. } => 13,
-            Body::TurnEnded { .. } => 14,
-            Body::Failed { .. } => 15,
-            Body::Notice { .. } => 16,
-            Body::HandedOver => 17,
-            Body::Closed => 18,
-            Body::Withheld { .. } => 19,
+            Body::PermissionClosed { .. } => 10,
+            Body::Answered { .. } => 11,
+            Body::Question { .. } => 12,
+            Body::QuestionClosed { .. } => 13,
+            Body::Result { .. } => 14,
+            Body::TurnEnded { .. } => 15,
+            Body::Failed { .. } => 16,
+            Body::Notice { .. } => 17,
+            Body::HandedOver => 18,
+            Body::Closed { .. } => 19,
+            Body::Withheld { .. } => 20,
         }
     }
 
@@ -255,6 +309,7 @@ mod tests {
             Body::ClientToolCall { id: "i".into(), name: "n".into(), input: json!({}) },
             Body::ToolResult { id: "i".into(), output: json!("o"), error: false },
             Body::Permission { id: "i".into(), kind: PermissionKind::Tool, tool: "t".into(), input: json!({}) },
+            Body::PermissionClosed { id: "i".into() },
             Body::Answered { id: "i".into(), decision: Decision::Deny, message: None },
             Body::Question { id: "i".into(), text: "t".into() },
             Body::QuestionClosed { id: "i".into(), how: QuestionEnd::Stopped },
@@ -263,7 +318,7 @@ mod tests {
             Body::Failed { kind: FailKind::Provider, reason: "r".into() },
             Body::Notice { text: "t".into() },
             Body::HandedOver,
-            Body::Closed,
+            Body::Closed { by: ClosedBy::Stop },
         ]
     }
 

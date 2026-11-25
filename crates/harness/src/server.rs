@@ -93,6 +93,16 @@ pub struct Server {
     sweep_every: Duration,
 }
 
+/// Why `serve` does not start when the token on stdin is not one the store knows. `serve` then exits with
+/// `UNKNOWN_TOKEN_EXIT`, so the app that started it can tell this from a harness that failed.
+const UNKNOWN_TOKEN: &str = "the token on stdin is not one this data folder knows, so the harness does not start; the folder keeps the tokens it has";
+pub const UNKNOWN_TOKEN_EXIT: u8 = 3;
+
+/// Whether `bind` refused the token on stdin as one the store does not know.
+pub fn unknown_token(e: &Error) -> bool {
+    matches!(e, Error::Refused(why) if why == UNKNOWN_TOKEN)
+}
+
 impl Server {
     /// Takes the data folder and listens on its socket. A store with no client token yet takes `first_token`'s, the
     /// one the client that starts the harness hands over; with none, the harness does not start. A store that has
@@ -110,7 +120,7 @@ impl Server {
             let token = first_token().ok_or_else(|| Error::Refused("no client token yet: give the first one on stdin".into()))?;
             store.add_client_token(&token.stored_key())?;
         } else if first_token().is_some_and(|token| !tokens.iter().any(|known| known.stored_key == token.stored_key())) {
-            return Err(Error::Refused("the token on stdin is not one this data folder knows, so the harness does not start; the folder keeps the tokens it has".into()));
+            return Err(Error::Refused(UNKNOWN_TOKEN.into()));
         }
         let harness = Harness::with_setup(store, drivers, settings, Arc::new(setup));
         // The store's lock is ours, so a socket or a descriptor left here is a dead harness's.
@@ -394,7 +404,7 @@ struct Client {
 impl Drop for Client {
     fn drop(&mut self) {
         for id in &self.ends_with_it {
-            let _ = self.harness.close(id);
+            let _ = self.harness.client_left(id);
         }
     }
 }
@@ -467,11 +477,26 @@ impl Client {
             Op::Cancel { session } => done(harness.cancel(&session)),
             Op::Answer { session, request, decision, message } => done(harness.answer(&session, &request, decision, message)),
             Op::ToolResult { session, call, output, error } => done(harness.tool_result(&session, &call, output, error)),
-            Op::AnswerQuestion { session, question, text } => done(harness.answer_question(&session, &question, text).await),
+            // It may resume the session, which waits for the shell as an open does.
+            Op::AnswerQuestion { session, question, text } => {
+                self.captured().await;
+                done(harness.answer_question(&session, &question, text).await)
+            }
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
-            Op::Resume { session, carry_on } => harness.resume_with(&session, carry_on).await.map(|_| json!({ "session": session })),
-            Op::TakeBack { session } => harness.take_back(&session).await.map(|_| json!({ "session": session })),
+            // Watched in the same step, as an open is, so a locked session's client misses none of the new start.
+            Op::Resume { session, carry_on } => {
+                self.captured().await;
+                let (feed, after) = harness.resume_watched(&session, carry_on, false)?;
+                self.watch(session.clone(), (vec![], false, 0), Some(feed), after);
+                Ok(json!({ "session": session }))
+            }
+            Op::TakeBack { session } => {
+                self.captured().await;
+                let (feed, after) = harness.resume_watched(&session, None, true)?;
+                self.watch(session.clone(), (vec![], false, 0), Some(feed), after);
+                Ok(json!({ "session": session }))
+            }
             Op::CleanUp { session } => done(harness.clean_up(&session).await),
             Op::Sessions => Ok(serde_json::to_value(harness.sessions()?)?),
             Op::Providers { logins } => {
@@ -535,8 +560,9 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
     let (page, more, upto) = stored;
     let mut lost = None;
     match pages(&harness, &session, page, more, upto, &mut last, &out).await {
-        Some(Paged::Done) => {}
-        Some(Paged::Closed) => return finish(&out, session).await,
+        // A resumed session's earlier start closed too: the watch reads on while it runs.
+        Some(Paged::Closed) if live.is_none() => return finish(&out, session).await,
+        Some(Paged::Done | Paged::Closed) => {}
         Some(Paged::Short) => {
             lost = Some(format!("events were lost: the sweep deleted the stored events of session {session} after {last}, up to {upto}, before they were read"));
             live = None;
@@ -576,7 +602,7 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
                 Err(RecvError::Closed) => break,
             },
         };
-        let closed = event.body == Body::Closed;
+        let closed = matches!(event.body, Body::Closed { .. });
         // An event numbered 0 was not stored, so it cannot have been pushed before.
         if event.seq == 0 || event.seq > last {
             last = last.max(event.seq);
@@ -592,7 +618,7 @@ async fn forward(harness: Harness, session: String, stored: (Vec<Event>, bool, u
 }
 
 enum Paged {
-    /// It pushed `closed`.
+    /// The last event it pushed is a `closed`: a resumed session's earlier ones are read past.
     Closed,
     /// The store has no more up to `upto`.
     Done,
@@ -603,19 +629,21 @@ enum Paged {
 /// Pushes `page`, then, while `more`, the store's next pages after `last` and up to `upto`. None when the client has
 /// gone.
 async fn pages(harness: &Harness, session: &str, mut page: Vec<Event>, mut more: bool, upto: u64, last: &mut u64, out: &Sender<Reply>) -> Option<Paged> {
+    let mut closed = false;
     loop {
         for event in page {
             *last = event.seq;
-            let closed = event.body == Body::Closed;
+            closed = matches!(event.body, Body::Closed { .. });
             if !push(out, session, event).await {
                 return None;
             }
-            if closed {
-                return Some(Paged::Closed);
-            }
         }
         if !more {
-            return Some(if upto != u64::MAX && *last < upto { Paged::Short } else { Paged::Done });
+            return Some(match () {
+                _ if closed => Paged::Closed,
+                _ if upto != u64::MAX && *last < upto => Paged::Short,
+                _ => Paged::Done,
+            });
         }
         (page, more) = harness.events_page(session, *last, upto, PAGE_BYTES).ok()?;
     }
@@ -637,7 +665,7 @@ mod tests {
     async fn events_an_event_both_read_and_live_is_pushed_once_and_the_watch_ends_at_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let harness = Harness::new(Store::open(&tmp.path().join("d")).unwrap(), vec![], Settings::default());
-        let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]).collect();
+        let all: Vec<Event> = (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed { by: crate::event::ClosedBy::Stop }, cut: None }]).collect();
         let (live, receiver) = mpsc::channel(64);
         let receiver = Feed::Locked { events: receiver, lost: Arc::new(std::sync::atomic::AtomicBool::new(false)), bytes: Arc::new(AtomicUsize::new(0)) };
         // The read got 1 to 3; the receiver has 2 onwards.
@@ -663,7 +691,7 @@ mod tests {
         store.create_session("s", "mock", false, Path::new("/"), None).unwrap();
         let harness = Harness::new(store, vec![], Settings::default());
         let (live, receiver) = tokio::sync::broadcast::channel(2);
-        for event in (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed, cut: None }]) {
+        for event in (1..=4).map(text).chain([Event { seq: 5, ms: 0, body: Body::Closed { by: crate::event::ClosedBy::Stop }, cut: None }]) {
             live.send(event).unwrap();
         }
         let (out, mut pushes) = mpsc::channel(64);
@@ -684,7 +712,7 @@ mod tests {
         store.create_session("s", "mock", true, Path::new("/"), None).unwrap();
         // Events 1 to 8 and `closed` are stored, withheld as a locked session's are. The watch began after 5, so 6 on
         // also came to its receiver, whole, while it read the store.
-        let whole: Vec<Event> = (1..=8).map(text).chain([Event { seq: 9, ms: 0, body: Body::Closed, cut: None }]).collect();
+        let whole: Vec<Event> = (1..=8).map(text).chain([Event { seq: 9, ms: 0, body: Body::Closed { by: crate::event::ClosedBy::Stop }, cut: None }]).collect();
         for event in &whole {
             store.append("s", &event.body, 0).unwrap();
         }

@@ -555,10 +555,10 @@ export interface Run {
   inWorkFolder?: boolean;
   /** The harness session the run is, once it opened one. */
   harnessSession?: string;
+  /** The harness took your answer to its open question, and it has not reached the agent yet; `lastDetail` says so in words. */
+  answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
-  /** You answered its question and the harness holds the answer until the agent's turn ends; left out when false. */
-  answerWaits?: boolean;
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
   commitEmail?: string | null;
   signingKey?: string | null;
@@ -618,7 +618,6 @@ export interface Run {
 
 /** Why a message to a run handed over to Terminal waits on you, as `HANDED_OVER_ASK` in `runs/message.rs`. */
 export const HANDED_OVER_ASK = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
-
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
 export const SUMMARY_ONLY = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";
@@ -836,6 +835,8 @@ export interface HarnessStatus {
   update: boolean;
   /** What the person should know, already worded for them. */
   message: string | null;
+  /** A debug build started with `GOSSAMR_MOCK_SCRIPT`: agents run on that mock script, not on Claude. */
+  mock?: boolean;
 }
 
 export type HarnessAction = "start" | "restart" | "stop";
