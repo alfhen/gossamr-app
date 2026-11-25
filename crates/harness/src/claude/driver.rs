@@ -493,6 +493,30 @@ mod tests {
         assert_eq!(said.try_recv().ok(), Some(Body::Started { provider_session: "s-0".into(), resumed: true }));
     }
 
+    fn launch(locked: bool, model: Option<&str>, resume: Option<&str>) -> Launch {
+        Launch {
+            cwd: "/nowhere".into(),
+            locked,
+            model: model.map(str::to_owned),
+            login: None,
+            effort: None,
+            resume: resume.map(str::to_owned),
+            tools_token: crate::driver::Secret::random(),
+            tools: std::sync::Arc::new(crate::tools::Endpoint::unattached("t")),
+            env: vec![],
+        }
+    }
+
+    #[test]
+    fn the_argv_names_a_model_only_when_chosen_and_a_session_only_on_a_resume() {
+        let tail = |launch: &Launch| args(launch)[STREAM.len()..].to_vec();
+        assert_eq!(tail(&launch(false, None, None)), ["--append-system-prompt", GUARD]);
+        assert_eq!(tail(&launch(false, Some("haiku"), Some("s-1"))), ["--model", "haiku", "--resume", "s-1", "--append-system-prompt", GUARD]);
+        let locked = tail(&launch(true, None, Some("s-1")));
+        assert_eq!(locked[..LOCKED.len()], *LOCKED);
+        assert_eq!(locked[LOCKED.len()..], ["--resume", "s-1"], "a locked session gets no guard: it has no tool to commit with");
+    }
+
     #[test]
     fn the_guard_says_never_to_turn_off_signing_or_hooks_and_to_report_it() {
         assert!(GUARD.contains("Never turn off commit signing or hooks"), "{GUARD}");
