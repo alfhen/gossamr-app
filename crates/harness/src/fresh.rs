@@ -27,6 +27,8 @@ pub enum CloneError {
     Occupied { repo: String, path: PathBuf },
     Auth(String),
     Failed(String),
+    /// The clone's origin breaks a rule (`Git::origin_or_why`), so the harness doesn't trust it.
+    Untrusted { path: PathBuf, why: String },
 }
 
 impl fmt::Display for CloneError {
@@ -36,6 +38,7 @@ impl fmt::Display for CloneError {
             CloneError::Occupied { repo, path } => write!(f, "{} already exists and isn't a clone of {repo}. Move it away, then retry.", tilde(path)),
             CloneError::Auth(line) => write!(f, "Git couldn't sign in to GitHub: {line}"),
             CloneError::Failed(line) => write!(f, "Cloning failed: {line}"),
+            CloneError::Untrusted { path, why } => write!(f, "{} can't be used, because {why}. Remove that setting, then retry.", tilde(path)),
         }
     }
 }
@@ -217,9 +220,15 @@ fn written_by_gossamr_tools(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     let parts: Vec<&str> = key.split('.').collect();
     match parts.as_slice() {
-        ["core", var] => matches!(*var, "repositoryformatversion" | "filemode" | "bare" | "logallrefupdates" | "ignorecase" | "precomposeunicode"),
+        // `hookspath`: Husky sets it on `npm install`. Harmless only because every git call Gossamr makes pins it to
+        // /dev/null (`PINNED`), which a test of every call holds to.
+        ["core", var] => matches!(*var, "repositoryformatversion" | "filemode" | "bare" | "logallrefupdates" | "ignorecase" | "precomposeunicode" | "hookspath"),
         ["remote", "origin" | "upstream", "url" | "fetch"] => true,
         ["remote", middle @ .., "gh-resolved"] | ["branch", middle @ .., "remote" | "merge"] => !middle.is_empty(),
+        // Who an agent commits as: neither runs a program nor names a host, so a fetch reads the same with them.
+        ["user", "name" | "email"] => true,
+        // `gh pr create` records the base it was made against; it names a branch, as `merge` does.
+        ["branch", middle @ .., "gh-merge-base"] => !middle.is_empty(),
         _ => false,
     }
 }
@@ -232,6 +241,9 @@ fn key_shape(key: &str) -> String {
         _ => key.to_owned(),
     }
 }
+
+/// What git says when it got no answer from the remote, as opposed to an answer that refused.
+const UNREACHABLE: [&str; 7] = ["could not resolve host", "unable to access", "could not read from remote repository", "connection refused", "timed out", "network is unreachable", "took longer than"];
 
 /// Whether the remote's fetch rules are the ones `git clone` writes. A changed rule can map remote branches onto
 /// local ones, and `--prune` would then delete branches that agents have unpushed commits on.
@@ -267,9 +279,13 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     }
     let mut args: Vec<OsString> = PINNED.iter().map(OsString::from).collect();
     args.extend(["-C".into(), path.into(), "fetch".into(), "--prune".into(), "--quiet".into(), "origin".into(), "+refs/heads/*:refs/remotes/origin/*".into()]);
-    match git.run(git.git_program(), args, &[NO_PROMPT], FETCH_LIMIT).await {
+    match git.run_telling_all(git.git_program(), args, &[NO_PROMPT], FETCH_LIMIT).await {
         Ok(()) => Fetched::Done,
-        Err(line) => Fetched::Not(line),
+        Err(said) => {
+            let lower = said.to_ascii_lowercase();
+            let unreachable = UNREACHABLE.iter().any(|sign| lower.contains(sign));
+            Fetched::Not(format!("{}; git said: {said}", if unreachable { "the remote couldn't be reached" } else { "the fetch failed" }))
+        }
     }
 }
 
@@ -320,8 +336,13 @@ pub async fn ensure_clone(git: &Git, home: &Path, repo: &str, fetch_due: bool) -
     let path = work_path(home, repo)?;
     if path.symlink_metadata().is_ok() {
         let real_folder = path.symlink_metadata().is_ok_and(|m| m.is_dir());
-        if !real_folder || !path.join(".git").exists() || !git.origin(&path).await.is_some_and(|url| origin_matches(&url, repo)) {
+        if !real_folder || !path.join(".git").exists() {
             return Err(CloneError::Occupied { repo: repo.to_owned(), path });
+        }
+        match git.origin_or_why(&path).await {
+            Ok(url) if origin_matches(&url, repo) => {}
+            Err(why) if why.starts_with("the clone's") => return Err(CloneError::Untrusted { path, why }),
+            _ => return Err(CloneError::Occupied { repo: repo.to_owned(), path }),
         }
         let fetched = if fetch_due { Some(fetch(git, &path).await) } else { None };
         return Ok(Ensured { path, cloned: false, fetched });
