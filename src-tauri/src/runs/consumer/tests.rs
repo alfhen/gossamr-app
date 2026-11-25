@@ -298,3 +298,17 @@ fn an_event_of_a_type_this_build_cannot_read_moves_its_number_and_nothing_else()
     assert_eq!((p.follow.seq, p.run.state), (9, before.state));
     assert_eq!(unreadable(&Body::Text { text: "x".into() }.withheld()), None, "a withheld event of a known type is read");
 }
+
+#[test]
+fn a_permission_request_the_agent_withdrew_waits_on_no_one_and_shows_what_still_does() {
+    let mut p = Played::new();
+    p.play(started());
+    p.play([
+        Body::Question { id: "q1".into(), text: "Which colour?".into() },
+        Body::Permission { id: "p1".into(), kind: harness::event::PermissionKind::Command, tool: "Bash".into(), input: json!({ "command": "rm -rf build" }) },
+    ]);
+    assert_eq!(p.run.state, RunState::NeedsPermission);
+    p.play([Body::PermissionClosed { id: "p1".into() }]);
+    assert_eq!((p.run.state, p.run.needs.as_deref(), p.follow.permissions.len()), (RunState::NeedsAnswer, Some("Which colour?"), 0), "the question shows again");
+    assert!(p.rows.last().unwrap().text.starts_with("It withdrew the request"));
+}

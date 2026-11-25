@@ -374,13 +374,13 @@ async fn resume_over_the_api_watches_a_locked_sessions_new_start_so_the_carry_on
     use harness::client::Push;
     let (_tmp, dir) = data_dir();
     let (token, mock) = (harness::auth::Token::random(), mock(TURNS));
-    let serve = || {
+    let bind = || {
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
         let first = token.clone();
-        harness::server::Server::bind(&dir, move || Some(first), drivers, settings(4)).unwrap()
+        harness::server::Server::bind(&dir, move || Some(first), drivers, settings(4))
     };
     let id = {
-        let server = serve();
+        let server = bind().unwrap();
         let served = server.harness().clone();
         let task = tokio::spawn(server.run());
         let (id, mut events) = open(&served, true).await;
@@ -391,7 +391,7 @@ async fn resume_over_the_api_watches_a_locked_sessions_new_start_so_the_carry_on
         id
     };
     drop(reopen(&dir).await);
-    let server = serve();
+    let server = bind_again(bind).await;
     let task = tokio::spawn(server.run());
     let mut client = harness::client::Client::connect(&dir, &token).await.unwrap();
     client.call(Op::Resume { session: id.clone(), carry_on: Some("go on".into()) }).await.unwrap();

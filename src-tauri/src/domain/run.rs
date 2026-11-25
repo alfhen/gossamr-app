@@ -379,12 +379,7 @@ pub fn worktree_in(clone: &std::path::Path, name: &str) -> PathBuf {
 }
 
 /// A running turn of an agent that Gossamr started itself, and so has to find again by its pid.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunProcess {
-    pub pid: u32,
-    /// The process start time in seconds, to tell a reused pid from the original.
-    pub started: u64,
-}
+pub use harness::process::Process as RunProcess;
 
 /// Why a run failed, as far as the page needs to offer a next step. `Run::error` keeps the full text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

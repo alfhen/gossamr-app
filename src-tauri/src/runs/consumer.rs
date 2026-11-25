@@ -89,6 +89,11 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.permissions.push((id, event.cut.is_some(), cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
             rows.add("ask", &format!("Asks to use {what}"), None);
         }
+        // An answer to it is refused from now on, so it waits on no one; settling shows what the run waits on instead.
+        Body::PermissionClosed { id } => {
+            follow.permissions.retain(|(open, ..)| *open != id);
+            rows.add("update", "It withdrew the request before you answered", None);
+        }
         Body::Answered { id, decision, .. } => {
             follow.permissions.retain(|(open, ..)| *open != id);
             rows.add("update", if decision == Decision::Allow { "You allowed it" } else { "You denied it" }, None);
