@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use crate::driver::{Capabilities, Command, Driver, Launch, Link, OpenError, random_hex};
 use crate::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
 use crate::redact::each_string;
-use crate::tools::{Endpoint, Reply};
+use crate::tools::{Reply, ToolSpec, ToolsEndpoint};
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -36,8 +36,9 @@ pub enum Step {
     ToolResult { id: Option<String>, #[serde(default)] output: Value, #[serde(default)] error: bool },
     /// Asks and waits for the answer. `answer` is the recorded one; a replay answered otherwise fails.
     Permission { kind: PermissionKind, tool: String, #[serde(default)] input: Value, answer: Option<Decision> },
-    /// Calls a client tool through the session's tools endpoint and waits for its result or its cut. `result` is
-    /// what the recorded client posted.
+    /// Calls a client tool through the session's tools endpoint over HTTP, as an agent does, and waits for its result
+    /// or its cut. It says it calls it (`tool_call`) and what it got back (`tool_result`). `result` is what the
+    /// recorded client posted.
     Call { name: String, #[serde(default)] input: Value, result: Option<Value> },
     Question(String),
     Sleep(u64),
@@ -63,6 +64,8 @@ pub struct Script {
     /// A recording: the mock plays only what was recorded and invents no step of its own.
     pub replay: bool,
     pub recorded: Vec<(String, Recorded)>,
+    /// The tools the script's client declares, from a `{"tools": [...]}` line.
+    pub tools: Vec<ToolSpec>,
 }
 
 /// The largest script or recording read. H0's largest recording is 200 KB.
@@ -88,7 +91,8 @@ impl Script {
         Script::parse(&text).map_err(at)
     }
 
-    /// A harness script has one step per line, and may start with a `{"capabilities": ...}` line.
+    /// A harness script has one step per line, and may start with a `{"capabilities": ...}` line and a `{"tools": ...}`
+    /// line.
     pub fn parse(text: &str) -> Result<Script, String> {
         // A data error quotes the value it could not take, so only its kind is told.
         let bad = |n: usize, e: serde_json::Error| match e.classify() {
@@ -109,9 +113,10 @@ impl Script {
         }
         let mut script = Script::default();
         for (n, line) in lines {
-            match line.get("capabilities") {
-                Some(caps) => script.capabilities = serde_json::from_value(caps.clone()).map_err(|e| bad(n, e))?,
-                None => script.steps.push(serde_json::from_value(line).map_err(|e| bad(n, e))?),
+            match (line.get("capabilities"), line.get("tools")) {
+                (Some(caps), _) => script.capabilities = serde_json::from_value(caps.clone()).map_err(|e| bad(n, e))?,
+                (None, Some(tools)) => script.tools = serde_json::from_value(tools.clone()).map_err(|e| bad(n, e))?,
+                (None, None) => script.steps.push(serde_json::from_value(line).map_err(|e| bad(n, e))?),
             }
         }
         if script.steps.is_empty() {
@@ -295,7 +300,7 @@ struct Player {
     mapper: Mapper,
     run: u64,
     token: String,
-    tools: Arc<Endpoint>,
+    tools: ToolsEndpoint,
     commands: UnboundedReceiver<Command>,
     output: UnboundedSender<Body>,
     ids: u64,
@@ -383,21 +388,33 @@ impl Player {
                     }
                 }
                 Step::Call { name, input, result } => {
-                    let _ = self.mock.inner.client.send(Some(ClientAction::ToolResult(result)));
-                    let (tools, token) = (self.tools.clone(), self.token.clone());
-                    let call = async move { tools.call(&token, &name, input).await };
-                    let (mock, key, run) = (self.mock.clone(), self.key.clone(), self.run);
-                    // A reply that is ready is taken before a stop, as an agent reads what it was sent.
-                    let got = tokio::select! {
-                        biased;
-                        reply = call => {
-                            mock.play(&key, run, |play, _| play.replies.push(reply));
-                            Got::Go
+                    let id = self.fresh("t");
+                    match self.send(Body::ToolCall { id: id.clone(), name: name.clone(), input: input.clone() }) {
+                        Got::Go => {
+                            let _ = self.mock.inner.client.send(Some(ClientAction::ToolResult(result)));
+                            let (tools, token) = (self.tools.clone(), self.token.clone());
+                            let call = async move { tools.call(&token, &name, input).await };
+                            // A reply that is ready is taken before a stop, as an agent reads what it was sent.
+                            let got = tokio::select! {
+                                biased;
+                                reply = call => Ok(reply),
+                                got = self.wait(|_| false, true) => Err(got),
+                            };
+                            let _ = self.mock.inner.client.send(None);
+                            match got {
+                                Ok(reply) => {
+                                    self.mock.play(&self.key, self.run, |play, _| play.replies.push(reply.clone()));
+                                    let (output, error) = match reply {
+                                        Ok(Reply { output, error }) => (output, error),
+                                        Err(reason) => (Value::String(reason), true),
+                                    };
+                                    self.send(Body::ToolResult { id, output, error })
+                                }
+                                Err(got) => got,
+                            }
                         }
-                        got = self.wait(|_| false, true) => got,
-                    };
-                    let _ = self.mock.inner.client.send(None);
-                    got
+                        stopped => stopped,
+                    }
                 }
             };
             match got {
@@ -581,8 +598,8 @@ mod tests {
     use crate::driver::Secret;
 
     fn launch(resume: Option<String>) -> Launch {
-        let tools = Arc::new(Endpoint::unattached("t"));
-        Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume, tools_token: Secret::random(), tools, env: vec![] }
+        let tools = ToolsEndpoint::unattached();
+        Launch { cwd: "/".into(), locked: false, model: None, login: None, effort: None, resume, tools_token: Secret::random(), tools, result_schema: None, env: vec![] }
     }
 
     #[test]
