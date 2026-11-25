@@ -46,14 +46,32 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     // The mock provider is there only when a script is given.
     let drivers: Vec<(String, std::sync::Arc<dyn harness::driver::Driver>)> =
         script.map(|script| ("mock".to_owned(), std::sync::Arc::new(harness::mock::Mock::new(script)) as _)).into_iter().collect();
-    let first_token = || {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).ok()?;
-        harness::auth::Token::parse(&line)
-    };
+    // A token on a pipe is read on every start, the pipe swapped for /dev/null, so none waits behind fd 0 while the
+    // harness runs. A terminal holds nothing to read, so one is asked only when the store has no token yet.
+    // SAFETY: isatty has no preconditions.
+    let handed = (unsafe { libc::isatty(libc::STDIN_FILENO) } != 1).then(|| {
+        let line = read_token();
+        // SAFETY: open, dup2 and close have no preconditions; a failure leaves fd 0 on the drained pipe.
+        unsafe {
+            let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY);
+            if null > libc::STDIN_FILENO {
+                libc::dup2(null, libc::STDIN_FILENO);
+                libc::close(null);
+            }
+        }
+        line
+    });
+    let first_token = move || handed.unwrap_or_else(read_token);
     let setup = harness::work::Setup::of_this_machine(dir.clone());
     let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings::default(), setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
     Ok(true)
+}
+
+/// The line on stdin, to its first newline or the end.
+fn read_token() -> Option<harness::auth::Token> {
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok()?;
+    harness::auth::Token::parse(&line)
 }

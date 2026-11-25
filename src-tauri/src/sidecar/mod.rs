@@ -426,21 +426,36 @@ fn spawn(program: &Path, dir: &Path, token: &Token) -> std::io::Result<Child> {
     let log = OpenOptions::new().create(true).write(true).truncate(true).mode(0o600).custom_flags(libc::O_NOFOLLOW).open(dir.join(LOG))?;
     let mut command = serve_command(program, dir);
     command.stderr(log);
-    // SAFETY: `setsid` is async-signal-safe and the closure touches nothing else.
+    // SAFETY: sysconf has no preconditions.
+    let open_max = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) }.clamp(256, 1 << 16) as libc::c_int;
+    // SAFETY: `setsid` and `fcntl` are async-signal-safe and the closure touches nothing else.
     unsafe {
-        command.pre_exec(|| if libc::setsid() == -1 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+        command.pre_exec(move || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // A descriptor the app or a library opened without close-on-exec would stay open in the harness, which
+            // outlives the app. Marking them, not closing them, keeps the pipe that reports a failed exec.
+            for fd in 3..open_max {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags != -1 && flags & libc::FD_CLOEXEC == 0 {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
     }
     let mut child = command.spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
-        // A harness that already knows a token does not read it; the pipe holds it until the harness ends.
         let _ = stdin.write_all(format!("{}\n", token.hex()).as_bytes());
     }
     Ok(child)
 }
 
+/// Runs in the data folder, so the harness holds no other folder of the person's open as its working folder.
 fn serve_command(program: &Path, dir: &Path) -> Command {
     let mut command = Command::new(program);
-    command.arg("serve").arg("--data").arg(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
+    command.arg("serve").arg("--data").arg(dir).current_dir(dir).env_remove(harness::cli::TOKEN_VARIABLE).stdin(Stdio::piped()).stdout(Stdio::null());
     command
 }
 

@@ -95,7 +95,8 @@ pub struct Server {
 
 impl Server {
     /// Takes the data folder and listens on its socket. A store with no client token yet takes `first_token`'s, the
-    /// one the client that starts the harness hands over; with none, the harness does not start.
+    /// one the client that starts the harness hands over; with none, the harness does not start. A store that has
+    /// tokens never takes another this way: one it does not know stops the start.
     pub fn bind(dir: &Path, first_token: impl FnOnce() -> Option<Token>, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings) -> Result<Server> {
         Server::bind_with(dir, first_token, drivers, settings, Setup::default())
     }
@@ -104,9 +105,12 @@ impl Server {
     pub fn bind_with(dir: &Path, first_token: impl FnOnce() -> Option<Token>, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings, setup: Setup) -> Result<Server> {
         let socket = socket_path(dir)?;
         let store = Store::open(dir)?;
-        if store.client_tokens()?.is_empty() {
+        let tokens = store.client_tokens()?;
+        if tokens.is_empty() {
             let token = first_token().ok_or_else(|| Error::Refused("no client token yet: give the first one on stdin".into()))?;
             store.add_client_token(&token.stored_key())?;
+        } else if first_token().is_some_and(|token| !tokens.iter().any(|known| known.stored_key == token.stored_key())) {
+            return Err(Error::Refused("the token on stdin is not one this data folder knows, so the harness does not start; the folder keeps the tokens it has".into()));
         }
         let harness = Harness::with_setup(store, drivers, settings, Arc::new(setup));
         // The store's lock is ours, so a socket or a descriptor left here is a dead harness's.

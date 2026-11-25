@@ -4,6 +4,11 @@ import { useBackend } from "../backend/useBackend";
 import { Button } from "../components/Button";
 
 const WORD: Record<HarnessStatus["state"], string> = { starting: "Starting", running: "Running", stopped: "Stopped", failed: "Failed" };
+const COULD_NOT: Record<HarnessAction, string> = {
+  start: "Couldn't start the harness. Try again.",
+  restart: "Couldn't restart the harness. Try again.",
+  stop: "Couldn't stop the harness. Try again.",
+};
 
 /** Whether the harness runs, its build, and what you can do about it. */
 export function HarnessSection() {
@@ -12,6 +17,7 @@ export function HarnessSection() {
   const [busy, setBusy] = useState(false);
   const [unread, setUnread] = useState(false);
   const [asks, setAsks] = useState(0);
+  const [failed, setFailed] = useState<HarnessAction | null>(null);
   useEffect(() => {
     if (!backend) return;
     let live = true;
@@ -34,9 +40,10 @@ export function HarnessSection() {
   const act = (action: HarnessAction) => {
     if (!backend) return;
     setBusy(true);
+    setFailed(null);
     backend
       .harnessStatus(action)
-      .then(setStatus, () => {})
+      .then(setStatus, () => setFailed(action))
       .finally(() => setBusy(false));
   };
   if (unread && !status) {
@@ -47,10 +54,11 @@ export function HarnessSection() {
       </div>
     );
   }
-  return <HarnessView status={status} busy={busy} onAction={act} />;
+  return <HarnessView status={status} busy={busy} failed={failed} onAction={act} />;
 }
 
-export function HarnessView({ status, busy, onAction }: { status: HarnessStatus | null; busy: boolean; onAction(action: HarnessAction): void }) {
+/** `failed` is the action whose call didn't come back, so the status shown is the one from before it. */
+export function HarnessView({ status, busy, failed = null, onAction }: { status: HarnessStatus | null; busy: boolean; failed?: HarnessAction | null; onAction(action: HarnessAction): void }) {
   /** Both stop every agent the harness runs, so each asks first. */
   const [asking, setAsking] = useState<"stop" | "restart" | null>(null);
   if (!status) return <p className="m-0 text-ws-ink2">Checking…</p>;
@@ -66,6 +74,11 @@ export function HarnessView({ status, busy, onAction }: { status: HarnessStatus 
       {status.message && (
         <p className="m-0 text-ws-ink2" role={status.state === "failed" ? "alert" : undefined}>
           {status.message}
+        </p>
+      )}
+      {failed && (
+        <p className="m-0 text-ws-ink2" role="alert">
+          {COULD_NOT[failed]}
         </p>
       )}
       {asking ? (

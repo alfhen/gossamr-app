@@ -809,7 +809,6 @@ export interface RunsChanged {
   connectionId: string;
 }
 
-/** What the person controls about runs. */
 /** How the harness beside the app stands (`harness_status`). */
 export interface HarnessStatus {
   state: "starting" | "running" | "stopped" | "failed";
@@ -825,6 +824,7 @@ export interface HarnessStatus {
 
 export type HarnessAction = "start" | "restart" | "stop";
 
+/** What the person controls about runs. */
 export interface AgentSettings {
   maxRuns: number;
   terminal: "terminal" | "iTerm";

@@ -430,6 +430,7 @@ Gossamr writes like a careful colleague: plain, short and exact.
 
 - **Address the person as "you".** Pip is "Pip". Agents are "agents", with their role as a label: "the reviewer".
 - **Use the app's own words**, always the same way: workstream, agent, draft, Needs you, Inbox, Work, Board, List.
+- **Harness** is the program beside the app that keeps agents running when you quit Gossamr. It is named only in Settings, in its own section and in that section's messages, because Activity Monitor shows a process by that name. Everywhere else the words are "agent" and "workstream".
 - **One idea per sentence**, in the active voice. Say what happened and what the person can do.
 - **One line per empty state.** No explainers, no glossary. Pip explains anything else when asked.
 - **Say two facts once, in Settings,** and nowhere else:

@@ -38,8 +38,15 @@ jobs:
       # so anything of the app's own code that leans on that feature fails here.
       - run: cargo check -p gossamr --release
       # The file vault of debug builds (GOSSAMR_TEST_VAULT) is under cfg(debug_assertions): a release binary has no trace of it.
-      # (`strings -a`: macOS grep does not match inside this binary.) A debug build of the app does hold the name.
-      - run: cargo build -p gossamr --release && ! strings -a target/release/gossamr | grep -q GOSSAMR_TEST_VAULT
+      # (`strings -a`: macOS grep does not match inside this binary.) A debug build of the app does hold the name. The strings
+      # go to a file that must not be empty, so a missing binary or a failed `strings` fails the step instead of passing it.
+      - run: |
+          set -eu
+          cargo build -p gossamr --release
+          strings -a target/release/gossamr > "$RUNNER_TEMP/release-strings.txt"
+          test -s "$RUNNER_TEMP/release-strings.txt"
+          grep -q 'gossamr' "$RUNNER_TEMP/release-strings.txt"
+          if grep -q GOSSAMR_TEST_VAULT "$RUNNER_TEMP/release-strings.txt"; then echo "the release build holds the test vault"; exit 1; fi
 
   # The harness has to build and pass on Linux, where it will also run. It needs neither the app nor dist/.
   harness-linux:
