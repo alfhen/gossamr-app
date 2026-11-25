@@ -211,7 +211,8 @@ mod tests {
         }
     }
 
-    /// The argv `main` built before the flags moved into the harness, for the same request.
+    /// The argv `main` built before the flags moved into the harness, for the same request. serde_json sorts keys here, as
+    /// it did there: no crate of the workspace turns on its `preserve_order`.
     #[test]
     fn pips_argv_is_todays_byte_for_byte() {
         let (_, prompt, turn) = split(request(Some("s-1")));
@@ -219,7 +220,7 @@ mod tests {
             "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--model", "sonnet", "--effort", "medium",
             "--permission-mode", "dontAsk", "--tools", "", "--allowedTools", "mcp__gossamr", "--setting-sources", "", "--disable-slash-commands",
             "--strict-mcp-config", "--mcp-config",
-            r#"{"mcpServers":{"gossamr":{"type":"http","url":"http://127.0.0.1:1/mcp/r","headers":{"Authorization":"Bearer ${GOSSAMR_MCP_TOKEN}"}}}}"#,
+            r#"{"mcpServers":{"gossamr":{"headers":{"Authorization":"Bearer ${GOSSAMR_MCP_TOKEN}"},"type":"http","url":"http://127.0.0.1:1/mcp/r"}}}"#,
             "--append-system-prompt", "sys", "--resume", "s-1",
         ];
         assert_eq!(pip::args(&turn), today);
