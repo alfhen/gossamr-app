@@ -172,7 +172,7 @@ async fn close(client: &mut Client, session: &str) {
     client.call(Op::Close { session: session.into() }).await.unwrap();
     loop {
         match tokio::time::timeout(WAIT, client.push()).await.expect("a push within the wait").unwrap() {
-            Some(Push::Event { event, .. }) if event.body == Body::Closed => return,
+            Some(Push::Event { event, .. }) if matches!(event.body, Body::Closed { .. }) => return,
             Some(_) => continue,
             None => panic!("the connection ended"),
         }
@@ -194,6 +194,9 @@ async fn a_session_that_names_a_repo_works_in_a_new_worktree_of_its_clone() {
     assert_eq!(rig.git(&rig.worktree("harness-1"), &["rev-parse", "--abbrev-ref", "HEAD"]), "harness-1");
     assert_eq!(rig.git(&rig.worktree("harness-1"), &["log", "--format=%s", "-1"]), "first", "from origin/main, the remote's default branch");
     assert!(rig.clone().join(".git").is_dir());
+    let listed = client.call(Op::Sessions).await.unwrap();
+    let row = listed.as_array().unwrap().iter().find(|row| row["id"] == session.as_str()).unwrap().clone();
+    assert_eq!((row["branch"].as_str(), row["cwd"].as_str()), (Some("harness-1"), rig.worktree("harness-1").to_str()), "the listing names its branch and its worktree");
 
     let again = open(&mut client, open_op("mock", None, Some("acme/webshop"), Some("main"), Some("harness-1"))).await;
     assert!(matches!(&again, Err(Error::Said(why)) if why.contains("already there")), "a branch that is there is refused");
@@ -303,7 +306,7 @@ async fn resume_take_back_and_an_answer_that_resumes_wait_for_the_connections_sh
             match op {
                 "take_back" => {
                     client.call(Op::HandOver { session: id.clone() }).await.unwrap();
-                    while !matches!(tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap(), Some(Push::Event { event, .. }) if event.body == Body::Closed) {}
+                    while !matches!(tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap(), Some(Push::Event { event, .. }) if matches!(event.body, Body::Closed { .. })) {}
                 }
                 _ => close(&mut client, &id).await,
             }

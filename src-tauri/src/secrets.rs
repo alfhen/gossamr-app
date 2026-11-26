@@ -78,8 +78,9 @@ struct Ready {
     doc: Doc,
     /// Pre-vault items that could not be read this run; they are not asked for again.
     legacy_failed: HashMap<String, String>,
-    /// Pre-vault values in `doc` that the vault write of their move didn't save: the old item still holds them.
-    unsaved: BTreeSet<String>,
+    /// Pre-vault values whose move the vault write didn't save, kept apart from `doc`, which a reread replaces: the old
+    /// item still holds them, and the next write that saves one removes it.
+    unsaved: BTreeMap<String, Value>,
 }
 
 enum State {
@@ -132,7 +133,7 @@ impl Vault {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if matches!(*state, State::Unread) {
             *state = match self.read_vault() {
-                Ok(doc) => State::Ready(Ready { doc, legacy_failed: HashMap::new(), unsaved: BTreeSet::new() }),
+                Ok(doc) => State::Ready(Ready { doc, legacy_failed: HashMap::new(), unsaved: BTreeMap::new() }),
                 Err(e) => State::Unavailable(e.to_string()),
             };
         }
@@ -162,6 +163,9 @@ impl Vault {
                 return Err(Error::KeychainUnavailable(reason.clone()));
             }
             if !ready.doc.secrets.contains_key(account) && !ready.doc.probed.contains(account) {
+                if let Some(value) = ready.unsaved.get(account) {
+                    return Ok(Some(serde_json::from_value(value.clone())?));
+                }
                 migrate(backend, ready, account)?;
             }
             Ok(ready.doc.secrets.get(account).map(|v| serde_json::from_value(v.clone())).transpose()?)
@@ -243,10 +247,10 @@ impl Vault {
         self.with_ready(|backend, ready| {
             let held = hold(backend);
             let base = latest(backend)?;
-            // A value whose move didn't save is in this app's copy and the old item only: start from it, as `load` does.
-            let unsaved = ready.unsaved.contains(account) && !base.probed.contains(account);
-            let stored = if unsaved { ready.doc.secrets.get(account) } else { base.secrets.get(account) };
-            let current = stored.map(|v| serde_json::from_value(v.clone())).transpose()?;
+            // A value whose move didn't save is in the old item only: start from it, as `load` does, unless another app
+            // has decided the account since.
+            let unsaved = ready.unsaved.get(account).filter(|_| !base.probed.contains(account) && !base.secrets.contains_key(account)).cloned();
+            let current = unsaved.as_ref().or_else(|| base.secrets.get(account)).map(|v| serde_json::from_value(v.clone())).transpose()?;
             let Some(value) = f(current) else {
                 ready.doc = base;
                 return Ok(());
@@ -258,7 +262,7 @@ impl Vault {
                 write_vault(backend, &next)?;
             }
             ready.doc = next;
-            if unsaved {
+            if unsaved.is_some() {
                 ready.unsaved.remove(account);
                 forget_legacy(backend, account);
             }
@@ -334,6 +338,7 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
     // there: that app's decision stands.
     if let Some(found) = base.as_ref().ok().filter(|doc| doc.secrets.contains_key(account) || doc.probed.contains(account)) {
         ready.doc = found.clone();
+        ready.unsaved.remove(account);
         return Ok(());
     }
     let read = backend.read(account).and_then(|found| Ok(found.map(|json| serde_json::from_str::<Value>(&json)).transpose()?));
@@ -347,9 +352,8 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
     };
     let mut next = base.as_ref().map_or_else(|_| ready.doc.clone(), Clone::clone);
     next.probed.insert(account.into());
-    let migrated = value.is_some();
-    if let Some(value) = value {
-        next.secrets.insert(account.into(), value);
+    if let Some(value) = &value {
+        next.secrets.insert(account.into(), value.clone());
     }
     // Not over a vault this app could not read again.
     let written = base.and_then(|_| write_vault(backend, &next));
@@ -357,10 +361,12 @@ fn migrate(backend: &dyn Backend, ready: &mut Ready, account: &str) -> Result<()
         eprintln!("couldn't save the Keychain vault: {e}");
     }
     ready.doc = next;
-    if migrated && written.is_ok() {
-        forget_legacy(backend, account);
-    } else if migrated {
-        ready.unsaved.insert(account.into());
+    match value {
+        Some(_) if written.is_ok() => forget_legacy(backend, account),
+        Some(value) => {
+            ready.unsaved.insert(account.into(), value);
+        }
+        None => {}
     }
     drop(held);
     Ok(())
@@ -610,6 +616,45 @@ mod tests {
         v.update::<Vec<String>>("logins", added).unwrap();
         assert_eq!(vault(&fake).load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned(), "b".to_owned()]));
         assert_eq!(fake.get("logins"), None, "the old item goes once the vault holds its value");
+    }
+
+    /// The old item holds `["a"]`, the move's vault write fails, and from then on the old item can't be read: a reread
+    /// or an update that changes nothing must not cost this app the value it moved.
+    fn moved_but_unsaved(fake: &Fake) -> Vault {
+        fake.put("logins", r#"["a"]"#);
+        let v = vault(fake);
+        fake.deny_writes(true);
+        assert_eq!(v.load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned()]));
+        fake.deny_writes(false);
+        fake.deny_reads_of("logins");
+        v
+    }
+
+    fn add_b(list: Option<Vec<String>>) -> Option<Vec<String>> {
+        Some([list.unwrap_or_default(), vec!["b".to_owned()]].concat())
+    }
+
+    #[test]
+    fn an_unsaved_old_value_survives_a_reread_between_the_load_and_the_update() {
+        let fake = Fake::default();
+        let v = moved_but_unsaved(&fake);
+        v.reread().unwrap();
+        assert_eq!(v.load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned()]));
+        v.update::<Vec<String>>("logins", add_b).unwrap();
+        assert_eq!(vault(&fake).load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(fake.get("logins"), None, "the old item goes once the vault holds its value");
+    }
+
+    #[test]
+    fn an_update_that_changes_nothing_keeps_an_unsaved_old_value_for_the_next_one() {
+        let fake = Fake::default();
+        let v = moved_but_unsaved(&fake);
+        v.update::<Vec<String>>("logins", |_| None).unwrap();
+        assert_eq!(v.load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned()]));
+        assert!(fake.get("logins").is_some(), "the old item stays while the vault doesn't hold its value");
+        v.update::<Vec<String>>("logins", add_b).unwrap();
+        assert_eq!(vault(&fake).load::<Vec<String>>("logins").unwrap(), Some(vec!["a".to_owned(), "b".to_owned()]));
+        assert_eq!(fake.get("logins"), None);
     }
 
     #[test]

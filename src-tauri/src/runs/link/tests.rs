@@ -480,6 +480,9 @@ async fn a_call_whose_answer_is_on_its_way_is_not_answered_again_on_a_reconnect(
 #[tokio::test]
 async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
     let mut bed = Bed::new(ASKS).await;
+    let counting = Arc::new(Counting { direct: bed.direct.clone(), at: Mutex::new(Vec::new()) });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
     let (run, session) = bed.started().await;
     let (_, follow) = bed.until(&run, |r, _| r.state == RunState::NeedsAnswer).await;
     bed.served.shut_down().await;
@@ -491,11 +494,12 @@ async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
     // The verifier's quiet spell: long enough for every watch the reconnect made of the closed session to have ended.
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     let before = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap().1.seq;
+    let connects = counting.at.lock().unwrap().len();
     bed.link.call(Op::AnswerQuestion { session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
-    // At once: the watching connection follows it now, not at some later reconnect, seconds on.
-    let resumed = tokio::time::timeout(std::time::Duration::from_millis(1500), bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1)).await;
-    let (_, resumed) = resumed.expect("the resumed start's events were applied at once");
+    let (_, resumed) = bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1).await;
     assert!(resumed.seq > before);
+    // On the watching connection as it was: the call's own connection is the one new one, and no reconnect came first.
+    assert_eq!(counting.at.lock().unwrap().len(), connects + 1, "applied with no reconnect");
     let rows = bed.rows(&run).await;
     assert!(rows.iter().any(|(_, text)| text == "Resumed") && rows.iter().any(|(_, text)| text == "Its question was answered"), "{rows:?}");
     bed.end().await;
@@ -522,8 +526,9 @@ async fn a_dropped_connection_is_tried_again_only_after_a_wait() {
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
     bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
     let _ = bed.link.follow("no-such-session", 0).await;
-    bed.served.shut_down().await;
+    // Before the shutdown, as the link's wait starts when the shutdown closes its connection.
     let dropped = std::time::Instant::now();
+    bed.served.shut_down().await;
     tokio::time::timeout(WAIT, async {
         while counting.at.lock().unwrap().iter().all(|at| *at < dropped) {
             tokio::task::yield_now().await;
@@ -556,5 +561,91 @@ async fn the_wait_grows_while_watching_the_followed_sessions_keeps_failing() {
     // 100, 200 and 400 ms between the first four tries when the wait doubles; 300 ms at most when it does not.
     assert!(started.elapsed() >= std::time::Duration::from_millis(600), "four tries in {:?}", started.elapsed());
     app.execute_batch("ALTER TABLE run_sessions_away RENAME TO run_sessions").unwrap();
+    bed.end().await;
+}
+
+/// A run whose session the harness no longer runs, though the app follows it mid-turn, as when the harness that ran it
+/// was killed: no `closed` was ever recorded.
+async fn lost(bed: &Bed) -> (Run, String) {
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    bed.until(&run, |_, f| f.closed).await;
+    bed.rig.fx.core.apply_session(&session, |run, follow| {
+        (follow.closed, follow.ended, follow.stop_asked, follow.in_turn) = (false, false, false, true);
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    (run, session)
+}
+
+fn lost_quietly(bed: &Bed, run: &Run) -> Run {
+    assert!(!bed.rig.noticed().iter().any(|(why, _)| *why == Attention::Failed), "Pip is not woken");
+    run.clone()
+}
+
+#[tokio::test]
+async fn at_a_connect_a_turn_the_harness_no_longer_runs_ends_as_lost() {
+    let mut bed = Bed::new(STREAM).await;
+    let (run, _) = lost(&bed).await;
+    bed.relink();
+    let (after, _) = bed.until(&run, |r, _| r.state == RunState::Stopped).await;
+    assert_eq!(after.last_detail.as_deref(), Some(consumer::AGENT_LOST));
+    lost_quietly(&bed, &after);
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_stop_or_a_message_the_harness_answers_not_running_ends_the_turn_as_lost() {
+    let bed = Bed::new(STREAM).await;
+    let (run, session) = lost(&bed).await;
+    bed.link.stop(&session).await.unwrap();
+    let stopped = bed.rig.get(&run).await;
+    assert_eq!((stopped.state, stopped.last_detail.as_deref()), (RunState::Stopped, Some(consumer::AGENT_LOST)), "Stop works");
+    let bed2 = Bed::new(STREAM).await;
+    let (run2, session2) = lost(&bed2).await;
+    let refused = bed2.link.send(&session2, "carry on").await.unwrap_err();
+    assert_eq!(refused, consumer::AGENT_LOST);
+    assert_eq!(bed2.rig.get(&run2).await.state, RunState::Stopped);
+    bed.end().await;
+    bed2.end().await;
+}
+
+#[tokio::test]
+async fn a_call_the_harness_has_a_result_for_is_not_answered_again_when_the_app_comes_back() {
+    let mut bed = Bed::new(READS).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1);
+    let mut client = bed.served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.clone(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    let call = events.iter().find(|e| matches!(e.body, harness::event::Body::ClientToolCall { .. })).unwrap().clone();
+    let harness::event::Body::ClientToolCall { id, name, input } = call.body.clone() else { unreachable!() };
+    // As if the app had gone after it applied the call and before it applied the result the harness took.
+    bed.rig.fx.core.apply_session(&session, move |_, follow| {
+        follow.seq = call.seq;
+        follow.calls = vec![(id, name, input)];
+        Vec::new()
+    }).await.unwrap();
+    bed.relink();
+    bed.until(&run, |_, f| f.calls.is_empty()).await;
+    assert_eq!(bed.tickets.0.lock().unwrap().len(), 1, "the tool ran once");
+    bed.end().await;
+}
+
+const TWO_QUESTIONS: &str = r#"{"prompt": null}
+{"question": "Which colour?"}
+{"question": "Which size?"}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_second_request_while_the_run_already_waits_is_told_as_a_new_need() {
+    let bed = Bed::new(TWO_QUESTIONS).await;
+    let (run, _) = bed.started().await;
+    bed.until(&run, |r, _| r.needs.as_deref() == Some("Which size?")).await;
+    let needs = bed.rig.noticed().iter().filter(|(why, _)| *why == Attention::Needs).count();
+    assert_eq!(needs, 2, "one for each question");
     bed.end().await;
 }

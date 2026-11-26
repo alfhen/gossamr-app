@@ -148,6 +148,26 @@ impl RunService {
             *run = self.load(&run.id).await?;
             return Ok(Err(Failure::Harness(format!("it took the brief, but Gossamr couldn't keep that it did: {e}"))));
         }
+        // The branch and worktree are the harness's: the run's pull request and its clean-up are found by them.
+        match on.link.listed(&session).await {
+            Some(row) => {
+                let (branch, worktree) = (row["branch"].as_str().map(str::to_owned), row["cwd"].as_str().map(std::path::PathBuf::from));
+                if let (Some(branch), Some(worktree)) = (branch, worktree) {
+                    let kept = self.core.apply_session(&session, move |run, _| {
+                        run.branch = Some(branch);
+                        run.expected_worktree = worktree;
+                        Vec::new()
+                    });
+                    if let Err(e) = kept.await {
+                        let _ = on.link.stop(&session).await;
+                        *run = self.load(&run.id).await?;
+                        return Ok(Err(Failure::Harness(format!("it opened a session, but Gossamr couldn't keep its branch: {e}"))));
+                    }
+                }
+            }
+            None => eprintln!("the harness didn't list session {session}, so run {} has no branch yet", run.id),
+        }
+        *run = self.load(&run.id).await?;
         Ok(Ok(()))
     }
 

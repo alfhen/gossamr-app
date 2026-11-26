@@ -150,6 +150,9 @@ impl Link {
         });
         asked.await.map_err(|e| e.to_string())?;
         let closed = self.call(Op::Close { session: session.to_owned() }).await.map(drop);
+        if closed.as_ref().is_err_and(|why| not_running(why)) && self.lost_mid_turn(session).await {
+            return self.inner.agent_lost(session).await;
+        }
         if closed.is_err() {
             // Not stopped, so a later end of the agent is its own, not this stop's.
             let _ = self.inner.core.apply_session(session, |_, follow| {
@@ -174,7 +177,14 @@ impl Link {
             None => self.open_question(session).await,
         };
         let Some(question) = question else {
-            return self.call(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map(|_| false);
+            return match self.call(Op::Send { session: session.to_owned(), text: text.to_owned() }).await {
+                Ok(_) => Ok(false),
+                Err(why) if not_running(&why) && self.lost_mid_turn(session).await => {
+                    self.inner.agent_lost(session).await?;
+                    Err(super::consumer::AGENT_LOST.into())
+                }
+                Err(why) => Err(why),
+            };
         };
         self.call(Op::AnswerQuestion { session: session.to_owned(), question: question.clone(), text: text.to_owned() }).await?;
         let noted = self.inner.core.apply_session(session, |run, follow| {
@@ -185,6 +195,22 @@ impl Link {
             self.inner.after(&applied.before, &applied.run);
         }
         Ok(true)
+    }
+
+    /// Whether the app follows `session` as not closed though the harness does not run it and stored nothing past what
+    /// the app applied: its harness went with no shutdown.
+    async fn lost_mid_turn(&self, session: &str) -> bool {
+        let Ok(Some((_, follow))) = self.inner.core.session_run(session).await else { return false };
+        if follow.closed {
+            return false;
+        }
+        self.listed(session).await.is_some_and(|row| row["running"] != true && row["last_seq"].as_u64().unwrap_or(0) <= follow.seq)
+    }
+
+    /// The harness's row for `session` in its listing.
+    pub async fn listed(&self, session: &str) -> Option<Value> {
+        let listed = self.call(Op::Sessions).await.ok()?;
+        listed.as_array()?.iter().find(|row| row["id"] == session).cloned()
     }
 
     async fn open_question(&self, session: &str) -> Option<String> {
@@ -303,7 +329,21 @@ async fn watching(inner: std::sync::Weak<Inner>, mut commands: mpsc::UnboundedRe
 /// tools that a quit left with no result.
 async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
     let followed = link.core.followed_sessions().await.map_err(|e| e.to_string())?;
+    // A harness that went with no shutdown recorded no end for a turn it was running: its listing says which. A session
+    // with stored events past what was applied has its end in them, and the watch below applies it.
+    let listed = client.call(Op::Sessions).await.map_err(|e| e.to_string())?;
+    let rows: std::collections::HashMap<String, (bool, u64)> = listed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| Some((row["id"].as_str()?.to_owned(), (row["running"] == true, row["last_seq"].as_u64().unwrap_or(0)))))
+        .collect();
     for (session, follow) in followed {
+        let lost = rows.get(&session).is_some_and(|&(running, last)| !running && last <= follow.seq);
+        if follow.in_turn && lost {
+            link.agent_lost(&session).await?;
+            continue;
+        }
         if let Err(e) = client.call(Op::Watch { session: session.clone(), after: follow.seq }).await {
             eprintln!("couldn't watch session {session}: {e}");
             continue;
@@ -311,9 +351,12 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
         if follow.calls.is_empty() {
             continue;
         }
+        // A call whose result the harness took while the app was away has it among the events not applied yet.
+        let Ok(page) = client.call(Op::Events { session: session.clone(), after: follow.seq }).await else { continue };
+        let answered: std::collections::HashSet<&str> = page["events"].as_array().into_iter().flatten().filter(|e| e["type"] == "tool_result").filter_map(|e| e["id"].as_str()).collect();
         let Ok(Some((run_id, _))) = link.core.session_run(&session).await else { continue };
         if let Ok(Some(run)) = link.core.run(&run_id).await {
-            for (id, name, input) in follow.calls {
+            for (id, name, input) in follow.calls.into_iter().filter(|(id, ..)| !answered.contains(id.as_str())) {
                 if !link.answering.lock().unwrap_or_else(|e| e.into_inner()).contains(&id) {
                     link.answer_tool(&session, run.clone(), id, name, input);
                 }
@@ -323,7 +366,23 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
     Ok(())
 }
 
+/// What the harness says of a session it does not run: one a harness that went with no shutdown left as it was.
+fn not_running(why: &str) -> bool {
+    why.contains("is not running")
+}
+
 impl Inner {
+    /// Ends, in the app only, the turn of a session the harness does not run though the app follows it as running: the
+    /// harness that ran it went with no shutdown, so nothing recorded its end. Pip is not woken.
+    async fn agent_lost(&self, session: &str) -> Result<(), String> {
+        let now = Utc::now();
+        let lost = self.core.apply_session(session, |run, follow| consumer::agent_lost(run, follow, now));
+        if let Some(applied) = lost.await.map_err(|e| e.to_string())? {
+            self.after(&applied.before, &applied.run);
+        }
+        Ok(())
+    }
+
     /// Applies a pushed event. An error means it was not stored, and nothing after it may be.
     async fn take(&self, session: &str, event: Event) -> Result<(), ()> {
         if let Some(of) = consumer::unreadable(&event.body) {
@@ -384,9 +443,15 @@ impl Inner {
             eprintln!("events of session {session} were lost again at {}; it is no longer watched", follow.seq);
             return Ok(());
         }
-        lost_at.insert(session.to_owned(), follow.seq);
-        let page = client.call(Op::Events { session: session.to_owned(), after: follow.seq }).await;
-        let first = page.ok().and_then(|page| page["events"].get(0).and_then(|event| event["seq"].as_u64()));
+        // A failed read is not an empty page: what it could not read may still be there, so nothing is passed over.
+        let page = match client.call(Op::Events { session: session.to_owned(), after: follow.seq }).await {
+            Ok(page) => page,
+            Err(e) => {
+                eprintln!("couldn't read what session {session} still holds after a loss: {e}");
+                return Err(());
+            }
+        };
+        let first = page["events"].get(0).and_then(|event| event["seq"].as_u64());
         let last = match first {
             Some(first) => first.saturating_sub(1),
             None => self.last_seq(client, session).await.unwrap_or(follow.seq),
@@ -400,9 +465,12 @@ impl Inner {
             .await;
         match applied {
             Ok(Some(applied)) => {
+                // Only a loss that was recorded is one not to record again at the same place.
+                lost_at.insert(session.to_owned(), follow.seq);
                 self.after(&applied.before, &applied.run);
                 if let Err(e) = client.call(Op::Watch { session: session.to_owned(), after: applied.follow.seq }).await {
                     eprintln!("couldn't watch session {session} again: {e}");
+                    return Err(());
                 }
             }
             Ok(None) => {}
@@ -421,7 +489,9 @@ impl Inner {
 
     /// Tells the notifier, and so Pip, of a run that came to need the person, finished or failed; and the page.
     fn after(&self, before: &Run, run: &Run) {
-        if run.state != before.state {
+        // A new request while the run already waits on one is a new need too.
+        let new_need = run.state == before.state && run.needs.is_some() && run.needs != before.needs;
+        if run.state != before.state || new_need {
             match run.state {
                 RunState::NeedsAnswer | RunState::NeedsPermission => self.notifier.notify(run, Attention::Needs),
                 RunState::Done => self.notifier.notify(run, Attention::Done),

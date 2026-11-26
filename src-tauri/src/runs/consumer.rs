@@ -23,6 +23,7 @@ pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
 pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
+pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Message the agent to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
@@ -84,7 +85,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::ToolCall { name, input, .. } => {
             let what = describe(&name, &input);
-            run.last_detail = Some(what.clone());
+            run.last_detail = Some(redact(&what));
             rows.add(tool_kind(&name), &what, None);
         }
         Body::ClientToolCall { id, name, input } => {
@@ -226,7 +227,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         // The session's task ended. Only after a stop the app asked for is that the end: a shutdown or a hand-over
         // can be resumed, and its question stays until a `question_closed`.
-        Body::Closed => {
+        // Who closed it (`by`) is read in H10c-2.
+        Body::Closed { .. } => {
             follow.closed = true;
             follow.ended = follow.stop_asked;
             follow.in_turn = false;
@@ -262,6 +264,25 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     rows.rows
 }
 
+/// Ends a turn the harness can no longer say the end of: its agent went with a harness that stopped with no shutdown.
+/// It reads as a cut, which no one is woken for and "carry on" may take up; an open question stays.
+pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>) -> Vec<RunEvent> {
+    follow.in_turn = false;
+    follow.closed = true;
+    follow.permissions.clear();
+    follow.calls.clear();
+    run.state = RunState::Stopped;
+    run.last_detail = Some(AGENT_LOST.into());
+    run.ended_at = Some(now);
+    settle(run, follow);
+    run.asking = run.state == RunState::NeedsAnswer;
+    run.needs = (run.state == RunState::NeedsAnswer).then(|| follow.asked.clone()).flatten();
+    run.last_progress_at = now;
+    let mut rows = Rows { run_id: run.id.clone(), at: now, rows: Vec::new() };
+    rows.add("stop", AGENT_LOST, None);
+    rows.rows
+}
+
 /// Notes, once, that the session's events after what the app applied and up to `last` were lost, and reads on after
 /// `last`. The row names the events skipped, so the person sees a hole in the record and not a silent jump.
 pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, last: u64, now: DateTime<Utc>) -> Vec<RunEvent> {
@@ -274,6 +295,8 @@ pub fn lost(run: &mut Run, follow: &mut SessionFollow, reason: &str, last: u64, 
         std::cmp::Ordering::Equal => format!("event {from} was skipped"),
         std::cmp::Ordering::Greater => format!("events {from} to {to} were skipped"),
     };
+    // On the run too, so the person sees it when its timeline is full and keeps no new row.
+    run.last_detail = Some(format!("{LOST}: {skipped}"));
     let mut rows = Rows { run_id: run.id.clone(), at: now, rows: Vec::new() };
     rows.add("error", &format!("{LOST}: {skipped}"), Some(reason));
     rows.rows

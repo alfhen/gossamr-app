@@ -8,7 +8,16 @@
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 //!
-//! No call resumes a session yet: H10 adds resuming after a restart, and H14 adds taking a handed-over session back.
+//! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
+//! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
+//! exited or crashed by itself, a fault signal or a SIGKILL from outside among them, or its driver failed), `signal`
+//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
+//! needs a driver that says how its agent ended (`Driver::open_reporting`); with one that does not, such an end reads
+//! as `agent`. When more than one holds, a request the harness took (`stop`, `shutdown`, `hand_over`, `client_left`)
+//! wins, even one the agent's going overtook, then `harness`, then `signal`, then `agent`. A locked session's `closed`, and one the sweep reached, arrives as `withheld` with `of: "closed"` and
+//! `kept.by`. A reader takes a value it does not know, or a `closed` from a harness that did not say, as `unknown`, so
+//! a later value needs no new protocol. Some starts end with no stored `closed`: one a shutdown gave up on, whose last
+//! event is `failed` with kind `stuck` (its agent may still run), and one whose harness was killed or crashed.
 
 use std::path::{Path, PathBuf};
 
@@ -157,7 +166,11 @@ pub enum Op {
     /// asked it, a clean-up or a resume refused for good closed is refused.
     AnswerQuestion { session: String, question: String, text: String },
     Close { session: String },
-    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume.
+    /// Closes the session as handed over to Terminal, keeping its provider id for a later resume. It answers once the
+    /// hand-over is taken, even if the agent goes before the session reads it, but only the `handed_over` event
+    /// confirms it: the session is marked as handed over, says `handed_over`, then closes `by: hand_over`. A `closed`
+    /// with `by: harness` and no `handed_over` after an Ok answer means the store would not keep the mark, and it was
+    /// not done. It is refused for a session already stopping.
     HandOver { session: String },
     /// Answers `{"session": id}` once a session that is not running has opened again, with a new tools token, and
     /// watches it on this connection from its next event, as `open` does, so a locked session's client misses none.

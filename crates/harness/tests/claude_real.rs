@@ -136,7 +136,7 @@ async fn real_session(locked: bool, result_schema: Option<serde_json::Value>, pr
     let seen = until_within(&mut events, 180, |body| body.ends_turn()).await;
     assert!(!working_in(&scratch).is_empty(), "the agent runs in the scratch folder while the session is open");
     harness.close(&id).unwrap();
-    let rest = until_within(&mut events, 60, |body| *body == Body::Closed).await;
+    let rest = until_within(&mut events, 60, |body| matches!(*body, Body::Closed { .. })).await;
     eprintln!("events: {:?} then {:?}", types(&seen), types(&rest));
     assert!(!seen.iter().chain(&rest).any(|event| matches!(event.body, Body::Failed { .. })), "nothing failed");
     assert!(!seen.iter().any(|event| matches!(event.body, Body::Notice { .. })), "Claude took the session's tools endpoint");
