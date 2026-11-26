@@ -68,6 +68,10 @@ pub fn may_run(process: &Process) -> bool {
 }
 
 fn refuses_signals(pid: u32) -> bool {
+    #[cfg(any(test, feature = "testing"))]
+    if seam::refusing(pid) {
+        return true;
+    }
     // SAFETY: signal 0 only checks that the process exists and may be signalled.
     let answered = unsafe { libc::kill(pid as libc::pid_t, 0) };
     answered != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
@@ -102,13 +106,19 @@ fn read_boot_id() -> Option<String> {
 
 /// Whether neither a process nor a process group answers to `pid`: nothing of what it led can run.
 pub fn nothing_has(pid: u32) -> bool {
-    let gone = |target: libc::pid_t| {
-        // SAFETY: signal 0 only checks that the target exists.
-        let answered = unsafe { libc::kill(target, 0) };
-        answered != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-    };
+    no_process_at(pid) && unanswered(-(pid as libc::pid_t))
+}
+
+/// Whether no process, running or not yet reaped, has `pid`.
+pub fn no_process_at(pid: u32) -> bool {
     let pid = pid as libc::pid_t;
-    pid > 0 && gone(pid) && gone(-pid)
+    pid > 0 && unanswered(pid)
+}
+
+fn unanswered(target: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only checks that the target exists.
+    let answered = unsafe { libc::kill(target, 0) };
+    answered != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 /// The folder `pid` works in.
@@ -418,6 +428,16 @@ pub mod seam {
         static LISTINGS: RefCell<Vec<(libc::pid_t, Listing, bool)>> = const { RefCell::new(Vec::new()) };
         static SWALLOWED: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
         static HIDES: RefCell<Option<bool>> = const { RefCell::new(None) };
+        static REFUSING: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+    }
+
+    /// Makes `pid` answer as a process the harness may not signal, as another user's does, once it has gone too.
+    pub fn refuse_signals_from(pid: u32) {
+        REFUSING.with(|set| set.borrow_mut().insert(pid as libc::pid_t));
+    }
+
+    pub(super) fn refusing(pid: u32) -> bool {
+        REFUSING.with(|set| set.borrow().contains(&(pid as libc::pid_t)))
     }
 
     /// Whether a group's listing may hide a member that runs, as with `hidepid`, in place of asking the system.

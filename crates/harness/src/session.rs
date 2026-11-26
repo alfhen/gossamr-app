@@ -1011,7 +1011,10 @@ fn leftovers_unchecked(why: &str) -> String {
 /// Whether session `id`, given up on, still is: its agent on record is checked again, with no wait, and the session is
 /// freed once nothing it left runs. A given-up session never runs in this harness, so this reaches no agent of its own.
 fn still_given_up(store: &Store, id: &str, live: &HashMap<String, Live>) -> bool {
-    stop_leftovers(store, Some(vec![id.to_owned()]), live, Duration::ZERO).is_err() || store.session(id).map_or(true, |row| row.given_up.is_some())
+    // Every way the check can fail leaves the session given up on: an end not written is rolled back, and a record or
+    // a giving up not read or written changes nothing.
+    let _ = stop_leftovers(store, Some(vec![id.to_owned()]), live, Duration::ZERO);
+    store.session(id).map_or(true, |row| row.given_up.is_some())
 }
 
 /// The refusal for a session given up on: what holds it, and what to do.
@@ -1022,6 +1025,12 @@ fn given_up(store: &Store, id: &str, what: &str) -> String {
         // be another process's by now, and is never named for the person to end.
         Ok(Some(recorded)) if recorded.boot.is_some() && recorded.boot == crate::process::boot_id() && crate::process::alive(&recorded.agent) => format!(
             "session {id}'s agent may still run (its process group is {}; {why}), so it is not {what}: end it, then try again",
+            recorded.agent.pid
+        ),
+        // With no process left at its pid, no pid is given out while it names a group that has members, so the group is
+        // still the agent's own: safe to name.
+        Ok(Some(recorded)) if why != UNREAD && why != UNLISTED && recorded.boot.is_some() && recorded.boot == crate::process::boot_id() && crate::process::no_process_at(recorded.agent.pid) => format!(
+            "a process in session {id}'s process group {} may still run ({why}), so it is not {what}: once it has ended, try again, or restart the harness, in Settings > Harness, to check again",
             recorded.agent.pid
         ),
         Ok(Some(_)) if why != UNREAD && why != UNLISTED => format!(

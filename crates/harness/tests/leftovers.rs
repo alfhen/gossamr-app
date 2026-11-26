@@ -482,14 +482,13 @@ async fn leftover_kept_is_checked_again_on_a_resume_and_freed_once_what_held_it_
     left_in(&dir, Some(&leader), &worktree(&dir));
     let harness = started_harness(&dir);
     // What holds it and what to do, on its row and in each refusal; no shutdown is named, as none happened.
-    // Its leader is gone, so the group's id may be another's by now: it is not named for the person to end.
-    let holds = "a process in session s's group may still run (a process in its group works outside the session's worktree)";
+    // Its leader is gone and no process has its pid, so the group is still the agent's: named by its id.
+    let holds = format!("a process in session s's process group {} may still run (a process in its group works outside the session's worktree)", leader.pid);
     let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
-    assert!(listed.contains(holds) && listed.ends_with("so it is not resumed: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"), "{listed}");
+    assert!(listed.contains(&holds) && listed.ends_with("so it is not resumed: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"), "{listed}");
     for refused in [harness.resume("s").await.err(), harness.take_back("s").await.err(), harness.clean_up("s").await.err()] {
         let refused = refused.map(|e| e.to_string()).unwrap_or_default();
-        assert!(refused.contains(holds) && refused.ends_with("in Settings > Harness, to check again"), "{refused}");
-        assert!(!refused.contains(&leader.pid.to_string()), "no pid named: {refused}");
+        assert!(refused.contains(&holds) && refused.ends_with("in Settings > Harness, to check again"), "{refused}");
     }
     assert!(process::alive(&work), "checked again, still not the harness's to kill");
     kill(&work);
@@ -696,7 +695,7 @@ async fn leftover_whose_giving_up_cannot_be_written_holds_every_resume_until_it_
     }
     sql(&dir, "DROP TRIGGER no_giving_up");
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(refused.contains("a process in session s's group may still run"), "{refused}");
+    assert!(refused.contains(&format!("a process in session s's process group {} may still run", leader.pid)), "{refused}");
     assert!(is_given_up(&dir));
     assert!(process::alive(&work), "never signalled");
     kill(&work);
@@ -845,4 +844,17 @@ async fn leftover_an_agent_that_ends_with_its_group_still_running_stays_on_recor
     for work in leaver.left.lock().unwrap().drain(..) {
         kill(&work);
     }
+}
+
+#[test]
+fn leftover_sent_its_kill_waits_for_a_process_that_refuses_signals_as_one_that_may_still_run() {
+    // As a command the agent ran with sudo: gone or not, it answers that it may not be signalled.
+    let (_tmp, dir) = data_dir();
+    let (child, agent) = agent();
+    left_by_a_crash(&dir, &agent);
+    process::seam::refuse_signals_from(agent.pid);
+    let harness = started_harness(&dir);
+    assert_eq!(ended(child), Some(libc::SIGKILL), "sent its kill");
+    let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
+    assert!(listed.contains("it was sent a kill and had not ended when last checked"), "waited for it, and kept: {listed}");
 }
