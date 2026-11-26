@@ -4,7 +4,7 @@ import { ButtonGroup } from "../components/ButtonGroup";
 import { labelsByRun } from "../lib/workstreamStage";
 import type { PermissionRequest, Run } from "../types";
 import { CodeBox } from "./AgentSheet";
-import { PERMISSIONS_WARNING, answeringKey, canAllow, denyOnlyWhy, openPermissions, permissionWants } from "./permissionLogic";
+import { PERMISSIONS_WARNING, answeringKey, canAllow, denyOnlyWhy, openPermissions, permissionWants, runAnswerPending } from "./permissionLogic";
 import { RequestInput } from "./RequestInput";
 import { useRuns } from "./runsStore";
 
@@ -25,6 +25,7 @@ export function PermissionItem({ run, request, label, size }: { run: Run; reques
   const key = answeringKey(run.id, request.id);
   const answering = useRuns((s) => s.permissionAnswering.get(key));
   const answered = useRuns((s) => s.permissionAnswered.has(key));
+  const pending = useRuns((s) => runAnswerPending(run.id, openPermissions(run), s.permissionAnswering, s.permissionAnswered));
   const refused = useRuns((s) => s.permissionRefused.get(key) ?? null);
   const settled = useSettled(`${run.id}\u0000${openPermissions(run).map((p) => p.id).join(",")}`);
   const regain = useRef<(() => void) | null>(null);
@@ -48,7 +49,7 @@ export function PermissionItem({ run, request, label, size }: { run: Run; reques
         if (keyboard) setTimeout(() => (document.activeElement === document.body || !document.activeElement) && from.focus({ preventScroll: true }), 0);
       });
   };
-  return <PermissionItemView name={name} request={request} answering={answering ?? null} held={answered || !settled} refused={refused} size={size} onAnswer={onAnswer} />;
+  return <PermissionItemView name={name} request={request} answering={answering ?? null} held={answered || pending || !settled} refused={refused} size={size} onAnswer={onAnswer} />;
 }
 
 /**

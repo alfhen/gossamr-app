@@ -53,5 +53,14 @@ export function subjectLine(subject: string): string {
 
 const flat = (segs: Seg[]) => segs.map((seg) => ("text" in seg ? seg.text : seg.hidden)).join("");
 
+/**
+ * Whether a run's requests all wait: one of its answers is on its way, or went through while its request is still listed.
+ * Until the list has settled, a click meant for one request can't land on another of the same run.
+ */
+export function runAnswerPending(runId: string, open: readonly Pick<PermissionRequest, "id">[], answering: ReadonlyMap<string, unknown>, answered: ReadonlySet<string>): boolean {
+  const own = (key: string) => key.startsWith(`${runId}\u0000`);
+  return [...answering.keys()].some(own) || open.some((request) => answered.has(answeringKey(runId, request.id)));
+}
+
 /** Where a request's answer is kept while it is on its way: by run and request, since ids are the harness's. */
 export const answeringKey = (runId: string, requestId: string) => `${runId}\u0000${requestId}`;

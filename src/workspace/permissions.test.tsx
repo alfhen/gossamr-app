@@ -7,7 +7,7 @@ import type { PermissionRequest, Run } from "../types";
 import { rowText } from "./AgentParts";
 import { NO_FILTERS } from "./agentsLogic";
 import { PermissionItemView } from "./PermissionRequests";
-import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow, subjectLine } from "./permissionLogic";
+import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow, runAnswerPending, subjectLine } from "./permissionLogic";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 
@@ -200,6 +200,26 @@ describe("the runs store's permission answer", () => {
     expect(await first).toBe(true);
     expect(answer).toHaveBeenCalledTimes(1);
     expect(useRuns.getState().permissionAnswering.size).toBe(0);
+  });
+
+  it("holds every request of the run while one answer is on its way, and after it went through until its request leaves", async () => {
+    const backend = seeded();
+    let release: () => void = () => {};
+    vi.spyOn(backend, "runsAnswerPermission").mockImplementation(() => new Promise((r) => (release = () => r(byKey(backend, "WEB-100")))));
+    useRuns.getState().init(backend);
+    const run = byKey(backend, "WEB-100");
+    const held = () => runAnswerPending(run.id, run.permissions!, useRuns.getState().permissionAnswering, useRuns.getState().permissionAnswered);
+    expect(held()).toBe(false);
+    for (const decision of ["allow", "deny"] as const) {
+      useRuns.setState({ permissionAnswering: new Map(), permissionAnswered: new Set() });
+      const first = useRuns.getState().answerPermission(run.id, decision === "allow" ? "perm-2" : "perm-3", decision);
+      expect(held(), `${decision} on its way`).toBe(true);
+      release();
+      await first;
+      expect(held(), `${decision} went through, still listed`).toBe(true);
+      expect(runAnswerPending(run.id, [], useRuns.getState().permissionAnswering, useRuns.getState().permissionAnswered), "its request left").toBe(false);
+    }
+    expect(runAnswerPending("another-run", run.permissions!, new Map([[`${run.id}\u0000perm-2`, "allow"]]), new Set())).toBe(false);
   });
 
   it("never answers a request a second time once its answer went through, while the list still shows it", async () => {
