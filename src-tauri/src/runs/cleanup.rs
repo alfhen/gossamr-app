@@ -16,7 +16,7 @@ use crate::inbox::Lookup;
 
 /// The run's worktree and branch, removed through git alone: see `repo::remove_with_git`.
 pub(crate) async fn remove_run_with_git(git: &Git, home: Option<&Path>, run: &Run) -> std::result::Result<Option<String>, String> {
-    let branch = run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name));
+    let branch = run.branch_name();
     // In turns with a launch's fetch and worktree add in the same clone.
     let _lock = match home {
         Some(home) => Some(super::fresh::lock_repo(home, &run.spec.repo).await.map_err(|e| e.to_string())?),
