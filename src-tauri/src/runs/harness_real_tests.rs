@@ -162,7 +162,7 @@ fn allowed_command(segment: &str) -> bool {
         ["git", "fetch", "origin", "main"] | ["git", "rebase", "origin/main"] | ["git", "add", "NOTES.md"] | ["git", "branch", "--show-current"] => true,
         ["git", "status"] | ["git", "status", "-sb" | "--short"] | ["git", "rev-parse", "HEAD"] | ["git", "rev-parse", "HEAD", "origin/main"] => true,
         ["git", "diff"] | ["git", "diff", "--stat" | "--cached" | "--staged"] | ["git", "show"] | ["git", "show", "--stat"] => true,
-        ["git", "log", "--oneline", count] => count.strip_prefix('-').is_some_and(|n| (1..=2).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit())),
+        ["git", "log", "--oneline", count] | ["git", "log", "--oneline", count, "HEAD" | "origin/main"] => count.strip_prefix('-').is_some_and(|n| (1..=2).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit())),
         ["git", "push", "origin", branch] | ["git", "push", "-u" | "--set-upstream", "origin", branch] => *branch == BRANCH,
         _ => false,
     }
@@ -220,9 +220,15 @@ struct Chain {
     stops: Stops,
     link: Arc<Link>,
     svc: RunService,
+    /// Held for the chain's life and given up last, after `stops` took the work-root switch out of the process: the
+    /// switch is process-wide and each harness inherits it, so two chains at once would share one work root.
+    _only: tokio::sync::MutexGuard<'static, ()>,
 }
 
+static CHAINS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn chain(fixed: &str, branch: &str) -> Chain {
+    let only = CHAINS.lock().await;
     let home = dirs::home_dir().expect("a home folder");
     let binary = super::binary::find_claude().expect("claude is installed");
     let version = Command::new(&binary).arg("--version").output().unwrap();
@@ -310,7 +316,7 @@ async fn chain(fixed: &str, branch: &str) -> Chain {
     let svc = RunService::new(fx.core.clone(), Arc::new(tools), RunIndex::load(&fx.dir.join("index")), changed)
         .with_home(work_home.clone())
         .with_harness(OnHarness { link: link.clone(), provider: "claude".into() });
-    Chain { home, env, fx, work_home, root, _tmp: tmp, bare, clone, worktree, remote_before, before, fixed, sidecar, stops, link, svc }
+    Chain { home, env, fx, work_home, root, _tmp: tmp, bare, clone, worktree, remote_before, before, fixed, sidecar, stops, link, svc, _only: only }
 }
 
 impl Chain {
@@ -561,6 +567,7 @@ fn the_real_runs_permission_rule_allows_only_the_briefs_edit_and_git_lines() {
         format!("git add NOTES.md && git commit -m \"Set the cart button colour\" && git push -u origin {BRANCH}"),
         format!("git add NOTES.md && git commit -q -m 'Set the cart button colour' && git push origin {BRANCH} 2>&1"),
         "git fetch origin main && git status -sb && git log --oneline -3 && git rev-parse HEAD origin/main".to_owned(),
+        "git fetch origin main && git status -sb && git log --oneline -3 origin/main && git rev-parse HEAD origin/main".to_owned(),
         "git rebase origin/main".to_owned(),
         "git branch --show-current".to_owned(),
     ] {
@@ -612,6 +619,8 @@ fn the_real_runs_permission_rule_allows_only_the_briefs_edit_and_git_lines() {
         "git log -p -- ../x".to_owned(),
         "git log --oneline -3 -- ../x".to_owned(),
         "git log --oneline -300".to_owned(),
+        "git log --oneline -3 origin/other".to_owned(),
+        "git log --oneline -3 origin/main -- ../x".to_owned(),
         "git log --format=%H".to_owned(),
         "git log @{u}".to_owned(),
         "git rev-parse --git-dir --show-toplevel --local-env-vars".to_owned(),

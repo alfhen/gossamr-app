@@ -133,6 +133,9 @@ impl AppConfig {
         };
         let mut config: Self = serde_json::from_value(Value::Object(file.clone())).unwrap_or_default();
         config.agents = config.agents.clamped();
+        // Read apart, as `models` is: a bad sibling in `agents` gives the defaults, and the next save would write Auto
+        // over an Ask the file holds.
+        config.agents.permissions = crate::model_choice::agent_permissions_of(file.get("agents").and_then(|agents| agents.get("permissions")));
         (config.models, config.unreadable_models) = ModelDefaults::from_file(file.get(MODELS_KEY));
         let block: Map<String, Value> = CONNECTION_KEYS.iter().filter_map(|k| Some((k.to_string(), file.get(*k)?.clone()))).collect();
         let problem = match serde_json::from_value::<Roster>(Value::Object(block.clone())) {
@@ -446,11 +449,27 @@ mod tests {
         let saved: Value = serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap();
         assert_eq!(saved["agents"]["permissions"], "ask");
         assert_eq!(AppConfig::load(&dir).agents.permissions, AgentPermissions::Ask);
-        for unknown in [r#""bypassPermissions""#, "true", r#"{"mode":"auto"}"#] {
+        for unknown in [r#""bypassPermissions""#, "true", r#"{"mode":"auto"}"#, r#"{"auto":null}"#, "null", r#""Auto""#] {
             std::fs::write(dir.join(FILE), format!(r#"{{"agents":{{"maxRuns":2,"terminal":"iTerm","permissions":{unknown}}}}}"#)).unwrap();
             let loaded = AppConfig::load(&dir).agents;
             assert_eq!((loaded.permissions, loaded.max_runs, loaded.terminal), (AgentPermissions::Ask, 2, TerminalChoice::ITerm), "{unknown}: asks, and the rest is kept");
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_ask_in_the_file_holds_when_another_agent_setting_cannot_be_read_and_a_save_keeps_it() {
+        let dir = std::env::temp_dir().join(format!("gossamr-config-permissions-sibling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":"many","permissions":"ask"}}"#).unwrap();
+        let loaded = AppConfig::load(&dir).agents;
+        assert_eq!((loaded.max_runs, loaded.permissions), (AgentSettings::default().max_runs, AgentPermissions::Ask), "the bad sibling takes its default, the Ask stays");
+        AppConfig::update(&dir, |config| config.agents.max_runs = 2).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!((saved["agents"]["maxRuns"].clone(), saved["agents"]["permissions"].clone()), (2.into(), "ask".into()));
+        std::fs::write(dir.join(FILE), r#"{"agents":{"maxRuns":"many"}}"#).unwrap();
+        assert_eq!(AppConfig::load(&dir).agents.permissions, AgentPermissions::Auto, "a missing key is still Auto");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -18,10 +18,21 @@ const CUSTOM_MODEL_LIMIT: usize = 20;
 /// each step (`ask`). Pip's locked profile never changes with it.
 pub use harness::driver::Permissions as AgentPermissions;
 
-/// Reads `agents.permissions` of `config.json`: a value this build does not know asks for each step, the start that
-/// passes nothing, and leaves the other agent settings as they are.
+/// Reads `agents.permissions` of `config.json`, or of a save: a missing key is Auto, the string `"auto"` is Auto, and
+/// any other value asks for each step, the stricter choice. Only a string is read: serde would take `{"auto": null}`
+/// for the variant too.
+pub fn agent_permissions_of(stored: Option<&Value>) -> AgentPermissions {
+    match stored {
+        None => AgentPermissions::Auto,
+        Some(Value::String(word)) if word == "auto" => AgentPermissions::Auto,
+        Some(_) => AgentPermissions::Ask,
+    }
+}
+
+/// As `agent_permissions_of`, for a key that is there; a value it does not know leaves the other agent settings as
+/// they are.
 pub fn read_agent_permissions<'de, D: Deserializer<'de>>(deserializer: D) -> Result<AgentPermissions, D::Error> {
-    Ok(serde_json::from_value(Value::deserialize(deserializer)?).unwrap_or(AgentPermissions::Ask))
+    Ok(agent_permissions_of(Some(&Value::deserialize(deserializer)?)))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
