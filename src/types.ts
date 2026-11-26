@@ -524,23 +524,20 @@ export interface RunSpec {
 /** What a permission request asks for, as the harness names it. `other`: a kind this build can't read. */
 export type PermissionKind = "command" | "file_change" | "permissions" | "tool" | "other";
 
-/** A permission request of a run on the harness, as the harness sent it: masked there, never cut. */
+/** A permission request of a run on the harness, as the harness sent it: masked there, never cut. An allow allows all of `input`, so offer Allow only where every field of `input` is on screen. */
 export interface PermissionRequest {
   /** The harness's id, which an answer names. */
   id: string;
   kind: PermissionKind;
   /** The tool's name: `Bash`, `Edit`, an MCP tool. */
   tool: string;
-  /** The heading line: the command, path, pattern, address or query it asks for. */
+  /** A heading for it: the whole command, path, pattern, address or query it asks for, else its whole input as JSON. It is not the request: an allow allows all of `input`. */
   subject: string;
-  /**
-   * The whole request as JSON, each masked part the literal `<redacted>`; text where the harness cut it; null for a request
-   * rebuilt after the harness lost it. Allow is offered only where every field of it is on screen.
-   */
+  /** The whole request, masked as the harness sent it; text where the harness cut it. The page must show all of it. */
   input: unknown;
-  /** Part of it is hidden as a secret: it can only be denied. */
+  /** The harness masked part of it as a secret (`<redacted>` in place of each), so you can't see all of what an allow runs. */
   masked?: boolean;
-  /** Cut, masked, of a kind Gossamr can't read, or rebuilt: it can only be denied. */
+  /** It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, or Gossamr no longer has it whole. */
   denyOnly?: boolean;
 }
 

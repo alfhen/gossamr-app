@@ -593,7 +593,8 @@ pub struct Run {
     pub permissions: Vec<PermissionRequest>,
 }
 
-/// A permission request of a run on the harness, as the harness sent it: masked there, never cut here.
+/// A permission request of a run on the harness, as the harness sent it: masked there, never cut here. An allow allows
+/// all of `input`, so a caller may offer Allow only where every field of `input` is on screen.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionRequest {
@@ -602,9 +603,17 @@ pub struct PermissionRequest {
     pub kind: harness::event::PermissionKind,
     /// The tool's name: `Bash`, `Edit`, an MCP tool.
     pub tool: String,
-    /// The whole command, path, pattern, address or query it asks for; else its whole input as JSON.
+    /// A heading for it: the whole command, path, pattern, address or query it asks for, else its whole input as JSON.
+    /// It is not the request: an allow allows all of `input`.
     pub subject: String,
-    /// The harness cut it to fit, or its kind is one Gossamr can't read: it can only be denied.
+    /// The whole request, masked as the harness sent it; text where the harness cut it. The page shows all of it.
+    #[serde(default)]
+    pub input: serde_json::Value,
+    /// The harness masked part of it as a secret, so the person can't see all of what an allow runs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub masked: bool,
+    /// It can only be denied: the harness cut it, it is masked, its kind is one Gossamr can't read, or Gossamr no longer
+    /// has it whole.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub deny_only: bool,
 }

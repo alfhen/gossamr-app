@@ -746,3 +746,20 @@ async fn permission_the_open_requests_are_the_same_after_a_reconnect_and_one_is_
     assert!(done.permissions.is_empty());
     bed.end().await;
 }
+
+#[tokio::test]
+async fn permission_a_run_saved_without_its_requests_reads_them_again_from_the_harness_when_the_link_follows_it() {
+    let mut bed = Bed::new(PERMITS).await;
+    let (run, session) = bed.started().await;
+    let (asking, _) = bed.until(&run, |r, _| r.state == RunState::NeedsPermission).await;
+    let dropped = std::mem::replace(&mut bed.link, link(&bed.rig, &Arc::new(Direct { dir: PathBuf::from("/nowhere"), token: Token::random() }), &bed.tickets));
+    drop(dropped);
+    let old = bed.rig.set(&run, |r| r.permissions.clear()).await;
+    assert_eq!(serde_json::to_value(&old).unwrap().get("permissions"), None, "saved as a build before them saved it");
+    bed.relink();
+    let (after, _) = bed.until(&run, |r, _| !r.permissions.is_empty()).await;
+    assert_eq!(after.permissions, asking.permissions, "whole, as the harness sent it");
+    bed.link.permit(&session, &after.permissions[0].id, Decision::Allow).await.unwrap();
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.end().await;
+}
