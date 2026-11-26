@@ -64,6 +64,9 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     // SAFETY: isatty has no preconditions.
     let handed = if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 { None } else { drain_stdin()? };
     let first_token = move || handed;
+    if let Some(why) = harness::work::work_home_refused() {
+        return Err(Error::Refused(why));
+    }
     let setup = harness::work::Setup::of_this_machine(dir.clone());
     let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings { turn_limit: turn_limit.unwrap_or(harness::session::Settings::default().turn_limit), ..harness::session::Settings::default() }, setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());

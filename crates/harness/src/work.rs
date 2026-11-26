@@ -286,9 +286,31 @@ fn work_home_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
     value.filter(|value| !value.is_empty()).map(PathBuf::from)
 }
 
+/// Why `serve` must not start: `HARNESS_WORK_HOME` is set and names no folder, which would otherwise leave the work
+/// root in the home folder with no word of it.
+pub fn work_home_refused() -> Option<String> {
+    work_home_refusal(debug_work_home())
+}
+
+fn work_home_refusal(value: Option<std::ffi::OsString>) -> Option<String> {
+    let home = work_home_from(value)?;
+    (!home.is_dir()).then(|| format!("HARNESS_WORK_HOME is {}, which is not a folder: make it, or unset the variable", home.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_is_refused_a_work_home_that_names_no_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(work_home_refusal(None), None);
+        assert_eq!(work_home_refusal(Some("".into())), None);
+        assert_eq!(work_home_refusal(Some(tmp.path().as_os_str().to_owned())), None, "a folder that is there");
+        let missing = tmp.path().join("typo");
+        let refused = work_home_refusal(Some(missing.as_os_str().to_owned())).expect("refused");
+        assert!(refused.starts_with("HARNESS_WORK_HOME is ") && refused.contains("typo"), "{refused}");
+    }
 
     #[test]
     fn a_work_home_is_taken_only_from_a_value_that_names_a_folder() {
