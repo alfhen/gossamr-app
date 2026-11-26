@@ -332,9 +332,14 @@ impl Store {
         Ok(())
     }
 
-    /// Gives up on every session that has an agent on record, read or not: for when the records cannot be read back.
-    pub fn give_up_on_recorded(&self, why: &str) -> Result<()> {
-        self.conn.execute("UPDATE sessions SET given_up = 1, given_up_why = ?1 WHERE agent_pid IS NOT NULL", [why])?;
+    /// Gives up on every session that has an agent on record, read or not, but those `except` names, which run here:
+    /// for when the records cannot be read back.
+    pub fn give_up_on_recorded<'a>(&self, why: &str, except: impl Iterator<Item = &'a str>) -> Result<()> {
+        let except = serde_json::to_string(&except.collect::<Vec<_>>())?;
+        self.conn.execute(
+            "UPDATE sessions SET given_up = 1, given_up_why = ?1 WHERE agent_pid IS NOT NULL AND id NOT IN (SELECT value FROM json_each(?2))",
+            params![why, except],
+        )?;
         Ok(())
     }
 

@@ -239,11 +239,14 @@ impl ClaudeDriver {
         // failure to give a reason by.
         let last_said = Arc::new(Mutex::new(None::<String>));
         let keeping = last_said.clone();
+        let secrets = [launch.tools_token.expose().to_owned()];
         let stderr = tokio::spawn(async move {
             let mut stderr = Lines::new(BufReader::new(stderr));
             while let Ok(Some((line, _))) = stderr.next(LINE_MAX).await {
                 if !line.trim().is_empty() {
-                    *keeping.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(line.chars().take(STDERR_KEPT).collect());
+                    // Masked whole, then cut: a secret the cut halved would no longer match.
+                    let masked = crate::redact::text(&line, &secrets).chars().take(STDERR_KEPT).collect();
+                    *keeping.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(masked);
                 }
             }
         });
@@ -258,7 +261,6 @@ impl ClaudeDriver {
             kill_after: self.stop_takes_up_to,
             setup_within: self.setup_within,
             stderr: (stderr, last_said),
-            secret: launch.tools_token.expose().to_owned(),
             end,
             sent: vec![],
         };
@@ -287,8 +289,6 @@ struct Agent {
     setup_within: Duration,
     /// The task reading stderr, and its last line.
     stderr: (tokio::task::JoinHandle<()>, Arc<Mutex<Option<String>>>),
-    /// The session's tools token, kept out of what a failure says.
-    secret: String,
     /// Where the session hears how the agent's process ended.
     end: Option<EndReport>,
     /// The signals the driver sent the agent's group, so an end by one of them is the harness's own.
@@ -406,13 +406,12 @@ impl Agent {
         if !going {
             let _ = tokio::time::timeout(Duration::from_secs(1), &mut self.stderr.0).await;
             let said = self.stderr.1.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
-            let secrets = [self.secret.clone()];
             let mut how = if self.stream.turn { "claude exited in the middle of a turn" } else { "claude exited" }.to_owned();
             if let Some(AgentEnd::Signalled { signal, sent: false }) = ended {
                 how.push_str(&format!(", ended by signal {signal}"));
             }
             self.stream.fail(match said {
-                Some(said) => format!("{how}: {}", crate::redact::text(&said, &secrets)),
+                Some(said) => format!("{how}: {said}"),
                 None => how,
             });
         }

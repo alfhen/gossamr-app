@@ -9,7 +9,8 @@
 //! about [`PAGE_BYTES`].
 //!
 //! At most `harness serve --turn-limit <n>` sessions are in a turn at once, across every client: a prompt past it
-//! waits, and its session says `waiting` until a turn ends and frees a slot, first come first served.
+//! waits, and its session says `waiting` until a turn ends and frees a slot, first come first served. A turn the agent
+//! starts unprompted counts at once, past the limit too: it has begun, and nothing holds it back.
 //!
 //! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
 //! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent

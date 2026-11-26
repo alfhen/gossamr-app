@@ -15,29 +15,80 @@ use harness::process::{self, Listing, Process};
 use harness::session::{Harness, Open};
 use harness::store::Store;
 
-/// A process in a group of its own, as an agent is started.
-fn agent() -> (Child, Process) {
-    let child = Command::new("/bin/sleep").arg("60").process_group(0).spawn().unwrap();
-    let pid = child.id();
-    (child, Process { pid, started: process::started_of(pid).expect("it runs") })
+/// A child the test started, killed and reaped when it is dropped still running, as when an assertion fails first.
+struct Owned(Option<Child>);
+
+impl Owned {
+    fn take(mut self) -> Child {
+        self.0.take().expect("owned")
+    }
 }
 
-/// How `child` ended, within 10 s; a child still running then is killed, and None says so.
-fn ended(mut child: Child) -> Option<i32> {
-    let (done, waited) = std::sync::mpsc::channel();
-    let pid = child.id();
-    let waiter = std::thread::spawn(move || {
-        let status = child.wait().unwrap();
-        let _ = done.send(());
-        status.signal()
-    });
-    if waited.recv_timeout(Duration::from_secs(10)).is_err() {
-        // SAFETY: our own child, not yet reaped, so the pid is still the one we started.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
-        waiter.join().unwrap();
-        return None;
+impl std::ops::Deref for Owned {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        self.0.as_ref().expect("owned")
     }
-    waiter.join().unwrap()
+}
+
+impl std::ops::DerefMut for Owned {
+    fn deref_mut(&mut self) -> &mut Child {
+        self.0.as_mut().expect("owned")
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// A process in a group of its own, as an agent is started.
+fn agent() -> (Owned, Process) {
+    agent_in(Path::new("."))
+}
+
+/// As `agent`, working in `cwd`.
+fn agent_in(cwd: &Path) -> (Owned, Process) {
+    let child = Command::new("/bin/sleep").arg("60").current_dir(cwd).process_group(0).spawn().unwrap();
+    let pid = child.id();
+    (Owned(Some(child)), Process { pid, started: process::started_of(pid).expect("it runs") })
+}
+
+/// How `child` ended, within 10 s; a child still running then is killed, and None says so. Waited for here alone, so
+/// no other thread can reap it and free its pid before the kill.
+fn ended(child: Owned) -> Option<i32> {
+    let mut child = child.take();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status.signal();
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Until the start whose events `events` gives closes, within 10 s; an error or silence fails.
+async fn closed(events: &mut tokio::sync::broadcast::Receiver<harness::event::Event>) {
+    let waited = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Ok(event) if matches!(event.body, Body::Closed { .. }) => return Ok(()),
+                Ok(_) => {}
+                Err(e) => return Err(e),
+            }
+        }
+    })
+    .await;
+    assert!(matches!(waited, Ok(Ok(()))), "closed within 10 s: {waited:?}");
 }
 
 fn running(child: &mut Child) -> bool {
@@ -261,9 +312,9 @@ fn a_leader_gone_leaving(cwd: &Path, count: usize) -> (Process, Vec<Process>) {
     (record, work)
 }
 
+/// Kills a fixture the test no longer owns as a child, only while its pid still has its start time, as the harness does.
 fn kill(process: &Process) {
-    // SAFETY: a sleep's own pid, read while it ran; it may be gone, and nothing else took it within the test.
-    unsafe { libc::kill(process.pid as libc::pid_t, libc::SIGKILL) };
+    let _ = process::signal(process, libc::SIGKILL);
 }
 
 #[test]
@@ -281,11 +332,13 @@ fn leftover_whose_leader_is_gone_has_what_it_left_in_its_group_stopped_before_it
 #[test]
 fn leftover_whose_leader_is_gone_and_whose_group_holds_one_older_than_it_stays_given_up_and_nothing_is_signalled() {
     let (_tmp, dir) = data_dir();
-    let (mut older, older_record) = agent();
+    // In the worktree, so its age alone keeps it.
+    let worktree = worktree(&dir);
+    let (mut older, older_record) = agent_in(&worktree);
     let mut gone = Command::new("/usr/bin/true").process_group(0).spawn().unwrap();
     let leader = Process { pid: gone.id(), started: older_record.started + 1 };
     gone.wait().unwrap();
-    left_by_a_shutdown(&dir, Some(&leader));
+    left_in(&dir, Some(&leader), &worktree);
     // Its group, as listed, holds a process that started before the leader did, so not the agent's work.
     process::seam::list_group_as(leader.pid, Listing::Members(vec![older_record.pid as libc::pid_t]));
     let harness = started_harness(&dir);
@@ -362,6 +415,9 @@ async fn leftover_recorded_with_no_boot_is_kept_and_never_signalled_until_nothin
     assert!(running(&mut child), "kept, never killed");
     assert_eq!(process::seam::sent_to(agent.pid), Vec::<i32>::new());
     assert!(is_given_up(&dir));
+    // Its pid may be another process's: never named for the person to end.
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("a process in session s's group may still run (it was recorded with no boot") && !refused.contains(&agent.pid.to_string()), "{refused}");
     child.kill().unwrap();
     child.wait().unwrap();
     let refused = harness.clean_up("s").await.err().map(|e| e.to_string()).unwrap_or_default();
@@ -393,12 +449,14 @@ async fn leftover_kept_is_checked_again_on_a_resume_and_freed_once_what_held_it_
     left_in(&dir, Some(&leader), &worktree(&dir));
     let harness = started_harness(&dir);
     // What holds it and what to do, on its row and in each refusal; no shutdown is named, as none happened.
-    let holds = format!("may still run (its process group is {}; a process in its group works outside the session's worktree)", leader.pid);
+    // Its leader is gone, so the group's id may be another's by now: it is not named for the person to end.
+    let holds = "a process in session s's group may still run (a process in its group works outside the session's worktree)";
     let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
-    assert!(listed.contains(&holds) && listed.ends_with("so it is not resumed: end it, then try again"), "{listed}");
+    assert!(listed.contains(holds) && listed.ends_with("so it is not resumed: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"), "{listed}");
     for refused in [harness.resume("s").await.err(), harness.take_back("s").await.err(), harness.clean_up("s").await.err()] {
         let refused = refused.map(|e| e.to_string()).unwrap_or_default();
-        assert!(refused.contains(&holds) && refused.ends_with("end it, then try again"), "{refused}");
+        assert!(refused.contains(holds) && refused.ends_with("in Settings > Harness, to check again"), "{refused}");
+        assert!(!refused.contains(&leader.pid.to_string()), "no pid named: {refused}");
     }
     assert!(process::alive(&work), "checked again, still not the harness's to kill");
     kill(&work);
@@ -458,7 +516,7 @@ fn leftover_stops_share_one_deadline_however_many_will_not_go() {
     let waited = |count: usize| {
         let (_tmp, dir) = data_dir();
         let store = opened(&dir);
-        let agents: Vec<(Child, Process)> = (0..count).map(|_| agent()).collect();
+        let agents: Vec<(Owned, Process)> = (0..count).map(|_| agent()).collect();
         for (n, (_, agent)) in agents.iter().enumerate() {
             store.create_session(&format!("s{n}"), "mock", false, Path::new("/a"), None).unwrap();
             store.set_agent(&format!("s{n}"), Some(agent)).unwrap();
@@ -492,7 +550,7 @@ impl Driver for Sleeper {
     fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
         let (child, agent) = agent();
         let pid = child.id();
-        self.children.lock().unwrap().push(child);
+        self.children.lock().unwrap().push(child.take());
         let (commands, mut commands_rx) = tokio::sync::mpsc::unbounded_channel();
         let (output, receiver) = tokio::sync::mpsc::unbounded_channel();
         let _ = output.send(Body::Started { provider_session: format!("sleeper-{pid}"), resumed: false });
@@ -526,7 +584,7 @@ async fn leftover_retried_after_a_record_could_not_be_read_never_touches_an_agen
     let closes = |harness: &Harness| harness.events(&id, 0).unwrap().into_iter().filter(|event| matches!(event.body, Body::Closed { .. })).count();
     assert_eq!(closes(&harness), 0, "its start is not ended for it");
     harness.close(&id).unwrap();
-    while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
+    closed(&mut events).await;
     assert_eq!(closes(&harness), 1, "one closed for its start");
     for mut child in sleeper.children.lock().unwrap().drain(..) {
         let _ = child.kill();
@@ -544,17 +602,20 @@ async fn leftover_retried_after_the_records_could_not_be_listed_never_touches_an
     raw.execute("UPDATE sessions SET id = CAST(id AS BLOB) WHERE id = 's'", []).unwrap();
     let sleeper = Sleeper::default();
     let harness = Harness::new(opened(&dir), vec![("sleeper".into(), Arc::new(sleeper.clone()))], settings(4));
-    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(refused.contains("the store could not list them"), "held: {refused}");
     let (id, mut events) = harness.open(Open { provider: "sleeper".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
     events.recv().await.unwrap();
+    // A retry whose listing fails again gives up on every session on record but those that run here.
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("the store could not list them"), "held: {refused}");
+    let live_given_up: Option<bool> = raw.query_row("SELECT given_up FROM sessions WHERE id = ?1", [&id], |row| row.get(0)).unwrap();
+    assert_eq!(live_given_up, Some(false), "a session that runs here is never given up on");
     raw.execute("UPDATE sessions SET id = CAST(id AS TEXT) WHERE typeof(id) = 'blob'", []).unwrap();
     let _ = harness.resume("s").await;
     assert_eq!(ended(old_child), Some(libc::SIGKILL), "the leftover was stopped by that retry");
     let running = sleeper.children.lock().unwrap()[0].try_wait().unwrap().is_none();
     assert!(running, "the agent this harness started runs on, though it now has a record too");
     harness.close(&id).unwrap();
-    while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
+    closed(&mut events).await;
     for mut child in sleeper.children.lock().unwrap().drain(..) {
         let _ = child.kill();
         child.wait().unwrap();
@@ -576,8 +637,94 @@ async fn leftover_retried_under_the_locks_waits_for_no_kill_and_says_it_had_not_
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
     let took = begun.elapsed();
     assert!(took < Duration::from_secs(1), "the retry waited {took:?}");
-    assert!(refused.contains("it was sent a kill and had not ended when last checked") && refused.ends_with("end it, then try again"), "{refused}");
+    // Its leader runs with its recorded start in this boot, so the group is surely the agent's, and named.
+    let holds = format!("session s's agent may still run (its process group is {}; it was sent a kill and had not ended when last checked)", agent.pid);
+    assert!(refused.contains(&holds) && refused.ends_with("end it, then try again"), "{refused}");
     assert!(running(&mut child));
     child.kill().unwrap();
     child.wait().unwrap();
+}
+
+#[tokio::test]
+async fn leftover_whose_giving_up_cannot_be_written_holds_every_resume_until_it_can() {
+    let (_tmp, dir) = data_dir();
+    let elsewhere = dir.with_file_name("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (leader, work) = a_leader_gone_with_its_work_left(&elsewhere);
+    left_in(&dir, Some(&leader), &worktree(&dir));
+    sql(&dir, "UPDATE sessions SET given_up = 0, given_up_why = NULL WHERE id = 's'");
+    // The store refuses to mark it given up, as a full disk or a read-only file would.
+    sql(&dir, "CREATE TRIGGER no_giving_up BEFORE UPDATE OF given_up ON sessions WHEN NEW.given_up = 1 BEGIN SELECT RAISE(FAIL, 'no'); END");
+    let harness = started_harness(&dir);
+    assert!(!is_given_up(&dir), "the write failed");
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("could not check for agents an earlier harness left running") && refused.contains("record them"), "{refused}");
+    sql(&dir, "DROP TRIGGER no_giving_up");
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("a process in session s's group may still run"), "{refused}");
+    assert!(is_given_up(&dir));
+    assert!(process::alive(&work), "never signalled");
+    kill(&work);
+}
+
+#[test]
+fn leftover_whose_listed_member_exits_after_forking_is_listed_again_before_it_counts_as_gone() {
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    left_in(&dir, Some(&leader), &worktree);
+    // The first listing holds only a process gone since, as a member that forked its child and exited.
+    let mut gone = Command::new("/usr/bin/true").spawn().unwrap();
+    let gone_pid = gone.id() as libc::pid_t;
+    gone.wait().unwrap();
+    process::seam::list_group_once_as(leader.pid, Listing::Members(vec![gone_pid]));
+    let harness = started_harness(&dir);
+    assert!(!process::alive(&work), "the child the second listing found was stopped");
+    assert_eq!(row(harness, &dir), (false, vec![]));
+}
+
+#[test]
+fn leftover_whose_group_answers_but_lists_nothing_stays_given_up_and_nothing_is_signalled() {
+    // As `hidepid` hides another user's member on Linux: the group is there, its members are not listed.
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    left_in(&dir, Some(&leader), &worktree);
+    process::seam::list_group_as(leader.pid, Listing::Nothing);
+    let harness = started_harness(&dir);
+    assert!(process::alive(&work), "not killed");
+    assert_eq!(process::seam::sent_to(work.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+    kill(&work);
+}
+
+#[tokio::test]
+async fn leftover_freed_by_a_watched_resume_ends_before_the_watch_begins() {
+    let (_tmp, dir) = data_dir();
+    let elsewhere = dir.with_file_name("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (leader, work) = a_leader_gone_with_its_work_left(&elsewhere);
+    let store = opened(&dir);
+    store.create_session("s", "sleeper", false, &worktree(&dir), None).unwrap();
+    store.set_agent("s", Some(&leader)).unwrap();
+    drop(store);
+    sql(&dir, "UPDATE sessions SET repo = 'acme/webshop', provider_session = 'sleeper-old' WHERE id = 's'");
+    let sleeper = Sleeper::default();
+    let harness = Harness::new(opened(&dir), vec![("sleeper".into(), Arc::new(sleeper.clone()))], settings(4));
+    assert!(is_given_up(&dir), "kept: its work runs outside the worktree");
+    kill(&work);
+    while process::may_run(&work) {
+        tokio::task::yield_now().await;
+    }
+    // The recheck ends the old start in the events; the watch starts after that end, at the new start.
+    let (_feed, after) = harness.resume_watched("s", None, false).unwrap();
+    let since: Vec<Body> = harness.events("s", 0).unwrap().into_iter().filter(|event| event.seq > after).map(|event| event.body).collect();
+    assert!(!since.iter().any(|body| matches!(body, Body::Failed { .. } | Body::Closed { .. })), "the old start's end is before the cursor: {since:?}");
+    let before = harness.events("s", 0).unwrap().into_iter().filter(|event| event.seq <= after).map(|event| event.body).collect::<Vec<_>>();
+    assert!(ended_by_the_next_harness(&before, "the agent was gone too"), "{before:?}");
+    harness.close("s").unwrap();
+    for mut child in sleeper.children.lock().unwrap().drain(..) {
+        let _ = child.kill();
+        child.wait().unwrap();
+    }
 }

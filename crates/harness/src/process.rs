@@ -31,12 +31,19 @@ pub fn started_of(pid: u32) -> Option<u64> {
 /// gives, so a process that has exited is never taken for a running one.
 #[cfg(target_os = "linux")]
 pub fn started_of(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let mut fields = stat[stat.rfind(')')? + 2..].split_whitespace();
+    let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+    let mut fields = stat_tail(&stat)?.split_whitespace();
     if fields.next()? == "Z" {
         return None;
     }
     fields.nth(18)?.parse().ok()
+}
+
+/// The fields of a `/proc/<pid>/stat` after the command name, which may hold any bytes, `)` and spaces among them.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn stat_tail(stat: &[u8]) -> Option<&str> {
+    let named = stat.iter().rposition(|b| *b == b')')?;
+    std::str::from_utf8(stat.get(named + 2..)?).ok()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -162,34 +169,59 @@ pub enum Left {
 /// lead another group by now.
 pub fn left_of(leader: &Process, worktree: Option<&std::path::Path>) -> Left {
     let group = leader.pid as libc::pid_t;
-    #[cfg(any(test, feature = "testing"))]
-    let listing = seam::listing(group).unwrap_or_else(|| members_left(group));
-    #[cfg(not(any(test, feature = "testing")))]
-    let listing = members_left(group);
-    let pids = match listing {
-        Listing::Full => return Left::Unknown("its process group could not be listed in full"),
-        Listing::Nothing => return Left::Nothing,
-        Listing::Members(pids) => pids,
-    };
     let within = worktree.and_then(|worktree| std::fs::canonicalize(worktree).ok());
+    // A member can fork and exit between a listing and its check, its child unlisted: nothing is left only when a
+    // listing is empty, or two in a row list the same processes and none of them runs.
+    let mut before = None;
+    for _ in 0..4 {
+        #[cfg(any(test, feature = "testing"))]
+        let listing = seam::listing(group).unwrap_or_else(|| members_left(group));
+        #[cfg(not(any(test, feature = "testing")))]
+        let listing = members_left(group);
+        let mut pids = match listing {
+            Listing::Full => return Left::Unknown("its process group could not be listed in full"),
+            // A member the harness may not see, as `hidepid` hides another user's, keeps the group.
+            Listing::Nothing if group_answers(group) => return Left::Unknown("its group still answers, but none of it can be listed"),
+            Listing::Nothing => return Left::Nothing,
+            Listing::Members(pids) => pids,
+        };
+        pids.sort_unstable();
+        match members_check(leader, worktree.is_some(), within.as_deref(), &pids) {
+            Some(left) => return left,
+            None if before.as_ref() == Some(&pids) => return Left::Nothing,
+            None => before = Some(pids),
+        }
+    }
+    Left::Unknown("its group kept changing while it was listed")
+}
+
+/// Whether the group answers to a signal 0: it has a member, maybe one the harness may not signal.
+fn group_answers(group: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only checks that the group exists.
+    let answered = unsafe { libc::kill(-group, 0) };
+    answered == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// What one listing of the group shows, or None when none of it runs.
+fn members_check(leader: &Process, has_worktree: bool, within: Option<&std::path::Path>, pids: &[libc::pid_t]) -> Option<Left> {
     let mut ours = vec![];
-    for pid in pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()) {
+    for pid in pids.iter().filter_map(|pid| u32::try_from(*pid).ok()) {
         match started_of(pid) {
-            None if refuses_signals(pid) => return Left::Unknown("a process in its group may not be signalled by the harness"),
+            None if refuses_signals(pid) => return Some(Left::Unknown("a process in its group may not be signalled by the harness")),
             // A zombie, or reaped since the listing.
             None => {}
             // The leader's pid is another process's: no pid is given out while it names a group that has members, so
             // the agent's group is gone and this one is another's.
-            Some(started) if pid == leader.pid && started != leader.started => return Left::Nothing,
-            Some(started) if started >= leader.started && cwd_of(pid).zip(within.as_ref()).is_some_and(|(cwd, within)| cwd.starts_with(within)) => {
+            Some(started) if pid == leader.pid && started != leader.started => return Some(Left::Nothing),
+            Some(started) if started >= leader.started && cwd_of(pid).zip(within).is_some_and(|(cwd, within)| cwd.starts_with(within)) => {
                 ours.push(Process { pid, started })
             }
-            Some(started) if started < leader.started => return Left::Unknown("a process in its group started before the agent"),
-            Some(_) if worktree.is_none() => return Left::Unknown("its session names no repo, so no process in its group can be told for the agent's"),
-            Some(_) => return Left::Unknown("a process in its group works outside the session's worktree"),
+            Some(started) if started < leader.started => return Some(Left::Unknown("a process in its group started before the agent")),
+            Some(_) if !has_worktree => return Some(Left::Unknown("its session names no repo, so no process in its group can be told for the agent's")),
+            Some(_) => return Some(Left::Unknown("a process in its group works outside the session's worktree")),
         }
     }
-    if ours.is_empty() { Left::Nothing } else { Left::Ours(ours) }
+    (!ours.is_empty()).then_some(Left::Ours(ours))
 }
 
 #[cfg(target_os = "macos")]
@@ -202,8 +234,8 @@ fn members_left(group: libc::pid_t) -> Listing {
 fn members_left(group: libc::pid_t) -> Listing {
     let Ok(all) = std::fs::read_dir("/proc") else { return Listing::Full };
     let in_group = |pid: libc::pid_t| {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        stat[stat.rfind(')')? + 2..].split_whitespace().nth(2)?.parse::<libc::pid_t>().ok().filter(|of| *of == group)
+        let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+        stat_tail(&stat)?.split_whitespace().nth(2)?.parse::<libc::pid_t>().ok().filter(|of| *of == group)
     };
     let members: Vec<libc::pid_t> = all.flatten().filter_map(|entry| entry.file_name().to_str()?.parse().ok()).filter(|pid| in_group(*pid).is_some()).collect();
     if members.is_empty() { Listing::Nothing } else { Listing::Members(members) }
@@ -403,5 +435,18 @@ pub mod seam {
     /// Makes every signal but SIGKILL to `pid` fail, so a test can still end the process.
     pub fn fail_signals_to(pid: u32) {
         FAILING.with(|set| set.borrow_mut().insert(pid as libc::pid_t));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_stat_line_is_read_past_a_command_name_of_any_bytes() {
+        let stat = b"4242 (sl\xffe) p)  S 1 4242 4242 0 -1 4194560 100 0 0 0 0 0 0 0 20 0 1 0 98765 1000 100";
+        let tail = stat_tail(stat).expect("read past the name");
+        assert_eq!(tail.split_whitespace().nth(2), Some("4242"), "the group");
+        assert_eq!(tail.split_whitespace().nth(19), Some("98765"), "the start");
     }
 }

@@ -786,6 +786,26 @@ exit 1"#;
 }
 
 #[tokio::test]
+async fn claude_a_token_that_the_stderr_cut_would_halve_is_masked_whole() {
+    // The fake writes the endpoint's token on stderr so that the 500 characters kept end in the middle of it.
+    let bin = tempfile::tempdir().unwrap();
+    let body = r#"read -r first
+id=$(printf '%s' "$first" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}\n' "$id"
+read -r servers
+token=$(printf '%s' "$servers" | sed 's/.*Bearer \([^"]*\)".*/\1/')
+pad=$(head -c 490 /dev/zero | tr '\0' x)
+printf '%s%s\n' "$pad" "$token" >&2
+exit 1"#;
+    let claude = harness::testing::fake_cli(&bin.path().join("claude"), body);
+    let (mut link, _out, _tmp) = direct(&native().join("6-model.jsonl"), &[], ClaudeDriver::new(claude));
+    let said = said_until(&mut link, |body| matches!(body, Body::Failed { .. })).await;
+    let Some(Body::Failed { reason, .. }) = said.last() else { unreachable!() };
+    let kept = reason.trim_start_matches("claude exited: ").trim_start_matches('x');
+    assert_eq!(kept, "<redacted>", "masked before the cut, so none of it is left");
+}
+
+#[tokio::test]
 async fn claude_the_setup_deadline_ends_once_setup_is_answered() {
     let fixture = native().join("6-model.jsonl");
     // Counted from the open, which includes the system's first check of a newly built replay: seconds, under load.

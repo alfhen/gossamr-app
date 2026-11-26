@@ -338,7 +338,6 @@ impl Harness {
         let (events, second) = self.start(id, watcher, taken_back, first, |store, live| {
             self.inner.leftovers_stopped(store, live)?;
             let row = store.session(id)?;
-            after = store.last_seq(id)?;
             let never = match () {
                 _ if row.cleaned => Some(Error::CleanedUp(id.to_owned())),
                 _ if row.ends_with_client => Some(Error::EndedWithClient(id.to_owned())),
@@ -360,6 +359,8 @@ impl Harness {
             if taken_back && !row.handed_over {
                 return Err(Error::Refused(format!("session {id} was not handed over, so there is nothing to take back: resume it")));
             }
+            // After the recheck, which may end the old start in the events.
+            after = store.last_seq(id)?;
             if carry_on {
                 if let Some(why) = &row.no_carry_on {
                     return Err(Error::Refused(format!("session {id} may not carry on: {why}")));
@@ -870,18 +871,19 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     let ids = match ids.map(Ok).unwrap_or_else(|| store.recorded().map(|ids| ids.into_iter().filter(|id| !live.contains_key(id)).collect())) {
         Ok(ids) => ids,
         Err(_) => {
-            let _ = store.give_up_on_recorded(UNLISTED);
+            let _ = store.give_up_on_recorded(UNLISTED, live.keys().map(String::as_str));
             return Err(Leftovers { ids: None, why: "the store could not list them".into() });
         }
     };
-    let (mut unread, mut checked) = (vec![], vec![]);
+    // Those whose record could not be read, or whose giving up could not be written: none of them may be resumed.
+    let (mut pending, mut checked) = (vec![], vec![]);
     for id in ids {
         let crate::store::Recorded { agent, boot, worktree } = match store.agent(&id) {
             Ok(Some(found)) => found,
             Ok(None) => continue,
             Err(_) => {
                 let _ = store.set_given_up(&id, UNREAD);
-                unread.push(id);
+                pending.push(id);
                 continue;
             }
         };
@@ -925,13 +927,15 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
                 let _ = store.set_agent(&id, None);
             }
             Err(why) => {
-                let _ = store.set_given_up(&id, why);
+                if store.set_given_up(&id, why).is_err() {
+                    pending.push(id);
+                }
             }
         }
     }
-    match unread.is_empty() {
+    match pending.is_empty() {
         true => Ok(()),
-        false => Err(Leftovers { ids: Some(unread), why: "the store could not read them back".into() }),
+        false => Err(Leftovers { ids: Some(pending), why: "the store could not read them back or record them".into() }),
     }
 }
 
@@ -993,17 +997,21 @@ fn leftovers_unchecked(why: &str) -> String {
 /// Whether session `id`, given up on, still is: its agent on record is checked again, with no wait, and the session is
 /// freed once nothing it left runs. A given-up session never runs in this harness, so this reaches no agent of its own.
 fn still_given_up(store: &Store, id: &str, live: &HashMap<String, Live>) -> bool {
-    let _ = stop_leftovers(store, Some(vec![id.to_owned()]), live, Duration::ZERO);
-    store.session(id).map_or(true, |row| row.given_up.is_some())
+    stop_leftovers(store, Some(vec![id.to_owned()]), live, Duration::ZERO).is_err() || store.session(id).map_or(true, |row| row.given_up.is_some())
 }
 
 /// The refusal for a session given up on: what holds it, and what to do.
 fn given_up(store: &Store, id: &str, what: &str) -> String {
     let why = store.session(id).ok().and_then(|row| row.given_up).unwrap_or_else(|| UNREAD.to_owned());
     match store.agent(id) {
-        Ok(Some(recorded)) if why != UNREAD && why != UNLISTED => format!(
-            "session {id}'s agent, or a process it started, may still run (its process group is {}; {why}), so it is not {what}: end it, then try again",
+        // Only a leader of this boot that still runs with its recorded start is surely the agent; any other pid may
+        // be another process's by now, and is never named for the person to end.
+        Ok(Some(recorded)) if recorded.boot.is_some() && recorded.boot == crate::process::boot_id() && crate::process::alive(&recorded.agent) => format!(
+            "session {id}'s agent may still run (its process group is {}; {why}), so it is not {what}: end it, then try again",
             recorded.agent.pid
+        ),
+        Ok(Some(_)) if why != UNREAD && why != UNLISTED => format!(
+            "a process in session {id}'s group may still run ({why}), so it is not {what}: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"
         ),
         Ok(None) => format!("session {id}'s agent may still run ({why}), and the harness has no record of its process, so it is not {what}"),
         _ => format!("session {id}'s agent may still run ({why}), so it is not {what}: restarting the harness, in Settings > Harness, checks again"),
@@ -2230,30 +2238,26 @@ mod tests {
         let ended = loop {
             let event = events.recv().await.unwrap();
             if matches!(event.body, Body::TurnEnded { .. }) {
-                break event.ms;
+                break std::time::Instant::now();
             }
         };
         assert_eq!(mock.replies(&provider_session), [Ok(Reply { output: json!(QUESTION_PENDING), error: false })]);
         // The wait is 2250 ms. From the call's arrival it ends at most 250 ms after the take; from the take, 2250 ms
         // after it. Only time after the take counts, so a slow start of the turn or of the endpoint cannot fail this.
-        let after = ended - took();
+        let after = ended.duration_since(took()).as_millis();
         assert!(after < 1250, "returned {after} ms after the session took it: the wait counts from the call's arrival");
     }
 
     /// Makes the session take its next call `busy` ms after it reached the endpoint. What it gives says when the
-    /// session took it, in the milliseconds an event's `ms` is in.
-    fn took_after_a_busy_session(harness: &Harness, busy: u64) -> impl Fn() -> i64 {
-        let took = Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN));
+    /// session took it, by the monotonic clock, so no clock step moves it.
+    fn took_after_a_busy_session(harness: &Harness, busy: u64) -> impl Fn() -> std::time::Instant {
+        let took = Arc::new(Mutex::new(None));
         let at = took.clone();
         set(&harness.inner.hooks.before_call, Box::new(move || {
             std::thread::sleep(Duration::from_millis(busy));
-            at.store(now_ms(), Ordering::Relaxed);
+            *at.lock().unwrap() = Some(std::time::Instant::now());
         }) as Hook);
-        move || {
-            let took = took.load(Ordering::Relaxed);
-            assert_ne!(took, i64::MIN, "the session took the call");
-            took
-        }
+        move || took.lock().unwrap().expect("the session took the call")
     }
 
     /// The session's events until `last` takes one, each within 10 s.
@@ -2572,14 +2576,14 @@ mod tests {
         let cut = loop {
             let event = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("an event within 10 s").unwrap();
             match event.body {
-                Body::ToolResult { output, error: true, .. } if output == timed_out => break event.ms,
+                Body::ToolResult { output, error: true, .. } if output == timed_out => break std::time::Instant::now(),
                 Body::TurnEnded { .. } => panic!("the turn ended with no cut"),
                 _ => {}
             }
         };
         // From the call's arrival the cut comes at most 1000 ms after the take; from the take, 3000 ms after it. Only
         // time after the take counts, so a slow start of the turn or of the endpoint cannot fail this.
-        let after = cut - took();
+        let after = cut.duration_since(took()).as_millis();
         assert!(after < 2000, "cut {after} ms after the session took the call: the limit counts from its arrival");
     }
 
