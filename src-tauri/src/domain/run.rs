@@ -291,19 +291,36 @@ fn pr_checkout(spec: &RunSpec) -> &str {
     spec.pr_sha.as_deref().unwrap_or("FETCH_HEAD")
 }
 
-/// The exact text handed to the agent as its prompt: one base brief around Pip's. A pull request is checked out at its
-/// pinned commit and never replaced by the base branch when that fails, which would test something else and could pass.
+/// Where an agent's worktree comes from, which the brief's first step follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// `claude --bg --worktree` and Codex: a worktree at the clone's HEAD, which the agent moves onto its branch.
+    OwnCheckout,
+    /// The harness made the worktree on the run's branch `<name>` from the fetched `origin/<base>`.
+    HarnessWorktree,
+}
+
+/// The exact text handed to an agent that sets up its own worktree: one base brief around Pip's. A pull request is
+/// checked out at its pinned commit and never replaced by the base branch when that fails, which would test something
+/// else and could pass.
 pub fn render_prompt(spec: &RunSpec) -> String {
+    render_prompt_from(spec, Start::OwnCheckout)
+}
+
+/// `render_prompt`, for an agent whose worktree came from `start`.
+pub fn render_prompt_from(spec: &RunSpec, start: Start) -> String {
     let (base, name) = (&spec.base, &spec.name);
     let role = spec.role.as_str();
     let article = if role.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
     let on = spec.ticket.as_deref().map_or_else(|| "the task below".to_string(), without_markers);
     let site = spec.ticket.as_ref().and(spec.site.as_deref()).map(|site| without_markers(&site.split_whitespace().collect::<Vec<_>>().join(" ")));
     let on_site = site.as_ref().map(|site| format!(" (on {site})")).unwrap_or_default();
-    let mut parts = vec![
-        format!("You are working as {article} {role} on {on}{on_site}."),
-        format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
-    ];
+    let worktree = match (start, spec.pr) {
+        (Start::OwnCheckout, _) => format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
+        (Start::HarnessWorktree, None) => format!("Your worktree is on branch `{name}`, made from `origin/{base}` at the harness's last fetch. Before you start, run `git fetch origin {base}` and, if `origin/{base}` moved, `git rebase origin/{base}` (the branch has no commits yet). Commit and push only on `{name}`; don't create another branch."),
+        (Start::HarnessWorktree, Some(_)) => format!("Your worktree is on branch `{name}`, made from `origin/{base}`. Check out the pull request below in it, as it says, and create no other branch."),
+    };
+    let mut parts = vec![format!("You are working as {article} {role} on {on}{on_site}."), worktree];
     if site.is_some() {
         parts.push(format!("Another Jira site can have a ticket with the same key. Put the full key, {on}, in the title of any pull request you open."));
     }
@@ -316,11 +333,17 @@ pub fn render_prompt(spec: &RunSpec) -> String {
         ));
     }
     parts.push(without_markers(spec.brief.trim()));
-    if spec.report {
-        parts.push("Gossamr's tools: call `report` when you are done, `ask` when you are blocked on a decision, and `read_workstream` for what earlier agents reported. If they aren't loaded, load them with ToolSearch.".into());
-    }
-    if spec.report {
-        parts.push("Write your full prose report in `report.note`. If the tool cannot be used, write the same report in your final answer so Pip can read it and draft what follows.".into());
+    // A harness session has no `report`: its report is the harness's own `result`, with the same status and note.
+    match (spec.report, start) {
+        (false, _) => {}
+        (true, Start::OwnCheckout) => {
+            parts.push("Gossamr's tools: call `report` when you are done, `ask` when you are blocked on a decision, and `read_workstream` for what earlier agents reported. If they aren't loaded, load them with ToolSearch.".into());
+            parts.push("Write your full prose report in `report.note`. If the tool cannot be used, write the same report in your final answer so Pip can read it and draft what follows.".into());
+        }
+        (true, Start::HarnessWorktree) => {
+            parts.push("Gossamr's tools: call `result` when you are done, `ask` when you are blocked on a decision, and `read_workstream` for what earlier agents reported. If they aren't loaded, load them with ToolSearch.".into());
+            parts.push("Write your full prose report in `result.note`, with `status` done or blocked. If the tool cannot be used, write the same report in your final answer so Pip can read it and draft what follows.".into());
+        }
     }
     parts.push("Don't write to Jira. Push no branch but your own and open pull requests as drafts; never merge one or mark it ready. Never check out a branch from a fork.".into());
     // The harness's own guard names no TICKET markers, so the brief carries rule 5 for them itself.
@@ -591,6 +614,16 @@ pub struct Run {
 }
 
 impl Run {
+    /// The branch the run works on: the one it recorded, else the one its path makes: the harness's `<name>`, or the
+    /// old path's `worktree-<name>`.
+    pub fn branch_name(&self) -> String {
+        match (&self.branch, &self.harness_session) {
+            (Some(branch), _) if !branch.trim().is_empty() => branch.clone(),
+            (_, Some(_)) => self.spec.name.clone(),
+            _ => format!("worktree-{}", self.spec.name),
+        }
+    }
+
     /// The provider instance the run is on: its choice, else the default instance.
     pub fn instance_id(&self) -> &str {
         self.runs_on.as_ref().map_or(crate::connections::DEFAULT_CLAUDE, |c| c.instance_id.as_str())
@@ -874,6 +907,45 @@ mod tests {
 
     fn ticketed() -> RunSpec {
         RunSpec { ticket: Some("CA-412".into()), ticket_block: Some("CA-412: Cart total\n\nTotal is off".into()), report: true, ..with_role("builder") }
+    }
+
+    #[test]
+    fn a_harness_runs_brief_says_its_worktree_is_on_its_own_branch_and_the_old_paths_brief_is_unchanged() {
+        let old = "Your worktree starts at the clone's current HEAD, which may not be `main`. First run `git fetch origin main` and `git checkout -B worktree-eng-1-fix-cart-3f9a origin/main` in your worktree (it has no changes yet), then continue.";
+        let made = "Your worktree is on branch `eng-1-fix-cart-3f9a`, made from `origin/main` at the harness's last fetch. Before you start, run `git fetch origin main` and, if `origin/main` moved, `git rebase origin/main` (the branch has no commits yet). Commit and push only on `eng-1-fix-cart-3f9a`; don't create another branch.";
+        let own = render_prompt(&ticketed());
+        assert_eq!(own.split("\n\n").nth(1), Some(old), "the old path's step, word for word");
+        assert_eq!(render_prompt_from(&ticketed(), Start::OwnCheckout), own);
+        let harness = render_prompt_from(&ticketed(), Start::HarnessWorktree);
+        let quiet = RunSpec { report: false, ..ticketed() };
+        assert_eq!(render_prompt_from(&quiet, Start::HarnessWorktree), render_prompt(&quiet).replacen(old, made, 1), "the same brief but for where its worktree is");
+        assert!(!harness.contains("worktree-") && !harness.contains("git checkout"), "{harness}");
+        assert!(harness.contains("`git fetch origin main`"), "a base the harness's fetch missed is fetched again: {harness}");
+        let pinned = RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..with_role("reviewer") };
+        let review = render_prompt_from(&pinned, Start::HarnessWorktree);
+        assert_eq!(review.split("\n\n").nth(1), Some("Your worktree is on branch `eng-1-fix-cart-3f9a`, made from `origin/main`. Check out the pull request below in it, as it says, and create no other branch."));
+        assert!(review.contains("`git fetch origin pull/12/head` then `git checkout --detach a1b2c3d4e5f6`"), "the pinned checkout stays: {review}");
+    }
+
+    #[test]
+    fn a_runs_branch_is_the_one_it_recorded_else_the_one_its_path_makes() {
+        let mut run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, spec(), chrono::Utc::now());
+        assert_eq!(run.branch_name(), "worktree-eng-1-fix-cart-3f9a", "the old path's");
+        run.harness_session = Some("s1".into());
+        assert_eq!(run.branch_name(), "eng-1-fix-cart-3f9a", "the harness's, before its listing is read");
+        run.branch = Some("named".into());
+        assert_eq!(run.branch_name(), "named");
+    }
+
+    #[test]
+    fn a_harness_runs_brief_names_the_harnesss_result_tool_for_its_report_and_the_old_paths_names_report() {
+        let own = render_prompt(&ticketed());
+        assert!(own.contains("call `report` when you are done") && own.contains("in `report.note`"), "{own}");
+        let harness = render_prompt_from(&ticketed(), Start::HarnessWorktree);
+        assert!(harness.contains("call `result` when you are done") && harness.contains("in `result.note`, with `status` done or blocked"), "{harness}");
+        assert!(!harness.contains("`report`") && !harness.contains("report.note"), "a harness session has no report tool: {harness}");
+        let quiet = render_prompt_from(&RunSpec { report: false, ..ticketed() }, Start::HarnessWorktree);
+        assert!(!quiet.contains("`result`"), "a run asked for no report is not told of the tool");
     }
 
     #[test]
