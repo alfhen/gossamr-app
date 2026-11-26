@@ -94,6 +94,9 @@ pub use super::consumer::CARRY_ONS;
 /// How long the carry on after a restart waits for the app to catch up with the harness's sessions.
 const CATCH_UP_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The way on from a carry on the harness's rules refused: a message, which the rules do not govern.
+pub const CARRY_ON_BY_MESSAGE: &str = "Message the agent to go on.";
+
 /// The prompt that takes up a turn a restart cut.
 pub const CARRY_ON: &str = "The harness restarted while you were working, so your last turn was cut short. Carry on where you left off.";
 
@@ -244,6 +247,9 @@ impl RunService {
             }
             let said = match on.link.carry_on(&session, CARRY_ON).await {
                 Ok(()) => "Carried on after the harness restarted".to_owned(),
+                // Only the harness's rule for a carry on keeps it, and a message is no carry on: say so. A session the
+                // harness keeps takes no message either, so its reason stands alone.
+                Err(why) if why.contains("may not carry on") => format!("Not carried on after the harness restarted: {}. {CARRY_ON_BY_MESSAGE}", plain_refusal(&why, &session).trim_end_matches('.')),
                 Err(why) => format!("Not carried on after the harness restarted: {}", plain_refusal(&why, &session)),
             };
             let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "follow_up".into(), text: said, detail: None };

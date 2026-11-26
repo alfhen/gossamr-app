@@ -799,3 +799,18 @@ fn an_agent_that_stopped_between_turns_cut_nothing_and_a_finished_run_stays_done
     assert_eq!((p.run.state, p.run.error.as_deref(), p.follow.cut.as_deref(), p.follow.closed), (RunState::Done, None, None, true), "no cut to carry on");
     assert!(!p.rows.iter().any(|row| row.text == CUT), "no cut is said either");
 }
+
+#[test]
+fn a_failed_between_turns_of_a_finished_run_says_so_and_leaves_it_done_but_a_setup_failure_fails_its_run() {
+    let signal = "claude exited, ended by signal 15";
+    let stuck = "the shutdown could not stop it";
+    for (kind, reason) in [(FailKind::Provider, signal), (FailKind::Stuck, stuck)] {
+        let mut p = Played::new();
+        p.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }, Body::Failed { kind, reason: reason.into() }]);
+        assert_eq!((p.run.state, p.run.error.as_deref(), p.run.failure), (RunState::Done, None, None), "{kind:?}: a finished run stays done");
+        assert_eq!(p.rows.last().map(|row| row.text.as_str()), Some(reason), "{kind:?}: and its row says why");
+    }
+    let mut setup = Played::new();
+    setup.play([Body::Failed { kind: FailKind::Provider, reason: "claude wouldn't start".into() }]);
+    assert_eq!(setup.run.state, RunState::Failed, "a run that never began a turn still fails");
+}

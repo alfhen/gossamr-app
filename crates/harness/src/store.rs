@@ -395,6 +395,18 @@ impl Store {
         if closed.as_deref() != Some("closed") {
             if last_turn.as_deref() == Some("turn_started") {
                 self.insert_event(id, &Body::Failed { kind: crate::event::FailKind::AgentStopped, reason: how.to_owned() }, ms, None)?;
+                // As a shutdown marks it: a carry on would go past a request no one answered.
+                let open: bool = self.conn.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM events p WHERE p.session = ?1 AND p.type = 'permission'
+                         AND p.seq > (SELECT MAX(seq) FROM events WHERE session = ?1 AND type = 'turn_started')
+                         AND NOT EXISTS (SELECT 1 FROM events a WHERE a.session = ?1 AND a.seq > p.seq
+                             AND a.type IN ('answered', 'permission_closed') AND json_extract(a.payload, '$.id') = json_extract(p.payload, '$.id')))",
+                    [id],
+                    |row| row.get(0),
+                )?;
+                if open {
+                    self.set_no_carry_on(id, Some(OPEN_REQUEST_STOPPED))?;
+                }
             }
             self.insert_event(id, &Body::Closed { by: crate::event::ClosedBy::HarnessWent }, ms, None)?;
         }
@@ -701,6 +713,9 @@ fn migrate(conn: &mut Connection) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
+
+/// Why a session whose turn stopped with a permission request open may not carry on: the request was never answered.
+pub const OPEN_REQUEST_STOPPED: &str = "a permission request was open when it stopped";
 
 pub fn now_ms() -> i64 {
     let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("the clock is after 1970");

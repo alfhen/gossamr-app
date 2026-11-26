@@ -1730,7 +1730,7 @@ impl Task {
         };
         self.stopping.store(true, Ordering::Relaxed);
         if !blocked && !self.open_requests().is_empty() {
-            self.forbid_carry_on(Some("a permission request was open when it stopped"), &mut blocked);
+            self.forbid_carry_on(Some(crate::store::OPEN_REQUEST_STOPPED), &mut blocked);
         }
         self.open_requests().clear();
         // `send` took these, so the client hears they never reached the agent: those queued here, and those still on

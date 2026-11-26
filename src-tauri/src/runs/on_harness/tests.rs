@@ -1500,7 +1500,7 @@ async fn a_cut_run_whose_session_the_harness_keeps_is_not_carried_on_or_resumed_
     rig.svc.carry_on_after_restart().await;
     let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
     let said = rows.iter().find(|text| text.starts_with("Not carried on after the harness restarted: ")).unwrap_or_else(|| panic!("{rows:?}"));
-    assert!(said.contains(plain) && !said.contains(&session), "the reason, in plain words: {said}");
+    assert!(said.contains(plain) && !said.contains(&session) && !said.contains(CARRY_ON_BY_MESSAGE), "the reason, in plain words, and no way on a message would refuse: {said}");
     let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err().to_string();
     assert!(refused.starts_with("The harness didn't resume it: ") && refused.contains(plain) && !refused.contains(&session), "{refused}");
     assert_eq!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.carry_ons, 0, "nothing counted");
@@ -1612,7 +1612,7 @@ async fn a_carry_on_the_harness_refuses_is_not_counted_keeps_the_cut_for_the_nex
     rig.svc.carry_on_after_restart().await;
     let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
     let said = rows.iter().find(|text| text.starts_with("Not carried on after the harness restarted: ")).unwrap_or_else(|| panic!("{rows:?}"));
-    assert!(said.ends_with(": It may not carry on: you denied its last request") && !said.contains(&session), "plain words, no `refused:` and no id: {said}");
+    assert!(said.ends_with(&format!(": It may not carry on: you denied its last request. {CARRY_ON_BY_MESSAGE}")) && !said.contains(&session), "plain words, no `refused:` and no id, and the way on: {said}");
     let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
     assert_eq!((follow.carry_ons, follow.cut.is_some(), follow.resuming), (0, true, false), "put back as it was");
     assert_eq!(rig.get(&run).await.state, RunState::Stopped);
@@ -1673,7 +1673,7 @@ async fn a_run_cut_with_a_permission_request_open_is_not_carried_on_but_takes_yo
     rig.svc.carry_on_after_restart().await;
     let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
     let said = rows.iter().find(|text| text.starts_with("Not carried on after the harness restarted: ")).unwrap_or_else(|| panic!("{rows:?}"));
-    assert!(said.contains("It may not carry on") && !said.contains(&session), "the harness's rule, said plainly: {said}");
+    assert!(said.contains("It may not carry on") && said.ends_with(CARRY_ON_BY_MESSAGE) && !said.contains(&session), "the harness's rule, said plainly, and the way on: {said}");
     let (_, delivery) = rig.svc.message_agent(&run.id, "Go ahead and read it.", crate::domain::Actor::Person).await.unwrap();
     assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
     let done = until_state(&rig, &run, RunState::Done).await;
@@ -1970,4 +1970,30 @@ async fn a_finished_run_whose_harness_went_without_a_shutdown_stays_done_and_is_
     assert!(!rows.iter().any(|text| text.contains("arried on") || text == crate::runs::consumer::CUT), "{rows:?}");
     assert!(!prompted(&served, &session, CARRY_ON).await);
     assert_eq!(rig.notices.0.lock().unwrap().len(), told, "Pip is told nothing new");
+}
+
+/// A turn that finishes, and an agent that then ends by a signal the harness did not send, as a logout's.
+const FINISHES_THEN_IS_SIGNALLED: &str = r#"{"prompt": null}
+{"say": "Looking at the cart."}
+{"end": "done"}
+{"fail": "claude exited, ended by signal 15"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_finished_runs_agent_ended_between_turns_leaves_it_done_and_pip_is_not_told_again() {
+    let served = Served::new(FINISHES_THEN_IS_SIGNALLED, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text == "claude exited, ended by signal 15") {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the agent's end is on the timeline");
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.error), (RunState::Done, None));
+    let told: Vec<crate::runs::tracker::Attention> = rig.notices.0.lock().unwrap().iter().filter(|(id, ..)| *id == run.id).map(|(_, why, _)| *why).collect();
+    assert_eq!(told, [crate::runs::tracker::Attention::Done], "told once that it was done, and nothing of the agent's end");
 }

@@ -944,3 +944,26 @@ fn leftover_whose_turn_had_ended_is_closed_with_no_cut_so_nothing_carries_it_on(
     drop(harness);
     assert_eq!(said(&dir), [Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Done }, Body::Closed { by: ClosedBy::HarnessWent }], "an idle start's end, not a cut turn's");
 }
+
+#[test]
+fn leftover_with_a_permission_request_still_open_may_not_carry_on_as_after_a_shutdown() {
+    use harness::event::{Body, Decision, PermissionKind};
+    let asked = |id: &str| Body::Permission { id: id.into(), kind: PermissionKind::Tool, tool: "Read".into(), input: serde_json::json!({}) };
+    for (answered, open) in [(false, true), (true, false)] {
+        let (_tmp, dir) = data_dir();
+        let (child, agent) = agent();
+        left_by_a_shutdown(&dir, Some(&agent));
+        let store = opened(&dir);
+        store.append("s", &asked("r1"), harness::store::now_ms()).unwrap();
+        if answered {
+            store.append("s", &Body::Answered { id: "r1".into(), decision: Decision::Allow, message: None }, harness::store::now_ms()).unwrap();
+        }
+        drop(store);
+        let harness = started_harness(&dir);
+        assert_eq!(ended(child), Some(libc::SIGKILL));
+        drop(harness);
+        assert!(ended_by_the_next_harness(&said(&dir), "stopped it"), "{:?}", said(&dir));
+        let marked = opened(&dir).session("s").unwrap().no_carry_on;
+        assert_eq!(marked.as_deref(), open.then_some(harness::store::OPEN_REQUEST_STOPPED), "answered {answered}");
+    }
+}

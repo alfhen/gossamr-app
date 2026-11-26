@@ -225,8 +225,16 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         // Nobody asked for it: a shutdown of the harness, or the agent's own end. Neither fails the run or wakes Pip;
         // an open question stays for after a resume.
-        // An agent that stopped between turns cut nothing: a finished run stays as it was, and nothing carries it on.
-        // So does a session whose harness went while it was idle, which the next harness ends as stopped.
+        // A `failed` between turns of a run that is over ended nothing it was doing: a logout's signal or an out of memory
+        // kill that reached an idle agent, a shutdown that could not finish, the idle session of a harness that went. Its
+        // row says so and the run stays as it was, so nobody is woken. One before the first turn, a setup that failed,
+        // still fails its run below.
+        Body::Failed { reason, .. } if !follow.in_turn && matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped) => {
+            follow.permissions.clear();
+            follow.calls.clear();
+            rows.add("update", &reason, None);
+        }
+        // An agent that stopped between turns cut nothing, whatever the run waits on, and nothing carries it on.
         Body::Failed { kind: FailKind::AgentStopped, .. } if !follow.in_turn => {
             follow.permissions.clear();
             follow.calls.clear();
