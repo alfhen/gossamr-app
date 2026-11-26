@@ -458,3 +458,86 @@ async fn a_harness_run_needs_its_login_signed_in_and_not_a_claude_that_has_bg() 
     let refused = rig.get(&rig.launched(2).await).await;
     assert_eq!((refused.state, refused.harness_session.is_none()), (RunState::Failed, true), "{:?}", refused.error);
 }
+
+#[tokio::test]
+async fn a_run_whose_agent_the_harness_lost_says_to_ask_pip_and_a_new_run_on_its_ticket_starts() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    // As if the harness had died mid-turn with no shutdown: the app still reads a turn the harness no longer runs.
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    rig.fx.core.apply_session(&session, |run, follow| {
+        (follow.closed, follow.ended, follow.in_turn) = (false, false, true);
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err();
+    assert!(refused.to_string().contains(crate::runs::consumer::AGENT_LOST), "{refused}");
+    let lost = rig.get(&run).await;
+    assert_eq!((lost.state, lost.last_detail.as_deref()), (RunState::Stopped, Some(crate::runs::consumer::AGENT_LOST)));
+    assert!(!crate::runs::consumer::AGENT_LOST.contains("Message the agent"), "a message is refused, so the text does not offer it");
+    // What the text says: Pip starts it again, as a new run on the same ticket.
+    let again = rig.fx.core.queue_test_run(crate::domain::RunSpec { name: "eng-1-fix-cart-again".into(), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let started = rig.svc.start_now(&again.id).await.unwrap();
+    assert!(started.harness_session.is_some(), "the new run opened on the harness");
+    until_state(&rig, &started, RunState::Done).await;
+}
+
+#[tokio::test]
+async fn a_message_to_a_finished_run_whose_agent_the_harness_lost_is_refused_in_plain_words_and_the_run_stays_done() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    // As if the harness had been killed after the turn ended: the app never read the close.
+    rig.fx.core.apply_session(&session, |_, follow| {
+        follow.closed = false;
+        Vec::new()
+    }).await.unwrap();
+    let refused = rig.svc.message_agent(&run.id, "One more thing.", crate::domain::Actor::Person).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::link::NOT_RUNNING);
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.last_detail.as_deref() == Some(crate::runs::consumer::AGENT_LOST)), (RunState::Done, false));
+}
+
+#[tokio::test]
+async fn a_harness_run_is_not_held_back_by_claudes_trust_question_which_its_print_mode_never_asks() {
+    let served = Served::new(FINISHES, 4);
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let home = fx.home.canonicalize().unwrap();
+    let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    let reads = Arc::new(crate::agent::agent_tools::HarnessReads(fx.core.clone()));
+    let link = Arc::new(Link::start(fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed));
+    let rig = crate::runs::rig::ready_in(fx, &[("HOME", home.to_string_lossy().into_owned())], |svc| svc.with_harness(OnHarness { link, provider: "mock".into() })).await;
+    // The temp home's Claude settings say the clone was never trusted, which the old path refuses.
+    let projects = serde_json::json!({ "projects": { rig.clone.to_string_lossy(): { "hasTrustDialogAccepted": false } } });
+    std::fs::write(home.join(".claude.json"), projects.to_string()).unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    rig.cli.with(|s| s.config_dir = home.join(".claude"));
+    assert_eq!(crate::runs::trust::trusted(&home.join(".claude.json"), &rig.clone), Some(false), "the settings read as untrusted");
+    let run = rig.launched(1).await;
+    let opened = rig.get(&run).await;
+    assert!(opened.harness_session.is_some() && opened.failure.is_none(), "{:?}", opened.error);
+}

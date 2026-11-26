@@ -78,7 +78,12 @@ impl Bed {
 
     /// A queued run of the account, opened as a mock session with the `read_ticket` tool, and sent its brief.
     async fn started(&self) -> (Run, String) {
-        let run = self.rig.queued(1).await;
+        self.started_as(1).await
+    }
+
+    /// `started`, for the account's run `n`.
+    async fn started_as(&self, n: u32) -> (Run, String) {
+        let run = self.rig.queued(n).await;
         let run = self.rig.set(&run, |r| r.state = RunState::Launching).await;
         let cwd = self.served._tmp.path().to_path_buf();
         let tools = vec![harness::tools::ToolSpec { name: "read_ticket".into(), description: String::new(), input_schema: json!({ "type": "object" }) }];
@@ -567,7 +572,11 @@ async fn the_wait_grows_while_watching_the_followed_sessions_keeps_failing() {
 /// A run whose session the harness no longer runs, though the app follows it mid-turn, as when the harness that ran it
 /// was killed: no `closed` was ever recorded.
 async fn lost(bed: &Bed) -> (Run, String) {
-    let (run, session) = bed.started().await;
+    lost_as(bed, 1).await
+}
+
+async fn lost_as(bed: &Bed, n: u32) -> (Run, String) {
+    let (run, session) = bed.started_as(n).await;
     bed.until(&run, |r, _| r.state == RunState::Done).await;
     bed.served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
     bed.until(&run, |_, f| f.closed).await;
@@ -647,5 +656,51 @@ async fn a_second_request_while_the_run_already_waits_is_told_as_a_new_need() {
     bed.until(&run, |r, _| r.needs.as_deref() == Some("Which size?")).await;
     let needs = bed.rig.noticed().iter().filter(|(why, _)| *why == Attention::Needs).count();
     assert_eq!(needs, 2, "one for each question");
+    bed.end().await;
+}
+
+/// A run that finished before the harness that ran it was killed: the app never read its session's `closed`.
+async fn finished_then_lost(bed: &Bed) -> (Run, String) {
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    bed.until(&run, |_, f| f.closed).await;
+    bed.rig.fx.core.apply_session(&session, |_, follow| {
+        (follow.closed, follow.ended, follow.stop_asked) = (false, false, false);
+        Vec::new()
+    }).await.unwrap();
+    (run, session)
+}
+
+#[tokio::test]
+async fn a_run_that_finished_before_the_harness_went_stays_done_at_a_connect_and_at_a_message() {
+    let mut bed = Bed::new(STREAM).await;
+    let (done, done_session) = finished_then_lost(&bed).await;
+    let (working, _) = lost_as(&bed, 2).await;
+    bed.relink();
+    // The working run's turn is lost at the connect, so the connect has looked at both.
+    bed.until(&working, |r, _| r.state == RunState::Stopped).await;
+    assert_eq!(bed.rig.get(&done).await.state, RunState::Done, "a finished run is not lost at a connect");
+    let refused = bed.link.send(&done_session, "One more thing.").await.unwrap_err();
+    assert_eq!(refused, NOT_RUNNING);
+    let after = bed.rig.get(&done).await;
+    assert_eq!((after.state, after.last_detail.as_deref() == Some(consumer::AGENT_LOST)), (RunState::Done, false), "nor at a message");
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn a_stop_or_a_message_leaves_a_session_whose_stored_events_the_app_has_not_read_to_those_events() {
+    let bed = Bed::new(STREAM).await;
+    let (run, session) = lost(&bed).await;
+    // Its turn end and close are stored past what the app applied: the harness says how it ended, so it is not lost.
+    bed.rig.fx.core.apply_session(&session, |_, follow| {
+        follow.seq -= 2;
+        Vec::new()
+    }).await.unwrap();
+    assert_eq!(bed.link.send(&session, "Go on.").await.unwrap_err(), NOT_RUNNING);
+    let _ = bed.link.stop(&session).await;
+    let after = bed.rig.get(&run).await;
+    assert_ne!(after.last_detail.as_deref(), Some(consumer::AGENT_LOST));
+    assert!(!bed.rows(&run).await.iter().any(|(_, text)| text == consumer::AGENT_LOST));
     bed.end().await;
 }

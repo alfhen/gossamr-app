@@ -408,3 +408,12 @@ fn a_tool_calls_detail_on_the_run_is_redacted_as_its_row_is() {
     assert!(!detail.contains("hunter2secret"), "{detail}");
     assert_eq!(Some(detail.as_str()), p.rows.last().map(|row| row.text.as_str()));
 }
+
+#[test]
+fn a_lost_agent_keeps_the_question_it_asked_for_you_to_answer() {
+    let mut p = Played::new();
+    p.play(started()).play([Body::Question { id: "q1".into(), text: "Which colour?".into() }]);
+    agent_lost(&mut p.run, &mut p.follow, Utc::now());
+    assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.asking), (RunState::NeedsAnswer, Some("Which colour?"), true));
+    assert_eq!(p.follow.question.as_deref(), Some("q1"));
+}

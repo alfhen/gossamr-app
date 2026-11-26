@@ -48,6 +48,8 @@ impl ClientTools for NoTools {
 
 /// Why a second answer or a message waits: the harness took the person's answer, and the agent has not had it yet.
 pub const ANSWER_ON_ITS_WAY: &str = "Your answer is on its way to the agent. Send more once it has arrived.";
+/// A message to a run whose session the harness no longer runs, with no turn it could have lost.
+pub const NOT_RUNNING: &str = "Its agent isn't running any more, so it takes no message. Ask Pip to start it again.";
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
@@ -170,6 +172,7 @@ impl Link {
                     self.inner.agent_lost(session).await?;
                     Err(super::consumer::AGENT_LOST.into())
                 }
+                Err(why) if not_running(&why) => Err(NOT_RUNNING.into()),
                 Err(why) => Err(why),
             };
         };
@@ -188,7 +191,8 @@ impl Link {
     /// the app applied: its harness went with no shutdown.
     async fn lost_mid_turn(&self, session: &str) -> bool {
         let Ok(Some((_, follow))) = self.inner.core.session_run(session).await else { return false };
-        if follow.closed {
+        // Only a turn the app reads as running can have been lost: a finished run stays finished.
+        if follow.closed || !follow.in_turn {
             return false;
         }
         self.listed(session).await.is_some_and(|row| row["running"] != true && row["last_seq"].as_u64().unwrap_or(0) <= follow.seq)

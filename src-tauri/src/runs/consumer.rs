@@ -22,7 +22,7 @@ pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
-pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Message the agent to start it again.";
+pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
