@@ -297,6 +297,7 @@ impl Replay {
         let endpoint_at = lines[..first_prompt].iter().find(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| line.seq);
         self.skipped = lines.iter().filter(|line| line.dir == "to_agent" && is_config(&line.data)).map(|line| request_id(&line.data)).collect();
         self.ids.recorded_allowed = recorded_allowed(&lines);
+        self.ids.recorded_servers = configured_servers(&lines);
         let follows = follows(&lines, &self.skipped);
         let waited_for: HashSet<u64> = follows.values().copied().collect();
         for line in &lines {
@@ -514,6 +515,15 @@ fn recorded_allowed(lines: &[Recorded]) -> Vec<String> {
     let argv: Vec<&str> = spawned.and_then(|line| line.data["detail"]["argv"].as_array()).into_iter().flatten().filter_map(Value::as_str).collect();
     let after = argv.iter().position(|arg| *arg == "--allowedTools").and_then(|at| argv.get(at + 1));
     after.into_iter().flat_map(|tools| tools.split([',', ' '])).filter(|tool| !tool.is_empty()).map(str::to_owned).collect()
+}
+
+/// The servers the recorded run's `--mcp-config` named, for a recording that gave its endpoint that way. A recorded
+/// `mcp_set_servers` names them in its place.
+fn configured_servers(lines: &[Recorded]) -> Vec<String> {
+    let spawned = lines.iter().find(|line| line.dir == "driver" && line.data["note"] == "spawned");
+    let argv: Vec<&str> = spawned.and_then(|line| line.data["detail"]["argv"].as_array()).into_iter().flatten().filter_map(Value::as_str).collect();
+    let config = argv.iter().position(|arg| *arg == "--mcp-config").and_then(|at| argv.get(at + 1)).and_then(|config| serde_json::from_str::<Value>(config).ok());
+    config.and_then(|config| config["mcpServers"].as_object().map(|servers| servers.keys().cloned().collect())).unwrap_or_default()
 }
 
 /// Whether the replay writes this line: an agent line, unless it answers a config request whose answer is the

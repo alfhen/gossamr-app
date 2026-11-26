@@ -8,7 +8,7 @@ use common::*;
 use harness::driver::{Capabilities, Command, Driver, Launch, Link, OpenError};
 use harness::error::Error;
 use harness::event::{Body, Decision, FailKind, PermissionKind, TurnEnd};
-use harness::session::Harness;
+use harness::session::{Harness, Open};
 use harness::store::Store;
 use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
@@ -423,7 +423,7 @@ impl Driver for Tattler {
             let _output = output;
             while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -836,7 +836,7 @@ impl Driver for Says {
                 }
             }
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -1133,7 +1133,7 @@ impl Driver for Puppet {
                 }
             }
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -1240,7 +1240,7 @@ async fn stop_a_prompt_the_driver_does_not_take_fails_the_session_where_the_stor
                 close.notified().await;
                 drop(output);
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let close = Arc::new(tokio::sync::Notify::new());
@@ -1282,7 +1282,7 @@ async fn stop_an_agent_that_calls_a_tool_as_it_stops_hears_the_session_ended_and
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("caller".into(), Arc::new(Caller(heard.clone())))];
@@ -1320,7 +1320,7 @@ async fn redact_a_provider_session_id_that_holds_a_secret_is_not_kept_and_the_se
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("leaky".into(), Arc::new(Leaky(secret.clone(), received.clone())))];
@@ -1356,7 +1356,7 @@ async fn redact_a_resumed_session_whose_agent_names_a_secret_id_drops_the_earlie
                 let _output = output;
                 while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let opens: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
@@ -1417,7 +1417,7 @@ async fn resume_a_session_closed_before_its_agent_said_it_started_keeps_the_id_a
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("late".into(), Arc::new(Late))];
@@ -1546,7 +1546,7 @@ async fn resume_a_locked_session_that_said_it_cannot_be_resumed_stays_refused_af
                 let _output = output;
                 while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("secretive".into(), Arc::new(Secretive(example("GitHub token"))))];
@@ -1588,7 +1588,8 @@ async fn shutdown_stops_waiting_for_an_agent_that_ignores_stop_and_kill_and_free
     let (gone, _) = open(&harness, false).await;
     let left = tokio::time::timeout(Duration::from_secs(30), harness.shutdown()).await.expect("shutdown does not wait for ever");
     assert_eq!(left, std::slice::from_ref(&stuck), "it names the session it gave up on");
-    let store = Store::open(&dir).expect("the data folder is free");
+    // Free once a child another test's thread is starting has exec'd: until then it holds a copy of the lock.
+    let store = reopen(&dir).await;
     let last = store.events(&stuck, 0).unwrap().pop().unwrap();
     assert!(matches!(&last.body, Body::Failed { kind: FailKind::Stuck, reason } if reason.contains("shut down")), "{last:?}");
     assert!(matches!(store.events(&gone, 0).unwrap().pop().unwrap().body, Body::Closed { .. }), "the others closed");
@@ -1653,7 +1654,7 @@ async fn question_one_whose_id_redaction_changes_is_answered_by_the_id_the_clien
                 let _output = output;
                 while commands_rx.recv().await.is_some_and(|command| command != Command::Stop) {}
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("asker".into(), Arc::new(Asker(example("GitHub token"))))];
@@ -1738,7 +1739,7 @@ async fn question_an_answer_reaches_the_agent_before_prompts_sent_while_it_was_o
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
     let end = Arc::new(tokio::sync::Notify::new());
@@ -1986,7 +1987,7 @@ impl Driver for Mute {
             }
             drop(output);
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -2006,4 +2007,164 @@ async fn a_live_session_owns_its_worktree_before_its_provider_id_comes() {
     assert!(matches!(harness.resume(&older).await, Err(Error::Refused(_))), "the older session doesn't resume into a live one's worktree");
     harness.clean_up(&older).await.unwrap();
     assert!(worktree.exists(), "and its clean-up leaves the live session's worktree alone");
+}
+
+#[tokio::test]
+async fn hand_over_of_a_closed_session_marks_it_so_only_a_take_back_resumes_it_and_nothing_cleans_it_up() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock("{\"prompt\": null}"), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
+    while harness.sessions().unwrap().iter().any(|row| row.id == id && row.running) {
+        tokio::task::yield_now().await;
+    }
+    harness.hand_over(&id).expect("a closed session is handed over as it is");
+    assert!(harness.events(&id, 0).unwrap().iter().any(|event| event.body == Body::HandedOver), "its record says so");
+    assert!(matches!(harness.resume(&id).await, Err(Error::HandedOver(_))));
+    assert!(matches!(harness.clean_up(&id).await, Err(Error::HandedOver(_))), "Terminal works in its worktree");
+    harness.hand_over(&id).expect("a second hand over changes nothing");
+    assert_eq!(harness.events(&id, 0).unwrap().iter().filter(|event| event.body == Body::HandedOver).count(), 1);
+    harness.take_back(&id).await.expect("taken back");
+}
+
+#[tokio::test]
+async fn clean_up_of_a_session_handed_over_to_terminal_is_refused_whoever_asks() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock("{\"prompt\": null}"), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    harness.hand_over(&id).unwrap();
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
+    while harness.sessions().unwrap().iter().any(|row| row.id == id && row.running) {
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(harness.clean_up(&id).await, Err(Error::HandedOver(_))));
+}
+
+/// A driver whose open blocks its thread until the test lets it go, as one that starts a slow process does.
+struct SlowOpen {
+    mock: harness::mock::Mock,
+    entered: Mutex<std::sync::mpsc::Sender<()>>,
+    go: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Driver for SlowOpen {
+    fn capabilities(&self) -> Capabilities {
+        self.mock.capabilities()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let _ = self.entered.lock().unwrap().send(());
+        let _ = self.go.lock().unwrap().recv_timeout(Duration::from_secs(30));
+        self.mock.open(launch)
+    }
+}
+
+/// On the kind of runtime `harness serve` runs on (`harness::serve_runtime`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slow_driver_open_stalls_no_other_session() {
+    let (_tmp, dir) = data_dir();
+    let quick = mock(LIFE);
+    let ((entered, was_entered), (go, wait)) = (std::sync::mpsc::channel(), std::sync::mpsc::channel());
+    let slow = SlowOpen { mock: quick.clone(), entered: Mutex::new(entered), go: Mutex::new(wait) };
+    let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("slow".into(), Arc::new(slow)), ("mock".into(), Arc::new(quick))];
+    let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
+    let opening = {
+        let harness = harness.clone();
+        tokio::spawn(async move { open_on(&harness, "slow", false).await })
+    };
+    tokio::task::spawn_blocking(move || was_entered.recv_timeout(Duration::from_secs(10))).await.unwrap().expect("the slow open began");
+    let (id, mut events) = open_on(&harness, "mock", false).await;
+    harness.send(&id, "go").unwrap();
+    let seen = until(&mut events, |body| matches!(body, Body::Permission { .. })).await;
+    let asked = seen.iter().find_map(|event| match &event.body { Body::Permission { id, .. } => Some(id.clone()), _ => None }).unwrap();
+    harness.answer(&id, &asked, Decision::Allow, None).unwrap();
+    until(&mut events, |body| body.ends_turn()).await;
+    assert!(!opening.is_finished(), "another session ran a whole turn while the slow open still blocked");
+    go.send(()).unwrap();
+    opening.await.unwrap();
+}
+
+/// An agent that starts and goes only when the test lets it, whatever it is told: one still stopping.
+struct Lingering {
+    let_go: Arc<tokio::sync::Notify>,
+}
+
+impl Driver for Lingering {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+        let (output, receiver) = mpsc::unbounded_channel();
+        let _ = output.send(Body::Started { provider_session: "lingering".into(), resumed: false });
+        let let_go = self.let_go.clone();
+        tokio::spawn(async move {
+            let commands = async { while commands_rx.recv().await.is_some() {} };
+            tokio::join!(let_go.notified(), commands);
+            drop(output);
+        });
+        Ok(Link { commands, output: receiver, process: None })
+    }
+}
+
+#[tokio::test]
+async fn no_resume_while_a_start_whose_agent_could_not_be_recorded_may_still_run() {
+    // The rule, from a start's side: an agent nothing names for the next harness keeps its session taken until it goes.
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let harness = Harness::new(Store::open(&dir).unwrap(), vec![("lingering".into(), Arc::new(Lingering { let_go: let_go.clone() }))], settings(4));
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    let opened = harness.open(Open { provider: "lingering".into(), cwd: "/nowhere".into(), ..Open::default() }).await;
+    assert!(opened.is_err(), "recording its agent failed");
+    let id = harness.sessions().unwrap().into_iter().next().expect("the session's row").id;
+    raw.execute_batch("DROP TRIGGER refuse_agent;").unwrap();
+    assert!(matches!(harness.resume(&id).await, Err(Error::Running(_))), "taken while its agent may run");
+    let_go.notify_one();
+    let given = Instant::now() + Duration::from_secs(10);
+    let resumed = loop {
+        match harness.resume(&id).await {
+            Err(Error::Running(_)) if Instant::now() < given => tokio::time::sleep(Duration::from_millis(10)).await,
+            resumed => break resumed,
+        }
+    };
+    // Free once its agent had gone; what refuses it now is its own (no provider session was ever named).
+    assert!(!matches!(resumed, Err(Error::Running(_))), "still taken after its agent went");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn limit_on_a_runtime_of_several_threads_as_serve_runs_turns_past_the_limit_still_wait() {
+    // Each turn holds on a permission, so as many run as the limit lets start.
+    let (_tmp, dir) = data_dir();
+    let mock = mock(
+        r#"{"prompt": null}
+        {"permission": {"kind": "tool", "tool": "Read"}}
+        {"end": "done"}"#,
+    );
+    let harness = harness(&dir, &mock, 2);
+    let mut sessions = vec![];
+    for _ in 0..8 {
+        sessions.push(open(&harness, false).await);
+    }
+    let sends: Vec<_> = sessions.iter().map(|(id, _)| (harness.clone(), id.clone())).map(|(harness, id)| tokio::spawn(async move { harness.send(&id, "go").unwrap() })).collect();
+    for send in sends {
+        send.await.unwrap();
+    }
+    let mut asked = vec![];
+    let mut waiting = 0;
+    for (id, events) in &mut sessions {
+        let first = until(events, |body| matches!(body, Body::Permission { .. } | Body::Waiting)).await;
+        match &first.last().unwrap().body {
+            Body::Permission { id: request, .. } => asked.push((id.clone(), request.clone())),
+            _ => waiting += 1,
+        }
+    }
+    assert_eq!((asked.len(), waiting), (2, 6), "two turns run and six wait, with sends from several threads at once");
+    for (id, request) in asked {
+        harness.answer(&id, &request, Decision::Allow, None).unwrap();
+    }
 }

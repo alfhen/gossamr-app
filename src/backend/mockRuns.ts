@@ -1,5 +1,5 @@
 import { denyOnlyWhy } from "../workspace/permissionLogic";
-import { HANDED_OVER_ASK, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -502,7 +502,7 @@ const HARNESS_SEEDS: Seed[] = [
   { key: "WEB-106", name: "web-106-cart-badge-3b4d", state: "failed", minutesAgo: 120, over: { shortId: "01d0b9a1", sessionId: "01d0b9a1-0000-4000-8000-000000000000", error: "Stopped when Gossamr updated how agents run. The worktree is kept.", failure: { type: "interrupted" } } },
   { key: "SUP-13", name: "sup-13-delivery-address-5c6e", state: "needsAnswer", minutesAgo: 26, over: { ...harnessOf(2), handedOver: true, asking: true, needs: "Should the new address apply to orders already packed?", lastDetail: "Waiting for an answer" } },
   { key: "CA-407", name: "ca-407-send-time-7d8f", state: "needsAnswer", minutesAgo: 9, over: { ...harnessOf(3), asking: true, needs: "Should the test keep 10% back as a control?", lastDetail: "Waiting for an answer" } },
-  { key: "DEVOPS-490", name: "devops-490-backfill-9e0a", state: "done", minutesAgo: 21 * 24 * 60, quietMinutes: 20 * 24 * 60, unpushed: true, over: { result: "The backfill replayed the last 30 days of events.", branch: "worktree-devops-490-backfill-9e0a" } },
+  { key: "DEVOPS-490", name: "devops-490-backfill-9e0a", state: "done", minutesAgo: 21 * 24 * 60, quietMinutes: 20 * 24 * 60, unpushed: true, over: { ...harnessOf(4), result: "The backfill replayed the last 30 days of events.", branch: "worktree-devops-490-backfill-9e0a" } },
   { key: "SUP-15", name: "sup-15-wholesale-1b2d", state: "stopped", minutesAgo: 40, over: { ...harnessOf(5), handedOver: true, lastDetail: "Handed over to Terminal" } },
   { key: "SUP-10", name: "sup-10-discount-code-2c3e", state: "stopped", minutesAgo: 33, over: { ...harnessOf(6), answerWaits: true, lastDetail: ANSWER_WAITS_RESUME } },
   { key: "CA-406", name: "ca-406-translate-footer-4e5f", state: "failed", minutesAgo: 12, over: { error: "The harness couldn't start the agent: the session limit is reached", failure: { type: "other" } } },
@@ -1499,6 +1499,7 @@ export class MockRuns {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
     if (!TERMINAL.includes(run.state)) throw new Error("This run is still going. Stop it first, then clean it up.");
+    if (run.harnessSession && run.handedOver && !run.worktreeRemovedAt) throw new Error(HANDED_OVER_CLEANUP);
     if (this.unpushed.has(id)) return { type: "refused", message: "The worktree has unpushed commits. Push them or discard them yourself, then try again." };
     const earlier = run.earlierSessions?.map((s) => ({ ...s, removed: true }));
     const left = !!run.runsOn && !this.providers.has(run.runsOn.instanceId);

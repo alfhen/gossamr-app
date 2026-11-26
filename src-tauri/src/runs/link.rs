@@ -84,13 +84,16 @@ struct Inner {
     unread: std::sync::Mutex<std::collections::HashSet<String>>,
     /// Calls of the app's tools whose answer is on its way, so a reconnect does not answer them again.
     answering: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// How many of the next follows fail, for a test of what a failed follow leaves.
+    #[cfg(test)]
+    failing_follows: std::sync::atomic::AtomicUsize,
 }
 
 impl Link {
     /// Starts the watching task, which follows every session the app's runs still follow.
     pub fn start(core: Arc<Core>, connect: Arc<dyn Connect>, tools: Arc<dyn ClientTools>, notifier: Arc<dyn RunNotifier>, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Link {
         let (commands, received) = mpsc::unbounded_channel();
-        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default() });
+        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), #[cfg(test)] failing_follows: Default::default() });
         tokio::spawn(watching(Arc::downgrade(&inner), received));
         Link { inner }
     }
@@ -103,8 +106,7 @@ impl Link {
             Op::AnswerQuestion { session, .. } | Op::Resume { session, .. } | Op::TakeBack { session } | Op::Send { session, .. } => Some(session.clone()),
             _ => None,
         };
-        let mut client = self.inner.connect.connect().await?;
-        let answered = client.call(op).await.map_err(|e| e.to_string())?;
+        let answered = self.ask(op).await?;
         if let Some(session) = resumes {
             let applied = self.inner.core.session_run(&session).await.map_err(|e| e.to_string())?;
             if let Some((_, follow)) = applied.filter(|(_, follow)| !follow.ended) {
@@ -112,6 +114,18 @@ impl Link {
             }
         }
         Ok(answered)
+    }
+
+    /// The harness's answer to `op`, and nothing more: `call` without its follow.
+    async fn ask(&self, op: Op) -> Result<Value, String> {
+        let mut client = self.inner.connect.connect().await?;
+        client.call(op).await.map_err(|e| e.to_string())
+    }
+
+    /// Makes the next `n` follows fail, as a watch the harness refused would.
+    #[cfg(test)]
+    pub fn fail_follows(&self, n: usize) {
+        self.inner.failing_follows.store(n, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Opens a session for `run_id`, makes it the run's, and watches it, in that order: the run follows the session
@@ -134,6 +148,34 @@ impl Link {
             return Err(why);
         }
         Ok(session)
+    }
+
+    /// Takes a session handed over to Terminal back and follows it again. The harness watches the new start on the
+    /// connection that asked, which is this call's own, so the watching connection reads it from what was applied.
+    pub async fn take_back(&self, session: &str) -> Result<(), String> {
+        // Marked before the call, whose watch may apply the new start's end before the call returns: a mark set after
+        // it would undo the `failed` or `closed` that cleared it.
+        let marked = self.inner.core.apply_session(session, |_, follow| {
+            follow.taken_back = true;
+            Vec::new()
+        });
+        marked.await.map_err(|e| e.to_string())?;
+        if let Err(why) = self.ask(Op::TakeBack { session: session.to_owned() }).await {
+            let _ = self.inner.core.apply_session(session, |_, follow| {
+                follow.taken_back = false;
+                Vec::new()
+            }).await;
+            return Err(why);
+        }
+        // Taken back: the harness's mark is gone and the session starts again, so the app reads it so before it
+        // follows, and a follow that fails leaves a session the next connect follows, not one handed over for good.
+        let taken = self.inner.core.apply_session(session, |run, follow| {
+            run.handed_over = false;
+            follow.closed = false;
+            Vec::new()
+        });
+        let follow = taken.await.map_err(|e| e.to_string())?.map(|applied| applied.follow).unwrap_or_default();
+        self.follow(session, follow.seq).await
     }
 
     /// Asks the harness to stop the session. The run reads stopped once the harness says it closed, never before.
@@ -239,6 +281,15 @@ impl Link {
 
     /// Watches a session from after `after`, once the watching connection is up.
     pub async fn follow(&self, session: &str, after: u64) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            use std::sync::atomic::Ordering::SeqCst;
+            let left = self.inner.failing_follows.load(SeqCst);
+            if left > 0 {
+                self.inner.failing_follows.store(left - 1, SeqCst);
+                return Err("the watch failed, for a test".into());
+            }
+        }
         let (done, answered) = oneshot::channel();
         self.inner.commands.send(Command::Follow { session: session.to_owned(), after, done }).map_err(|_| "the link to the harness has stopped".to_owned())?;
         answered.await.map_err(|_| "the link to the harness has stopped".to_owned())?
@@ -364,14 +415,16 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
         Value::Null
     });
     let rows: std::collections::HashMap<String, &Value> = listed.as_array().into_iter().flatten().filter_map(|row| Some((row["id"].as_str()?.to_owned(), row))).collect();
+    // Any session the listing names a branch for, followed or not: one that closed, or was cut, before its open kept
+    // the branch still has it filled in.
+    for (session, row) in &rows {
+        link.keep_branch(session, row).await;
+    }
     for (session, follow) in followed {
         let lost = rows.get(&session).is_some_and(|row| row["running"] != true && row["last_seq"].as_u64().unwrap_or(0) <= follow.seq);
         if follow.in_turn && lost {
             link.agent_lost(&session).await?;
             continue;
-        }
-        if let Some(row) = rows.get(&session) {
-            link.keep_branch(&session, row).await;
         }
         link.recover_permissions(client, &session, &follow).await;
         if let Err(e) = client.call(Op::Watch { session: session.clone(), after: follow.seq }).await {
@@ -446,6 +499,11 @@ impl Inner {
     /// them: an open whose listing failed, or that the app quit after, is filled in at the next connect.
     async fn keep_branch(&self, session: &str, row: &Value) {
         let (Some(branch), Some(worktree)) = (row["branch"].as_str(), row["cwd"].as_str()) else { return };
+        // Read first, so a run that has its branch, or a session no run follows, costs no write.
+        let Ok(Some((run_id, _))) = self.core.session_run(session).await else { return };
+        if !matches!(self.core.run(&run_id).await, Ok(Some(run)) if run.branch.is_none()) {
+            return;
+        }
         let (branch, worktree) = (branch.to_owned(), std::path::PathBuf::from(worktree));
         let kept = self.core.apply_session(session, move |run, _| {
             if run.branch.is_none() {

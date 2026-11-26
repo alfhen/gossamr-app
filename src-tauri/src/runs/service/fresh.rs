@@ -122,9 +122,52 @@ impl RunService {
         }
         let ensured = ensured.map_err(clone_failure)?;
         if let Some(Fetched::Not(why)) = &ensured.fetched {
-            let text = format!("Couldn't update Gossamr's clone of {}: {why}. The agent starts from what was fetched before.", spec.repo);
+            let why = with_clone_way_out(why, &ensured.path);
+            let text = format!("Couldn't update Gossamr's clone of {}: {}. The agent starts from what was fetched before.", spec.repo, why.trim_end_matches('.'));
             self.note_clone(run, "clone_note", text).await;
         }
         Ok(Some(git.commit_identity(&ensured.path).await))
     }
+}
+
+/// `why` with the way out of `clone_settings_way_out` in place of the harness's general one, which names no key.
+pub(crate) fn with_clone_way_out(why: &str, clone: &std::path::Path) -> String {
+    match clone_settings_way_out(why, clone) {
+        Some(out) => format!("{}. {out}", why.split(". To clear them, ").next().unwrap_or(why).trim_end_matches('.')),
+        None => why.to_owned(),
+    }
+}
+
+/// How to remove the settings a refusal of git names when Gossamr won't fetch a clone with settings it didn't make: one
+/// sentence, the same wherever the refusal is shown. A key shown with `*` hides part of itself, which only the clone's
+/// own config can tell. None for any other refusal.
+pub(crate) fn clone_settings_way_out(why: &str, clone: &std::path::Path) -> Option<String> {
+    const SAID: &str = "the clone has settings Gossamr didn't make (";
+    let listed = why.split_once(SAID)?.1.split_once(')')?.0;
+    let (listed, more) = match listed.rsplit_once(", and ") {
+        Some((keys, more)) if more.ends_with(" more") => (keys, more.trim_end_matches(" more").parse::<usize>().ok()),
+        _ => (listed, None),
+    };
+    let keys: Vec<&str> = listed.split(", ").map(str::trim).filter(|key| !key.is_empty()).collect();
+    let (hidden, plain): (Vec<&str>, Vec<&str>) = keys.iter().partition(|key| key.contains('*'));
+    let at = format!("git -C {} config", crate::runs::shell::quote(&clone.display().to_string()));
+    let mut parts = Vec::new();
+    if !plain.is_empty() {
+        // `--unset-all`: a setting such as `credential.helper` can have several values, which `--unset` refuses.
+        let each: Vec<String> = plain.iter().map(|key| format!("`{at} --unset-all {key}`")).collect();
+        parts.push(format!("remove {} with {}", if plain.len() == 1 { "it" } else { "them" }, each.join(" and ")));
+    }
+    let rest = match (hidden.len(), more) {
+        (0, None) => None,
+        (0, Some(n)) => Some(format!("the {n} more")),
+        (1, None) => Some("the one shown with `*`".to_owned()),
+        (_, None) => Some("those shown with `*`".to_owned()),
+        (_, Some(n)) => Some(format!("those shown with `*` and the {n} more")),
+    };
+    if let Some(rest) = rest {
+        parts.push(format!("find {rest} with `{at} --list --show-origin`"));
+    }
+    let sentence = parts.join(", and ");
+    let mut chars = sentence.chars();
+    Some(format!("{}{}.", chars.next()?.to_uppercase(), chars.as_str()))
 }

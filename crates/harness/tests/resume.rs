@@ -91,7 +91,7 @@ impl Driver for Stuck {
             while received.recv().await.is_some() {}
             std::future::pending::<()>().await;
         });
-        Ok(Link { commands, output: receiver })
+        Ok(Link { commands, output: receiver, process: None })
     }
 }
 
@@ -106,12 +106,12 @@ async fn resume_and_clean_up_of_a_session_a_shutdown_gave_up_on_are_refused() {
     let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("stuck".into(), Arc::new(Stuck))];
     let harness = Harness::new(Store::open(&dir).unwrap(), drivers, settings(4));
     match harness.resume_with(&id, None).await {
-        Err(Error::Refused(why)) => assert!(why.contains("gave up") && why.contains("may still run"), "{why}"),
+        Err(Error::Refused(why)) => assert!(why.contains("a shutdown stopped waiting for it") && why.contains("may still run"), "{why}"),
         other => panic!("resumed: {:?}", other.is_ok()),
     }
     // Its agent may still work in the worktree.
     match harness.clean_up(&id).await {
-        Err(Error::Refused(why)) => assert!(why.contains("gave up") && why.contains("not cleaned up"), "{why}"),
+        Err(Error::Refused(why)) => assert!(why.contains("a shutdown stopped waiting for it") && why.contains("not cleaned up"), "{why}"),
         other => panic!("cleaned up: {:?}", other.is_ok()),
     }
 }

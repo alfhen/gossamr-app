@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { HANDED_OVER_ASK, type Run } from "../types";
+import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, type Run } from "../types";
 import { failureHelp } from "./failureHelp";
 import { cleanable, cleanupReason, removerOf } from "./cleanupLogic";
 import { RunCleanupView } from "./RunCleanup";
@@ -105,11 +105,20 @@ describe("a run on the harness that failed for another reason", () => {
 });
 
 describe("cleaning up a run on the harness", () => {
-  it("isn't offered until the app can do it: it has no Claude session to remove", () => {
+  it("is offered while its worktree is there, though it has no Claude session, and not once the worktree is removed", () => {
     const run = { ...byKey(harness(), "CA-407"), state: "done" as const, endedAt: new Date(NOW - 30 * 86_400_000).toISOString() };
     expect(run.shortId).toBeNull();
-    expect(cleanable(run)).toBe(false);
-    expect(cleanupReason(run, NOW, { disk: null, change: null })).toBeNull();
+    expect(cleanable(run)).toBe(true);
+    expect(cleanupReason(run, NOW, { disk: null, change: null })).toMatch(/more than 14 days ago/);
+    expect(cleanable({ ...run, worktreeRemovedAt: new Date(NOW).toISOString() })).toBe(false);
+  });
+
+  it("is offered for a run handed over to Terminal, and the mock refuses it in the words Rust gives", async () => {
+    const backend = harness();
+    const run = byKey(backend, "SUP-15");
+    expect(run.handedOver && cleanable(run)).toBe(true);
+    await expect(backend.runsCleanup(run.id)).rejects.toThrow(HANDED_OVER_CLEANUP);
+    expect(byKey(backend, "SUP-15").worktreeRemovedAt ?? null).toBeNull();
   });
 
   it("shows a refusal in the words it was given, and removes nothing", async () => {

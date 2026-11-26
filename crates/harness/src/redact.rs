@@ -241,8 +241,14 @@ impl Scans {
     }
 }
 
+/// A URL's `user:password@`, as a proxy URL carries it, to the last `@` before the host: a password may hold `@`, `/`
+/// or `#` unescaped, as proxy settings often do. A user alone (`ssh://git@host`) is no secret and stays. A host's port
+/// and a path with an `@` (`host:8080/@x`) cannot be told from a password that starts with digits and holds a `/`, so
+/// it is masked too.
+static USERINFO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/?#@:"<>]*:[^\s"<>]*@"#).expect("a valid pattern"));
+
 pub fn text(s: &str, secrets: &[String]) -> String {
-    let mut out = s.to_owned();
+    let mut out = USERINFO.replace_all(s, format!("${{1}}{MASK}@")).into_owned();
     for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
         out = out.replace(secret.as_str(), MASK);
         out = mask_partial(&out, secret);
@@ -376,6 +382,30 @@ pub fn body(body: Body, secrets: &[String]) -> Body {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_urls_user_and_password_are_masked_and_text_that_only_looks_like_one_is_kept() {
+        for (said, want) in [
+            ("proxy http://me:hunter2@proxy.test:8080 refused", "proxy http://<redacted>@proxy.test:8080 refused"),
+            ("HTTPS_PROXY=https://me:p%40ss@proxy.test", "HTTPS_PROXY=https://<redacted>@proxy.test"),
+            ("socks5h://u:pw@127.0.0.1:1080", "socks5h://<redacted>@127.0.0.1:1080"),
+            ("http://o'neil:it's@proxy.test", "http://<redacted>@proxy.test"),
+            ("http://me:p@ss@proxy.test:8080", "http://<redacted>@proxy.test:8080"),
+            ("http://user:1234@proxy.test", "http://<redacted>@proxy.test"),
+            ("http://me:1234@proxy.test:8080", "http://<redacted>@proxy.test:8080"),
+            ("socks5://u:0000@127.0.0.1:1080", "socks5://<redacted>@127.0.0.1:1080"),
+            ("http://user:1234/abc@proxy.test", "http://<redacted>@proxy.test"),
+            ("see http://example.test:8080/@me", "see http://<redacted>@me"),
+            ("http://me:pa/ss@proxy.test", "http://<redacted>@proxy.test"),
+            ("http://me:pa#ss@proxy.test/x", "http://<redacted>@proxy.test/x"),
+            ("\"ALL_PROXY\":\"socks://:pw@h\"", "\"ALL_PROXY\":\"socks://<redacted>@h\""),
+        ] {
+            assert_eq!(text(said, &[]), want);
+        }
+        for kept in ["ssh://git@example.test/repo.git", "mail a:b@example.test", "http://example.test/a:b@c", "time 10:30@home"] {
+            assert_eq!(text(kept, &[]), kept);
+        }
+    }
 
     #[test]
     fn redact_masks_each_token_shape_and_the_sessions_own_secrets_and_leaves_plain_text_alone() {
