@@ -289,6 +289,50 @@ fn members_left(_group: libc::pid_t) -> Listing {
     Listing::Full
 }
 
+/// Every process `process` started, and theirs, each with its start time, while `process` is still the run's. Taken
+/// before it goes: once it has, its children belong to the system and no longer lead back to it.
+pub fn descendants(process: &Process) -> Vec<Process> {
+    if !alive(process) {
+        return vec![];
+    }
+    let (mut found, mut parents) = (vec![], vec![process.pid]);
+    while let Some(parent) = parents.pop() {
+        for pid in children_of(parent) {
+            if let Some(started) = started_of(pid).filter(|_| found.iter().all(|seen: &Process| seen.pid != pid)) {
+                found.push(Process { pid, started });
+                parents.push(pid);
+            }
+        }
+    }
+    found
+}
+
+#[cfg(target_os = "macos")]
+fn children_of(parent: u32) -> Vec<u32> {
+    const MAX: usize = 1024;
+    let mut pids = [0 as libc::pid_t; MAX];
+    let size = std::mem::size_of_val(&pids) as libc::c_int;
+    // SAFETY: `pids` is as large as `size` says, and the call fills at most that much.
+    let count = unsafe { libc::proc_listchildpids(parent as libc::pid_t, pids.as_mut_ptr().cast(), size) };
+    pids[..usize::try_from(count).unwrap_or(0).min(MAX)].iter().filter_map(|pid| u32::try_from(*pid).ok()).filter(|pid| *pid > 0).collect()
+}
+
+/// Every process whose parent, field 4 of `/proc/<pid>/stat`, is `parent`.
+#[cfg(target_os = "linux")]
+fn children_of(parent: u32) -> Vec<u32> {
+    let Ok(all) = std::fs::read_dir("/proc") else { return vec![] };
+    let parent_of = |pid: u32| {
+        let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+        stat_tail(&stat)?.split_whitespace().nth(1)?.parse::<u32>().ok()
+    };
+    all.flatten().filter_map(|entry| entry.file_name().to_str()?.parse().ok()).filter(|pid| parent_of(*pid) == Some(parent)).collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn children_of(_parent: u32) -> Vec<u32> {
+    vec![]
+}
+
 /// Kills the group `process` led, even when its leader is gone: a launcher that exited on SIGINT leaves its child in the
 /// group. Only for a stop that found the leader alive and the run's own at its start, so the group id is still the run's.
 pub fn kill_group(process: &Process) -> std::io::Result<()> {

@@ -67,7 +67,7 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     }
     let setup = harness::work::Setup::of_this_machine(dir.clone());
     // The mock provider is there only when a script is given. Claude is found where `providers` looks, at each open.
-    let drivers = harness::serve_drivers(script, harness::claude::driver::ClaudeDriver::found(setup.places().clone()));
+    let drivers = harness::serve_drivers(script, setup.places());
     let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings { turn_limit: turn_limit.unwrap_or(harness::session::Settings::default().turn_limit), ..harness::session::Settings::default() }, setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;
