@@ -804,6 +804,8 @@ impl Harness {
             let _ = link.commands.send(Command::Kill);
             tokio::spawn(async move {
                 while link.output.recv().await.is_some() {}
+                #[cfg(test)]
+                inner.hooks.after_unrecorded_output_ended(&id);
                 inner.forget(&id, start);
             });
             return Err(e);
@@ -1930,6 +1932,8 @@ mod tests {
         before_call: Mutex<Option<Hook>>,
         /// Just after `answer_question` marked the question as being answered, before it sends the answer.
         after_answer_taken: Mutex<Option<Hook>>,
+        /// Just after the output of a start whose agent could not be recorded has ended, with its id.
+        after_unrecorded_output_ended: Mutex<Option<IdHook>>,
     }
 
     fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
@@ -1986,6 +1990,12 @@ mod tests {
         pub(super) fn after_shutdown_stops(&self) {
             if let Some(hook) = take(&self.after_shutdown_stops) {
                 hook();
+            }
+        }
+
+        pub(super) fn after_unrecorded_output_ended(&self, id: &str) {
+            if let Some(hook) = take(&self.after_unrecorded_output_ended) {
+                hook(id);
             }
         }
     }
@@ -2229,6 +2239,68 @@ mod tests {
             let by = closed_by(&mut events).await;
             assert!(matches!(by, ClosedBy::Signal | ClosedBy::Shutdown), "{gap} ms: {by:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_a_signal_ends_in_the_middle_of_a_turn_fails_with_that_signal_named() {
+        for (signal, named) in [(libc::SIGTERM, "signal 15 (SIGTERM)"), (libc::SIGABRT, "signal 6 (SIGABRT)")] {
+            let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+            let (_harness, mut events, _) = in_a_turn(&tmp, &hand).await;
+            hand.gone(AgentEnd::Signalled { signal, sent: false });
+            let seen = events_until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+            let failed = seen.iter().find_map(|body| match body {
+                Body::Failed { kind: FailKind::AgentStopped, reason } => Some(reason.as_str()),
+                _ => None,
+            });
+            assert_eq!(failed, Some(format!("the agent stopped in the middle of a turn: {named}").as_str()));
+        }
+    }
+
+    /// An agent that goes only when it is told to be killed, not when its commands close.
+    struct GoesOnKill;
+
+    impl Driver for GoesOnKill {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+
+        fn open(&self, _launch: Launch) -> std::result::Result<Link, OpenError> {
+            let (commands, mut received) = mpsc::unbounded_channel();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "goes-on-kill".into(), resumed: false }).unwrap();
+            tokio::spawn(async move {
+                loop {
+                    match received.recv().await {
+                        Some(Command::Kill) => break,
+                        Some(_) => {}
+                        None => std::future::pending().await,
+                    }
+                }
+                drop(output);
+            });
+            Ok(Link { commands, output: receiver, process: None })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_start_whose_agent_could_not_be_recorded_is_killed_and_keeps_its_session_until_its_output_ends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("goes-on-kill".into(), Arc::new(GoesOnKill))];
+        let harness = Harness::new(Store::open(&dir).unwrap(), drivers, Settings::default());
+        let (taken, still) = oneshot::channel();
+        let reading = harness.clone();
+        set(&harness.inner.hooks.after_unrecorded_output_ended, Box::new(move |id: &str| {
+            let _ = taken.send(reading.inner.live().contains_key(id));
+        }) as IdHook);
+        let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+        raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+        let opened = harness.open(Open { provider: "goes-on-kill".into(), cwd: "/nowhere".into(), ..Open::default() }).await;
+        assert!(opened.is_err(), "recording its agent failed");
+        let still = tokio::time::timeout(Duration::from_secs(10), still).await.expect("its output ends only once its agent is told to go");
+        assert_eq!(still, Ok(true), "taken until its output has ended, and released only then");
+        // On this one thread the release runs in the same poll as the hook, before this test runs again.
+        assert!(harness.inner.live().is_empty(), "released once its output ended");
     }
 
     #[tokio::test]

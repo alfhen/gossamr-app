@@ -392,6 +392,8 @@ mod tests {
             ("http://o'neil:it's@proxy.test", "http://<redacted>@proxy.test"),
             ("http://me:p@ss@proxy.test:8080", "http://<redacted>@proxy.test:8080"),
             ("http://user:1234@proxy.test", "http://<redacted>@proxy.test"),
+            ("http://me:1234@proxy.test:8080", "http://<redacted>@proxy.test:8080"),
+            ("socks5://u:0000@127.0.0.1:1080", "socks5://<redacted>@127.0.0.1:1080"),
             ("http://user:1234/abc@proxy.test", "http://<redacted>@proxy.test"),
             ("see http://example.test:8080/@me", "see http://<redacted>@me"),
             ("http://me:pa/ss@proxy.test", "http://<redacted>@proxy.test"),

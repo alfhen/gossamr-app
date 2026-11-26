@@ -215,6 +215,25 @@ fn leftover_whose_leader_is_gone_has_what_it_left_in_its_group_stopped_before_it
 }
 
 #[test]
+fn leftover_whose_leader_is_gone_and_whose_group_holds_one_older_than_it_stays_given_up_and_nothing_is_signalled() {
+    let (_tmp, dir) = data_dir();
+    let (mut older, older_record) = agent();
+    let mut gone = Command::new("/usr/bin/true").process_group(0).spawn().unwrap();
+    let leader = Process { pid: gone.id(), started: older_record.started + 1 };
+    gone.wait().unwrap();
+    left_by_a_shutdown(&dir, Some(&leader));
+    // Its group, as listed, holds a process that started before the leader did, so not the agent's work.
+    process::seam::list_group_as(leader.pid, Listing::Members(vec![older_record.pid as libc::pid_t]));
+    let harness = started_harness(&dir);
+    assert!(running(&mut older), "one older than the leader is never taken for the agent's");
+    assert_eq!(process::seam::sent_to(older_record.pid), Vec::<i32>::new());
+    assert_eq!(process::seam::sent_to(leader.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+    older.kill().unwrap();
+    older.wait().unwrap();
+}
+
+#[test]
 fn leftover_whose_leader_is_gone_and_whose_group_cannot_be_read_stays_given_up_and_nothing_is_signalled() {
     let (_tmp, dir) = data_dir();
     let (leader, work) = a_leader_gone_with_its_work_left();
