@@ -368,6 +368,16 @@ impl Store {
         Ok(())
     }
 
+    /// Keeps `agent` on record and the session given up on for the reason `why`, both or neither: for an agent whose
+    /// group still answered when its output closed.
+    pub fn keep_given_up(&self, id: &str, agent: &Process, why: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.set_agent(id, Some(agent))?;
+        self.set_given_up(id, why)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Ends a leftover's start in its events as its own harness would have, a `failed` that says `how` and a `closed`
     /// by the harness, unless it had closed, and clears its agent: all of it or none, so a failure leaves the leftover
     /// on record for the next check.

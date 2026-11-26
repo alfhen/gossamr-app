@@ -891,3 +891,39 @@ async fn leftover_kept_after_a_hand_over_is_not_taken_back_or_cleaned_up_and_say
     drop(harness);
     assert!(opened(&dir).session("s").unwrap().handed_over, "still handed over");
 }
+
+#[tokio::test]
+async fn leftover_an_agent_that_ends_with_its_group_running_and_whose_hold_cannot_be_written_holds_every_resume() {
+    let (_tmp, dir) = data_dir();
+    let leaver = Leaver::default();
+    let harness = Harness::new(opened(&dir), vec![("leaver".into(), Arc::new(leaver.clone()))], settings(4));
+    sql(&dir, "CREATE TRIGGER no_giving_up BEFORE UPDATE OF given_up ON sessions WHEN NEW.given_up = 1 BEGIN SELECT RAISE(FAIL, 'no'); END");
+    let (id, mut events) = harness.open(Open { provider: "leaver".into(), cwd: worktree(&dir), ..Open::default() }).await.unwrap();
+    closed(&mut events).await;
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    // Held: that resume checked again, and the store still could not record what it found.
+    assert!(refused.contains("could not check for agents an earlier harness left running"), "{refused}");
+    // Once the store takes it, the check writes the hold, and the session is given up on.
+    sql(&dir, "DROP TRIGGER no_giving_up");
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("may still run"), "{refused}");
+    for work in leaver.left.lock().unwrap().drain(..) {
+        kill(&work);
+    }
+}
+
+#[tokio::test]
+async fn leftover_a_start_whose_agent_was_never_recorded_and_whose_group_outlives_it_stays_taken_until_a_shutdown_gives_it_up() {
+    let (_tmp, dir) = data_dir();
+    let leaver = Leaver::default();
+    let harness = Harness::new(opened(&dir), vec![("leaver".into(), Arc::new(leaver.clone()))], settings(4));
+    // Nothing can record its agent: not at its start, and not when its group outlives it.
+    sql(&dir, "CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions WHEN NEW.agent_pid IS NOT NULL BEGIN SELECT RAISE(ABORT, 'refused'); END");
+    assert!(harness.open(Open { provider: "leaver".into(), cwd: worktree(&dir), ..Open::default() }).await.is_err());
+    let id = harness.sessions().unwrap().into_iter().next().expect("the session's row").id;
+    let left = tokio::time::timeout(Duration::from_secs(10), harness.shutdown()).await.expect("shutdown does not wait for ever");
+    assert_eq!(left, [id], "still taken when the shutdown came, and given up on by it");
+    for work in leaver.left.lock().unwrap().drain(..) {
+        kill(&work);
+    }
+}

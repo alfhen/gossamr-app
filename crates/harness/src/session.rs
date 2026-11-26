@@ -887,9 +887,26 @@ impl Harness {
                     inner.left.notify_waiters();
                     output.await;
                 }
+                // As at a start's end: a group that still answers keeps the agent on record, given up on. With nothing
+                // written for it, the session stays taken, stuck, so no resume starts beside it and a shutdown gives
+                // it up.
+                let kept = match link.process.as_ref() {
+                    Some(agent) if !group_gone_by(agent, std::time::Instant::now() + LEFTOVER_EXIT).await => {
+                        inner.with_store(|store| store.keep_given_up(&id, agent, GROUP_LEFT)).is_ok()
+                    }
+                    _ => {
+                        let _ = inner.with_store(|store| store.set_agent(&id, None));
+                        true
+                    }
+                };
                 #[cfg(test)]
                 inner.hooks.after_unrecorded_output_ended(&id);
-                inner.forget(&id, start);
+                if kept {
+                    inner.forget(&id, start);
+                } else {
+                    stuck.store(true, Ordering::Relaxed);
+                    inner.left.notify_waiters();
+                }
             });
             return Err(e);
         }
@@ -1187,6 +1204,17 @@ impl Inner {
 
     fn live(&self) -> MutexGuard<'_, HashMap<String, Live>> {
         self.live.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Holds every resume until a check of session `id`'s agent on record can write what it finds, as for a leftover
+    /// whose record could not be read.
+    fn hold_for_check(&self, id: &str) {
+        let mut pending = self.leftovers.lock().unwrap_or_else(|p| p.into_inner());
+        match pending.as_mut() {
+            Some(Leftovers { ids: Some(ids), .. }) if !ids.iter().any(|held| held == id) => ids.push(id.to_owned()),
+            Some(_) => {}
+            None => *pending = Some(Leftovers { ids: Some(vec![id.to_owned()]), why: "the store could not record that an agent's group may still run".into() }),
+        }
     }
 
     /// Refuses while the agents a harness before this one left running are not known to be stopped. Each call tries
@@ -1756,12 +1784,16 @@ impl Task {
         let mut live = self.inner.live();
         // Before `closed`, so a client that has seen it finds the token refused.
         self.inner.forget_endpoint(&self.endpoint, self.start);
-        // A group that still answers keeps the record, given up on, for a resume's recheck to free once it is gone. A
-        // shutdown that gave up on the agent never gets here, and the next harness finds it on record.
-        let _ = self.inner.with_store(|store| match group_left {
-            true => store.set_given_up(&self.id, GROUP_LEFT),
-            false => store.set_agent(&self.id, None),
+        // A group that still answers keeps the record, given up on, for a resume's recheck to free once it is gone; if
+        // that cannot be written, every resume waits for a check that can. A shutdown that gave up on the agent never
+        // gets here, and the next harness finds it on record.
+        let kept = self.inner.with_store(|store| match (group_left, link.process.as_ref()) {
+            (true, Some(agent)) => store.keep_given_up(&self.id, agent, GROUP_LEFT),
+            _ => store.set_agent(&self.id, None),
         });
+        if group_left && kept.is_err() {
+            self.inner.hold_for_check(&self.id);
+        }
         #[cfg(test)]
         self.inner.hooks.before_closed();
         // A request the harness took wins, then the harness's own failure, then a signal from outside, then the agent.

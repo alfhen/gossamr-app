@@ -121,7 +121,9 @@ impl Setup {
         match &self.home {
             Some(home) => {
                 let home = home.to_string_lossy();
-                text.replace(&format!("'{home}/"), "~/'").replace(&format!("'{home}'"), "~").replace(&*home, "~")
+                // As `fresh::quoted` writes it, a quote in the path closed, escaped and opened again.
+                let quoted = home.replace('\'', "'\\''");
+                text.replace(&format!("'{quoted}/"), "~/'").replace(&format!("'{quoted}'"), "~").replace(&*quoted, "~").replace(&*home, "~")
             }
             None => text.to_owned(),
         }
@@ -308,12 +310,13 @@ mod tests {
     #[test]
     fn a_masked_command_for_the_person_still_runs_in_a_shell() {
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().canonicalize().unwrap();
+        let home = tmp.path().canonicalize().unwrap().join("o'brien home");
         let clone = home.join("Gossamr agents").join("it's");
         std::fs::create_dir_all(&clone).unwrap();
         let setup = Setup::new(Some(home.clone()), home.join("data"));
         let command = setup.masked(&format!("cd {} && pwd", crate::fresh::quoted(&clone)));
         assert!(command.starts_with("cd ~/'Gossamr agents/it"), "the home folder is outside the quotes: {command}");
+        assert!(!command.contains("brien"), "no part of the home folder is left: {command}");
         let ran = std::process::Command::new("/bin/sh").args(["-c", &command]).env("HOME", &home).output().unwrap();
         assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
     }

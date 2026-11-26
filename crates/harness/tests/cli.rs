@@ -603,33 +603,44 @@ fn serve_takes_a_turn_limit_of_one_or_more() {
 
 #[test]
 fn serve_runs_with_the_turn_limit_its_command_line_gives() {
-    use std::io::BufRead;
     // What the second session says before its turn starts, with `serve` at `limit`, while the first holds a turn.
     let second_says = |limit: &[&str]| {
         let serving = serve_with(WAITS, limit);
         let mut first = client(&serving, &["run", "--provider", "mock", "hi"]).spawn().unwrap();
         give_token(&mut first, &serving.token);
-        for line in std::io::BufReader::new(first.stdout.take().unwrap()).lines() {
-            if line.unwrap().contains("\"type\":\"permission\"") {
-                break;
-            }
-        }
+        let held = first_of(first.stdout.take().unwrap(), &["permission"]);
         let mut second = client(&serving, &["run", "--provider", "mock", "hi"]).spawn().unwrap();
         give_token(&mut second, &serving.token);
-        let mut said = None;
-        for line in std::io::BufReader::new(second.stdout.take().unwrap()).lines() {
-            let line = line.unwrap();
-            if line.contains("\"type\":\"waiting\"") || line.contains("\"type\":\"turn_started\"") {
-                said = Some(if line.contains("waiting") { "waiting" } else { "turn_started" });
-                break;
-            }
-        }
+        let said = held.and_then(|_| first_of(second.stdout.take().unwrap(), &["waiting", "turn_started"]));
         for mut child in [first, second] {
             let _ = child.kill();
             let _ = child.wait();
         }
-        said
+        said.unwrap_or_else(|seen| panic!("no such event within 30 s; seen: {seen:?}"))
     };
-    assert_eq!(second_says(&["--turn-limit", "1"]), Some("waiting"), "one turn at a time");
-    assert_eq!(second_says(&[]), Some("turn_started"), "the default lets a second run");
+    assert_eq!(second_says(&["--turn-limit", "1"]), "waiting", "one turn at a time");
+    assert_eq!(second_says(&[]), "turn_started", "the default lets a second run");
+}
+
+/// The type of the first event on `stdout` whose type is one of `types`, within 30 s; else the types seen.
+fn first_of(stdout: std::process::ChildStdout, types: &[&str]) -> Result<String, Vec<String>> {
+    use std::io::BufRead;
+    let (lines, read) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut seen = vec![];
+    while let Ok(line) = read.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+        let kind = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|event| event["type"].as_str().map(str::to_owned)).unwrap_or(line);
+        if types.contains(&kind.as_str()) {
+            return Ok(kind);
+        }
+        seen.push(kind);
+    }
+    Err(seen)
 }
