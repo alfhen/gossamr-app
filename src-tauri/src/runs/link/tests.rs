@@ -611,7 +611,7 @@ async fn a_stop_or_a_message_the_harness_answers_not_running_ends_the_turn_as_lo
     let (run, session) = lost(&bed).await;
     bed.link.stop(&session).await.unwrap();
     let stopped = bed.rig.get(&run).await;
-    assert_eq!((stopped.state, stopped.last_detail.as_deref()), (RunState::Stopped, Some(consumer::AGENT_LOST)), "Stop works");
+    assert_eq!((stopped.state, stopped.last_detail.as_deref()), (RunState::Stopped, Some(consumer::LOST_AT_STOP)), "Stop works, and offers no message");
     let bed2 = Bed::new(STREAM).await;
     let (run2, session2) = lost(&bed2).await;
     let refused = bed2.link.send(&session2, "carry on").await.unwrap_err();
@@ -720,6 +720,16 @@ async fn a_turn_whose_harness_went_after_storing_events_the_app_had_not_read_end
     let (after, follow) = bed.until(&run, |r, _| r.state == RunState::Stopped).await;
     assert_eq!((follow.seq, after.last_detail.as_deref()), (stored, Some(consumer::AGENT_LOST)), "its events are applied, then its turn is lost");
     bed.end().await;
+}
+
+#[test]
+fn a_row_the_harness_holds_or_gave_up_on_keeps_its_session_from_a_resume_and_says_why() {
+    let held = "the harness could not check for agents an earlier harness left running (its record could not be read), so no session is resumed until it can";
+    let given_up = "session s's agent may still run (a shutdown stopped waiting for it), so it is not resumed";
+    assert_eq!(kept_by(&json!({ "id": "s", "held": held })).as_deref(), Some(held));
+    assert_eq!(kept_by(&json!({ "id": "s", "given_up": given_up })).as_deref(), Some(given_up));
+    assert_eq!(kept_by(&json!({ "id": "s", "held": held, "given_up": given_up })).as_deref(), Some(held), "what holds every session first");
+    assert_eq!(kept_by(&json!({ "id": "s", "running": false })), None);
 }
 
 const PERMITS: &str = r#"{"prompt": null}

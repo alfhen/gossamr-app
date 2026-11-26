@@ -1545,6 +1545,8 @@ impl Task {
                             self.close_question(&question, QuestionEnd::Denied);
                             let _ = reply.send(Reply::failed(closed_because(QuestionEnd::Denied)));
                         }
+                        // A turn an outside signal cut with a request open, as a shutdown's is: a carry on would go past it.
+                        let open_when_cut = matches!(body, Body::Failed { kind: FailKind::AgentStopped, .. }) && !self.open_requests().is_empty();
                         if body.ends_turn() {
                             turn = Turn::Idle;
                             slot = None;
@@ -1552,7 +1554,7 @@ impl Task {
                             release(&mut held_ask);
                         }
                         // Kept before the turn's end is, so no record shows the deny or the cancel without it.
-                        if let Some(why) = no_carry_on_after(&body)
+                        if let Some(why) = no_carry_on_after(&body).or(open_when_cut.then_some(crate::store::OPEN_REQUEST_STOPPED))
                             && !self.forbid_carry_on(Some(why), &mut blocked)
                         {
                             continue 'run;
@@ -1730,7 +1732,7 @@ impl Task {
         };
         self.stopping.store(true, Ordering::Relaxed);
         if !blocked && !self.open_requests().is_empty() {
-            self.forbid_carry_on(Some("a permission request was open when it stopped"), &mut blocked);
+            self.forbid_carry_on(Some(crate::store::OPEN_REQUEST_STOPPED), &mut blocked);
         }
         self.open_requests().clear();
         // `send` took these, so the client hears they never reached the agent: those queued here, and those still on

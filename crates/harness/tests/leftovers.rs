@@ -118,10 +118,11 @@ fn left_in(dir: &Path, agent: Option<&Process>, worktree: &Path) {
     sql(dir, "UPDATE sessions SET repo = 'acme/webshop' WHERE id = 's'");
 }
 
-/// As `left_by_a_shutdown`, for a session opened in `folder`, which names no repo.
+/// As `left_by_a_shutdown`, for a session opened in `folder`, which names no repo. Its agent was in a turn.
 fn left_in_folder(dir: &Path, agent: Option<&Process>, folder: &Path) {
     let store = opened(dir);
     store.create_session("s", "mock", false, folder, None).unwrap();
+    store.append("s", &harness::event::Body::TurnStarted, harness::store::now_ms()).unwrap();
     store.set_agent("s", agent).unwrap();
     store.set_given_up("s", "a shutdown stopped waiting for it").unwrap();
 }
@@ -149,7 +150,7 @@ fn said(dir: &Path) -> Vec<harness::event::Body> {
 /// What a start that its next harness ended says last: a `failed` that says how, and a `closed` by the harness.
 fn ended_by_the_next_harness(said: &[harness::event::Body], how: &str) -> bool {
     use harness::event::{Body, ClosedBy, FailKind};
-    matches!(said, [.., Body::Failed { kind: FailKind::AgentStopped, reason }, Body::Closed { by: ClosedBy::Harness }] if reason.contains(how))
+    matches!(said, [.., Body::Failed { kind: FailKind::AgentStopped, reason }, Body::Closed { by: ClosedBy::HarnessWent }] if reason.contains(how))
 }
 
 fn row(harness: Harness, dir: &Path) -> (bool, Vec<(String, Process)>) {
@@ -180,7 +181,7 @@ fn leftover_a_start_that_already_closed_gets_no_second_end() {
     let harness = started_harness(&dir);
     assert_eq!(ended(child), Some(libc::SIGKILL));
     drop(harness);
-    assert_eq!(said(&dir), [closed], "the shutdown's closed stays the last word");
+    assert_eq!(said(&dir), [harness::event::Body::TurnStarted, closed], "the shutdown's closed stays the last word");
 }
 
 #[test]
@@ -740,6 +741,7 @@ async fn leftover_freed_by_a_watched_resume_ends_before_the_watch_begins() {
     let (leader, work) = a_leader_gone_with_its_work_left(&elsewhere);
     let store = opened(&dir);
     store.create_session("s", "sleeper", false, &worktree(&dir), None).unwrap();
+    store.append("s", &Body::TurnStarted, harness::store::now_ms()).unwrap();
     store.set_agent("s", Some(&leader)).unwrap();
     drop(store);
     sql(&dir, "UPDATE sessions SET repo = 'acme/webshop', provider_session = 'sleeper-old' WHERE id = 's'");
@@ -788,11 +790,13 @@ fn leftover_whose_group_lists_only_an_exited_process_twice_but_still_answers_whe
 async fn leftover_whose_end_cannot_be_written_is_kept_on_record_with_no_half_end_and_ended_once_it_can() {
     let (_tmp, dir) = data_dir();
     left_by_a_crash(&dir, &Process { pid: 4242, started: 7 });
+    opened(&dir).append("s", &Body::TurnStarted, harness::store::now_ms()).unwrap();
     sql(&dir, "UPDATE sessions SET agent_boot = 'another boot' WHERE id = 's'");
     // The store takes the `failed` but refuses the `closed`.
     sql(&dir, "CREATE TRIGGER no_closed BEFORE INSERT ON events WHEN NEW.type = 'closed' BEGIN SELECT RAISE(FAIL, 'no'); END");
     let harness = started_harness(&dir);
-    assert!(harness.events("s", 0).unwrap().is_empty(), "neither half of its end");
+    let events: Vec<Body> = harness.events("s", 0).unwrap().into_iter().map(|event| event.body).collect();
+    assert_eq!(events, [Body::TurnStarted], "neither half of its end");
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
     assert!(refused.contains("could not check for agents an earlier harness left running"), "{refused}");
     sql(&dir, "DROP TRIGGER no_closed");
@@ -925,5 +929,45 @@ async fn leftover_a_start_whose_agent_was_never_recorded_and_whose_group_outlive
     assert_eq!(left, [id], "still taken when the shutdown came, and given up on by it");
     for work in leaver.left.lock().unwrap().drain(..) {
         kill(&work);
+    }
+}
+
+#[test]
+fn leftover_whose_turn_had_ended_is_closed_with_no_cut_so_nothing_carries_it_on() {
+    use harness::event::{Body, ClosedBy, TurnEnd};
+    let (_tmp, dir) = data_dir();
+    let (child, agent) = agent();
+    left_by_a_shutdown(&dir, Some(&agent));
+    opened(&dir).append("s", &Body::TurnEnded { how: TurnEnd::Done }, harness::store::now_ms()).unwrap();
+    let harness = started_harness(&dir);
+    assert_eq!(ended(child), Some(libc::SIGKILL));
+    drop(harness);
+    assert_eq!(said(&dir), [Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Done }, Body::Closed { by: ClosedBy::HarnessWent }], "an idle start's end, not a cut turn's");
+}
+
+#[test]
+fn leftover_with_a_permission_request_still_open_may_not_carry_on_as_after_a_shutdown() {
+    use harness::event::{Body, Decision, PermissionKind};
+    let asked = |id: &str| Body::Permission { id: id.into(), kind: PermissionKind::Tool, tool: "Read".into(), input: serde_json::json!({}) };
+    // Each also once its events were swept, which keeps their ids under `kept`.
+    for (answered, swept, open) in [(false, false, true), (true, false, false), (false, true, true), (true, true, false)] {
+        let (_tmp, dir) = data_dir();
+        let (child, agent) = agent();
+        left_by_a_shutdown(&dir, Some(&agent));
+        let store = opened(&dir);
+        store.append("s", &asked("r1"), harness::store::now_ms()).unwrap();
+        if answered {
+            store.append("s", &Body::Answered { id: "r1".into(), decision: Decision::Allow, message: None }, harness::store::now_ms()).unwrap();
+        }
+        if swept {
+            assert!(store.sweep(harness::store::now_ms() + 31 * 86_400_000).unwrap() > 0, "swept");
+        }
+        drop(store);
+        let harness = started_harness(&dir);
+        assert_eq!(ended(child), Some(libc::SIGKILL));
+        drop(harness);
+        assert!(ended_by_the_next_harness(&said(&dir), "stopped it"), "{:?}", said(&dir));
+        let marked = opened(&dir).session("s").unwrap().no_carry_on;
+        assert_eq!(marked.as_deref(), open.then_some(harness::store::OPEN_REQUEST_STOPPED), "answered {answered}, swept {swept}");
     }
 }

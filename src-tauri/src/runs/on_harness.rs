@@ -10,6 +10,7 @@ use harness::event::Decision;
 
 use super::failure::Failure;
 use super::link::{Connect, Link};
+use super::message::Delivery;
 use super::service::RunService;
 use crate::domain::{render_prompt_from, Run, RunEvent, RunState, Start};
 use crate::error::{Error, Result};
@@ -69,16 +70,44 @@ fn with_way_out(refusal: &str, run: &Run) -> String {
     super::service::fresh::with_clone_way_out(refusal, &run.spec.clone_path)
 }
 
-/// The harness's refusal as a sentence for the person: its words without the kind it starts with.
-fn plain_refusal(why: &str) -> String {
+/// The harness's refusal as a sentence for the person: its words without the kind it starts with, and `session`, an id
+/// that means nothing to the person, said as "it".
+fn plain_refusal(why: &str, session: &str) -> String {
     let said = why.strip_prefix("refused: ").unwrap_or(why);
+    let said = said.replace(&format!("session {session}'s "), "its ").replace(&format!("session {session} "), "it ");
     let mut chars = said.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// A session a cut nobody chose closed, which a message may resume: not one the person stopped, handed over or cleaned
+/// up, and not one whose question waits for its answer.
+fn resumable(follow: &crate::domain::SessionFollow) -> bool {
+    follow.closed && !follow.ended && follow.cut.is_some() && follow.question.is_none()
+}
+
+/// A finished run whose session a restart closed, which a message wakes, as on the old path: not one you stopped,
+/// handed over or cleaned up, and not one whose question waits for its answer.
+fn wakes(run: &Run, follow: &crate::domain::SessionFollow) -> bool {
+    run.state == RunState::Done && follow.closed && !follow.ended && !run.handed_over && run.worktree_removed_at.is_none() && follow.question.is_none()
 }
 
 /// What an agent of the old path reads when the move to the harness stopped it.
 pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it moved agents to the harness, before you answered its question, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
+
+pub use super::consumer::CARRY_ONS;
+
+/// How long the carry on after a restart waits for the app to catch up with the harness's sessions.
+const CATCH_UP_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Why a message did not reach an agent that its resume started again.
+pub const RESUMED_NOT_SENT: &str = "It started again, but your message didn't reach it, so send it again:";
+
+/// The way on from a carry on the harness's rules refused: a message, which the rules do not govern.
+pub const CARRY_ON_BY_MESSAGE: &str = "Message the agent to go on.";
+
+/// The prompt that takes up a turn a restart cut.
+pub const CARRY_ON: &str = "The harness restarted while you were working, so your last turn was cut short. Carry on where you left off.";
 
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
@@ -203,6 +232,40 @@ impl RunService {
         }
         *run = self.load(&run.id).await?;
         Ok(Ok(()))
+    }
+
+    /// After the harness restarted: resumes each run whose turn an end nobody asked for cut, with "carry on", unless its
+    /// session waits on the person (a question), the app stopped it, or it was carried on `CARRY_ONS` times in a row
+    /// with no turn ending by itself between. What the harness refuses, and why, goes on the run's timeline.
+    pub async fn carry_on_after_restart(&self) {
+        let Some(on) = &self.harness else { return };
+        // The old harness's end of each turn it cut reaches the app only once the link has reconnected and caught up.
+        if !on.link.caught_up(CATCH_UP_TAKES_UP_TO).await {
+            eprintln!("the app had not caught up with the harness's sessions after {CATCH_UP_TAKES_UP_TO:?}, so only the runs it had read as cut are carried on");
+        }
+        let stopped = crate::domain::RunQuery { states: Some(vec![RunState::Stopped]), ..Default::default() };
+        let Ok(runs) = self.core.runs_list(&stopped).await else { return };
+        for run in runs {
+            let Some(session) = run.harness_session.clone() else { continue };
+            // As a message holds it for its resume, and read again under it: a message, or another pass, that resumed
+            // the session meanwhile has taken its cut, so only one of them sends.
+            let _turn = self.launching.lock().await;
+            let Ok(Some((_, follow))) = self.core.session_run(&session).await else { continue };
+            if follow.cut.is_none() || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
+                continue;
+            }
+            let said = match on.link.carry_on(&session, CARRY_ON).await {
+                Ok(()) => "Carried on after the harness restarted".to_owned(),
+                // Only the harness's rule for a carry on keeps it, and a message is no carry on: say so. A session the
+                // harness keeps takes no message either, so its reason stands alone.
+                Err(why) if why.contains("may not carry on") => format!("Not carried on after the harness restarted: {}. {CARRY_ON_BY_MESSAGE}", plain_refusal(&why, &session).trim_end_matches('.')),
+                Err(why) => format!("Not carried on after the harness restarted: {}", plain_refusal(&why, &session)),
+            };
+            let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "follow_up".into(), text: said, detail: None };
+            if let Err(e) = self.core.append_run_events(&run.id, &[row]).await {
+                eprintln!("couldn't record the carry on of run {}: {e}", run.id);
+            }
+        }
     }
 
     /// Once, when Claude's runs first go to the harness: stops each agent the old `claude --bg` path still has going,
@@ -344,22 +407,35 @@ impl RunService {
 
     /// Sends the person's or Pip's text to a run on the harness: the answer to its open question, else a message.
     /// `None` for a run that is not on the harness.
-    pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, bool)>> {
+    pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, Delivery)>> {
         let (link, session) = self.on_harness_of(run)?;
         let follow = self.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
-        // A session just taken back is starting again: its run reads stopped until its `started` comes.
-        let starting = follow.taken_back;
+        // A session just taken back or resumed is starting again: its run reads stopped until its `started` comes.
+        let starting = follow.taken_back || follow.resuming;
         // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
         // prompt, and the turn it starts takes the run out of Failed.
         let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
+        if !starting && !runs_on && (matches!(run.state, RunState::Stopped | RunState::Failed) && resumable(&follow) || wakes(run, &follow)) {
+            return Some(self.resume_on_harness(link, session, run, text).await);
+        }
         if !starting && !runs_on && matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
             return Some(Err(Error::Proposal(format!("This run is {}, so it takes no message.", run.state.as_str()))));
         }
         Some(match link.send(session, text).await {
-            Ok(answered) => self.load(&run.id).await.map(|run| (run, answered)),
+            Ok(answered) => self.load(&run.id).await.map(|run| (run, if answered { Delivery::Answered } else { Delivery::Queued })),
             Err(why) if why == super::link::ANSWER_ON_ITS_WAY || why == super::link::NOT_RUNNING => Err(Error::Proposal(why)),
+            // The message found the agent lost: it starts it again, as the run now says to.
+            Err(why) if why == super::consumer::AGENT_LOST => self.resume_on_harness(link, session, run, text).await,
             Err(why) => Err(Error::Proposal(format!("The harness didn't take it: {why}"))),
         })
+    }
+
+    async fn resume_on_harness(&self, link: &Link, session: &str, run: &Run, text: &str) -> Result<(Run, Delivery)> {
+        match link.resume_with(session, text).await {
+            Ok(()) => self.load(&run.id).await.map(|run| (run, Delivery::Resumed)),
+            Err(super::link::NotResumed::Refused(why)) => Err(Error::Proposal(format!("The harness didn't resume it: {}", plain_refusal(&why, session)))),
+            Err(super::link::NotResumed::NotSent(why)) => Err(Error::Proposal(format!("{RESUMED_NOT_SENT} {}", plain_refusal(&why, session)))),
+        }
     }
 
     /// Allows or denies one open permission request of `run_id`, once, for that request alone. Only the person's page
@@ -423,7 +499,7 @@ impl RunService {
             if let Some((branch, worktree)) = work {
                 match self.kept_on_harness(run, &branch, &worktree).await {
                     Ok(None) => {}
-                    Ok(Some(kept)) => return Some(Ok(Some(with_way_out(&plain_refusal(&kept), run)))),
+                    Ok(Some(kept)) => return Some(Ok(Some(with_way_out(&plain_refusal(&kept, session), run)))),
                     Err(why) => return Some(Ok(Some(format!("{UNCHECKED}: {}. Try again in a moment.", why.trim_end_matches('.'))))),
                 }
             }
@@ -456,7 +532,7 @@ impl RunService {
                 }
             }
         }
-        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err().map(|why| with_way_out(&plain_refusal(&why), run))))
+        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err().map(|why| with_way_out(&plain_refusal(&why, session), run))))
     }
 
     /// Why git would keep a harness run's worktree and branch, asked with the app's own git as the harness would remove
@@ -479,7 +555,7 @@ impl RunService {
         let (link, session) = self.on_harness_of(run)?;
         Some(match link.take_back(session).await {
             Ok(()) => self.load(&run.id).await,
-            Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {}", plain_refusal(&why)))),
+            Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {}", plain_refusal(&why, session)))),
         })
     }
 
@@ -499,7 +575,7 @@ impl RunService {
             if follow.closed {
                 // The harness marks a closed session handed over as it is; the app no longer follows it, so it reads
                 // the mark here.
-                link.call(Op::HandOver { session: session.to_owned() }).await.map_err(|why| Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why))))?;
+                link.call(Op::HandOver { session: session.to_owned() }).await.map_err(|why| Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why, session))))?;
                 self.core.apply_session(session, |run, _| {
                     run.handed_over = true;
                     run.last_detail = Some(super::consumer::HANDED_OVER.into());
@@ -516,7 +592,7 @@ impl RunService {
                 asked(true).await?;
                 if let Err(why) = link.call(Op::HandOver { session: session.to_owned() }).await {
                     asked(false).await?;
-                    return Err(Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why))));
+                    return Err(Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why, session))));
                 }
             }
             let tc = self.observing_toolchain(run).await?;

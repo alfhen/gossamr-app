@@ -464,6 +464,10 @@ async fn waking_agents_counts_against_the_turns_three() {
     let over = d.err("in-ws", "message_agent", json!({ "id": finished[3].id, "text": "Again." })).await;
     assert!(over.contains("You have started 3 agents in this turn already"), "{over}");
     assert_eq!(d.run_by_id(&finished[3].id).await.state, RunState::Done);
+    // A failed run's message may resume its cut on the harness, so it counts too.
+    d.rig.set(&finished[3], |r| r.state = RunState::Failed).await;
+    let failed = d.err("in-ws", "message_agent", json!({ "id": finished[3].id, "text": "Again." })).await;
+    assert!(failed.contains("You have started 3 agents in this turn already"), "{failed}");
 }
 
 #[tokio::test]
@@ -572,4 +576,51 @@ async fn an_agent_queued_for_a_workstream_that_is_paused_is_not_launched_until_i
     d.rig.fx.core.resume_workstream(&d.rig.fx.scope, &d.ws).await.unwrap();
     d.rig.svc.launch_waiting().await.unwrap();
     assert_eq!(d.rig.cli.launches(), 1);
+}
+
+/// Takes every message as the harness takes one to a finished run's session still open: as its next prompt, which
+/// starts a turn, delivered as queued. Anything else is the real service's.
+struct QueuesAsANewTurn(Arc<crate::runs::service::RunService>, Arc<crate::inbox::Core>);
+
+#[async_trait::async_trait]
+impl crate::agent::AgentDriver for QueuesAsANewTurn {
+    async fn plan(&self, repo: &str, key: &str, title: &str) -> std::result::Result<crate::agent::ClonePlan, String> {
+        crate::agent::AgentDriver::plan(&*self.0, repo, key, title).await
+    }
+
+    async fn begin(self: Arc<Self>, run_id: String) -> crate::error::Result<Run> {
+        self.0.clone().begin(run_id).await
+    }
+
+    async fn message(&self, run_id: &str, _text: &str) -> crate::error::Result<(Run, Delivery)> {
+        Ok((self.1.run(run_id).await?.expect("the run is kept"), Delivery::Queued))
+    }
+
+    async fn stop(self: Arc<Self>, run_id: String) -> crate::error::Result<Run> {
+        self.0.clone().stop(run_id).await
+    }
+}
+
+#[tokio::test]
+async fn a_message_that_starts_a_turn_in_a_finished_runs_open_session_counts_against_the_turns_three() {
+    let mut d = drive().await;
+    let mut finished = Vec::new();
+    for n in 1..=4 {
+        let request = format!("q{n}");
+        d.join(&request);
+        let run = working(&d, &request, &format!("look {n}")).await;
+        d.rig.session(&run, |e| {
+            e.state = Some("done".into());
+            e.status = None;
+            e.pid = None;
+        });
+        d.rig.set(&run, |r| (r.state, r.ended_at) = (RunState::Done, Some(chrono::Utc::now()))).await;
+        finished.push(run);
+    }
+    d.st.driver = Arc::new(QueuesAsANewTurn(d.rig.svc.clone(), d.rig.fx.core.clone()));
+    for run in &finished[..3] {
+        assert!(d.ok("in-ws", "message_agent", json!({ "id": run.id, "text": "Again." })).await.starts_with("Queued"));
+    }
+    let over = d.err("in-ws", "message_agent", json!({ "id": finished[3].id, "text": "Again." })).await;
+    assert!(over.contains("You have started 3 agents in this turn already"), "a woken session's start is kept: {over}");
 }

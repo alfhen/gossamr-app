@@ -2202,3 +2202,45 @@ async fn limit_on_a_runtime_of_several_threads_as_serve_runs_turns_past_the_limi
         harness.answer(&id, &request, Decision::Allow, None).unwrap();
     }
 }
+
+/// An agent that asks for a permission and is then ended mid-turn by a signal from outside, as the Claude driver
+/// reports a logout's.
+struct CutWhileAsking;
+
+impl Driver for CutWhileAsking {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
+        let (commands, mut commands_rx) = mpsc::unbounded_channel::<Command>();
+        let (output, receiver) = mpsc::unbounded_channel();
+        let _ = output.send(Body::Started { provider_session: "cut-while-asking".into(), resumed: false });
+        tokio::spawn(async move {
+            while let Some(command) = commands_rx.recv().await {
+                if let Command::Prompt(_) = command {
+                    let _ = output.send(Body::TurnStarted);
+                    let _ = output.send(Body::Permission { id: "p1".into(), kind: PermissionKind::Tool, tool: "Read".into(), input: json!({}) });
+                    let _ = output.send(Body::Failed { kind: FailKind::AgentStopped, reason: "claude exited in the middle of a turn, ended by signal 15".into() });
+                    break;
+                }
+            }
+            drop(output);
+        });
+        Ok(Link { commands, output: receiver, process: None })
+    }
+}
+
+#[tokio::test]
+async fn a_turn_an_outside_signal_cut_with_a_request_open_may_not_carry_on_as_after_a_shutdown() {
+    let (_tmp, dir) = data_dir();
+    let harness = Harness::new(Store::open(&dir).unwrap(), vec![("cut".into(), Arc::new(CutWhileAsking))], settings(4));
+    let (id, mut events) = harness.open(Open { provider: "cut".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+    harness.send(&id, "go").unwrap();
+    until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+    while harness.sessions().unwrap().iter().any(|row| row.id == id && row.running) {
+        tokio::task::yield_now().await;
+    }
+    let refused = harness.resume_with(&id, Some("carry on".into())).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains(&format!("may not carry on: {}", harness::store::OPEN_REQUEST_STOPPED)), "{refused}");
+}
