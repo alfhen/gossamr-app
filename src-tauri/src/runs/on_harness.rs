@@ -9,6 +9,7 @@ use harness::client::Client;
 
 use super::failure::Failure;
 use super::link::{Connect, Link};
+use super::message::Delivery;
 use super::service::RunService;
 use crate::domain::{render_prompt_from, Run, RunEvent, RunState, Start};
 use crate::error::{Error, Result};
@@ -66,6 +67,12 @@ fn plain_refusal(why: &str) -> String {
     let said = why.strip_prefix("refused: ").unwrap_or(why);
     let mut chars = said.chars();
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
+/// A session a cut nobody chose closed, which a message may resume: not one the person stopped, handed over or cleaned
+/// up, and not one whose question waits for its answer.
+fn resumable(follow: &crate::domain::SessionFollow) -> bool {
+    follow.closed && !follow.ended && follow.cut.is_some() && follow.question.is_none()
 }
 
 /// What an agent of the old path reads when the move to the harness stopped it.
@@ -365,7 +372,7 @@ impl RunService {
 
     /// Sends the person's or Pip's text to a run on the harness: the answer to its open question, else a message.
     /// `None` for a run that is not on the harness.
-    pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, bool)>> {
+    pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, Delivery)>> {
         let (link, session) = self.on_harness_of(run)?;
         let follow = self.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
         // A session just taken back is starting again: its run reads stopped until its `started` comes.
@@ -373,14 +380,26 @@ impl RunService {
         // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
         // prompt, and the turn it starts takes the run out of Failed.
         let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
+        if !starting && !runs_on && matches!(run.state, RunState::Stopped | RunState::Failed) && resumable(&follow) {
+            return Some(self.resume_on_harness(link, session, run, text).await);
+        }
         if !starting && !runs_on && matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
             return Some(Err(Error::Proposal(format!("This run is {}, so it takes no message.", run.state.as_str()))));
         }
         Some(match link.send(session, text).await {
-            Ok(answered) => self.load(&run.id).await.map(|run| (run, answered)),
+            Ok(answered) => self.load(&run.id).await.map(|run| (run, if answered { Delivery::Answered } else { Delivery::Queued })),
             Err(why) if why == super::link::ANSWER_ON_ITS_WAY || why == super::link::NOT_RUNNING => Err(Error::Proposal(why)),
+            // The message found the agent lost: it starts it again, as the run now says to.
+            Err(why) if why == super::consumer::AGENT_LOST => self.resume_on_harness(link, session, run, text).await,
             Err(why) => Err(Error::Proposal(format!("The harness didn't take it: {why}"))),
         })
+    }
+
+    async fn resume_on_harness(&self, link: &Link, session: &str, run: &Run, text: &str) -> Result<(Run, Delivery)> {
+        match link.resume_with(session, text).await {
+            Ok(()) => self.load(&run.id).await.map(|run| (run, Delivery::Resumed)),
+            Err(why) => Err(Error::Proposal(format!("The harness didn't resume it: {why}"))),
+        }
     }
 
     /// Cleans up a run's session through the harness: its worktree and branch, never forced, so unpushed work stays and

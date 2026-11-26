@@ -74,7 +74,7 @@ impl RunService {
             let _turn = self.launching.lock().await;
             let run = self.load(run_id).await?;
             if let Some(sent) = self.send_on_harness(&run, text).await {
-                return sent.map(|(run, answered)| (run, if answered { Delivery::Answered } else { Delivery::Queued }));
+                return sent;
             }
         }
         let asking = !at_rest(run.state) && self.core.asks().question(run_id).is_some();

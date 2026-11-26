@@ -69,12 +69,21 @@ impl Served {
         self.task = Some(tokio::spawn(server.run()));
     }
 
-    /// Serves the data folder again after a shutdown, with the same provider and its sessions.
-    pub fn serve_again(&mut self, turn_limit: usize) {
+    /// Serves the data folder again after a shutdown, with the same provider and its sessions. A task of the old
+    /// harness may hold its store's lock a moment after it stopped, so a folder still in use is tried again.
+    pub async fn serve_again(&mut self, turn_limit: usize) {
         let mock = self.mock.clone().expect("served before");
-        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
-        let first = self.token.clone();
-        let server = Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }).unwrap();
+        let bound = tokio::time::timeout(WAIT, async {
+            loop {
+                let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock.clone()))];
+                let first = self.token.clone();
+                match Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }) {
+                    Err(harness::error::Error::InUse(_)) => tokio::time::sleep(Duration::from_millis(20)).await,
+                    bound => return bound.unwrap(),
+                }
+            }
+        });
+        let server = bound.await.expect("the old harness let go of its folder");
         self.task = Some(tokio::spawn(server.run()));
     }
 

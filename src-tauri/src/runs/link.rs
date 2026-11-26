@@ -148,9 +148,19 @@ impl Link {
     /// Resumes a session that is not running with `carry_on` as its prompt, counting it, and follows it again. The harness
     /// refuses one a deny, a cancel, a stop or an open request forbids, or a shutdown gave up on, and says why.
     pub async fn carry_on(&self, session: &str, carry_on: &str) -> Result<(), String> {
-        self.call(Op::Resume { session: session.to_owned(), carry_on: Some(carry_on.to_owned()) }).await?;
+        self.resume(session, carry_on, true).await
+    }
+
+    /// Resumes a session that is not running with the person's or Pip's message as its prompt, as `carry_on` does. A
+    /// message starts the count of carry-ons again: someone chose to go on.
+    pub async fn resume_with(&self, session: &str, text: &str) -> Result<(), String> {
+        self.resume(session, text, false).await
+    }
+
+    async fn resume(&self, session: &str, prompt: &str, counted: bool) -> Result<(), String> {
+        self.call(Op::Resume { session: session.to_owned(), carry_on: Some(prompt.to_owned()) }).await?;
         let counted = self.inner.core.apply_session(session, |_, follow| {
-            follow.carry_ons += 1;
+            follow.carry_ons = if counted { follow.carry_ons + 1 } else { 0 };
             Vec::new()
         });
         let follow = counted.await.map_err(|e| e.to_string())?.map(|applied| applied.follow).unwrap_or_default();

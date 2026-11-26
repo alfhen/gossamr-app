@@ -25,7 +25,7 @@ pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resu
 pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
 pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again if the run starts working again, or ask Pip to start it again.";
 pub const SIGNING_NEEDS_YOU_CLOSED: &str = "A commit needs your signing agent, which refused it, and the run's session has since ended: unlock it (for example 1Password), then ask Pip to start it again.";
-pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
+pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Message the agent to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 pub const CUT_AGAIN: &str = "Its turn was cut short again after Gossamr carried on three times in a row. Message the agent to start it again.";
 /// How many times in a row the app carries a cut run on, with no turn ending by itself between.
@@ -340,8 +340,8 @@ pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>)
 
 /// A cut after `CARRY_ONS` carry-ons in a row is not carried on again: it fails, so the person hears of it.
 fn cut_again(run: &mut Run, follow: &mut SessionFollow, rows: &mut Rows) {
+    // It stays cut, so a message from the person can still resume it.
     if follow.carry_ons >= CARRY_ONS && follow.question.is_none() {
-        follow.cut = None;
         fail_cut(run, rows, CUT_AGAIN);
     }
 }

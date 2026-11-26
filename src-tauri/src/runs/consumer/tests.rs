@@ -606,7 +606,8 @@ fn a_turn_cut_again_after_three_carry_ons_in_a_row_fails_and_one_that_ends_well_
         p.follow.carry_ons = n;
         p.play(resumed()).play([cut(), Body::Closed { by: ClosedBy::Shutdown }]);
     }
-    assert_eq!((p.run.state, p.run.error.as_deref(), p.follow.cut.as_deref()), (RunState::Failed, Some(CUT_AGAIN), None));
+    assert_eq!((p.run.state, p.run.error.as_deref()), (RunState::Failed, Some(CUT_AGAIN)));
+    assert!(p.follow.cut.is_some(), "a message can still resume it");
     let mut well = Played::new();
     well.follow.carry_ons = CARRY_ONS - 1;
     well.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }]);

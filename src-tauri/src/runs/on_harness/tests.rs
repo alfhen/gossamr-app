@@ -709,7 +709,7 @@ async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_t
     let run = rig.launched(1).await;
     until_detail(&rig, &run, "Starting a long build.").await;
     served.shut_down().await;
-    served.serve_again(4);
+    served.serve_again(4).await;
     let cut = until_detail(&rig, &run, crate::runs::consumer::CUT).await;
     assert_eq!(cut.state, RunState::Stopped);
     let session = cut.harness_session.clone().unwrap();
@@ -755,7 +755,7 @@ async fn a_run_the_app_stopped_or_one_whose_question_is_open_is_not_carried_on()
     rig.svc.stop(&stopped.id).await.unwrap();
     until_state(&rig, &stopped, RunState::Stopped).await;
     served.shut_down().await;
-    served.serve_again(4);
+    served.serve_again(4).await;
     let (_, follow) = rig.fx.core.session_run(&rig.get(&asking).await.harness_session.unwrap()).await.unwrap().unwrap();
     assert!(follow.question.is_some());
     // Each as a cut run would be but for the one thing that keeps it from carrying on.
@@ -824,41 +824,6 @@ async fn a_run_whose_commit_the_signing_agent_refused_takes_the_message_its_text
     assert_eq!(delivery, crate::runs::message::Delivery::Queued);
     let done = until_state(&rig, &run, RunState::Done).await;
     assert_eq!((done.error, done.failure, done.last_detail.as_deref()), (None, None, Some("Committed.")));
-}
-
-#[tokio::test]
-async fn a_run_whose_agent_the_harness_lost_says_to_ask_pip_and_a_new_run_on_its_ticket_starts() {
-    let served = Served::new(FINISHES, 4);
-    let rig = on_harness(&served).await;
-    let run = rig.launched(1).await;
-    until_state(&rig, &run, RunState::Done).await;
-    let session = rig.get(&run).await.harness_session.unwrap();
-    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
-    // As if the harness had died mid-turn with no shutdown: the app still reads a turn the harness no longer runs.
-    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
-    tokio::time::timeout(WAIT, async {
-        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
-            applied.changed().await.unwrap();
-        }
-    })
-    .await
-    .unwrap();
-    rig.fx.core.apply_session(&session, |run, follow| {
-        (follow.closed, follow.ended, follow.in_turn) = (false, false, true);
-        run.state = RunState::Working;
-        run.ended_at = None;
-        Vec::new()
-    }).await.unwrap();
-    let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err();
-    assert!(refused.to_string().contains(crate::runs::consumer::AGENT_LOST), "{refused}");
-    let lost = rig.get(&run).await;
-    assert_eq!((lost.state, lost.last_detail.as_deref()), (RunState::Stopped, Some(crate::runs::consumer::AGENT_LOST)));
-    assert!(!crate::runs::consumer::AGENT_LOST.contains("Message the agent"), "a message is refused, so the text does not offer it");
-    // What the text says: Pip starts it again, as a new run on the same ticket.
-    let again = rig.fx.core.queue_test_run(crate::domain::RunSpec { name: "eng-1-fix-cart-again".into(), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let started = rig.svc.start_now(&again.id).await.unwrap();
-    assert!(started.harness_session.is_some(), "the new run opened on the harness");
-    until_state(&rig, &started, RunState::Done).await;
 }
 
 #[tokio::test]
@@ -1384,4 +1349,129 @@ async fn clean_up_of_a_closed_session_the_harness_refuses_says_why_in_a_sentence
     let way_out = format!(". Remove it with `git -C {} config --unset-all commit.gpgsign`.", crate::runs::shell::quote(&done.spec.clone_path.display().to_string()));
     assert!(message.ends_with(&way_out) && !message.contains("..") && !message.contains("To clear them") && message.matches("Remove it with").count() == 1, "one way out: {message}");
     assert!(git.worktree(&done.spec.name).is_dir());
+}
+
+/// A long build a shutdown can cut, and a long turn after it for a resume to start, since the mock skips the turn it
+/// cut. That turn does not end, so an end that resets the count of carry-ons does not come.
+const BUILDS_ON: &str = r#"{"prompt": null}
+{"say": "Starting a long build."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}
+{"say": "Back on the build."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#;
+
+/// A run whose long turn a harness shutdown cut, read as cut once the harness serves again.
+async fn cut_by_a_shutdown(served: &mut Served) -> (Rig, Run, String) {
+    let rig = on_harness(served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let cut = until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    let session = cut.harness_session.clone().unwrap();
+    (rig, cut, session)
+}
+
+/// The run once its session resumed and the message was sent: in a turn, or done with it.
+async fn until_resumed(rig: &Rig, run: &Run) -> Run {
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    let resumed = tokio::time::timeout(WAIT, async {
+        loop {
+            let rows = rig.fx.core.run_events(&run.id).await.unwrap();
+            let now = rig.get(run).await;
+            if rows.iter().any(|e| e.text == "Resumed") && rows.iter().any(|e| e.text == "Message sent") && matches!(now.state, RunState::Working | RunState::Done) {
+                return now;
+            }
+            applied.changed().await.unwrap();
+        }
+    })
+    .await;
+    match resumed {
+        Ok(run) => run,
+        Err(_) => {
+            let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+            panic!("the run did not resume, it is {:?}: {rows:?}", rig.get(run).await.state)
+        }
+    }
+}
+
+/// Whether `text` reached the session's agent as a prompt.
+async fn prompted(served: &Served, session: &str, text: &str) -> bool {
+    let mut client = served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.to_owned(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    events.iter().any(|e| e.body == Body::Prompted { text: text.into() })
+}
+
+#[tokio::test]
+async fn a_message_to_a_cut_run_resumes_its_session_with_the_message_and_starts_the_carry_ons_again() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    rig.fx.core.apply_session(&session, |_, f| {
+        f.carry_ons = 2;
+        Vec::new()
+    }).await.unwrap();
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Go on with the build.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    until_resumed(&rig, &run).await;
+    assert!(prompted(&served, &session, "Go on with the build.").await, "the message is the resumed session's prompt");
+    assert_eq!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.carry_ons, 0);
+}
+
+#[tokio::test]
+async fn a_run_failed_after_three_carry_ons_takes_the_message_its_text_asks_for() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // As the fold leaves it when the cut after the third carry-on closes.
+    rig.fx.core.apply_session(&session, |run, f| {
+        f.carry_ons = CARRY_ONS;
+        run.state = RunState::Failed;
+        run.error = Some(crate::runs::consumer::CUT_AGAIN.into());
+        Vec::new()
+    }).await.unwrap();
+    assert!(crate::runs::consumer::CUT_AGAIN.contains("Message the agent to start it again"));
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Start again.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    let working = until_resumed(&rig, &run).await;
+    assert_eq!((working.error, working.failure), (None, None));
+    assert!(prompted(&served, &session, "Start again.").await);
+}
+
+#[tokio::test]
+async fn a_message_that_finds_the_agent_lost_starts_it_again_as_the_run_then_says() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // As if the harness had died with no shutdown: the app still reads the turn, and the harness has none.
+    rig.fx.core.apply_session(&session, |run, f| {
+        (f.closed, f.in_turn, f.cut) = (false, true, None);
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    assert!(crate::runs::consumer::AGENT_LOST.contains("Message the agent to start it again"));
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Pick it up.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    assert!(rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text == crate::runs::consumer::AGENT_LOST), "the timeline says it was lost");
+    until_resumed(&rig, &run).await;
+    assert!(prompted(&served, &session, "Pick it up.").await);
+}
+
+#[tokio::test]
+async fn a_run_you_stopped_or_a_crash_failed_is_not_resumed_by_a_message() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // Stopped by you (even with a cut before it), failed by a crash, and stopped by another client's Stop.
+    let cut = Some(crate::runs::consumer::CUT.to_owned());
+    for (ended, cut, state) in [(true, cut, RunState::Stopped), (false, None, RunState::Failed), (false, None, RunState::Stopped)] {
+        rig.fx.core.apply_session(&session, |run, f| {
+            (f.ended, f.cut) = (ended, cut.clone());
+            run.state = state;
+            Vec::new()
+        }).await.unwrap();
+        let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err();
+        assert!(refused.to_string().contains("so it takes no message"), "{state:?} {ended}: {refused}");
+    }
+    assert!(!prompted(&served, &session, "Go on.").await, "the app did not resume it");
 }
