@@ -566,10 +566,20 @@ impl Stream {
     /// Claude's answer to the last switch: a refusal leaves the agent in the mode it had, and the client is told.
     fn switched(&mut self, line: &Value) {
         let Some((_, before)) = self.switching.take() else { return };
+        let asked = self.permissions.map_or("", mode_of);
         if line["response"]["subtype"] == "success" {
+            // Claude echoes the mode it took (2.1.331); one it names other than the one asked for is what the agent runs in.
+            let Some(took) = line["response"]["response"]["mode"].as_str().filter(|took| *took != asked) else { return };
+            self.permissions = Some(match took {
+                "auto" => Permissions::Auto,
+                "default" | "manual" => Permissions::Ask,
+                _ => before,
+            });
+            self.unchecked = None;
+            self.emit(Body::Notice { text: format!("Claude switched this agent to {} mode, not {} mode.", named(took), named(asked)) });
             return;
         }
-        let asked = self.permissions.replace(before).map_or("", mode_of);
+        self.permissions = Some(before);
         self.unchecked = None;
         let why = line["response"]["error"].as_str().unwrap_or("no reason given");
         let text = format!("Claude didn't switch this agent to {} mode ({why}), so it goes on in {} mode.", named(asked), named(mode_of(before)));
@@ -1087,7 +1097,11 @@ mod tests {
         assert_eq!(w.said(), [Body::Notice { text: refused.into() }]);
         assert_eq!(w.stream.permissions, Some(Permissions::Ask), "the mode it has");
         w.stream.set_permissions(Permissions::Auto);
-        assert_eq!(w.sent().iter().filter(|line| line["request"]["subtype"] == "set_permission_mode").count(), 1, "so a later switch to Auto is sent again");
+        let id = switch_id(&mut w);
+        assert!(!id.is_empty(), "so a later switch to Auto is sent again");
+        w.agent(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {"mode": "default"}}}));
+        assert_eq!(w.said(), [Body::Notice { text: "Claude switched this agent to Manual mode, not Auto mode.".into() }], "taken, in another mode than asked");
+        assert_eq!(w.stream.permissions, Some(Permissions::Ask), "the mode it runs in");
     }
 
     #[test]

@@ -145,13 +145,40 @@ impl Link {
             Op::SetPermissions { session, permissions } => Some((session.clone(), *permissions)),
             _ => None,
         };
-        let mut client = self.inner.connect.connect().await?;
-        let answered = client.call(op).await.map_err(|e| e.to_string());
-        // Noted though the harness refused the op: it keeps the choice before it does the op's own work.
-        if let Some((session, permissions)) = asked {
+        let answered = self.ask_once(op).await;
+        let Some((session, mut sent)) = asked else { return answered };
+        let mut kept = answered.is_ok();
+        // Settings may have changed while the call was on its way, and the harness applies its value after the
+        // change's own: send the choice of now, until what was sent last is still the choice.
+        loop {
+            let now = self.permissions();
+            if now == sent {
+                break;
+            }
+            sent = now;
+            kept = self.ask_once(Op::SetPermissions { session: session.clone(), permissions: now }).await.is_ok();
+        }
+        // A refused op may or may not have kept the choice: the harness's row says which.
+        let noted = match kept {
+            true => Some(sent),
+            false => self.kept_permissions(&session).await,
+        };
+        if let Some(permissions) = noted {
             self.note_permissions(&session, permissions).await;
         }
         answered
+    }
+
+    async fn ask_once(&self, op: Op) -> Result<Value, String> {
+        let mut client = self.inner.connect.connect().await?;
+        client.call(op).await.map_err(|e| e.to_string())
+    }
+
+    /// What the harness keeps for the session, if it can say.
+    async fn kept_permissions(&self, session: &str) -> Option<AgentPermissions> {
+        let listed = self.ask_once(Op::Sessions).await.ok()?;
+        let row = listed.as_array()?.iter().find(|row| row["id"] == session)?;
+        serde_json::from_value(row["permissions"].clone()).ok()
     }
 
     /// Settings' choice of who settles a Claude agent's permission prompts, from now on, for the calls that follow.
@@ -192,7 +219,9 @@ impl Link {
     async fn note_permissions(&self, session: &str, permissions: AgentPermissions) {
         let noted = self.inner.core.apply_session(session, move |run, _| {
             let before = run.agent_permissions.replace(permissions);
-            if before.is_none_or(|before| before == permissions) {
+            // Said only of a run whose agent works or waits on you: one that is done takes it with its next message.
+            let busy = matches!(run.state, RunState::Working | RunState::NeedsAnswer | RunState::NeedsPermission);
+            if !busy || before.is_none_or(|before| before == permissions) {
                 return Vec::new();
             }
             let text = match permissions {

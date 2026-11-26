@@ -856,6 +856,18 @@ async fn a_change_of_settings_reaches_an_agent_in_the_middle_of_its_turn_with_no
 }
 
 #[tokio::test]
+async fn a_change_of_settings_moves_a_finished_runs_open_session_with_no_line_on_its_timeline() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    choose(&rig, AgentPermissions::Ask);
+    until_mode(&served, &rig, &run, AgentPermissions::Ask).await;
+    let rows = rig.fx.core.run_events(&run.id).await.unwrap();
+    assert!(!rows.iter().any(|row| row.text.starts_with("Permissions are now")), "a run that is done says nothing: {:?}", rows.iter().map(|r| &r.text).collect::<Vec<_>>());
+}
+
+#[tokio::test]
 async fn a_carry_on_after_a_harness_restart_starts_the_agent_in_the_mode_chosen_since() {
     let mut served = Served::new(BUILDS, 4);
     let rig = on_harness(&served).await;

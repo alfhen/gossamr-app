@@ -806,3 +806,84 @@ async fn permission_a_run_saved_without_its_requests_reads_them_again_from_the_h
     bed.until(&run, |r, _| r.state == RunState::Done).await;
     bed.end().await;
 }
+
+/// Connects as `Direct` does, but holds the first connect after `arm` until the test lets it go.
+struct Gated {
+    direct: Arc<Direct>,
+    armed: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    entered: tokio::sync::Notify,
+}
+
+impl Gated {
+    fn arm(&self) -> tokio::sync::oneshot::Sender<()> {
+        let (release, gate) = tokio::sync::oneshot::channel();
+        *self.armed.lock().unwrap() = Some(gate);
+        release
+    }
+}
+
+#[async_trait]
+impl Connect for Gated {
+    async fn connect(&self) -> Result<Client, String> {
+        let gate = self.armed.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.entered.notify_one();
+            let _ = gate.await;
+        }
+        self.direct.connect().await
+    }
+}
+
+/// The session's `permissions` as the harness lists it.
+async fn kept(bed: &Bed, session: &str) -> Value {
+    let listed = bed.served.client().await.call(Op::Sessions).await.unwrap();
+    listed.as_array().unwrap().iter().find(|row| row["id"] == session).expect("listed")["permissions"].clone()
+}
+
+#[tokio::test]
+async fn a_message_that_carried_the_old_choice_while_settings_changed_does_not_undo_the_change() {
+    let mut bed = Bed::new(THREE_TURNS).await;
+    let gated = Arc::new(Gated { direct: bed.direct.clone(), armed: Mutex::new(None), entered: tokio::sync::Notify::new() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), gated.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
+    bed.link.set_permissions(AgentPermissions::Auto);
+    let (run, session) = bed.started().await;
+    bed.until(&run, |run, _| run.state == RunState::Done || run.last_detail.as_deref() == Some("One.")).await;
+    assert_eq!(kept(&bed, &session).await, "auto");
+    // A message reads Auto, then waits to connect while Settings change to Ask and that change reaches the harness.
+    let release = gated.arm();
+    let sending = Link { inner: bed.link.inner.clone() };
+    let message = tokio::spawn({
+        let session = session.clone();
+        async move { sending.call(Op::Send { permissions: None, session, text: "Pip's message".into() }).await }
+    });
+    tokio::time::timeout(WAIT, gated.entered.notified()).await.expect("the message is on its way");
+    bed.link.choose_permissions(AgentPermissions::Ask);
+    tokio::time::timeout(WAIT, async {
+        while kept(&bed, &session).await != "ask" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the change reached the harness");
+    release.send(()).unwrap();
+    message.await.unwrap().unwrap();
+    assert_eq!(kept(&bed, &session).await, "ask", "the message's Auto did not win");
+    let now = bed.rig.get(&run).await;
+    assert_eq!(now.agent_permissions, Some(AgentPermissions::Ask));
+    let rows = bed.rig.fx.core.run_events(&run.id).await.unwrap();
+    assert!(!rows.iter().any(|row| row.text == NOW_AUTO), "no line says Settings chose Auto");
+}
+
+#[tokio::test]
+async fn an_op_the_harness_refused_before_it_kept_the_choice_leaves_the_runs_mode_as_it_was() {
+    let bed = Bed::new(THREE_TURNS).await;
+    let run = bed.rig.queued(1).await;
+    let run = bed.rig.set(&run, |r| r.state = RunState::Working).await;
+    // A session the harness has no row for, as after its sweep: it refuses at once, and keeps nothing.
+    bed.rig.fx.core.bind_run_session(&run.id, "s-gone").await.unwrap();
+    bed.link.set_permissions(AgentPermissions::Ask);
+    let refused = bed.link.call(Op::Send { permissions: None, session: "s-gone".into(), text: "hello".into() }).await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(bed.rig.get(&run).await.agent_permissions, None, "nothing was kept, so nothing is shown");
+}
