@@ -870,7 +870,8 @@ async fn runs_outcome(core: State<'_, CoreState>, runs: State<'_, RunsState>, id
 
 #[tauri::command]
 async fn runs_list(core: State<'_, CoreState>, query: Option<RunQuery>) -> Result<Vec<Run>> {
-    core.runs_list(&query.unwrap_or_default()).await
+    // The page sees each open permission request as the harness sent it; `app.sqlite` keeps the app-masked copy.
+    core.runs_shown(&query.unwrap_or_default()).await
 }
 
 #[tauri::command]

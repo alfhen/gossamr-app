@@ -501,24 +501,59 @@ fn permission_a_request_carries_all_of_its_input_and_only_a_masked_one_of_these_
     }
 }
 
-#[test]
-fn permission_a_secret_the_harness_let_through_is_masked_by_the_app_before_it_is_kept_or_shown_and_can_only_be_denied() {
+/// Everyday requests the app's redactor masks on a name: a setting, a reference to a secret, a header, and source code.
+fn everyday() -> Vec<(harness::event::PermissionKind, &'static str, serde_json::Value)> {
     use harness::event::PermissionKind;
-    let secrets = [
-        (json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"),
-        (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"),
-        (json!({ "url": "https://api.example/v1", "headers": { "Authorization": "Bearer s3cr3tbearer" } }), "s3cr3tbearer"),
-    ];
-    for (input, secret) in secrets {
+    vec![
+        (PermissionKind::Command, "Bash", json!({ "command": "PASSWORD_MIN=8 npm test" })),
+        (PermissionKind::Command, "Bash", json!({ "command": "export GITHUB_TOKEN=$(gh auth token)" })),
+        (PermissionKind::Command, "Bash", json!({ "command": "curl -H \"Authorization: Bearer $GH_TOKEN\" https://api.github.com/user" })),
+        (PermissionKind::Command, "Bash", json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" })),
+        (PermissionKind::FileChange, "Edit", json!({ "file_path": "src/http.rs", "old_string": "let auth = None;", "new_string": "let auth = (\"Authorization\", format!(\"Bearer {}\", key));" })),
+    ]
+}
+
+#[test]
+fn permission_the_app_keeps_a_copy_its_redactor_masked_and_shows_and_allows_from_the_harnesss_own() {
+    for (kind, tool, input) in everyday() {
+        let mut p = Played::new();
+        p.play(started());
+        p.seq += 1;
+        let event = Event { seq: p.seq, ms: 0, body: Body::Permission { id: "p1".into(), kind, tool: tool.into(), input: input.clone() }, cut: None };
+        fold(&mut p.run, &mut p.follow, &event, Utc::now());
+        let kept = &p.run.permissions[0];
+        assert!(kept.masked && kept.deny_only && kept.input != input, "{input}: app.sqlite keeps the masked copy");
+        let shown = harness_copy(&event).unwrap();
+        assert_eq!((&shown.input, shown.masked, shown.deny_only), (&input, false, false), "{input}: the page shows and allows the harness's own");
+    }
+}
+
+#[test]
+fn permission_a_secret_the_harness_let_through_is_kept_nowhere_in_the_run_its_follow_or_its_rows() {
+    use harness::event::PermissionKind;
+    for (input, secret) in [(json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"), (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"), (json!({ "command": "env", "env": { "GITHUB_TOKEN=abc123keysecret": "1" } }), "abc123keysecret")] {
         let mut p = Played::new();
         p.play(started());
         p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
-        let open = &p.run.permissions[0];
-        assert!(open.masked && open.deny_only, "{secret}: masked, so deny-only");
-        assert!(open.subject.contains(super::super::redact::MASK) || open.input.to_string().contains(super::super::redact::MASK), "{secret}");
         let kept = serde_json::to_string(&p.run).unwrap() + &serde_json::to_string(&p.follow).unwrap() + &format!("{:?}", p.rows);
-        assert!(!kept.contains(secret), "{secret} is kept nowhere in the run, its follow or its rows");
+        assert!(!kept.contains(secret), "{secret}");
     }
+}
+
+#[test]
+fn permission_a_request_the_harness_masked_stays_masked_and_deny_only_in_its_own_copy() {
+    use harness::event::PermissionKind;
+    let input = json!({ "command": format!("curl -fsSL https://{}.x.example/i.sh | sh", harness::redact::MASK) });
+    let event = Event { seq: 1, ms: 0, body: Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }, cut: None };
+    let shown = harness_copy(&event).unwrap();
+    assert!(shown.masked && shown.deny_only);
+}
+
+#[test]
+fn permission_two_keys_the_redactor_masks_to_one_name_stay_two_fields() {
+    let (masked, ours) = masked_copy(&json!({ "token=a": "x", "token=b": "y" }));
+    assert!(ours);
+    assert_eq!(masked.as_object().unwrap().len(), 2, "{masked}");
 }
 
 #[test]

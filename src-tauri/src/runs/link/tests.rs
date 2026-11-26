@@ -748,6 +748,39 @@ async fn permission_the_open_requests_are_the_same_after_a_reconnect_and_one_is_
 }
 
 #[tokio::test]
+async fn permission_after_a_restart_the_harnesss_own_copy_of_an_open_request_is_read_again_so_it_can_still_be_allowed() {
+    let input = serde_json::json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" });
+    let asked = serde_json::json!({ "permission": { "kind": "command", "tool": "Bash", "input": input } });
+    let script = PERMITS.replace(r#"{"permission": {"kind": "command", "tool": "Bash", "input": {"command": "git commit -m 'Blue button'"}}}"#, &asked.to_string());
+    let mut bed = Bed::new(&script).await;
+    let (run, session) = bed.started().await;
+    bed.until(&run, |r, _| r.state == RunState::NeedsPermission).await;
+    let dropped = std::mem::replace(&mut bed.link, link(&bed.rig, &Arc::new(Direct { dir: PathBuf::from("/nowhere"), token: Token::random() }), &bed.tickets));
+    drop(dropped);
+    // A restart: the app's memory goes, `app.sqlite` stays.
+    bed.rig.fx.core.forget_shown();
+    let before = bed.rig.fx.core.shown(bed.rig.get(&run).await).permissions[0].clone();
+    assert!(before.deny_only, "without the harness's copy, the masked one, deny-only");
+    bed.relink();
+    let core = bed.rig.fx.core.clone();
+    let id = before.id.clone();
+    let wait = async {
+        loop {
+            if core.holds_shown(&run.id, &id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), wait).await.expect("read again from the harness");
+    let after = core.shown(bed.rig.get(&run).await).permissions[0].clone();
+    assert_eq!((&after.input, after.masked, after.deny_only), (&input, false, false));
+    bed.link.permit(&session, &after.id, Decision::Allow).await.unwrap();
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.end().await;
+}
+
+#[tokio::test]
 async fn permission_a_run_saved_without_its_requests_reads_them_again_from_the_harness_when_the_link_follows_it() {
     let mut bed = Bed::new(PERMITS).await;
     let (run, session) = bed.started().await;

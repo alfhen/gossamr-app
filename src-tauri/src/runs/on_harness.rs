@@ -370,7 +370,8 @@ impl RunService {
         if decision == Decision::Other {
             return refuse("An answer is allow or deny.");
         }
-        let run = self.load(run_id).await?;
+        // Judged on what the page shows: the harness's own copy where the app holds it, else the app-masked one.
+        let run = self.core.shown(self.load(run_id).await?);
         let Some((link, session)) = self.on_harness_of(&run) else { return refuse("This run isn't on the harness: answer it in Terminal.") };
         if run.handed_over {
             return refuse(HANDED_OVER_PERMISSION);
@@ -400,7 +401,7 @@ impl RunService {
             return refuse(why);
         }
         match link.permit(session, request, decision).await {
-            Ok(()) => self.load(run_id).await,
+            Ok(()) => self.load(run_id).await.map(|run| self.core.shown(run)),
             Err(why) if why == super::link::NOT_OPEN || why == super::link::NOT_RUNNING_TO_ANSWER => refuse(&why),
             Err(why) => refuse(&format!("The harness didn't take your answer: {why}")),
         }

@@ -548,12 +548,27 @@ fn describe(name: &str, input: &Value) -> String {
     }
 }
 
-/// A permission request as the run keeps it. A kind this build does not know is still a request, one the person can
-/// only deny, as is one cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept.
-/// The app's own redactor runs over it first, so a secret the harness let through is neither kept nor shown; a request
-/// it masked anything in is masked, so deny-only. An allow sends the driver's own copy, so what runs is unchanged.
+/// A permission request as `app.sqlite` keeps it: with the app's own redactor run over it, so a secret the harness let
+/// through is never stored. It is masked, so deny-only, wherever that masked anything; the page shows and judges an allow
+/// on the harness's own copy (`harness_copy`) instead, held in memory, and falls back to this one only without it.
 fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool) -> PermissionRequest {
-    let (input, ours) = masked_copy(&input);
+    build(id, kind, tool, input, cut, true)
+}
+
+/// The harness's own copy of the permission request an event asks, masked only by the harness: what the page shows, and
+/// what an allow sends, since an allow sends the driver's own copy. A withheld one has no input to show.
+pub fn harness_copy(event: &Event) -> Option<PermissionRequest> {
+    match readable(&event.body)? {
+        Body::Permission { id, kind, tool, input } => Some(build(id, kind, tool, input, event.cut.is_some(), false)),
+        _ => None,
+    }
+}
+
+/// A permission request. A kind this build does not know is still a request, one the person can only deny, as is one
+/// cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept. `ours`: run the app's
+/// redactor over it too.
+fn build(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool, ours: bool) -> PermissionRequest {
+    let (input, ours) = if ours { masked_copy(&input) } else { (input, false) };
     let masked = ours || holds_mask(&input);
     let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input) || stacks_marks(&input);
     PermissionRequest { id, kind, tool, subject: subject(&input), input, masked, deny_only }
@@ -596,16 +611,22 @@ fn masked_copy(value: &Value) -> (Value, bool) {
         }
         Value::Object(fields) => {
             let mut masked = false;
-            let fields = fields
-                .iter()
-                .map(|(key, value)| {
-                    let name = redact(key);
-                    let (value, inner) = masked_copy(value);
-                    masked |= inner || name != *key;
-                    (name, value)
-                })
-                .collect();
-            (Value::Object(fields), masked)
+            let mut out = serde_json::Map::new();
+            for (key, value) in fields {
+                let mut name = redact(key);
+                masked |= name != *key;
+                // Two keys that mask to one name stay two fields, numbered as the harness numbers them.
+                let base = name.clone();
+                let mut n = 2;
+                while out.contains_key(&name) {
+                    name = format!("{base} {n}");
+                    n += 1;
+                }
+                let (value, inner) = masked_copy(value);
+                masked |= inner;
+                out.insert(name, value);
+            }
+            (Value::Object(out), masked)
         }
         other => (other.clone(), false),
     }
