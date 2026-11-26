@@ -565,3 +565,60 @@ fn a_command_that_only_quotes_git_commit_does_not_clear_a_refused_signature() {
     separated.play(started()).play([bash("t1", "git -C \"/work/a & b/repo\" commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
     assert_eq!(separated.run.state, RunState::Failed, "a quoted separator in the folder");
 }
+
+#[test]
+fn a_turn_the_agent_or_the_harness_ended_fails_and_says_why_while_a_shutdown_or_a_signal_stays_a_cut_to_carry_on() {
+    let cut = || Body::Failed { kind: FailKind::AgentStopped, reason: "the agent stopped in the middle of a turn: killed by SIGKILL".into() };
+    for by in [ClosedBy::Agent, ClosedBy::Harness] {
+        let mut p = Played::new();
+        p.play(started()).play([cut(), Body::Closed { by }]);
+        assert_eq!(p.run.state, RunState::Failed, "{by:?}");
+        assert_eq!((p.run.error.as_deref(), p.run.failure), (Some("the agent stopped in the middle of a turn: killed by SIGKILL"), Some(RunFailure::Other)), "{by:?}");
+        assert_eq!(p.follow.cut, None, "{by:?}: nothing to carry on");
+    }
+    for by in [ClosedBy::Shutdown, ClosedBy::Signal, ClosedBy::ClientLeft, ClosedBy::Unknown] {
+        let mut p = Played::new();
+        p.play(started()).play([cut(), Body::Closed { by }]);
+        assert_eq!((p.run.state, p.run.error.as_deref()), (RunState::Stopped, None), "{by:?}");
+        assert!(p.follow.cut.is_some(), "{by:?}: carry on may take it up");
+    }
+    for by in [ClosedBy::Stop, ClosedBy::HandOver] {
+        let mut p = Played::new();
+        p.play(started()).play([cut(), Body::Closed { by }]);
+        assert_eq!((p.run.state, p.follow.cut.as_deref()), (RunState::Stopped, None), "{by:?}: someone chose it, so it is not carried on");
+    }
+    let mut idle = Played::new();
+    idle.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }, Body::Closed { by: ClosedBy::Agent }]);
+    assert_eq!(idle.run.state, RunState::Done, "an agent that goes between turns cut nothing");
+    let mut asking = Played::new();
+    asking.play(started()).play([Body::Question { id: "q1".into(), text: "Which colour?".into() }, cut(), Body::Closed { by: ClosedBy::Agent }]);
+    assert_eq!(asking.run.state, RunState::NeedsAnswer, "its answer resumes it");
+}
+
+#[test]
+fn a_turn_cut_again_after_three_carry_ons_in_a_row_fails_and_one_that_ends_well_starts_the_count_again() {
+    let cut = || Body::Failed { kind: FailKind::AgentStopped, reason: "the agent stopped in the middle of a turn".into() };
+    let resumed = || [Body::Started { provider_session: "p".into(), resumed: true }, Body::Prompted { text: "carry on".into() }, Body::TurnStarted];
+    let mut p = Played::new();
+    p.play(started()).play([cut(), Body::Closed { by: ClosedBy::Shutdown }]);
+    for n in 1..=CARRY_ONS {
+        assert_eq!(p.run.state, RunState::Stopped, "after {} carry-ons", n - 1);
+        p.follow.carry_ons = n;
+        p.play(resumed()).play([cut(), Body::Closed { by: ClosedBy::Shutdown }]);
+    }
+    assert_eq!((p.run.state, p.run.error.as_deref(), p.follow.cut.as_deref()), (RunState::Failed, Some(CUT_AGAIN), None));
+    let mut well = Played::new();
+    well.follow.carry_ons = CARRY_ONS - 1;
+    well.play(started()).play([Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(well.follow.carry_ons, 0);
+    let mut lost = Played::new();
+    lost.play(started());
+    lost.follow.carry_ons = CARRY_ONS;
+    let rows = agent_lost(&mut lost.run, &mut lost.follow, Utc::now());
+    assert_eq!((lost.run.state, lost.run.error.as_deref()), (RunState::Failed, Some(CUT_AGAIN)), "a lost agent counts too");
+    assert_eq!(rows.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(), ["stop", "error"]);
+    let mut first = Played::new();
+    first.play(started());
+    agent_lost(&mut first.run, &mut first.follow, Utc::now());
+    assert_eq!((first.run.state, first.follow.cut.is_some()), (RunState::Stopped, true), "a first lost agent is a cut");
+}

@@ -734,7 +734,7 @@ async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_t
     assert_eq!(follow.carry_ons, 1);
     rig.fx.core.apply_session(&session, |_, f| {
         f.carry_ons = CARRY_ONS;
-        f.cut = true;
+        f.cut = Some(crate::runs::consumer::CUT.into());
         f.closed = true;
         Vec::new()
     }).await.unwrap();
@@ -763,7 +763,7 @@ async fn a_run_the_app_stopped_or_one_whose_question_is_open_is_not_carried_on()
         rig.set(run, |r| r.state = RunState::Stopped).await;
         let session = rig.get(run).await.harness_session.unwrap();
         rig.fx.core.apply_session(&session, |_, f| {
-            (f.cut, f.closed, f.ended) = (true, true, ended);
+            (f.cut, f.closed, f.ended) = (Some(crate::runs::consumer::CUT.into()), true, ended);
             if !question {
                 f.question = None;
             }

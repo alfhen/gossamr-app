@@ -72,8 +72,7 @@ fn plain_refusal(why: &str) -> String {
 pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it moved agents to the harness, before you answered its question, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 
-/// "Carry on" prompts sent in a row with no turn ending by itself between, past which a cut run waits for the person.
-pub const CARRY_ONS: u32 = 3;
+pub use super::consumer::CARRY_ONS;
 
 /// The prompt that takes up a turn a restart cut.
 pub const CARRY_ON: &str = "The harness restarted while you were working, so your last turn was cut short. Carry on where you left off.";
@@ -213,7 +212,7 @@ impl RunService {
         for run in runs {
             let Some(session) = run.harness_session.clone() else { continue };
             let Ok(Some((_, follow))) = self.core.session_run(&session).await else { continue };
-            if !follow.cut || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
+            if follow.cut.is_none() || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
                 continue;
             }
             let said = match on.link.carry_on(&session, CARRY_ON).await {

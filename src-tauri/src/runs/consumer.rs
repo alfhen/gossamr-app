@@ -5,7 +5,7 @@
 //! the session was followed (`Db::apply_session`), so an event is applied once, and one already applied is passed over.
 
 use chrono::{DateTime, Utc};
-use harness::event::{Body, Decision, Event, FailKind, PermissionKind, QuestionEnd, TurnEnd, PRIVATE_FIELDS};
+use harness::event::{Body, ClosedBy, Decision, Event, FailKind, PermissionKind, QuestionEnd, TurnEnd, PRIVATE_FIELDS};
 use serde_json::Value;
 
 use super::redact::redact;
@@ -27,6 +27,9 @@ pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its sessio
 pub const SIGNING_NEEDS_YOU_CLOSED: &str = "A commit needs your signing agent, which refused it, and the run's session has since ended: unlock it (for example 1Password), then ask Pip to start it again.";
 pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
+pub const CUT_AGAIN: &str = "Its turn was cut short again after Gossamr carried on three times in a row. Message the agent to start it again.";
+/// How many times in a row the app carries a cut run on, with no turn ending by itself between.
+pub const CARRY_ONS: u32 = 3;
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
 
 /// Applies `event` to `run` and `follow`, and returns the timeline rows it adds. An event the app already applied
@@ -84,7 +87,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::TurnStarted => {
             follow.in_turn = true;
-            follow.cut = false;
+            follow.cut = None;
             reopen(run);
             if run.last_detail.as_deref() == Some(SLOT_WAIT) {
                 run.last_detail = None;
@@ -221,7 +224,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // an open question stays for after a resume.
         Body::Failed { kind: FailKind::AgentStopped, reason } => {
             follow.in_turn = false;
-            follow.cut = true;
+            follow.cut = Some(reason.clone());
             follow.permissions.clear();
             follow.calls.clear();
             run.state = RunState::Stopped;
@@ -250,11 +253,25 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         // The session's task ended. Only after a stop the app asked for is that the end: a shutdown or a hand-over
         // can be resumed, and its question stays until a `question_closed`.
-        // Who closed it (`by`) is read in H10c-2.
-        Body::Closed { .. } => {
+        Body::Closed { by } => {
             // A message can no longer reach it, so the way out its failure names is the one that still works.
             if run.failure == Some(RunFailure::SigningNeedsYou) {
                 run.error = Some(SIGNING_NEEDS_YOU_CLOSED.into());
+            }
+            match (by, follow.cut.take()) {
+                // A Stop or a hand-over from elsewhere is someone's choice, which "carry on" must not undo.
+                (ClosedBy::Stop | ClosedBy::HandOver, _) | (_, None) => {}
+                // The agent's own end (a crash, a kill from outside) or the harness giving up on it: a failure the
+                // person hears of, named as its `failed` named it. One waiting on a question is resumed by the answer.
+                (ClosedBy::Agent | ClosedBy::Harness, Some(reason)) => {
+                    if follow.question.is_none() {
+                        fail_cut(run, &mut rows, &reason);
+                    }
+                }
+                (_, Some(reason)) => {
+                    follow.cut = Some(reason);
+                    cut_again(run, follow, &mut rows);
+                }
             }
             follow.closed = true;
             follow.ended = follow.stop_asked;
@@ -296,25 +313,44 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
 pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>) -> Vec<RunEvent> {
     follow.in_turn = false;
     follow.closed = true;
+    follow.cut = Some(AGENT_LOST.into());
     follow.permissions.clear();
     follow.calls.clear();
     run.state = RunState::Stopped;
     run.last_detail = Some(AGENT_LOST.into());
     run.ended_at = Some(now);
-    // A Stop that found the agent lost is the person's end of the run: nothing is left to answer.
+    let mut rows = Rows { run_id: run.id.clone(), at: now, rows: Vec::new() };
+    rows.add("stop", AGENT_LOST, None);
+    // A Stop that found the agent lost is the person's end of the run: nothing is left to answer or carry on.
     if follow.stop_asked {
         follow.ended = true;
+        follow.cut = None;
         follow.question = None;
         follow.asked = None;
         drop_answer(run, follow);
+    } else {
+        cut_again(run, follow, &mut rows);
     }
     settle(run, follow);
     run.asking = run.state == RunState::NeedsAnswer;
     run.needs = (run.state == RunState::NeedsAnswer).then(|| follow.asked.clone()).flatten();
     run.last_progress_at = now;
-    let mut rows = Rows { run_id: run.id.clone(), at: now, rows: Vec::new() };
-    rows.add("stop", AGENT_LOST, None);
     rows.rows
+}
+
+/// A cut after `CARRY_ONS` carry-ons in a row is not carried on again: it fails, so the person hears of it.
+fn cut_again(run: &mut Run, follow: &mut SessionFollow, rows: &mut Rows) {
+    if follow.carry_ons >= CARRY_ONS && follow.question.is_none() {
+        follow.cut = None;
+        fail_cut(run, rows, CUT_AGAIN);
+    }
+}
+
+fn fail_cut(run: &mut Run, rows: &mut Rows, reason: &str) {
+    run.state = RunState::Failed;
+    run.error = Some(cut(&redact(reason), DETAIL_KEPT));
+    run.failure = Some(RunFailure::Other);
+    rows.add("error", reason, None);
 }
 
 /// Notes, once, that the session's events after what the app applied and up to `last` were lost, and reads on after
