@@ -186,7 +186,7 @@ pub enum Op {
     /// reason: a session cleaned up, one that ended with its client, one marked as one that cannot be resumed, one
     /// handed over and not taken back, one whose worktree another session holds, one given up on because its agent or
     /// a process it started may still run (each resume checks that agent again, and frees the session once it is gone;
-    /// the reason names its process group), and every session while the harness could not check for agents an earlier harness left running
+    /// the reason names its process group, why, and what to do, and is the row's `given_up`), and every session while the harness could not check for agents an earlier harness left running
     /// (each resume checks again, and the reason is the rows' `held`); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
     /// cancelled turn or open permission request forbids it. A cancel forbids it because "carry on" would undo it;
     /// the next turn lifts each mark.
@@ -197,7 +197,7 @@ pub enum Op {
     },
     /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
     /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
-    /// over is refused: resume it. Refused, as `resume` is, while the rows say `held`.
+    /// over is refused: resume it. Refused, as `resume` is, while the rows say `held` or the row says `given_up`.
     TakeBack { session: String },
     /// Refused while the session runs, and for one given up on, whose agent may still work in its worktree: checked
     /// again first, as `resume` does.
@@ -205,7 +205,11 @@ pub enum Op {
     /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
     /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.
     /// A row's `held`, left out when there is none, says why no session may be resumed now: the harness could not check
-    /// for agents an earlier harness left running, so one may still run. It is the text `resume` refuses with.
+    /// for agents an earlier harness left running, so one may still run. It is the text `resume` refuses with. A row's
+    /// `given_up`, left out when there is none, says why this session is not resumed, taken back or cleaned up: its
+    /// agent or a process it started may still run, and why the harness could not stop it (a shutdown that stopped
+    /// waiting, a group it may not signal, a process in it that works outside the worktree...), and what to do. It
+    /// is the text `resume` refuses with; each of those calls checks again first.
     Sessions,
     /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
     /// (`providers::Standing`): the usual setup of every provider of the table, then each of `logins`. A login is

@@ -72,7 +72,7 @@ fn left_in_folder(dir: &Path, agent: Option<&Process>, folder: &Path) {
     let store = opened(dir);
     store.create_session("s", "mock", false, folder, None).unwrap();
     store.set_agent("s", agent).unwrap();
-    store.set_given_up("s").unwrap();
+    store.set_given_up("s", "a shutdown stopped waiting for it").unwrap();
 }
 
 /// Changes the store's file as only a test may.
@@ -104,7 +104,7 @@ fn ended_by_the_next_harness(said: &[harness::event::Body], how: &str) -> bool {
 fn row(harness: Harness, dir: &Path) -> (bool, Vec<(String, Process)>) {
     drop(harness);
     let store = opened(dir);
-    (store.session("s").unwrap().given_up, store.agents().unwrap())
+    (store.session("s").unwrap().given_up.is_some(), store.agents().unwrap())
 }
 
 #[test]
@@ -392,9 +392,13 @@ async fn leftover_kept_is_checked_again_on_a_resume_and_freed_once_what_held_it_
     let (leader, work) = a_leader_gone_with_its_work_left(&elsewhere);
     left_in(&dir, Some(&leader), &worktree(&dir));
     let harness = started_harness(&dir);
-    for refused in [harness.resume("s").await.err(), harness.clean_up("s").await.err()] {
+    // What holds it and what to do, on its row and in each refusal; no shutdown is named, as none happened.
+    let holds = format!("may still run (its process group is {}; a process in its group works outside the session's worktree)", leader.pid);
+    let listed = harness.sessions().unwrap()[0].given_up.clone().unwrap_or_default();
+    assert!(listed.contains(&holds) && listed.ends_with("so it is not resumed: end it, then try again"), "{listed}");
+    for refused in [harness.resume("s").await.err(), harness.take_back("s").await.err(), harness.clean_up("s").await.err()] {
         let refused = refused.map(|e| e.to_string()).unwrap_or_default();
-        assert!(refused.contains(&format!("may still run (its process group is {})", leader.pid)) && refused.ends_with("end it, then try again"), "{refused}");
+        assert!(refused.contains(&holds) && refused.ends_with("end it, then try again"), "{refused}");
     }
     assert!(process::alive(&work), "checked again, still not the harness's to kill");
     kill(&work);
@@ -403,6 +407,7 @@ async fn leftover_kept_is_checked_again_on_a_resume_and_freed_once_what_held_it_
     }
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
     assert!(!refused.contains("may still run"), "freed in this harness: {refused}");
+    assert_eq!(harness.sessions().unwrap()[0].given_up, None);
     assert_eq!(row(harness, &dir), (false, vec![]));
 }
 
@@ -527,4 +532,52 @@ async fn leftover_retried_after_a_record_could_not_be_read_never_touches_an_agen
         let _ = child.kill();
         child.wait().unwrap();
     }
+}
+
+#[tokio::test]
+async fn leftover_retried_after_the_records_could_not_be_listed_never_touches_an_agent_this_harness_started() {
+    let (_tmp, dir) = data_dir();
+    let (old_child, old) = agent();
+    left_by_a_crash(&dir, &old);
+    // An id the store cannot read back as text, so not even which sessions have a record can be listed.
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET id = CAST(id AS BLOB) WHERE id = 's'", []).unwrap();
+    let sleeper = Sleeper::default();
+    let harness = Harness::new(opened(&dir), vec![("sleeper".into(), Arc::new(sleeper.clone()))], settings(4));
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("the store could not list them"), "held: {refused}");
+    let (id, mut events) = harness.open(Open { provider: "sleeper".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+    events.recv().await.unwrap();
+    raw.execute("UPDATE sessions SET id = CAST(id AS TEXT) WHERE typeof(id) = 'blob'", []).unwrap();
+    let _ = harness.resume("s").await;
+    assert_eq!(ended(old_child), Some(libc::SIGKILL), "the leftover was stopped by that retry");
+    let running = sleeper.children.lock().unwrap()[0].try_wait().unwrap().is_none();
+    assert!(running, "the agent this harness started runs on, though it now has a record too");
+    harness.close(&id).unwrap();
+    while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::Closed { .. })) {}
+    for mut child in sleeper.children.lock().unwrap().drain(..) {
+        let _ = child.kill();
+        child.wait().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn leftover_retried_under_the_locks_waits_for_no_kill_and_says_it_had_not_ended() {
+    let (_tmp, dir) = data_dir();
+    let (mut child, agent) = agent();
+    left_by_a_crash(&dir, &agent);
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET agent_pid = -1 WHERE id = 's'", []).unwrap();
+    let harness = started_harness(&dir);
+    raw.execute("UPDATE sessions SET agent_pid = ?1 WHERE id = 's'", [agent.pid]).unwrap();
+    // A kill that never lands: a start's wait for it is 2 s, and this retry holds every session's locks.
+    process::seam::swallow_group_kills(agent.pid);
+    let begun = std::time::Instant::now();
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    let took = begun.elapsed();
+    assert!(took < Duration::from_secs(1), "the retry waited {took:?}");
+    assert!(refused.contains("it was sent a kill and had not ended when last checked") && refused.ends_with("end it, then try again"), "{refused}");
+    assert!(running(&mut child));
+    child.kill().unwrap();
+    child.wait().unwrap();
 }

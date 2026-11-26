@@ -153,8 +153,8 @@ pub enum Left {
     Ours(Vec<Process>),
     /// A listing that proves nothing, or a member that may not be the agent's: one that started before the leader, works
     /// outside its folder, or cannot be read. The leader's pid can lead another group by now, such as a pipeline whose
-    /// first command exited, and what this would kill is the person's own.
-    Unknown,
+    /// first command exited, and what this would kill is the person's own. With which of these it is.
+    Unknown(&'static str),
 }
 
 /// What runs on in the group `leader` led, once it is gone, where the agent worked in `worktree`, a repository's
@@ -167,7 +167,7 @@ pub fn left_of(leader: &Process, worktree: Option<&std::path::Path>) -> Left {
     #[cfg(not(any(test, feature = "testing")))]
     let listing = members_left(group);
     let pids = match listing {
-        Listing::Full => return Left::Unknown,
+        Listing::Full => return Left::Unknown("its process group could not be listed in full"),
         Listing::Nothing => return Left::Nothing,
         Listing::Members(pids) => pids,
     };
@@ -175,7 +175,7 @@ pub fn left_of(leader: &Process, worktree: Option<&std::path::Path>) -> Left {
     let mut ours = vec![];
     for pid in pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()) {
         match started_of(pid) {
-            None if refuses_signals(pid) => return Left::Unknown,
+            None if refuses_signals(pid) => return Left::Unknown("a process in its group may not be signalled by the harness"),
             // A zombie, or reaped since the listing.
             None => {}
             // The leader's pid is another process's: no pid is given out while it names a group that has members, so
@@ -184,7 +184,9 @@ pub fn left_of(leader: &Process, worktree: Option<&std::path::Path>) -> Left {
             Some(started) if started >= leader.started && cwd_of(pid).zip(within.as_ref()).is_some_and(|(cwd, within)| cwd.starts_with(within)) => {
                 ours.push(Process { pid, started })
             }
-            Some(_) => return Left::Unknown,
+            Some(started) if started < leader.started => return Left::Unknown("a process in its group started before the agent"),
+            Some(_) if worktree.is_none() => return Left::Unknown("its session names no repo, so no process in its group can be told for the agent's"),
+            Some(_) => return Left::Unknown("a process in its group works outside the session's worktree"),
         }
     }
     if ours.is_empty() { Left::Nothing } else { Left::Ours(ours) }
