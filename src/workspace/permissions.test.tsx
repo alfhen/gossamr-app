@@ -70,7 +70,8 @@ describe("a permission request's item", () => {
   });
 
   it("never offers Allow where the input isn't all on screen, even unmarked", () => {
-    for (const over of [{ masked: true }, { input: null }, { input: '{"command":"ls' }]) expect(buttons(item(request(over))).map((b) => b.text)).not.toContain("Allow");
+    // As `answer_permission` refuses: an input that isn't a JSON object, such as a list, is not offered Allow either.
+    for (const over of [{ masked: true }, { input: null }, { input: '{"command":"ls' }, { input: ["ls"] }]) expect(buttons(item(request(over))).map((b) => b.text)).not.toContain("Allow");
   });
 
   it("shows every field an allow passes, beside the heading, for each kind the agents ask", () => {

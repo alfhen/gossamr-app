@@ -19,7 +19,7 @@ export const PERMISSIONS_WARNING = "Allowing this gives the agent more access th
  * Whether Allow may be offered: only where every field of the input is on screen, so never for a request that is masked,
  * cut (its input is text), rebuilt with no input, or that the app marks deny-only.
  */
-export const canAllow = (request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">) => !request.denyOnly && !request.masked && request.input != null && typeof request.input === "object";
+export const canAllow = (request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">) => !request.denyOnly && !request.masked && request.input != null && typeof request.input === "object" && !Array.isArray(request.input);
 
 /** Why a request has no Allow, or null when it has one: the app's own refusal of an Allow, in runs/on_harness.rs. */
 export function denyOnlyWhy(request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">): string | null {
