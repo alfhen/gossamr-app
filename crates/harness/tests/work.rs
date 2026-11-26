@@ -697,3 +697,18 @@ async fn an_upstream_on_another_remote_is_not_trusted() {
     assert!(matches!(&kept, Err(Error::Said(why)) if why.contains("not fully merged")), "only origin's refs count");
     assert!(rig.worktree("elsewhere").join("elsewhere").exists());
 }
+
+#[tokio::test]
+async fn work_a_work_home_moves_the_clones_and_worktrees_and_leaves_the_home_folder_as_it_is() {
+    let rig = Rig::new();
+    let elsewhere = rig.tmp.path().canonicalize().unwrap().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let setup = rig.setup().with_work_home(Some(elsewhere.clone()));
+    assert_eq!(setup.home(), Some(rig.home.as_path()), "the home a login folder's ~ and the CLIs are found by");
+    let (work, worktree, _) = setup.prepare("acme/webshop", None, "moved-1").await.unwrap();
+    assert_eq!(work.clone, elsewhere.join("Gossamr/agents/acme/webshop"));
+    assert_eq!(worktree, elsewhere.join("Gossamr/agents/acme/webshop+worktrees/moved-1"));
+    assert!(!rig.clone().exists(), "nothing in the home folder's work root");
+    let (_, unmoved, _) = rig.setup().with_work_home(None).prepare("acme/webshop", None, "here-1").await.unwrap();
+    assert_eq!(unmoved, rig.worktree("here-1"), "with none, the work root is the home folder's");
+}

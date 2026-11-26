@@ -37,6 +37,8 @@ pub mod trust;
 pub use harness::{ask, binary, codex_models, env, fresh, provider_env, provider_folder, repo};
 
 #[cfg(test)]
+mod harness_real_tests;
+#[cfg(test)]
 mod real_tests;
 #[cfg(test)]
 pub(crate) mod rig;

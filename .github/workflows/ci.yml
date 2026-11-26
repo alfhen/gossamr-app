@@ -50,6 +50,12 @@ jobs:
           if grep -q GOSSAMR_TEST_VAULT "$RUNNER_TEMP/release-strings.txt"; then echo "the release build holds the test vault"; exit 1; fi
           if grep -q GOSSAMR_MOCK_SCRIPT "$RUNNER_TEMP/release-strings.txt"; then echo "the release build holds the mock switch"; exit 1; fi
           if grep -q GOSSAMR_APP_DATA "$RUNNER_TEMP/release-strings.txt"; then echo "the release build holds the app data switch"; exit 1; fi
+          # The harness's work-root switch (HARNESS_WORK_HOME) is debug-only too.
+          cargo build -p harness --release
+          strings -a target/release/harness > "$RUNNER_TEMP/harness-strings.txt"
+          test -s "$RUNNER_TEMP/harness-strings.txt"
+          grep -q 'harness' "$RUNNER_TEMP/harness-strings.txt"
+          if grep -q HARNESS_WORK_HOME "$RUNNER_TEMP/harness-strings.txt"; then echo "the release harness holds the work-root switch"; exit 1; fi
 
   # The harness has to build and pass on Linux, where it will also run. It needs neither the app nor dist/.
   harness-linux:
