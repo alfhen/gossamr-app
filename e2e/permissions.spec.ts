@@ -4,6 +4,9 @@ import { agentsHome, expandNeedsYou, mockPermissionAnswers, openNeedRow, mockRun
 /** The mock's long command on CA-407, `LONG_COMMAND` in src/backend/mockRuns.ts. */
 const LONG_COMMAND = 'pnpm vitest run src/campaigns/sendTime.test.ts src/campaigns/schedule.test.ts --reporter=verbose && git add src/campaigns/sendTime.ts src/campaigns/sendTime.test.ts && git commit -m "Pick each campaign\'s send time from the last 30 days of opens"';
 
+/** A real press: the button is held for a moment, as a hand holds it, so a click lost while pressed fails a test. */
+const PRESS = { delay: 80 };
+
 const card = (page: Page, key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
 const requestsOn = (page: Page, key: string) => card(page, key).locator("[data-permission-request]");
 /** Brings a request on screen, as a person scrolls to it: its Allow wakes only once all of it has been seen. */
@@ -11,10 +14,21 @@ const inView = (ask: Locator) => ask.scrollIntoViewIfNeeded();
 /** The value shown under the input field named `name`. */
 const field = (scope: Locator, name: string) => scope.locator("[data-input-field]").filter({ has: scope.page().locator("dt", { hasText: new RegExp(`^${name.replace(/[[\].*+?^${}()|\\]/g, "\\$&")}$`) }) }).locator("dd");
 const runId = async (page: Page, key: string) => (await mockRuns(page)).filter((r) => r.key === key).slice(-1)[0].id;
+const answers = async (page: Page) => (await mockPermissionAnswers(page)).map((a) => [a.request, a.decision]);
+const centre = (box: { x: number; y: number; width: number; height: number }) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
+/** Presses the middle of `box` where the pointer is put, held for a moment. */
+const pressAt = (page: Page, box: { x: number; y: number; width: number; height: number }) => page.mouse.click(centre(box).x, centre(box).y, PRESS);
+/** Takes the pointer off every request, so an answered one gives up the place it kept. */
+async function away(page: Page) {
+  await page.mouse.move(2, 2);
+  await expect(agentsHome(page).locator("[data-permission-closed]")).toHaveCount(0);
+}
 
 test.beforeEach(async ({ page }) => {
   await openApp(page, "runs=permissions");
   await openAgents(page);
+  // A real pointer has been somewhere on the page before it reaches a button.
+  await page.mouse.move(2, 2);
 });
 
 test("a command the agent asks to run shows whole on its card with Allow and Deny, and Allow lets it go on", async ({ page }) => {
@@ -25,20 +39,37 @@ test("a command the agent asks to run shows whole on its card with Allow and Den
   await expect(field(ask, "dangerouslyDisableSandbox")).toHaveText("true");
   await expect(ask.getByRole("button", { name: "Deny" })).toBeVisible();
   await inView(ask);
-  await ask.getByRole("button", { name: "Allow" }).click();
+  await ask.getByRole("button", { name: "Allow" }).click(PRESS);
   await expect(requestsOn(page, "CA-407")).toHaveCount(0);
-  await expect(card(page, "CA-407")).toContainText("Allowed Bash");
   expect(await mockPermissionAnswers(page)).toEqual([{ run: await runId(page, "CA-407"), request: "perm-1", decision: "allow" }]);
+  await away(page);
+  await expect(card(page, "CA-407")).toContainText("Allowed Bash");
+});
+
+test("a real press on Allow and on Deny, held a quarter of a second, answers each", async ({ page }) => {
+  const asks = requestsOn(page, "WEB-100");
+  await inView(asks.first());
+  await asks.first().getByRole("button", { name: "Deny" }).click({ delay: 250 });
+  await expect(asks).toHaveCount(1);
+  await away(page);
+  await inView(asks);
+  await asks.getByRole("button", { name: "Allow" }).click({ delay: 250 });
+  await expect(asks).toHaveCount(0);
+  expect(await answers(page)).toEqual([
+    ["perm-2", "deny"],
+    ["perm-3", "allow"],
+  ]);
 });
 
 test("two open requests are two items, each answered on its own, and the run waits until the last", async ({ page }) => {
   await expect(requestsOn(page, "WEB-100")).toHaveCount(2);
-  await requestsOn(page, "WEB-100").first().getByRole("button", { name: "Deny" }).click();
+  await requestsOn(page, "WEB-100").first().getByRole("button", { name: "Deny" }).click(PRESS);
   await expect(requestsOn(page, "WEB-100")).toHaveCount(1);
   await expect(requestsOn(page, "WEB-100")).toContainText("git push origin web-100-page-speed-2a3b");
-  expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-2", "deny"]]);
+  expect(await answers(page)).toEqual([["perm-2", "deny"]]);
+  await away(page);
   await inView(requestsOn(page, "WEB-100"));
-  await requestsOn(page, "WEB-100").getByRole("button", { name: "Allow" }).click();
+  await requestsOn(page, "WEB-100").getByRole("button", { name: "Allow" }).click(PRESS);
   await expect(requestsOn(page, "WEB-100")).toHaveCount(0);
 });
 
@@ -70,16 +101,40 @@ test("a masked request and one rebuilt after the harness lost it offer only Deny
   await expect(rebuilt.getByRole("button", { name: "Allow" })).toHaveCount(0);
 });
 
-test("after an answered request leaves, the one that moves up waits a moment before it can be answered, and a double-click answers one", async ({ page }) => {
+test("an answered request keeps its place under the pointer, saying what you did, until the pointer leaves it", async ({ page }) => {
+  const a = requestsOn(page, "CA-406");
+  const bAllow = requestsOn(page, "WEB-107").getByRole("button", { name: "Allow" });
+  await inView(a);
+  const before = (await bAllow.boundingBox())!;
+  await a.getByRole("button", { name: "Allow" }).click(PRESS);
+  const kept = card(page, "CA-406").locator("[data-permission-closed]");
+  await expect(kept).toHaveText("You allowed this.");
+  await page.waitForTimeout(300);
+  expect((await bAllow.boundingBox())!.y, "the next card stays where it was").toBe(before.y);
+  await page.mouse.move(2, 2);
+  await expect(kept).toHaveCount(0);
+  await expect.poll(async () => (await bAllow.boundingBox())!.y).toBeLessThan(before.y);
+});
+
+test("a request withdrawn under the pointer keeps its place too, and says it closed", async ({ page }) => {
+  const first = requestsOn(page, "WEB-100").first();
+  await inView(first);
+  await first.hover();
+  await mockWithdrawPermission(page, await runId(page, "WEB-100"), "perm-2");
+  await expect(card(page, "WEB-100").locator("[data-permission-closed]")).toHaveText("This request closed.");
+  await away(page);
+  await expect(requestsOn(page, "WEB-100")).toHaveCount(1);
+});
+
+test("after an answer, the run's other request waits a moment before it can be answered, and a double click answers one", async ({ page }) => {
   await expect(requestsOn(page, "WEB-100")).toHaveCount(2);
   await inView(requestsOn(page, "WEB-100").first());
-  await requestsOn(page, "WEB-100").first().getByRole("button", { name: "Allow" }).dblclick();
+  await requestsOn(page, "WEB-100").first().getByRole("button", { name: "Allow" }).dblclick(PRESS);
   await expect(requestsOn(page, "WEB-100")).toHaveCount(1);
   const next = requestsOn(page, "WEB-100");
   await expect(next.getByRole("button", { name: "Allow" })).toBeDisabled({ timeout: 400 });
-  await expect(next.getByRole("button", { name: "Deny" })).toBeDisabled({ timeout: 400 });
   await expect(next.getByRole("button", { name: "Allow" })).toBeEnabled();
-  expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-2", "allow"]]);
+  expect(await answers(page)).toEqual([["perm-2", "allow"]]);
   await expect(next).toContainText("git push origin web-100-page-speed-2a3b");
 });
 
@@ -112,61 +167,149 @@ test("a double click on the first of two requests of the same height answers onl
   const asks = requestsOn(page, "SUP-15");
   await expect(asks).toHaveCount(2);
   await inView(asks.first());
-  await asks.first().getByRole("button", { name: "Allow" }).dblclick();
+  await asks.first().getByRole("button", { name: "Allow" }).dblclick(PRESS);
   await expect(asks).toHaveCount(1);
   await page.waitForTimeout(800);
-  expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-12", "allow"]]);
+  expect(await answers(page)).toEqual([["perm-12", "allow"]]);
   await expect(asks).toContainText("git push --force origin main");
 });
 
-test("a second click 250 ms later at the same spot answers nothing more, though the next request moved under it", async ({ page }) => {
+test("a second click 250 ms later at the same spot answers nothing more", async ({ page }) => {
   const asks = requestsOn(page, "SUP-15");
   const allow = asks.first().getByRole("button", { name: "Allow" });
-  await allow.scrollIntoViewIfNeeded();
+  await inView(asks.first());
   await expect(allow).toBeEnabled();
   const at = (await allow.boundingBox())!;
-  await page.mouse.click(at.x + at.width / 2, at.y + at.height / 2);
+  await pressAt(page, at);
   await page.waitForTimeout(250);
-  await page.mouse.click(at.x + at.width / 2, at.y + at.height / 2);
+  await pressAt(page, at);
   await expect(asks).toHaveCount(1);
   await page.waitForTimeout(800);
   expect((await mockPermissionAnswers(page)).map((a) => a.request)).toEqual(["perm-12"]);
 });
 
-/** Clicks the middle of `box`, as a pointer that stays where it is. */
-const clickAt = (page: Page, box: { x: number; y: number; width: number; height: number }) => page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-
-test("a double click on one run's Allow answers only that run, though the next card's Allow moves under the pointer", async ({ page }) => {
+test("a double click on one run's Allow answers only that run, and the next card doesn't move under the pointer", async ({ page }) => {
   const a = requestsOn(page, "CA-406");
   const b = requestsOn(page, "WEB-107");
-  await a.getByRole("button", { name: "Allow" }).scrollIntoViewIfNeeded();
+  await inView(a);
   await expect(a.getByRole("button", { name: "Allow" })).toBeEnabled();
   const at = (await a.getByRole("button", { name: "Allow" }).boundingBox())!;
-  await page.mouse.dblclick(at.x + at.width / 2, at.y + at.height / 2);
+  const bBefore = (await b.getByRole("button", { name: "Allow" }).boundingBox())!;
+  await page.mouse.dblclick(centre(at).x, centre(at).y, PRESS);
   await expect(a).toHaveCount(0);
-  // The heights that make this a probe: the other run's Allow is now where the pointer is.
-  const under = (await b.getByRole("button", { name: "Allow" }).boundingBox())!;
-  expect(at.y + at.height / 2).toBeGreaterThanOrEqual(under.y);
-  expect(at.y + at.height / 2).toBeLessThanOrEqual(under.y + under.height);
   await page.waitForTimeout(800);
+  expect((await b.getByRole("button", { name: "Allow" }).boundingBox())!.y).toBe(bBefore.y);
   expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-15"]);
   await expect(b).toContainText("git push --force origin main");
 });
 
 for (const gap of [150, 300, 450]) {
-  test(`two clicks ${gap} ms apart on one run's Allow answer only that run, though the next card moved under the pointer`, async ({ page }) => {
+  test(`two clicks ${gap} ms apart on one run's Allow answer only that run`, async ({ page }) => {
     const allow = requestsOn(page, "CA-406").getByRole("button", { name: "Allow" });
-    await allow.scrollIntoViewIfNeeded();
+    await inView(requestsOn(page, "CA-406"));
     await expect(allow).toBeEnabled();
     const at = (await allow.boundingBox())!;
-    await clickAt(page, at);
+    await pressAt(page, at);
     await page.waitForTimeout(gap);
-    await clickAt(page, at);
+    await pressAt(page, at);
     await page.waitForTimeout(800);
     expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-15"]);
     await expect(requestsOn(page, "WEB-107")).toContainText("git push --force origin main");
   });
 }
+
+/** The verifier's wobbles: a small move of a resting hand is not a fresh aim. */
+const WOBBLES: [string, (page: Page, at: { x: number; y: number }) => Promise<void>][] = [
+  [
+    "a double click, a 5 px wobble and one more click a second later",
+    async (page, at) => {
+      await page.mouse.dblclick(at.x, at.y, PRESS);
+      await page.mouse.move(at.x + 5, at.y);
+      await page.waitForTimeout(1000);
+      await page.mouse.click(at.x + 5, at.y, PRESS);
+    },
+  ],
+  [
+    "two clicks 700 ms and 5 px apart",
+    async (page, at) => {
+      await page.mouse.click(at.x, at.y, PRESS);
+      await page.waitForTimeout(700);
+      await page.mouse.click(at.x + 5, at.y, PRESS);
+    },
+  ],
+  [
+    "a click, a 6 px drift and another click",
+    async (page, at) => {
+      await page.mouse.click(at.x, at.y, PRESS);
+      for (let i = 1; i <= 6; i++) await page.mouse.move(at.x, at.y + i);
+      await page.waitForTimeout(600);
+      await page.mouse.click(at.x, at.y + 6, PRESS);
+    },
+  ],
+];
+
+for (const [name, wobble] of WOBBLES) {
+  test(`a wobble is not a fresh aim: ${name} allows only the first run`, async ({ page }) => {
+    const allow = requestsOn(page, "CA-406").getByRole("button", { name: "Allow" });
+    await inView(requestsOn(page, "CA-406"));
+    await expect(allow).toBeEnabled();
+    await wobble(page, centre((await allow.boundingBox())!));
+    await page.waitForTimeout(800);
+    expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-15"]);
+  });
+}
+
+test("an Allow the pointer rested on through an answer elsewhere counts only once the pointer has left it and come back", async ({ page }) => {
+  const a = requestsOn(page, "CA-406");
+  const allow = a.getByRole("button", { name: "Allow" });
+  // Focus the Deny in the card below first: focusing scrolls, and the pointer must rest where the Allow then is.
+  const deny = requestsOn(page, "WEB-107").getByRole("button", { name: "Deny" });
+  await expect(deny).toBeEnabled();
+  await deny.focus();
+  // Back in view, out from under the screen's header; focus stays on the Deny.
+  await inView(a);
+  await expect(allow).toBeEnabled();
+  await expect(deny).toBeFocused();
+  const at = centre((await allow.boundingBox())!);
+  await page.mouse.move(at.x, at.y);
+  // An answer by key in the card below, while the pointer rests on this Allow.
+  await page.keyboard.press("Enter");
+  await expect(requestsOn(page, "WEB-107")).toHaveCount(0);
+  await page.waitForTimeout(700);
+  // A wobble inside the button is not leaving it.
+  await page.mouse.move(at.x + 3, at.y + 2);
+  await page.mouse.down();
+  await page.waitForTimeout(80);
+  await page.mouse.up();
+  await expect(a).toContainText("Not allowed yet: point at Allow again and click it.");
+  expect(await answers(page)).toEqual([["perm-16", "deny"]]);
+  // Off it and back on, it counts.
+  await page.mouse.move(at.x, at.y - 60);
+  await page.mouse.click(at.x, at.y, PRESS);
+  await expect(requestsOn(page, "CA-406")).toHaveCount(0);
+  expect(await answers(page)).toEqual([
+    ["perm-16", "deny"],
+    ["perm-15", "allow"],
+  ]);
+});
+
+test("Space and Enter on an Allow reached by Tab answer it", async ({ page }) => {
+  for (const [key, run, request] of [
+    ["Space", "CA-407", "perm-1"],
+    ["Enter", "CA-405", "perm-8"],
+  ] as const) {
+    const ask = requestsOn(page, run);
+    const allow = ask.getByRole("button", { name: "Allow" });
+    await inView(ask);
+    await expect(allow).toBeEnabled();
+    await ask.locator("[data-permission-heading]").focus();
+    await page.keyboard.press("Tab");
+    await expect(allow).toBeFocused();
+    await page.keyboard.press(key);
+    await expect(requestsOn(page, run)).toHaveCount(0);
+    expect((await mockPermissionAnswers(page)).slice(-1)[0]).toMatchObject({ request, decision: "allow" });
+  }
+});
 
 test("what follows a run of blank lines, and a field after a long value, are in sight above Allow with nothing scrolling them away", async ({ page }) => {
   const ask = requestsOn(page, "WEB-106");
@@ -195,7 +338,7 @@ test("after a keyboard answer the keyboard goes to the next request's heading, n
   await page.keyboard.press("Enter");
   await expect(requestsOn(page, "SUP-15")).toHaveCount(1);
   await expect(requestsOn(page, "SUP-15").locator("[data-permission-heading]")).toBeFocused();
-  expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-12", "deny"]]);
+  expect(await answers(page)).toEqual([["perm-12", "deny"]]);
 });
 
 test("after a keyboard answer to a run's last request the keyboard goes to the run's card, not the page", async ({ page }) => {
@@ -210,23 +353,21 @@ test("after a keyboard answer to a run's last request the keyboard goes to the r
 
 test("a burst of clicks at one spot answers one request: a double click and three more clicks 150 ms apart", async ({ page }) => {
   const allow = requestsOn(page, "SUP-15").first().getByRole("button", { name: "Allow" });
-  await allow.scrollIntoViewIfNeeded();
+  await inView(requestsOn(page, "SUP-15").first());
   await expect(allow).toBeEnabled();
   const at = (await allow.boundingBox())!;
-  await page.mouse.dblclick(at.x + at.width / 2, at.y + at.height / 2);
+  await page.mouse.dblclick(centre(at).x, centre(at).y, PRESS);
   for (let i = 0; i < 3; i++) {
     await page.waitForTimeout(150);
-    await clickAt(page, at);
+    await pressAt(page, at);
   }
-  // Past every hold: only a fresh aim would answer now, and clicks at the spot are not one.
   await page.waitForTimeout(700);
-  await clickAt(page, at);
+  await pressAt(page, at);
   await page.waitForTimeout(700);
   expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-12"]);
-  await expect(requestsOn(page, "SUP-15")).toContainText("Not allowed yet: point at Allow again and click it.");
-  // A fresh aim does answer it.
-  await page.mouse.move(at.x + at.width / 2 + 40, at.y + at.height / 2 + 40);
-  await requestsOn(page, "SUP-15").getByRole("button", { name: "Allow" }).click();
+  // Aimed afresh, the other one is answered.
+  await away(page);
+  await requestsOn(page, "SUP-15").getByRole("button", { name: "Allow" }).click(PRESS);
   await expect(requestsOn(page, "SUP-15")).toHaveCount(0);
 });
 
@@ -253,7 +394,7 @@ test("a request is answered in the run sheet too, and the sheet shows the one le
   await openRunOf(page, "SUP-15");
   const asks = runSheet(page).locator("[data-permission-request]");
   await expect(asks).toHaveCount(2);
-  await asks.first().getByRole("button", { name: "Deny" }).click();
+  await asks.first().getByRole("button", { name: "Deny" }).click(PRESS);
   await expect(asks).toHaveCount(1);
   await expect(runSheet(page)).toContainText("Asks for permission");
   await expect(asks).toContainText("git push --force origin main");
@@ -263,7 +404,7 @@ test("a request the harness cut offers only Deny and says why", async ({ page })
   const ask = requestsOn(page, "SUP-13");
   await expect(ask).toContainText("This request was too large to show whole, so it can only be denied.");
   await expect(ask.getByRole("button", { name: "Allow" })).toHaveCount(0);
-  await ask.getByRole("button", { name: "Deny" }).click();
+  await ask.getByRole("button", { name: "Deny" }).click(PRESS);
   await expect(requestsOn(page, "SUP-13")).toHaveCount(0);
 });
 
@@ -292,7 +433,7 @@ test("Needs you lists one item per request; opened from the badge, it lands on t
   await page.keyboard.press("a");
   await page.keyboard.press("Enter");
   expect(await mockPermissionAnswers(page)).toEqual([]);
-  await allow.click();
+  await allow.click(PRESS);
   await expect(needRow(page, /CA-407/)).toHaveCount(0);
   expect((await mockPermissionAnswers(page)).map((a) => a.decision)).toEqual(["allow"]);
 });

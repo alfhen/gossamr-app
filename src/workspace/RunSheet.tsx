@@ -24,7 +24,7 @@ import { cleanupReason } from "./cleanupLogic";
 import { answerable, answerSentText, sheetTopOn, canStartNow, stopControl } from "./runSheetLogic";
 import { RunAnswer } from "./RunAnswer";
 import { PermissionAsk } from "./PermissionAsk";
-import { PermissionRequests } from "./PermissionRequests";
+import { PermissionRequests, useClosingIn } from "./PermissionRequests";
 import { openPermissions } from "./permissionLogic";
 import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
@@ -140,13 +140,14 @@ export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
 
 function Attention({ run, label, opened, trust, answering, slotPlace, on }: { run: Run; label?: string; opened: boolean; trust?: TrustState; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
   const asks = openPermissions(run).length;
-  if (asks)
+  const closing = useClosingIn(run, "sheet");
+  if (asks || closing)
     return (
       <Box tone="needs" label="Permission request">
         <BoxTitle icon="hand" tone="needs">
-          {asks === 1 ? "Asks for permission" : `Asks for ${asks} permissions`}
+          {asks > 1 ? `Asks for ${asks} permissions` : "Asks for permission"}
         </BoxTitle>
-        <PermissionRequests run={run} label={label} />
+        <PermissionRequests run={run} label={label} where="sheet" />
       </Box>
     );
   switch (run.state) {

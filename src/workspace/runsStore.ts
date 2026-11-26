@@ -43,6 +43,16 @@ export function browseList(snapshot: readonly string[] | null, live: readonly st
   return [...kept, ...live.filter((id) => !had.has(id))];
 }
 
+/** A request in a run's list that the pointer is on. */
+export interface PermissionHover {
+  /** Which list: a run's card or its sheet. */
+  where: "card" | "sheet";
+  runId: string;
+  key: string;
+  index: number;
+  height: number;
+}
+
 interface RunsState {
   backend: Backend | null;
   /** The runs on the Agents view; archived ones are in `archived`, so nothing that counts or lists runs sees them. */
@@ -84,6 +94,14 @@ interface RunsState {
    * run's card moves the cards below it.
    */
   permissionEpoch: number;
+  /** What was answered here, by `answeringKey`, for the line an answered request leaves while the pointer is on it. */
+  permissionDecided: ReadonlyMap<string, "allow" | "deny">;
+  /**
+   * The request in a run's list the pointer is on: its place and height. When it closes (answered or withdrawn) the list
+   * keeps that place until the pointer leaves, so nothing moves under it.
+   */
+  permissionHover: PermissionHover | null;
+  hoverPermission(hover: PermissionHover | null): void;
   /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
@@ -236,6 +254,12 @@ export const useRuns = create<RunsState>((set, get) => ({
   permissionAnswered: new Set<string>(),
   permissionRefused: new Map(),
   permissionEpoch: 0,
+  permissionDecided: new Map(),
+  permissionHover: null,
+
+  hoverPermission(hover) {
+    set({ permissionHover: hover });
+  },
   answered: {},
   ...idle,
 
@@ -381,7 +405,7 @@ export const useRuns = create<RunsState>((set, get) => ({
     try {
       await backend.runsAnswerPermission(id, request, decision);
       // Request ids are the harness's and never come back, so the key stays: the item is gone by the next read.
-      set({ permissionAnswered: new Set([...get().permissionAnswered, key]), permissionEpoch: get().permissionEpoch + 1 });
+      set({ permissionAnswered: new Set([...get().permissionAnswered, key]), permissionDecided: new Map([...get().permissionDecided, [key, decision]]), permissionEpoch: get().permissionEpoch + 1 });
       return true;
     } catch (e) {
       // The item keeps the reason until the next answer: a toast alone goes away.

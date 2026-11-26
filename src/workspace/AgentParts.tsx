@@ -12,7 +12,7 @@ import { ownKey } from "./agentKeys";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { PermissionAsk } from "./PermissionAsk";
-import { PermissionRequests } from "./PermissionRequests";
+import { PermissionRequests, useClosingIn } from "./PermissionRequests";
 import { openPermissions, permissionsRow } from "./permissionLogic";
 import { useStateView } from "./useStateView";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, type Tone } from "./agentsLogic";
@@ -182,14 +182,16 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
   const quiet = quietMinutes(run, now);
   const shown = useDecisionShown();
   const instance = useRunInstance(run);
-  if (openPermissions(run).length) {
+  // A request that closed under the pointer keeps its place until the pointer leaves, so the card below doesn't move up.
+  const closing = useClosingIn(run, "card");
+  if (openPermissions(run).length || closing) {
     // The one Needs you shows is answered there; the run's others stay here.
     const there = shown.need?.runId === run.id && shown.need.kind === "permission" ? shown.need.requestId : undefined;
-    if (there && openPermissions(run).every((p) => p.id === there)) return <p className="m-0 text-ws-ink2">Asking you in Needs you, in the open workstream.</p>;
+    if (!closing && there && openPermissions(run).every((p) => p.id === there)) return <p className="m-0 text-ws-ink2">Asking you in Needs you, in the open workstream.</p>;
     return (
       <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
         {there && <p className="m-0 text-sm text-ws-ink2">One more is open in Needs you.</p>}
-        <PermissionRequests run={run} size="sm" except={there} />
+        <PermissionRequests run={run} size="sm" except={there} where="card" />
       </div>
     );
   }

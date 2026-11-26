@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { aimedAfresh, movedWithin, repeatOnOther, trackMoves } from "./buttonMoves";
 import { inputLineCount } from "./permissionInput";
 import { Button } from "../components/Button";
@@ -8,7 +8,7 @@ import type { PermissionRequest, Run } from "../types";
 import { CodeBox } from "./AgentSheet";
 import { PERMISSIONS_WARNING, answeringKey, canAllow, denyOnlyWhy, openPermissions, permissionWants, runAnswerPending } from "./permissionLogic";
 import { RequestInput } from "./RequestInput";
-import { useRuns } from "./runsStore";
+import { useRuns, type PermissionHover } from "./runsStore";
 
 type Size = "sm" | "md";
 
@@ -22,7 +22,7 @@ function useAgentName(run: Run, label?: string) {
  * One open request with Allow and Deny. Neither is the default: nothing takes the keyboard, neither is the prominent style,
  * and Enter on the card around it opens the run, so allowing takes a deliberate press.
  */
-export function PermissionItem({ run, request, label, size }: { run: Run; request: PermissionRequest; label?: string; size?: Size }) {
+export function PermissionItem({ run, request, label, size, where, index = 0 }: { run: Run; request: PermissionRequest; label?: string; size?: Size; where?: PermissionHover["where"]; index?: number }) {
   const name = useAgentName(run, label);
   const key = answeringKey(run.id, request.id);
   const answering = useRuns((s) => s.permissionAnswering.get(key));
@@ -52,8 +52,14 @@ export function PermissionItem({ run, request, label, size }: { run: Run; reques
       });
   };
   const held = answered || pending ? "Wait a moment: an answer is on its way." : settled ? null : "Wait a moment: the list just changed.";
+  // In a run's list, the item says when the pointer is on it, so its place is kept if it closes under the pointer.
+  const note = () => where && root.current && useRuns.getState().hoverPermission({ where, runId: run.id, key, index, height: root.current.offsetHeight });
+  const leave = () => {
+    const hover = useRuns.getState().permissionHover;
+    if (hover?.key === key && hover.where === where) useRuns.getState().hoverPermission(null);
+  };
   return (
-    <div ref={root}>
+    <div ref={root} onPointerEnter={note} onPointerDown={note} onPointerLeave={leave}>
       <PermissionItemView name={name} request={request} answering={answering ?? null} held={held} unread={!seen} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} />
     </div>
   );
@@ -135,11 +141,12 @@ function AnswerButton({ size, off, title, allow = false, onAnswer, onMissed, chi
   const ref = useRef<HTMLButtonElement>(null);
   const [moved, setMoved] = useState(0);
   // A move holds the button where you can see it, as a change to the list does.
+  // Only Allow is followed: denying is safe wherever the button sits.
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || !allow) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const stop = trackMoves(el, () => {
+    const stop = trackMoves(el, el.closest("[data-permission-answers]") ?? el, () => {
       setMoved((n) => n + 1);
       clearTimeout(timer);
       timer = setTimeout(() => setMoved(0), SETTLE_MS);
@@ -148,7 +155,7 @@ function AnswerButton({ size, off, title, allow = false, onAnswer, onMissed, chi
       stop();
       clearTimeout(timer);
     };
-  }, []);
+  }, [allow]);
   const held = off || moved > 0;
   return (
     <Button
@@ -159,7 +166,8 @@ function AnswerButton({ size, off, title, allow = false, onAnswer, onMissed, chi
       title={off ? title : moved > 0 ? "Wait a moment: the list just changed." : undefined}
       onClick={(ev) => {
         const el = ev.currentTarget;
-        if (ev.detail > 1 || (ev.detail === 1 && (movedWithin(el, SETTLE_MS) || repeatOnOther(el, REPEAT_MS)))) return;
+        if (ev.detail > 1) return;
+        if (allow && ev.detail === 1 && (movedWithin(el, SETTLE_MS) || repeatOnOther(el, REPEAT_MS))) return;
         // An Allow needs a fresh aim after any answer on the page, so clicks at one spot answer one request.
         if (allow && !aimedAfresh(el, ev.detail === 0)) return onMissed?.(ev.detail === 0);
         onAnswer(el);
@@ -210,16 +218,6 @@ export function PermissionItemView({ name, request, answering, held = null, unre
       <span data-seen-part aria-hidden className="block h-px" />
       {request.kind === "permissions" && <p className="m-0 text-sm font-semibold text-ws-warn">{PERMISSIONS_WARNING}</p>}
       {why && <p className="m-0 text-sm text-ws-ink2">{why}</p>}
-      {hint && (
-        <p role="status" className="m-0 text-sm text-ws-ink2">
-          {hint}
-        </p>
-      )}
-      {refused && (
-        <p role="status" className="m-0 text-sm text-ws-blocked">
-          Not answered: {refused}
-        </p>
-      )}
       {/* After the whole request, never beside it or sticky: Allow is reached only by passing all of it. The card behind
           takes a click or Enter as opening the run; these buttons are answers of their own. */}
       <div data-permission-answers onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
@@ -234,19 +232,78 @@ export function PermissionItemView({ name, request, answering, held = null, unre
           </AnswerButton>
         </ButtonGroup>
       </div>
+      {/* Below the buttons, so a line that comes and goes never moves them. */}
+      {hint && (
+        <p role="status" className="m-0 text-sm text-ws-ink2">
+          {hint}
+        </p>
+      )}
+      {refused && (
+        <p role="status" className="m-0 text-sm text-ws-blocked">
+          Not answered: {refused}
+        </p>
+      )}
     </div>
   );
 }
 
-/** Every open request of a run, oldest first, each answered on its own; `except` is one Needs you shows. */
-export function PermissionRequests({ run, label, size, except }: { run: Run; label?: string; size?: Size; except?: string }) {
+/**
+ * Every open request of a run, oldest first, each answered on its own; `except` is one Needs you shows. A request that
+ * closes under the pointer, answered or withdrawn, leaves a line of its height in its place until the pointer leaves it, so
+ * nothing below moves under a resting pointer.
+ */
+export function PermissionRequests({ run, label, size, except, where }: { run: Run; label?: string; size?: Size; except?: string; where: PermissionHover["where"] }) {
+  const hover = useRuns((s) => (s.permissionHover?.runId === run.id && s.permissionHover.where === where ? s.permissionHover : null));
+  const decided = useRuns((s) => (hover ? s.permissionDecided.get(hover.key) : undefined));
+  const open = openPermissions(run).filter((request) => request.id !== except);
+  const items = open.map((request, index) => <PermissionItem key={request.id} run={run} request={request} label={label} size={size} where={where} index={index} />);
+  const closed = hover && !open.some((request) => answeringKey(run.id, request.id) === hover.key) ? hover : null;
+  if (closed) {
+    const text = decided === "allow" ? "You allowed this." : decided === "deny" ? "You denied this." : "This request closed.";
+    items.splice(Math.min(closed.index, items.length), 0, <Closed key={`closed:${closed.key}`} height={closed.height} text={text} onGone={() => useRuns.getState().hoverPermission(null)} />);
+  }
   return (
     <div data-permission-requests tabIndex={-1} className="grid gap-3 outline-none">
-      {openPermissions(run)
-        .filter((request) => request.id !== except)
-        .map((request) => (
-        <PermissionItem key={request.id} run={run} request={request} label={label} size={size} />
-      ))}
+      {items}
+    </div>
+  );
+}
+
+/** Whether a run's list in `where` keeps a closed request's place under the pointer, so it stays drawn though none is open. */
+export const useClosingIn = (run: Pick<Run, "id">, where: PermissionHover["where"]) => useRuns((s) => s.permissionHover?.runId === run.id && s.permissionHover.where === where);
+
+/**
+ * While the pointer is on one of a run's requests in its card, the card keeps at least the height it has, so an answer
+ * there can't move the cards below it up under the pointer. Rendered inside the card; it draws nothing.
+ */
+export function HoldCardHeight({ run }: { run: Pick<Run, "id"> }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const pointed = useClosingIn(run, "card");
+  useLayoutEffect(() => {
+    const card = ref.current?.closest<HTMLElement>("article");
+    if (!card || !pointed) return;
+    card.style.minHeight = `${card.getBoundingClientRect().height}px`;
+    return () => void (card.style.minHeight = "");
+  }, [pointed]);
+  return <span ref={ref} hidden />;
+}
+
+/** The place a closed request keeps while the pointer is on it. It goes once the pointer is off it. */
+function Closed({ height, text, onGone }: { height: number; text: string; onGone(): void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const gone = useRef(onGone);
+  gone.current = onGone;
+  useEffect(() => {
+    const away = (ev: PointerEvent) => {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r || ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) gone.current();
+    };
+    document.addEventListener("pointermove", away, true);
+    return () => document.removeEventListener("pointermove", away, true);
+  }, []);
+  return (
+    <div ref={ref} data-permission-closed role="status" style={{ height }} onPointerLeave={() => gone.current()} className="grid content-center rounded-md border border-dashed border-ws-sep px-2.5 text-sm text-ws-ink2">
+      {text}
     </div>
   );
 }
