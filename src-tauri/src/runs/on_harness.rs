@@ -41,8 +41,12 @@ const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
 /// How long clean-up waits for a session it closed to say so.
 const CLOSE_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
 
+const INTERRUPTED_ROW: &str = "Stopped when Gossamr moved agents to the harness. Ask Pip to start it again.";
+const INTERRUPTED_ASKING: &str = "Stopped when Gossamr moved agents to the harness, before you answered its question. Ask Pip to start it again.";
+
 /// What an agent of the old path reads when the move to the harness stopped it.
-pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness. Its worktree is kept; Clean up removes it. Ask Pip to start it again on the harness.";
+pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
+pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it moved agents to the harness, before you answered its question, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
@@ -194,8 +198,18 @@ impl RunService {
                 continue;
             }
             let Ok(mut run) = self.load(&run.id).await else { continue };
+            // A question it waited on goes with it, as at a Stop: nothing can answer it now.
+            let asked = run.needs.is_some() && run.state == RunState::NeedsAnswer;
+            self.end_ask_on(tc.backend.as_ref(), &run);
+            run.needs = None;
+            run.asking = false;
+            let said = if asked { INTERRUPTED_ASKING } else { INTERRUPTED_ROW };
+            let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "stop".into(), text: said.into(), detail: None };
+            if let Err(e) = self.core.append_run_events(&run.id, &[row]).await {
+                eprintln!("couldn't record that run {} was interrupted: {e}", run.id);
+            }
             run.state = RunState::Failed;
-            run.error = Some(INTERRUPTED.into());
+            run.error = Some(if asked { INTERRUPTED_BEFORE_ANSWER } else { INTERRUPTED }.into());
             run.failure = Some(crate::domain::RunFailure::Interrupted);
             run.ended_at = Some(chrono::Utc::now());
             if let Err(e) = self.store(&run).await {

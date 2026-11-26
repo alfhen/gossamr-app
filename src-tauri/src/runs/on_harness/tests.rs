@@ -614,3 +614,26 @@ async fn the_move_is_safe_to_run_again_after_a_crash_between_the_stop_and_its_ma
     assert!(rig.fx.core.harness_moved().await.unwrap(), "done the second time");
     assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 2, "a second stop of a stopped agent harms nothing");
 }
+
+#[tokio::test]
+async fn the_move_ends_the_question_an_old_run_waited_on_and_says_so() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    let waiting = rig
+        .set(&run, |r| {
+            r.state = RunState::NeedsAnswer;
+            r.short_id = Some(crate::runs::cli::ShortId::parse("00000001").unwrap());
+            r.needs = Some("Which database?".into());
+            r.asking = true;
+        })
+        .await;
+    let _held = rig.fx.core.asks().open(&waiting.id, "Which database?").unwrap();
+    rig.svc.move_to_harness().await;
+    let after = rig.get(&waiting).await;
+    assert_eq!((after.state, after.needs, after.asking), (RunState::Failed, None, false));
+    assert!(rig.fx.core.asks().question(&waiting.id).is_none(), "the held ask is cancelled");
+    let rows = rig.fx.core.run_events(&waiting.id).await.unwrap();
+    assert_eq!(rows.last().map(|row| row.text.as_str()), Some(INTERRUPTED_ASKING));
+    assert_eq!(after.error.as_deref(), Some(INTERRUPTED_BEFORE_ANSWER), "the run sheet says the answer is gone, and what to do");
+}
