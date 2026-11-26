@@ -276,9 +276,13 @@ impl RunService {
     /// `None` for a run that is not on the harness.
     pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, bool)>> {
         let (link, session) = self.on_harness_of(run)?;
+        let follow = self.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
         // A session just taken back is starting again: its run reads stopped until its `started` comes.
-        let starting = matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.taken_back);
-        if !starting && matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
+        let starting = follow.taken_back;
+        // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
+        // prompt, and the turn it starts takes the run out of Failed.
+        let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
+        if !starting && !runs_on && matches!(run.state, RunState::Queued | RunState::Launching | RunState::Failed | RunState::Stopped) {
             return Some(Err(Error::Proposal(format!("This run is {}, so it takes no message.", run.state.as_str()))));
         }
         Some(match link.send(session, text).await {

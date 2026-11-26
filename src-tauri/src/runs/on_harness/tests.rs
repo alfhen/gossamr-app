@@ -637,3 +637,27 @@ async fn the_move_ends_the_question_an_old_run_waited_on_and_says_so() {
     assert_eq!(rows.last().map(|row| row.text.as_str()), Some(INTERRUPTED_ASKING));
     assert_eq!(after.error.as_deref(), Some(INTERRUPTED_BEFORE_ANSWER), "the run sheet says the answer is gone, and what to do");
 }
+
+const SIGNING_REFUSED: &str = r#"{"prompt": null}
+{"tool": {"id": "t1", "name": "Bash", "input": {"command": "git commit -m 'Fix the cart'"}}}
+{"tool_result": {"id": "t1", "output": "error: 1Password: Could not connect to socket. Is the agent running?\n\nfatal: failed to write commit object", "error": true}}
+{"end": "done"}
+{"prompt": null}
+{"say": "Committed."}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_run_whose_commit_the_signing_agent_refused_takes_the_message_its_text_asks_for_and_works_again() {
+    let served = Served::new(SIGNING_REFUSED, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let failed = until_state(&rig, &run, RunState::Failed).await;
+    assert_eq!(failed.error.as_deref(), Some(crate::runs::consumer::SIGNING_NEEDS_YOU));
+    assert!(crate::runs::consumer::SIGNING_NEEDS_YOU.contains("message the agent to commit again"));
+    // What the text says, once the signing agent is unlocked.
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Commit again.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Queued);
+    let done = until_state(&rig, &run, RunState::Done).await;
+    assert_eq!((done.error, done.failure, done.last_detail.as_deref()), (None, None, Some("Committed.")));
+}
