@@ -325,6 +325,44 @@ async fn adopt_a_harness_already_serving_with_the_apps_token_and_start_no_second
 }
 
 #[tokio::test]
+async fn the_start_up_ensure_waits_while_the_links_first_connect_reads_the_key_then_starts_the_harness_and_counts_it() {
+    let bed = Bed::new();
+    let sidecar = Arc::new(bed.sidecar(&bed.fake("harness", PROTOCOL, "new")));
+    let starts = sidecar.starts();
+    // As the link's first connect holds it while it reads the vault for a key there is none of yet.
+    let reading = sidecar.work.lock().await;
+    let read = sidecar.ensure().await;
+    assert_eq!((read.state, bed.pids("serving").len()), (State::Starting, 0), "a page's read goes on without waiting and starts nothing");
+    let starting = tokio::spawn({
+        let sidecar = sidecar.clone();
+        async move { sidecar.start_up().await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!starting.is_finished(), "the start-up waits for the lock");
+    drop(reading);
+    let status = tokio::time::timeout(WAIT, starting).await.unwrap().unwrap();
+    assert_eq!(status.state, State::Running, "{status:?}");
+    assert_eq!((bed.pids("serving").len(), *starts.borrow()), (1, 1), "one harness started, and counted once");
+    bed.none_left().await;
+}
+
+#[tokio::test]
+async fn ensures_that_adopt_the_harness_count_no_start_and_a_restart_counts_one() {
+    let bed = Bed::new();
+    let program = bed.fake("harness", PROTOCOL, "new");
+    let sidecar = bed.sidecar(&program);
+    let starts = sidecar.starts();
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    assert_eq!(*starts.borrow(), 1);
+    assert_eq!(sidecar.ensure().await.state, State::Running);
+    assert_eq!(sidecar.start_up().await.state, State::Running);
+    assert_eq!((bed.pids("serving").len(), *starts.borrow()), (1, 1), "two ensures adopted it and counted nothing");
+    assert_eq!(sidecar.act(Action::Restart).await.state, State::Running);
+    assert_eq!((bed.pids("serving").len(), *starts.borrow()), (2, 2), "a restart starts one more");
+    bed.none_left().await;
+}
+
+#[tokio::test]
 async fn an_older_build_of_the_same_protocol_is_kept_and_a_restart_updates_it() {
     let bed = Bed::new();
     let old = bed.serve_by_hand(&bed.fake("old", PROTOCOL, "old"), &bed.token()).await;

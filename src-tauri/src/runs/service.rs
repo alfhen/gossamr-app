@@ -102,6 +102,8 @@ pub struct RunService {
     pub(super) started_at: DateTime<Utc>,
     /// Set once the app has a harness: Claude runs open sessions there from then on.
     pub(super) harness: Option<super::on_harness::OnHarness>,
+    /// How long the carry on after a harness start waits for the app to catch up, once the harness answers.
+    pub(super) catch_up: Duration,
 }
 
 pub(super) use super::fresh::real;
@@ -161,6 +163,7 @@ impl RunService {
             focus: tokio::sync::Notify::new(),
             started_at: Utc::now(),
             harness: None,
+            catch_up: super::on_harness::CATCH_UP_TAKES_UP_TO,
         }
     }
 
@@ -202,6 +205,12 @@ impl RunService {
     #[cfg(test)]
     pub fn with_timing(mut self, timing: Timing) -> Self {
         self.timing = timing;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_catch_up(mut self, catch_up: Duration) -> Self {
+        self.catch_up = catch_up;
         self
     }
 

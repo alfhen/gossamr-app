@@ -98,7 +98,7 @@ pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it 
 pub use super::consumer::CARRY_ONS;
 
 /// How long the carry on after a restart waits for the app to catch up with the harness's sessions.
-const CATCH_UP_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
+pub(super) const CATCH_UP_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Why a message did not reach an agent that its resume started again.
 pub const RESUMED_NOT_SENT: &str = "It started again, but your message didn't reach it, so send it again:";
@@ -240,8 +240,8 @@ impl RunService {
     pub async fn carry_on_after_restart(&self) {
         let Some(on) = &self.harness else { return };
         // The old harness's end of each turn it cut reaches the app only once the link has reconnected and caught up.
-        if !on.link.caught_up(CATCH_UP_TAKES_UP_TO).await {
-            eprintln!("the app had not caught up with the harness's sessions after {CATCH_UP_TAKES_UP_TO:?}, so only the runs it had read as cut are carried on");
+        if !on.link.caught_up(self.catch_up).await {
+            eprintln!("the app had not caught up with the harness's sessions within {:?} of the harness answering, so only the runs it had read as cut are carried on", self.catch_up);
         }
         let stopped = crate::domain::RunQuery { states: Some(vec![RunState::Stopped]), ..Default::default() };
         let Ok(runs) = self.core.runs_list(&stopped).await else { return };
@@ -264,6 +264,21 @@ impl RunService {
             let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "follow_up".into(), text: said, detail: None };
             if let Err(e) = self.core.append_run_events(&run.id, &[row]).await {
                 eprintln!("couldn't record the carry on of run {}: {e}", run.id);
+            }
+        }
+    }
+
+    /// From the app's start: carries on once the harness answers, then again after each harness `starts` counts, from
+    /// Settings too. A start is counted before its harness can answer, so the pass that waited for the answer covers
+    /// it, and no start is carried on twice.
+    pub async fn carry_on_at_each_start(&self, mut starts: tokio::sync::watch::Receiver<u64>) {
+        let Some(on) = &self.harness else { return };
+        loop {
+            on.link.answers().await;
+            starts.mark_unchanged();
+            self.carry_on_after_restart().await;
+            if starts.changed().await.is_err() {
+                return;
             }
         }
     }

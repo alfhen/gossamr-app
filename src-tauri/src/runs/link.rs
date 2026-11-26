@@ -220,10 +220,22 @@ impl Link {
         Ok(())
     }
 
-    /// Waits up to `limit` until the app has applied every event the harness holds for each session it follows, and
-    /// marked lost each turn the harness no longer runs: after a harness start, once the watch has reconnected and
-    /// caught up. False if that did not happen within `limit`.
+    /// Waits until the harness answers, however long it takes to start. Asked less often as it goes on, as the watch
+    /// connects: with no key yet, each ask reads the vault.
+    pub async fn answers(&self) {
+        let mut wait = RETRY_FIRST;
+        while self.ask(Op::Sessions).await.is_err() {
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(RETRY_MOST);
+        }
+    }
+
+    /// Once the harness answers, waits up to `limit` until the app has applied every event the harness holds for each
+    /// session it follows, and marked lost each turn the harness no longer runs: after a harness start, once the watch
+    /// has reconnected and caught up. False if that did not happen within `limit`.
     pub async fn caught_up(&self, limit: Duration) -> bool {
+        // From the answer on: a harness still starting holds nothing for the app to catch up on yet.
+        self.answers().await;
         let mut applied = self.applied();
         let caught_up = async {
             while !self.is_caught_up().await {

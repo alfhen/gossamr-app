@@ -147,6 +147,8 @@ pub struct Sidecar {
     /// Held for each start, adopt, stop or restart, so two of them in this app never interleave.
     work: tokio::sync::Mutex<Inner>,
     status: Mutex<Status>,
+    /// Counts the harnesses this app started, so the runs a start cut are carried on once per start.
+    starts: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     waiting: tokio::sync::Notify,
 }
@@ -163,6 +165,7 @@ impl Sidecar {
             limits,
             work: tokio::sync::Mutex::new(inner),
             status: Mutex::new(Status::new(State::Starting, None)),
+            starts: tokio::sync::watch::channel(0).0,
             #[cfg(test)]
             waiting: tokio::sync::Notify::new(),
         }
@@ -181,10 +184,27 @@ impl Sidecar {
     /// Starts or adopts the harness unless it was stopped from Settings. While another call is at work, its status.
     pub async fn ensure(&self) -> Status {
         let Ok(mut inner) = self.work.try_lock() else { return self.status() };
+        self.ensure_with(&mut inner).await
+    }
+
+    /// `ensure` for the app's start, after any call at work: one that holds the lock only to read the key, as the
+    /// link's first connect does, would otherwise leave the harness unstarted until Settings > Harness.
+    pub async fn start_up(&self) -> Status {
+        let mut inner = self.work.lock().await;
+        self.ensure_with(&mut inner).await
+    }
+
+    async fn ensure_with(&self, inner: &mut Inner) -> Status {
         if inner.stopped_by_you {
             return self.status();
         }
-        self.run(&mut inner, None).await
+        self.run(inner, None).await
+    }
+
+    /// Changes each time this app starts a harness, from Settings too, before the new one answers. An adopted one is no
+    /// start.
+    pub fn starts(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.starts.subscribe()
     }
 
     pub async fn act(&self, action: Action) -> Status {
@@ -377,6 +397,8 @@ impl Sidecar {
                             return Err(format!("The harness stopped as it started: {}", self.last_log_line()));
                         }
                         let child = spawn(&self.program, &self.dir, token).map_err(|e| format!("Gossamr couldn't start the harness at {}: {e}", self.program.display()))?;
+                        // Counted before it can answer, so the carry on that waits for an answer covers this start.
+                        self.starts.send_modify(|n| *n += 1);
                         started = Some(child);
                     }
                     let child = started.as_mut().expect("a child was just started");
