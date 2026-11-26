@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness::api::Op;
 use harness::client::Client;
-use harness::event::Decision;
+use harness::event::{Decision, PermissionKind};
 
 use super::failure::Failure;
 use super::link::{Connect, Link};
@@ -46,6 +46,7 @@ pub const ONLY_DENY_CUT: &str = "This request was too large to show whole, so it
 pub const ONLY_DENY_KIND: &str = "Gossamr can't show all of this request, so it can only be denied.";
 pub const ONLY_DENY_MASKED: &str = "Part of this is hidden; run it yourself in Terminal if you trust it.";
 pub const ONLY_DENY_INEXACT: &str = "Gossamr can't show this request exactly, so it can only be denied.";
+pub const ONLY_DENY_MARKS: &str = "Part of this is a stack of marks Gossamr shows only as a count, so it can only be denied.";
 
 /// How long clean-up waits for a session it closed to say so.
 const CLOSE_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
@@ -445,7 +446,8 @@ impl RunService {
         if decision == Decision::Other {
             return refuse("An answer is allow or deny.");
         }
-        let run = self.load(run_id).await?;
+        // Judged on what the page shows: the harness's own copy where the app holds it, else the app-masked one.
+        let run = self.core.shown(self.load(run_id).await?);
         let Some((link, session)) = self.on_harness_of(&run) else { return refuse("This run isn't on the harness: answer it in Terminal.") };
         if run.handed_over {
             return refuse(HANDED_OVER_PERMISSION);
@@ -457,7 +459,9 @@ impl RunService {
         // The command is the gate: the flag is what the page reads, and a masked request or one with no whole input
         // is refused whatever it says.
         let exact = super::consumer::shows_exactly(&open.input);
-        if (open.deny_only || open.masked || !open.input.is_object() || !exact) && decision == Decision::Allow {
+        let stacked = super::consumer::stacks_marks(&open.input);
+        let unread = open.kind == PermissionKind::Other;
+        if (open.deny_only || open.masked || !open.input.is_object() || !exact || stacked || unread) && decision == Decision::Allow {
             // The input of a request the harness cut is text.
             let why = if open.masked {
                 ONLY_DENY_MASKED
@@ -465,13 +469,15 @@ impl RunService {
                 ONLY_DENY_CUT
             } else if !exact {
                 ONLY_DENY_INEXACT
+            } else if stacked {
+                ONLY_DENY_MARKS
             } else {
                 ONLY_DENY_KIND
             };
             return refuse(why);
         }
         match link.permit(session, request, decision).await {
-            Ok(()) => self.load(run_id).await,
+            Ok(()) => self.load(run_id).await.map(|run| self.core.shown(run)),
             Err(why) if why == super::link::NOT_OPEN || why == super::link::NOT_RUNNING_TO_ANSWER => refuse(&why),
             Err(why) => refuse(&format!("The harness didn't take your answer: {why}")),
         }

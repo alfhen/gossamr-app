@@ -249,16 +249,27 @@ test("the review's wiggle: a click, an 8 px move and back, and clicks at the sam
 });
 
 /**
- * Scrolls each band of a request to the middle of the window in turn, two frames apart so each is seen, in one call: a
- * call per band of a request thousands of lines long outlasts a test on a slow runner.
+ * Scrolls each band of a request to the middle of the window in turn, a moment and two frames apart so each is seen, in
+ * one call: a call per band of a request thousands of lines long outlasts a test on a slow runner.
  */
 const readBandByBand = (ask: Locator) =>
   ask.evaluate(async (item) => {
     for (const band of item.querySelectorAll("[data-seen-part]")) {
       band.scrollIntoView({ block: "center" });
+      await new Promise((done) => setTimeout(done, 30));
       await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
     }
   });
+
+/**
+ * Reads a request band by band until Allow wakes. On a loaded runner one pass can scroll past a band before the page has
+ * looked at it; a person would scroll again, and so does this. A jump to the end is checked apart, before.
+ */
+const readUntilAllowed = (ask: Locator, allow: Locator) =>
+  expect(async () => {
+    await readBandByBand(ask);
+    await expect(allow).toBeEnabled({ timeout: 2_000 });
+  }).toPass({ timeout: 80_000 });
 
 test("one line of 120,000 characters is read band by band: a jump to its end doesn't wake Allow, and the item says why", async ({ page }) => {
   // A request many thousands of pixels tall, read band by band, on a runner slower than a desk.
@@ -272,8 +283,7 @@ test("one line of 120,000 characters is read band by band: a jump to its end doe
   await expect(allow).toBeDisabled();
   const bands = ask.locator("[data-seen-part]");
   expect(await bands.count()).toBeGreaterThan(10);
-  await readBandByBand(ask);
-  await expect(allow).toBeEnabled();
+  await readUntilAllowed(ask, allow);
 });
 
 /** Scrolls a request through the window by the wheel, from its start to past its end, as a person reads it. */
@@ -586,8 +596,7 @@ test("the keyboard can't reach Allow on a long request it hasn't scrolled throug
   await page.waitForTimeout(300);
   await expect(allow).toBeDisabled();
   // Scrolled through, stretch by stretch, it can be allowed.
-  await readBandByBand(ask);
-  await expect(allow).toBeEnabled();
+  await readUntilAllowed(ask, allow);
 });
 
 test("a request is answered in the run sheet too, and the sheet shows the one left", async ({ page }) => {

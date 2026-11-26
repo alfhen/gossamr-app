@@ -157,6 +157,11 @@ describe("what the fields say about themselves", () => {
     expect(shown(renderToStaticMarkup(<RequestInput kind="file_change" input={{ file_path: "a", content: false }} />))).toContain("content (boolean)");
   });
 
+  it("shows -0 as -0, as the agent sent it", () => {
+    const [field] = inputFields("tool", { offset: -0 });
+    expect(field.type === "text" && field.lines.map(flat)).toEqual(["-0"]);
+  });
+
   it("shows an empty list of edits as a field, not nothing", () => {
     expect(inputFields("file_change", { file_path: "a", edits: [] }).map((f) => flat(f.name))).toEqual(["file_path", "edits"]);
   });

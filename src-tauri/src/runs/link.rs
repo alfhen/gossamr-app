@@ -616,16 +616,26 @@ impl Inner {
         }
     }
 
-    /// A run saved before runs kept their open permission requests has them only in its follow: read them again from
-    /// the harness. A list it cannot read now is left for the next connect.
+    /// Reads again from the harness what the app holds of the open permission requests only in memory: the harness's own
+    /// copy of each, which a restart lost. A run saved before runs kept their requests has them only in its follow, and
+    /// gets them back too. A list it cannot read now is left for the next connect; until then, a request whose stored
+    /// copy the app masked shows that copy, masked, so deny-only.
     async fn recover_permissions(&self, client: &mut Client, session: &str, follow: &crate::domain::SessionFollow) {
         let Ok(Some((run_id, _))) = self.core.session_run(session).await else { return };
         let Ok(Some(run)) = self.core.run(&run_id).await else { return };
         let missing: Vec<&str> = follow.permissions.iter().map(|(id, ..)| id.as_str()).filter(|id| !run.permissions.iter().any(|open| open.id == *id)).collect();
-        if missing.is_empty() {
+        let wanted: Vec<&str> = follow.permissions.iter().map(|(id, ..)| id.as_str()).filter(|id| missing.contains(id) || !self.core.holds_shown(&run_id, id)).collect();
+        if wanted.is_empty() {
             return;
         }
-        let Some(asked) = asked_up_to(client, session, follow.seq, &missing).await else { return };
+        let Some(asked) = asked_up_to(client, session, follow.seq, &wanted).await else { return };
+        for copy in asked.iter().filter_map(consumer::harness_copy) {
+            self.core.keep_shown(&run_id, copy);
+        }
+        if missing.is_empty() {
+            (self.changed)(&run.connection_id);
+            return;
+        }
         match self.core.apply_session(session, |run, follow| {
             consumer::recover_permissions(run, follow, &asked);
             Vec::new()
@@ -676,6 +686,10 @@ impl Inner {
                 return Err(());
             }
         };
+        // The request as the harness sent it, for the page and the allow: `app.sqlite` has only the app-masked copy.
+        if let Some(copy) = consumer::harness_copy(&event).filter(|copy| applied.run.permissions.iter().any(|open| open.id == copy.id)) {
+            self.core.keep_shown(&applied.run.id, copy);
+        }
         self.after(&applied.before, &applied.run);
         // A call read again after a reconnect was answered the first time.
         if let (Some((id, name, input)), true) = (call, fresh) {
@@ -753,6 +767,7 @@ impl Inner {
 
     /// Tells the notifier, and so Pip, of a run that came to need the person, finished or failed; and the page.
     fn after(&self, before: &Run, run: &Run) {
+        self.core.prune_shown(run);
         // A new request while the run already waits on one is a new need too.
         let new_need = run.state == before.state && run.needs.is_some() && run.needs != before.needs;
         if run.state != before.state || new_need {

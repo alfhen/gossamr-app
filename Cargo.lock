@@ -1558,6 +1558,7 @@ dependencies = [
  "libc",
  "objc2-app-kit",
  "objc2-foundation",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",
