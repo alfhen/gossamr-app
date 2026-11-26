@@ -317,7 +317,7 @@ pub fn render_prompt_from(spec: &RunSpec, start: Start) -> String {
     let on_site = site.as_ref().map(|site| format!(" (on {site})")).unwrap_or_default();
     let worktree = match (start, spec.pr) {
         (Start::OwnCheckout, _) => format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
-        (Start::HarnessWorktree, None) => format!("Your worktree is ready, on branch `{name}` made from `origin/{base}`. Commit and push on `{name}`; don't check out or create another branch."),
+        (Start::HarnessWorktree, None) => format!("Your worktree is on branch `{name}`, made from `origin/{base}` at the harness's last fetch. Before you start, run `git fetch origin {base}` and, if `origin/{base}` moved, `git rebase origin/{base}` (the branch has no commits yet). Commit and push only on `{name}`; don't create another branch."),
         (Start::HarnessWorktree, Some(_)) => format!("Your worktree is on branch `{name}`, made from `origin/{base}`. Check out the pull request below in it, as it says, and create no other branch."),
     };
     let mut parts = vec![format!("You are working as {article} {role} on {on}{on_site}."), worktree];
@@ -614,6 +614,16 @@ pub struct Run {
 }
 
 impl Run {
+    /// The branch the run works on: the one it recorded, else the one its path makes: the harness's `<name>`, or the
+    /// old path's `worktree-<name>`.
+    pub fn branch_name(&self) -> String {
+        match (&self.branch, &self.harness_session) {
+            (Some(branch), _) if !branch.trim().is_empty() => branch.clone(),
+            (_, Some(_)) => self.spec.name.clone(),
+            _ => format!("worktree-{}", self.spec.name),
+        }
+    }
+
     /// The provider instance the run is on: its choice, else the default instance.
     pub fn instance_id(&self) -> &str {
         self.runs_on.as_ref().map_or(crate::connections::DEFAULT_CLAUDE, |c| c.instance_id.as_str())
@@ -902,7 +912,7 @@ mod tests {
     #[test]
     fn a_harness_runs_brief_says_its_worktree_is_on_its_own_branch_and_the_old_paths_brief_is_unchanged() {
         let old = "Your worktree starts at the clone's current HEAD, which may not be `main`. First run `git fetch origin main` and `git checkout -B worktree-eng-1-fix-cart-3f9a origin/main` in your worktree (it has no changes yet), then continue.";
-        let made = "Your worktree is ready, on branch `eng-1-fix-cart-3f9a` made from `origin/main`. Commit and push on `eng-1-fix-cart-3f9a`; don't check out or create another branch.";
+        let made = "Your worktree is on branch `eng-1-fix-cart-3f9a`, made from `origin/main` at the harness's last fetch. Before you start, run `git fetch origin main` and, if `origin/main` moved, `git rebase origin/main` (the branch has no commits yet). Commit and push only on `eng-1-fix-cart-3f9a`; don't create another branch.";
         let own = render_prompt(&ticketed());
         assert_eq!(own.split("\n\n").nth(1), Some(old), "the old path's step, word for word");
         assert_eq!(render_prompt_from(&ticketed(), Start::OwnCheckout), own);
@@ -910,10 +920,21 @@ mod tests {
         let quiet = RunSpec { report: false, ..ticketed() };
         assert_eq!(render_prompt_from(&quiet, Start::HarnessWorktree), render_prompt(&quiet).replacen(old, made, 1), "the same brief but for where its worktree is");
         assert!(!harness.contains("worktree-") && !harness.contains("git checkout"), "{harness}");
+        assert!(harness.contains("`git fetch origin main`"), "a base the harness's fetch missed is fetched again: {harness}");
         let pinned = RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..with_role("reviewer") };
         let review = render_prompt_from(&pinned, Start::HarnessWorktree);
         assert_eq!(review.split("\n\n").nth(1), Some("Your worktree is on branch `eng-1-fix-cart-3f9a`, made from `origin/main`. Check out the pull request below in it, as it says, and create no other branch."));
         assert!(review.contains("`git fetch origin pull/12/head` then `git checkout --detach a1b2c3d4e5f6`"), "the pinned checkout stays: {review}");
+    }
+
+    #[test]
+    fn a_runs_branch_is_the_one_it_recorded_else_the_one_its_path_makes() {
+        let mut run = Run::queued("r1".into(), "p1".into(), "c1".into(), None, spec(), chrono::Utc::now());
+        assert_eq!(run.branch_name(), "worktree-eng-1-fix-cart-3f9a", "the old path's");
+        run.harness_session = Some("s1".into());
+        assert_eq!(run.branch_name(), "eng-1-fix-cart-3f9a", "the harness's, before its listing is read");
+        run.branch = Some("named".into());
+        assert_eq!(run.branch_name(), "named");
     }
 
     #[test]
