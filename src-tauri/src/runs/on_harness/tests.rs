@@ -65,7 +65,9 @@ async fn an_approved_run_opens_a_harness_session_sends_its_brief_and_reads_done_
         Body::Prompted { text } => Some(text.clone()),
         _ => None,
     });
-    assert_eq!(brief, Some(crate::domain::render_prompt(&done.spec)), "the brief alone: the harness adds the guard");
+    let brief = brief.expect("the brief was sent");
+    assert_eq!(brief, crate::domain::render_prompt_from(&done.spec, crate::domain::Start::HarnessWorktree), "the brief alone: the harness adds the guard");
+    assert!(brief.contains(&format!("on branch `{}`", done.spec.name)) && !brief.contains("worktree-"), "it stays on the branch the harness made");
 }
 
 #[test]
@@ -761,4 +763,26 @@ async fn permission_a_request_the_harness_masked_part_of_says_so_and_can_only_be
     rig.svc.answer_permission(&run.id, &open.id, Decision::Deny).await.unwrap();
     let done = until_state(&rig, &run, RunState::Done).await;
     assert_eq!(answers(&served, &done).await, [(open.id, Decision::Deny, None)]);
+}
+
+#[tokio::test]
+async fn permission_the_command_refuses_an_allow_of_a_masked_request_or_one_with_no_whole_input_whatever_its_flag_says() {
+    let served = Served::new(PERMITS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let id = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].id.clone();
+    for (input, masked, why) in [(None, true, ONLY_DENY_MASKED), (Some(serde_json::Value::Null), false, ONLY_DENY_KIND), (Some(serde_json::json!("git com")), false, ONLY_DENY_CUT)] {
+        rig.set(&run, |run| {
+            let open = &mut run.permissions[0];
+            (open.masked, open.deny_only) = (masked, false);
+            if let Some(input) = input {
+                open.input = input;
+            }
+        })
+        .await;
+        assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, why);
+    }
+    assert!(answers(&served, &run).await.is_empty(), "none reached the harness");
+    rig.svc.answer_permission(&run.id, &id, Decision::Deny).await.unwrap();
+    until_state(&rig, &run, RunState::Done).await;
 }

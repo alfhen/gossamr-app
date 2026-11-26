@@ -4,6 +4,8 @@ use crate::domain::{CodeChange, CodeChangeKind, CodeChangeState, Run};
 
 /// The branch names a run may have pushed: the one the session reported and the one its worktree is named after.
 pub fn branches_of(run: &Run) -> Vec<String> {
+    // The branch the run records comes first: the harness's `<name>`, or the old path's. `worktree-<name>` is still
+    // looked up for a harness run too: one started before its brief said to stay on `<name>` was told to move there.
     let named = format!("worktree-{}", run.spec.name);
     let mut out: Vec<String> = run.branch.iter().filter(|b| !b.trim().is_empty()).cloned().collect();
     if !out.contains(&named) {

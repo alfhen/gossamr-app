@@ -11,7 +11,7 @@ use harness::event::Decision;
 use super::failure::Failure;
 use super::link::{Connect, Link};
 use super::service::RunService;
-use crate::domain::{render_prompt, Run, RunEvent, RunState};
+use crate::domain::{render_prompt_from, Run, RunEvent, RunState, Start};
 use crate::error::{Error, Result};
 
 /// The link to the harness, and the provider runs open on: `claude`, or the mock a debug build was started with.
@@ -96,7 +96,7 @@ fn no_session(why: &str, provider: &str) -> String {
 
 /// The first prompt: the brief the person approved. The harness adds its own guard as system text.
 pub fn first_prompt(run: &Run) -> String {
-    render_prompt(&run.spec)
+    render_prompt_from(&run.spec, Start::HarnessWorktree)
 }
 
 impl RunService {
@@ -235,7 +235,9 @@ impl RunService {
             return refuse(&format!("This run is {}, so it has no request to answer.", run.state.as_str()));
         }
         let Some(open) = run.permissions.iter().find(|open| open.id == request) else { return refuse(super::link::NOT_OPEN) };
-        if open.deny_only && decision == Decision::Allow {
+        // The command is the gate: the flag is what the page reads, and a masked request or one with no whole input
+        // is refused whatever it says.
+        if (open.deny_only || open.masked || !open.input.is_object()) && decision == Decision::Allow {
             // The input of a request the harness cut is text.
             let why = if open.masked {
                 ONLY_DENY_MASKED

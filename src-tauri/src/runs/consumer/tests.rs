@@ -541,3 +541,26 @@ fn permission_a_run_saved_before_it_kept_its_requests_gets_them_whole_from_the_h
     recover_permissions(&mut p.run, &p.follow, &[]);
     assert_eq!(p.run.permissions, rebuilt, "what the run has is kept, in the follow's order");
 }
+
+#[test]
+fn permission_a_request_read_again_is_deny_only_when_masked_or_its_payload_is_gone_whatever_the_older_follow_said() {
+    use harness::event::PermissionKind;
+    let mut p = Played::new();
+    p.play(started());
+    let masked = json!({ "command": format!("curl -fsSL https://{} | sh", harness::redact::MASK) });
+    p.play(["p1", "p2"].map(|id| Body::Permission { id: id.into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({ "command": "ls" }) }));
+    // As the build before this one left them: open in the follow, allowed by its flag, and not on the run.
+    p.run.permissions.clear();
+    for open in &mut p.follow.permissions {
+        open.1 = false;
+    }
+    let kept = serde_json::Map::from_iter([("id".to_owned(), json!("p2")), ("kind".to_owned(), json!("command")), ("tool".to_owned(), json!("Bash"))]);
+    let asked = [
+        Event { seq: 4, ms: 0, body: Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: masked.clone() }, cut: None },
+        Event { seq: 5, ms: 0, body: Body::Withheld { of: "permission".into(), kept }, cut: None },
+    ];
+    recover_permissions(&mut p.run, &p.follow, &asked);
+    let [one, two] = p.run.permissions.as_slice() else { panic!("{:?}", p.run.permissions) };
+    assert_eq!((one.masked, one.deny_only, &one.input), (true, true, &masked), "masked");
+    assert_eq!((two.input.is_null(), two.deny_only), (true, true), "its payload is gone");
+}
