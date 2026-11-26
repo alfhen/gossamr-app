@@ -784,3 +784,65 @@ fn leftover_whose_group_lists_only_an_exited_process_twice_but_still_answers_whe
     exited.wait().unwrap();
     kill(&work);
 }
+
+#[tokio::test]
+async fn leftover_whose_end_cannot_be_written_is_kept_on_record_with_no_half_end_and_ended_once_it_can() {
+    let (_tmp, dir) = data_dir();
+    left_by_a_crash(&dir, &Process { pid: 4242, started: 7 });
+    sql(&dir, "UPDATE sessions SET agent_boot = 'another boot' WHERE id = 's'");
+    // The store takes the `failed` but refuses the `closed`.
+    sql(&dir, "CREATE TRIGGER no_closed BEFORE INSERT ON events WHEN NEW.type = 'closed' BEGIN SELECT RAISE(FAIL, 'no'); END");
+    let harness = started_harness(&dir);
+    assert!(harness.events("s", 0).unwrap().is_empty(), "neither half of its end");
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("could not check for agents an earlier harness left running"), "{refused}");
+    sql(&dir, "DROP TRIGGER no_closed");
+    let _ = harness.resume("s").await;
+    let said: Vec<Body> = harness.events("s", 0).unwrap().into_iter().map(|event| event.body).collect();
+    assert!(ended_by_the_next_harness(&said, "the agent was gone too"), "{said:?}");
+    assert_eq!(row(harness, &dir), (false, vec![]));
+}
+
+/// An agent whose leader is gone as soon as it starts, leaving its work in its group; its output closes at once.
+#[derive(Default, Clone)]
+struct Leaver {
+    left: Arc<Mutex<Vec<Work>>>,
+}
+
+impl Driver for Leaver {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+
+    fn open(&self, launch: Launch) -> Result<Link, OpenError> {
+        let (leader, work) = a_leader_gone_with_its_work_left(&launch.cwd);
+        self.left.lock().unwrap().push(work);
+        let (commands, _) = tokio::sync::mpsc::unbounded_channel();
+        let (output, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let _ = output.send(Body::Started { provider_session: format!("leaver-{}", leader.pid), resumed: false });
+        Ok(Link { commands, output: receiver, process: Some(leader) })
+    }
+}
+
+#[tokio::test]
+async fn leftover_an_agent_that_ends_with_its_group_still_running_stays_on_record_until_a_recheck_finds_it_gone() {
+    let (_tmp, dir) = data_dir();
+    let leaver = Leaver::default();
+    let harness = Harness::new(opened(&dir), vec![("leaver".into(), Arc::new(leaver.clone()))], settings(4));
+    let (id, mut events) = harness.open(Open { provider: "leaver".into(), cwd: worktree(&dir), ..Open::default() }).await.unwrap();
+    closed(&mut events).await;
+    let listed = harness.sessions().unwrap().into_iter().find(|session| session.id == id).and_then(|session| session.given_up).unwrap_or_default();
+    assert!(listed.contains("its agent ended, but its process group still answered when its session closed"), "{listed}");
+    // A resume checks it again, and its group is still not the harness's to stop.
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("may still run"), "{refused}");
+    let work = leaver.left.lock().unwrap().remove(0);
+    assert!(process::alive(&work), "never signalled");
+    kill(&work);
+    let refused = harness.resume(&id).await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!refused.contains("may still run"), "freed once its group is gone: {refused}");
+    harness.close(&id).unwrap_or_default();
+    for work in leaver.left.lock().unwrap().drain(..) {
+        kill(&work);
+    }
+}
