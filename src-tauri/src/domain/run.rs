@@ -588,6 +588,25 @@ pub struct Run {
     /// Its session was handed over to Terminal: nothing resumes it until the person says they took it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
+    /// Its agent's permission requests that are still open, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<PermissionRequest>,
+}
+
+/// A permission request of a run on the harness, as the harness sent it: masked there, never cut here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequest {
+    /// The harness's id, which an answer names.
+    pub id: String,
+    pub kind: harness::event::PermissionKind,
+    /// The tool's name: `Bash`, `Edit`, an MCP tool.
+    pub tool: String,
+    /// The whole command, path, pattern, address or query it asks for; else its whole input as JSON.
+    pub subject: String,
+    /// The harness cut it to fit, or its kind is one Gossamr can't read: it can only be denied.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deny_only: bool,
 }
 
 impl Run {
@@ -664,6 +683,7 @@ impl Run {
             harness_session: None,
             answer_waits: false,
             handed_over: false,
+            permissions: Vec::new(),
         }
     }
 

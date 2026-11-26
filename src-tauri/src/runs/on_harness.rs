@@ -212,6 +212,11 @@ impl RunService {
         })
     }
 
+    /// Allows or denies one open permission request of `run_id`, once.
+    pub async fn answer_permission(&self, _run_id: &str, _request: &str, _decision: harness::event::Decision) -> Result<Run> {
+        Err(Error::Proposal("Gossamr can't answer permission requests yet.".into()))
+    }
+
     /// Asks the harness to stop a run's session; the run reads stopped once it closed. `None` for a run not on it.
     pub(super) async fn stop_on_harness(&self, run: &Run) -> Option<Result<Run>> {
         let (link, session) = self.on_harness_of(run)?;

@@ -238,6 +238,10 @@ export class JiraBackend implements Backend {
     return invoke<Run>("runs_answer", { id, text, tookBack: options?.tookBack ?? false });
   }
 
+  runsAnswerPermission(id: string, request: string, decision: "allow" | "deny") {
+    return invoke<Run>("runs_answer_permission", { id, request, decision });
+  }
+
   runsAdoptSession(id: string, session: string) {
     return invoke<Run>("runs_adopt_session", { id, session });
   }

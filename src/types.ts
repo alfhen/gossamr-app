@@ -521,6 +521,22 @@ export interface RunSpec {
   workstream?: string | null;
 }
 
+/** What a permission request asks for, as the harness names it. `other`: a kind this build can't read. */
+export type PermissionKind = "command" | "file_change" | "permissions" | "tool" | "other";
+
+/** A permission request of a run on the harness, as the harness sent it: masked there, never cut. */
+export interface PermissionRequest {
+  /** The harness's id, which an answer names. */
+  id: string;
+  kind: PermissionKind;
+  /** The tool's name: `Bash`, `Edit`, an MCP tool. */
+  tool: string;
+  /** The whole command, path, pattern, address or query it asks for; else its whole input as JSON. */
+  subject: string;
+  /** The harness cut it to fit, or its kind is one Gossamr can't read: it can only be denied. */
+  denyOnly?: boolean;
+}
+
 export type RunState = "queued" | "launching" | "working" | "needsAnswer" | "needsPermission" | "systemBlocked" | "done" | "failed" | "stopped" | "unknown";
 
 /**
@@ -559,6 +575,8 @@ export interface Run {
   answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */
   handedOver?: boolean;
+  /** Its agent's permission requests that are still open, oldest first. Each is answered once, with `runsAnswerPermission`. */
+  permissions?: PermissionRequest[];
   /** The address and signing key git commits with in the run's clone, read when the run was last made ready. */
   commitEmail?: string | null;
   signingKey?: string | null;

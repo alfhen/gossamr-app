@@ -774,6 +774,13 @@ async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String, took_
     runs.answer_took_back(&id, &text, took_back.unwrap_or(false)).await
 }
 
+/// Allows or denies one open permission request of a run on the harness, once. Only the person answers one: no Pip or
+/// agent tool reaches this.
+#[tauri::command]
+async fn runs_answer_permission(runs: State<'_, RunsState>, id: String, request: String, decision: harness::event::Decision) -> Result<Run> {
+    runs.answer_permission(&id, &request, decision).await
+}
+
 /// Takes a listed session over as the continuation of a stopped or finished run, when it still passes every check.
 #[tauri::command]
 async fn runs_adopt_session(runs: State<'_, RunsState>, id: String, session: String) -> Result<Run> {
@@ -1184,6 +1191,7 @@ pub fn run() {
             runs_stop,
             runs_set_model,
             runs_answer,
+            runs_answer_permission,
             runs_adopt_session,
             runs_stop_all,
             workstreams_stop,
