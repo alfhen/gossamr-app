@@ -8,7 +8,8 @@
 //! the thread's `config.mcp_servers` under its per-session name, with its token in `http_headers` only, so it travels
 //! on stdin and is in no argv, no environment and no file, and only that one server key is approved without asking.
 //!
-//! Approvals are answered from H7b on; until then Codex is told this client does not answer them.
+//! Approvals are answered from H7b on. Until then each is declined in its own shape, so no turn waits on one, and the
+//! session says so.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::unix::process::ExitStatusExt;
@@ -514,13 +515,7 @@ impl Rpc {
     fn read(&mut self, line: &str) {
         let Ok(line) = serde_json::from_str::<Value>(line) else { return };
         match (line["method"].as_str(), line.get("id")) {
-            (Some(_), Some(id)) => {
-                // A request of app-server's. Its approvals are answered from H7b on; until then it hears this client
-                // does not answer them, never nothing.
-                let error = json!({"code": -32601, "message": "not supported by this client"});
-                self.send(json!({"id": id, "error": error}));
-                self.emit(Body::Notice { text: "Codex asked for an approval, which this harness does not answer yet, so it was refused.".into() });
-            }
+            (Some(method), Some(id)) => self.asks(method, id.clone()),
             (Some(method), None) => self.notified(method, &line["params"]),
             (None, Some(id)) => {
                 let asked = id.as_u64().and_then(|id| self.asked.remove(&id));
@@ -528,6 +523,20 @@ impl Rpc {
             }
             (None, None) => {}
         }
+    }
+
+    /// A request of app-server's, answered at once so no turn waits on it: an approval is declined in its own shape until
+    /// H7b answers approvals, anything else is refused.
+    fn asks(&mut self, method: &str, id: Value) {
+        let (declined, what) = match method {
+            "item/commandExecution/requestApproval" => (json!({"decision": "decline"}), "to run a command"),
+            "item/fileChange/requestApproval" => (json!({"decision": "decline"}), "to change files"),
+            "item/permissions/requestApproval" => (json!({"permissions": {}, "scope": "turn"}), "for more permissions"),
+            "mcpServer/elicitation/request" => (json!({"action": "decline", "content": null}), "to run another MCP server's tool"),
+            _ => return self.send(json!({"id": id, "error": {"code": -32601, "message": "not supported by this client"}})),
+        };
+        self.send(json!({"id": id, "result": declined}));
+        self.emit(Body::Notice { text: format!("Codex asked {what}, and it was declined: approvals come with H7b, and until then each is declined.") });
     }
 
     fn answered(&mut self, asked: Option<Asked>, line: &Value) {

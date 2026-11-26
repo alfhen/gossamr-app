@@ -255,6 +255,25 @@ async fn codex_stop_kills_a_command_that_outlived_turn_interrupt() {
 }
 
 #[tokio::test]
+async fn codex_each_approval_is_declined_in_its_own_shape_until_h7b_and_the_turn_goes_on() {
+    let declines = [
+        ("item/commandExecution/requestApproval", serde_json::json!({"decision": "decline"})),
+        ("item/fileChange/requestApproval", serde_json::json!({"decision": "decline"})),
+        ("item/permissions/requestApproval", serde_json::json!({"permissions": {}, "scope": "turn"})),
+        ("mcpServer/elicitation/request", serde_json::json!({"action": "decline", "content": null})),
+    ];
+    for (method, declined) in declines {
+        let run = Run::new();
+        let said = one_turn(&run, run.launch(&[("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", method)], None, None, None)).await;
+        let answer = run.requests().into_iter().find(|line| line["id"] == 900 && line.get("method").is_none()).unwrap_or_else(|| panic!("{method} was answered"));
+        assert_eq!(answer["result"], declined, "{method}");
+        let told = said.iter().any(|body| matches!(body, Body::Notice { text } if text.contains("declined: approvals come with H7b")));
+        assert!(told, "the session says it was declined: {said:?}");
+        assert_eq!(said.last(), Some(&Body::TurnEnded { how: TurnEnd::Done }), "{method}: the turn did not wait on it");
+    }
+}
+
+#[tokio::test]
 async fn codex_a_locked_session_is_refused() {
     let run = Run::new();
     let mut launch = run.launch(&[], None, None, None);

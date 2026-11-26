@@ -14,7 +14,8 @@
 //! its usage and completes; `command` starts `sleep 60` in a process group of its own, writes its pid to
 //! `command.pid`, and waits for `turn/interrupt`, which leaves the sleep running, as Codex does (H0, row 3). At the
 //! end of stdin it exits and leaves any sleep it started; with `FAKE_APP_SERVER_STAY` set it ignores SIGTERM and stays
-//! instead, as an agent that will not stop does.
+//! instead, as an agent that will not stop does. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
+//! 900, and completes the turn once it is answered.
 
 use std::io::{BufRead, Write};
 use std::os::unix::process::CommandExt;
@@ -156,6 +157,12 @@ impl Fake {
                 }
             }
             Some(_) if !id.is_null() => self.say(json!({"id": id, "error": {"code": -32601, "message": "unknown method"}})),
+            // The answer to the approval it asked: the turn goes on to its end.
+            None if *id == 900 => {
+                if let Some(turn) = self.turn.take() {
+                    self.notify("turn/completed", json!({"threadId": "thr-fake-1", "turn": {"id": turn, "status": "completed"}}));
+                }
+            }
             _ => {}
         }
     }
@@ -167,6 +174,11 @@ impl Fake {
         self.turn = Some(turn.clone());
         self.say(json!({"id": id, "result": {"turn": {"id": turn, "status": "inProgress"}}}));
         self.notify("turn/started", json!({"threadId": thread, "turn": {"id": turn}}));
+        if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("approval") {
+            let method = std::env::var("FAKE_APP_SERVER_APPROVAL").unwrap_or_default();
+            self.say(json!({"id": 900, "method": method, "params": {"threadId": thread, "turnId": turn, "itemId": format!("item-{n}")}}));
+            return;
+        }
         if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("command") {
             let sleep = std::process::Command::new("/bin/sleep").arg("60").process_group(0).spawn();
             if let Ok(sleep) = sleep {
