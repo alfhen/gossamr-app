@@ -496,7 +496,7 @@ async fn shutdown_stops_every_session_and_frees_the_data_folder() {
             _ => continue,
         }
     }
-    let shut = tokio::time::timeout(Duration::from_secs(10), client.call(Op::Shutdown)).await;
+    let shut = tokio::time::timeout(Duration::from_secs(10), client.call(Op::Shutdown { no_carry_on: None })).await;
     shut.expect("shutdown answers once every session has stopped").unwrap();
     let store = harness::store::Store::open(&served.dir).expect("the data folder is free once shutdown answers");
     for id in [&idle, &asking] {
@@ -1047,7 +1047,7 @@ async fn events_the_opener_of_an_unlocked_session_gets_its_first_event() {
 async fn shutdown_the_socket_and_descriptor_are_gone_when_a_client_gets_its_answer() {
     let served = serve(SCRIPT);
     let mut client = connect(&served).await;
-    let answer = client.call(Op::Shutdown).await.unwrap();
+    let answer = client.call(Op::Shutdown { no_carry_on: None }).await.unwrap();
     assert_eq!(answer, json!({ "left": [] }));
     assert!(!served.dir.join(SOCKET).exists() && !served.dir.join(DESCRIPTOR).exists(), "removed before the store was let go");
 }
@@ -1097,7 +1097,7 @@ async fn tokens_a_revoke_that_cuts_a_write_short_drops_the_connection_without_fl
 async fn shutdown_two_clients_that_ask_at_once_both_get_the_answer() {
     let served = serve(SCRIPT);
     let (mut first, mut second) = (connect(&served).await, connect(&served).await);
-    let (one, two) = tokio::join!(first.call(Op::Shutdown), second.call(Op::Shutdown));
+    let (one, two) = tokio::join!(first.call(Op::Shutdown { no_carry_on: None }), second.call(Op::Shutdown { no_carry_on: None }));
     for answer in [one, two] {
         assert!(answer.as_ref().is_ok_and(|said| said["left"].is_array()), "{answer:?}");
     }
@@ -1145,13 +1145,13 @@ async fn shutdown_a_client_that_asks_once_it_has_begun_is_told_so() {
     let mut events = harness.subscribe(&id).unwrap();
     asking.call(Op::Send { session: id, text: "run".into() }).await.unwrap();
     until(&mut events, |body| matches!(body, Body::TurnStarted)).await;
-    let first_ask = tokio::spawn(async move { asking.call(Op::Shutdown).await });
+    let first_ask = tokio::spawn(async move { asking.call(Op::Shutdown { no_carry_on: None }).await });
     // On this one thread, `run` removes the socket and closes the asks in one step; the stuck agent then holds the
     // shutdown open while the late client asks.
     while dir.join(SOCKET).exists() {
         tokio::task::yield_now().await;
     }
-    let refused = late.call(Op::Shutdown).await;
+    let refused = late.call(Op::Shutdown { no_carry_on: None }).await;
     assert!(matches!(&refused, Err(Error::Said(why)) if why.contains("already shutting down")), "{refused:?}");
     let answered = first_ask.await.unwrap();
     assert!(answered.as_ref().is_ok_and(|said| said["left"].as_array().is_some_and(|left| left.len() == 1)), "{answered:?}");
@@ -1279,7 +1279,7 @@ async fn client_proves_and_shuts_down_a_harness_of_another_protocol_and_sends_it
     let mut client = Client::connect_any_protocol(tmp.path(), &token, WAIT).await.unwrap();
     assert_eq!(client.hello.protocol, other);
     assert!(matches!(client.call(Op::Sessions).await, Err(Error::Protocol(ref why)) if why.contains("only `shutdown`")), "nothing else is sent");
-    assert_eq!(client.call(Op::Shutdown).await.unwrap(), json!({ "left": [] }));
+    assert_eq!(client.call(Op::Shutdown { no_carry_on: None }).await.unwrap(), json!({ "left": [] }));
     drop(client);
     assert_eq!(fake.await.unwrap(), vec!["shutdown"], "the fake saw only the shutdown");
 }

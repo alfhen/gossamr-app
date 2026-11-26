@@ -71,7 +71,7 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
             });
             Some(Command::Providers { logins: logins.collect::<Option<_>>()? })
         }
-        ("shutdown", []) if known(&[]) => call(Op::Shutdown),
+        ("shutdown", []) if known(&[]) => call(Op::Shutdown { no_carry_on: None }),
         ("token", [new]) if new == "new" && known(&[]) => Some(Command::TokenNew),
         ("token", [list]) if list == "list" && known(&[]) => call(Op::TokenList),
         ("token", [revoke, id]) if revoke == "revoke" && known(&[]) => call(Op::TokenRevoke { token: id.parse().ok()? }),

@@ -174,8 +174,9 @@ enum Request {
     /// A client's Stop, or the client a session ends with leaving: what its `closed` says.
     Stop(ClosedBy),
     HandOver,
-    /// The harness shuts down: the session stops, and its open question stays open for after the restart.
-    Shutdown,
+    /// The harness shuts down: the session stops, and its open question stays open for after the restart. With a
+    /// reason, it may not carry on after it.
+    Shutdown(Option<String>),
     /// "Carry on" after a resume: sent once nothing forbids it, checked in the step that sends it.
     CarryOn(String),
 }
@@ -570,15 +571,24 @@ impl Harness {
     /// folder. Nothing starts after it. A stuck session gets a last `failed` that says the harness gave up on it, and
     /// is named in what this returns; its agent may still run, for the next start to find.
     pub async fn shutdown(&self) -> Vec<String> {
-        let running: Vec<Live> = {
+        self.shutdown_with(None).await
+    }
+
+    /// `shutdown`, after which no session it stops may carry on, for `no_carry_on`, until a turn of its own.
+    pub async fn shutdown_with(&self, no_carry_on: Option<&str>) -> Vec<String> {
+        let running: Vec<(String, Live)> = {
             let live = self.inner.live();
             self.inner.closing.store(true, Ordering::Relaxed);
-            live.values().cloned().collect()
+            live.iter().map(|(id, live)| (id.clone(), live.clone())).collect()
         };
         // As in `stop`, the first stop wins: a hand over already on its way is not overtaken.
-        for live in running {
-            if !live.stopping.swap(true, Ordering::Relaxed) {
-                let _ = live.requests.send(Request::Shutdown);
+        for (id, live) in running {
+            let sent = !live.stopping.swap(true, Ordering::Relaxed) && live.requests.send(Request::Shutdown(no_carry_on.map(str::to_owned))).is_ok();
+            // A session already on its way out takes no request, so its mark is written for it.
+            if !sent && let Some(why) = no_carry_on
+                && let Err(e) = self.inner.with_store(|store| store.set_no_carry_on(&id, Some(why)))
+            {
+                eprintln!("harness: couldn't keep session {id} from carrying on after the shutdown: {e}");
             }
         }
         #[cfg(test)]
@@ -1723,7 +1733,14 @@ impl Task {
                         break 'run true;
                     }
                     Some(Request::CarryOn(text)) => carry_on = Some(text),
-                    Some(Request::Shutdown) | None => {
+                    Some(Request::Shutdown(why)) => {
+                        by = ClosedBy::Shutdown;
+                        if let Some(why) = why {
+                            self.forbid_carry_on(Some(&why), &mut blocked);
+                        }
+                        break 'run true;
+                    }
+                    None => {
                         by = ClosedBy::Shutdown;
                         break 'run true;
                     }
@@ -1745,7 +1762,12 @@ impl Task {
             unsent |= matches!(request, Request::Prompt(_) | Request::AnswerAsk { .. } | Request::CarryOn(_));
             taken = taken.or(match request {
                 Request::Stop(who) => Some(who),
-                Request::Shutdown => Some(ClosedBy::Shutdown),
+                Request::Shutdown(why) => {
+                    if let Some(why) = why {
+                        self.forbid_carry_on(Some(&why), &mut blocked);
+                    }
+                    Some(ClosedBy::Shutdown)
+                }
                 Request::HandOver => Some(ClosedBy::HandOver),
                 _ => None,
             });

@@ -20,6 +20,11 @@ async fn on_harness(served: &Served) -> Rig {
 
 /// The app on `served`, opening runs on `provider`, with `cap` agents at once.
 async fn on_harness_as(served: &Served, provider: &str, cap: usize) -> Rig {
+    on_harness_with(served, provider, cap, CATCH_UP_TAKES_UP_TO).await
+}
+
+/// `on_harness_as`, whose carry on after a harness start waits `catch_up` for the app to catch up.
+async fn on_harness_with(served: &Served, provider: &str, cap: usize, catch_up: std::time::Duration) -> Rig {
     let fx = fixture_watching(&["acme/webshop"]).await;
     let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
@@ -28,7 +33,7 @@ async fn on_harness_as(served: &Served, provider: &str, cap: usize) -> Rig {
     let notices = Arc::new(Notices::default());
     let link = Arc::new(Link::start(fx.core.clone(), direct, reads, notices.clone(), changed));
     let told = notices.clone();
-    let mut rig = ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap).with_notifier(told)).await;
+    let mut rig = ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap).with_notifier(told).with_catch_up(catch_up)).await;
     rig.notices = notices;
     rig
 }
@@ -1374,6 +1379,10 @@ const BUILDS_ON: &str = r#"{"prompt": null}
 /// A run whose long turn a harness shutdown cut, read as cut once the harness serves again.
 async fn cut_by_a_shutdown(served: &mut Served) -> (Rig, Run, String) {
     let rig = on_harness(served).await;
+    cut_on(rig, served).await
+}
+
+async fn cut_on(rig: Rig, served: &mut Served) -> (Rig, Run, String) {
     let run = rig.launched(1).await;
     until_detail(&rig, &run, "Starting a long build.").await;
     served.shut_down().await;
@@ -1649,6 +1658,140 @@ async fn a_run_whose_harness_went_without_a_shutdown_is_carried_on_once_and_pip_
     assert!(prompted(&served, &session, CARRY_ON).await);
     let told: Vec<crate::runs::tracker::Attention> = rig.notices.0.lock().unwrap().iter().filter(|(id, ..)| *id == run.id).map(|(_, why, _)| *why).collect();
     assert!(!told.contains(&crate::runs::tracker::Attention::Failed), "nothing failed, so Pip hears nothing: {told:?}");
+}
+
+/// Longer than the link's longest wait between connects, so a reconnect fits in it.
+const CATCH_UP: std::time::Duration = std::time::Duration::from_secs(8);
+
+#[tokio::test]
+async fn a_carry_on_that_begins_before_the_harness_answers_waits_for_it_and_carries_on_a_run_its_harness_went_from() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness_with(&served, "mock", 6, CATCH_UP).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    let (_, before) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    served.shut_down().await;
+    until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    // As a reboot leaves it: the next harness ends the start the old one left as `harness_went`.
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE events SET payload = json_set(payload, '$.by', 'harness_went') WHERE session = ?1 AND type = 'closed'", [&session]).unwrap();
+    rig.fx.core.apply_session(&session, move |run, f| {
+        *f = before;
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    // The app's carry on begins while the harness is not up yet, and the harness comes up later than its window.
+    let rig = Arc::new(rig);
+    let carrying = tokio::spawn({
+        let rig = rig.clone();
+        async move { rig.svc.carry_on_after_restart().await }
+    });
+    tokio::time::sleep(CATCH_UP + std::time::Duration::from_secs(1)).await;
+    assert!(!carrying.is_finished(), "it waits for the harness to answer before its window opens");
+    served.serve_again(4).await;
+    tokio::time::timeout(WAIT * 2, carrying).await.expect("the carry on ended").unwrap();
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert_eq!(rows.iter().filter(|text| *text == "Carried on after the harness restarted").count(), 1, "{rows:?}");
+    until_detail(&rig, &run, "Back on the build.").await;
+    assert!(prompted(&served, &session, CARRY_ON).await);
+}
+
+/// The carry ons the harness refused for `run`, one a pass.
+async fn refusals(rig: &Rig, run: &Run) -> usize {
+    rig.fx.core.run_events(&run.id).await.unwrap().iter().filter(|e| e.text.starts_with("Not carried on after the harness restarted: ")).count()
+}
+
+async fn until_refused(rig: &Rig, run: &Run, n: usize) {
+    let waited = tokio::time::timeout(WAIT * 2, async {
+        while refusals(rig, run).await < n {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    });
+    waited.await.unwrap_or_else(|_| panic!("not {n} passes"));
+}
+
+#[tokio::test]
+async fn each_harness_start_is_carried_on_by_one_pass_and_nothing_counted_starts_none() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness_with(&served, "mock", 6, CATCH_UP).await;
+    let (rig, run, session) = cut_on(rig, &mut served).await;
+    // Refused each time, so each pass leaves a row.
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET no_carry_on = 'you denied its last request' WHERE id = ?1", [&session]).unwrap();
+    served.shut_down().await;
+    let (starts, counted) = tokio::sync::watch::channel(0u64);
+    let rig = Arc::new(rig);
+    let carrying = tokio::spawn({
+        let rig = rig.clone();
+        async move { rig.svc.carry_on_at_each_start(counted).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    // As Settings > Harness starts it while the first pass waits: counted before the new harness answers.
+    starts.send_modify(|n| *n += 1);
+    served.serve_again(4).await;
+    until_refused(&rig, &run, 1).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert_eq!(refusals(&rig, &run).await, 1, "one start, one pass, and no pass while nothing is counted");
+    served.shut_down().await;
+    starts.send_modify(|n| *n += 1);
+    served.serve_again(4).await;
+    until_refused(&rig, &run, 2).await;
+    carrying.abort();
+}
+
+/// A run in a long turn when you stop every agent from Settings, read as cut.
+async fn stopped_by_you(served: &mut Served, rig: &Rig) -> (Run, String) {
+    let run = rig.launched(1).await;
+    until_detail(rig, &run, "Starting a long build.").await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down_as(Some(crate::sidecar::STOPPED_EVERY_AGENT)).await;
+    let cut = until_detail(rig, &run, crate::runs::consumer::CUT).await;
+    assert_eq!(cut.state, RunState::Stopped);
+    (run, session)
+}
+
+/// That `run` was not carried on, and its timeline says a message would.
+async fn not_carried_on_as_you_stopped_it(rig: &Rig, served: &Served, run: &Run, session: &str) {
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert!(!rows.iter().any(|text| text == "Carried on after the harness restarted"), "{rows:?}");
+    let said = format!("Not carried on after the harness restarted: It may not carry on: {}. {CARRY_ON_BY_MESSAGE}", crate::sidecar::STOPPED_EVERY_AGENT);
+    assert!(rows.contains(&said), "{rows:?}");
+    assert!(!prompted(served, session, CARRY_ON).await, "no carry on reached the agent");
+}
+
+#[tokio::test]
+async fn after_you_stop_every_agent_quit_and_open_the_app_no_run_is_carried_on_and_a_message_resumes_it() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness(&served).await;
+    let (run, session) = stopped_by_you(&mut served, &rig).await;
+    // The next app start serves the harness again and carries on what a restart cut.
+    served.serve_again(4).await;
+    rig.svc.carry_on_after_restart().await;
+    not_carried_on_as_you_stopped_it(&rig, &served, &run, &session).await;
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Go on with the build.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    until_resumed(&rig, &run).await;
+    assert!(prompted(&served, &session, "Go on with the build.").await, "your message resumed it");
+}
+
+#[tokio::test]
+async fn after_you_stop_every_agent_and_start_the_harness_again_no_run_is_carried_on() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = Arc::new(on_harness(&served).await);
+    let (starts, counted) = tokio::sync::watch::channel(0u64);
+    let carrying = tokio::spawn({
+        let rig = rig.clone();
+        async move { rig.svc.carry_on_at_each_start(counted).await }
+    });
+    let (run, session) = stopped_by_you(&mut served, &rig).await;
+    // Settings > Start: counted, then served.
+    starts.send_modify(|n| *n += 1);
+    served.serve_again(4).await;
+    until_refused(&rig, &run, 1).await;
+    not_carried_on_as_you_stopped_it(&rig, &served, &run, &session).await;
+    carrying.abort();
 }
 
 /// A turn waiting on a permission when the harness shut down, and a second turn for a message.

@@ -32,6 +32,9 @@ pub const TOKEN_ACCOUNT: &str = "harness";
 const APP_LOCK: &str = "app.lock";
 const LOG: &str = "harness.log";
 
+/// Why a run Stop cut is not carried on: you stopped it, so it goes on only when you message it.
+pub const STOPPED_EVERY_AGENT: &str = "you stopped every agent";
+
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// For one connection and its proof.
@@ -147,6 +150,8 @@ pub struct Sidecar {
     /// Held for each start, adopt, stop or restart, so two of them in this app never interleave.
     work: tokio::sync::Mutex<Inner>,
     status: Mutex<Status>,
+    /// Counts the harnesses this app started, so the runs a start cut are carried on once per start.
+    starts: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     waiting: tokio::sync::Notify,
 }
@@ -163,6 +168,7 @@ impl Sidecar {
             limits,
             work: tokio::sync::Mutex::new(inner),
             status: Mutex::new(Status::new(State::Starting, None)),
+            starts: tokio::sync::watch::channel(0).0,
             #[cfg(test)]
             waiting: tokio::sync::Notify::new(),
         }
@@ -181,10 +187,27 @@ impl Sidecar {
     /// Starts or adopts the harness unless it was stopped from Settings. While another call is at work, its status.
     pub async fn ensure(&self) -> Status {
         let Ok(mut inner) = self.work.try_lock() else { return self.status() };
+        self.ensure_with(&mut inner).await
+    }
+
+    /// `ensure` for the app's start, after any call at work: one that holds the lock only to read the key, as the
+    /// link's first connect does, would otherwise leave the harness unstarted until Settings > Harness.
+    pub async fn start_up(&self) -> Status {
+        let mut inner = self.work.lock().await;
+        self.ensure_with(&mut inner).await
+    }
+
+    async fn ensure_with(&self, inner: &mut Inner) -> Status {
         if inner.stopped_by_you {
             return self.status();
         }
-        self.run(&mut inner, None).await
+        self.run(inner, None).await
+    }
+
+    /// Changes each time this app starts a harness, from Settings too, before the new one answers. An adopted one is no
+    /// start.
+    pub fn starts(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.starts.subscribe()
     }
 
     pub async fn act(&self, action: Action) -> Status {
@@ -263,8 +286,8 @@ impl Sidecar {
         let lock = self.app_lock().await?;
         let token = self.token(inner)?;
         let result = match action {
-            Some(Action::Stop) => self.stop(&token).await.map(|left| Status::new(State::Stopped, Some(left_message("Stopped.", &left)))),
-            Some(Action::Restart) => match self.stop(&token).await {
+            Some(Action::Stop) => self.stop(&token, Some(STOPPED_EVERY_AGENT)).await.map(|left| Status::new(State::Stopped, Some(left_message("Stopped.", &left)))),
+            Some(Action::Restart) => match self.stop(&token, None).await {
                 Ok(left) => restarted(self.start_or_adopt(&token, &socket).await, &left),
                 Err(e) => Err(e),
             },
@@ -376,6 +399,9 @@ impl Sidecar {
                         if failures >= 3 {
                             return Err(format!("The harness stopped as it started: {}", self.last_log_line()));
                         }
+                        // Counted before it can answer, so the carry on that waits for an answer covers this start. A spawn
+                        // that fails counts too, and its pass only waits for a harness that answers.
+                        self.starts.send_modify(|n| *n += 1);
                         let child = spawn(&self.program, &self.dir, token).map_err(|e| format!("Gossamr couldn't start the harness at {}: {e}", self.program.display()))?;
                         started = Some(child);
                     }
@@ -415,7 +441,8 @@ impl Sidecar {
     }
 
     /// Tells a harness of this app's token to stop every session and itself, and waits until the data folder is free.
-    async fn stop(&self, token: &Token) -> Result<Vec<String>, String> {
+    /// With `no_carry_on`, no session it stops is carried on after the next start; a message still resumes it.
+    async fn stop(&self, token: &Token, no_carry_on: Option<&str>) -> Result<Vec<String>, String> {
         let mut client = match Client::connect_any_protocol(&self.dir, token, self.limits.prove_within).await {
             Ok(client) => client,
             // One that is stopping has taken its socket away and still holds the folder: wait for it below.
@@ -424,7 +451,7 @@ impl Sidecar {
             Err(e) => return Err(format!("Gossamr couldn't reach the harness: {e}")),
         };
         let stopping = || "The harness is still stopping. Try again in a minute.".to_owned();
-        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown)).await.map_err(|_| stopping())?;
+        let answer = tokio::time::timeout(self.limits.stopping_within, client.call(Op::Shutdown { no_carry_on: no_carry_on.map(str::to_owned) })).await.map_err(|_| stopping())?;
         let answer = answer.map_err(|e| format!("Gossamr couldn't stop the harness: {e}"))?;
         drop(client);
         self.until_free().await?;

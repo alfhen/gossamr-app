@@ -89,7 +89,7 @@ impl Client {
 
     /// Makes a call and waits for its answer. Pushes that come meanwhile are kept for `push`.
     pub async fn call(&mut self, op: Op) -> Result<Value> {
-        if self.hello.protocol != PROTOCOL && !matches!(op, Op::Shutdown) {
+        if self.hello.protocol != PROTOCOL && !matches!(op, Op::Shutdown { .. }) {
             return Err(Error::Protocol(format!("the harness speaks protocol {}, this client {PROTOCOL}: only `shutdown` is sent to it", self.hello.protocol)));
         }
         self.next_id += 1;

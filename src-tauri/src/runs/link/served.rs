@@ -100,8 +100,13 @@ impl Served {
 
     /// Stops the harness through its own `shutdown` and waits until it has freed the data folder.
     pub async fn shut_down(&mut self) {
+        self.shut_down_as(None).await;
+    }
+
+    /// `shut_down`, after which no session it stopped may carry on, for `no_carry_on`, as Settings > Stop asks.
+    pub async fn shut_down_as(&mut self, no_carry_on: Option<&str>) {
         let mut client = self.client().await;
-        client.call(Op::Shutdown).await.unwrap();
+        client.call(Op::Shutdown { no_carry_on: no_carry_on.map(str::to_owned) }).await.unwrap();
         tokio::time::timeout(WAIT, self.task.take().unwrap()).await.unwrap().unwrap().unwrap();
     }
 }
