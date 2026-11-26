@@ -70,8 +70,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::Prompted { text } => {
             follow.prompts += 1;
-            // The first prompt is the brief the person approved; each later one is a message to the agent.
-            if follow.prompts > 1 {
+            // The first prompt is the brief the person approved; each later one is a message to the agent, but for
+            // Gossamr's own carry on, whose row the carry on writes.
+            if follow.prompts > 1 && text != super::on_harness::CARRY_ON {
                 rows.add("follow_up", "Message sent", Some(&text));
             }
         }

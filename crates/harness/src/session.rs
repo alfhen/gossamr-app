@@ -1041,7 +1041,7 @@ fn end_left_start(store: &Store, id: &str, how: &str) {
     if !closed {
         let ms = now_ms();
         let _ = store.append(id, &Body::Failed { kind: FailKind::AgentStopped, reason: how.to_owned() }, ms);
-        let _ = store.append(id, &Body::Closed { by: ClosedBy::Harness }, ms);
+        let _ = store.append(id, &Body::Closed { by: ClosedBy::HarnessWent }, ms);
     }
 }
 

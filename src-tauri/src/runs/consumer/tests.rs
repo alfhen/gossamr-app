@@ -577,7 +577,7 @@ fn a_turn_the_agent_or_the_harness_ended_fails_and_says_why_while_a_shutdown_or_
         assert_eq!((p.run.error.as_deref(), p.run.failure), (Some("the agent stopped in the middle of a turn: killed by SIGKILL"), Some(RunFailure::Other)), "{by:?}");
         assert_eq!(p.follow.cut, None, "{by:?}: nothing to carry on");
     }
-    for by in [ClosedBy::Shutdown, ClosedBy::Signal, ClosedBy::ClientLeft, ClosedBy::Unknown] {
+    for by in [ClosedBy::Shutdown, ClosedBy::Signal, ClosedBy::ClientLeft, ClosedBy::HarnessWent, ClosedBy::Unknown] {
         let mut p = Played::new();
         p.play(started()).play([cut(), Body::Closed { by }]);
         assert_eq!((p.run.state, p.run.error.as_deref()), (RunState::Stopped, None), "{by:?}");
@@ -623,4 +623,16 @@ fn a_turn_cut_again_after_three_carry_ons_in_a_row_fails_and_one_that_ends_well_
     first.play(started());
     agent_lost(&mut first.run, &mut first.follow, Utc::now());
     assert_eq!((first.run.state, first.follow.cut.is_some()), (RunState::Stopped, true), "a first lost agent is a cut");
+}
+
+#[test]
+fn a_harness_that_went_without_a_shutdown_leaves_a_cut_to_carry_on_and_a_new_turn_clears_it() {
+    let mut p = Played::new();
+    let went = "the harness that ran this agent went, and the next one stopped it";
+    p.play(started()).play([Body::Failed { kind: FailKind::AgentStopped, reason: went.into() }, Body::Closed { by: ClosedBy::HarnessWent }]);
+    assert_eq!((p.run.state, p.run.error.as_deref(), p.follow.cut.as_deref()), (RunState::Stopped, None, Some(went)), "not a failure: carry on may take it up");
+    p.play([Body::Started { provider_session: "p1".into(), resumed: true }, Body::TurnStarted]);
+    assert_eq!((p.run.state, p.follow.cut.as_deref()), (RunState::Working, None), "the new turn is not the one that was cut");
+    let read: ClosedBy = serde_json::from_value(json!("harness_went")).unwrap();
+    assert_eq!(read, ClosedBy::HarnessWent, "as the harness writes it");
 }

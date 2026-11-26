@@ -149,7 +149,7 @@ fn said(dir: &Path) -> Vec<harness::event::Body> {
 /// What a start that its next harness ended says last: a `failed` that says how, and a `closed` by the harness.
 fn ended_by_the_next_harness(said: &[harness::event::Body], how: &str) -> bool {
     use harness::event::{Body, ClosedBy, FailKind};
-    matches!(said, [.., Body::Failed { kind: FailKind::AgentStopped, reason }, Body::Closed { by: ClosedBy::Harness }] if reason.contains(how))
+    matches!(said, [.., Body::Failed { kind: FailKind::AgentStopped, reason }, Body::Closed { by: ClosedBy::HarnessWent }] if reason.contains(how))
 }
 
 fn row(harness: Harness, dir: &Path) -> (bool, Vec<(String, Process)>) {

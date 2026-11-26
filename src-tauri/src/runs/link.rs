@@ -153,8 +153,9 @@ impl Link {
         self.resume(session, carry_on, true).await
     }
 
-    /// Resumes a session that is not running with the person's or Pip's message as its prompt, as `carry_on` does. A
-    /// message starts the count of carry-ons again: someone chose to go on.
+    /// Resumes a session that is not running and sends it the person's or Pip's message as its next prompt. Not as a
+    /// carry on: the harness refuses one after a stop, a deny, a cancel or a request left open, which the person's own
+    /// choice to go on must not meet. A message starts the count of carry-ons again.
     pub async fn resume_with(&self, session: &str, text: &str) -> Result<(), String> {
         self.resume(session, text, false).await
     }
@@ -179,14 +180,19 @@ impl Link {
             })
         };
         mark(if counted { carry_ons + 1 } else { 0 }, None, true).await.map_err(|e| e.to_string())?;
-        if let Err(why) = self.call(Op::Resume { session: session.to_owned(), carry_on: Some(prompt.to_owned()) }).await {
+        let carry_on = counted.then(|| prompt.to_owned());
+        if let Err(why) = self.call(Op::Resume { session: session.to_owned(), carry_on }).await {
             if let Err(e) = mark(carry_ons, cut, false).await {
                 eprintln!("couldn't put back the count of carry-ons of session {session}: {e}");
             }
             return Err(why);
         }
         let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
-        self.follow(session, follow.seq).await
+        self.follow(session, follow.seq).await?;
+        if !counted {
+            self.send(session, prompt).await?;
+        }
+        Ok(())
     }
 
     /// Waits up to `limit` until the app has applied every event the harness holds for each session it follows, and
