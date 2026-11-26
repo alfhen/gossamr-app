@@ -464,6 +464,10 @@ async fn waking_agents_counts_against_the_turns_three() {
     let over = d.err("in-ws", "message_agent", json!({ "id": finished[3].id, "text": "Again." })).await;
     assert!(over.contains("You have started 3 agents in this turn already"), "{over}");
     assert_eq!(d.run_by_id(&finished[3].id).await.state, RunState::Done);
+    // A failed run's message may resume its cut on the harness, so it counts too.
+    d.rig.set(&finished[3], |r| r.state = RunState::Failed).await;
+    let failed = d.err("in-ws", "message_agent", json!({ "id": finished[3].id, "text": "Again." })).await;
+    assert!(failed.contains("You have started 3 agents in this turn already"), "{failed}");
 }
 
 #[tokio::test]
