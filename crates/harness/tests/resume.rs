@@ -267,6 +267,22 @@ async fn after_a_shutdown_with_a_reason_carry_on_is_refused_for_it_a_resume_work
 }
 
 #[tokio::test]
+async fn a_shutdown_with_a_reason_marks_a_session_already_on_its_way_out_too() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let id = {
+        let harness = harness(&dir, &mock, 4);
+        let (id, mut events) = open(&harness, false).await;
+        next(&mut events).await;
+        // Its stop is taken, so it takes no shutdown request; nothing has run it yet on this one thread.
+        harness.hand_over(&id).unwrap();
+        assert!(harness.shutdown_with(Some("you stopped every agent")).await.is_empty());
+        id
+    };
+    assert_eq!(reopen(&dir).await.session(&id).unwrap().no_carry_on.as_deref(), Some("you stopped every agent"));
+}
+
+#[tokio::test]
 async fn take_back_then_resume_works_and_resume_without_it_is_refused() {
     let (_tmp, dir) = data_dir();
     let mock = mock(TURNS);

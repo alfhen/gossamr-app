@@ -576,15 +576,19 @@ impl Harness {
 
     /// `shutdown`, after which no session it stops may carry on, for `no_carry_on`, until a turn of its own.
     pub async fn shutdown_with(&self, no_carry_on: Option<&str>) -> Vec<String> {
-        let running: Vec<Live> = {
+        let running: Vec<(String, Live)> = {
             let live = self.inner.live();
             self.inner.closing.store(true, Ordering::Relaxed);
-            live.values().cloned().collect()
+            live.iter().map(|(id, live)| (id.clone(), live.clone())).collect()
         };
         // As in `stop`, the first stop wins: a hand over already on its way is not overtaken.
-        for live in running {
-            if !live.stopping.swap(true, Ordering::Relaxed) {
-                let _ = live.requests.send(Request::Shutdown(no_carry_on.map(str::to_owned)));
+        for (id, live) in running {
+            let sent = !live.stopping.swap(true, Ordering::Relaxed) && live.requests.send(Request::Shutdown(no_carry_on.map(str::to_owned))).is_ok();
+            // A session already on its way out takes no request, so its mark is written for it.
+            if !sent && let Some(why) = no_carry_on
+                && let Err(e) = self.inner.with_store(|store| store.set_no_carry_on(&id, Some(why)))
+            {
+                eprintln!("harness: couldn't keep session {id} from carrying on after the shutdown: {e}");
             }
         }
         #[cfg(test)]
