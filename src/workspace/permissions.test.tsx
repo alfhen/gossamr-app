@@ -100,9 +100,21 @@ describe("a permission request's item", () => {
     expect(html.lastIndexOf(">Deny<")).toBeGreaterThan(last);
     // A Deny before it too, safe to give unseen, with where Allow is.
     expect(html.indexOf(">Deny<")).toBeLessThan(html.indexOf("migrating batch 1"));
-    expect(unescape(html)).toContain("This request is 3,001 lines long. Allow is at its end.");
+    expect(unescape(html)).toContain("This request is 3,001 lines long. Scroll through it to allow it: Allow is at its end.");
     expect(html.match(/>Allow</g)).toHaveLength(1);
     expect(html).not.toMatch(/sticky|fixed|max-h-/);
+  });
+
+  it("keeps Allow, and only Allow, off until the whole request has been on screen, and says so", () => {
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} unread onAnswer={vi.fn()} />);
+    const allow = buttons(html).find((b) => b.text === "Allow")!;
+    const deny = buttons(html).filter((b) => b.text === "Deny");
+    expect(allow.tag).toContain("disabled");
+    expect(allow.tag).toContain('title="Scroll through the whole request to allow it."');
+    for (const b of deny) expect(b.tag).not.toContain("disabled");
+    // Only in the title: a line that came and went would move the buttons under the pointer.
+    expect(unescape(html.replace(/title="[^"]*"/g, ""))).not.toContain("Scroll through the whole request");
+    expect((html.match(/data-seen-part/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 
   it("holds both buttons while held: answered, or just moved into place", () => {

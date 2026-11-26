@@ -6,6 +6,8 @@ const LONG_COMMAND = 'pnpm vitest run src/campaigns/sendTime.test.ts src/campaig
 
 const card = (page: Page, key: string) => agentsHome(page).locator("article[data-run-id]").filter({ hasText: key }).first();
 const requestsOn = (page: Page, key: string) => card(page, key).locator("[data-permission-request]");
+/** Brings a request on screen, as a person scrolls to it: its Allow wakes only once all of it has been seen. */
+const inView = (ask: Locator) => ask.scrollIntoViewIfNeeded();
 /** The value shown under the input field named `name`. */
 const field = (scope: Locator, name: string) => scope.locator("[data-input-field]").filter({ has: scope.page().locator("dt", { hasText: new RegExp(`^${name.replace(/[[\].*+?^${}()|\\]/g, "\\$&")}$`) }) }).locator("dd");
 const runId = async (page: Page, key: string) => (await mockRuns(page)).filter((r) => r.key === key).slice(-1)[0].id;
@@ -22,6 +24,7 @@ test("a command the agent asks to run shows whole on its card with Allow and Den
   await expect(field(ask, "command")).toHaveText(LONG_COMMAND);
   await expect(field(ask, "dangerouslyDisableSandbox")).toHaveText("true");
   await expect(ask.getByRole("button", { name: "Deny" })).toBeVisible();
+  await inView(ask);
   await ask.getByRole("button", { name: "Allow" }).click();
   await expect(requestsOn(page, "CA-407")).toHaveCount(0);
   await expect(card(page, "CA-407")).toContainText("Allowed Bash");
@@ -34,6 +37,7 @@ test("two open requests are two items, each answered on its own, and the run wai
   await expect(requestsOn(page, "WEB-100")).toHaveCount(1);
   await expect(requestsOn(page, "WEB-100")).toContainText("git push origin web-100-page-speed-2a3b");
   expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-2", "deny"]]);
+  await inView(requestsOn(page, "WEB-100"));
   await requestsOn(page, "WEB-100").getByRole("button", { name: "Allow" }).click();
   await expect(requestsOn(page, "WEB-100")).toHaveCount(0);
 });
@@ -68,6 +72,7 @@ test("a masked request and one rebuilt after the harness lost it offer only Deny
 
 test("after an answered request leaves, the one that moves up waits a moment before it can be answered, and a double-click answers one", async ({ page }) => {
   await expect(requestsOn(page, "WEB-100")).toHaveCount(2);
+  await inView(requestsOn(page, "WEB-100").first());
   await requestsOn(page, "WEB-100").first().getByRole("button", { name: "Allow" }).dblclick();
   await expect(requestsOn(page, "WEB-100")).toHaveCount(1);
   const next = requestsOn(page, "WEB-100");
@@ -106,6 +111,7 @@ test("with an input of thousands of lines, Allow sits after its last line, not p
 test("a double click on the first of two requests of the same height answers only that one", async ({ page }) => {
   const asks = requestsOn(page, "SUP-15");
   await expect(asks).toHaveCount(2);
+  await inView(asks.first());
   await asks.first().getByRole("button", { name: "Allow" }).dblclick();
   await expect(asks).toHaveCount(1);
   await page.waitForTimeout(800);
@@ -182,15 +188,65 @@ test("what follows a run of blank lines, and a field after a long value, are in 
   }
 });
 
-test("after a keyboard answer the keyboard stays in the list, on no button", async ({ page }) => {
-  const list = card(page, "SUP-15").locator("[data-permission-requests]");
+test("after a keyboard answer the keyboard goes to the next request's heading, never its Allow", async ({ page }) => {
   const deny = requestsOn(page, "SUP-15").first().getByRole("button", { name: "Deny" });
   await expect(deny).toBeEnabled();
   await deny.focus();
   await page.keyboard.press("Enter");
   await expect(requestsOn(page, "SUP-15")).toHaveCount(1);
-  await expect(list).toBeFocused();
+  await expect(requestsOn(page, "SUP-15").locator("[data-permission-heading]")).toBeFocused();
   expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-12", "deny"]]);
+});
+
+test("after a keyboard answer to a run's last request the keyboard goes to the run's card, not the page", async ({ page }) => {
+  const deny = requestsOn(page, "CA-407").getByRole("button", { name: "Deny" });
+  await deny.scrollIntoViewIfNeeded();
+  await expect(deny).toBeEnabled();
+  await deny.focus();
+  await page.keyboard.press("Enter");
+  await expect(requestsOn(page, "CA-407")).toHaveCount(0);
+  await expect(card(page, "CA-407")).toBeFocused();
+});
+
+test("a burst of clicks at one spot answers one request: a double click and three more clicks 150 ms apart", async ({ page }) => {
+  const allow = requestsOn(page, "SUP-15").first().getByRole("button", { name: "Allow" });
+  await allow.scrollIntoViewIfNeeded();
+  await expect(allow).toBeEnabled();
+  const at = (await allow.boundingBox())!;
+  await page.mouse.dblclick(at.x + at.width / 2, at.y + at.height / 2);
+  for (let i = 0; i < 3; i++) {
+    await page.waitForTimeout(150);
+    await clickAt(page, at);
+  }
+  // Past every hold: only a fresh aim would answer now, and clicks at the spot are not one.
+  await page.waitForTimeout(700);
+  await clickAt(page, at);
+  await page.waitForTimeout(700);
+  expect((await mockPermissionAnswers(page)).map((x) => x.request)).toEqual(["perm-12"]);
+  await expect(requestsOn(page, "SUP-15")).toContainText("Not allowed yet: point at Allow again and click it.");
+  // A fresh aim does answer it.
+  await page.mouse.move(at.x + at.width / 2 + 40, at.y + at.height / 2 + 40);
+  await requestsOn(page, "SUP-15").getByRole("button", { name: "Allow" }).click();
+  await expect(requestsOn(page, "SUP-15")).toHaveCount(0);
+});
+
+test("the keyboard can't reach Allow on a long request it hasn't scrolled through, even at its end", async ({ page }) => {
+  const ask = requestsOn(page, "SUP-10");
+  const allow = ask.getByRole("button", { name: "Allow" });
+  await card(page, "SUP-10").focus();
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await expect(allow).toBeDisabled();
+  await expect(allow).not.toBeFocused();
+  await expect(allow).toHaveAttribute("title", "Scroll through the whole request to allow it.");
+  // Jumping to the end is not reading it.
+  await ask.locator("[data-permission-answers]").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  await expect(allow).toBeDisabled();
+  // Scrolled through, stretch by stretch, it can be allowed.
+  const stretches = ask.locator("[data-seen-part]");
+  for (let i = 0, n = await stretches.count(); i < n; i++) await stretches.nth(i).scrollIntoViewIfNeeded();
+  await expect(allow).toBeEnabled();
 });
 
 test("a request is answered in the run sheet too, and the sheet shows the one left", async ({ page }) => {

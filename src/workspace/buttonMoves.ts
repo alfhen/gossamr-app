@@ -63,9 +63,35 @@ export function movedWithin(el: Element, ms: number): boolean {
 const presses: { x: number; y: number; at: number; on: Element | null }[] = [];
 let listening = false;
 
+/** Where the pointer last was, and the last answer on the page: where the pointer was then, and when it moved away. */
+let pointer = { x: Number.NaN, y: Number.NaN };
+let answer = { seq: 0, x: Number.NaN, y: Number.NaN, movedAt: null as number | null };
+/** The answer each Allow last had focus moved onto it by a key after. */
+const keyAimed = new WeakMap<Element, number>();
+
+/** How far, in px, the pointer must move after an answer for the next Allow to count as aimed. */
+const AIM_PX = 4;
+
 function listen() {
   if (listening) return;
   listening = true;
+  document.addEventListener(
+    "pointermove",
+    (ev) => {
+      pointer = { x: ev.clientX, y: ev.clientY };
+      // A pointer whose place at the answer isn't known (a key answered) has moved once it moves at all.
+      const far = !(Math.hypot(ev.clientX - answer.x, ev.clientY - answer.y) <= AIM_PX);
+      if (answer.seq && answer.movedAt === null && far) answer.movedAt = performance.now();
+    },
+    true,
+  );
+  document.addEventListener(
+    "focusin",
+    (ev) => {
+      if (ev.target instanceof Element && ev.target.matches("[data-allow]:focus-visible")) keyAimed.set(ev.target, answer.seq);
+    },
+    true,
+  );
   document.addEventListener(
     "pointerdown",
     (ev) => {
@@ -88,4 +114,21 @@ export function repeatOnOther(el: Element, ms: number): boolean {
   if (presses.length < 2) return false;
   const [before, now] = presses;
   return now.on === el && before.on !== el && now.at - before.at < ms && Math.abs(now.x - before.x) <= SAME_SPOT && Math.abs(now.y - before.y) <= SAME_SPOT;
+}
+
+/** Notes a permission answer: from now on an Allow counts only when aimed afresh. */
+export function noteAnswer() {
+  answer = { seq: answer.seq + 1, x: pointer.x, y: pointer.y, movedAt: null };
+}
+
+/**
+ * Whether a click on the Allow `el` was aimed at it since the last answer on the page: by the pointer, which moved after
+ * that answer and then pressed on `el`; by a key, which moved focus onto `el` after it. Repeated clicks at one spot, however
+ * far apart in time, answer one request. Before any answer every Allow counts.
+ */
+export function aimedAfresh(el: Element, byKey: boolean): boolean {
+  if (!answer.seq) return true;
+  if (byKey) return keyAimed.get(el) === answer.seq;
+  const press = presses[presses.length - 1];
+  return answer.movedAt !== null && !!press && press.on === el && press.at > answer.movedAt;
 }

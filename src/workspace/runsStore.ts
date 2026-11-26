@@ -10,6 +10,7 @@ import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { answerSentText } from "./runSheetLogic";
 import { answeringKey } from "./permissionLogic";
+import { noteAnswer } from "./buttonMoves";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
@@ -372,6 +373,8 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend, permissionAnswering, permissionAnswered } = get();
     const key = answeringKey(id, request);
     if (!backend || permissionAnswering.has(key) || permissionAnswered.has(key)) return false;
+    // Every Allow after this one needs a fresh aim, wherever it is on the page.
+    noteAnswer();
     const refused = new Map(get().permissionRefused);
     refused.delete(key);
     set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]), permissionRefused: refused });
