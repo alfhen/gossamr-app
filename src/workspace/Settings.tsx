@@ -12,7 +12,7 @@ import { useEscBack } from "./escBack";
 import { Segmented } from "../components/Segmented";
 
 /** The two facts the app states about what it does, and only here. */
-export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve a draft. Agents in Auto can push and run gh without asking you.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools. In Auto, Gossamr picks their permission mode, not your settings. Change it in Agent settings."] as const;
+export const PROMISES = ["Gossamr posts nothing to Jira or GitHub until you approve a draft. Agents in Auto can push and run gh without asking you.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools. Gossamr sets their permission mode from Agent settings, not from your Claude Code settings."] as const;
 
 /** The agents promise, naming the login new agents run on once it is known. */
 export const agentsPromise = (instanceName: string | null, driver: Driver = "claude") =>
@@ -20,7 +20,7 @@ export const agentsPromise = (instanceName: string | null, driver: Driver = "cla
     ? PROMISES[1]
     : driver === "codex"
       ? `Agents run on ${instanceName} with its own Codex settings. Only danger-full-access lets them commit and push.`
-      : `Agents run on ${instanceName} with its own Claude Code settings, so they can push branches and use your own tools. In Auto, Gossamr picks their permission mode, not your settings. Change it in Agent settings.`;
+      : `Agents run on ${instanceName} with its own Claude Code settings, so they can push branches and use your own tools. Gossamr sets their permission mode from Agent settings, not from your Claude Code settings.`;
 
 function useNow() {
   const [now, setNow] = useState(() => new Date());

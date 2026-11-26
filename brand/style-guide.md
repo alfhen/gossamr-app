@@ -435,7 +435,7 @@ Gossamr writes like a careful colleague: plain, short and exact.
 - **One line per empty state.** No explainers, no glossary. Pip explains anything else when asked.
 - **Say two facts once, in Settings,** and nowhere else:
   - Gossamr posts nothing to Jira or GitHub until you approve a draft. Agents in Auto can push and run gh without asking you.
-  - Agents run with your own Claude Code settings, so they can push branches and use your own tools. In Auto, Gossamr picks their permission mode, not your settings. Change it in Agent settings.
+  - Agents run with your own Claude Code settings, so they can push branches and use your own tools. Gossamr sets their permission mode from Agent settings, not from your Claude Code settings.
 - **One status word** per workstream: Needs you, Failed, Running, Done or Idle.
 - **Buttons are verbs** that name the result: "Approve", "Post review", "Open in Terminal", "Ask Pip".
 - **Errors** say what failed and what to do next, without blame and without apology: "Claude asks you once per folder before it will work there."

@@ -37,14 +37,17 @@ pub const STREAM: &[&str] =
 /// the session's own. Ticket text is untrusted, so loosening one of these lets it reach files, a shell or the network.
 pub const LOCKED: &[&str] = &["--permission-mode", "dontAsk", "--tools", "", "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config"];
 
-/// A normal session's mode when the client asks for auto (`Permissions::Auto`). Where auto mode is not available to
+/// A normal session's mode flag, from the client's choice, on every start: `auto` for Auto, `default` (Manual) for Ask,
+/// so Ask holds whatever `permissions.defaultMode` the login's own settings name. Where auto mode is not available to
 /// the login (an admin's `disableAutoMode`, a model it does not support), Claude starts in Manual instead.
-pub const AUTO: &[&str] = &["--permission-mode", "auto"];
+pub fn mode_flag(permissions: Permissions) -> [String; 2] {
+    ["--permission-mode".to_owned(), mode_of(permissions).to_owned()]
+}
 
 /// How a notice begins when a session asked for auto mode and Claude started it in another mode.
 pub const NO_AUTO: &str = "Auto mode isn't available to this Claude login or model";
 
-/// How a notice begins when a session asked for each step and the login's own default started it in another mode.
+/// How a notice begins when a session asked for each step and Claude started it in another mode all the same.
 pub const NOT_MANUAL: &str = "Your Claude Code settings run this agent in";
 
 /// What the session is told when `init` names a mode other than the one asked for, if it should be told: a session
@@ -66,8 +69,7 @@ fn mode_notice(asked: Permissions, mode: &str) -> Option<String> {
     }
 }
 
-/// The mode `set_permission_mode` switches a running agent to. Ask is Manual: the stricter reading of asking for each
-/// step, where a start passes no mode and the login's own default applies.
+/// The mode a start names, and the one `set_permission_mode` switches a running agent to.
 fn mode_of(permissions: Permissions) -> &'static str {
     match permissions {
         Permissions::Auto => "auto",
@@ -191,9 +193,9 @@ pub fn args(launch: &Launch) -> Vec<String> {
     let mut args: Vec<String> = STREAM.iter().map(|flag| (*flag).to_owned()).collect();
     if launch.locked {
         args.extend(LOCKED.iter().map(|flag| (*flag).to_owned()));
-    } else if launch.permissions == Permissions::Auto {
+    } else {
         // On every start, a resume's included: a resumed session starts in the mode its argv names, not the last one's.
-        args.extend(AUTO.iter().map(|flag| (*flag).to_owned()));
+        args.extend(mode_flag(launch.permissions));
     }
     // Tool names are letters, digits, `_` and `-`, so the list Claude splits at commas holds exactly these.
     if !launch.tools.allowed.is_empty() {
@@ -643,8 +645,7 @@ impl Stream {
                     self.emit(Body::Started { provider_session: session.to_owned(), resumed: false });
                 }
                 // Claude starts in Manual, saying nothing else, when auto mode is not available to the login or the
-                // model (2.1.331), and a start that passes no mode takes the login's own default: only `init` tells.
-                // A CLI that names no mode is not taken to have fallen back.
+                // model (2.1.331): only `init` tells. A CLI that names no mode is not taken to have fallen back.
                 if let Some(asked) = self.unchecked
                     && let Some(mode) = line["permissionMode"].as_str()
                 {
@@ -935,7 +936,7 @@ mod tests {
             args(&launch)
         };
         let normal = with(false, Some("haiku"), Some("low"));
-        assert_eq!(normal[STREAM.len()..STREAM.len() + 4], ["--model", "haiku", "--effort", "low"]);
+        assert_eq!(normal[STREAM.len()..STREAM.len() + 6], ["--permission-mode", "default", "--model", "haiku", "--effort", "low"]);
         let locked = with(true, None, Some("high"));
         assert_eq!(locked[STREAM.len() + LOCKED.len()..], ["--effort", "high"], "a locked session too");
         for (model, effort) in [(None, None), (Some("default"), Some("default"))] {
@@ -963,15 +964,15 @@ mod tests {
     #[test]
     fn the_argv_names_a_model_only_when_chosen_and_a_session_only_on_a_resume() {
         let tail = |launch: &Launch| args(launch)[STREAM.len()..].to_vec();
-        assert_eq!(tail(&launch(false, None, None)), ["--append-system-prompt", GUARD]);
-        assert_eq!(tail(&launch(false, Some("haiku"), Some("s-1"))), ["--model", "haiku", "--resume=s-1", "--append-system-prompt", GUARD]);
+        assert_eq!(tail(&launch(false, None, None)), ["--permission-mode", "default", "--append-system-prompt", GUARD]);
+        assert_eq!(tail(&launch(false, Some("haiku"), Some("s-1"))), ["--permission-mode", "default", "--model", "haiku", "--resume=s-1", "--append-system-prompt", GUARD]);
         let locked = tail(&launch(true, None, Some("s-1")));
         assert_eq!(locked[..LOCKED.len()], *LOCKED);
         assert_eq!(locked[LOCKED.len()..], ["--resume=s-1"], "a locked session gets no guard: it has no tool to commit with");
     }
 
     #[test]
-    fn auto_names_auto_mode_on_a_normal_start_and_on_its_resume_and_never_on_a_locked_session() {
+    fn a_normal_session_names_auto_or_manual_from_the_choice_on_every_start_and_resume_and_a_locked_one_only_dont_ask() {
         let with = |locked: bool, resume: Option<&str>, permissions: Permissions| {
             let mut launch = launch(locked, Some("sonnet"), resume);
             launch.permissions = permissions;
@@ -981,13 +982,16 @@ mod tests {
         assert_eq!(with(false, None, Permissions::Auto), start);
         let resume = ["--permission-mode", "auto", "--model", "sonnet", "--resume=s-1", "--append-system-prompt", GUARD];
         assert_eq!(with(false, Some("s-1"), Permissions::Auto), resume);
-        assert_eq!(with(false, Some("s-1"), Permissions::Ask), ["--model", "sonnet", "--resume=s-1", "--append-system-prompt", GUARD], "ask passes no mode");
+        let ask = ["--permission-mode", "default", "--model", "sonnet", "--append-system-prompt", GUARD];
+        assert_eq!(with(false, None, Permissions::Ask), ask, "Manual, whatever default the login's settings name");
+        let ask_resume = ["--permission-mode", "default", "--model", "sonnet", "--resume=s-1", "--append-system-prompt", GUARD];
+        assert_eq!(with(false, Some("s-1"), Permissions::Ask), ask_resume);
         for resume in [None, Some("s-1")] {
             let locked = with(true, resume, Permissions::Auto);
             assert_eq!(locked, with(true, resume, Permissions::Ask), "a locked session ignores it");
             assert_eq!(locked[..LOCKED.len()], *LOCKED);
             assert_eq!(locked.iter().filter(|arg| *arg == "--permission-mode").count(), 1, "its one mode is dontAsk: {locked:?}");
-            assert!(!locked.iter().any(|arg| arg == "auto"));
+            assert!(!locked.iter().any(|arg| arg == "auto" || arg == "default"));
         }
     }
 
@@ -1078,7 +1082,7 @@ mod tests {
             args(&launch)
         };
         let names = "mcp__k3x9q2w7e5r1t8__result,mcp__k3x9q2w7e5r1t8__find";
-        assert_eq!(with(false)[STREAM.len()..], ["--allowedTools", names, "--append-system-prompt", GUARD]);
+        assert_eq!(with(false)[STREAM.len()..], ["--permission-mode", "default", "--allowedTools", names, "--append-system-prompt", GUARD]);
         assert_eq!(with(true)[STREAM.len() + LOCKED.len()..], ["--allowedTools", names]);
         assert!(!args(&launch(false, None, None)).iter().any(|arg| arg == "--allowedTools"), "none when nothing is allowed");
     }

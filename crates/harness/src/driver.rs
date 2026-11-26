@@ -91,7 +91,8 @@ pub fn random_hex(bytes: usize) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Permissions {
-    /// The provider's own start, with no mode passed: each prompt comes to the client.
+    /// Each prompt comes to the client: Claude's `--permission-mode default` (Manual), whatever default the login's own
+    /// settings name.
     #[default]
     Ask,
     /// The provider's auto mode, where it has one: it runs what its checker takes as safe, blocks what it does not,
@@ -108,7 +109,7 @@ impl Permissions {
         }
     }
 
-    /// From the store: anything but `auto` is `Ask`, the start that passes nothing.
+    /// From the store: anything but `auto` is `Ask`.
     pub fn from_stored(stored: Option<&str>) -> Permissions {
         match stored {
             Some("auto") => Permissions::Auto,

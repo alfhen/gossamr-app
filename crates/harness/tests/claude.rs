@@ -363,7 +363,7 @@ async fn claude_turns_are_counted_by_result() {
 }
 
 #[tokio::test]
-async fn claude_the_normal_profiles_argv_is_exactly_the_stream_flags_a_model_and_the_guard() {
+async fn claude_the_normal_profiles_argv_is_exactly_the_stream_flags_the_mode_a_model_and_the_guard() {
     let fixture = native().join("6-model.jsonl");
     for model in [None, Some("haiku")] {
         let rig = rig(&fixture, &[]);
@@ -371,7 +371,7 @@ async fn claude_the_normal_profiles_argv_is_exactly_the_stream_flags_a_model_and
         let (id, mut events) = rig.open(false, model).await;
         drive(&rig, &id, &mut events, acts, results).await;
         let mut want: Vec<String> = harness::claude::driver::STREAM.iter().map(|flag| (*flag).to_owned()).collect();
-        want.extend(["--allowedTools".into(), allowed_for(&endpoint(&rig).0)]);
+        want.extend(["--permission-mode".into(), "default".into(), "--allowedTools".into(), allowed_for(&endpoint(&rig).0)]);
         if let Some(model) = model {
             want.extend(["--model".into(), model.into()]);
         }
@@ -386,12 +386,15 @@ async fn claude_the_normal_profile_passes_no_restricting_flag() {
     let (rig, _) = play(&native().join("6-model.jsonl")).await;
     let argv = rig.argv();
     for flag in [
-        "--tools", "--disallowedTools", "--permission-mode", "--setting-sources", "--strict-mcp-config", "--disable-slash-commands",
+        "--tools", "--disallowedTools", "--setting-sources", "--strict-mcp-config", "--disable-slash-commands",
         "--settings", "--agents", "--agent", "--add-dir", "--plugin-dir", "--mcp-config", "--bare", "--safe-mode", "--restricted",
         "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions",
     ] {
         assert!(!argv.iter().any(|arg| arg == flag), "{flag}");
     }
+    // Its one mode is the Settings choice, Ask here: Manual, never one that runs more unasked.
+    let modes: Vec<&[String]> = argv.windows(2).filter(|pair| pair[0] == "--permission-mode").collect();
+    assert_eq!(modes, [&["--permission-mode".to_owned(), "default".to_owned()][..]]);
     let allowed = argv.iter().position(|arg| arg == "--allowedTools").map(|at| argv[at + 1].clone());
     assert_eq!(allowed, Some(allowed_for(&endpoint(&rig).0)), "it allows the endpoint's own tools and nothing else");
 }
@@ -996,14 +999,14 @@ async fn mode_after_a_restart(first: Permissions, now: Permissions, carry_on: bo
 }
 
 #[tokio::test]
-async fn claude_a_message_after_a_switch_to_ask_resumes_with_no_auto_mode_and_after_a_switch_to_auto_with_it() {
-    assert_eq!(mode_after_a_restart(Permissions::Auto, Permissions::Ask, false).await, Vec::<String>::new());
+async fn claude_a_message_after_a_switch_to_ask_resumes_in_manual_and_after_a_switch_to_auto_in_auto() {
+    assert_eq!(mode_after_a_restart(Permissions::Auto, Permissions::Ask, false).await, ["default"]);
     assert_eq!(mode_after_a_restart(Permissions::Ask, Permissions::Auto, false).await, ["auto"]);
 }
 
 #[tokio::test]
 async fn claude_a_carry_on_after_a_restart_starts_in_the_mode_chosen_since() {
-    assert_eq!(mode_after_a_restart(Permissions::Auto, Permissions::Ask, true).await, Vec::<String>::new());
+    assert_eq!(mode_after_a_restart(Permissions::Auto, Permissions::Ask, true).await, ["default"]);
     assert_eq!(mode_after_a_restart(Permissions::Ask, Permissions::Auto, true).await, ["auto"]);
 }
 
