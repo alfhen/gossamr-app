@@ -721,3 +721,28 @@ async fn a_turn_whose_harness_went_after_storing_events_the_app_had_not_read_end
     assert_eq!((follow.seq, after.last_detail.as_deref()), (stored, Some(consumer::AGENT_LOST)), "its events are applied, then its turn is lost");
     bed.end().await;
 }
+
+const PERMITS: &str = r#"{"prompt": null}
+{"permission": {"kind": "command", "tool": "Bash", "input": {"command": "git commit -m 'Blue button'"}}}
+{"say": "Went on after the answer."}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn permission_the_open_requests_are_the_same_after_a_reconnect_and_one_is_answered_on_the_new_link() {
+    let mut bed = Bed::new(PERMITS).await;
+    let (run, session) = bed.started().await;
+    let (asking, _) = bed.until(&run, |r, _| r.state == RunState::NeedsPermission).await;
+    assert_eq!(asking.permissions.len(), 1);
+    let dropped = std::mem::replace(&mut bed.link, link(&bed.rig, &Arc::new(Direct { dir: PathBuf::from("/nowhere"), token: Token::random() }), &bed.tickets));
+    drop(dropped);
+    bed.relink();
+    let (replayed, ..) = bed.replayed(&run, &session).await;
+    let after = bed.rig.get(&run).await;
+    assert_eq!((&after.permissions, after.state), (&asking.permissions, RunState::NeedsPermission));
+    assert_eq!(after.permissions, replayed.permissions, "as if it had read every event once");
+    bed.link.permit(&session, &asking.permissions[0].id, Decision::Allow).await.unwrap();
+    let (done, _) = bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert!(done.permissions.is_empty());
+    bed.end().await;
+}

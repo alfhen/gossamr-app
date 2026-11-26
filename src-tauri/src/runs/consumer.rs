@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use super::redact::redact;
 use super::tracker::cleaned_answer;
-use crate::domain::{Run, RunEvent, RunFailure, RunState, SessionFollow};
+use crate::domain::{PermissionRequest, Run, RunEvent, RunFailure, RunState, SessionFollow};
 
 const TEXT_KEPT: usize = 500;
 const DETAIL_KEPT: usize = 2_048;
@@ -95,7 +95,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             let what = describe(&tool, &input);
             // A kind this build does not know is still a request, one the person can only deny.
             let deny_only = event.cut.is_some() || kind == PermissionKind::Other;
-            follow.permissions.push((id, deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
+            follow.permissions.push((id.clone(), deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
+            run.permissions.push(PermissionRequest { id, kind, tool, subject: subject(&input), deny_only });
             rows.add("ask", &format!("Asks to use {what}"), None);
         }
         // An answer to it is refused from now on, so it waits on no one; settling shows what the run waits on instead.
@@ -231,6 +232,23 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::Withheld { .. } => {}
     }
+    waits(run, follow);
+    if run.state != before || !rows.rows.is_empty() {
+        run.last_progress_at = now;
+    }
+    rows.rows
+}
+
+/// Notes that the harness took the person's answer to the open permission request `request`: it waits on no one now,
+/// before its `answered` comes, so a second answer is refused and the run shows what it waits on next.
+pub fn permission_answered(run: &mut Run, follow: &mut SessionFollow, request: &str) {
+    follow.permissions.retain(|(open, ..)| open != request);
+    waits(run, follow);
+}
+
+/// What the open requests leave the run waiting on, and what it shows for it.
+fn waits(run: &mut Run, follow: &SessionFollow) {
+    run.permissions.retain(|asked| follow.permissions.iter().any(|(open, ..)| *open == asked.id));
     settle(run, follow);
     run.answer_waits = follow.answered.is_some();
     run.asking = run.state == RunState::NeedsAnswer;
@@ -240,10 +258,6 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         RunState::NeedsAnswer => follow.asked.clone(),
         _ => None,
     };
-    if run.state != before || !rows.rows.is_empty() {
-        run.last_progress_at = now;
-    }
-    rows.rows
 }
 
 /// Ends a turn the harness can no longer say the end of: its agent went with a harness that stopped with no shutdown.
@@ -252,6 +266,7 @@ pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>)
     follow.in_turn = false;
     follow.closed = true;
     follow.permissions.clear();
+    run.permissions.clear();
     follow.calls.clear();
     run.state = RunState::Stopped;
     run.last_detail = Some(AGENT_LOST.into());
@@ -423,12 +438,25 @@ fn tool_kind(name: &str) -> &'static str {
     }
 }
 
-/// A tool and the one field of its input that says what it does: the command, the file, the pattern or the address.
+/// The fields of a tool's input that say what it does: the command, the file, the pattern or the address.
+const SAYS_WHAT: [&str; 6] = ["command", "file_path", "path", "pattern", "url", "query"];
+
+/// A tool and the one field of its input that says what it does, cut to a line.
 fn describe(name: &str, input: &Value) -> String {
-    let field = ["command", "file_path", "path", "pattern", "url", "query"].iter().find_map(|key| input.get(*key).and_then(Value::as_str));
+    let field = SAYS_WHAT.iter().find_map(|key| input.get(*key).and_then(Value::as_str));
     match field.and_then(|f| f.lines().next()).map(|f| cut(f.trim(), 200)) {
         Some(what) if !what.is_empty() => format!("{name}: {what}"),
         _ => name.to_owned(),
+    }
+}
+
+/// The whole of what a permission request asks for: the field that says it, else its whole input. The input of one the
+/// harness cut is text.
+fn subject(input: &Value) -> String {
+    match SAYS_WHAT.iter().find_map(|key| input.get(*key).and_then(Value::as_str)) {
+        Some(field) => field.to_owned(),
+        None if input.is_null() => String::new(),
+        None => plain(input),
     }
 }
 

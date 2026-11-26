@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use harness::api::Op;
 use harness::client::{Client, Push};
-use harness::event::{Body, Event};
+use harness::event::{Body, Decision, Event};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -50,6 +50,11 @@ impl ClientTools for NoTools {
 pub const ANSWER_ON_ITS_WAY: &str = "Your answer is on its way to the agent. Send more once it has arrived.";
 /// A message to a run whose session the harness no longer runs, with no turn it could have lost.
 pub const NOT_RUNNING: &str = "Its agent isn't running any more, so it takes no message. Ask Pip to start it again.";
+
+/// An answer to a permission request the run's session does not hold open.
+pub const NOT_OPEN: &str = "That request isn't open any more: it was answered or withdrawn, or it isn't this run's.";
+/// An answer to a permission request of a session the harness no longer runs.
+pub const NOT_RUNNING_TO_ANSWER: &str = "Its agent isn't running any more, so the request can't be answered.";
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
@@ -185,6 +190,25 @@ impl Link {
             self.inner.after(&applied.before, &applied.run);
         }
         Ok(true)
+    }
+
+    /// Answers the open permission request `request` of `session`, once, for that request alone: never "always", never
+    /// for the session. The run waits on it no more once the harness took it.
+    pub async fn permit(&self, session: &str, request: &str, decision: Decision) -> Result<(), String> {
+        match self.call(Op::Answer { session: session.to_owned(), request: request.to_owned(), decision, message: None }).await {
+            Ok(_) => {}
+            Err(why) if why.starts_with("no open permission request") => return Err(NOT_OPEN.into()),
+            Err(why) if not_running(&why) => return Err(NOT_RUNNING_TO_ANSWER.into()),
+            Err(why) => return Err(why),
+        }
+        let noted = self.inner.core.apply_session(session, |run, follow| {
+            consumer::permission_answered(run, follow, request);
+            Vec::new()
+        });
+        if let Some(applied) = noted.await.map_err(|e| e.to_string())? {
+            self.inner.after(&applied.before, &applied.run);
+        }
+        Ok(())
     }
 
     /// Whether the app follows `session` as not closed though the harness does not run it and stored nothing past what

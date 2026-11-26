@@ -427,3 +427,52 @@ fn a_stop_that_finds_the_agent_lost_ends_the_run_and_its_question() {
     assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.asking), (RunState::Stopped, None, false));
     assert!(p.follow.ended && p.follow.question.is_none(), "nothing more is followed or answered");
 }
+
+#[test]
+fn permission_the_run_lists_each_open_request_whole_in_the_order_asked_and_drops_each_as_it_closes() {
+    use crate::domain::PermissionRequest;
+    use harness::event::PermissionKind;
+    let mut p = Played::new();
+    p.play(started());
+    let long = format!("git commit -m 'Blue button'\n{}", "x".repeat(400));
+    p.play([
+        Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({ "command": long, "description": "Commit" }) },
+        Body::Permission { id: "p2".into(), kind: PermissionKind::FileChange, tool: "Edit".into(), input: json!({ "file_path": "src/cart.ts", "old_string": "a" }) },
+        Body::Permission { id: "p3".into(), kind: PermissionKind::Other, tool: "Fetch".into(), input: json!({ "where": "here" }) },
+    ]);
+    p.seq += 1;
+    let cut = Event { seq: p.seq, ms: 1_700_000_000_000, body: Body::Permission { id: "p4".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!("echo aaa") }, cut: Some(9) };
+    fold(&mut p.run, &mut p.follow, &cut, Utc::now());
+    let request = |id: &str, kind, tool: &str, subject: &str, deny_only| PermissionRequest { id: id.into(), kind, tool: tool.into(), subject: subject.into(), deny_only };
+    assert_eq!(p.run.permissions, [
+        request("p1", PermissionKind::Command, "Bash", &long, false),
+        request("p2", PermissionKind::FileChange, "Edit", "src/cart.ts", false),
+        request("p3", PermissionKind::Other, "Fetch", r#"{"where":"here"}"#, true),
+        request("p4", PermissionKind::Command, "Bash", "echo aaa", true),
+    ], "the whole command, never cut, and its whole input when no field says what it is");
+    let sent = serde_json::to_value(&p.run).unwrap();
+    assert_eq!(sent["permissions"][2], json!({ "id": "p3", "kind": "other", "tool": "Fetch", "subject": "{\"where\":\"here\"}", "denyOnly": true }));
+    assert_eq!(sent["permissions"][0].get("denyOnly"), None);
+    p.play([Body::PermissionClosed { id: "p2".into() }, Body::Answered { id: "p1".into(), decision: Decision::Deny, message: None }]);
+    assert_eq!(p.run.permissions.iter().map(|open| open.id.as_str()).collect::<Vec<_>>(), ["p3", "p4"]);
+    p.play([Body::TurnEnded { how: TurnEnd::Done }]);
+    assert!(p.run.permissions.is_empty(), "a turn's end closes them all");
+    assert_eq!(serde_json::to_value(&p.run).unwrap().get("permissions"), None, "left out when empty");
+}
+
+#[test]
+fn permission_two_open_requests_answered_in_either_order_leave_the_run_waiting_on_the_other_then_working() {
+    use harness::event::PermissionKind;
+    for (first, second) in [("p1", "p2"), ("p2", "p1")] {
+        let mut p = Played::new();
+        p.play(started());
+        p.play(["p1", "p2"].map(|id| Body::Permission { id: id.into(), kind: PermissionKind::Command, tool: "Bash".into(), input: json!({ "command": format!("rm {id}") }) }));
+        permission_answered(&mut p.run, &mut p.follow, first);
+        let left: Vec<_> = p.run.permissions.iter().map(|open| open.id.as_str()).collect();
+        assert_eq!((p.run.state, left, p.run.needs.clone()), (RunState::NeedsPermission, vec![second], Some(format!("Wants to use Bash: rm {second}"))));
+        permission_answered(&mut p.run, &mut p.follow, second);
+        assert_eq!((p.run.state, p.run.permissions.len(), p.run.needs.as_deref()), (RunState::Working, 0, None));
+        p.play([Body::Answered { id: first.into(), decision: Decision::Allow, message: None }, Body::Answered { id: second.into(), decision: Decision::Deny, message: None }]);
+        assert_eq!(p.run.state, RunState::Working, "their answers, read later, change nothing more");
+    }
+}
