@@ -696,6 +696,89 @@ async fn the_move_is_safe_to_run_again_after_a_crash_between_the_stop_and_its_ma
     assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 2, "a second stop of a stopped agent harms nothing");
 }
 
+const BUILDS: &str = r#"{"prompt": null}
+{"say": "Starting a long build."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_times_waits_for_you() {
+    let mut served = Served::new(BUILDS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    served.shut_down().await;
+    served.serve_again(4);
+    let cut = until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    assert_eq!(cut.state, RunState::Stopped);
+    let session = cut.harness_session.clone().unwrap();
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    rig.svc.carry_on_after_restart().await;
+    let resumed = tokio::time::timeout(WAIT, async {
+        loop {
+            let rows = rig.fx.core.run_events(&run.id).await.unwrap();
+            if rows.iter().any(|e| e.text == "Message sent") {
+                return rows;
+            }
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the carry on was sent");
+    assert!(resumed.iter().any(|e| e.text == "Resumed") && resumed.iter().any(|e| e.text == "Carried on after the harness restarted"));
+    let mut client = served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.clone(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    assert!(events.iter().any(|e| e.body == Body::Prompted { text: CARRY_ON.into() }), "the carry on reached the agent");
+    let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert_eq!(follow.carry_ons, 1);
+    rig.fx.core.apply_session(&session, |_, f| {
+        f.carry_ons = CARRY_ONS;
+        f.cut = true;
+        f.closed = true;
+        Vec::new()
+    }).await.unwrap();
+    let rows = rig.fx.core.run_events(&run.id).await.unwrap().len();
+    rig.svc.carry_on_after_restart().await;
+    let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert_eq!((follow.carry_ons, rig.fx.core.run_events(&run.id).await.unwrap().len()), (CARRY_ONS, rows), "past three in a row it waits for you");
+}
+
+#[tokio::test]
+async fn a_run_the_app_stopped_or_one_whose_question_is_open_is_not_carried_on() {
+    let mut served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let asking = rig.launched(1).await;
+    until_state(&rig, &asking, RunState::NeedsAnswer).await;
+    let stopped = rig.launched(2).await;
+    until_state(&rig, &stopped, RunState::NeedsAnswer).await;
+    rig.svc.stop(&stopped.id).await.unwrap();
+    until_state(&rig, &stopped, RunState::Stopped).await;
+    served.shut_down().await;
+    served.serve_again(4);
+    let (_, follow) = rig.fx.core.session_run(&rig.get(&asking).await.harness_session.unwrap()).await.unwrap().unwrap();
+    assert!(follow.question.is_some());
+    // Each as a cut run would be but for the one thing that keeps it from carrying on.
+    for (run, question, ended) in [(&asking, true, false), (&stopped, false, true)] {
+        rig.set(run, |r| r.state = RunState::Stopped).await;
+        let session = rig.get(run).await.harness_session.unwrap();
+        rig.fx.core.apply_session(&session, |_, f| {
+            (f.cut, f.closed, f.ended) = (true, true, ended);
+            if !question {
+                f.question = None;
+            }
+            Vec::new()
+        }).await.unwrap();
+    }
+    rig.svc.carry_on_after_restart().await;
+    for run in [&asking, &stopped] {
+        let (_, follow) = rig.fx.core.session_run(&rig.get(run).await.harness_session.unwrap()).await.unwrap().unwrap();
+        assert_eq!(follow.carry_ons, 0, "{}", run.id);
+        let asked = rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text.contains("arried on"));
+        assert!(!asked, "{}: the app did not even ask the harness", run.id);
+    }
+}
+
 #[tokio::test]
 async fn the_move_ends_the_question_an_old_run_waited_on_and_says_so() {
     let served = Served::new(WORKS_LONG, 4);

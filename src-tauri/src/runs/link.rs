@@ -145,6 +145,18 @@ impl Link {
         Ok(session)
     }
 
+    /// Resumes a session that is not running with `carry_on` as its prompt, counting it, and follows it again. The harness
+    /// refuses one a deny, a cancel, a stop or an open request forbids, or a shutdown gave up on, and says why.
+    pub async fn carry_on(&self, session: &str, carry_on: &str) -> Result<(), String> {
+        self.call(Op::Resume { session: session.to_owned(), carry_on: Some(carry_on.to_owned()) }).await?;
+        let counted = self.inner.core.apply_session(session, |_, follow| {
+            follow.carry_ons += 1;
+            Vec::new()
+        });
+        let follow = counted.await.map_err(|e| e.to_string())?.map(|applied| applied.follow).unwrap_or_default();
+        self.follow(session, follow.seq).await
+    }
+
     /// Takes a session handed over to Terminal back and follows it again. The harness watches the new start on the
     /// connection that asked, which is this call's own, so the watching connection reads it from what was applied.
     pub async fn take_back(&self, session: &str) -> Result<(), String> {

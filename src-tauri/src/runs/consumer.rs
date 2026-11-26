@@ -84,6 +84,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::TurnStarted => {
             follow.in_turn = true;
+            follow.cut = false;
             reopen(run);
             if run.last_detail.as_deref() == Some(SLOT_WAIT) {
                 run.last_detail = None;
@@ -220,6 +221,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // an open question stays for after a resume.
         Body::Failed { kind: FailKind::AgentStopped, reason } => {
             follow.in_turn = false;
+            follow.cut = true;
             follow.permissions.clear();
             follow.calls.clear();
             run.state = RunState::Stopped;

@@ -752,6 +752,9 @@ pub struct SessionFollow {
     /// The provider's own id of the session, from its `started`: what a person resumes it by in Terminal.
     #[serde(default)]
     pub provider_session: Option<String>,
+    /// Its last turn was cut by an end nobody asked for, a shutdown among them, so "carry on" may take it up again.
+    #[serde(default)]
+    pub cut: bool,
     /// The app took the session back from Terminal; it is starting again until its `started` comes.
     #[serde(default)]
     pub taken_back: bool,

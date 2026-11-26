@@ -72,6 +72,12 @@ fn plain_refusal(why: &str) -> String {
 pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it moved agents to the harness, before you answered its question, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 
+/// "Carry on" prompts sent in a row with no turn ending by itself between, past which a cut run waits for the person.
+pub const CARRY_ONS: u32 = 3;
+
+/// The prompt that takes up a turn a restart cut.
+pub const CARRY_ON: &str = "The harness restarted while you were working, so your last turn was cut short. Carry on where you left off.";
+
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
 /// What Claude runs open on: the harness's `claude` driver, or the mock a debug build was started with.
@@ -195,6 +201,30 @@ impl RunService {
         }
         *run = self.load(&run.id).await?;
         Ok(Ok(()))
+    }
+
+    /// After the harness restarted: resumes each run whose turn an end nobody asked for cut, with "carry on", unless its
+    /// session waits on the person (a question), the app stopped it, or it was carried on `CARRY_ONS` times in a row
+    /// with no turn ending by itself between. What the harness refuses, and why, goes on the run's timeline.
+    pub async fn carry_on_after_restart(&self) {
+        let Some(on) = &self.harness else { return };
+        let stopped = crate::domain::RunQuery { states: Some(vec![RunState::Stopped]), ..Default::default() };
+        let Ok(runs) = self.core.runs_list(&stopped).await else { return };
+        for run in runs {
+            let Some(session) = run.harness_session.clone() else { continue };
+            let Ok(Some((_, follow))) = self.core.session_run(&session).await else { continue };
+            if !follow.cut || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
+                continue;
+            }
+            let said = match on.link.carry_on(&session, CARRY_ON).await {
+                Ok(()) => "Carried on after the harness restarted".to_owned(),
+                Err(why) => format!("Not carried on after the harness restarted: {why}"),
+            };
+            let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "follow_up".into(), text: said, detail: None };
+            if let Err(e) = self.core.append_run_events(&run.id, &[row]).await {
+                eprintln!("couldn't record the carry on of run {}: {e}", run.id);
+            }
+        }
     }
 
     /// Once, when Claude's runs first go to the harness: stops each agent the old `claude --bg` path still has going,

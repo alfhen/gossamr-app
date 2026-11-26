@@ -69,6 +69,15 @@ impl Served {
         self.task = Some(tokio::spawn(server.run()));
     }
 
+    /// Serves the data folder again after a shutdown, with the same provider and its sessions.
+    pub fn serve_again(&mut self, turn_limit: usize) {
+        let mock = self.mock.clone().expect("served before");
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let first = self.token.clone();
+        let server = Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }).unwrap();
+        self.task = Some(tokio::spawn(server.run()));
+    }
+
     /// Not serving yet, for `serve_on`.
     pub fn idle() -> Served {
         let tmp = tempfile::tempdir().unwrap();
