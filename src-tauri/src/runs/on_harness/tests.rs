@@ -1127,7 +1127,7 @@ async fn a_handed_over_run_whose_worktree_you_removed_is_cleaned_up_as_the_refus
     rig.svc.attach(&run.id).await.unwrap();
     let handed = until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
     assert_eq!(rig.svc.cleanup(&run.id).await.unwrap_err().to_string(), crate::runs::cleanup::HANDED_OVER_CLEANUP);
-    assert!(crate::runs::cleanup::HANDED_OVER_CLEANUP.contains("I took it back"), "it names the button");
+    assert!(crate::runs::cleanup::HANDED_OVER_CLEANUP.contains("Resume here"), "it names the button");
     // What it says: remove the worktree yourself, then Clean up.
     std::fs::remove_dir_all(git.worktree(&done.spec.name)).unwrap();
     assert!(crate::runs::cleanup::cleanable(&rig.get(&run).await), "Clean up is offered again");
@@ -2345,8 +2345,98 @@ async fn hand_over_from_a_request_it_can_only_deny_cuts_the_turn_waiting_on_it()
     assert!(open.deny_only);
     assert_eq!(rig.svc.attach(&run.id).await.unwrap_err().to_string(), HAND_OVER_WAITING, "Open in Terminal still waits for an answer");
     rig.svc.take_over(&run.id).await.unwrap();
+    let session = rig.get(&run).await.harness_session.unwrap();
+    assert!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "Terminal opened only once the harness's agent had gone");
     let handed = until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
     assert!(handed.handed_over && handed.permissions.is_empty() && handed.state != RunState::NeedsPermission, "{:?}", handed.state);
     assert_eq!(rig.opened.0.lock().unwrap().len(), 1, "Terminal opened once");
     assert!(answers(&served, &handed).await.is_empty(), "nothing was answered for you");
+}
+
+/// A run handed over to Terminal from Done, and its provider's session id.
+async fn handed_over_done(served: &Served) -> (Rig, Run, String, String) {
+    let rig = on_harness(served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.clone().unwrap();
+    rig.svc.attach(&run.id).await.unwrap();
+    until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    let provider = rig.fx.core.session_run(&session).await.unwrap().unwrap().1.provider_session.unwrap();
+    (rig, run, session, provider)
+}
+
+fn interactive(session: &str, cwd: &std::path::Path, pid: u32) -> crate::runs::cli::AgentEntry {
+    crate::runs::cli::AgentEntry { kind: Some("interactive".into()), session_id: Some(session.into()), cwd: Some(cwd.display().to_string()), pid: Some(pid), ..Default::default() }
+}
+
+#[tokio::test]
+async fn hand_over_resume_here_and_i_took_it_back_wait_while_claude_still_runs_the_session_in_terminal() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, session, provider) = handed_over_done(&served).await;
+    // As Claude lists a `claude --resume` open in Terminal: this test's own process stands in for it, so it runs.
+    let open = interactive(&provider, std::path::Path::new("/elsewhere"), std::process::id());
+    rig.cli.with(|s| s.sessions.push(open));
+    let said = crate::runs::terminal_open::still_open(std::process::id());
+    assert_eq!(rig.svc.take_back(&run.id).await.unwrap_err().to_string(), said);
+    assert_eq!(rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap_err().to_string(), said, "I took it back waits too");
+    assert!(rig.get(&run).await.handed_over);
+    assert!(!sessions(&served).await.iter().any(|row| row["id"] == session.as_str() && row["running"] == true), "the harness took nothing back");
+    rig.cli.with(|s| s.sessions = vec![interactive("another-id", std::path::Path::new("/elsewhere"), std::process::id())]);
+    assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "another session's Terminal is no hold on this one");
+}
+
+#[tokio::test]
+async fn hand_over_resume_here_waits_while_the_harness_finds_a_process_resuming_the_session_and_says_so_plainly() {
+    let served = Served::new(TWO_TURNS, 4);
+    let (rig, run, _session, provider) = handed_over_done(&served).await;
+    // Claude can't list; the harness looks at every process all the same.
+    rig.cli.with(|s| s.list_fails = true);
+    let mut open = tokio::process::Command::new("/bin/sh").args(["-c", "sleep 30; true", "sh", "--resume", &provider]).kill_on_drop(true).spawn().unwrap();
+    // Once the check sees it steadily: just after a spawn, for some milliseconds, its arguments can't be read.
+    let pid = open.id().unwrap();
+    tokio::time::timeout(WAIT, async {
+        let mut since: Option<std::time::Instant> = None;
+        while since.is_none_or(|since| since.elapsed() < std::time::Duration::from_millis(150)) {
+            match harness::process::holding(&provider, std::path::Path::new("/nowhere"), &[], &Default::default()) {
+                Some(seen) if seen == pid => since = since.or(Some(std::time::Instant::now())),
+                _ => since = None,
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the check sees the shell steadily");
+    let in_terminal = |said: &str| said.starts_with(&format!("Its agent {} (pid ", harness::session::STILL_IN_TERMINAL)) && said.ends_with("). Quit it there, then Resume here.");
+    let said = rig.svc.take_back(&run.id).await.unwrap_err().to_string();
+    assert!(in_terminal(&said), "the harness's words alone: {said}");
+    let said = rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap_err().to_string();
+    assert!(in_terminal(&said), "I took it back waits too: {said}");
+    open.kill().await.unwrap();
+    open.wait().await.unwrap();
+    assert!(!rig.svc.take_back(&run.id).await.unwrap().handed_over, "once it ended");
+}
+
+#[tokio::test]
+async fn hand_over_by_take_over_is_refused_for_a_request_you_can_answer_here() {
+    let served = Served::new(PERMITS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let open = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].clone();
+    assert!(!open.deny_only);
+    assert_eq!(rig.svc.take_over(&run.id).await.unwrap_err().to_string(), TAKE_OVER_ONLY_DENY);
+    let still = rig.get(&run).await;
+    assert_eq!((still.state, still.handed_over), (RunState::NeedsPermission, false), "nothing was cut");
+    assert!(rig.opened.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn hand_over_aside_a_stopped_run_whose_session_waits_open_takes_no_message_unless_resume_here_took_it_back() {
+    let served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    // As a turn a cancel or a deny ended leaves it: Stopped, its session open at rest.
+    rig.set(&run, |r| r.state = RunState::Stopped).await;
+    let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err().to_string();
+    assert_eq!(refused, "This run is stopped, so it takes no message.");
 }

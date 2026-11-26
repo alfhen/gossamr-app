@@ -446,3 +446,106 @@ async fn resume_over_the_api_watches_a_locked_sessions_new_start_so_the_carry_on
     assert!(got.contains(&Body::Prompted { text: "go on".into() }));
     task.abort();
 }
+
+/// A session handed over to Terminal that works in `cwd`, and its provider's id.
+async fn handed_over_in(harness: &Harness, cwd: &std::path::Path) -> (String, String) {
+    let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: cwd.into(), tools: tools(), ..Default::default() }).await.unwrap();
+    let ps = provider_session(&next(&mut events).await.body);
+    harness.hand_over(&id).unwrap();
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
+    (id, ps)
+}
+
+/// A process that lives until it is killed, started as `command` does it.
+struct Held(std::process::Child);
+
+impl Held {
+    fn start(command: &mut std::process::Command) -> Held {
+        Held(command.stdin(std::process::Stdio::null()).spawn().unwrap())
+    }
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A shell that runs on after `sleep`, so it keeps its own arguments, with `args` after its name.
+fn shell_with(args: &[&str]) -> std::process::Command {
+    let mut command = std::process::Command::new("/bin/sh");
+    command.args(["-c", "sleep 30; true", "sh"]).args(args);
+    command
+}
+
+/// Until the check sees `pid` hold the session steadily: just after a spawn, for some milliseconds, a process shows
+/// neither its spawner's arguments nor its own.
+fn settled(pid: u32, id: &str, folder: &std::path::Path, programs: &[&str]) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut since = None;
+    while since.is_none_or(|since: std::time::Instant| since.elapsed() < std::time::Duration::from_millis(150)) {
+        assert!(std::time::Instant::now() < until, "the check never saw {pid} steadily");
+        match harness::process::holding(id, folder, programs, &Default::default()) {
+            Some(seen) if seen == pid => since = since.or(Some(std::time::Instant::now())),
+            _ => since = None,
+        }
+    }
+}
+
+fn waits_for(refused: Result<broadcast::Receiver<Event>, Error>, pid: u32) {
+    match refused {
+        Err(Error::Refused(said)) => assert_eq!(said, format!("Its agent {} (pid {pid}). Quit it there, then Resume here.", harness::session::STILL_IN_TERMINAL)),
+        other => panic!("not refused: {:?}", other.is_ok()),
+    }
+}
+
+#[tokio::test]
+async fn take_back_waits_while_a_process_resumes_the_session_and_goes_ahead_once_it_ends() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, ps) = handed_over_in(&harness, folder.path()).await;
+    // As `claude --resume <id>` in Terminal, wherever it works.
+    let open = Held::start(&mut shell_with(&["--resume", &ps]));
+    settled(open.pid(), &ps, std::path::Path::new("/nowhere"), &[]);
+    waits_for(harness.take_back(&id).await, open.pid());
+    let starts = mock.tokens(&ps).len();
+    drop(open);
+    let mut events = harness.take_back(&id).await.expect("once it ended");
+    until(&mut events, |body| matches!(body, Body::Started { .. })).await;
+    assert_eq!(mock.tokens(&ps).len(), starts + 1, "started once, after Terminal let go");
+}
+
+#[tokio::test]
+async fn take_back_waits_for_the_providers_program_in_the_sessions_folder_but_not_for_a_shell_there() {
+    let (_tmp, dir) = data_dir();
+    let mock = mock(TURNS);
+    let harness = harness(&dir, &mock, 4);
+    let folder = tempfile::tempdir().unwrap();
+    let (id, _) = handed_over_in(&harness, folder.path()).await;
+    // Started as `claude`, as the installed link names it, in the session's folder, with no id in sight.
+    let mut claude = std::process::Command::new("/bin/sleep");
+    std::os::unix::process::CommandExt::arg0(&mut claude, "claude").arg("30").current_dir(folder.path());
+    let claude = Held::start(&mut claude);
+    settled(claude.pid(), "no-such-id", folder.path(), &["claude"]);
+    waits_for(harness.take_back(&id).await, claude.pid());
+    drop(claude);
+    let mut shell = shell_with(&[]);
+    let _shell = Held::start(shell.current_dir(folder.path()));
+    harness.take_back(&id).await.expect("your own shell in the folder is no Terminal claude");
+}
+
+#[test]
+fn the_check_for_terminal_counts_no_agent_of_the_harnesss_own() {
+    let id = "1b2c3d4e-0000-4000-8000-00000000000f";
+    let agent = Held::start(&mut shell_with(&["--resume", id]));
+    settled(agent.pid(), id, std::path::Path::new("/nowhere"), &[]);
+    let ours = std::collections::HashSet::from([agent.pid()]);
+    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &ours), None, "the harness's own");
+    assert_eq!(harness::process::holding(id, std::path::Path::new("/nowhere"), &["claude"], &Default::default()), Some(agent.pid()), "anyone else's");
+}

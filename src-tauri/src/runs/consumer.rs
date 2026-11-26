@@ -63,6 +63,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.handed_over = false;
             // Resume here starts it with no prompt: it waits at rest for a message, which starts its turn.
             if taken_back && follow.answered.is_none() {
+                follow.resumed_here = true;
                 run.last_detail = Some(RESUMED_HERE.into());
             } else {
                 reopen(run);
@@ -98,6 +99,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         }
         Body::TurnStarted => {
             follow.in_turn = true;
+            follow.resumed_here = false;
             follow.cut = None;
             reopen(run);
             if run.last_detail.as_deref() == Some(SLOT_WAIT) {
@@ -280,6 +282,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // The session's task ended. Only after a stop the app asked for is that the end: a shutdown or a hand-over
         // can be resumed, and its question stays until a `question_closed`.
         Body::Closed { by } => {
+            follow.resumed_here = false;
             // A message can no longer reach it, so the way out its failure names is the one that still works.
             if run.failure == Some(RunFailure::SigningNeedsYou) {
                 run.error = Some(SIGNING_NEEDS_YOU_CLOSED.into());

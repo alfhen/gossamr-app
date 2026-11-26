@@ -1252,6 +1252,7 @@ export class MockRuns {
 
   /** As `hand_over_on_harness`: a session at rest, or one waiting on a permission you take over, is closed as handed over and opened in Terminal. */
   private handOver(run: Run, takeOver: boolean) {
+    if (takeOver && !run.permissions?.some((request) => request.denyOnly)) throw new Error("Take over is for a request Gossamr can only deny. Answer this one here.");
     if (!run.handedOver) {
       if (run.state === "working" || run.state === "launching") throw new Error("Its agent is in the middle of a turn, and opening it in Terminal would cut that turn short. Wait for the turn to end, or stop it first.");
       if (run.state === "needsAnswer" || (run.state === "needsPermission" && !takeOver)) throw new Error("It is waiting on you; answer or stop it first.");
@@ -1269,7 +1270,9 @@ export class MockRuns {
     const run = this.get(id);
     if (!run?.harnessSession || !run.handedOver) throw new Error(NOT_HANDED_OVER);
     const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
-    return `cd ${quote(run.expectedWorktree)} && ${quote("/usr/local/bin/claude")} --resume ${quote(run.harnessSession)}`;
+    // The provider's own session id, as the harness's follow holds it, never the harness's.
+    const provider = run.harnessSession.replace(/^hs-/, "1b2c3d4e-");
+    return `cd ${quote(run.expectedWorktree)} && ${quote("/usr/local/bin/claude")} ${quote("--resume")} ${quote(provider)}`;
   }
 
   /** Resume here: the session is taken back and started again, so it takes messages again. */

@@ -164,6 +164,9 @@ struct OpenRequest {
     cut: bool,
 }
 
+/// Why a take back waits: a process still holds the session, as Terminal's `claude --resume` does.
+pub const STILL_IN_TERMINAL: &str = "still runs this session in Terminal";
+
 enum Request {
     Prompt(String),
     /// An answer to an open question: to its held `ask` call, or else as the next prompt, before those already queued.
@@ -374,6 +377,15 @@ impl Harness {
                 return Err(why);
             }
             let provider_session = row.provider_session.clone().expect("checked by why_not_resumable");
+            // Handed over, it may still run in Terminal: two agents on one session would write one transcript.
+            if taken_back {
+                let ours: std::collections::HashSet<u32> = store.agents()?.into_iter().map(|(_, agent)| agent.pid).collect();
+                let programs = crate::provider::Provider::ALL.map(crate::provider::Provider::binary);
+                if let Some(pid) = crate::process::holding(&provider_session, &row.cwd, &programs, &ours) {
+                    let label = crate::provider::Provider::named(&row.provider).map_or("Its agent", crate::provider::Provider::label);
+                    return Err(Error::Refused(format!("{label} {STILL_IN_TERMINAL} (pid {pid}). Quit it there, then Resume here.")));
+                }
+            }
             let driver = self.driver(&row.provider)?;
             let endpoint = match row.endpoint {
                 Some(endpoint) => endpoint,

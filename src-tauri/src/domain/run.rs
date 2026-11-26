@@ -791,6 +791,10 @@ pub struct SessionFollow {
     /// The app resumed the session, with a carry on or a message; it is starting again until its `started` comes.
     #[serde(default)]
     pub resuming: bool,
+    /// Resume here took it back with no message: it waits at rest, reading as it did when handed over, until a turn of
+    /// its own or its `closed`.
+    #[serde(default)]
+    pub resumed_here: bool,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,

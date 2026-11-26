@@ -63,6 +63,13 @@ const UNCHECKED: &str = "Gossamr couldn't check this run's work before stopping 
 /// Why Attach refuses a run that waits on you in the middle of its turn.
 pub const HAND_OVER_WAITING: &str = "It is waiting on you; answer or stop it first.";
 
+/// Why Take over refuses a run with no request Gossamr can only deny: the others are answered here.
+pub const TAKE_OVER_ONLY_DENY: &str = "Take over is for a request Gossamr can only deny. Answer this one here.";
+
+/// Why Take over opened no Terminal: the harness's agent had not gone yet, or may still run.
+pub const HANDED_OVER_NOT_GONE: &str = "It is handed over, but its agent hasn't stopped yet, so Terminal didn't open. Open in Terminal again once it has.";
+pub const HANDED_OVER_MAY_RUN: &str = "It is handed over, but its agent may still run, so Terminal didn't open:";
+
 /// Why Resume here and the resume command refuse a run.
 pub const NOT_HANDED_OVER: &str = "It isn't handed over to Terminal.";
 
@@ -436,8 +443,8 @@ impl RunService {
         // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
         // prompt, and the turn it starts takes the run out of Failed.
         let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
-        // Taken back with Resume here, it reads as it did when handed over while its session waits at rest again.
-        let runs_on = runs_on || run.state == RunState::Stopped && follow.provider_session.is_some() && !follow.closed && !follow.stop_asked;
+        // Only a run Resume here took back: a Stopped run whose turn a cancel or a deny ended takes no message, as before.
+        let runs_on = runs_on || run.state == RunState::Stopped && follow.resumed_here && !follow.closed;
         if !starting && !runs_on && (matches!(run.state, RunState::Stopped | RunState::Failed) && resumable(&follow) || wakes(run, &follow)) {
             return Some(self.resume_on_harness(link, session, run, text).await);
         }
@@ -581,10 +588,38 @@ impl RunService {
     /// harness.
     pub(super) async fn take_back_on_harness(&self, run: &Run) -> Option<Result<Run>> {
         let (link, session) = self.on_harness_of(run)?;
+        if let Err(why) = self.left_terminal(run, session).await {
+            return Some(Err(why));
+        }
         Some(match link.take_back(session).await {
             Ok(()) => self.load(&run.id).await,
+            // Already in plain words, and the way on is yours.
+            Err(why) if why.contains(harness::session::STILL_IN_TERMINAL) => Err(Error::Proposal(plain_refusal(&why, session))),
             Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {}", plain_refusal(&why, session)))),
         })
+    }
+
+    /// Refuses a take back while Claude's own listing on the run's login shows it still runs the session in Terminal.
+    /// The harness refuses one while any process holds it.
+    async fn left_terminal(&self, run: &Run, session: &str) -> Result<()> {
+        use super::terminal_open::{alive, listed_open, still_open};
+        let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
+        let Some(resumed_by) = follow.provider_session else { return Ok(()) };
+        let listed = match self.observing_toolchain(run).await {
+            Ok(tc) => tc.backend.listed_sessions().await.map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        };
+        match listed {
+            Ok(rows) => match listed_open(&rows, &resumed_by, alive) {
+                Some(pid) => Err(Error::Proposal(still_open(pid))),
+                None => Ok(()),
+            },
+            // The harness still looks at every process.
+            Err(why) => {
+                eprintln!("couldn't ask Claude whether Terminal still runs session {session}; the harness's own check stands: {why}");
+                Ok(())
+            }
+        }
     }
 
     /// Hands a run's session to Terminal: the harness closes it as handed over, so nothing resumes it until you take it
@@ -596,6 +631,9 @@ impl RunService {
         Some(async {
             let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
             let resumed_by = follow.provider_session.clone().ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to open.".into()))?;
+            if take_over && !self.core.shown(run.clone()).permissions.iter().any(|request| request.deny_only) {
+                return Err(Error::Proposal(TAKE_OVER_ONLY_DENY.into()));
+            }
             // A hand-over cuts a running turn and drops the messages queued for it: Terminal takes a session at rest,
             // but for a permission you chose to answer there yourself.
             if follow.in_turn && !follow.closed && !(take_over && run.state == RunState::NeedsPermission) {
@@ -620,9 +658,25 @@ impl RunService {
                     })
                 };
                 asked(true).await?;
+                let mut applied = link.applied();
                 if let Err(why) = link.call(Op::HandOver { session: session.to_owned() }).await {
                     asked(false).await?;
                     return Err(Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why, session))));
+                }
+                // The harness takes the hand-over before its agent has gone: Terminal opens once it has, so two never
+                // run on the session at once.
+                let gone = tokio::time::timeout(CLOSE_TAKES_UP_TO, async {
+                    while !matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if follow.closed) {
+                        if applied.changed().await.is_err() {
+                            return;
+                        }
+                    }
+                });
+                if gone.await.is_err() {
+                    return Err(Error::Proposal(HANDED_OVER_NOT_GONE.into()));
+                }
+                if let Some(why) = link.kept(session).await {
+                    return Err(Error::Proposal(format!("{HANDED_OVER_MAY_RUN} {}", plain_refusal(&why, session))));
                 }
             }
             let tc = self.observing_toolchain(run).await?;

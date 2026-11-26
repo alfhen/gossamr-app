@@ -143,6 +143,91 @@ fn cwd_of(pid: u32) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
+/// A process other than `ours` that still holds a session: one whose arguments hold its provider id `id`, as
+/// `claude --resume <id>` in Terminal does, or one of `programs` working inside its `folder`. A shell left in the
+/// folder is no holder. Only this user's processes are read.
+pub fn holding(id: &str, folder: &std::path::Path, programs: &[&str], ours: &std::collections::HashSet<u32>) -> Option<u32> {
+    let folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_owned());
+    let joined = format!("={id}");
+    let me = std::process::id();
+    let named = |path: &std::path::Path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| programs.contains(&name));
+    all_pids().into_iter().filter(|pid| *pid != me && !ours.contains(pid)).find(|pid| {
+        let args = args_of(*pid).unwrap_or_default();
+        let by_id = args.iter().skip(1).any(|arg| arg == id || arg.ends_with(&joined));
+        // By the name it was started as too: an installed `claude` is a link to a file named by its version.
+        let provider = args.first().is_some_and(|first| named(std::path::Path::new(first))) || program_of(*pid).is_some_and(|path| named(&path));
+        by_id || provider && cwd_of(*pid).is_some_and(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd).starts_with(&folder))
+    })
+}
+
+/// Every pid this user may see.
+#[cfg(target_os = "macos")]
+fn all_pids() -> Vec<u32> {
+    // SAFETY: a null buffer asks only for the count.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    let Ok(count) = usize::try_from(count) else { return Vec::new() };
+    // Room for processes that start between the two calls.
+    let mut pids = vec![0 as libc::pid_t; count + 64];
+    let size = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice())).unwrap_or(libc::c_int::MAX);
+    // SAFETY: `pids` is as large as `size` says, and the call fills at most that much.
+    let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), size) };
+    pids.truncate(usize::try_from(got).unwrap_or(0));
+    pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn all_pids() -> Vec<u32> {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid has no preconditions.
+    let me = unsafe { libc::getuid() };
+    let Ok(all) = std::fs::read_dir("/proc") else { return Vec::new() };
+    all.flatten().filter(|entry| entry.metadata().is_ok_and(|meta| meta.uid() == me)).filter_map(|entry| entry.file_name().to_str()?.parse().ok()).collect()
+}
+
+/// The arguments `pid` was started with, its program's name first. Another user's process gives none.
+#[cfg(target_os = "macos")]
+fn args_of(pid: u32) -> Option<Vec<String>> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, libc::c_int::try_from(pid).ok()?];
+    let mut size: libc::size_t = 0;
+    // SAFETY: a null buffer asks only for the size.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, std::ptr::null_mut(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    let mut buffer = vec![0u8; size];
+    // SAFETY: `buffer` is `size` bytes, and the call fills at most that much and says how much in `size`.
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buffer.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 {
+        return None;
+    }
+    buffer.truncate(size);
+    // The argument count, the program's path, padding, then the arguments, each ended by a zero byte.
+    let count = usize::try_from(i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?)).ok()?;
+    let mut rest = buffer.get(4..)?.split(|b| *b == 0).skip(1).skip_while(|part| part.is_empty());
+    Some((0..count).map_while(|_| rest.next()).map(|arg| String::from_utf8_lossy(arg).into_owned()).collect())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn args_of(pid: u32) -> Option<Vec<String>> {
+    let line = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    Some(line.split(|b| *b == 0).filter(|arg| !arg.is_empty()).map(|arg| String::from_utf8_lossy(arg).into_owned()).collect())
+}
+
+/// The program `pid` runs.
+#[cfg(target_os = "macos")]
+fn program_of(pid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: `path` is as large as the size passed, and the call fills at most that much.
+    let got = unsafe { libc::proc_pidpath(libc::c_int::try_from(pid).ok()?, path.as_mut_ptr().cast(), path.len() as u32) };
+    let got = usize::try_from(got).ok().filter(|got| *got > 0)?;
+    path.truncate(got);
+    Some(std::ffi::OsString::from_vec(path).into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn program_of(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
 /// Sends `signal` to the process alone. Returns false, and sends nothing, when the pid is no longer the run's.
 pub fn signal(process: &Process, signal: libc::c_int) -> std::io::Result<bool> {
     if !alive(process) {

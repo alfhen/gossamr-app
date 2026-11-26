@@ -648,7 +648,7 @@ export const RESUMED_HERE = "Resumed here. Message the agent to go on.";
 export const NOT_HANDED_OVER = "It isn't handed over to Terminal.";
 
 /** Why Clean up leaves a run handed over to Terminal while its worktree is there, as `HANDED_OVER_CLEANUP` in `runs/cleanup.rs`. */
-export const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
+export const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Quit it there and press Resume here, or remove the worktree yourself once you are done there, then Clean up.";
 
 /** Said wherever a result is only the one-line summary Claude keeps, so nobody takes it for the whole answer. */
 export const SUMMARY_ONLY = "Gossamr could only read a one-line summary of the run, not its full answer. Open the session to see the rest.";

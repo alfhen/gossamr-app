@@ -29,6 +29,7 @@ pub mod shell;
 pub mod result;
 pub mod service;
 pub mod state;
+mod terminal_open;
 pub mod toolchain;
 pub mod transcript;
 pub mod tracker;
