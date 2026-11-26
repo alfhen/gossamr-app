@@ -1,4 +1,5 @@
 import type { KeyboardEvent } from "react";
+import { HoldCardHeight } from "./PermissionRequests";
 import { archiveControl } from "../lib/archiveRuns";
 import { roleLabel } from "../lib/roles";
 import type { ReviewView, Run } from "../types";
@@ -146,6 +147,7 @@ export function AgentCard({ run, now, selected, position, total, ticketTitle, la
       onKeyDown={asking ? undefined : onActivate(onOpen)}
       className={`ws-agent-card relative grid cursor-pointer content-start gap-1.5 border-b border-ws-sep py-3 pr-2 pl-6 outline-offset-[-2px] ${selected ? "bg-ws-accent-soft" : "hover:bg-ws-hover"}`}
     >
+      <HoldCardHeight run={run} />
       <span className="absolute top-[17px] left-2 flex">
         <Dot tone={view.tone} live={view.live} />
       </span>

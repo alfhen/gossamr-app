@@ -356,6 +356,46 @@ impl Store {
         Ok(())
     }
 
+    /// As `set_agent` with the new start's agent, and, for a take back, the hand-over mark cleared with it: both or
+    /// neither, so a take back whose agent cannot be recorded keeps its mark and may be tried again.
+    pub fn set_agent_of_start(&self, id: &str, agent: Option<&Process>, taken_back: bool) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        if taken_back {
+            self.set_handed_over(id, false)?;
+        }
+        self.set_agent(id, agent)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Keeps `agent` on record and the session given up on for the reason `why`, both or neither: for an agent whose
+    /// group still answered when its output closed.
+    pub fn keep_given_up(&self, id: &str, agent: &Process, why: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.set_agent(id, Some(agent))?;
+        self.set_given_up(id, why)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Ends a leftover's start in its events as its own harness would have, a `failed` that says `how` and a `closed`
+    /// as `harness_went`, unless it had closed, and clears its agent: all of it or none, so a failure leaves the leftover
+    /// on record for the next check.
+    pub fn end_leftover(&self, id: &str, how: &str, ms: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let closed: Option<String> = self
+            .conn
+            .query_row("SELECT type FROM events WHERE session = ?1 ORDER BY seq DESC LIMIT 1", [id], |row| row.get(0))
+            .optional()?;
+        if closed.as_deref() != Some("closed") {
+            self.insert_event(id, &Body::Failed { kind: crate::event::FailKind::AgentStopped, reason: how.to_owned() }, ms, None)?;
+            self.insert_event(id, &Body::Closed { by: crate::event::ClosedBy::HarnessWent }, ms, None)?;
+        }
+        self.set_agent(id, None)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Each session with an agent on record, which a harness before this one started and did not see go.
     pub fn agents(&self) -> Result<Vec<(String, Process)>> {
         let mut statement = self.conn.prepare("SELECT id, agent_pid, agent_started FROM sessions WHERE agent_pid IS NOT NULL AND agent_started IS NOT NULL")?;

@@ -731,3 +731,45 @@ fn a_row_the_harness_holds_or_gave_up_on_keeps_its_session_from_a_resume_and_say
     assert_eq!(kept_by(&json!({ "id": "s", "held": held, "given_up": given_up })).as_deref(), Some(held), "what holds every session first");
     assert_eq!(kept_by(&json!({ "id": "s", "running": false })), None);
 }
+
+const PERMITS: &str = r#"{"prompt": null}
+{"permission": {"kind": "command", "tool": "Bash", "input": {"command": "git commit -m 'Blue button'"}}}
+{"say": "Went on after the answer."}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn permission_the_open_requests_are_the_same_after_a_reconnect_and_one_is_answered_on_the_new_link() {
+    let mut bed = Bed::new(PERMITS).await;
+    let (run, session) = bed.started().await;
+    let (asking, _) = bed.until(&run, |r, _| r.state == RunState::NeedsPermission).await;
+    assert_eq!(asking.permissions.len(), 1);
+    let dropped = std::mem::replace(&mut bed.link, link(&bed.rig, &Arc::new(Direct { dir: PathBuf::from("/nowhere"), token: Token::random() }), &bed.tickets));
+    drop(dropped);
+    bed.relink();
+    let (replayed, ..) = bed.replayed(&run, &session).await;
+    let after = bed.rig.get(&run).await;
+    assert_eq!((&after.permissions, after.state), (&asking.permissions, RunState::NeedsPermission));
+    assert_eq!(after.permissions, replayed.permissions, "as if it had read every event once");
+    bed.link.permit(&session, &asking.permissions[0].id, Decision::Allow).await.unwrap();
+    let (done, _) = bed.until(&run, |r, _| r.state == RunState::Done).await;
+    assert!(done.permissions.is_empty());
+    bed.end().await;
+}
+
+#[tokio::test]
+async fn permission_a_run_saved_without_its_requests_reads_them_again_from_the_harness_when_the_link_follows_it() {
+    let mut bed = Bed::new(PERMITS).await;
+    let (run, session) = bed.started().await;
+    let (asking, _) = bed.until(&run, |r, _| r.state == RunState::NeedsPermission).await;
+    let dropped = std::mem::replace(&mut bed.link, link(&bed.rig, &Arc::new(Direct { dir: PathBuf::from("/nowhere"), token: Token::random() }), &bed.tickets));
+    drop(dropped);
+    let old = bed.rig.set(&run, |r| r.permissions.clear()).await;
+    assert_eq!(serde_json::to_value(&old).unwrap().get("permissions"), None, "saved as a build before them saved it");
+    bed.relink();
+    let (after, _) = bed.until(&run, |r, _| !r.permissions.is_empty()).await;
+    assert_eq!(after.permissions, asking.permissions, "whole, as the harness sent it");
+    bed.link.permit(&session, &after.permissions[0].id, Decision::Allow).await.unwrap();
+    bed.until(&run, |r, _| r.state == RunState::Done).await;
+    bed.end().await;
+}

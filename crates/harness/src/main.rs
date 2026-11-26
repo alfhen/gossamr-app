@@ -62,6 +62,9 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     // SAFETY: isatty has no preconditions.
     let handed = if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 { None } else { drain_stdin()? };
     let first_token = move || handed;
+    if let Some(why) = harness::work::work_home_refused() {
+        return Err(Error::Refused(why));
+    }
     let setup = harness::work::Setup::of_this_machine(dir.clone());
     // The mock provider is there only when a script is given. Claude is found where `providers` looks, at each open.
     let drivers = harness::serve_drivers(script, harness::claude::driver::ClaudeDriver::found(setup.places().clone()));

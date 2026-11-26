@@ -111,7 +111,7 @@ async fn resume_and_clean_up_of_a_session_a_shutdown_gave_up_on_are_refused() {
     }
     // Its agent may still work in the worktree.
     match harness.clean_up(&id).await {
-        Err(Error::Refused(why)) => assert!(why.contains("a shutdown stopped waiting for it") && why.contains("not cleaned up"), "{why}"),
+        Err(Error::Refused(why)) => assert!(why.contains("a shutdown stopped waiting for it") && why.contains("never cleaned up"), "{why}"),
         other => panic!("cleaned up: {:?}", other.is_ok()),
     }
 }

@@ -126,6 +126,8 @@ interface Handle {
   loseRun(id: string): void;
   attached(): string[];
   answerTries(): string[];
+  withdrawPermission(id: string, request: string): void;
+  permissionAnswers(): { run: string; request: string; decision: string }[];
   jiraWrites(): { proposalId: string; type: string; key: string | null; text?: string }[];
   reviewDrafts(): ReviewDraftRow[];
   seedWorkstreamEvent(key: string, event: { actor: string; action: string; at: string; runId?: string | null; proposalId?: string | null; detail?: string | null }): void;
@@ -258,6 +260,25 @@ export const mockAnswerTries = (page: Page) =>
     const mock = (globalThis as Mocked).__gossamrMock;
     if (!mock) throw new Error(missing);
     return mock.answerTries();
+  }, NO_MOCK);
+
+/** Has run `id`'s agent withdraw its open permission request `request`. */
+export const mockWithdrawPermission = (page: Page, id: string, request: string) =>
+  page.evaluate(
+    ({ id, request, missing }) => {
+      const mock = (globalThis as Mocked).__gossamrMock;
+      if (!mock) throw new Error(missing);
+      mock.withdrawPermission(id, request);
+    },
+    { id, request, missing: NO_MOCK },
+  );
+
+/** Every permission answer the sample backend took, oldest first. */
+export const mockPermissionAnswers = (page: Page) =>
+  page.evaluate((missing) => {
+    const mock = (globalThis as Mocked).__gossamrMock;
+    if (!mock) throw new Error(missing);
+    return mock.permissionAnswers();
   }, NO_MOCK);
 
 /** The run ids Terminal was opened on, oldest first. */

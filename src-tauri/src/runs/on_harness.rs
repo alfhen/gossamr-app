@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness::api::Op;
 use harness::client::Client;
+use harness::event::Decision;
 
 use super::failure::Failure;
 use super::link::{Connect, Link};
@@ -38,6 +39,13 @@ pub const MOCK: &str = "mock";
 
 /// How long after a run launched the harness can create its session: an open waits for the shell and makes a clone.
 const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
+
+pub const HANDED_OVER_PERMISSION: &str = "It was handed over to Terminal, so answer it there.";
+pub const ONLY_DENY_CUT: &str = "This request was too large to show whole, so it can only be denied.";
+/// For a kind this build can't read, and a request Gossamr no longer has whole.
+pub const ONLY_DENY_KIND: &str = "Gossamr can't show all of this request, so it can only be denied.";
+pub const ONLY_DENY_MASKED: &str = "Part of this is hidden; run it yourself in Terminal if you trust it.";
+pub const ONLY_DENY_INEXACT: &str = "Gossamr can't show this request exactly, so it can only be denied.";
 
 /// How long clean-up waits for a session it closed to say so.
 const CLOSE_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
@@ -411,6 +419,45 @@ impl RunService {
         match link.resume_with(session, text).await {
             Ok(()) => self.load(&run.id).await.map(|run| (run, Delivery::Resumed)),
             Err(why) => Err(Error::Proposal(format!("The harness didn't resume it: {}", plain_refusal(&why, session)))),
+        }
+    }
+
+    /// Allows or denies one open permission request of `run_id`, once, for that request alone. Only the person's page
+    /// calls this: an allow is theirs to give, never Pip's or an agent's.
+    pub async fn answer_permission(&self, run_id: &str, request: &str, decision: Decision) -> Result<Run> {
+        let refuse = |why: &str| Err(Error::Proposal(why.to_owned()));
+        if decision == Decision::Other {
+            return refuse("An answer is allow or deny.");
+        }
+        let run = self.load(run_id).await?;
+        let Some((link, session)) = self.on_harness_of(&run) else { return refuse("This run isn't on the harness: answer it in Terminal.") };
+        if run.handed_over {
+            return refuse(HANDED_OVER_PERMISSION);
+        }
+        if matches!(run.state, RunState::Queued | RunState::Launching | RunState::Done | RunState::Failed | RunState::Stopped) {
+            return refuse(&format!("This run is {}, so it has no request to answer.", run.state.as_str()));
+        }
+        let Some(open) = run.permissions.iter().find(|open| open.id == request) else { return refuse(super::link::NOT_OPEN) };
+        // The command is the gate: the flag is what the page reads, and a masked request or one with no whole input
+        // is refused whatever it says.
+        let exact = super::consumer::shows_exactly(&open.input);
+        if (open.deny_only || open.masked || !open.input.is_object() || !exact) && decision == Decision::Allow {
+            // The input of a request the harness cut is text.
+            let why = if open.masked {
+                ONLY_DENY_MASKED
+            } else if open.input.is_string() {
+                ONLY_DENY_CUT
+            } else if !exact {
+                ONLY_DENY_INEXACT
+            } else {
+                ONLY_DENY_KIND
+            };
+            return refuse(why);
+        }
+        match link.permit(session, request, decision).await {
+            Ok(()) => self.load(run_id).await,
+            Err(why) if why == super::link::NOT_OPEN || why == super::link::NOT_RUNNING_TO_ANSWER => refuse(&why),
+            Err(why) => refuse(&format!("The harness didn't take your answer: {why}")),
         }
     }
 

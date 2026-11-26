@@ -2090,11 +2090,12 @@ async fn a_slow_driver_open_stalls_no_other_session() {
 /// An agent that starts and goes only when the test lets it, whatever it is told: one still stopping.
 struct Lingering {
     let_go: Arc<tokio::sync::Notify>,
+    stop_takes_up_to_ms: Option<u64>,
 }
 
 impl Driver for Lingering {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
+        Capabilities { stop_takes_up_to_ms: self.stop_takes_up_to_ms, ..Capabilities::default() }
     }
 
     fn open(&self, _launch: Launch) -> Result<Link, OpenError> {
@@ -2116,7 +2117,7 @@ async fn no_resume_while_a_start_whose_agent_could_not_be_recorded_may_still_run
     // The rule, from a start's side: an agent nothing names for the next harness keeps its session taken until it goes.
     let (_tmp, dir) = data_dir();
     let let_go = Arc::new(tokio::sync::Notify::new());
-    let harness = Harness::new(Store::open(&dir).unwrap(), vec![("lingering".into(), Arc::new(Lingering { let_go: let_go.clone() }))], settings(4));
+    let harness = Harness::new(Store::open(&dir).unwrap(), vec![("lingering".into(), Arc::new(Lingering { let_go: let_go.clone(), stop_takes_up_to_ms: None }))], settings(4));
     let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
     raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
     let opened = harness.open(Open { provider: "lingering".into(), cwd: "/nowhere".into(), ..Open::default() }).await;
@@ -2134,6 +2135,39 @@ async fn no_resume_while_a_start_whose_agent_could_not_be_recorded_may_still_run
     };
     // Free once its agent had gone; what refuses it now is its own (no provider session was ever named).
     assert!(!matches!(resumed, Err(Error::Running(_))), "still taken after its agent went");
+}
+
+#[tokio::test]
+async fn shutdown_stops_waiting_for_a_start_whose_agent_could_not_be_recorded_and_keeps_its_output_open() {
+    let (_tmp, dir) = data_dir();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let lingering = Lingering { let_go: let_go.clone(), stop_takes_up_to_ms: Some(100) };
+    let harness = Harness::new(Store::open(&dir).unwrap(), vec![("lingering".into(), Arc::new(lingering))], settings(4));
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    assert!(harness.open(Open { provider: "lingering".into(), cwd: "/nowhere".into(), ..Open::default() }).await.is_err());
+    let id = harness.sessions().unwrap().into_iter().next().expect("the session's row").id;
+    let left = tokio::time::timeout(Duration::from_secs(10), harness.shutdown()).await.expect("shutdown does not wait for ever");
+    assert_eq!(left, [id], "it names the start it gave up on");
+    let_go.notify_one();
+}
+
+#[tokio::test]
+async fn take_back_whose_agent_cannot_be_recorded_keeps_the_hand_over_mark_for_another_try() {
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("s", "lingering", false, std::path::Path::new("/nowhere"), None).unwrap();
+    store.set_provider_session("s", Some("lingering")).unwrap();
+    store.set_handed_over("s", true).unwrap();
+    let let_go = Arc::new(tokio::sync::Notify::new());
+    let lingering = Lingering { let_go: let_go.clone(), stop_takes_up_to_ms: None };
+    let harness = Harness::new(store, vec![("lingering".into(), Arc::new(lingering))], settings(4));
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+    assert!(harness.take_back("s").await.is_err(), "recording its agent failed");
+    let marked: bool = raw.query_row("SELECT handed_over FROM sessions WHERE id = 's'", [], |row| row.get(0)).unwrap();
+    assert!(marked, "still handed over, so a take back may be tried again");
+    let_go.notify_one();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -28,7 +28,7 @@ export interface MockOptions {
   jira?: 2;
   /** How the harness stands from the start: another build of the same protocol, one that can't start, one the backend can't ask, or one whose every action fails (`?mockHarness=older`, `failed`, `unreachable` or `refuses`). */
   harness?: "older" | "failed" | "unreachable" | "refuses";
-  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones" | "harness"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; trustRefused?: boolean; gitRules?: boolean; prSurfaceMs?: number | null };
+  runs?: { seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones" | "harness" | "permissions"; epoch?: number; cap?: number; planDescription?: boolean; untrusted?: boolean; trustRefused?: boolean; gitRules?: boolean; prSurfaceMs?: number | null };
 }
 
 interface Stored {
@@ -127,6 +127,10 @@ export interface MockHandle {
   attached(): string[];
   /** The run of every answer tried, refused or not. */
   answerTries(): string[];
+  /** Has run `id`'s agent withdraw its open permission request `request`, as `MockRuns.withdrawPermission` does. */
+  withdrawPermission(id: string, request: string): void;
+  /** Every permission answer that went through, oldest first. */
+  permissionAnswers(): { run: string; request: string; decision: "allow" | "deny" }[];
   /** The command Terminal was opened on for each run in `attached`. */
   attachCommands(): string[];
   /** How many times Reveal in Finder was pressed for the work folder. */
@@ -193,7 +197,7 @@ export interface TicketEdit {
 
 /** The parts of the sample backend the handle reaches. */
 export interface MockClockParts {
-  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
+  runs: { advance(id?: string): void; list(): { id: string; spec: { role: string; prSha?: string | null; name: string }; state: string; passes?: number; item?: { key: string } | null; shortId?: string | null; digest: string; runsOn?: ModelChoice | null }[]; surfacePullRequests(): boolean; launches(): MockLaunch[]; scriptNext(kind: Step, script: ScriptedFinish): void; pipStart(a: { workstream: string | null; role: string; brief: string | null; repo: string | null; pr?: number | null; item: ItemRef | null }, requestId: string): { id: string }; ask(id: string, question: string): unknown; askPermission(id: string, needs: string): unknown; block(id: string): unknown; lose(id: string): unknown; readonly attached: readonly string[]; readonly answerTries: readonly string[]; withdrawPermission(id: string, request: string): unknown; readonly permissionAnswers: readonly { run: string; request: string; decision: "allow" | "deny" }[]; readonly attachCommands: readonly string[]; readonly workFolderReveals: number };
   workstreams?: { list(includeClosed?: boolean): { workstream: { id: string; itemKey: string | null; closedAt: string | null } }[]; events(id: string): MockHandleEvent[]; pause(id: string, reason: "person" | "ceiling", actor: "supervisor"): unknown; seedEvent(id: string, actor: WorkstreamActor, action: string, at: string, extra?: { runId?: string | null; proposalId?: string | null; detail?: string | null }): unknown };
   draftReview: MockHandle["draftReview"];
   proposals?: { writes: readonly { proposalId: string; intent: Intent }[]; list(): Proposal[]; noteEdited(id: string): void };
@@ -240,6 +244,8 @@ export function exposeMockClock({ runs, workstreams, proposals, pip, tickets, ji
     loseRun: (id) => void runs.lose(id),
     attached: () => [...runs.attached],
     answerTries: () => [...runs.answerTries],
+    withdrawPermission: (id, request) => void runs.withdrawPermission(id, request),
+    permissionAnswers: () => [...runs.permissionAnswers],
     attachCommands: () => [...runs.attachCommands],
     workFolderReveals: () => runs.workFolderReveals,
     connectionTerminals: () => [...(terminals ?? [])],
@@ -328,7 +334,7 @@ export function mockOptionsFromUrl(): MockOptions {
   options.runs = {
     // The scripted ages count back from now, so the runs look recent whenever the page is opened.
     epoch: Date.now(),
-    seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" || seed === "stuck" || seed === "reports" || seed === "clones" || seed === "harness" ? seed : "kinds",
+    seed: seed === "empty" || seed === "many" || seed === "failures" || seed === "busy" || seed === "stuck" || seed === "reports" || seed === "clones" || seed === "harness" || seed === "permissions" ? seed : "kinds",
     cap: count("runsCap"),
     planDescription: true,
     untrusted: params.get("runsUntrusted") === "1",

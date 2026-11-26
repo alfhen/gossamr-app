@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use harness::api::Op;
 use harness::client::{Client, Push};
-use harness::event::{Body, Event};
+use harness::event::{Body, Decision, Event};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -50,6 +50,11 @@ impl ClientTools for NoTools {
 pub const ANSWER_ON_ITS_WAY: &str = "Your answer is on its way to the agent. Send more once it has arrived.";
 /// A message to a run whose session the harness no longer runs, with no turn it could have lost.
 pub const NOT_RUNNING: &str = "Its agent isn't running any more, so it takes no message. Ask Pip to start it again.";
+
+/// An answer to a permission request the run's session does not hold open.
+pub const NOT_OPEN: &str = "That request isn't open any more: it was answered or withdrawn, or it isn't this run's.";
+/// An answer to a permission request of a session the harness no longer runs.
+pub const NOT_RUNNING_TO_ANSWER: &str = "Its agent isn't running any more, so the request can't be answered.";
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
@@ -302,6 +307,28 @@ impl Link {
         Ok(true)
     }
 
+    /// Answers the open permission request `request` of `session`, once, for that request alone: never "always", never
+    /// for the session. The run waits on it no more once the harness took it.
+    pub async fn permit(&self, session: &str, request: &str, decision: Decision) -> Result<(), String> {
+        match self.call(Op::Answer { session: session.to_owned(), request: request.to_owned(), decision, message: None }).await {
+            Ok(_) => {}
+            Err(why) if why.starts_with("no open permission request") => return Err(NOT_OPEN.into()),
+            Err(why) if not_running(&why) => return Err(NOT_RUNNING_TO_ANSWER.into()),
+            Err(why) => return Err(why),
+        }
+        // The harness took it, so it is taken: a run that can't note it now reads it from the `answered` event.
+        let noted = self.inner.core.apply_session(session, |run, follow| {
+            consumer::permission_answered(run, follow, request);
+            Vec::new()
+        });
+        match noted.await {
+            Ok(Some(applied)) => self.inner.after(&applied.before, &applied.run),
+            Ok(None) => {}
+            Err(e) => eprintln!("the harness took an answer to a request of session {session}, but Gossamr couldn't note it: {e}"),
+        }
+        Ok(())
+    }
+
     /// Whether the app follows `session` as not closed though the harness does not run it and stored nothing past what
     /// the app applied: its harness went with no shutdown.
     async fn lost_mid_turn(&self, session: &str) -> bool {
@@ -478,6 +505,7 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
             link.agent_lost(&session).await?;
             continue;
         }
+        link.recover_permissions(client, &session, &follow).await;
         if let Err(e) = client.call(Op::Watch { session: session.clone(), after: follow.seq }).await {
             eprintln!("couldn't watch session {session}: {e}");
             continue;
@@ -514,6 +542,27 @@ async fn results_after(client: &mut Client, session: &str, after: u64) -> Option
     }
 }
 
+/// The `permission` events the harness stored for `session` up to `upto` whose id is in `ids`, read page by page.
+async fn asked_up_to(client: &mut Client, session: &str, upto: u64, ids: &[&str]) -> Option<Vec<Event>> {
+    let (mut asked, mut after) = (Vec::new(), 0);
+    loop {
+        let page = client.call(Op::Events { session: session.to_owned(), after }).await.ok()?;
+        let events = page["events"].as_array().cloned().unwrap_or_default();
+        after = events.last().and_then(|e| e["seq"].as_u64()).unwrap_or(after);
+        // One event of a type this build can't read is passed over, as the watch does.
+        let read = events.into_iter().filter_map(|e| serde_json::from_value::<Event>(e).ok());
+        let wanted = |body: &Body| match body {
+            Body::Permission { id, .. } => ids.contains(&id.as_str()),
+            Body::Withheld { of, kept } => of == "permission" && kept.get("id").and_then(Value::as_str).is_some_and(|id| ids.contains(&id)),
+            _ => false,
+        };
+        asked.extend(read.filter(|e| e.seq <= upto && wanted(&e.body)));
+        if page["more"] != true || after >= upto || after == 0 {
+            return Some(asked);
+        }
+    }
+}
+
 /// What the harness says of a session it does not run: one a harness that went with no shutdown left as it was.
 fn not_running(why: &str) -> bool {
     why.contains("is not running")
@@ -544,6 +593,26 @@ impl Inner {
         });
         if let Err(e) = kept.await {
             eprintln!("couldn't keep the branch of session {session}: {e}");
+        }
+    }
+
+    /// A run saved before runs kept their open permission requests has them only in its follow: read them again from
+    /// the harness. A list it cannot read now is left for the next connect.
+    async fn recover_permissions(&self, client: &mut Client, session: &str, follow: &crate::domain::SessionFollow) {
+        let Ok(Some((run_id, _))) = self.core.session_run(session).await else { return };
+        let Ok(Some(run)) = self.core.run(&run_id).await else { return };
+        let missing: Vec<&str> = follow.permissions.iter().map(|(id, ..)| id.as_str()).filter(|id| !run.permissions.iter().any(|open| open.id == *id)).collect();
+        if missing.is_empty() {
+            return;
+        }
+        let Some(asked) = asked_up_to(client, session, follow.seq, &missing).await else { return };
+        match self.core.apply_session(session, |run, follow| {
+            consumer::recover_permissions(run, follow, &asked);
+            Vec::new()
+        }).await {
+            Ok(Some(applied)) => self.after(&applied.before, &applied.run),
+            Ok(None) => {}
+            Err(e) => eprintln!("couldn't keep the permission requests of session {session}: {e}"),
         }
     }
 
