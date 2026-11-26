@@ -14,10 +14,18 @@ export const permissionWants = (request: Pick<PermissionRequest, "kind">) => WAN
 /** The line a request for more permissions carries: the others ask for one action, this one for more reach. */
 export const PERMISSIONS_WARNING = "Allowing this gives the agent more access than it started with.";
 
-/** Why a request has no Allow, or null when it has one: the app's refusal of an Allow, `ONLY_DENY_KIND` and `ONLY_DENY_CUT` in runs/on_harness.rs. */
-export function denyOnlyWhy(request: Pick<PermissionRequest, "kind" | "denyOnly">): string | null {
-  if (!request.denyOnly) return null;
-  return request.kind === "other" ? "Gossamr can't read this kind of request, so it can only be denied." : "This request was too large to show whole, so it can only be denied.";
+/**
+ * Whether Allow may be offered: only where every field of the input is on screen, so never for a request that is masked,
+ * cut (its input is text), rebuilt with no input, or that the app marks deny-only.
+ */
+export const canAllow = (request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">) => !request.denyOnly && !request.masked && request.input != null && typeof request.input === "object";
+
+/** Why a request has no Allow, or null when it has one: the app's own refusal of an Allow, in runs/on_harness.rs. */
+export function denyOnlyWhy(request: Pick<PermissionRequest, "denyOnly" | "masked" | "input">): string | null {
+  if (canAllow(request)) return null;
+  if (request.masked) return "Part of this is hidden; run it yourself in Terminal if you trust it.";
+  if (typeof request.input === "string") return "This request was too large to show whole, so it can only be denied.";
+  return "Gossamr can't show all of this request, so it can only be denied.";
 }
 
 /** The run's open requests: those of a run on the harness. A run without them asks in its own Terminal prompt. */

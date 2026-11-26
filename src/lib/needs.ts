@@ -401,7 +401,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
           kind: "permission",
           title: `${name} asks to ${wants}`,
           // The whole subject is in the decision, beside its buttons; a sentence would have to cut it.
-          why: `${name} wants to ${wants} with ${ask.tool}.`,
+          why: `${name} wants to ${wants}${ask.tool ? ` with ${ask.tool}` : ""}.`,
           ifYouWait: `The agent waits; ${stays}.`,
           primary: action("open", "Review"),
           secondary: [],

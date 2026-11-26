@@ -4,7 +4,8 @@ import { ButtonGroup } from "../components/ButtonGroup";
 import { labelsByRun } from "../lib/workstreamStage";
 import type { PermissionRequest, Run } from "../types";
 import { CodeBox } from "./AgentSheet";
-import { PERMISSIONS_WARNING, answeringKey, denyOnlyWhy, openPermissions, permissionWants } from "./permissionLogic";
+import { PERMISSIONS_WARNING, answeringKey, canAllow, denyOnlyWhy, openPermissions, permissionWants } from "./permissionLogic";
+import { RequestInput } from "./RequestInput";
 import { useRuns } from "./runsStore";
 
 type Size = "sm" | "md";
@@ -32,19 +33,19 @@ export function PermissionItemView({ name, request, answering, size = "md", onAn
       <p className="m-0 font-semibold text-ws-ink">
         {name} wants to {permissionWants(request)}
       </p>
-      <p className="m-0 text-sm text-ws-ink2">
-        With <code className="font-mono">{request.tool}</code>:
-      </p>
-      {/* The whole subject, wrapped; a long one scrolls in its box rather than being cut. */}
-      <div className="max-h-64 overflow-y-auto">
-        <CodeBox text={request.subject} what="the request" wrap />
-      </div>
+      {request.tool && (
+        <p className="m-0 text-sm text-ws-ink2">
+          With <code className="font-mono">{request.tool}</code>:
+        </p>
+      )}
+      {/* Every field of what an allow passes the agent, not only its heading. */}
+      {request.input != null ? <RequestInput kind={request.kind} input={request.input} /> : request.subject && <CodeBox text={request.subject} what="the request" wrap />}
       {request.kind === "permissions" && <p className="m-0 text-sm font-semibold text-ws-warn">{PERMISSIONS_WARNING}</p>}
       {why && <p className="m-0 text-sm text-ws-ink2">{why}</p>}
       {/* The card behind takes a click or Enter as opening the run; these buttons are answers of their own. */}
       <div onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
         <ButtonGroup label="Answer the permission request">
-          {!request.denyOnly && (
+          {canAllow(request) && (
             <Button size={size} disabled={!!answering} onClick={() => onAnswer("allow")}>
               {answering === "allow" ? "Allowing…" : "Allow"}
             </Button>

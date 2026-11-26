@@ -531,9 +531,16 @@ export interface PermissionRequest {
   kind: PermissionKind;
   /** The tool's name: `Bash`, `Edit`, an MCP tool. */
   tool: string;
-  /** The whole command, path, pattern, address or query it asks for; else its whole input as JSON. */
+  /** The heading line: the command, path, pattern, address or query it asks for. */
   subject: string;
-  /** The harness cut it to fit, or its kind is one Gossamr can't read: it can only be denied. */
+  /**
+   * The whole request as JSON, each masked part the literal `<redacted>`; text where the harness cut it; null for a request
+   * rebuilt after the harness lost it. Allow is offered only where every field of it is on screen.
+   */
+  input: unknown;
+  /** Part of it is hidden as a secret: it can only be denied. */
+  masked?: boolean;
+  /** Cut, masked, of a kind Gossamr can't read, or rebuilt: it can only be denied. */
   denyOnly?: boolean;
 }
 
