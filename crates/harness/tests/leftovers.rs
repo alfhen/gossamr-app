@@ -282,29 +282,56 @@ fn worktree(dir: &Path) -> PathBuf {
     worktree
 }
 
-/// The reviewer's probe: a leader in a group of its own starts `sleep 60` in the background and exits, reaped. Its
-/// record, taken while it ran, and the sleep, which keeps the group. Both work in `cwd`.
-fn a_leader_gone_with_its_work_left(cwd: &Path) -> (Process, Process) {
+/// What a gone leader left running: a `cat` that reads a pipe this test holds, so it ends when the test lets go of the
+/// pipe, or ends, and is never signalled by a pid that may have been reused.
+struct Work {
+    process: Process,
+    hold: Arc<Mutex<Option<std::io::PipeWriter>>>,
+}
+
+impl std::ops::Deref for Work {
+    type Target = Process;
+    fn deref(&self) -> &Process {
+        &self.process
+    }
+}
+
+/// The reviewer's probe: a leader in a group of its own starts work in the background and exits, reaped. Its record,
+/// taken while it ran, and the work, which keeps the group. Both work in `cwd`.
+fn a_leader_gone_with_its_work_left(cwd: &Path) -> (Process, Work) {
     let (leader, mut work) = a_leader_gone_leaving(cwd, 1);
     (leader, work.remove(0))
 }
 
-/// As `a_leader_gone_with_its_work_left`, with `count` sleeps left.
-fn a_leader_gone_leaving(cwd: &Path, count: usize) -> (Process, Vec<Process>) {
-    let mut leader = Command::new("/bin/sh")
-        .args(["-c", &format!("{} read go", "sleep 60 & echo $!;".repeat(count))])
+/// As `a_leader_gone_with_its_work_left`, with `count` processes left, which all end once the pipe is let go of.
+fn a_leader_gone_leaving(cwd: &Path, count: usize) -> (Process, Vec<Work>) {
+    let (held, hold) = std::io::pipe().unwrap();
+    let held = std::os::fd::OwnedFd::from(held);
+    let at = std::os::fd::AsRawFd::as_raw_fd(&held);
+    let mut leader = Command::new("/bin/sh");
+    leader
+        .args(["-c", &format!("{} read go", "cat <&3 >/dev/null & echo $!;".repeat(count))])
         .current_dir(cwd)
         .process_group(0)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stdout(std::process::Stdio::piped());
+    // SAFETY: dup2 and fcntl are async-signal-safe; the pipe's end is open in this process until the spawn returns.
+    // When the end already is fd 3, dup2 leaves it close-on-exec, so the flag is cleared instead.
+    unsafe {
+        leader.pre_exec(move || {
+            let kept = if at == 3 { libc::fcntl(3, libc::F_SETFD, 0) } else { libc::dup2(at, 3) - 3 };
+            if kept == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+        });
+    }
+    let mut leader = leader.spawn().unwrap();
+    drop(held);
     let record = Process { pid: leader.id(), started: process::started_of(leader.id()).expect("it runs") };
     let mut said = std::io::BufRead::lines(std::io::BufReader::new(leader.stdout.take().unwrap()));
+    let hold = Arc::new(Mutex::new(Some(hold)));
     let work = (0..count)
         .map(|_| {
             let pid: u32 = said.next().unwrap().unwrap().trim().parse().unwrap();
-            Process { pid, started: process::started_of(pid).expect("the sleep runs") }
+            Work { process: Process { pid, started: process::started_of(pid).expect("the work runs") }, hold: hold.clone() }
         })
         .collect();
     drop(leader.stdin.take());
@@ -312,9 +339,14 @@ fn a_leader_gone_leaving(cwd: &Path, count: usize) -> (Process, Vec<Process>) {
     (record, work)
 }
 
-/// Kills a fixture the test no longer owns as a child, only while its pid still has its start time, as the harness does.
-fn kill(process: &Process) {
-    let _ = process::signal(process, libc::SIGKILL);
+/// Ends what a gone leader left, by letting go of the pipe it reads, and waits until it has gone.
+fn kill(work: &Work) {
+    work.hold.lock().unwrap().take();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while process::may_run(work) {
+        assert!(std::time::Instant::now() < deadline, "the work ended within 10 s");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -389,7 +421,7 @@ fn leftover_recorded_in_another_boot_is_gone_with_its_group_and_nothing_is_signa
     let worktree = worktree(&dir);
     let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
     let (mut child, live) = agent();
-    for (record, member) in [(&leader, &work), (&live, &live)] {
+    for (record, member) in [(&leader, &work.process), (&live, &live)] {
         left_in(&dir, Some(record), &worktree);
         sql(&dir, "UPDATE sessions SET agent_boot = 'another boot' WHERE id = 's'");
         let harness = started_harness(&dir);
