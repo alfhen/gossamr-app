@@ -9,6 +9,7 @@ import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type 
 import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
 import { answerSentText } from "./runSheetLogic";
+import { answeringKey } from "./permissionLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
@@ -70,6 +71,8 @@ interface RunsState {
   answering: ReadonlySet<string>;
   /** Runs whose answer was refused because they were handed over to Terminal, until one goes through. */
   handedOverAsked: ReadonlySet<string>;
+  /** Permission requests whose answer is on its way, by `answeringKey`, with what was answered. */
+  permissionAnswering: ReadonlyMap<string, "allow" | "deny">;
   /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
@@ -99,6 +102,8 @@ interface RunsState {
   setModel(id: string, choice: ModelChoice): Promise<void>;
   /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. `tookBack`: you took a run handed over to Terminal back. */
   answer(id: string, text: string, options?: { tookBack?: boolean }): Promise<boolean>;
+  /** Allows or denies one open permission request of a run, once: a second answer while one is on its way does nothing. */
+  answerPermission(id: string, request: string, decision: "allow" | "deny"): Promise<boolean>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
   adoptSession(id: string, session: string): Promise<void>;
   /** With `trust`, Gossamr first trusts the run's own clone for its login; a refusal is kept for the run's card. */
@@ -213,6 +218,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   drafting: null,
   answering: new Set<string>(),
   handedOverAsked: new Set<string>(),
+  permissionAnswering: new Map(),
   answered: {},
   ...idle,
 
@@ -341,6 +347,25 @@ export const useRuns = create<RunsState>((set, get) => ({
       return false;
     } finally {
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
+      void get().reload();
+    }
+  },
+
+  async answerPermission(id, request, decision) {
+    const { backend, permissionAnswering } = get();
+    const key = answeringKey(id, request);
+    if (!backend || permissionAnswering.has(key)) return false;
+    set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]) });
+    try {
+      await backend.runsAnswerPermission(id, request, decision);
+      return true;
+    } catch (e) {
+      useToasts.getState().push(`Couldn't ${decision} it: ${messageOf(e)}`);
+      return false;
+    } finally {
+      const left = new Map(get().permissionAnswering);
+      left.delete(key);
+      set({ permissionAnswering: left });
       void get().reload();
     }
   },

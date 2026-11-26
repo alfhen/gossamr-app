@@ -1,5 +1,6 @@
 import { type ConnectionInfo, type Intent, type ItemRef, type Proposal, type Run, type WorkstreamView } from "../types";
 import { permissionRequest } from "../workspace/agentsLogic";
+import { openPermissions, permissionWants } from "../workspace/permissionLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { DEFAULT_INSTANCE, instanceOf } from "../workspace/providerLogic";
 import { docText } from "./docs";
@@ -52,6 +53,8 @@ export interface Need {
   workstreamId: string | null;
   /** The run it is about, for a need that is a run's. */
   runId?: string;
+  /** The open permission request it is, for a run on the harness: one need per request. */
+  requestId?: string;
   /** The ticket it is about, when it has one. */
   ticketKey?: string;
   /** "KEY · its title" when the title is known, else the key; null when it is about no ticket. */
@@ -386,7 +389,26 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
     const at = run.endedAt ?? run.lastProgressAt;
     const base = { key: `run:${run.id}`, runId: run.id, at, target: { type: "run", id: run.id } as const, ...where(ws?.workstream.id ?? null, run.item) };
     const stays = base.ticketKey ? `nothing else in ${base.ticketKey} moves` : "nothing else it blocks moves";
-    if (run.state === "needsAnswer") {
+    const asks = openPermissions(run);
+    if (asks.length) {
+      for (const ask of asks) {
+        const wants = permissionWants(ask);
+        out.push({
+          ...base,
+          key: `run:${run.id}:permission:${ask.id}`,
+          requestId: ask.id,
+          group: "unblock",
+          kind: "permission",
+          title: `${name} asks to ${wants}`,
+          // The whole subject is in the decision, beside its buttons; a sentence would have to cut it.
+          why: `${name} wants to ${wants} with ${ask.tool}.`,
+          ifYouWait: `The agent waits; ${stays}.`,
+          primary: action("open", "Review"),
+          secondary: [],
+          batchable: false,
+        });
+      }
+    } else if (run.state === "needsAnswer") {
       out.push({
         ...base,
         group: "unblock",

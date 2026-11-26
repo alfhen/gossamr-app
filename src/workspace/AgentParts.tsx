@@ -12,6 +12,8 @@ import { ownKey } from "./agentKeys";
 import { useRuns } from "./runsStore";
 import { useWorkstreams } from "./workstreamsStore";
 import { PermissionAsk } from "./PermissionAsk";
+import { PermissionRequests } from "./PermissionRequests";
+import { openPermissions, permissionsRow } from "./permissionLogic";
 import { useStateView } from "./useStateView";
 import { permissionRequest, progressText, quietMinutes, quietText, resultHeadline, slotQueue, stoppedText, type Tone } from "./agentsLogic";
 import { Button } from "../components/Button";
@@ -180,6 +182,14 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
   const quiet = quietMinutes(run, now);
   const shown = useDecisionShown();
   const instance = useRunInstance(run);
+  if (openPermissions(run).length) {
+    if (shown.need?.runId === run.id && shown.need.kind === "permission") return <p className="m-0 text-ws-ink2">Asking you in Needs you, in the open workstream.</p>;
+    return (
+      <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
+        <PermissionRequests run={run} size="sm" />
+      </div>
+    );
+  }
   switch (run.state) {
     case "needsPermission":
       // Asked once: the open workstream's Needs you holds the buttons, so the card does not repeat them (nor take the keyboard when they are pressed).
@@ -273,6 +283,7 @@ export function RowText({ run, now }: { run: Run; now: number }) {
 /** The single line a list row shows after the state chip; `runs` places a run waiting for a slot in line. */
 export function rowText(run: Run, now: number, runs?: readonly Run[], instance: RunInstance | null = null): string {
   const quiet = quietMinutes(run, now);
+  if (openPermissions(run).length) return permissionsRow(openPermissions(run));
   switch (run.state) {
     case "needsPermission":
       return permissionRequest(run.needs)?.command ?? "Waiting for permission";

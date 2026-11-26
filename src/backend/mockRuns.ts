@@ -1,4 +1,4 @@
-import { HANDED_OVER_ASK, type AgentSettings, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { HANDED_OVER_ASK, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -431,6 +431,25 @@ const ANSWER_ON_ITS_WAY = "Your answer is on its way to the agent. Send more onc
 /** A run on the harness has its harness session and no Claude session id, as H10b writes it. */
 const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null });
 
+/** A long command, so the page is seen to show it whole. */
+export const LONG_COMMAND = "pnpm vitest run src/campaigns/sendTime.test.ts src/campaigns/schedule.test.ts --reporter=verbose && git add src/campaigns/sendTime.ts src/campaigns/sendTime.test.ts && git commit -m \"Pick each campaign's send time from the last 30 days of opens\"";
+
+const ask = (id: string, kind: PermissionRequest["kind"], tool: string, subject: string, denyOnly = false): PermissionRequest => ({ id, kind, tool, subject, ...(denyOnly ? { denyOnly } : {}) });
+const asking = (i: number, permissions: PermissionRequest[]): Partial<Run> => ({ ...harnessOf(i), permissions, lastDetail: "Waiting for permission" });
+
+/**
+ * Runs on the harness with permission requests open: one command, two at once, one the harness cut, one of a kind Gossamr
+ * can't read, one that asks for more permissions, and an MCP tool.
+ */
+const PERMISSION_SEEDS: Seed[] = [
+  { key: "CA-407", name: "ca-407-send-time-7d8f", state: "needsPermission", minutesAgo: 9, over: asking(1, [ask("perm-1", "command", "Bash", LONG_COMMAND)]) },
+  { key: "WEB-100", name: "web-100-page-speed-2a3b", state: "needsPermission", minutesAgo: 12, over: asking(2, [ask("perm-2", "file_change", "Edit", "src/components/ProductPage.tsx"), ask("perm-3", "command", "Bash", "git push origin web-100-page-speed-2a3b")]) },
+  { key: "SUP-13", name: "sup-13-delivery-address-5c6e", state: "needsPermission", minutesAgo: 14, over: asking(3, [ask("perm-4", "command", "Bash", "for f in data/addresses/*.csv; do node scripts/migrate-address.js \"$f\"", true)]) },
+  { key: "DEVOPS-472", name: "devops-472-dead-letter-8a9b", state: "needsPermission", minutesAgo: 16, over: asking(4, [ask("perm-5", "permissions", "request_permissions", '{"network":"enabled","paths":["~/.aws"]}')]) },
+  { key: "DEVOPS-473", name: "devops-473-duplicate-events-0c1d", state: "needsPermission", minutesAgo: 18, over: asking(5, [ask("perm-6", "tool", "mcp__github__create_issue", '{"repo":"acme/ops","title":"Duplicate events after a consumer restart"}'), ask("perm-7", "other", "Teleport", '{"to":"elsewhere"}', true)]) },
+];
+
+
 /**
  * Runs in each state the page shows for runs on the harness: signing needs you, interrupted, handed over (asking, and
  * stopped as H10b ends it), an answer it holds (in a turn, and for a session to resume), a clean-up refused, and a session
@@ -455,7 +474,7 @@ const CLONE_SEEDS: Seed[] = [
 
 export interface MockRunsOptions {
   /** `busy` is the eight scripted runs and `kinds` adds one of each other role; `many` is twenty-four; `failures` is one failed launch of each kind; `stuck` adds two stopped runs that may have carried on elsewhere; `harness` adds runs on the harness in each state the page shows for them. */
-  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones" | "harness";
+  seed?: "busy" | "kinds" | "empty" | "many" | "failures" | "stuck" | "reports" | "clones" | "harness" | "permissions";
   /** The moment the scripted ages count back from. Fixed by default so tests stay deterministic. */
   epoch?: number;
   /** How many runs may be live at once; another waits for a slot. */
@@ -591,7 +610,7 @@ export class MockRuns {
     this.trustRefused = !!o.trustRefused;
     this.gitRules = !!o.gitRules;
     this.prSurfaceMs = o.prSurfaceMs === undefined ? PR_SURFACE_MS : o.prSurfaceMs;
-    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : o.seed === "harness" ? [...SEEDS, ...HARNESS_SEEDS] : SEEDS;
+    const seeds = o.seed === "empty" ? [] : o.seed === "many" ? manySeeds() : o.seed === "failures" ? FAILURE_SEEDS : o.seed === "stuck" ? [...SEEDS, ...STUCK_SEEDS] : o.seed === "kinds" ? [...SEEDS, ...KIND_SEEDS] : o.seed === "reports" ? [...SEEDS, ...REPORT_SEEDS] : o.seed === "clones" ? [...SEEDS, ...CLONE_SEEDS] : o.seed === "harness" ? [...SEEDS, ...HARNESS_SEEDS] : o.seed === "permissions" ? [...SEEDS, ...PERMISSION_SEEDS] : SEEDS;
     this.runs = seeds.map((s, i) => seeded(i, s, this.epoch));
     seeds.forEach((seed, i) => seed.report && this.reports.set(this.runs[i].id, seed.report));
     seeds.forEach((seed, i) => seed.unpushed && this.unpushed.add(this.runs[i].id));
@@ -788,6 +807,36 @@ export class MockRuns {
     return next;
   }
 
+  /**
+   * Allows or denies one open request, once, as `runs_answer_permission`. The agent goes on once none is left open: a deny
+   * refuses that one tool call, and Claude carries on without it.
+   */
+  answerPermission(id: string, request: string, decision: "allow" | "deny"): Run {
+    const run = this.get(id);
+    if (!run) throw new Error(`There is no agent ${id}.`);
+    if (run.handedOver) throw new Error("It is handed over to Terminal, so you answer it there.");
+    if (TERMINAL.includes(run.state)) throw new Error(`It is ${run.state}, so it has no permission request to answer.`);
+    const asked = run.permissions?.find((p) => p.id === request);
+    if (!asked) throw new Error("That permission request isn't open any more.");
+    if (decision === "allow" && asked.denyOnly) throw new Error("That request can only be denied.");
+    this.permissionAnswers.push({ run: id, request, decision });
+    return this.closePermission(run, request, `${decision === "allow" ? "Allowed" : "Denied"} ${asked.tool}`);
+  }
+
+  /** Has the agent withdraw an open request, as when its turn ends before you answer, for tests. */
+  withdrawPermission(id: string, request: string): Run {
+    const run = this.get(id) ?? missing();
+    if (!run.permissions?.some((p) => p.id === request)) throw new Error("that request isn't open");
+    return this.closePermission(run, request, "Went on without it");
+  }
+
+  private closePermission(run: Run, request: string, detail: string): Run {
+    const left = (run.permissions ?? []).filter((p) => p.id !== request);
+    const next = this.update(run.id, { permissions: left.length ? left : undefined, ...(left.length ? {} : { state: "working" as const, needs: null }), lastDetail: left.length ? run.lastDetail : detail, lastProgressAt: this.now() });
+    this.changed();
+    return next;
+  }
+
   /** Has a running run go unclear for now, as `track` does when Claude reports a state it can't read, for tests. */
   lose(id: string): Run {
     const next = this.update(id, { state: "unknown", needs: null, error: "Claude reported the state \"odd\". Open in Terminal to look." });
@@ -823,6 +872,8 @@ export class MockRuns {
     if (!run) throw new Error("that run no longer exists");
     const next = { ...run, ...patch };
     if (next.state !== "needsAnswer") next.asking = false;
+    // A session that ended closed whatever it was asking.
+    if (TERMINAL.includes(next.state)) delete next.permissions;
     this.runs = this.runs.map((r) => (r.id === id ? next : r));
     return next;
   }
@@ -871,7 +922,8 @@ export class MockRuns {
     const current = this.get(run.id);
     if (current && current.state !== run.state) return current;
     const to = NEXT[run.state];
-    if (!to) return run;
+    // A run waits on its open permission requests until each is answered or withdrawn.
+    if (!to || run.permissions?.length) return run;
     if (run.state === "queued") {
       const signedOut = this.providers.signedOutName(run.runsOn?.instanceId ?? "claude");
       const words = signedOut ? `Waits until ${signedOut} is signed in.` : null;
@@ -1088,7 +1140,7 @@ export class MockRuns {
       this.changed();
       return "queued";
     }
-    if (run.state === "needsPermission") throw new Error("It is waiting at a permission prompt. Only the person answers that, in Terminal.");
+    if (run.state === "needsPermission") throw new Error(run.permissions?.length ? "It is waiting for your permission, which only you give." : "It is waiting at a permission prompt. Only the person answers that, in Terminal.");
     if (run.state === "queued" || run.state === "launching") throw new Error("It hasn't started working yet.");
     if (run.state === "stopped" && run.unsentAnswer) throw new Error("The person's answer is waiting to be sent to it.");
     if (run.state !== "done" && run.state !== "stopped") throw new Error(`It is ${run.state}, so it can't take a message.`);
@@ -1377,6 +1429,8 @@ export class MockRuns {
   readonly unpushed = new Set<string>();
   /** The run of every answer tried, refused or not, oldest first. */
   readonly answerTries: string[] = [];
+  /** Every permission answer that went through, oldest first. */
+  readonly permissionAnswers: { run: string; request: string; decision: "allow" | "deny" }[] = [];
 
   settings(): AgentSettings {
     return this.limits;

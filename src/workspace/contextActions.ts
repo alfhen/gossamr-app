@@ -57,8 +57,8 @@ export const contextDeps: ContextDeps = {
       case "answer":
         return openNeed(need);
       case "open":
-        // A permission or a sign-in is answered in Terminal: its button opens it there.
-        return need.runId && (need.kind === "permission" || need.kind === "signIn") ? void useRuns.getState().attach(need.runId) : openNeed(need);
+        // A sign-in, and a permission asked in Claude's own prompt, are answered in Terminal: its button opens it there. A request on the harness opens its decision, which only a press of Allow or Deny answers.
+        return need.runId && !need.requestId && (need.kind === "permission" || need.kind === "signIn") ? void useRuns.getState().attach(need.runId) : openNeed(need);
     }
   },
   openInWorkstream,
