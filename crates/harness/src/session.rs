@@ -1015,7 +1015,10 @@ fn given_up(store: &Store, id: &str, what: &str) -> String {
         Ok(Some(_)) if why != UNREAD && why != UNLISTED => format!(
             "a process in session {id}'s group may still run ({why}), so it is not {what}: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"
         ),
-        Ok(None) => format!("session {id}'s agent may still run ({why}), and the harness has no record of its process, so it is not {what}"),
+        // Nothing can check it again, so nothing frees it.
+        Ok(None) => format!(
+            "session {id}'s agent may still run ({why}), and the harness has no record of its process to check, so it is never {what}: open a new session for its work"
+        ),
         _ => format!("session {id}'s agent may still run ({why}), so it is not {what}: restarting the harness, in Settings > Harness, checks again"),
     }
 }

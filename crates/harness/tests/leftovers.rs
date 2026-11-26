@@ -200,11 +200,13 @@ fn leftover_a_pid_that_another_process_took_is_never_signalled() {
     assert_eq!(ended(child), Some(libc::SIGTERM), "nothing else ended it");
 }
 
-#[test]
-fn leftover_given_up_with_no_agent_on_record_stays_given_up() {
+#[tokio::test]
+async fn leftover_given_up_with_no_agent_on_record_stays_given_up_and_says_there_is_no_way_back() {
     let (_tmp, dir) = data_dir();
     left_by_a_shutdown(&dir, None);
     let harness = started_harness(&dir);
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(refused.contains("no record of its process to check, so it is never resumed: open a new session for its work"), "{refused}");
     assert_eq!(row(harness, &dir), (true, vec![]), "nothing says its agent is gone");
 }
 
