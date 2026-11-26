@@ -65,7 +65,9 @@ async fn an_approved_run_opens_a_harness_session_sends_its_brief_and_reads_done_
         Body::Prompted { text } => Some(text.clone()),
         _ => None,
     });
-    assert_eq!(brief, Some(crate::domain::render_prompt(&done.spec)), "the brief alone: the harness adds the guard");
+    let brief = brief.expect("the brief was sent");
+    assert_eq!(brief, crate::domain::render_prompt_from(&done.spec, crate::domain::Start::HarnessWorktree), "the brief alone: the harness adds the guard");
+    assert!(brief.contains(&format!("on branch `{}`", done.spec.name)) && !brief.contains("worktree-"), "it stays on the branch the harness made");
 }
 
 #[test]

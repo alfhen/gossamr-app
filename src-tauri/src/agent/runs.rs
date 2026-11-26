@@ -318,7 +318,7 @@ async fn get(st: &McpState, pip: &PipRun, args: &Value) -> Reply {
     if let Some(last) = run.last_detail.as_deref().and_then(|t| quoted(t, DETAIL_CHARS, true)) {
         out.push(format!("Last action: {last}"));
     }
-    out.push(format!("Repository: {} · branch: {}", run.spec.repo, run.branch.clone().unwrap_or_else(|| format!("worktree-{}", run.spec.name))));
+    out.push(format!("Repository: {} · branch: {}", run.spec.repo, run.branch_name()));
     if let Some(n) = run.tokens {
         out.push(format!("Used {}", tokens(n)));
     }

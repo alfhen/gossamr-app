@@ -11,7 +11,7 @@ use harness::event::Decision;
 use super::failure::Failure;
 use super::link::{Connect, Link};
 use super::service::RunService;
-use crate::domain::{render_prompt, Run, RunEvent, RunState};
+use crate::domain::{render_prompt_from, Run, RunEvent, RunState, Start};
 use crate::error::{Error, Result};
 
 /// The link to the harness, and the provider runs open on: `claude`, or the mock a debug build was started with.
@@ -96,7 +96,7 @@ fn no_session(why: &str, provider: &str) -> String {
 
 /// The first prompt: the brief the person approved. The harness adds its own guard as system text.
 pub fn first_prompt(run: &Run) -> String {
-    render_prompt(&run.spec)
+    render_prompt_from(&run.spec, Start::HarnessWorktree)
 }
 
 impl RunService {
