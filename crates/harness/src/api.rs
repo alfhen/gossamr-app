@@ -8,6 +8,9 @@
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 //!
+//! At most `harness serve --turn-limit <n>` sessions are in a turn at once, across every client: a prompt past it
+//! waits, and its session says `waiting` until a turn ends and frees a slot, first come first served.
+//!
 //! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
 //! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
 //! exited or crashed by itself, a fault signal or a SIGKILL from outside among them, or its driver failed), `signal`

@@ -2100,3 +2100,36 @@ async fn no_resume_while_a_start_whose_agent_could_not_be_recorded_may_still_run
     // Free once its agent had gone; what refuses it now is its own (no provider session was ever named).
     assert!(!matches!(resumed, Err(Error::Running(_))), "still taken after its agent went");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn limit_on_a_runtime_of_several_threads_as_serve_runs_turns_past_the_limit_still_wait() {
+    // Each turn holds on a permission, so as many run as the limit lets start.
+    let (_tmp, dir) = data_dir();
+    let mock = mock(
+        r#"{"prompt": null}
+        {"permission": {"kind": "tool", "tool": "Read"}}
+        {"end": "done"}"#,
+    );
+    let harness = harness(&dir, &mock, 2);
+    let mut sessions = vec![];
+    for _ in 0..8 {
+        sessions.push(open(&harness, false).await);
+    }
+    let sends: Vec<_> = sessions.iter().map(|(id, _)| (harness.clone(), id.clone())).map(|(harness, id)| tokio::spawn(async move { harness.send(&id, "go").unwrap() })).collect();
+    for send in sends {
+        send.await.unwrap();
+    }
+    let mut asked = vec![];
+    let mut waiting = 0;
+    for (id, events) in &mut sessions {
+        let first = until(events, |body| matches!(body, Body::Permission { .. } | Body::Waiting)).await;
+        match &first.last().unwrap().body {
+            Body::Permission { id: request, .. } => asked.push((id.clone(), request.clone())),
+            _ => waiting += 1,
+        }
+    }
+    assert_eq!((asked.len(), waiting), (2, 6), "two turns run and six wait, with sends from several threads at once");
+    for (id, request) in asked {
+        harness.answer(&id, &request, Decision::Allow, None).unwrap();
+    }
+}

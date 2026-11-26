@@ -84,7 +84,7 @@ pub enum Request {
 
 pub const USAGE: &str = "usage: harness --version
        harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]
-       harness serve [--data <folder>] [--mock-script <file>]   (the first client token on stdin)
+       harness serve [--data <folder>] [--mock-script <file>] [--turn-limit <n>]   (the first client token on stdin)
   against the harness serving --data <folder>, with the client token on stdin (--token-stdin):
        harness run --provider <name> [--answer allow|deny]... [--ends-with-client] <prompt>
        harness sessions | shutdown | token list | token revoke <id>
