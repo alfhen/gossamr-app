@@ -1299,6 +1299,6 @@ async fn clean_up_of_a_closed_session_the_harness_refuses_says_why_in_a_sentence
     assert!(!message.to_lowercase().starts_with("refused") && message.starts_with(char::is_uppercase), "the harness's kind is taken off: {message}");
     assert!(message.contains("(commit.gpgsign)"), "{message}");
     let way_out = format!(". Remove it with `git -C {} config --unset-all commit.gpgsign`.", crate::runs::shell::quote(&done.spec.clone_path.display().to_string()));
-    assert!(message.ends_with(&way_out) && !message.contains(".."), "{message}");
+    assert!(message.ends_with(&way_out) && !message.contains("..") && !message.contains("To clear them") && message.matches("Remove it with").count() == 1, "one way out: {message}");
     assert!(git.worktree(&done.spec.name).is_dir());
 }

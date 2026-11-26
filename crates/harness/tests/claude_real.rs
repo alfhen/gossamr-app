@@ -90,10 +90,29 @@ async fn until_quiet_ok(events: &mut tokio::sync::broadcast::Receiver<Event>, la
     }
 }
 
-/// One real session: `spec` opened in a scratch repo whose remote is a local bare repo, `prompt` sent, its first turn
-/// run, then the session closed. The login folders' config is checked while it runs and after, and nothing of the
-/// session may be left. The first turn's events, and those after it.
-async fn real_session(locked: bool, result_schema: Option<serde_json::Value>, prompt: &str) -> (Vec<Event>, Vec<Event>) {
+/// What a real session is opened with and told.
+#[derive(Default)]
+struct Real<'a> {
+    locked: bool,
+    result_schema: Option<serde_json::Value>,
+    tools: Vec<harness::tools::ToolSpec>,
+    prompt: &'a str,
+    /// What the client answers a question with; a question with none fails the test.
+    answer: Option<&'a str>,
+}
+
+/// What a real session left: its first turn's events, those after it, and its scratch repo, kept until this is dropped.
+struct Ran {
+    seen: Vec<Event>,
+    rest: Vec<Event>,
+    scratch: PathBuf,
+    _tmp: tempfile::TempDir,
+}
+
+/// One real session opened in a scratch repo whose remote is a local bare repo, the prompt sent, its first turn run
+/// with every permission allowed and a question answered, then the session closed. The login folders' config is
+/// checked while it runs and after, and nothing of the session may be left.
+async fn real_session(real: Real<'_>) -> Ran {
     let home = dirs::home_dir().expect("a home folder");
     let before = login_snapshot(&home);
     let watching = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -120,6 +139,10 @@ async fn real_session(locked: bool, result_schema: Option<serde_json::Value>, pr
     git(&["init", "-q", "--bare", remote.to_str().unwrap()]);
     git(&["init", "-q", scratch.to_str().unwrap()]);
     git(&["-C", scratch.to_str().unwrap(), "remote", "add", "origin", remote.to_str().unwrap()]);
+    // The scratch repo's own config, so a commit there needs no key and names no one.
+    for (key, value) in [("user.name", "Harness Test"), ("user.email", "test@example.invalid"), ("commit.gpgsign", "false")] {
+        git(&["-C", scratch.to_str().unwrap(), "config", key, value]);
+    }
     let scratch = scratch.canonicalize().unwrap();
     let setup = Setup::of_this_machine(data.clone());
     setup.capture().await.expect("the shell's environment is read");
@@ -130,10 +153,24 @@ async fn real_session(locked: bool, result_schema: Option<serde_json::Value>, pr
     }
     let driver = ClaudeDriver::new(binary);
     let harness = Harness::with_setup(Store::open(&data).unwrap(), vec![("claude".into(), Arc::new(driver))], settings(4), Arc::new(setup));
-    let spec = Open { provider: "claude".into(), cwd: scratch.clone(), locked, model: Some("haiku".into()), result_schema, ..Open::default() };
+    let spec = Open { provider: "claude".into(), cwd: scratch.clone(), locked: real.locked, model: Some("haiku".into()), result_schema: real.result_schema, tools: real.tools, ..Open::default() };
     let (id, mut events) = harness.open(spec).await.unwrap();
-    harness.send(&id, prompt).unwrap();
-    let seen = until_within(&mut events, 180, |body| body.ends_turn()).await;
+    harness.send(&id, real.prompt).unwrap();
+    // One deadline for the whole turn, so an agent that keeps talking cannot hold the test open.
+    let turn = async {
+        let mut seen = vec![];
+        while !seen.last().is_some_and(|event: &Event| event.body.ends_turn()) {
+            let event = events.recv().await.unwrap();
+            match &event.body {
+                Body::Permission { id: asked, .. } => harness.answer(&id, asked, harness::event::Decision::Allow, None).unwrap(),
+                Body::Question { id: asked, .. } => harness.answer_question(&id, asked, real.answer.expect("no question was expected").into()).await.unwrap(),
+                _ => {}
+            }
+            seen.push(event);
+        }
+        seen
+    };
+    let seen = tokio::time::timeout(Duration::from_secs(300), turn).await.expect("the turn ends within 300 s");
     assert!(!working_in(&scratch).is_empty(), "the agent runs in the scratch folder while the session is open");
     harness.close(&id).unwrap();
     let rest = until_within(&mut events, 60, |body| matches!(*body, Body::Closed { .. })).await;
@@ -147,13 +184,13 @@ async fn real_session(locked: bool, result_schema: Option<serde_json::Value>, pr
     let after = login_snapshot(&home);
     let changed: Vec<&String> = after.iter().filter(|line| !before.contains(line)).collect();
     assert!(unchanged_while_running && changed.is_empty(), "a login's config changed: {changed:?}");
-    (seen, rest)
+    Ran { seen, rest, scratch, _tmp: tmp }
 }
 
 #[tokio::test]
 #[ignore]
 async fn claude_real_one_prompt_gives_text_and_a_result_and_leaves_nothing() {
-    let (seen, _) = real_session(false, None, "Reply with the single word ready, and use no tool.").await;
+    let seen = real_session(Real { prompt: "Reply with the single word ready, and use no tool.", ..Real::default() }).await.seen;
     let kinds = types(&seen);
     let started = seen.iter().find_map(|event| match &event.body { Body::Started { provider_session, resumed } => Some((provider_session.clone(), *resumed)), _ => None });
     let (session, resumed) = started.expect("init named the session");
@@ -171,7 +208,8 @@ async fn claude_real_a_locked_session_runs_its_own_result_tool_unasked_and_is_of
     let schema = serde_json::json!({"type": "object", "properties": {"tools": {"type": "array", "items": {"type": "string"}}}, "required": ["tools"]});
     let prompt = "Call your result tool exactly once, with `tools` set to the name of every tool you are able to call, \
         each exactly as it is given to you. Call no other tool, then reply with the word done.";
-    let (seen, _) = real_session(true, Some(schema), prompt).await;
+    let note = harness::tools::ToolSpec { name: "note".into(), description: "Keeps a note. Do not call it.".into(), input_schema: serde_json::json!({"type": "object"}) };
+    let seen = real_session(Real { locked: true, result_schema: Some(schema), tools: vec![note], prompt, ..Real::default() }).await.seen;
     assert!(!seen.iter().any(|event| matches!(event.body, Body::Permission { .. })), "nothing asked: {:?}", types(&seen));
     let call = seen.iter().find_map(|event| match &event.body { Body::ToolCall { id, name, .. } if name.ends_with("__result") => Some((id.clone(), name.clone())), _ => None });
     let (call, name) = call.expect("the result tool was called");
@@ -181,5 +219,31 @@ async fn claude_real_a_locked_session_runs_its_own_result_tool_unasked_and_is_of
     let server = name.trim_end_matches("__result");
     let mut tools: Vec<String> = given["tools"].as_array().unwrap().iter().filter_map(|tool| tool.as_str()).map(|tool| tool.trim_start_matches(&format!("{server}__")).to_owned()).collect();
     tools.sort();
-    assert_eq!(tools, ["ask", "result"], "it was offered the session's own tools and nothing else: {given}");
+    assert_eq!(tools, ["ask", "note", "result"], "it was offered the declared tools and the harness's own, and nothing else: {given}");
+}
+
+#[tokio::test]
+#[ignore]
+async fn claude_real_an_agent_edits_asks_is_answered_commits_and_ends_with_a_result_that_fits() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {"file": {"type": "string"}, "commit": {"type": "string", "minLength": 40, "maxLength": 40}},
+        "required": ["file", "commit"],
+        "additionalProperties": false
+    });
+    let prompt = "In this repository, create a file named colour.txt. Before you write it, call your ask tool to ask which \
+        colour to write, and wait for the answer. Write exactly that colour, in lower case, as the file's only line. Then \
+        commit the file with git, with the message `Add colour`. Last, call your result tool with `file` set to the \
+        file's name and `commit` set to the commit's full hash, then reply with the word done.";
+    let ran = real_session(Real { result_schema: Some(schema), prompt, answer: Some("green"), ..Real::default() }).await;
+    let kinds = types(&ran.seen);
+    let asked = ran.seen.iter().any(|event| matches!(&event.body, Body::ToolCall { name, .. } if name.ends_with("__ask")));
+    assert!(asked && kinds.iter().any(|kind| kind == "question"), "it asked through ask: {kinds:?}");
+    assert_eq!(std::fs::read_to_string(ran.scratch.join("colour.txt")).unwrap().trim(), "green", "it wrote what it was told");
+    let head = std::process::Command::new("git").args(["-C", ran.scratch.to_str().unwrap(), "log", "-1", "--format=%H %s"]).output().unwrap();
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_owned();
+    let given = ran.seen.iter().chain(&ran.rest).filter_map(|event| match &event.body { Body::Result { data } => Some(data.clone()), _ => None }).next_back().expect("a result was taken");
+    assert_eq!(given["file"], "colour.txt");
+    assert_eq!(head, format!("{} Add colour", given["commit"].as_str().unwrap()), "the result names the commit it made");
+    assert_eq!(ran.seen.last().map(|event| &event.body), Some(&Body::TurnEnded { how: TurnEnd::Done }));
 }

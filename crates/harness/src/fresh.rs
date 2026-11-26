@@ -245,9 +245,9 @@ fn key_shape(key: &str) -> String {
 /// What git says when it got no answer from the remote, as opposed to an answer that refused.
 const UNREACHABLE: [&str; 7] = ["could not resolve host", "unable to access", "could not read from remote repository", "connection refused", "timed out", "network is unreachable", "took longer than"];
 
-/// Whether the remote's fetch rules are the ones `git clone` writes. A changed rule can map remote branches onto
-/// local ones, and `--prune` would then delete branches that agents have unpushed commits on.
-async fn default_fetch_rules(git: &Git, path: &Path, keys: &[String]) -> bool {
+/// The first remote fetch rule that is not the one `git clone` writes, with the rule it should be. A changed rule can
+/// map remote branches onto local ones, and `--prune` would then delete branches that agents have unpushed commits on.
+async fn changed_fetch_rule(git: &Git, path: &Path, keys: &[String]) -> Option<(String, String)> {
     for remote in ["origin", "upstream"] {
         let key = format!("remote.{remote}.fetch");
         if !keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
@@ -255,10 +255,10 @@ async fn default_fetch_rules(git: &Git, path: &Path, keys: &[String]) -> bool {
         }
         let want = format!("+refs/heads/*:refs/remotes/{remote}/*");
         if git.local_config_values(path, &key).await.iter().any(|v| *v != want) {
-            return false;
+            return Some((key, want));
         }
     }
-    true
+    None
 }
 
 /// A fetch can run a program named in the clone's own config, and agents can change that config. So it happens only
@@ -270,6 +270,7 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     let mut odd: Vec<String> = keys.iter().filter(|k| !written_by_gossamr_tools(k)).map(|k| key_shape(&k.to_ascii_lowercase())).collect();
     odd.sort();
     odd.dedup();
+    let at = quoted(path);
     if !odd.is_empty() {
         let more = odd.len().saturating_sub(5);
         odd.truncate(5);
@@ -277,10 +278,14 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
             0 => odd.join(", "),
             n => format!("{}, and {n} more", odd.join(", ")),
         };
-        return Fetched::Not(format!("the clone has settings Gossamr didn't make ({listed}), which a fetch would honour"));
+        return Fetched::Not(format!(
+            "the clone has settings Gossamr didn't make ({listed}), which a fetch would honour. To clear them, `git -C {at} config --local --list --name-only` lists each in full and `git -C {at} config --local --unset-all <name>` removes one"
+        ));
     }
-    if !default_fetch_rules(git, path, &keys).await {
-        return Fetched::Not("the clone's fetch rules were changed, and a fetch would follow them".into());
+    if let Some((key, want)) = changed_fetch_rule(git, path, &keys).await {
+        return Fetched::Not(format!(
+            "the clone's fetch rule {key} was changed, and a fetch would follow it. To clear it, run `git -C {at} config --local --replace-all {key} '{want}'`"
+        ));
     }
     let mut args: Vec<OsString> = PINNED.iter().map(OsString::from).collect();
     args.extend(["-C".into(), path.into(), "fetch".into(), "--prune".into(), "--quiet".into(), "origin".into(), "+refs/heads/*:refs/remotes/origin/*".into()]);
@@ -292,6 +297,11 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
             Fetched::Not(format!("{}; git said: {said}", if unreachable { "the remote couldn't be reached" } else { "the fetch failed" }))
         }
     }
+}
+
+/// `path` as one shell word, so a command the person copies works with a space or a quote in it.
+fn quoted(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 /// A temp clone's folder name: `+` is a character `valid_repo` refuses, so no repository's clone or worktree can be

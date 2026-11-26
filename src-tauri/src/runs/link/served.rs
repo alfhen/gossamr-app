@@ -41,8 +41,16 @@ impl Served {
     pub fn serve(&mut self, script: &str, turn_limit: usize) {
         let mock = self.mock.get_or_insert_with(|| Mock::new(Script::parse(script).unwrap())).clone();
         let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
-        let first = self.token.clone();
-        let server = Server::bind(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }).unwrap();
+        // Once its lock is free: just after a shutdown, a child another test's thread is starting holds a copy of the
+        // lock's descriptor until it execs.
+        let given = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let server = loop {
+            let first = self.token.clone();
+            match Server::bind(&self.dir, move || Some(first), drivers.clone(), Settings { turn_limit, ..Settings::default() }) {
+                Err(harness::error::Error::InUse(_)) if std::time::Instant::now() < given => std::thread::sleep(std::time::Duration::from_millis(10)),
+                bound => break bound.unwrap(),
+            }
+        };
         self.task = Some(tokio::spawn(server.run()));
     }
 

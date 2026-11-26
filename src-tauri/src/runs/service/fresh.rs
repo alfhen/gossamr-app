@@ -122,11 +122,19 @@ impl RunService {
         }
         let ensured = ensured.map_err(clone_failure)?;
         if let Some(Fetched::Not(why)) = &ensured.fetched {
-            let way_out = clone_settings_way_out(why, &ensured.path).map(|out| format!(" {out}")).unwrap_or_default();
-            let text = format!("Couldn't update Gossamr's clone of {}: {why}.{way_out} The agent starts from what was fetched before.", spec.repo);
+            let why = with_clone_way_out(why, &ensured.path);
+            let text = format!("Couldn't update Gossamr's clone of {}: {}. The agent starts from what was fetched before.", spec.repo, why.trim_end_matches('.'));
             self.note_clone(run, "clone_note", text).await;
         }
         Ok(Some(git.commit_identity(&ensured.path).await))
+    }
+}
+
+/// `why` with the way out of `clone_settings_way_out` in place of the harness's general one, which names no key.
+pub(crate) fn with_clone_way_out(why: &str, clone: &std::path::Path) -> String {
+    match clone_settings_way_out(why, clone) {
+        Some(out) => format!("{}. {out}", why.split(". To clear them, ").next().unwrap_or(why).trim_end_matches('.')),
+        None => why.to_owned(),
     }
 }
 

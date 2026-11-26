@@ -58,10 +58,7 @@ pub const HAND_OVER_IN_TURN: &str = "Its agent is in the middle of a turn, and o
 
 /// A clean-up refusal, with how to remove the clone's settings when they are why: the clone note says the same.
 fn with_way_out(refusal: &str, run: &Run) -> String {
-    match super::service::fresh::clone_settings_way_out(refusal, &run.spec.clone_path) {
-        Some(out) => format!("{}. {out}", refusal.trim_end_matches('.')),
-        None => refusal.to_owned(),
-    }
+    super::service::fresh::with_clone_way_out(refusal, &run.spec.clone_path)
 }
 
 /// The harness's refusal as a sentence for the person: its words without the kind it starts with.
