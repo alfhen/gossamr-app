@@ -310,6 +310,9 @@ impl RunService {
             Ok(_) => return Err(Failure::NoClone(format!("{} isn't a clone of {}: its origin is another repository", clone.display(), spec.repo))),
             Err(why) => return Err(Failure::NoClone(format!("Git couldn't read the origin of {} ({why})", clone.display()))),
         }
+        if self.harness.is_some() && tc.driver == crate::connections::Driver::Claude {
+            return tc.backend.preflight_on_harness(clone).await;
+        }
         tc.backend.preflight(clone).await
     }
 

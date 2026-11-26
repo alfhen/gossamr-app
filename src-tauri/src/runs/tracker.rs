@@ -289,8 +289,10 @@ impl RunService {
                     None => format!("{name} has a question"),
                 },
             };
-            owners.insert(format!("run:{}:{:?}", run.id, run.state), run.connection_id.clone());
-            needs.entry(ws).or_default().push(Need { key: format!("run:{}:{:?}", run.id, run.state), run_id: Some(run.id.clone()), what, since: run.last_progress_at });
+            // The need itself is in the key, so a second request in the same state is a new item, announced once.
+            let key = format!("run:{}:{:?}:{}", run.id, run.state, need_digest(run.needs.as_deref()));
+            owners.insert(key.clone(), run.connection_id.clone());
+            needs.entry(ws).or_default().push(Need { key, run_id: Some(run.id.clone()), what, since: run.last_progress_at });
         }
         // A failure is stuck until dealt with, but only the latest run of its kind on its ticket.
         let Ok(all) = self.core.runs_list(&RunQuery::default()).await else { return };
@@ -390,7 +392,8 @@ impl RunService {
                     continue;
                 }
             };
-            if run.state == RunState::Failed || run.worktree_removed_at.is_some() {
+            // A run bound to a harness session since the snapshot is the event consumer's.
+            if run.state == RunState::Failed || run.worktree_removed_at.is_some() || run.harness_session.is_some() {
                 continue;
             }
             let misses = self.misses.lock().expect("misses lock poisoned").get(&run.id).copied().unwrap_or(0);
@@ -523,6 +526,12 @@ impl RunService {
     pub async fn events(&self, run_id: &str) -> crate::error::Result<Vec<RunEvent>> {
         self.core.run_events(run_id).await
     }
+}
+
+/// A short stable digest of what a run waits on, for a need's key.
+fn need_digest(needs: Option<&str>) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(needs.unwrap_or_default().as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

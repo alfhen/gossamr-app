@@ -78,7 +78,17 @@ impl Board {
     /// Takes the items announced before this launch. With no record at all (the first launch with this record), what
     /// waits now counts as announced, so an upgrade does not announce everything that was already open.
     pub fn restore(&mut self, record: Option<BTreeSet<String>>, waiting: &[Waiting]) {
-        self.seen = record.unwrap_or_else(|| waiting.iter().flat_map(|w| w.needs.iter().map(|n| n.key.clone())).collect());
+        let now = || waiting.iter().flat_map(|w| w.needs.iter().map(|n| n.key.clone()));
+        self.seen = match record {
+            // A run's key gained its need's digest (`run:<id>:<state>:<digest>`): what an older build announced under
+            // `run:<id>:<state>` stays announced.
+            Some(kept) => {
+                let older = |key: &String| key.starts_with("run:") && key.rsplit_once(':').is_some_and(|(before, _)| kept.contains(before));
+                let upgraded: Vec<String> = now().filter(older).collect();
+                kept.into_iter().chain(upgraded).collect()
+            }
+            None => now().collect(),
+        };
         self.restored = true;
     }
 
@@ -176,6 +186,14 @@ mod tests {
             true
         });
         assert_eq!(shown, vec![Outgoing { notice: Notice { title: "CA-401 is waiting on you".into(), body: "r5 asks a question".into() }, open_run: Some("r5".into()) }]);
+    }
+
+    #[test]
+    fn a_question_an_older_build_announced_under_its_key_without_the_need_is_not_announced_again() {
+        let mut board = Board::default();
+        let waiting = [ws("w1", vec![need("run:r5:NeedsAnswer:0a1b2c3d4e5f", 0), need("run:r6:NeedsAnswer:0a1b2c3d4e5f", 5)])];
+        board.restore(Some(BTreeSet::from(["run:r5:NeedsAnswer".to_owned()])), &waiting);
+        assert_eq!(tick(&mut board, &on(), false, &waiting, true), ["CA-401 is waiting on you: run:r6:NeedsAnswer:0a1b2c3d4e5f asks a question"], "only the one never announced");
     }
 
     #[test]

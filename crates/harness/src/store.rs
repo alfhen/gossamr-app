@@ -176,6 +176,15 @@ pub struct Listed {
     /// The question the agent asked through `ask` that is still open: its id.
     #[serde(default)]
     pub open_question: Option<String>,
+    /// The folder the agent works in: the worktree the harness made for a session that names a repo, else the
+    /// folder it was opened in. Sent as text, a byte that is not UTF-8 as U+FFFD, so no session's path can fail the
+    /// listing of them all.
+    #[serde(default, serialize_with = "lossy_path")]
+    pub cwd: PathBuf,
+}
+
+fn lossy_path<S: serde::Serializer>(path: &Path, to: S) -> std::result::Result<S::Ok, S::Error> {
+    to.serialize_str(&path.to_string_lossy())
 }
 
 impl Store {
@@ -360,14 +369,15 @@ impl Store {
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort,
-                (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1)
+                (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1), cwd
              FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
             let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question })
+            let cwd = PathBuf::from(OsString::from_vec(row.get(13)?));
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question, cwd })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

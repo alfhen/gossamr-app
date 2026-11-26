@@ -48,8 +48,14 @@ impl Served {
 
     /// Serves with what the harness knows of the machine: a home folder and a shell, for sessions that name a repo.
     pub fn serve_on(&mut self, script: &str, turn_limit: usize, setup: harness::work::Setup) {
+        self.serve_as(script, turn_limit, setup, "mock");
+    }
+
+    /// `serve_on`, with the mock under `provider`'s name, so the app opens it as it opens that provider.
+    pub fn serve_as(&mut self, script: &str, turn_limit: usize, setup: harness::work::Setup, provider: &str) {
         let mock = Mock::new(Script::parse(script).unwrap());
-        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        self.mock = Some(mock.clone());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![(provider.into(), Arc::new(mock))];
         let first = self.token.clone();
         let server = Server::bind_with(&self.dir, move || Some(first), drivers, Settings { turn_limit, ..Settings::default() }, setup).unwrap();
         self.task = Some(tokio::spawn(server.run()));
