@@ -6,7 +6,7 @@ import { needs } from "../lib/needs";
 import type { PermissionRequest, Run } from "../types";
 import { rowText } from "./AgentParts";
 import { NO_FILTERS } from "./agentsLogic";
-import { PermissionItemView } from "./PermissionRequests";
+import { PermissionItemView, bandOnTop } from "./PermissionRequests";
 import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow, runAnswerPending, subjectLine } from "./permissionLogic";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
@@ -93,14 +93,14 @@ describe("a permission request's item", () => {
   });
 
   it("puts Allow and Deny after the last line of an input thousands of lines long, with nothing pinning them", () => {
-    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request({ input: { command: LONG_SCRIPT } })} answering={null} onAnswer={vi.fn()} />);
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request({ input: { command: LONG_SCRIPT } })} answering={null} tall onAnswer={vi.fn()} />);
     const last = html.indexOf('migrating batch 3000');
     expect(last).toBeGreaterThan(0);
     expect(html.indexOf(">Allow<")).toBeGreaterThan(last);
     expect(html.lastIndexOf(">Deny<")).toBeGreaterThan(last);
     // A Deny before it too, safe to give unseen, with where Allow is.
     expect(html.indexOf(">Deny<")).toBeLessThan(html.indexOf("migrating batch 1"));
-    expect(unescape(html)).toContain("This request is 3,001 lines long. Scroll through it to allow it: Allow is at its end.");
+    expect(unescape(html)).toContain("This request is taller than your screen. Scroll through it to allow it: Allow is at its end.");
     expect(html.match(/>Allow</g)).toHaveLength(1);
     expect(html).not.toMatch(/sticky|fixed|max-h-/);
   });
@@ -114,7 +114,42 @@ describe("a permission request's item", () => {
     for (const b of deny) expect(b.tag).not.toContain("disabled");
     // Only in the title: a line that came and went would move the buttons under the pointer.
     expect(unescape(html.replace(/title="[^"]*"/g, ""))).not.toContain("Scroll through the whole request");
-    expect((html.match(/data-seen-part/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect((html.match(/data-seen-part/g) ?? []).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("lays bands by height over the request, at most half a window each, so one long line is read in many", () => {
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request({ input: { command: "x".repeat(120_000) } })} answering={null} bands={{ area: 14_861, step: 360 }} onAnswer={vi.fn()} />);
+    expect((html.match(/data-seen-part/g) ?? []).length).toBe(Math.ceil(14_861 / 360));
+    expect(html).toContain("top:14760px;height:101px");
+  });
+
+  it("offers Deny at the top and says why Allow is off only when the item is taller than the window", () => {
+    const short = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} onAnswer={vi.fn()} />);
+    expect(short).not.toContain("data-permission-top");
+    const tall = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} tall onAnswer={vi.fn()} />);
+    expect(tall).toContain("data-permission-top");
+  });
+
+  it("counts a band as on screen only when the request is on top all across it, not partly under a sheet or a header", () => {
+    // A page: the request, and beside it a sheet (with a word in it) and Pip's small floating button.
+    const page = { contains: () => true, parentElement: null } as unknown as Element;
+    const root = { contains: (n: unknown) => n === inside, parentElement: page } as unknown as Element;
+    const inside = { parentElement: root } as unknown as Element;
+    const box = (width: number, height: number) => () => ({ width, height }) as DOMRect;
+    const sheet = { parentElement: page, contains: (n: unknown) => n === word, getBoundingClientRect: box(520, 720) } as unknown as Element;
+    const word = { parentElement: sheet, contains: () => false, getBoundingClientRect: box(40, 16) } as unknown as Element;
+    const pip = { parentElement: page, contains: () => false, getBoundingClientRect: box(64, 64) } as unknown as Element;
+    const entry = { intersectionRect: { left: 0, top: 100, width: 400, height: 200 } as DOMRect };
+    const at: [number, number][] = [];
+    expect(bandOnTop(entry, root, (x, y) => (at.push([x, y]), inside))).toBe(true);
+    expect(at).toHaveLength(15);
+    expect(at).toContainEqual([40, 150]);
+    expect(at).toContainEqual([360, 250]);
+    // A sheet over the right of the band, met at a word in it, is the sheet.
+    expect(bandOnTop(entry, root, (x) => (x > 250 ? word : inside))).toBe(false);
+    // Pip's button over a corner is passed over.
+    expect(bandOnTop(entry, root, (x, y) => (x > 350 && y > 200 ? pip : inside))).toBe(true);
+    expect(bandOnTop(entry, root, () => null)).toBe(false);
   });
 
   it("holds both buttons while held: answered, or just moved into place", () => {

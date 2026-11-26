@@ -1,5 +1,6 @@
 /**
- * Where each Allow sits in the layout of what scrolls around it, sampled every frame while one is shown, and whether the
+ * Where each Allow sits in the layout of what scrolls around it, sampled for a short burst after anything on the page
+ * changes (the DOM, a size, an answer) and at every pointer move and press, and whether the
  * pointer has been off it since, so a click on an Allow that came under a resting pointer can be told from one aimed at
  * it. A card above that shrinks moves every card below it, which no change to their own requests shows. Scrolling moves
  * nothing here (the person did that), and neither does a transform: the place is read from an untransformed wrapper, since
@@ -19,6 +20,11 @@ interface Tracked {
 
 const tracked = new Map<Element, Tracked>();
 let frame = 0;
+/** Frames left in the current burst of sampling. */
+let burstLeft = 0;
+/** Frames a burst lasts: long enough for a layout change and what it sets off to settle. */
+const BURST_FRAMES = 30;
+let watching: { stop(): void } | null = null;
 
 function scrollerOf(el: Element): Element | null {
   for (let at = el.parentElement; at; at = at.parentElement) if (/auto|scroll/.test(getComputedStyle(at).overflowY)) return at;
@@ -45,7 +51,31 @@ function check(at: Tracked, now: number): boolean {
 function sample() {
   const now = performance.now();
   for (const at of tracked.values()) check(at, now);
-  frame = tracked.size ? requestAnimationFrame(sample) : 0;
+  frame = tracked.size && --burstLeft > 0 ? requestAnimationFrame(sample) : 0;
+}
+
+/** Samples every frame for a while; nothing runs while the page is still. */
+function burst() {
+  if (!tracked.size) return;
+  burstLeft = BURST_FRAMES;
+  if (!frame) frame = requestAnimationFrame(sample);
+}
+
+/** Watches the page for what can move a button while one is followed: a change to the DOM, or to the window's size. */
+function watch() {
+  if (watching) return;
+  const dom = new MutationObserver(burst);
+  dom.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
+  const sizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(burst);
+  sizes?.observe(document.documentElement);
+  window.addEventListener("resize", burst);
+  watching = {
+    stop() {
+      dom.disconnect();
+      sizes?.disconnect();
+      window.removeEventListener("resize", burst);
+    },
+  };
 }
 
 /**
@@ -56,8 +86,14 @@ export function trackMoves(el: Element, box: Element, onMove: () => void): () =>
   listen();
   const scroller = scrollerOf(box);
   tracked.set(el, { box, scroller, ...place(box, scroller), movedAt: performance.now(), outsideAt: Number.NEGATIVE_INFINITY, onMove });
-  if (!frame) frame = requestAnimationFrame(sample);
-  return () => void tracked.delete(el);
+  watch();
+  burst();
+  return () => {
+    tracked.delete(el);
+    if (tracked.size) return;
+    watching?.stop();
+    watching = null;
+  };
 }
 
 /** Whether `el` moved within the last `ms`, including a move since the last frame. */
@@ -77,6 +113,8 @@ let pointer = { x: Number.NaN, y: Number.NaN };
 let answer = { seq: 0, at: Number.NEGATIVE_INFINITY };
 /** The answer each Allow last had focus moved onto it by a key after. */
 const keyAimed = new WeakMap<Element, number>();
+/** A key that moves focus was pressed in this task. */
+let navigating = false;
 
 const inside = (p: { x: number; y: number }, r: DOMRect) => p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
 
@@ -89,6 +127,7 @@ function listen() {
       const before = pointer;
       pointer = { x: ev.clientX, y: ev.clientY };
       const now = performance.now();
+      for (const at of tracked.values()) check(at, now);
       // Off the button where it is now, before this move or after it. A pointer resting where a button came to be is on
       // it, and so is a wobble inside it.
       for (const [el, at] of tracked) {
@@ -98,10 +137,20 @@ function listen() {
     },
     true,
   );
+  // Focus moved by a key: a Tab or an arrow pressed just now, not code that focused Allow after some other key.
+  document.addEventListener(
+    "keydown",
+    (ev) => {
+      if (!/^(Tab|Arrow(Up|Down|Left|Right))$/.test(ev.key)) return;
+      navigating = true;
+      setTimeout(() => (navigating = false), 0);
+    },
+    true,
+  );
   document.addEventListener(
     "focusin",
     (ev) => {
-      if (ev.target instanceof Element && ev.target.matches("[data-allow]:focus-visible")) keyAimed.set(ev.target, answer.seq);
+      if (navigating && ev.target instanceof Element && ev.target.matches("[data-allow]")) keyAimed.set(ev.target, answer.seq);
     },
     true,
   );
@@ -132,6 +181,7 @@ export function repeatOnOther(el: Element, ms: number): boolean {
 /** Notes a permission answer: from now on an Allow counts only when aimed afresh. */
 export function noteAnswer() {
   answer = { seq: answer.seq + 1, at: performance.now() };
+  burst();
 }
 
 /**

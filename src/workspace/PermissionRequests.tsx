@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { aimedAfresh, movedWithin, repeatOnOther, trackMoves } from "./buttonMoves";
-import { inputLineCount } from "./permissionInput";
 import { Button } from "../components/Button";
 import { ButtonGroup } from "../components/ButtonGroup";
 import { labelsByRun } from "../lib/workstreamStage";
@@ -34,12 +33,11 @@ export function PermissionItem({ run, request, label, size, where, index = 0 }: 
   const settled = useSettled(`${epoch}\u0000${run.id}\u0000${openPermissions(run).map((p) => p.id).join(",")}`);
   const regain = useRef<(() => void) | null>(null);
   const root = useRef<HTMLDivElement>(null);
-  const seen = useSeenWhole(root);
+  const { seen, tall, bands } = useReading(root);
   const [hint, setHint] = useState<string | null>(null);
   // An item answered from the keyboard leaves; the keyboard goes to the next request's heading, else the run's.
   useEffect(() => () => void (regain.current && setTimeout(regain.current, 0)), []);
-  const onAnswer = (decision: "allow" | "deny", from: HTMLElement) => {
-    const keyboard = document.activeElement === from;
+  const onAnswer = (decision: "allow" | "deny", from: HTMLElement, keyboard: boolean) => {
     setHint(null);
     if (keyboard) regain.current = afterAnswer(from);
     void useRuns
@@ -60,7 +58,7 @@ export function PermissionItem({ run, request, label, size, where, index = 0 }: 
   };
   return (
     <div ref={root} onPointerEnter={note} onPointerDown={note} onPointerLeave={leave}>
-      <PermissionItemView name={name} request={request} answering={answering ?? null} held={held} unread={!seen} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} />
+      <PermissionItemView name={name} request={request} answering={answering ?? null} held={held} unread={!seen} tall={tall} bands={bands} refused={refused} hint={hint} size={size} onAnswer={onAnswer} onMissed={(byKey) => setHint(byKey ? AIM_BY_KEY : AIM_BY_POINTER)} />
     </div>
   );
 }
@@ -89,27 +87,127 @@ function afterAnswer(from: HTMLElement): () => void {
   };
 }
 
+/** The share of a band that must be in view for it to count as seen. */
+const SEEN_SHARE = 0.6;
+
+/** How tall each band is: half the window, so most of one always fits on screen at once. */
+const bandStep = () => Math.max(80, Math.floor(window.innerHeight / 2));
+
+/** Where a band is looked at, as shares of what is in view of it: across its width, at three heights. */
+const LOOK_X = [0.1, 0.3, 0.5, 0.7, 0.9];
+const LOOK_Y = [0.25, 0.5, 0.75];
+
+/** The largest share of a band a covering thing may take and still be passed over: a small floating control, not a pane. */
+const SMALL_COVER = 0.1;
+
 /**
- * Whether every part of the item's request (`[data-seen-part]`: its start, each stretch of its input, its end) has been on
- * screen since the item appeared. A request that fits on screen is seen at once; a long one only once scrolled through,
- * not by a jump to its end.
+ * What covers a band at a point, taken whole: from the element on top, up to the largest part of the page that doesn't hold
+ * the request, so a word in the run sheet counts as the sheet.
  */
-function useSeenWhole(root: RefObject<HTMLElement | null>): boolean {
+function coverOf(top: Element, root: Node): Element {
+  let cover = top;
+  while (cover.parentElement && !cover.parentElement.contains(root)) cover = cover.parentElement;
+  return cover;
+}
+
+/**
+ * Whether the request is on top everywhere a band is looked at, across what is in view of it: a band under a sticky
+ * header, or partly under the run sheet or a pane, is in the viewport but not all on screen. A small floating control
+ * over a corner, such as Pip's button, is passed over, or a request that can't scroll from under it could never be read.
+ * `topAt` is `document.elementFromPoint`.
+ */
+export function bandOnTop(entry: Pick<IntersectionObserverEntry, "intersectionRect">, root: Node, topAt: (x: number, y: number) => Element | null): boolean {
+  const r = entry.intersectionRect;
+  const area = r.width * r.height;
+  return LOOK_Y.every((dy) =>
+    LOOK_X.every((dx) => {
+      const top = topAt(r.left + r.width * dx, r.top + r.height * dy);
+      if (!top) return false;
+      if (root.contains(top)) return true;
+      const cover = coverOf(top, root).getBoundingClientRect();
+      return cover.width * cover.height < area * SMALL_COVER;
+    }),
+  );
+}
+
+/**
+ * Reads how much of the request has been on screen since the item appeared. The request is laid in bands by height (see
+ * `bandStep`), drawn over it as `[data-seen-part]`; each counts once most of it has been in view with the request on top
+ * there. A request that fits on screen is seen at once; a long one, even one long line, only once scrolled through, not
+ * by a jump to its end. `tall`: the item is taller than the window, so it says why Allow is off and offers Deny at its top.
+ */
+function useReading(root: RefObject<HTMLElement | null>): { seen: boolean; tall: boolean; bands: Bands } {
+  const [size, setSize] = useState<{ area: number; item: number; step: number } | null>(null);
   const [seen, setSeen] = useState(false);
   useEffect(() => {
-    const parts = Array.from(root.current?.querySelectorAll("[data-seen-part]") ?? []);
+    const item = root.current;
+    const area = item?.querySelector<HTMLElement>("[data-seen-area]");
+    if (!item || !area || typeof ResizeObserver === "undefined") return;
+    const measure = () => setSize((was) => {
+      const now = { area: Math.ceil(area.getBoundingClientRect().height), item: item.getBoundingClientRect().height, step: bandStep() };
+      return was && was.area === now.area && was.item === now.item && was.step === now.step ? was : now;
+    });
+    const sizes = new ResizeObserver(measure);
+    sizes.observe(area);
+    sizes.observe(item);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => {
+      sizes.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [root]);
+  const area = size?.area ?? 0;
+  const step = size?.step ?? 0;
+  const measured = !!size;
+  useEffect(() => {
+    const item = root.current;
+    if (!item || !measured) return;
+    const parts = Array.from(item.querySelectorAll("[data-seen-part]"));
     if (!parts.length || typeof IntersectionObserver === "undefined") return setSeen(true);
+    // Laid out again, the bands are new: what was read counts again only once read again.
+    setSeen(false);
     const left = new Set(parts);
-    const watch = new IntersectionObserver((entries) => {
-      for (const entry of entries) if (entry.isIntersecting) left.delete(entry.target);
+    const inView = new Set<Element>();
+    const tick = () => {
+      for (const part of inView) if (left.has(part) && bandOnTop({ intersectionRect: inWindow(part) }, item, (x, y) => document.elementFromPoint(x, y))) left.delete(part);
       if (left.size) return;
       watch.disconnect();
       setSeen(true);
-    });
+    };
+    const watch = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.intersectionRatio >= SEEN_SHARE) inView.add(entry.target);
+          else inView.delete(entry.target);
+        }
+        tick();
+      },
+      { threshold: [0, SEEN_SHARE, 1] },
+    );
     parts.forEach((part) => watch.observe(part));
-    return () => watch.disconnect();
-  }, [root]);
-  return seen;
+    // What covered a band may go without the band moving: look again when anything scrolls.
+    document.addEventListener("scroll", tick, true);
+    return () => {
+      watch.disconnect();
+      document.removeEventListener("scroll", tick, true);
+    };
+  }, [root, area, step, measured]);
+  return { seen, tall: !!size && size.item > window.innerHeight, bands: { area, step } };
+}
+
+/** The part of `el` inside the window. */
+function inWindow(el: Element): DOMRect {
+  const r = el.getBoundingClientRect();
+  const left = Math.max(r.left, 0);
+  const top = Math.max(r.top, 0);
+  return new DOMRect(left, top, Math.max(0, Math.min(r.right, window.innerWidth) - left), Math.max(0, Math.min(r.bottom, window.innerHeight) - top));
+}
+
+/** The request's height and the band height, both 0 before they are measured (one band covers it then). */
+interface Bands {
+  area: number;
+  step: number;
 }
 
 /**
@@ -137,7 +235,7 @@ function useSettled(key: string) {
  * that moved on screen within `SETTLE_MS`, and not a click at the spot of one a moment before that landed on something
  * else. A key press acts on the focused button wherever it sits.
  */
-function AnswerButton({ size, off, title, allow = false, onAnswer, onMissed, children }: { size: Size; off: boolean; title?: string; allow?: boolean; onAnswer(from: HTMLElement): void; onMissed?(byKey: boolean): void; children: ReactNode }) {
+function AnswerButton({ size, off, title, allow = false, onAnswer, onMissed, children }: { size: Size; off: boolean; title?: string; allow?: boolean; onAnswer(from: HTMLElement, byKey: boolean): void; onMissed?(byKey: boolean): void; children: ReactNode }) {
   const ref = useRef<HTMLButtonElement>(null);
   const [moved, setMoved] = useState(0);
   // A move holds the button where you can see it, as a change to the list does.
@@ -170,7 +268,7 @@ function AnswerButton({ size, off, title, allow = false, onAnswer, onMissed, chi
         if (allow && ev.detail === 1 && (movedWithin(el, SETTLE_MS) || repeatOnOther(el, REPEAT_MS))) return;
         // An Allow needs a fresh aim after any answer on the page, so clicks at one spot answer one request.
         if (allow && !aimedAfresh(el, ev.detail === 0)) return onMissed?.(ev.detail === 0);
-        onAnswer(el);
+        onAnswer(el, ev.detail === 0);
       }}
     >
       {children}
@@ -184,25 +282,23 @@ const UNREAD = "Scroll through the whole request to allow it.";
 /** How long after a click a second one at the same spot, on what moved under it, is ignored. */
 export const REPEAT_MS = 1000;
 
-/** Lines from which an item also offers Deny at its top and says where Allow is. */
-export const LONG_REQUEST_LINES = 40;
-
-export function PermissionItemView({ name, request, answering, held = null, unread = false, refused = null, hint = null, size = "md", onAnswer, onMissed }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; unread?: boolean; refused?: string | null; hint?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement): void; onMissed?(byKey: boolean): void }) {
+export function PermissionItemView({ name, request, answering, held = null, unread = false, tall = false, bands = { area: 0, step: 0 }, refused = null, hint = null, size = "md", onAnswer, onMissed }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; held?: string | null; unread?: boolean; tall?: boolean; bands?: Bands; refused?: string | null; hint?: string | null; size?: Size; onAnswer(decision: "allow" | "deny", from: HTMLElement, byKey: boolean): void; onMissed?(byKey: boolean): void }) {
   const why = denyOnlyWhy(request);
   const off = !!answering || !!held;
   const title = held ?? undefined;
-  const length = request.input != null ? inputLineCount(request.kind, request.input) : 0;
+  const count = bands.step ? Math.max(1, Math.ceil(bands.area / bands.step)) : 1;
   return (
     <div data-permission-request={request.id} className="grid gap-2">
       <p data-permission-heading tabIndex={-1} className="m-0 font-semibold text-ws-ink outline-none focus-visible:outline-2 focus-visible:outline-ws-pip">
         {name} wants to {permissionWants(request)}
       </p>
-      {/* Denying unseen is safe, so a long request offers Deny before it too; Allow stays after all of it. */}
-      {length > LONG_REQUEST_LINES && (
+      {/* Taller than the window, a request offers Deny before it too, since denying unseen is safe, and says why Allow is off
+          in words the keyboard and a screen reader reach. Allow stays after all of it. */}
+      {tall && (
         <div data-permission-top className="flex flex-wrap items-center gap-2" onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
           {/* Said whether or not it has been read, so nothing below moves once it has. */}
-          <p className="m-0 text-sm text-ws-ink2">{`This request is ${length.toLocaleString("en")} lines long. Scroll through it to allow it: Allow is at its end.`}</p>
-          <AnswerButton size={size} off={off} title={title} onAnswer={(el) => onAnswer("deny", el)}>
+          <p className="m-0 text-sm text-ws-ink2">This request is taller than your screen. Scroll through it to allow it: Allow is at its end.</p>
+          <AnswerButton size={size} off={off} title={title} onAnswer={(el, byKey) => onAnswer("deny", el, byKey)}>
             Deny
           </AnswerButton>
         </div>
@@ -212,10 +308,15 @@ export function PermissionItemView({ name, request, answering, held = null, unre
           With <code className="font-mono">{request.tool}</code>:
         </p>
       )}
-      {/* Every field of what an allow passes the agent, not only its heading, between marks that say when it was all on screen. */}
-      <span data-seen-part aria-hidden className="block h-px" />
-      {request.input != null ? <RequestInput kind={request.kind} input={request.input} /> : request.subject && <CodeBox text={request.subject} what="the request" wrap />}
-      <span data-seen-part aria-hidden className="block h-px" />
+      {/* Every field of what an allow passes the agent, not only its heading, under bands that say when all of it was on screen. */}
+      <div data-seen-area className="relative">
+        {request.input != null ? <RequestInput kind={request.kind} input={request.input} /> : request.subject && <CodeBox text={request.subject} what="the request" wrap />}
+        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+          {Array.from({ length: count }, (_, i) => (
+            <span key={i} data-seen-part className="absolute inset-x-0" style={bands.step ? { top: i * bands.step, height: Math.min(bands.step, bands.area - i * bands.step) } : { top: 0, bottom: 0 }} />
+          ))}
+        </div>
+      </div>
       {request.kind === "permissions" && <p className="m-0 text-sm font-semibold text-ws-warn">{PERMISSIONS_WARNING}</p>}
       {why && <p className="m-0 text-sm text-ws-ink2">{why}</p>}
       {/* After the whole request, never beside it or sticky: Allow is reached only by passing all of it. The card behind
@@ -223,11 +324,11 @@ export function PermissionItemView({ name, request, answering, held = null, unre
       <div data-permission-answers onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
         <ButtonGroup label="Answer the permission request">
           {canAllow(request) && (
-            <AnswerButton size={size} off={off || unread} title={title ?? (unread ? UNREAD : undefined)} allow onAnswer={(el) => onAnswer("allow", el)} onMissed={onMissed}>
+            <AnswerButton size={size} off={off || unread} title={title ?? (unread ? UNREAD : undefined)} allow onAnswer={(el, byKey) => onAnswer("allow", el, byKey)} onMissed={onMissed}>
               {answering === "allow" ? "Allowing…" : "Allow"}
             </AnswerButton>
           )}
-          <AnswerButton size={size} off={off} title={title} onAnswer={(el) => onAnswer("deny", el)}>
+          <AnswerButton size={size} off={off} title={title} onAnswer={(el, byKey) => onAnswer("deny", el, byKey)}>
             {answering === "deny" ? "Denying…" : "Deny"}
           </AnswerButton>
         </ButtonGroup>

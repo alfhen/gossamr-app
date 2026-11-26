@@ -18,26 +18,18 @@ function Segs({ segs }: { segs: Seg[] }) {
   );
 }
 
-/** Lines in each stretch the item watches to know a long request was scrolled through, not jumped over. */
-const STRETCH = 40;
-
-/** Lines as lines, each with its own mark in front when it is removed (−) or added (+), in stretches of `STRETCH`. */
+/** Lines as lines, each with its own mark in front when it is removed (−) or added (+). */
 function Lines({ lines, mark, tone = "" }: { lines: Seg[][]; mark?: "−" | "+"; tone?: string }) {
-  const stretches = Array.from({ length: Math.ceil(lines.length / STRETCH) }, (_, i) => lines.slice(i * STRETCH, (i + 1) * STRETCH));
   return (
     <>
-      {stretches.map((stretch, s) => (
-        <div key={s} data-seen-part>
-          {stretch.map((line, i) => (
-            <div key={i} data-line={mark ?? ""} className={`min-h-[1lh] ${tone}`}>
-              {mark && (
-                <span aria-hidden className="select-none pr-1">
-                  {mark}
-                </span>
-              )}
-              <Segs segs={line} />
-            </div>
-          ))}
+      {lines.map((line, i) => (
+        <div key={i} data-line={mark ?? ""} className={`min-h-[1lh] ${tone}`}>
+          {mark && (
+            <span aria-hidden className="select-none pr-1">
+              {mark}
+            </span>
+          )}
+          <Segs segs={line} />
         </div>
       ))}
     </>

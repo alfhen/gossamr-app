@@ -120,8 +120,3 @@ export function inputFields(kind: PermissionKind, input: unknown): InputField[] 
   }
   return [...out, ...Object.entries(value).filter(([key]) => !done.has(key)).map(([key, v]) => text(key, v))];
 }
-
-/** How many lines a request's input takes on screen, its field names included. */
-export function inputLineCount(kind: PermissionKind, input: unknown): number {
-  return inputFields(kind, input).reduce((sum, field) => sum + 1 + (field.type === "text" ? field.lines.length : field.removed.length + field.added.length), 0);
-}
