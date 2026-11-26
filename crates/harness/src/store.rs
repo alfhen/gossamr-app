@@ -83,7 +83,10 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     // The running start's agent, by pid and start time, so a harness after this one can stop it if it outlived its
     // session: an orphaned `claude` ends its turn alone.
     "ALTER TABLE sessions ADD COLUMN agent_pid INTEGER;
-    ALTER TABLE sessions ADD COLUMN agent_started INTEGER;"];
+    ALTER TABLE sessions ADD COLUMN agent_started INTEGER;",
+    // The boot the agent was recorded in, so a record from another boot is told apart with no clock. A record from
+    // before this step has none, and is never taken as gone or killed for it.
+    "ALTER TABLE sessions ADD COLUMN agent_boot TEXT;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -193,6 +196,16 @@ pub struct Listed {
 
 fn lossy_path<S: serde::Serializer>(path: &Path, to: S) -> std::result::Result<S::Ok, S::Error> {
     to.serialize_str(&path.to_string_lossy())
+}
+
+/// A session's agent on record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorded {
+    pub agent: Process,
+    /// The boot it was recorded in; none for a record from before the store kept it.
+    pub boot: Option<String>,
+    /// The repository worktree the session works in, if it names a repo.
+    pub worktree: Option<PathBuf>,
 }
 
 impl Store {
@@ -314,8 +327,11 @@ impl Store {
     /// session runs any more.
     pub fn set_agent(&self, id: &str, agent: Option<&Process>) -> Result<()> {
         match agent {
-            Some(agent) => self.conn.execute("UPDATE sessions SET agent_pid = ?2, agent_started = ?3 WHERE id = ?1", params![id, agent.pid, agent.started as i64])?,
-            None => self.conn.execute("UPDATE sessions SET agent_pid = NULL, agent_started = NULL, given_up = 0 WHERE id = ?1", [id])?,
+            Some(agent) => self.conn.execute(
+                "UPDATE sessions SET agent_pid = ?2, agent_started = ?3, agent_boot = ?4 WHERE id = ?1",
+                params![id, agent.pid, agent.started as i64, crate::process::boot_id()],
+            )?,
+            None => self.conn.execute("UPDATE sessions SET agent_pid = NULL, agent_started = NULL, agent_boot = NULL, given_up = 0 WHERE id = ?1", [id])?,
         };
         Ok(())
     }
@@ -335,13 +351,17 @@ impl Store {
         Ok(ids)
     }
 
-    /// The agent on record for session `id`, with the folder it worked in, or None when none is.
-    pub fn agent(&self, id: &str) -> Result<Option<(Process, PathBuf)>> {
-        let row = self.conn.query_row("SELECT agent_pid, agent_started, cwd FROM sessions WHERE id = ?1", [id], |row| {
-            Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Vec<u8>>(2)?))
+    /// The agent on record for session `id`, or None when none is.
+    pub fn agent(&self, id: &str) -> Result<Option<Recorded>> {
+        let row = self.conn.query_row("SELECT agent_pid, agent_started, agent_boot, cwd, repo IS NOT NULL FROM sessions WHERE id = ?1", [id], |row| {
+            Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Vec<u8>>(3)?, row.get::<_, bool>(4)?))
         })?;
         Ok(match row {
-            (Some(pid), Some(started), cwd) => Some((Process { pid, started: started as u64 }, PathBuf::from(OsString::from_vec(cwd)))),
+            (Some(pid), Some(started), boot, cwd, repo) => Some(Recorded {
+                agent: Process { pid, started: started as u64 },
+                boot,
+                worktree: repo.then(|| PathBuf::from(OsString::from_vec(cwd))),
+            }),
             _ => None,
         })
     }

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Process {
     pub pid: u32,
-    /// The process start time in seconds, to tell a reused pid from the original.
+    /// The process start time, to tell a reused pid from the original: in seconds on macOS, in clock ticks since boot on
+    /// Linux. It is compared only within one boot.
     pub started: u64,
 }
 
@@ -25,9 +26,9 @@ pub fn started_of(pid: u32) -> Option<u64> {
     Some(info.pbi_start_tvsec)
 }
 
-/// Field 22 of `/proc/<pid>/stat`, in clock ticks since boot, plus the boot time in ticks, so a record kept across a
-/// reboot never matches a process of the next boot. Unlike `etimes`, it does not move between calls. None for a
-/// zombie, as macOS gives, so a process that has exited is never taken for a running one.
+/// Field 22 of `/proc/<pid>/stat`, in clock ticks since boot, which no clock step moves: a record kept across a
+/// reboot is told apart by `boot_id`. Unlike `etimes`, it does not move between calls. None for a zombie, as macOS
+/// gives, so a process that has exited is never taken for a running one.
 #[cfg(target_os = "linux")]
 pub fn started_of(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -35,21 +36,7 @@ pub fn started_of(pid: u32) -> Option<u64> {
     if fields.next()? == "Z" {
         return None;
     }
-    let since_boot: u64 = fields.nth(18)?.parse().ok()?;
-    Some(booted_ticks()? + since_boot)
-}
-
-/// When the machine booted, in clock ticks since the epoch: `btime` of `/proc/stat`, which is in seconds.
-#[cfg(target_os = "linux")]
-fn booted_ticks() -> Option<u64> {
-    static BOOTED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *BOOTED.get_or_init(|| {
-        let stat = std::fs::read_to_string("/proc/stat").ok()?;
-        let btime: u64 = stat.lines().find_map(|line| line.strip_prefix("btime "))?.trim().parse().ok()?;
-        // SAFETY: sysconf has no preconditions.
-        let per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok().filter(|ticks| *ticks > 0)?;
-        Some(btime * per_second)
-    })
+    fields.nth(18)?.parse().ok()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -79,37 +66,42 @@ fn refuses_signals(pid: u32) -> bool {
     answered != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// Whether `process` started well before this machine last booted, so it and its group are gone. Ten minutes of slack,
-/// as a clock set forward moves the boot time with it.
-pub fn started_before_this_boot(process: &Process) -> bool {
-    booted().is_some_and(|(booted, per_second)| process.started.saturating_add(600 * per_second) < booted)
+/// This boot's id, which no clock step changes: `kern.bootsessionuuid`, or `/proc/sys/kernel/random/boot_id`.
+pub fn boot_id() -> Option<String> {
+    static BOOT: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    BOOT.get_or_init(read_boot_id).clone()
 }
 
-/// When this machine booted, in the unit of `started_of`, and that unit's count per second.
 #[cfg(target_os = "macos")]
-fn booted() -> Option<(u64, u64)> {
-    let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
-    let mut boot = std::mem::MaybeUninit::<libc::timeval>::zeroed();
-    let mut size = std::mem::size_of::<libc::timeval>();
-    // SAFETY: `boot` is as large as `size` says, and the call writes at most that much.
-    let got = unsafe { libc::sysctl(mib.as_mut_ptr(), 2, boot.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
-    if got != 0 || size != std::mem::size_of::<libc::timeval>() {
-        return None;
-    }
-    // SAFETY: the call filled the whole struct.
-    Some((u64::try_from(unsafe { boot.assume_init() }.tv_sec).ok()?, 1))
+fn read_boot_id() -> Option<String> {
+    let mut id = [0u8; 64];
+    let mut size = id.len();
+    // SAFETY: the name is a C string, and `id` is as large as `size` says.
+    let got = unsafe { libc::sysctlbyname(c"kern.bootsessionuuid".as_ptr(), id.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+    let id = std::str::from_utf8(id.get(..size)?).ok()?.trim_end_matches('\0').trim();
+    (got == 0 && !id.is_empty()).then(|| id.to_owned())
 }
 
 #[cfg(target_os = "linux")]
-fn booted() -> Option<(u64, u64)> {
-    // SAFETY: sysconf has no preconditions.
-    let per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) }).ok().filter(|ticks| *ticks > 0)?;
-    Some((booted_ticks()?, per_second))
+fn read_boot_id() -> Option<String> {
+    let id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    Some(id.trim().to_owned()).filter(|id| !id.is_empty())
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn booted() -> Option<(u64, u64)> {
+fn read_boot_id() -> Option<String> {
     None
+}
+
+/// Whether neither a process nor a process group answers to `pid`: nothing of what it led can run.
+pub fn nothing_has(pid: u32) -> bool {
+    let gone = |target: libc::pid_t| {
+        // SAFETY: signal 0 only checks that the target exists.
+        let answered = unsafe { libc::kill(target, 0) };
+        answered != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    };
+    let pid = pid as libc::pid_t;
+    pid > 0 && gone(pid) && gone(-pid)
 }
 
 /// The folder `pid` works in.
@@ -165,9 +157,10 @@ pub enum Left {
     Unknown,
 }
 
-/// What runs on in the group `leader` led, once it is gone, where the agent worked in `worktree`. Its group is never
-/// signalled for this: the leader's pid may lead another group by now.
-pub fn left_of(leader: &Process, worktree: &std::path::Path) -> Left {
+/// What runs on in the group `leader` led, once it is gone, where the agent worked in `worktree`, a repository's
+/// worktree; with none, any member that runs is Unknown. Its group is never signalled for this: the leader's pid may
+/// lead another group by now.
+pub fn left_of(leader: &Process, worktree: Option<&std::path::Path>) -> Left {
     let group = leader.pid as libc::pid_t;
     #[cfg(any(test, feature = "testing"))]
     let listing = seam::listing(group).unwrap_or_else(|| members_left(group));
@@ -178,7 +171,7 @@ pub fn left_of(leader: &Process, worktree: &std::path::Path) -> Left {
         Listing::Nothing => return Left::Nothing,
         Listing::Members(pids) => pids,
     };
-    let within = std::fs::canonicalize(worktree).ok();
+    let within = worktree.and_then(|worktree| std::fs::canonicalize(worktree).ok());
     let mut ours = vec![];
     for pid in pids.into_iter().filter_map(|pid| u32::try_from(pid).ok()) {
         match started_of(pid) {

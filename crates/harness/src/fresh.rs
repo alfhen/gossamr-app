@@ -270,7 +270,7 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     let mut odd: Vec<String> = keys.iter().filter(|k| !written_by_gossamr_tools(k)).map(|k| key_shape(&k.to_ascii_lowercase())).collect();
     odd.sort();
     odd.dedup();
-    let at = path.display();
+    let at = quoted(path);
     if !odd.is_empty() {
         odd.truncate(5);
         return Fetched::Not(format!(
@@ -293,6 +293,11 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
             Fetched::Not(format!("{}; git said: {said}", if unreachable { "the remote couldn't be reached" } else { "the fetch failed" }))
         }
     }
+}
+
+/// `path` as one shell word, so a command the person copies works with a space or a quote in it.
+fn quoted(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
 /// A temp clone's folder name: `+` is a character `valid_repo` refuses, so no repository's clone or worktree can be

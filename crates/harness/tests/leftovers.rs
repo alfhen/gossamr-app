@@ -61,12 +61,29 @@ fn left_by_a_shutdown(dir: &Path, agent: Option<&Process>) {
     left_in(dir, agent, Path::new("/a"));
 }
 
-/// As `left_by_a_shutdown`, for an agent that worked in `worktree`.
+/// As `left_by_a_shutdown`, for an agent that worked in `worktree`, a repo's.
 fn left_in(dir: &Path, agent: Option<&Process>, worktree: &Path) {
+    left_in_folder(dir, agent, worktree);
+    sql(dir, "UPDATE sessions SET repo = 'acme/webshop' WHERE id = 's'");
+}
+
+/// As `left_by_a_shutdown`, for a session opened in `folder`, which names no repo.
+fn left_in_folder(dir: &Path, agent: Option<&Process>, folder: &Path) {
     let store = opened(dir);
-    store.create_session("s", "mock", false, worktree, None).unwrap();
+    store.create_session("s", "mock", false, folder, None).unwrap();
     store.set_agent("s", agent).unwrap();
     store.set_given_up("s").unwrap();
+}
+
+/// Changes the store's file as only a test may.
+fn sql(dir: &Path, statement: &str) {
+    rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap().execute_batch(statement).unwrap();
+}
+
+/// Read from the file, as the harness that holds the store runs on.
+fn is_given_up(dir: &Path) -> bool {
+    let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+    raw.query_row("SELECT given_up FROM sessions WHERE id = 's'", [], |row| row.get(0)).unwrap()
 }
 
 fn started_harness(dir: &Path) -> Harness {
@@ -172,7 +189,7 @@ async fn leftover_no_resume_while_a_leftover_that_was_sent_its_kill_may_still_ru
     let harness = started_harness(&dir);
     assert!(running(&mut child), "the kill did not reach it");
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(refused.contains("gave up"), "no resume beside it: {refused}");
+    assert!(refused.contains("may still run"), "no resume beside it: {refused}");
     assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), agent)]), "still on record, and given up on");
     child.kill().unwrap();
     child.wait().unwrap();
@@ -201,6 +218,10 @@ async fn leftover_no_resume_while_the_leftovers_could_not_be_listed_and_a_client
     assert!(!refused.contains("could not check"), "{refused}");
     assert_eq!(harness.sessions().unwrap()[0].held, None);
     assert_eq!(ended(child), Some(libc::SIGKILL), "the leftover was stopped by that check");
+    // That retry did not wait for its kill, so the session was given up on; the next resume finds the agent gone.
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!refused.contains("may still run"), "{refused}");
+    assert!(!is_given_up(&dir), "freed");
 }
 
 /// A worktree folder beside the data folder.
@@ -308,20 +329,91 @@ fn leftover_whose_leader_is_gone_and_whose_group_works_outside_its_worktree_stay
 }
 
 #[test]
-fn leftover_recorded_before_this_boot_is_gone_with_its_group_and_nothing_is_signalled() {
-    // A record from before the machine last booted: whatever runs in a group of that id now is another's, even in the
-    // worktree.
+fn leftover_recorded_in_another_boot_is_gone_with_its_group_and_nothing_is_signalled() {
+    // Whatever runs in a group of that id now is another's, even in the worktree, and even a process whose pid and start
+    // match: on Linux the start counts from the boot.
     let (_tmp, dir) = data_dir();
     let worktree = worktree(&dir);
     let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
-    let before_boot = Process { pid: leader.pid, started: 0 };
-    left_in(&dir, Some(&before_boot), &worktree);
-    let harness = started_harness(&dir);
-    assert!(process::alive(&work), "a group cannot outlive a reboot");
-    assert_eq!(process::seam::sent_to(work.pid), Vec::<i32>::new());
-    assert_eq!(row(harness, &dir), (false, vec![]), "and its session is free");
-    assert!(ended_by_the_next_harness(&said(&dir), "gone too"), "{:?}", said(&dir));
+    let (mut child, live) = agent();
+    for (record, member) in [(&leader, &work), (&live, &live)] {
+        left_in(&dir, Some(record), &worktree);
+        sql(&dir, "UPDATE sessions SET agent_boot = 'another boot' WHERE id = 's'");
+        let harness = started_harness(&dir);
+        assert!(process::alive(member), "a group cannot outlive a reboot, so nothing is killed");
+        assert_eq!(process::seam::sent_to(record.pid), Vec::<i32>::new());
+        assert_eq!(row(harness, &dir), (false, vec![]), "and its session is free");
+        assert!(ended_by_the_next_harness(&said(&dir), "gone too"), "{:?}", said(&dir));
+        sql(&dir, "DELETE FROM events; DELETE FROM sessions");
+    }
     kill(&work);
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[tokio::test]
+async fn leftover_recorded_with_no_boot_is_kept_and_never_signalled_until_nothing_answers_to_its_pid() {
+    // A record from before the store kept the boot: its start time proves nothing.
+    let (_tmp, dir) = data_dir();
+    let (mut child, agent) = agent();
+    left_in(&dir, Some(&agent), &worktree(&dir));
+    sql(&dir, "UPDATE sessions SET agent_boot = NULL WHERE id = 's'");
+    let harness = started_harness(&dir);
+    assert!(running(&mut child), "kept, never killed");
+    assert_eq!(process::seam::sent_to(agent.pid), Vec::<i32>::new());
+    assert!(is_given_up(&dir));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let refused = harness.clean_up("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!refused.contains("may still run"), "once nothing has its pid, it is gone: {refused}");
+    assert_eq!(row(harness, &dir), (false, vec![]));
+}
+
+#[test]
+fn leftover_of_a_session_with_no_repo_is_kept_whatever_folder_its_group_works_in() {
+    // Opened in a folder, the folder can be everything: `~` or `/`.
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    left_in_folder(&dir, Some(&leader), &worktree);
+    let harness = started_harness(&dir);
+    assert!(process::alive(&work), "not killed");
+    assert_eq!(process::seam::sent_to(work.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+    kill(&work);
+}
+
+#[tokio::test]
+async fn leftover_kept_is_checked_again_on_a_resume_and_freed_once_what_held_it_is_gone() {
+    // The reviewer's first probe: a member outside the worktree keeps it, until the person ends that member.
+    let (_tmp, dir) = data_dir();
+    let elsewhere = dir.with_file_name("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (leader, work) = a_leader_gone_with_its_work_left(&elsewhere);
+    left_in(&dir, Some(&leader), &worktree(&dir));
+    let harness = started_harness(&dir);
+    for refused in [harness.resume("s").await.err(), harness.clean_up("s").await.err()] {
+        let refused = refused.map(|e| e.to_string()).unwrap_or_default();
+        assert!(refused.contains(&format!("may still run (its process group is {})", leader.pid)) && refused.ends_with("end it, then try again"), "{refused}");
+    }
+    assert!(process::alive(&work), "checked again, still not the harness's to kill");
+    kill(&work);
+    while process::may_run(&work) {
+        tokio::task::yield_now().await;
+    }
+    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(!refused.contains("may still run"), "freed in this harness: {refused}");
+    assert_eq!(row(harness, &dir), (false, vec![]));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_start_time_on_linux_counts_from_the_boot_so_no_clock_step_moves_it() {
+    let uptime: f64 = std::fs::read_to_string("/proc/uptime").unwrap().split_whitespace().next().unwrap().parse().unwrap();
+    // SAFETY: sysconf has no preconditions.
+    let per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+    let started = process::started_of(std::process::id()).unwrap() as f64;
+    assert!(started <= (uptime + 1.0) * per_second, "{started} ticks, {uptime} s since boot");
 }
 
 #[test]

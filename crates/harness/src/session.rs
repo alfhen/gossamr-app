@@ -356,8 +356,8 @@ impl Harness {
             if taken_back && !row.handed_over {
                 return Err(Error::Refused(format!("session {id} was not handed over, so there is nothing to take back: resume it")));
             }
-            if row.given_up {
-                return Err(given_up(id, "resumed"));
+            if row.given_up && still_given_up(store, id, live) {
+                return Err(given_up(store, id, "resumed"));
             }
             if carry_on {
                 if let Some(why) = &row.no_carry_on {
@@ -632,8 +632,8 @@ impl Harness {
             }
             let row = self.inner.with_store(|store| store.session(id))?;
             // Its agent may still work in the worktree.
-            if row.given_up {
-                return Err(given_up(id, "cleaned up"));
+            if row.given_up && self.inner.with_store(|store| Ok(still_given_up(store, id, &live)))? {
+                return Err(self.inner.with_store(|store| Ok(given_up(store, id, "cleaned up")))?);
             }
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
             // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.
@@ -859,7 +859,7 @@ const FOUND_GONE: &str = "the harness that ran this agent went, and the agent wa
 /// leader gone, only the members plausibly its own (`left_of`). One that will not stop by `wait`, one deadline for them
 /// all, stays on record, and its session stays given up on, so no resume starts a second agent beside it.
 fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String, Live>, wait: Duration) -> std::result::Result<(), Leftovers> {
-    use crate::process::{Left, alive, kill_group, left_of, signal, started_before_this_boot};
+    use crate::process::{Left, alive, boot_id, kill_group, left_of, nothing_has, signal};
     let ids = match ids.map(Ok).unwrap_or_else(|| store.recorded().map(|ids| ids.into_iter().filter(|id| !live.contains_key(id)).collect())) {
         Ok(ids) => ids,
         Err(_) => {
@@ -869,7 +869,7 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     };
     let (mut unread, mut checked) = (vec![], vec![]);
     for id in ids {
-        let (agent, worktree) = match store.agent(&id) {
+        let crate::store::Recorded { agent, boot, worktree } = match store.agent(&id) {
             Ok(Some(found)) => found,
             Ok(None) => continue,
             Err(_) => {
@@ -878,13 +878,15 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
                 continue;
             }
         };
-        let check = if started_before_this_boot(&agent) {
-            Leftover::Gone(FOUND_GONE)
-        } else if alive(&agent) {
-            if kill_group(&agent).is_ok() { Leftover::Sent(vec![agent.clone()]) } else { Leftover::Kept }
-        } else {
+        // The boot first, by id and with no clock: a record of another boot can match a new process by pid and start.
+        let check = match (boot, boot_id()) {
+            (Some(was), Some(now)) if was != now => Leftover::Gone(FOUND_GONE),
+            // Which boot it was is not known, so its start time proves nothing: only a pid and group that no longer
+            // exist do.
+            (None, _) | (_, None) => if nothing_has(agent.pid) { Leftover::Gone(FOUND_GONE) } else { Leftover::Kept },
+            _ if alive(&agent) => if kill_group(&agent).is_ok() { Leftover::Sent(vec![agent.clone()]) } else { Leftover::Kept },
             // A group outlives its leader: what the agent started may still work in its worktree.
-            match left_of(&agent, &worktree) {
+            _ => match left_of(&agent, worktree.as_deref()) {
                 Left::Nothing => Leftover::Gone(FOUND_GONE),
                 Left::Ours(members) => {
                     for member in &members {
@@ -893,7 +895,7 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
                     Leftover::Sent(members)
                 }
                 Left::Unknown => Leftover::Kept,
-            }
+            },
         };
         checked.push((id, agent, worktree, check));
     }
@@ -901,7 +903,7 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
     for (id, agent, worktree, check) in checked {
         let gone = match check {
             Leftover::Gone(how) => Some(how),
-            Leftover::Sent(sent) => emptied(&agent, &worktree, &sent, until).then_some(STOPPED),
+            Leftover::Sent(sent) => emptied(&agent, worktree.as_deref(), &sent, until).then_some(STOPPED),
             Leftover::Kept => None,
         };
         match gone {
@@ -922,7 +924,7 @@ fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String
 
 /// Whether the group `agent` led is empty by `until`, once `sent` were killed: it is listed again, and what a member
 /// forked meanwhile is killed too, a few times.
-fn emptied(agent: &crate::process::Process, worktree: &std::path::Path, sent: &[crate::process::Process], until: std::time::Instant) -> bool {
+fn emptied(agent: &crate::process::Process, worktree: Option<&std::path::Path>, sent: &[crate::process::Process], until: std::time::Instant) -> bool {
     use crate::process::Left;
     if !gone_by(sent, until) {
         return false;
@@ -971,11 +973,26 @@ fn gone_by(processes: &[crate::process::Process], until: std::time::Instant) -> 
 }
 
 fn leftovers_unchecked(why: &str) -> String {
-    format!("the harness could not check for agents an earlier harness left running ({why}), so no session is resumed until it can")
+    format!("the harness could not check for agents an earlier harness left running ({why}), so no session is resumed until it can: restarting the harness, in Settings > Harness, checks again")
 }
 
-fn given_up(id: &str, what: &str) -> Error {
-    Error::Refused(format!("a shutdown gave up on session {id}'s agent, which may still run, so it is not {what}"))
+/// Whether session `id`, given up on, still is: its agent on record is checked again, with no wait, and the session is
+/// freed once nothing it left runs. A given-up session never runs in this harness, so this reaches no agent of its own.
+fn still_given_up(store: &Store, id: &str, live: &HashMap<String, Live>) -> bool {
+    let _ = stop_leftovers(store, Some(vec![id.to_owned()]), live, Duration::ZERO);
+    store.session(id).map_or(true, |row| row.given_up)
+}
+
+/// The refusal for a session given up on: what holds it, and what to do.
+fn given_up(store: &Store, id: &str, what: &str) -> Error {
+    Error::Refused(match store.agent(id) {
+        Ok(Some(recorded)) => format!(
+            "session {id}'s agent, or a process it started, may still run (its process group is {}), so it is not {what}: end it, then try again",
+            recorded.agent.pid
+        ),
+        Ok(None) => format!("a shutdown gave up on session {id}'s agent, which may still run, so it is not {what}"),
+        Err(_) => format!("session {id}'s agent may still run and its record cannot be read, so it is not {what}: restarting the harness, in Settings > Harness, checks again"),
+    })
 }
 
 /// The environment an agent gets: the harness's own, without a client token.
