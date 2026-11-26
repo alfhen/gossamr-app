@@ -46,11 +46,23 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Which build this is; `build.rs` says how it is chosen.
 pub const BUILD_ID: &str = env!("HARNESS_BUILD_ID");
 
-/// The providers `harness serve` offers: the mock when a script is given, and Claude when its CLI is found.
-pub fn serve_drivers(script: Option<mock::Script>, claude: Option<std::path::PathBuf>) -> Vec<(String, std::sync::Arc<dyn driver::Driver>)> {
+/// The providers `harness serve` offers: the mock when a script is given, and Claude, whose CLI each open looks for.
+pub fn serve_drivers(script: Option<mock::Script>, claude: claude::driver::ClaudeDriver) -> Vec<(String, std::sync::Arc<dyn driver::Driver>)> {
     let mock = script.map(|script| ("mock".to_owned(), std::sync::Arc::new(mock::Mock::new(script)) as std::sync::Arc<dyn driver::Driver>));
-    let claude = claude.map(|binary| ("claude".to_owned(), std::sync::Arc::new(claude::driver::ClaudeDriver::new(binary)) as std::sync::Arc<dyn driver::Driver>));
-    mock.into_iter().chain(claude).collect()
+    let claude = ("claude".to_owned(), std::sync::Arc::new(claude) as std::sync::Arc<dyn driver::Driver>);
+    mock.into_iter().chain([claude]).collect()
+}
+
+/// The runtime `harness serve` runs on. A driver's open starts a process and can block, so it takes several threads:
+/// one slow open stalls no client and no other session. Set here, so `TOKIO_WORKER_THREADS=1` cannot make it one.
+pub fn serve_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    tokio::runtime::Builder::new_multi_thread().worker_threads(serve_workers(available)).enable_all().build()
+}
+
+/// At least two, whatever the machine has.
+fn serve_workers(available: usize) -> usize {
+    available.max(2)
 }
 
 /// What `harness --version` prints.
@@ -72,7 +84,7 @@ pub enum Request {
 
 pub const USAGE: &str = "usage: harness --version
        harness run --provider mock --script <file> [--data <folder>] [--answer allow|deny]... [<prompt>]
-       harness serve [--data <folder>] [--mock-script <file>]   (the first client token on stdin)
+       harness serve [--data <folder>] [--mock-script <file>] [--turn-limit <n>]   (the first client token on stdin)
   against the harness serving --data <folder>, with the client token on stdin (--token-stdin):
        harness run --provider <name> [--answer allow|deny]... [--ends-with-client] <prompt>
        harness sessions | shutdown | token list | token revoke <id>
@@ -147,12 +159,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn serve_offers_the_mock_with_a_script_and_claude_when_its_cli_is_found() {
+    fn serve_offers_the_mock_with_a_script_and_claude_always() {
         let names = |drivers: Vec<(String, std::sync::Arc<dyn driver::Driver>)>| drivers.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
-        assert_eq!(names(serve_drivers(None, None)), Vec::<String>::new());
-        assert_eq!(names(serve_drivers(None, Some("/usr/local/bin/claude".into()))), ["claude"]);
+        let claude = || claude::driver::ClaudeDriver::found(binary::CliPlaces::none());
+        assert_eq!(names(serve_drivers(None, claude())), ["claude"], "found at open, so one on the shell's PATH counts");
         let script = mock::Script::parse("{\"prompt\": null}\n{\"end\": \"done\"}").unwrap();
-        assert_eq!(names(serve_drivers(Some(script), Some("/usr/local/bin/claude".into()))), ["mock", "claude"]);
+        assert_eq!(names(serve_drivers(Some(script), claude())), ["mock", "claude"]);
+    }
+
+    #[test]
+    fn serve_runs_on_a_runtime_of_several_threads() {
+        let runtime = serve_runtime().unwrap();
+        assert_eq!(runtime.handle().runtime_flavor(), tokio::runtime::RuntimeFlavor::MultiThread);
+        let available = std::thread::available_parallelism().unwrap().get();
+        assert_eq!(runtime.metrics().num_workers(), serve_workers(available), "its workers are set, not left to the environment");
+        assert_eq!(serve_workers(1), 2, "two on a machine of one core");
     }
 
     fn args(list: &[&str]) -> Vec<OsString> {

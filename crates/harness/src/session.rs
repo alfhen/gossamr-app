@@ -83,6 +83,9 @@ pub struct Harness {
 struct Inner {
     /// None once the harness has shut down, which frees the data folder.
     store: Mutex<Option<Store>>,
+    /// Why the agents a harness before this one left running are not known to be stopped: until they are, no session
+    /// is resumed, as one of them may still run.
+    leftovers: Mutex<Option<Leftovers>>,
     drivers: HashMap<String, Arc<dyn Driver>>,
     turns: Arc<Turns>,
     live: Mutex<HashMap<String, Live>>,
@@ -204,11 +207,14 @@ impl Harness {
         Harness::with_setup(store, drivers, settings, Arc::new(Setup::default()))
     }
 
-    /// A harness whose sessions take their environment, logins and clones from `setup`.
+    /// A harness whose sessions take their environment, logins and clones from `setup`. Agents a harness before it
+    /// left running are stopped first, before any session can be resumed.
     pub fn with_setup(store: Store, drivers: Vec<(String, Arc<dyn Driver>)>, settings: Settings, setup: Arc<Setup>) -> Harness {
+        let leftovers = stop_leftovers(&store, None, &HashMap::new(), LEFTOVER_EXIT).err();
         Harness {
             inner: Arc::new(Inner {
                 store: Mutex::new(Some(store)),
+                leftovers: Mutex::new(leftovers),
                 drivers: drivers.into_iter().collect(),
                 turns: Arc::new(Turns { limit: settings.turn_limit, state: Mutex::new(TurnsState::default()) }),
                 live: Mutex::new(HashMap::new()),
@@ -330,8 +336,8 @@ impl Harness {
         let first = carry_on.clone().map(Request::CarryOn);
         let carry_on = carry_on.is_some();
         let (events, second) = self.start(id, watcher, taken_back, first, |store, live| {
+            self.inner.leftovers_stopped(store, live)?;
             let row = store.session(id)?;
-            after = store.last_seq(id)?;
             let never = match () {
                 _ if row.cleaned => Some(Error::CleanedUp(id.to_owned())),
                 _ if row.ends_with_client => Some(Error::EndedWithClient(id.to_owned())),
@@ -343,15 +349,18 @@ impl Harness {
                 store.close_questions(id, QuestionEnd::NotResumable, now_ms())?;
                 return Err(refused);
             }
+            // First, so neither refusal below points to a call that this one would refuse too.
+            if row.given_up.is_some() && still_given_up(store, id, live) {
+                return Err(Error::Refused(given_up(store, id, if taken_back { "taken back" } else { "resumed" })));
+            }
             if row.handed_over && !taken_back {
                 return Err(Error::HandedOver(id.to_owned()));
             }
             if taken_back && !row.handed_over {
                 return Err(Error::Refused(format!("session {id} was not handed over, so there is nothing to take back: resume it")));
             }
-            if row.given_up {
-                return Err(given_up(id, "resumed"));
-            }
+            // After the recheck, which may end the old start in the events.
+            after = store.last_seq(id)?;
             if carry_on {
                 if let Some(why) = &row.no_carry_on {
                     return Err(Error::Refused(format!("session {id} may not carry on: {why}")));
@@ -535,7 +544,7 @@ impl Harness {
             for id in &stuck {
                 let reason = "the harness shut down without waiting longer for this agent, which may still run".to_owned();
                 let _ = store.append(id, &Body::Failed { kind: FailKind::Stuck, reason }, now_ms());
-                let _ = store.set_given_up(id);
+                let _ = store.set_given_up(id, crate::store::SHUT_DOWN);
             }
         }
         *store = None;
@@ -573,8 +582,13 @@ impl Harness {
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let live = self.inner.live();
         let mut listed = self.inner.with_store(Store::sessions)?;
+        let held = self.inner.leftovers.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|left| leftovers_unchecked(&left.why));
         for session in &mut listed {
             session.running = live.contains_key(&session.id);
+            session.held = held.clone();
+            if session.given_up.is_some() {
+                session.given_up = Some(self.inner.with_store(|store| Ok(given_up(store, &session.id, "resumed")))?);
+            }
         }
         Ok(listed)
     }
@@ -621,10 +635,12 @@ impl Harness {
             if live.contains_key(id) {
                 return Err(Error::Running(id.to_owned()));
             }
+            // As a resume is: while a leftover is still to be checked, any session's agent may still run.
+            self.inner.with_store(|store| self.inner.leftovers_stopped(store, &live))?;
             let row = self.inner.with_store(|store| store.session(id))?;
             // Its agent may still work in the worktree.
-            if row.given_up {
-                return Err(given_up(id, "cleaned up"));
+            if row.given_up.is_some() && self.inner.with_store(|store| Ok(still_given_up(store, id, &live)))? {
+                return Err(Error::Refused(self.inner.with_store(|store| Ok(given_up(store, id, "cleaned up")))?));
             }
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
             // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.
@@ -786,10 +802,21 @@ impl Harness {
         let link = driver.open_reporting(launch, EndReport(end)).map_err(|OpenError { kind, message }| Error::Open { kind, message: redact::text(&message, &secrets) })?;
         // While the session is still taken: a take-back that failed to open keeps the mark, and a later hand over's
         // mark is never cleared by this one.
-        if taken_back {
-            self.inner.with_store(|store| store.set_handed_over(id, false))?;
-        }
+        let handed_back = if taken_back { self.inner.with_store(|store| store.set_handed_over(id, false)) } else { Ok(()) };
+        let recorded = handed_back.and_then(|()| self.inner.with_store(|store| store.set_agent(id, link.process.as_ref())));
         reserved.keep();
+        if let Err(e) = recorded {
+            // Its agent runs and nothing names it for the next harness: the session stays taken until it has gone.
+            let (inner, id, mut link) = (self.inner.clone(), id.to_owned(), link);
+            let _ = link.commands.send(Command::Kill);
+            tokio::spawn(async move {
+                while link.output.recv().await.is_some() {}
+                #[cfg(test)]
+                inner.hooks.after_unrecorded_output_ended(&id);
+                inner.forget(&id, start);
+            });
+            return Err(e);
+        }
         let task = Task {
             inner: self.inner.clone(),
             id: id.to_owned(),
@@ -816,9 +843,181 @@ impl Harness {
     }
 }
 
-/// The refusal for a session a shutdown gave up on, which H6 will find and stop by its pid.
-fn given_up(id: &str, what: &str) -> Error {
-    Error::Refused(format!("a shutdown gave up on session {id}'s agent, which may still run, so it is not {what}"))
+/// The agents a harness before this one left running that are still to be dealt with: the sessions whose records could
+/// not be read back (None: not even which sessions have one), and why.
+struct Leftovers {
+    ids: Option<Vec<String>>,
+    why: String,
+}
+
+/// What a leftover's check came to before any wait.
+enum Leftover {
+    Gone(&'static str),
+    Sent(Vec<crate::process::Process>),
+    /// Why.
+    Kept(&'static str),
+}
+
+const STOPPED: &str = "the harness that ran this agent went, and the next one stopped it";
+const UNLISTED: &str = "the store could not list the agents on record";
+const UNREAD: &str = "its record could not be read";
+const FOUND_GONE: &str = "the harness that ran this agent went, and the agent was gone too";
+
+/// Stops each agent a harness before this one started and did not see go, among the sessions `ids` names, or, when
+/// they could not be read at start, those with a record now that do not run here. Its process group, when the pid
+/// still answers and started when the record says, so a pid another process took since is never signalled. With its
+/// leader gone, only the members plausibly its own (`left_of`). One that will not stop by `wait`, one deadline for them
+/// all, stays on record, and its session stays given up on, so no resume starts a second agent beside it.
+fn stop_leftovers(store: &Store, ids: Option<Vec<String>>, live: &HashMap<String, Live>, wait: Duration) -> std::result::Result<(), Leftovers> {
+    use crate::process::{Left, alive, boot_id, kill_group, left_of, nothing_has, signal};
+    let ids = match ids.map(Ok).unwrap_or_else(|| store.recorded().map(|ids| ids.into_iter().filter(|id| !live.contains_key(id)).collect())) {
+        Ok(ids) => ids,
+        Err(_) => {
+            let _ = store.give_up_on_recorded(UNLISTED, live.keys().map(String::as_str));
+            return Err(Leftovers { ids: None, why: "the store could not list them".into() });
+        }
+    };
+    // Those whose record could not be read, or whose giving up could not be written: none of them may be resumed.
+    let (mut pending, mut checked) = (vec![], vec![]);
+    for id in ids {
+        let crate::store::Recorded { agent, boot, worktree } = match store.agent(&id) {
+            Ok(Some(found)) => found,
+            Ok(None) => continue,
+            Err(_) => {
+                let _ = store.set_given_up(&id, UNREAD);
+                pending.push(id);
+                continue;
+            }
+        };
+        // The boot first, by id and with no clock: a record of another boot can match a new process by pid and start.
+        let check = match (boot, boot_id()) {
+            (Some(was), Some(now)) if was != now => Leftover::Gone(FOUND_GONE),
+            // Which boot it was is not known, so its start time proves nothing: only a pid and group that no longer
+            // exist do.
+            (None, _) | (_, None) => match nothing_has(agent.pid) {
+                true => Leftover::Gone(FOUND_GONE),
+                false => Leftover::Kept("it was recorded with no boot, and its pid or its group still answers"),
+            },
+            _ if alive(&agent) => match kill_group(&agent) {
+                Ok(()) => Leftover::Sent(vec![agent.clone()]),
+                Err(_) => Leftover::Kept("the harness could not kill its group"),
+            },
+            // A group outlives its leader: what the agent started may still work in its worktree.
+            _ => match left_of(&agent, worktree.as_deref()) {
+                Left::Nothing => Leftover::Gone(FOUND_GONE),
+                Left::Ours(members) => {
+                    for member in &members {
+                        let _ = signal(member, libc::SIGKILL);
+                    }
+                    Leftover::Sent(members)
+                }
+                Left::Unknown(why) => Leftover::Kept(why),
+            },
+        };
+        checked.push((id, agent, worktree, check));
+    }
+    let until = std::time::Instant::now() + wait;
+    for (id, agent, worktree, check) in checked {
+        let gone = match check {
+            Leftover::Gone(how) => Ok(how),
+            Leftover::Sent(sent) => emptied(&agent, worktree.as_deref(), &sent, until).map(|()| STOPPED),
+            Leftover::Kept(why) => Err(why),
+        };
+        match gone {
+            Ok(how) => {
+                end_left_start(store, &id, how);
+                let _ = store.set_agent(&id, None);
+            }
+            Err(why) => {
+                if store.set_given_up(&id, why).is_err() {
+                    pending.push(id);
+                }
+            }
+        }
+    }
+    match pending.is_empty() {
+        true => Ok(()),
+        false => Err(Leftovers { ids: Some(pending), why: "the store could not read them back or record them".into() }),
+    }
+}
+
+/// Whether the group `agent` led is empty by `until`, once `sent` were killed: it is listed again, and what a member
+/// forked meanwhile is killed too, a few times. If not, why.
+fn emptied(agent: &crate::process::Process, worktree: Option<&std::path::Path>, sent: &[crate::process::Process], until: std::time::Instant) -> std::result::Result<(), &'static str> {
+    use crate::process::Left;
+    const NOT_YET: &str = "it was sent a kill and had not ended when last checked";
+    if !gone_by(sent, until) {
+        return Err(NOT_YET);
+    }
+    for _ in 0..3 {
+        match crate::process::left_of(agent, worktree) {
+            Left::Nothing => return Ok(()),
+            Left::Ours(more) => {
+                for member in &more {
+                    let _ = crate::process::signal(member, libc::SIGKILL);
+                }
+                if !gone_by(&more, until) {
+                    return Err(NOT_YET);
+                }
+            }
+            Left::Unknown(why) => return Err(why),
+        }
+    }
+    Err("its group kept gaining processes after each kill")
+}
+
+/// Ends a leftover's start in its events as its own harness would have, so a client that reads them sees the start end:
+/// a `failed` and a `closed`, unless the start had already closed.
+fn end_left_start(store: &Store, id: &str, how: &str) {
+    let Ok(last) = store.last_seq(id) else { return };
+    let closed = last > 0 && store.events(id, last - 1).ok().and_then(|events| events.last().map(|event| matches!(event.body, Body::Closed { .. }))).unwrap_or(false);
+    if !closed {
+        let ms = now_ms();
+        let _ = store.append(id, &Body::Failed { kind: FailKind::AgentStopped, reason: how.to_owned() }, ms);
+        let _ = store.append(id, &Body::Closed { by: ClosedBy::Harness }, ms);
+    }
+}
+
+/// How long the leftovers a harness kills as it starts have, all of them, to be gone before their sessions stay given up.
+const LEFTOVER_EXIT: Duration = Duration::from_secs(2);
+
+/// Whether every one of `processes` has exited by `until`: a SIGKILL sent is not yet a process gone.
+fn gone_by(processes: &[crate::process::Process], until: std::time::Instant) -> bool {
+    while processes.iter().any(crate::process::may_run) {
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+fn leftovers_unchecked(why: &str) -> String {
+    format!("the harness could not check for agents an earlier harness left running ({why}), so no session is resumed until it can: restarting the harness, in Settings > Harness, checks again")
+}
+
+/// Whether session `id`, given up on, still is: its agent on record is checked again, with no wait, and the session is
+/// freed once nothing it left runs. A given-up session never runs in this harness, so this reaches no agent of its own.
+fn still_given_up(store: &Store, id: &str, live: &HashMap<String, Live>) -> bool {
+    stop_leftovers(store, Some(vec![id.to_owned()]), live, Duration::ZERO).is_err() || store.session(id).map_or(true, |row| row.given_up.is_some())
+}
+
+/// The refusal for a session given up on: what holds it, and what to do.
+fn given_up(store: &Store, id: &str, what: &str) -> String {
+    let why = store.session(id).ok().and_then(|row| row.given_up).unwrap_or_else(|| UNREAD.to_owned());
+    match store.agent(id) {
+        // Only a leader of this boot that still runs with its recorded start is surely the agent; any other pid may
+        // be another process's by now, and is never named for the person to end.
+        Ok(Some(recorded)) if recorded.boot.is_some() && recorded.boot == crate::process::boot_id() && crate::process::alive(&recorded.agent) => format!(
+            "session {id}'s agent may still run (its process group is {}; {why}), so it is not {what}: end it, then try again",
+            recorded.agent.pid
+        ),
+        Ok(Some(_)) if why != UNREAD && why != UNLISTED => format!(
+            "a process in session {id}'s group may still run ({why}), so it is not {what}: once it has ended, try again, or restart the harness, in Settings > Harness, to check again"
+        ),
+        Ok(None) => format!("session {id}'s agent may still run ({why}), and the harness has no record of its process, so it is not {what}"),
+        _ => format!("session {id}'s agent may still run ({why}), so it is not {what}: restarting the harness, in Settings > Harness, checks again"),
+    }
 }
 
 /// The environment an agent gets: the harness's own, without a client token.
@@ -897,6 +1096,20 @@ impl Inner {
 
     fn live(&self) -> MutexGuard<'_, HashMap<String, Live>> {
         self.live.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Refuses while the agents a harness before this one left running are not known to be stopped. Each call tries
+    /// again, under the store's lock, for the sessions the first try could not read, and never one that runs here.
+    fn leftovers_stopped(&self, store: &Store, live: &HashMap<String, Live>) -> Result<()> {
+        let mut unchecked = self.leftovers.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(left) = unchecked.take() {
+            // Under the locks, so nothing waits: a leftover its kill has not ended yet is given up on at once.
+            *unchecked = stop_leftovers(store, left.ids, live, Duration::ZERO).err();
+        }
+        match unchecked.as_ref() {
+            Some(left) => Err(Error::Refused(leftovers_unchecked(&left.why))),
+            None => Ok(()),
+        }
     }
 
     /// Removes the session's live entry if it is still this start's, and stops serving its tools endpoint.
@@ -1447,6 +1660,9 @@ impl Task {
         let mut live = self.inner.live();
         // Before `closed`, so a client that has seen it finds the token refused.
         self.inner.forget_endpoint(&self.endpoint, self.start);
+        // The driver closed its output, so the agent is gone. A shutdown that gave up on it never gets here, and the
+        // next harness finds it on record.
+        let _ = self.inner.with_store(|store| store.set_agent(&self.id, None));
         #[cfg(test)]
         self.inner.hooks.before_closed();
         // A request the harness took wins, then the harness's own failure, then a signal from outside, then the agent.
@@ -1827,6 +2043,8 @@ mod tests {
         before_call: Mutex<Option<Hook>>,
         /// Just after `answer_question` marked the question as being answered, before it sends the answer.
         after_answer_taken: Mutex<Option<Hook>>,
+        /// Just after the output of a start whose agent could not be recorded has ended, with its id.
+        after_unrecorded_output_ended: Mutex<Option<IdHook>>,
     }
 
     fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
@@ -1883,6 +2101,12 @@ mod tests {
         pub(super) fn after_shutdown_stops(&self) {
             if let Some(hook) = take(&self.after_shutdown_stops) {
                 hook();
+            }
+        }
+
+        pub(super) fn after_unrecorded_output_ended(&self, id: &str) {
+            if let Some(hook) = take(&self.after_unrecorded_output_ended) {
+                hook(id);
             }
         }
     }
@@ -2010,14 +2234,32 @@ mod tests {
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
         let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
         let Ok(Event { body: Body::Started { provider_session, .. }, .. }) = events.recv().await else { panic!("started first") };
-        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
-        set(&harness.inner.hooks.before_call, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
-        let sent = std::time::Instant::now();
+        // The session takes the call 2000 ms after it reached the endpoint, as when it is busy.
+        let took = took_after_a_busy_session(&harness, 2000);
         harness.send(&id, "go").unwrap();
-        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::TurnEnded { .. })) {}
+        let ended = loop {
+            let event = events.recv().await.unwrap();
+            if matches!(event.body, Body::TurnEnded { .. }) {
+                break std::time::Instant::now();
+            }
+        };
         assert_eq!(mock.replies(&provider_session), [Ok(Reply { output: json!(QUESTION_PENDING), error: false })]);
-        // From the session's own moment it would return at 1500 + 2250 ms, past the limit.
-        assert!(sent.elapsed() < Duration::from_millis(limit), "returned before the limit, from the call's start: {:?}", sent.elapsed());
+        // The wait is 2250 ms. From the call's arrival it ends at most 250 ms after the take; from the take, 2250 ms
+        // after it. Only time after the take counts, so a slow start of the turn or of the endpoint cannot fail this.
+        let after = ended.duration_since(took()).as_millis();
+        assert!(after < 1250, "returned {after} ms after the session took it: the wait counts from the call's arrival");
+    }
+
+    /// Makes the session take its next call `busy` ms after it reached the endpoint. What it gives says when the
+    /// session took it, by the monotonic clock, so no clock step moves it.
+    fn took_after_a_busy_session(harness: &Harness, busy: u64) -> impl Fn() -> std::time::Instant {
+        let took = Arc::new(Mutex::new(None));
+        let at = took.clone();
+        set(&harness.inner.hooks.before_call, Box::new(move || {
+            std::thread::sleep(Duration::from_millis(busy));
+            *at.lock().unwrap() = Some(std::time::Instant::now());
+        }) as Hook);
+        move || took.lock().unwrap().expect("the session took the call")
     }
 
     /// The session's events until `last` takes one, each within 10 s.
@@ -2076,7 +2318,7 @@ mod tests {
             let (kept, seen, last) = (self.output.clone(), self.commands.clone(), self.on_stop.clone());
             if self.deaf.load(Ordering::Relaxed) {
                 drop(received);
-                return Ok(Link { commands, output: receiver });
+                return Ok(Link { commands, output: receiver, process: None });
             }
             tokio::spawn(async move {
                 while let Some(command) = received.recv().await {
@@ -2092,7 +2334,7 @@ mod tests {
                     }
                 }
             });
-            Ok(Link { commands, output: receiver })
+            Ok(Link { commands, output: receiver, process: None })
         }
     }
 
@@ -2126,6 +2368,68 @@ mod tests {
             let by = closed_by(&mut events).await;
             assert!(matches!(by, ClosedBy::Signal | ClosedBy::Shutdown), "{gap} ms: {by:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_a_signal_ends_in_the_middle_of_a_turn_fails_with_that_signal_named() {
+        for (signal, named) in [(libc::SIGTERM, "signal 15 (SIGTERM)"), (libc::SIGABRT, "signal 6 (SIGABRT)")] {
+            let (tmp, hand) = (tempfile::tempdir().unwrap(), Hand::default());
+            let (_harness, mut events, _) = in_a_turn(&tmp, &hand).await;
+            hand.gone(AgentEnd::Signalled { signal, sent: false });
+            let seen = events_until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+            let failed = seen.iter().find_map(|body| match body {
+                Body::Failed { kind: FailKind::AgentStopped, reason } => Some(reason.as_str()),
+                _ => None,
+            });
+            assert_eq!(failed, Some(format!("the agent stopped in the middle of a turn: {named}").as_str()));
+        }
+    }
+
+    /// An agent that goes only when it is told to be killed, not when its commands close.
+    struct GoesOnKill;
+
+    impl Driver for GoesOnKill {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::default()
+        }
+
+        fn open(&self, _launch: Launch) -> std::result::Result<Link, OpenError> {
+            let (commands, mut received) = mpsc::unbounded_channel();
+            let (output, receiver) = mpsc::unbounded_channel();
+            output.send(Body::Started { provider_session: "goes-on-kill".into(), resumed: false }).unwrap();
+            tokio::spawn(async move {
+                loop {
+                    match received.recv().await {
+                        Some(Command::Kill) => break,
+                        Some(_) => {}
+                        None => std::future::pending().await,
+                    }
+                }
+                drop(output);
+            });
+            Ok(Link { commands, output: receiver, process: None })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_start_whose_agent_could_not_be_recorded_is_killed_and_keeps_its_session_until_its_output_ends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("data");
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("goes-on-kill".into(), Arc::new(GoesOnKill))];
+        let harness = Harness::new(Store::open(&dir).unwrap(), drivers, Settings::default());
+        let (taken, still) = oneshot::channel();
+        let reading = harness.clone();
+        set(&harness.inner.hooks.after_unrecorded_output_ended, Box::new(move |id: &str| {
+            let _ = taken.send(reading.inner.live().contains_key(id));
+        }) as IdHook);
+        let raw = rusqlite::Connection::open(dir.join("harness.sqlite")).unwrap();
+        raw.execute_batch("CREATE TRIGGER refuse_agent BEFORE UPDATE OF agent_pid ON sessions BEGIN SELECT RAISE(ABORT, 'refused'); END;").unwrap();
+        let opened = harness.open(Open { provider: "goes-on-kill".into(), cwd: "/nowhere".into(), ..Open::default() }).await;
+        assert!(opened.is_err(), "recording its agent failed");
+        let still = tokio::time::timeout(Duration::from_secs(10), still).await.expect("its output ends only once its agent is told to go");
+        assert_eq!(still, Ok(true), "taken until its output has ended, and released only then");
+        // On this one thread the release runs in the same poll as the hook, before this test runs again.
+        assert!(harness.inner.live().is_empty(), "released once its output ended");
     }
 
     #[tokio::test]
@@ -2267,14 +2571,42 @@ mod tests {
         let tools = vec![ToolSpec { name: "read_ticket".into(), description: "Read a ticket.".into(), input_schema: json!({"type": "object"}) }];
         let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), tools, ..Open::default() }).await.unwrap();
         events.recv().await.unwrap();
-        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
-        set(&harness.inner.hooks.before_call, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
-        let sent = std::time::Instant::now();
+        // The session takes the call 2000 ms after it reached the endpoint, as when it is busy.
+        let took = took_after_a_busy_session(&harness, 2000);
         harness.send(&id, "go").unwrap();
-        let seen = events_until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
-        assert!(seen.iter().any(|body| matches!(body, Body::ToolResult { output, error: true, .. } if output == &json!(format!("timed out after {limit} ms")))), "{seen:?}");
-        // From the session's own moment the cut would come at 1500 + 3000 ms.
-        assert!(sent.elapsed() < Duration::from_millis(4000), "cut at the limit from the call's arrival: {:?}", sent.elapsed());
+        let timed_out = json!(format!("timed out after {limit} ms"));
+        let cut = loop {
+            let event = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("an event within 10 s").unwrap();
+            match event.body {
+                Body::ToolResult { output, error: true, .. } if output == timed_out => break std::time::Instant::now(),
+                Body::TurnEnded { .. } => panic!("the turn ended with no cut"),
+                _ => {}
+            }
+        };
+        // From the call's arrival the cut comes at most 1000 ms after the take; from the take, 3000 ms after it. Only
+        // time after the take counts, so a slow start of the turn or of the endpoint cannot fail this.
+        let after = cut.duration_since(took()).as_millis();
+        assert!(after < 2000, "cut {after} ms after the session took the call: the limit counts from its arrival");
+    }
+
+    #[tokio::test]
+    async fn tools_endpoint_a_closed_sessions_token_is_refused_before_its_closed_is_recorded() {
+        // With no resume after it, so no new start's token takes the old one's place.
+        let tmp = tempfile::tempdir().unwrap();
+        let mock = Mock::new(Script::parse("{\"prompt\": null}").unwrap());
+        let drivers: Vec<(String, Arc<dyn Driver>)> = vec![("mock".into(), Arc::new(mock))];
+        let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
+        let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
+        events.recv().await.unwrap();
+        let name = harness.inner.live().get(&id).unwrap().endpoint.clone();
+        let endpoints = harness.inner.endpoints().unwrap();
+        assert!(endpoints.serves(&name));
+        let served = Arc::new(Mutex::new(None));
+        let (seen, checking) = (served.clone(), endpoints.clone());
+        set(&harness.inner.hooks.before_closed, Box::new(move || *seen.lock().unwrap() = Some(checking.serves(&name))) as Hook);
+        harness.close(&id).unwrap();
+        events_until(&mut events, |body| matches!(body, Body::Closed { .. })).await;
+        assert_eq!(*served.lock().unwrap(), Some(false), "a client that has seen `closed` finds the token refused");
     }
 
     #[tokio::test]

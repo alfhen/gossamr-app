@@ -293,7 +293,7 @@ impl Mock {
             end,
         };
         tokio::spawn(player.play());
-        Ok(Link { commands, output })
+        Ok(Link { commands, output, process: None })
     }
 }
 

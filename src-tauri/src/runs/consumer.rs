@@ -203,6 +203,8 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             rows.add("error", &reason, None);
         }
         Body::Notice { text } => rows.add("update", &text, None),
+        // What a turn used is no row of the timeline.
+        Body::Usage { .. } => {}
         Body::HandedOver => {
             run.last_detail = Some(HANDED_OVER.into());
             rows.add("stop", HANDED_OVER, None);
