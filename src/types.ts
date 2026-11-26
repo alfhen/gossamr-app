@@ -876,7 +876,7 @@ export interface AgentSettings {
   permissions?: AgentPermissions;
 }
 
-/** "auto": Claude Code's auto mode runs safe steps and blocks or asks the rest. "ask": you're asked about each step. */
+/** "auto": Claude Code's auto mode decides which steps are safe and runs them, a push or a reset among them. "ask": you're asked about each step. */
 export type AgentPermissions = "auto" | "ask";
 
 /** Who git commits as in `~/Gossamr/agents`, and whether the person's git settings choose that by folder. */

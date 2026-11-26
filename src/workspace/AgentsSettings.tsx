@@ -187,8 +187,8 @@ function WorkFolder({ git, onReveal }: { git: WorkFolderGit | null | undefined; 
 const FIELD = "w-20 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm text-ws-ink";
 
 const PERMISSIONS_HINT: Record<AgentPermissions, string> = {
-  auto: "Safe steps run. The rest is blocked or comes to Needs you.",
-  ask: "Each step that needs your OK comes to Needs you.",
+  auto: "Claude decides which steps are safe and runs them. It can push, delete or reset without asking you.",
+  ask: "You allow or deny each step that needs it.",
 };
 
 /** How many agents run at once, the terminal that opens sessions, and who settles a Claude agent's permission prompts. */

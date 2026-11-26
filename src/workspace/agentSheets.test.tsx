@@ -423,10 +423,10 @@ describe("agent settings", () => {
     const view = (settings: typeof SETTINGS) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     const unsent = view({ ...SETTINGS, permissions: undefined });
     expect(unsent).toMatch(/<option value="auto" selected/);
-    expect(unsent).toContain("Safe steps run. The rest is blocked or comes to Needs you.");
+    expect(unsent).toContain("Claude decides which steps are safe and runs them. It can push, delete or reset without asking you.");
     const asks = view({ ...SETTINGS, permissions: "ask" });
     expect(asks).toMatch(/<option value="ask" selected/);
-    expect(asks).toContain("Each step that needs your OK comes to Needs you.");
+    expect(asks).toContain("You allow or deny each step that needs it.");
   });
 
   it("holds the fields while a save is under way so a second one can't send stale values", () => {
