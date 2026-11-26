@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness::api::Op;
 use harness::client::Client;
-use harness::event::{Decision, PermissionKind};
+use harness::event::Decision;
 
 use super::failure::Failure;
 use super::link::{Connect, Link};
@@ -41,7 +41,9 @@ const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
 
 pub const HANDED_OVER_PERMISSION: &str = "It was handed over to Terminal, so answer it there.";
 pub const ONLY_DENY_CUT: &str = "This request was too large to show whole, so it can only be denied.";
-pub const ONLY_DENY_KIND: &str = "Gossamr can't read this kind of request, so it can only be denied.";
+/// For a kind this build can't read, and a request Gossamr no longer has whole.
+pub const ONLY_DENY_KIND: &str = "Gossamr can't show all of this request, so it can only be denied.";
+pub const ONLY_DENY_MASKED: &str = "Part of this is hidden; run it yourself in Terminal if you trust it.";
 
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
@@ -234,7 +236,15 @@ impl RunService {
         }
         let Some(open) = run.permissions.iter().find(|open| open.id == request) else { return refuse(super::link::NOT_OPEN) };
         if open.deny_only && decision == Decision::Allow {
-            return refuse(if open.kind == PermissionKind::Other { ONLY_DENY_KIND } else { ONLY_DENY_CUT });
+            // The input of a request the harness cut is text.
+            let why = if open.masked {
+                ONLY_DENY_MASKED
+            } else if open.input.is_string() {
+                ONLY_DENY_CUT
+            } else {
+                ONLY_DENY_KIND
+            };
+            return refuse(why);
         }
         match link.permit(session, request, decision).await {
             Ok(()) => self.load(run_id).await,

@@ -201,12 +201,15 @@ impl Link {
             Err(why) if not_running(&why) => return Err(NOT_RUNNING_TO_ANSWER.into()),
             Err(why) => return Err(why),
         }
+        // The harness took it, so it is taken: a run that can't note it now reads it from the `answered` event.
         let noted = self.inner.core.apply_session(session, |run, follow| {
             consumer::permission_answered(run, follow, request);
             Vec::new()
         });
-        if let Some(applied) = noted.await.map_err(|e| e.to_string())? {
-            self.inner.after(&applied.before, &applied.run);
+        match noted.await {
+            Ok(Some(applied)) => self.inner.after(&applied.before, &applied.run),
+            Ok(None) => {}
+            Err(e) => eprintln!("the harness took an answer to a request of session {session}, but Gossamr couldn't note it: {e}"),
         }
         Ok(())
     }
@@ -370,6 +373,7 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
         if let Some(row) = rows.get(&session) {
             link.keep_branch(&session, row).await;
         }
+        link.recover_permissions(client, &session, &follow).await;
         if let Err(e) = client.call(Op::Watch { session: session.clone(), after: follow.seq }).await {
             eprintln!("couldn't watch session {session}: {e}");
             continue;
@@ -406,6 +410,20 @@ async fn results_after(client: &mut Client, session: &str, after: u64) -> Option
     }
 }
 
+/// The `permission` events the harness stored for `session` up to `upto` whose id is in `ids`, read page by page.
+async fn asked_up_to(client: &mut Client, session: &str, upto: u64, ids: &[&str]) -> Option<Vec<Event>> {
+    let (mut asked, mut after) = (Vec::new(), 0);
+    loop {
+        let page = client.call(Op::Events { session: session.to_owned(), after }).await.ok()?;
+        let events: Vec<Event> = serde_json::from_value(page["events"].clone()).ok()?;
+        after = events.last().map_or(after, |e| e.seq);
+        asked.extend(events.into_iter().filter(|e| e.seq <= upto && matches!(&e.body, Body::Permission { id, .. } if ids.contains(&id.as_str()))));
+        if page["more"] != true || after >= upto || after == 0 {
+            return Some(asked);
+        }
+    }
+}
+
 /// What the harness says of a session it does not run: one a harness that went with no shutdown left as it was.
 fn not_running(why: &str) -> bool {
     why.contains("is not running")
@@ -431,6 +449,26 @@ impl Inner {
         });
         if let Err(e) = kept.await {
             eprintln!("couldn't keep the branch of session {session}: {e}");
+        }
+    }
+
+    /// A run saved before runs kept their open permission requests has them only in its follow: read them again from
+    /// the harness. A list it cannot read now is left for the next connect.
+    async fn recover_permissions(&self, client: &mut Client, session: &str, follow: &crate::domain::SessionFollow) {
+        let Ok(Some((run_id, _))) = self.core.session_run(session).await else { return };
+        let Ok(Some(run)) = self.core.run(&run_id).await else { return };
+        let missing: Vec<&str> = follow.permissions.iter().map(|(id, ..)| id.as_str()).filter(|id| !run.permissions.iter().any(|open| open.id == *id)).collect();
+        if missing.is_empty() {
+            return;
+        }
+        let Some(asked) = asked_up_to(client, session, follow.seq, &missing).await else { return };
+        match self.core.apply_session(session, |run, follow| {
+            consumer::recover_permissions(run, follow, &asked);
+            Vec::new()
+        }).await {
+            Ok(Some(applied)) => self.after(&applied.before, &applied.run),
+            Ok(None) => {}
+            Err(e) => eprintln!("couldn't keep the permission requests of session {session}: {e}"),
         }
     }
 
