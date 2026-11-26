@@ -4,6 +4,9 @@ import { agentsHome, expandNeedsYou, mockPermissionAnswers, openNeedRow, mockRun
 /** The mock's long command on CA-407, `LONG_COMMAND` in src/backend/mockRuns.ts. */
 const LONG_COMMAND = 'pnpm vitest run src/campaigns/sendTime.test.ts src/campaigns/schedule.test.ts --reporter=verbose && git add src/campaigns/sendTime.ts src/campaigns/sendTime.test.ts && git commit -m "Pick each campaign\'s send time from the last 30 days of opens"';
 
+/** The key that moves focus to the next button: WebKit on a Mac's default settings skips buttons on Tab and reaches them on Option-Tab. */
+const tabKey = (browserName: string) => (browserName === "webkit" ? "Alt+Tab" : "Tab");
+
 /** A real press: the button is held for a moment, as a hand holds it, so a click lost while pressed fails a test. */
 const PRESS = { delay: 80 };
 
@@ -414,7 +417,7 @@ test("an Allow the pointer rested on through an answer elsewhere counts only onc
   ]);
 });
 
-test("after an answer, a key press on an Allow counts only once a key, not code, moved focus onto it", async ({ page }) => {
+test("after an answer, a key press on an Allow counts only once a key, not code, moved focus onto it", async ({ page, browserName }) => {
   const ask = requestsOn(page, "CA-405");
   const allow = ask.getByRole("button", { name: "Allow" });
   // An answer by key in another run first.
@@ -428,11 +431,11 @@ test("after an answer, a key press on an Allow counts only once a key, not code,
   await expect(allow).toBeEnabled();
   await allow.focus();
   await page.keyboard.press("Enter");
-  await expect(ask).toContainText("Not allowed yet: move to Allow with Tab, then press it.");
+  await expect(ask).toContainText("Not allowed yet: move to Allow with the keyboard, then press it.");
   expect(await answers(page)).toEqual([["perm-16", "deny"]]);
   // Off it and back by key, it counts.
-  await page.keyboard.press("Shift+Tab");
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(`Shift+${tabKey(browserName)}`);
+  await page.keyboard.press(tabKey(browserName));
   await expect(allow).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(requestsOn(page, "CA-405")).toHaveCount(0);
@@ -442,7 +445,19 @@ test("after an answer, a key press on an Allow counts only once a key, not code,
   ]);
 });
 
-test("Space and Enter on an Allow reached by Tab answer it", async ({ page }) => {
+test("a short request opened in Needs you with Pip's launcher over part of it can be allowed at once", async ({ page }) => {
+  await expandNeedsYou(page, "General");
+  await openNeedRow(page, /WEB-107/);
+  const ask = needsPane(page).locator("[data-permission-request]");
+  const area = (await ask.locator("[data-seen-area]").boundingBox())!;
+  const launcher = (await page.locator("[data-pip-launcher]").boundingBox())!;
+  const over = Math.max(0, Math.min(area.x + area.width, launcher.x + launcher.width) - Math.max(area.x, launcher.x)) * Math.max(0, Math.min(area.y + area.height, launcher.y + launcher.height) - Math.max(area.y, launcher.y));
+  // More than the share small covers may take between them: only its name lets it pass.
+  expect(over / (area.width * area.height), "the launcher lies over the request").toBeGreaterThan(0.1);
+  await expect(ask.getByRole("button", { name: "Allow" })).toBeEnabled();
+});
+
+test("Space and Enter on an Allow reached by the keyboard answer it", async ({ page, browserName }) => {
   for (const [key, run, request] of [
     ["Space", "CA-407", "perm-1"],
     ["Enter", "CA-405", "perm-8"],
@@ -452,7 +467,7 @@ test("Space and Enter on an Allow reached by Tab answer it", async ({ page }) =>
     await inView(ask);
     await expect(allow).toBeEnabled();
     await ask.locator("[data-permission-heading]").focus();
-    await page.keyboard.press("Tab");
+    await page.keyboard.press(tabKey(browserName));
     await expect(allow).toBeFocused();
     await page.keyboard.press(key);
     await expect(requestsOn(page, run)).toHaveCount(0);
@@ -520,12 +535,12 @@ test("a burst of clicks at one spot answers one request: a double click and thre
   await expect(requestsOn(page, "SUP-15")).toHaveCount(0);
 });
 
-test("the keyboard can't reach Allow on a long request it hasn't scrolled through, even at its end", async ({ page }) => {
+test("the keyboard can't reach Allow on a long request it hasn't scrolled through, even at its end", async ({ page, browserName }) => {
   const ask = requestsOn(page, "SUP-10");
   const allow = ask.getByRole("button", { name: "Allow" });
   await card(page, "SUP-10").focus();
-  await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(tabKey(browserName));
+  await page.keyboard.press(tabKey(browserName));
   await expect(allow).toBeDisabled();
   await expect(allow).not.toBeFocused();
   await expect(allow).toHaveAttribute("title", "Scroll through the whole request to allow it.");

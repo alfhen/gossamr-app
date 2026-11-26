@@ -65,7 +65,8 @@ export function PermissionItem({ run, request, label, size, where, index = 0 }: 
 
 /** Why a click on Allow did nothing: it wasn't aimed at this request after the last answer. */
 const AIM_BY_POINTER = "Not allowed yet: point at Allow again and click it.";
-const AIM_BY_KEY = "Not allowed yet: move to Allow with Tab, then press it.";
+// Not "Tab": in WebKit on a Mac's default settings Tab skips buttons and Option-Tab reaches them.
+const AIM_BY_KEY = "Not allowed yet: move to Allow with the keyboard, then press it.";
 
 /**
  * Where the keyboard goes once an item answered from it has left: the next request's heading, never its Allow; else the
