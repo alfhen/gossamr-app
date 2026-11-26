@@ -28,6 +28,8 @@ pub struct Work {
 /// its own data folder, where CLIs are installed, and the shell environment it last captured.
 pub struct Setup {
     home: Option<PathBuf>,
+    /// The home the work root is under when it is not `home`: a debug build's `HARNESS_WORK_HOME`.
+    work_home: Option<PathBuf>,
     data_dir: PathBuf,
     places: CliPlaces,
     /// The shell `capture` runs; None captures nothing, so sessions run in the harness's own environment.
@@ -39,7 +41,7 @@ pub struct Setup {
 /// their provider's usual login.
 impl Default for Setup {
     fn default() -> Setup {
-        Setup { home: None, data_dir: PathBuf::new(), places: CliPlaces::none(), shell_program: None, shell: Mutex::new(None) }
+        Setup { home: None, work_home: None, data_dir: PathBuf::new(), places: CliPlaces::none(), shell_program: None, shell: Mutex::new(None) }
     }
 }
 
@@ -54,7 +56,18 @@ impl Setup {
     pub fn of_this_machine(data_dir: PathBuf) -> Setup {
         let setup = Setup::new(dirs::home_dir(), data_dir);
         let places = CliPlaces::of_this_mac(setup.home.clone());
-        Setup { places, ..setup }.with_shell_program(&std::env::var("SHELL").unwrap_or_default())
+        Setup { places, ..setup }.with_work_home(work_home_from(debug_work_home())).with_shell_program(&std::env::var("SHELL").unwrap_or_default())
+    }
+
+    /// The work root under `home` in place of the home folder. Nothing else moves: the agent's own `HOME`, the shell
+    /// capture, where CLIs are found and where a login folder's `~` points stay the machine's.
+    pub fn with_work_home(self, home: Option<PathBuf>) -> Setup {
+        Setup { work_home: home.and_then(|home| home.canonicalize().ok()), ..self }
+    }
+
+    /// The home the work root, `~/Gossamr/agents`, is under.
+    fn work_root_home(&self) -> Option<&Path> {
+        self.work_home.as_deref().or(self.home.as_deref())
     }
 
     pub fn with_shell_program(self, program: &str) -> Setup {
@@ -143,9 +156,9 @@ impl Setup {
             ProviderState::Unavailable(why) => return Err(refused(why.message().into())),
             ProviderState::Off => unreachable!("a login asked for at open is on"),
         };
-        if let (Some(typed), Some(home)) = (login, self.home.as_deref()) {
+        if let (Some(typed), Some(home), Some(work)) = (login, self.home.as_deref(), self.work_root_home()) {
             let folder = expand(typed, home);
-            let (folder_real, root) = (real(&folder), real(&agents_root(home)));
+            let (folder_real, root) = (real(&folder), real(&agents_root(work)));
             if folder_real.starts_with(&root) || root.starts_with(&folder_real) {
                 return Err(refused("it is the harness's work root, where the clones are, or inside it or holds it".into()));
             }
@@ -161,7 +174,7 @@ impl Setup {
     /// that is already there is refused (`Git::add_worktree`). With the work, a note for the session when the fetch
     /// did not happen, so it starts from what was fetched before.
     pub async fn prepare(&self, repo: &str, base: Option<&str>, branch: &str) -> Result<(Work, PathBuf, Option<String>)> {
-        let home = self.home.as_deref().ok_or_else(|| Error::Refused("the harness doesn't know the home folder, so it has no work root".into()))?;
+        let home = self.work_root_home().ok_or_else(|| Error::Refused("the harness doesn't know the home folder, so it has no work root".into()))?;
         let git = self.git();
         let _lock = lock_repo(home, repo).await.map_err(|e| self.clone_refused(e))?;
         remove_stale_temps(&git, home, repo).await;
@@ -194,7 +207,7 @@ impl Setup {
 
     /// Removes the worktree and branch of a start that never ran, while nothing was done in them.
     pub async fn discard(&self, work: &Work, worktree: &Path) {
-        let Some(home) = self.home.as_deref() else { return };
+        let Some(home) = self.work_root_home() else { return };
         let Ok(_lock) = lock_repo(home, &work.repo).await else { return };
         self.git().discard_untouched_worktree(&work.clone, worktree, &work.branch, &format!("origin/{}", work.base)).await;
     }
@@ -203,10 +216,10 @@ impl Setup {
     /// committed, commits not merged or pushed) stays, and is the refusal.
     pub async fn remove(&self, work: &Work, worktree: &Path) -> Result<()> {
         // In turns with an open of the same repo, whose fetch and worktree add would race this fetch and removal.
-        let home = self.home.as_deref().ok_or_else(|| Error::Refused("the harness doesn't know the home folder, so it has no work root".into()))?;
+        let home = self.work_root_home().ok_or_else(|| Error::Refused("the harness doesn't know the home folder, so it has no work root".into()))?;
         let _lock = lock_repo(home, &work.repo).await.map_err(|e| self.clone_refused(e))?;
         let at = Worktree { repo: &work.repo, clone: &work.clone, path: worktree, branch: &work.branch, base: &work.base };
-        match remove_with_git(&self.git(), self.home.as_deref(), at).await {
+        match remove_with_git(&self.git(), self.work_root_home(), at).await {
             Ok(None) => Ok(()),
             Ok(Some(kept)) if kept.starts_with("nothing was removed") => Err(Error::Refused(self.masked(&kept))),
             Ok(Some(kept)) => Err(Error::Refused(self.masked(&format!("git keeps the worktree: {kept}")))),
@@ -260,6 +273,34 @@ pub fn valid_effort(effort: &str) -> bool {
     !effort.is_empty() && effort.len() <= 16 && effort.bytes().all(|b| b.is_ascii_lowercase())
 }
 
+/// The variable a debug build of the harness takes its work root's home from, so a test can run the real `serve`
+/// without touching `~/Gossamr`. A release build has no such code.
+#[cfg(debug_assertions)]
+pub const WORK_HOME_VARIABLE: &str = "HARNESS_WORK_HOME";
+
+fn debug_work_home() -> Option<std::ffi::OsString> {
+    #[cfg(debug_assertions)]
+    return std::env::var_os(WORK_HOME_VARIABLE);
+    #[cfg(not(debug_assertions))]
+    None
+}
+
+/// The work root's home a value of `HARNESS_WORK_HOME` names: none when it is unset or empty.
+fn work_home_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
+/// Why `serve` must not start: `HARNESS_WORK_HOME` is set and names no folder, which would otherwise leave the work
+/// root in the home folder with no word of it.
+pub fn work_home_refused() -> Option<String> {
+    work_home_refusal(debug_work_home())
+}
+
+fn work_home_refusal(value: Option<std::ffi::OsString>) -> Option<String> {
+    let home = work_home_from(value)?;
+    (!home.is_dir()).then(|| format!("HARNESS_WORK_HOME is {}, which is not a folder: make it, or unset the variable", home.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +316,26 @@ mod tests {
         assert!(command.starts_with("cd ~/'Gossamr agents/it"), "the home folder is outside the quotes: {command}");
         let ran = std::process::Command::new("/bin/sh").args(["-c", &command]).env("HOME", &home).output().unwrap();
         assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+    }
+
+    #[test]
+    fn serve_is_refused_a_work_home_that_names_no_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(work_home_refusal(None), None);
+        assert_eq!(work_home_refusal(Some("".into())), None);
+        assert_eq!(work_home_refusal(Some(tmp.path().as_os_str().to_owned())), None, "a folder that is there");
+        let missing = tmp.path().join("typo");
+        let refused = work_home_refusal(Some(missing.as_os_str().to_owned())).expect("refused");
+        assert!(refused.starts_with("HARNESS_WORK_HOME is ") && refused.contains("typo"), "{refused}");
+    }
+
+    #[test]
+    fn a_work_home_is_taken_only_from_a_value_that_names_a_folder() {
+        assert_eq!(work_home_from(None), None, "unset: the home folder's work root");
+        assert_eq!(work_home_from(Some("".into())), None);
+        assert_eq!(work_home_from(Some("/tmp/elsewhere".into())), Some(PathBuf::from("/tmp/elsewhere")));
+        #[cfg(debug_assertions)]
+        assert_eq!(WORK_HOME_VARIABLE, "HARNESS_WORK_HOME", "the name CI's strings check looks for in a release build");
     }
 
     #[test]
