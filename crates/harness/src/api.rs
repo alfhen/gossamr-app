@@ -235,8 +235,13 @@ pub enum Op {
     TokenList,
     /// Revokes a token; its connections are closed at their next call. The last token cannot be revoked.
     TokenRevoke { token: i64 },
-    /// Stops every session and the harness, and frees the data folder; answers once that is done.
-    Shutdown,
+    /// Stops every session and the harness, and frees the data folder; answers once that is done. With `no_carry_on`,
+    /// each session it stops may not carry on, for that reason, until a turn of its own: a message still resumes it.
+    /// A build that does not know the field takes the call as a plain shutdown.
+    Shutdown {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        no_carry_on: Option<String>,
+    },
 }
 
 /// What the harness sends after the hello: an answer to a call (`id` with `ok` or `error`), an event of a session

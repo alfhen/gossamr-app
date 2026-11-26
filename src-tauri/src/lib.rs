@@ -179,18 +179,13 @@ fn use_freed_slot(service: &RunsState) {
 
 /// Starts or adopts the harness, unless you stopped it, and says how it stands; or does `action`.
 #[tauri::command]
-async fn harness_status(sidecar: State<'_, SidecarState>, runs: State<'_, RunsState>, action: Option<sidecar::Action>) -> Result<sidecar::Status> {
+async fn harness_status(sidecar: State<'_, SidecarState>, action: Option<sidecar::Action>) -> Result<sidecar::Status> {
     let Some(sidecar) = sidecar.as_ref().as_ref() else { return Ok(sidecar::Status::no_folder()) };
-    let restarted = matches!(action, Some(sidecar::Action::Restart | sidecar::Action::Start));
+    // A start or restart here is counted in `starts`, and the runs it cut carry on from the app's start-up task.
     let mut status = match action {
         None => sidecar.ensure().await,
         Some(action) => sidecar.act(action).await,
     };
-    // A restart cut the turns that were running; the runs it cut carry on, as after the app's own start.
-    if restarted && status.state == sidecar::State::Running {
-        let carrying = runs.inner().clone();
-        tauri::async_runtime::spawn(async move { carrying.carry_on_after_restart().await });
-    }
     // What the harness serves, not what this app was started with: an adopted harness may serve no mock.
     status.mock = sidecar::mock_script().is_some() && sidecar.serves(runs::on_harness::MOCK).await;
     Ok(status)
@@ -1129,11 +1124,13 @@ pub fn run() {
             let (harness_handle, sweeping) = (app.handle().clone(), app.state::<RunsState>().inner().clone());
             tauri::async_runtime::spawn(async move {
                 if let Some(sidecar) = sidecar.as_ref() {
-                    sidecar.ensure().await;
+                    // Before the start, so the start it makes is one the first carry on covers.
+                    let starts = sidecar.starts();
+                    sidecar.start_up().await;
                     wire::changed(&harness_handle, wire::Topic::Harness, "");
                     sweeping.move_to_harness().await;
                     sweeping.sweep_harness().await;
-                    sweeping.carry_on_after_restart().await;
+                    sweeping.carry_on_at_each_start(starts).await;
                 }
             });
 

@@ -204,13 +204,15 @@ impl Server {
         while let Ok(ask) = asked.try_recv() {
             shutting.push(ask);
         }
-        let left = harness.shutdown().await;
+        // Two clients may ask at once: one that forbids a carry on wins.
+        let no_carry_on = shutting.iter().find_map(|ask| ask.no_carry_on.clone());
+        let left = harness.shutdown_with(no_carry_on.as_deref()).await;
         if !left.is_empty() {
             eprintln!("harness: shut down without waiting longer for the stuck agents of sessions {}", left.join(", "));
         }
         // A client that asked for this, or was refused, gets its answer, if it takes it within a second, before its
         // connection ends.
-        for ShutdownAsk { left: answer } in shutting {
+        for ShutdownAsk { left: answer, .. } in shutting {
             let _ = answer.send(left.clone());
         }
         let _ = tokio::time::timeout(CLOSE_WITHIN, asks.answering.write()).await;
@@ -222,6 +224,7 @@ impl Server {
 /// A client's `shutdown`, which `run` carries out: it gives the client the sessions it left.
 struct ShutdownAsk {
     left: tokio::sync::oneshot::Sender<Vec<String>>,
+    no_carry_on: Option<String>,
 }
 
 /// Where a client asks for `shutdown`. A client holds a read of `answering` until its answer is written, and `run`
@@ -530,11 +533,11 @@ impl Client {
                 Ok(Value::Array(listed.collect()))
             }
             Op::TokenRevoke { token } => done(harness.revoke_client_token(token)),
-            Op::Shutdown => {
+            Op::Shutdown { no_carry_on } => {
                 // Taken before the ask, so `run` cannot end this connection before the answer is written.
                 self.answering = self.asks.answering.clone().try_read_owned().ok();
                 let (left, answer) = tokio::sync::oneshot::channel();
-                self.asks.queue.send(ShutdownAsk { left }).map_err(|_| Error::Refused("the harness is already shutting down".into()))?;
+                self.asks.queue.send(ShutdownAsk { left, no_carry_on }).map_err(|_| Error::Refused("the harness is already shutting down".into()))?;
                 Ok(json!({ "left": answer.await.unwrap_or_default() }))
             }
         }
