@@ -353,3 +353,20 @@ async fn a_finished_run_on_the_second_login_is_cleaned_up_through_that_logins_cl
     assert_eq!(second.0.lock().unwrap().rms, ["abc12345"]);
     assert!(rig.cli.0.lock().unwrap().rms.is_empty());
 }
+
+#[tokio::test]
+async fn a_run_the_move_to_the_harness_interrupted_is_cleaned_up_with_git_alone() {
+    let (rig, run) = stopped().await;
+    let interrupted = rig
+        .set(&run, |r| {
+            r.state = RunState::Failed;
+            r.failure = Some(crate::domain::RunFailure::Interrupted);
+        })
+        .await;
+    assert!(cleanable(&interrupted));
+    std::fs::create_dir_all(&interrupted.expected_worktree).unwrap();
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), Cleanup::Removed);
+    assert!(rig.cli.0.lock().unwrap().rms.is_empty(), "no claude rm");
+    let log = std::fs::read_to_string(rig.fx.dir.join("git.log")).unwrap_or_default();
+    assert!(log.lines().any(|l| l.contains("worktree remove")), "{log}");
+}

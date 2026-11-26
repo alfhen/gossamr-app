@@ -1117,6 +1117,7 @@ pub fn run() {
                 if let Some(sidecar) = sidecar.as_ref() {
                     sidecar.ensure().await;
                     wire::changed(&harness_handle, wire::Topic::Harness, "");
+                    sweeping.move_to_harness().await;
                     sweeping.sweep_harness().await;
                 }
             });

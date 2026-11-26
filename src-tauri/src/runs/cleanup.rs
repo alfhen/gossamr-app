@@ -33,9 +33,20 @@ pub enum Cleanup {
     Refused { message: String },
 }
 
+/// Why Clean up leaves a run handed over to Terminal: Terminal resumes it in its worktree.
+pub const HANDED_OVER_CLEANUP: &str = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
+
+/// A run handed over to Terminal whose worktree is still there: once you removed it, nothing resumes the session,
+/// and the harness cleans it up.
+fn terminal_works_in(run: &Run) -> bool {
+    run.handed_over && run.expected_worktree.symlink_metadata().is_ok()
+}
+
 /// A run that is over and still has something to remove: its worktree, or an earlier session that was kept.
 pub fn cleanable(run: &Run) -> bool {
-    matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown) && run.short_id.is_some() && (run.worktree_removed_at.is_none() || !run.leftover_sessions().is_empty())
+    let over = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown);
+    let on_harness = run.harness_session.is_some() && run.worktree_removed_at.is_none() && !terminal_works_in(run);
+    over && (on_harness || run.short_id.is_some() && (run.worktree_removed_at.is_none() || !run.leftover_sessions().is_empty()))
 }
 
 fn refuse(message: impl Into<String>) -> Error {
@@ -44,9 +55,6 @@ fn refuse(message: impl Into<String>) -> Error {
 
 /// Marks a run as being cleaned up until dropped, on every way out of `cleanup`.
 struct Cleaning<'a>(&'a RunService, String);
-
-/// What Clean up and Delete say of a run on the harness until clean-up goes through it.
-pub(super) const ON_HARNESS_LATER: &str = "Clean up for an agent on the harness comes in a coming update. Its worktree stays in ~/Gossamr/agents until then.";
 
 impl Drop for Cleaning<'_> {
     fn drop(&mut self) {
@@ -84,8 +92,8 @@ impl RunService {
         if !worktree_pending && leftovers.is_empty() {
             return Err(refuse("This run's worktree is already removed."));
         }
-        if run.harness_session.is_some() {
-            return Err(refuse(ON_HARNESS_LATER));
+        if run.harness_session.is_some() && terminal_works_in(&run) {
+            return Err(refuse(HANDED_OVER_CLEANUP));
         }
         if !cleanable(&run) {
             return Err(refuse(match run.state {
@@ -93,7 +101,15 @@ impl RunService {
                 other => format!("This run is {}. Stop it first, then clean it up.", other.as_str()),
             }));
         }
-        if self.instance_removed(&run).await {
+        if let Some(cleaned) = self.cleanup_on_harness(&run).await {
+            return match cleaned? {
+                Some(message) => Ok(Cleanup::Refused { message }),
+                None => self.settle_cleanup(&run, true, Vec::new(), None, false).await,
+            };
+        }
+        // An agent the move to the harness stopped is cleaned up with git alone, as the old path's tools are no longer used.
+        let interrupted = run.failure == Some(crate::domain::RunFailure::Interrupted);
+        if interrupted || self.instance_removed(&run).await {
             if worktree_pending {
                 if let Some(message) = self.remove_with_git(&run).await? {
                     return Ok(Cleanup::Refused { message });

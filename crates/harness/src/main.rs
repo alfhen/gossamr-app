@@ -17,7 +17,7 @@ fn main() -> ExitCode {
                 eprintln!("harness: {variable} is set, so serve does not start: any program of yours, an agent too, can read the environment a process started with. Unset it and give the first token on stdin.");
                 return ExitCode::FAILURE;
             }
-            let served = runtime().block_on(serve(data, mock_script, turn_limit));
+            let served = harness::serve_runtime().expect("a runtime starts").block_on(serve(data, mock_script, turn_limit));
             match served {
                 Err(e) if harness::server::unknown_token(&e) => {
                     eprintln!("harness: {e}");
@@ -57,8 +57,6 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
     use harness::error::Error;
     let dir = data.or_else(harness::store::default_dir).ok_or_else(|| Error::Refused("no data folder: set HARNESS_DATA".into()))?;
     let script = mock_script.map(|path| harness::mock::Script::load(&path)).transpose().map_err(Error::Driver)?;
-    // The mock provider is there only when a script is given, and Claude when its CLI is installed.
-    let drivers = harness::serve_drivers(script, harness::binary::find_claude());
     // A token on a pipe is read on every start, the pipe swapped for /dev/null, so none waits behind fd 0 while the
     // harness runs. A terminal is never read: a token typed there stays on the screen, and no prompt holds up a start.
     // SAFETY: isatty has no preconditions.
@@ -68,6 +66,8 @@ async fn serve(data: Option<std::path::PathBuf>, mock_script: Option<std::path::
         return Err(Error::Refused(why));
     }
     let setup = harness::work::Setup::of_this_machine(dir.clone());
+    // The mock provider is there only when a script is given. Claude is found where `providers` looks, at each open.
+    let drivers = harness::serve_drivers(script, harness::claude::driver::ClaudeDriver::found(setup.places().clone()));
     let server = harness::server::Server::bind_with(&dir, first_token, drivers, harness::session::Settings { turn_limit: turn_limit.unwrap_or(harness::session::Settings::default().turn_limit), ..harness::session::Settings::default() }, setup)?;
     eprintln!("harness: serving {}", dir.join(harness::api::SOCKET).display());
     server.run().await?;

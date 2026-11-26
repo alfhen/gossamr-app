@@ -25,6 +25,7 @@ pub mod notices;
 pub mod pr;
 pub mod redact;
 pub mod report;
+pub mod shell;
 pub mod result;
 pub mod service;
 pub mod state;

@@ -773,7 +773,7 @@ impl RunLauncher for RunService {
 }
 
 mod choice;
-mod fresh;
+pub(super) mod fresh;
 mod trust;
 
 #[cfg(test)]

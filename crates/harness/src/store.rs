@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{Error, Result};
 use crate::event::{Body, Event, KEPT_FIELDS};
+use crate::process::Process;
 use crate::tools::ToolSpec;
 use crate::work::Work;
 
@@ -78,7 +79,16 @@ const STEPS: &[&str] = &["CREATE TABLE sessions (
     // Why the harness may not send "carry on" to the session, if anything forbids it now; and that a shutdown gave up
     // on its agent, which may still run, so no resume may start a second one.
     "ALTER TABLE sessions ADD COLUMN no_carry_on TEXT;
-    ALTER TABLE sessions ADD COLUMN given_up INTEGER NOT NULL DEFAULT 0;"];
+    ALTER TABLE sessions ADD COLUMN given_up INTEGER NOT NULL DEFAULT 0;",
+    // The running start's agent, by pid and start time, so a harness after this one can stop it if it outlived its
+    // session: an orphaned `claude` ends its turn alone.
+    "ALTER TABLE sessions ADD COLUMN agent_pid INTEGER;
+    ALTER TABLE sessions ADD COLUMN agent_started INTEGER;",
+    // The boot the agent was recorded in, so a record from another boot is told apart with no clock. A record from
+    // before this step has none, and is never taken as gone or killed for it. And why the harness gave up on the
+    // session's agent; a session given up on before this step was given up on by a shutdown.
+    "ALTER TABLE sessions ADD COLUMN agent_boot TEXT;
+    ALTER TABLE sessions ADD COLUMN given_up_why TEXT;"];
 
 /// What the sweep deletes: the event rows of a session cleaned up before ?1, or never cleaned up and idle since ?2,
 /// unless it runs (?3, a JSON array of ids). It reads the sessions table only.
@@ -131,8 +141,8 @@ pub struct SessionRow {
     pub result_schema: Option<serde_json::Value>,
     /// Why "carry on" may not be sent now: a stop, a deny-ended turn, a permission request left open.
     pub no_carry_on: Option<String>,
-    /// A shutdown gave up on its agent, which may still run (#458 item 11).
-    pub given_up: bool,
+    /// Why the harness gave up on its agent, which may still run, so no resume may start a second one (#458 item 11).
+    pub given_up: Option<String>,
 }
 
 /// What a new session's row holds besides its id.
@@ -176,6 +186,13 @@ pub struct Listed {
     /// The question the agent asked through `ask` that is still open: its id.
     #[serde(default)]
     pub open_question: Option<String>,
+    /// Set by the harness: why no session may be resumed now, as `resume` and `take_back` say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
+    /// Why the harness gave up on the session's agent, which may still run; the harness lists the text `resume`
+    /// refuses with, which also says what to do. None for a session not given up on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub given_up: Option<String>,
     /// The folder the agent works in: the worktree the harness made for a session that names a repo, else the
     /// folder it was opened in. Sent as text, a byte that is not UTF-8 as U+FFFD, so no session's path can fail the
     /// listing of them all.
@@ -183,8 +200,26 @@ pub struct Listed {
     pub cwd: PathBuf,
 }
 
+/// Why a session was given up on: a row from before the harness kept a reason was given up on by a shutdown.
+fn given_up(given_up: bool, why: Option<String>) -> Option<String> {
+    given_up.then(|| why.unwrap_or_else(|| SHUT_DOWN.to_owned()))
+}
+
+/// Why a shutdown gave up on a session.
+pub const SHUT_DOWN: &str = "a shutdown stopped waiting for it";
+
 fn lossy_path<S: serde::Serializer>(path: &Path, to: S) -> std::result::Result<S::Ok, S::Error> {
     to.serialize_str(&path.to_string_lossy())
+}
+
+/// A session's agent on record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorded {
+    pub agent: Process,
+    /// The boot it was recorded in; none for a record from before the store kept it.
+    pub boot: Option<String>,
+    /// The repository worktree the session works in, if it names a repo.
+    pub worktree: Option<PathBuf>,
 }
 
 impl Store {
@@ -253,7 +288,7 @@ impl Store {
         self.conn
             .query_row(
                 "SELECT provider, locked, cwd, model, provider_session, cleaned_ms IS NOT NULL, ends_with_client, cannot_resume, handed_over,
-                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema, no_carry_on, given_up FROM sessions WHERE id = ?1",
+                 login, effort, repo, base, branch, clone, endpoint, tools, result_schema, no_carry_on, given_up, given_up_why FROM sessions WHERE id = ?1",
                 [id],
                 |row| {
                     Ok(SessionRow {
@@ -277,7 +312,7 @@ impl Store {
                         tools: json_column(row, 16)?.unwrap_or_default(),
                         result_schema: json_column(row, 17)?,
                         no_carry_on: row.get(18)?,
-                        given_up: row.get(19)?,
+                        given_up: given_up(row.get(19)?, row.get(20)?),
                     })
                 },
             )
@@ -291,9 +326,64 @@ impl Store {
         Ok(())
     }
 
-    pub fn set_given_up(&self, id: &str) -> Result<()> {
-        self.conn.execute("UPDATE sessions SET given_up = 1 WHERE id = ?1", [id])?;
+    /// Gives up on the session's agent, which may still run, for the reason `why`.
+    pub fn set_given_up(&self, id: &str, why: &str) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET given_up = 1, given_up_why = ?2 WHERE id = ?1", params![id, why])?;
         Ok(())
+    }
+
+    /// Gives up on every session that has an agent on record, read or not, but those `except` names, which run here:
+    /// for when the records cannot be read back.
+    pub fn give_up_on_recorded<'a>(&self, why: &str, except: impl Iterator<Item = &'a str>) -> Result<()> {
+        let except = serde_json::to_string(&except.collect::<Vec<_>>())?;
+        self.conn.execute(
+            "UPDATE sessions SET given_up = 1, given_up_why = ?1 WHERE agent_pid IS NOT NULL AND id NOT IN (SELECT value FROM json_each(?2))",
+            params![why, except],
+        )?;
+        Ok(())
+    }
+
+    /// The running start's agent, or None once it is gone. Its going also lifts a shutdown's giving up: no agent of the
+    /// session runs any more.
+    pub fn set_agent(&self, id: &str, agent: Option<&Process>) -> Result<()> {
+        match agent {
+            Some(agent) => self.conn.execute(
+                "UPDATE sessions SET agent_pid = ?2, agent_started = ?3, agent_boot = ?4 WHERE id = ?1",
+                params![id, agent.pid, agent.started as i64, crate::process::boot_id()],
+            )?,
+            None => self.conn.execute("UPDATE sessions SET agent_pid = NULL, agent_started = NULL, agent_boot = NULL, given_up = 0, given_up_why = NULL WHERE id = ?1", [id])?,
+        };
+        Ok(())
+    }
+
+    /// Each session with an agent on record, which a harness before this one started and did not see go.
+    pub fn agents(&self) -> Result<Vec<(String, Process)>> {
+        let mut statement = self.conn.prepare("SELECT id, agent_pid, agent_started FROM sessions WHERE agent_pid IS NOT NULL AND agent_started IS NOT NULL")?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?, row.get::<_, i64>(2)?)))?;
+        let agents = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(agents.into_iter().map(|(id, pid, started)| (id, Process { pid, started: started as u64 })).collect())
+    }
+
+    /// Each session with an agent on record, by id alone, so a record that cannot be read back is still found.
+    pub fn recorded(&self) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare("SELECT id FROM sessions WHERE agent_pid IS NOT NULL ORDER BY id")?;
+        let ids = statement.query_map([], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    }
+
+    /// The agent on record for session `id`, or None when none is.
+    pub fn agent(&self, id: &str) -> Result<Option<Recorded>> {
+        let row = self.conn.query_row("SELECT agent_pid, agent_started, agent_boot, cwd, repo IS NOT NULL FROM sessions WHERE id = ?1", [id], |row| {
+            Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Vec<u8>>(3)?, row.get::<_, bool>(4)?))
+        })?;
+        Ok(match row {
+            (Some(pid), Some(started), boot, cwd, repo) => Some(Recorded {
+                agent: Process { pid, started: started as u64 },
+                boot,
+                worktree: repo.then(|| PathBuf::from(OsString::from_vec(cwd))),
+            }),
+            _ => None,
+        })
     }
 
     /// Names the tools endpoint of a session made before the store kept the name.
@@ -369,15 +459,16 @@ impl Store {
     pub fn sessions(&self) -> Result<Vec<Listed>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, provider, locked, model, created_ms, cleaned_ms IS NOT NULL, ends_with_client, last_seq, repo, branch, login, effort,
-                (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1), cwd
+                (SELECT q.id FROM questions q WHERE q.session = sessions.id AND q.closed_ms IS NULL ORDER BY q.asked_ms DESC LIMIT 1), cwd,
+                given_up, given_up_why
              FROM sessions ORDER BY created_ms, id",
         )?;
         let rows = stmt.query_map([], |row| {
             let (id, provider, locked, model, created_ms, cleaned) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
             let (ends_with_client, last_seq) = (row.get(6)?, row.get::<_, i64>(7)? as u64);
             let (repo, branch, login, effort, open_question) = (row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?);
-            let cwd = PathBuf::from(OsString::from_vec(row.get(13)?));
-            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question, cwd })
+            let (cwd, given_up) = (PathBuf::from(OsString::from_vec(row.get(13)?)), given_up(row.get(14)?, row.get(15)?));
+            Ok(Listed { id, provider, locked, model, created_ms, cleaned, ends_with_client, last_seq, running: false, repo, branch, login, effort, open_question, held: None, given_up, cwd })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

@@ -376,6 +376,38 @@ pub struct Worktree<'a> {
 /// Removes a worktree and its branch through git alone. Anything git refuses stays, in git's own words, as `Ok(Some)`.
 /// The clone and the worktree must lie in `~/Gossamr/agents`; otherwise the refusal is the `Err`.
 pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<'_>) -> Result<Option<String>, String> {
+    let (clone, branch) = (worktree.clone, worktree.branch);
+    let (worktree, kept_in) = match deletable(git, home, worktree).await? {
+        Ok(found) => found,
+        Err(kept) => return Ok(Some(kept)),
+    };
+    if let Err(message) = git.remove_worktree(clone, &worktree).await {
+        return Ok(Some(message));
+    }
+    Ok(git.delete_branch(clone, branch, kept_in.as_deref()).await.err())
+}
+
+/// What `remove_with_git` would keep, asked before anything is stopped or removed: `Some` with why, or `None` when it
+/// would remove the worktree and branch. It fetches as `remove_with_git` does, and also asks the worktree for changes
+/// not committed, which git's removal refuses.
+pub async fn kept_by_git(git: &Git, home: Option<&Path>, worktree: Worktree<'_>) -> Result<Option<String>, String> {
+    let (worktree, _) = match deletable(git, home, worktree).await? {
+        Ok(found) => found,
+        Err(kept) => return Ok(Some(kept)),
+    };
+    if worktree.symlink_metadata().is_err() {
+        return Ok(None);
+    }
+    match git.out_or_why(&worktree, &["status", "--porcelain", "--untracked-files=normal"]).await {
+        Ok(changes) if changes.trim().is_empty() => Ok(None),
+        Ok(_) => Ok(Some("nothing was removed: the worktree has changes that are not committed".into())),
+        Err(why) => Ok(Some(format!("nothing was removed: {why}"))),
+    }
+}
+
+/// The checks `remove_with_git` makes before it removes anything: the worktree's real path and where its branch's
+/// commits are kept, or why nothing would be removed.
+async fn deletable(git: &Git, home: Option<&Path>, worktree: Worktree<'_>) -> Result<Result<(PathBuf, Option<String>), String>, String> {
     let home = home.ok_or("Gossamr doesn't know your home folder.")?;
     let Worktree { repo, clone, path: expected, branch, base } = worktree;
     let in_work_folder = contained(&agents_root(home), clone).is_some() || is_work_path(home, repo, clone);
@@ -397,20 +429,13 @@ pub async fn remove_with_git(git: &Git, home: Option<&Path>, worktree: Worktree<
     // The fetch below and the refs it updates prove something only for the one origin on GitHub.
     match git.origin_or_why(clone).await {
         Ok(url) if origin_matches(&url, repo) => {}
-        Ok(_) => return Ok(Some(format!("nothing was removed: the clone's origin isn't {repo} on GitHub"))),
-        Err(why) => return Ok(Some(format!("nothing was removed: {why}"))),
+        Ok(_) => return Ok(Err(format!("nothing was removed: the clone's origin isn't {repo} on GitHub"))),
+        Err(why) => return Ok(Err(format!("nothing was removed: {why}"))),
     }
     if let crate::fresh::Fetched::Not(why) = crate::fresh::fetch(git, clone).await {
-        return Ok(Some(format!("nothing was removed: the clone couldn't be fetched to check that the branch's commits are on the remote, because {why}")));
+        return Ok(Err(format!("nothing was removed: the clone couldn't be fetched to check that the branch's commits are on the remote, because {why}")));
     }
-    let kept_in = match git.check_branch_deletable(clone, branch, base).await {
-        Ok(kept_in) => kept_in,
-        Err(message) => return Ok(Some(message)),
-    };
-    if let Err(message) = git.remove_worktree(clone, &worktree).await {
-        return Ok(Some(message));
-    }
-    Ok(git.delete_branch(clone, branch, kept_in.as_deref()).await.err())
+    Ok(git.check_branch_deletable(clone, branch, base).await.map(|kept_in| (worktree, kept_in)))
 }
 
 /// Whether a remote URL names `repo` (`owner/name`) on GitHub, over https or ssh, with or without `.git`: the host is

@@ -712,3 +712,39 @@ async fn work_a_work_home_moves_the_clones_and_worktrees_and_leaves_the_home_fol
     let (_, unmoved, _) = rig.setup().with_work_home(None).prepare("acme/webshop", None, "here-1").await.unwrap();
     assert_eq!(unmoved, rig.worktree("here-1"), "with none, the work root is the home folder's");
 }
+
+#[tokio::test]
+async fn a_handed_over_session_whose_worktree_you_removed_can_be_cleaned_up_since_nothing_can_take_it_back() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let session = open(&mut client, open_op("mock", None, Some("acme/webshop"), None, Some("harness-1"))).await.unwrap();
+    close(&mut client, &session).await;
+    client.call(Op::HandOver { session: session.clone() }).await.unwrap();
+    // As the person does in Terminal when Clean up says Terminal has it.
+    std::fs::remove_dir_all(rig.worktree("harness-1")).unwrap();
+    let taken = client.call(Op::TakeBack { session: session.clone() }).await;
+    assert!(matches!(&taken, Err(Error::Said(why)) if why.contains("worktree is gone")), "{taken:?}");
+    clean_up(&mut client, &session).await.expect("nothing could resume it, so its clean-up is not refused for the hand-over");
+    assert!(rig.git(&rig.clone(), &["branch", "--list", "harness-1"]).is_empty(), "the branch goes too");
+    assert_eq!(client.call(Op::Sessions).await.unwrap()[0]["cleaned"], true);
+}
+
+#[tokio::test]
+async fn a_closed_session_a_take_back_would_refuse_is_not_handed_over_and_its_clean_up_goes_ahead() {
+    let rig = Rig::new();
+    let served = serve(&rig.data, rig.setup());
+    let mut client = connect(&served).await;
+    let mut op = open_op("mock", None, Some("acme/webshop"), None, Some("harness-1"));
+    if let Op::Open { ends_with_client, .. } = &mut op {
+        *ends_with_client = true;
+    }
+    let session = open(&mut client, op).await.unwrap();
+    close(&mut client, &session).await;
+    let handed = client.call(Op::HandOver { session: session.clone() }).await;
+    assert!(matches!(&handed, Err(Error::Said(why)) if why.contains("is not handed over")), "{handed:?}");
+    let taken = client.call(Op::TakeBack { session: session.clone() }).await;
+    assert!(taken.is_err(), "and there is nothing to take back");
+    clean_up(&mut client, &session).await.expect("not blocked by a hand-over");
+    assert!(!rig.worktree("harness-1").exists());
+}

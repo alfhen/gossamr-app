@@ -8,16 +8,23 @@
 //! event's body is at most `event::EVENT_MAX`; a larger one is cut and says by how much. `events` answers in pages of
 //! about [`PAGE_BYTES`].
 //!
+//! At most `harness serve --turn-limit <n>` sessions are in a turn at once, across every client: a prompt past it
+//! waits, and its session says `waiting` until a turn ends and frees a slot, first come first served. A turn the agent
+//! starts unprompted counts at once, past the limit too: it has begun, and nothing holds it back.
+//!
 //! A start of a session ends with a `closed` event, whose `by` (`event::ClosedBy`) says why: `shutdown` (the harness
 //! went down and stopped it, a turn it cut among them), `stop` (a client's `close`), `hand_over`, `agent` (the agent
 //! exited or crashed by itself, a fault signal or a SIGKILL from outside among them, or its driver failed), `signal`
-//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it). `signal`
+//! (SIGTERM, SIGHUP or SIGINT, which a logout or a restart sends first, ended the agent and the harness did not send it), `client_left` (it ended with its client), or `harness` (the harness could not go on with it, or went without a shutdown and the next one ended the start). `signal`
 //! needs a driver that says how its agent ended (`Driver::open_reporting`); with one that does not, such an end reads
 //! as `agent`. When more than one holds, a request the harness took (`stop`, `shutdown`, `hand_over`, `client_left`)
 //! wins, even one the agent's going overtook, then `harness`, then `signal`, then `agent`. A locked session's `closed`, and one the sweep reached, arrives as `withheld` with `of: "closed"` and
 //! `kept.by`. A reader takes a value it does not know, or a `closed` from a harness that did not say, as `unknown`, so
 //! a later value needs no new protocol. Some starts end with no stored `closed`: one a shutdown gave up on, whose last
 //! event is `failed` with kind `stuck` (its agent may still run), and one whose harness was killed or crashed.
+//! A start whose harness was killed or crashed gets its end later: when the next harness stops the agent it left, or
+//! finds it and its group gone, it appends `failed` (kind `agent_stopped`) and `closed` with `by: harness` to that old
+//! start's events, so a client reading them after a restart sees them arrive after events from before it.
 
 use std::path::{Path, PathBuf};
 
@@ -178,8 +185,10 @@ pub enum Op {
     /// person asks. With `carry_on`, that text is the next prompt, checked and sent in one step of the session, so no
     /// question, permission request, stop or hand-over gets in between; a blank one is refused. Refused with the
     /// reason: a session cleaned up, one that ended with its client, one marked as one that cannot be resumed, one
-    /// handed over and not taken back, one whose worktree another session holds, one a shutdown gave up on (its agent
-    /// may still run); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
+    /// handed over and not taken back, one whose worktree another session holds, one given up on because its agent or
+    /// a process it started may still run (each resume checks that agent again, and frees the session once it is gone;
+    /// the reason names its process group, why, and what to do, and is the row's `given_up`), and every session while the harness could not check for agents an earlier harness left running
+    /// (each resume checks again, and the reason is the rows' `held`); and with `carry_on`, one with an open question, or one whose last stop, deny-ended turn,
     /// cancelled turn or open permission request forbids it. A cancel forbids it because "carry on" would undo it;
     /// the next turn lifts each mark.
     Resume {
@@ -189,12 +198,19 @@ pub enum Op {
     },
     /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
     /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
-    /// over is refused: resume it.
+    /// over is refused: resume it. Refused, as `resume` is, while the rows say `held` or the row says `given_up`.
     TakeBack { session: String },
-    /// Refused while the session runs, and for one a shutdown gave up on, whose agent may still work in its worktree.
+    /// Refused while the session runs, for one given up on, whose agent may still work in its worktree (checked again
+    /// first, as `resume` does), and, as `resume` is, while the rows say `held`.
     CleanUp { session: String },
     /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
     /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.
+    /// A row's `held`, left out when there is none, says why no session may be resumed now: the harness could not check
+    /// for agents an earlier harness left running, so one may still run. It is the text `resume` refuses with. A row's
+    /// `given_up`, left out when there is none, says why this session is not resumed, taken back or cleaned up: its
+    /// agent or a process it started may still run, and why the harness could not stop it (a shutdown that stopped
+    /// waiting, a group it may not signal, a process in it that works outside the worktree...), and what to do. It
+    /// is the text `resume` refuses with; each of those calls checks again first.
     Sessions,
     /// Answers `{"drivers": [...], "logins": [...]}`: each driver's name and capabilities, and how each login stands
     /// (`providers::Standing`): the usual setup of every provider of the table, then each of `logins`. A login is
