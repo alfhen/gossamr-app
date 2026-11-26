@@ -23,9 +23,11 @@ pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
 pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
-pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again if the run starts working again, or ask Pip to start it again.";
+pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again; if the run takes no message, ask Pip to start it again.";
 pub const SIGNING_NEEDS_YOU_CLOSED: &str = "A commit needs your signing agent, which refused it, and the run's session has since ended: unlock it (for example 1Password), then ask Pip to start it again.";
 pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Message the agent to start it again.";
+/// What a Stop that found the agent lost says: the run is over, so no message starts it again.
+pub const LOST_AT_STOP: &str = "Stopped. The harness had already lost its agent.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 pub const CUT_AGAIN: &str = "Its turn was cut short again after Gossamr carried on three times in a row. Message the agent to start it again.";
 /// How many times in a row the app carries a cut run on, with no turn ending by itself between.
@@ -317,10 +319,11 @@ pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>)
     follow.permissions.clear();
     follow.calls.clear();
     run.state = RunState::Stopped;
-    run.last_detail = Some(AGENT_LOST.into());
+    let said = if follow.stop_asked { LOST_AT_STOP } else { AGENT_LOST };
+    run.last_detail = Some(said.into());
     run.ended_at = Some(now);
     let mut rows = Rows { run_id: run.id.clone(), at: now, rows: Vec::new() };
-    rows.add("stop", AGENT_LOST, None);
+    rows.add("stop", said, None);
     // A Stop that found the agent lost is the person's end of the run: nothing is left to answer or carry on.
     if follow.stop_asked {
         follow.ended = true;

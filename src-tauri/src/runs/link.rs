@@ -158,6 +158,10 @@ impl Link {
     }
 
     async fn resume(&self, session: &str, prompt: &str, counted: bool) -> Result<(), String> {
+        // While the harness keeps the session no resume is sent: its row says why, and what to do.
+        if let Some(why) = self.kept(session).await {
+            return Err(why);
+        }
         self.call(Op::Resume { session: session.to_owned(), carry_on: Some(prompt.to_owned()) }).await?;
         let counted = self.inner.core.apply_session(session, |_, follow| {
             follow.carry_ons = if counted { follow.carry_ons + 1 } else { 0 };
@@ -266,6 +270,12 @@ impl Link {
     pub async fn listed(&self, session: &str) -> Option<Value> {
         let listed = self.call(Op::Sessions).await.ok()?;
         listed.as_array()?.iter().find(|row| row["id"] == session).cloned()
+    }
+
+    /// Why the harness resumes `session` for no one now, from its row: `held` while it could not check for agents an
+    /// earlier harness left running, or `given_up` while an agent or process this session left may still run.
+    pub async fn kept(&self, session: &str) -> Option<String> {
+        kept_by(&self.listed(session).await?)
     }
 
     async fn open_question(&self, session: &str) -> Option<String> {
@@ -622,6 +632,11 @@ impl Inner {
         }
         self.applied.send_modify(|n| *n += 1);
     }
+}
+
+/// Why the harness keeps the session of listed `row` from any resume, as its row says.
+fn kept_by(row: &Value) -> Option<String> {
+    row["held"].as_str().or_else(|| row["given_up"].as_str()).map(str::to_owned)
 }
 
 #[cfg(test)]

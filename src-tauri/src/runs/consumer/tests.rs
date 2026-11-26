@@ -444,7 +444,8 @@ fn a_stop_that_finds_the_agent_lost_ends_the_run_and_its_question() {
     p.follow.stop_asked = true;
     agent_lost(&mut p.run, &mut p.follow, Utc::now());
     assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.asking), (RunState::Stopped, None, false));
-    assert!(p.follow.ended && p.follow.question.is_none(), "nothing more is followed or answered");
+    assert!(p.follow.ended && p.follow.question.is_none() && p.follow.cut.is_none(), "nothing more is followed, answered or carried on");
+    assert_eq!(p.run.last_detail.as_deref(), Some(LOST_AT_STOP), "no message starts it again, so the text offers none");
 }
 
 const REFUSED: &str = "error: 1Password: Could not connect to socket. Is the agent running?\n\nfatal: failed to write commit object";
