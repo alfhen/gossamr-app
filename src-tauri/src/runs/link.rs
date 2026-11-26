@@ -350,14 +350,16 @@ async fn follow_all(link: &Inner, client: &mut Client) -> Result<(), String> {
         Value::Null
     });
     let rows: std::collections::HashMap<String, &Value> = listed.as_array().into_iter().flatten().filter_map(|row| Some((row["id"].as_str()?.to_owned(), row))).collect();
+    // Any session the listing names a branch for, followed or not: one that closed, or was cut, before its open kept
+    // the branch still has it filled in.
+    for (session, row) in &rows {
+        link.keep_branch(session, row).await;
+    }
     for (session, follow) in followed {
         let lost = rows.get(&session).is_some_and(|row| row["running"] != true && row["last_seq"].as_u64().unwrap_or(0) <= follow.seq);
         if follow.in_turn && lost {
             link.agent_lost(&session).await?;
             continue;
-        }
-        if let Some(row) = rows.get(&session) {
-            link.keep_branch(&session, row).await;
         }
         if let Err(e) = client.call(Op::Watch { session: session.clone(), after: follow.seq }).await {
             eprintln!("couldn't watch session {session}: {e}");
@@ -410,6 +412,11 @@ impl Inner {
     /// them: an open whose listing failed, or that the app quit after, is filled in at the next connect.
     async fn keep_branch(&self, session: &str, row: &Value) {
         let (Some(branch), Some(worktree)) = (row["branch"].as_str(), row["cwd"].as_str()) else { return };
+        // Read first, so a run that has its branch, or a session no run follows, costs no write.
+        let Ok(Some((run_id, _))) = self.core.session_run(session).await else { return };
+        if !matches!(self.core.run(&run_id).await, Ok(Some(run)) if run.branch.is_none()) {
+            return;
+        }
         let (branch, worktree) = (branch.to_owned(), std::path::PathBuf::from(worktree));
         let kept = self.core.apply_session(session, move |run, _| {
             if run.branch.is_none() {

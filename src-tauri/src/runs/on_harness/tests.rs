@@ -811,21 +811,42 @@ async fn a_harness_run_is_not_held_back_by_claudes_trust_question_which_its_prin
 }
 
 #[tokio::test]
-async fn a_run_whose_open_kept_no_branch_has_the_harnesss_at_the_next_connect() {
+async fn a_run_whose_open_kept_no_branch_has_the_harnesss_at_the_next_connect_whether_its_session_is_idle_closed_or_lost() {
     let (_repo, setup) = on_a_bare_repo();
     let mut served = Served::idle();
     served.serve_as(FINISHES, 4, setup, "claude");
     let rig = on_harness_as(&served, "claude", 6).await;
-    let run = rig.launched(1).await;
-    let done = until_state(&rig, &run, RunState::Done).await;
-    let (branch, worktree) = (done.branch.clone().unwrap(), done.expected_worktree.clone());
-    // As if the listing after the brief had failed, or the app had quit before it.
-    let session = done.harness_session.clone().unwrap();
-    rig.fx.core.apply_session(&session, |run, _| {
-        run.branch = None;
-        run.expected_worktree = std::path::PathBuf::from("/elsewhere");
-        Vec::new()
-    }).await.unwrap();
+    let mut runs = Vec::new();
+    for n in 1..=3 {
+        let run = rig.launched(n).await;
+        runs.push(until_state(&rig, &run, RunState::Done).await);
+    }
+    let kept: Vec<(String, std::path::PathBuf)> = runs.iter().map(|run| (run.branch.clone().unwrap(), run.expected_worktree.clone())).collect();
+    let session = |n: usize| runs[n].harness_session.clone().unwrap();
+    // The second closed, so it is followed no more; the third closed too, though the app reads it mid-turn, as when
+    // the harness that ran it was killed.
+    for n in [1, 2] {
+        served.client().await.call(Op::Close { session: session(n) }).await.unwrap();
+        let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+        tokio::time::timeout(WAIT, async {
+            while !rig.fx.core.session_run(&session(n)).await.unwrap().unwrap().1.closed {
+                applied.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+    }
+    for n in 0..3 {
+        // As if the listing after the brief had failed, or the app had quit before it.
+        rig.fx.core.apply_session(&session(n), move |run, follow| {
+            run.branch = None;
+            run.expected_worktree = std::path::PathBuf::from("/elsewhere");
+            if n == 2 {
+                (follow.closed, follow.in_turn) = (false, true);
+            }
+            Vec::new()
+        }).await.unwrap();
+    }
     // The app again: a new link, whose connect reads the listing.
     let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
@@ -834,16 +855,21 @@ async fn a_run_whose_open_kept_no_branch_has_the_harnesss_at_the_next_connect() 
     let mut applied = again.applied();
     let filled = tokio::time::timeout(WAIT, async {
         loop {
-            let now = rig.get(&run).await;
-            if now.branch.is_some() {
+            let mut now = Vec::new();
+            for run in &runs {
+                now.push(rig.get(run).await);
+            }
+            if now.iter().all(|run| run.branch.is_some()) && now[2].state == RunState::Stopped {
                 return now;
             }
             let _ = tokio::time::timeout(std::time::Duration::from_millis(50), applied.changed()).await;
         }
     })
     .await
-    .expect("the connect filled the branch in");
-    assert_eq!((filled.branch.as_deref(), &filled.expected_worktree), (Some(branch.as_str()), &worktree));
+    .expect("the connect filled every branch in, and cut the lost turn");
+    for (run, (branch, worktree)) in filled.iter().zip(&kept) {
+        assert_eq!((run.branch.as_ref(), &run.expected_worktree), (Some(branch), worktree), "{}", run.id);
+    }
 }
 
 #[tokio::test]
