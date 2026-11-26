@@ -5,6 +5,7 @@ import type { ModelChoice, Run } from "../types";
 import { Icon, STATE_ICON } from "./AgentIcons";
 import { useDecisionShown } from "./decisionShown";
 import { CloneActions } from "./CloneActions";
+import { FailureStep } from "./FailureSteps";
 import { failureHelp, retryEnabled, type FailureAct } from "./failureHelp";
 import { createdFrom, stopControl } from "./runSheetLogic";
 import { ownKey } from "./agentKeys";
@@ -131,8 +132,6 @@ export interface FailureState {
 
 const RETRY_WAITS = "Do the step above first, then retry";
 
-const ACT_ICONS = { terminal: "term", install: "ext", trust: "shield" } as const;
-
 export function FailureNext({ run, failure }: { run: Run; failure: FailureState }) {
   const { trusting = false, refused = null } = failure.trust ?? {};
   const help = failureHelp(run, refused, useRunInstance(run));
@@ -144,15 +143,7 @@ export function FailureNext({ run, failure }: { run: Run; failure: FailureState 
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center gap-2">
         {help.kind === "outsideWorkFolder" && <CloneActions run={run} />}
-        {[help.primary, help.secondary].map(
-          (step, i) =>
-            step && (
-              <Button key={step.act} variant={i === 0 && next ? "primary" : "secondary"} size="sm" disabled={step.act === "trust" && trusting} onClick={(ev) => (ev.stopPropagation(), failure.on.act(step.act))}>
-                <Icon name={ACT_ICONS[step.act]} />
-                {step.act === "trust" && trusting ? "Trusting…" : step.label}
-              </Button>
-            ),
-        )}
+        {[help.primary, help.secondary].map((step, i) => step && <FailureStep key={step.act} run={run} step={step} primary={i === 0 && !!next} size="sm" trusting={trusting} onAct={failure.on.act} />)}
         {help.retry && (
           <Button variant={ready && !next ? "primary" : "secondary"} size="sm" disabled={!ready} aria-describedby={ready ? undefined : why} onClick={(ev) => (ev.stopPropagation(), failure.on.retry())}>
             <Icon name="retry" />
@@ -202,6 +193,7 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
       return (
         <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
           <q className={`${clamp(3)} [quotes:none] text-ws-ink`}>{run.needs?.trim() || "It is waiting for you"}</q>
+          {run.handedOver && <p className="m-0 text-xs text-ws-ink2">Handed over to Terminal</p>}
           <div className="flex flex-wrap items-center gap-2">
             <OpenInTerminal run={run} onOpen={onAttach} />
           </div>

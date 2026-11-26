@@ -278,8 +278,14 @@ impl Db {
             if !archived || !db.sees_run(id)? {
                 return Ok(false);
             }
-            for table in ["run_events", "run_reports", "run_report_tokens", "run_messages", "run_sessions"] {
+            for table in ["run_events", "run_reports", "run_report_tokens", "run_messages"] {
                 db.conn.execute(&format!("DELETE FROM {table} WHERE run_id = ?1"), params![id])?;
+            }
+            // A harness session's worktree may outlive its run, and its row is the only record of it until clean-up
+            // through the harness removes it.
+            let worktree_gone = db.run(id)?.is_some_and(|run| run.harness_session.is_none() || run.worktree_removed_at.is_some());
+            if worktree_gone {
+                db.conn.execute("DELETE FROM run_sessions WHERE run_id = ?1", params![id])?;
             }
             Ok(db.conn.execute("DELETE FROM runs WHERE id = ?1", params![id])? > 0)
         })

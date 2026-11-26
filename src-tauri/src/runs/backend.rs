@@ -221,6 +221,11 @@ pub trait RunBackend: Send + Sync {
     /// Whether a session can start in `clone`: everything that depends on the program and the login, checked before
     /// anything is launched.
     async fn preflight(&self, clone: &Path) -> std::result::Result<(), Failure>;
+    /// `preflight` for a session the harness runs: only what still applies, as its driver checks its own version and
+    /// asks no trust question.
+    async fn preflight_on_harness(&self, clone: &Path) -> std::result::Result<(), Failure> {
+        self.preflight(clone).await
+    }
     async fn launch(&self, req: &LaunchRequest) -> std::result::Result<Session, Failure>;
     /// The program this runs, for a command that has to start the same one in a terminal.
     fn binary(&self) -> Option<PathBuf> {

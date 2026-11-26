@@ -21,6 +21,7 @@ import { LAUNCHER_GUTTER } from "./PipExtras";
 import { PERMISSION_NOTE } from "./PermissionAsk";
 import { useActivity } from "./activityStore";
 import { Button } from "../components/Button";
+import { FailureStep, type FailureStepProps } from "./FailureSteps";
 import { Rail, railBadgeText } from "./Rail";
 import { useRuns } from "./runsStore";
 
@@ -560,7 +561,10 @@ describe("controls inside a card", () => {
       if (Array.isArray(n)) return n.forEach(walk);
       const e = n as El | null;
       if (!e || typeof e !== "object" || !("props" in e)) return;
-      if ((e as unknown as { type: unknown }).type === Button) found.push(e);
+      const type = (e as unknown as { type: unknown }).type;
+      if (type === Button) found.push(e);
+      // A failure's step is its own component; a plain one (not Clean up) renders its button without hooks.
+      if (type === FailureStep) return walk(FailureStep(e.props as unknown as FailureStepProps));
       walk(e.props.children);
     };
     walk(el);

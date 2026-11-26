@@ -422,3 +422,174 @@ async fn at_start_a_session_an_interrupted_open_left_on_its_runs_branch_closes_a
     assert!(running(&ids[1], &listed), "not one on an old run's branch");
     assert!(running(&ids[2], &listed), "nor one opened by hand on a finished run's branch");
 }
+
+#[test]
+fn claude_runs_open_on_the_harnesss_claude_driver_unless_a_debug_build_serves_the_mock() {
+    assert_eq!((provider(false), provider(true)), ("claude", MOCK));
+}
+
+#[tokio::test]
+async fn a_run_on_the_harness_records_the_branch_and_worktree_the_harness_made_so_its_pull_request_is_found() {
+    let (_repo, setup) = on_a_bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let row = sessions(&served).await.into_iter().find(|s| s["id"] == done.harness_session.as_deref().unwrap()).unwrap();
+    assert_eq!(done.branch.as_deref(), Some(run.spec.name.as_str()), "the branch the harness made, with no prefix");
+    assert_eq!(Some(done.expected_worktree.to_string_lossy().as_ref()), row["cwd"].as_str(), "the worktree the harness reports");
+    assert!(done.expected_worktree.is_dir() && done.expected_worktree.ends_with(format!("acme/webshop+worktrees/{}", run.spec.name)));
+    let pushed = crate::codehost::links::tests::pr(12, &run.spec.name, "Fix the cart total", "");
+    assert_eq!(crate::runs::pr::change_for(&done, &[pushed]).and_then(|c| c.number), Some(12), "the run finds the pull request pushed from its branch");
+    let refused = rig.svc.cleanup(&run.id).await.unwrap_err().to_string();
+    assert!(refused.contains("comes in a coming update"), "not that there is no worktree: {refused}");
+}
+
+#[tokio::test]
+async fn a_harness_run_needs_its_login_signed_in_and_not_a_claude_that_has_bg() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    rig.cli.with(|s| s.bg = false);
+    let run = rig.launched(1).await;
+    let opened = rig.get(&run).await;
+    assert!(opened.harness_session.is_some(), "opened: {:?}", opened.error);
+    rig.cli.with(|s| s.logged_in = false);
+    let refused = rig.get(&rig.launched(2).await).await;
+    assert_eq!((refused.state, refused.harness_session.is_none()), (RunState::Failed, true), "{:?}", refused.error);
+}
+
+#[tokio::test]
+async fn a_run_whose_agent_the_harness_lost_says_to_ask_pip_and_a_new_run_on_its_ticket_starts() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    // As if the harness had died mid-turn with no shutdown: the app still reads a turn the harness no longer runs.
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    rig.fx.core.apply_session(&session, |run, follow| {
+        (follow.closed, follow.ended, follow.in_turn) = (false, false, true);
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err();
+    assert!(refused.to_string().contains(crate::runs::consumer::AGENT_LOST), "{refused}");
+    let lost = rig.get(&run).await;
+    assert_eq!((lost.state, lost.last_detail.as_deref()), (RunState::Stopped, Some(crate::runs::consumer::AGENT_LOST)));
+    assert!(!crate::runs::consumer::AGENT_LOST.contains("Message the agent"), "a message is refused, so the text does not offer it");
+    // What the text says: Pip starts it again, as a new run on the same ticket.
+    let again = rig.fx.core.queue_test_run(crate::domain::RunSpec { name: "eng-1-fix-cart-again".into(), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
+    let started = rig.svc.start_now(&again.id).await.unwrap();
+    assert!(started.harness_session.is_some(), "the new run opened on the harness");
+    until_state(&rig, &started, RunState::Done).await;
+}
+
+#[tokio::test]
+async fn a_message_to_a_finished_run_whose_agent_the_harness_lost_is_refused_in_plain_words_and_the_run_stays_done() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    // As if the harness had been killed after the turn ended: the app never read the close.
+    rig.fx.core.apply_session(&session, |_, follow| {
+        follow.closed = false;
+        Vec::new()
+    }).await.unwrap();
+    let refused = rig.svc.message_agent(&run.id, "One more thing.", crate::domain::Actor::Person).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::link::NOT_RUNNING);
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.last_detail.as_deref() == Some(crate::runs::consumer::AGENT_LOST)), (RunState::Done, false));
+}
+
+#[tokio::test]
+async fn a_harness_run_is_not_held_back_by_claudes_trust_question_which_its_print_mode_never_asks() {
+    let served = Served::new(FINISHES, 4);
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let home = fx.home.canonicalize().unwrap();
+    let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    let reads = Arc::new(crate::agent::agent_tools::HarnessReads(fx.core.clone()));
+    let link = Arc::new(Link::start(fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed));
+    let rig = crate::runs::rig::ready_in(fx, &[("HOME", home.to_string_lossy().into_owned())], |svc| svc.with_harness(OnHarness { link, provider: "mock".into() })).await;
+    // The temp home's Claude settings say the clone was never trusted, which the old path refuses.
+    let projects = serde_json::json!({ "projects": { rig.clone.to_string_lossy(): { "hasTrustDialogAccepted": false } } });
+    std::fs::write(home.join(".claude.json"), projects.to_string()).unwrap();
+    std::fs::create_dir_all(home.join(".claude")).unwrap();
+    rig.cli.with(|s| s.config_dir = home.join(".claude"));
+    assert_eq!(crate::runs::trust::trusted(&home.join(".claude.json"), &rig.clone), Some(false), "the settings read as untrusted");
+    let run = rig.launched(1).await;
+    let opened = rig.get(&run).await;
+    assert!(opened.harness_session.is_some() && opened.failure.is_none(), "{:?}", opened.error);
+}
+
+#[tokio::test]
+async fn a_run_whose_open_kept_no_branch_has_the_harnesss_at_the_next_connect() {
+    let (_repo, setup) = on_a_bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let (branch, worktree) = (done.branch.clone().unwrap(), done.expected_worktree.clone());
+    // As if the listing after the brief had failed, or the app had quit before it.
+    let session = done.harness_session.clone().unwrap();
+    rig.fx.core.apply_session(&session, |run, _| {
+        run.branch = None;
+        run.expected_worktree = std::path::PathBuf::from("/elsewhere");
+        Vec::new()
+    }).await.unwrap();
+    // The app again: a new link, whose connect reads the listing.
+    let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    let reads = Arc::new(crate::agent::agent_tools::HarnessReads(rig.fx.core.clone()));
+    let again = Link::start(rig.fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed);
+    let mut applied = again.applied();
+    let filled = tokio::time::timeout(WAIT, async {
+        loop {
+            let now = rig.get(&run).await;
+            if now.branch.is_some() {
+                return now;
+            }
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), applied.changed()).await;
+        }
+    })
+    .await
+    .expect("the connect filled the branch in");
+    assert_eq!((filled.branch.as_deref(), &filled.expected_worktree), (Some(branch.as_str()), &worktree));
+}
+
+#[tokio::test]
+async fn delete_says_a_harness_runs_worktree_is_cleaned_up_later_and_keeps_its_session_on_record() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    rig.svc.archive(std::slice::from_ref(&run.id)).await.unwrap();
+    let info = rig.svc.worktree_info(&run.id).await.unwrap();
+    assert_eq!((info.removable, info.reason.as_deref()), (false, Some(crate::runs::cleanup::ON_HARNESS_LATER)));
+    let refused = rig.svc.delete(&run.id, true).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::cleanup::ON_HARNESS_LATER);
+    rig.svc.delete(&run.id, false).await.unwrap();
+    let rows: i64 = rusqlite::Connection::open(rig.fx.dir.join("app.sqlite")).unwrap().query_row("SELECT count(*) FROM run_sessions WHERE run_id = ?1", [&run.id], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1, "the only record of its worktree stays");
+}

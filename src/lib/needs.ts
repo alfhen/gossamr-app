@@ -435,7 +435,7 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
         title: trust ? `${name} needs its clone trusted` : `${name} failed`,
         why: `${name} ${trust ? "can't start until its clone is trusted" : "failed"}: ${sentence(help?.summary ?? (run.error?.trim() || "no reason was recorded"))}`,
         ifYouWait: "Nothing retries by itself; it stays here until you retry or dismiss it.",
-        primary: help?.primary ? action("open", help.primary.act === "trust" ? "Review and trust" : help.primary.label) : help?.retry === false ? action("open", "Open the run") : action("retry", run.shortId ? "Open in Terminal" : "Retry"),
+        primary: help?.primary ? action("open", help.primary.act === "trust" ? "Review and trust" : help.primary.label) : help?.retry === false || run.harnessSession ? action("open", "Open the run") : action("retry", run.shortId ? "Open in Terminal" : "Retry"),
         secondary: [action("dismiss", "Dismiss")],
         batchable: false,
       });

@@ -40,6 +40,15 @@ const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
 
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
+/// What Claude runs open on: the harness's `claude` driver, or the mock a debug build was started with.
+pub fn provider(mock: bool) -> &'static str {
+    if mock {
+        MOCK
+    } else {
+        "claude"
+    }
+}
+
 /// The run sheet says it, so a mock run is never taken for a real one.
 pub const ON_THE_MOCK: &str = "This run is on a mock script, not on Claude. Nothing it says is real.";
 
@@ -121,6 +130,26 @@ impl RunService {
             *run = self.load(&run.id).await?;
             return Ok(Err(Failure::Harness(format!("it took the brief, but Gossamr couldn't keep that it did: {e}"))));
         }
+        // The branch and worktree are the harness's: the run's pull request and its clean-up are found by them.
+        match on.link.listed(&session).await {
+            Some(row) => {
+                let (branch, worktree) = (row["branch"].as_str().map(str::to_owned), row["cwd"].as_str().map(std::path::PathBuf::from));
+                if let (Some(branch), Some(worktree)) = (branch, worktree) {
+                    let kept = self.core.apply_session(&session, move |run, _| {
+                        run.branch = Some(branch);
+                        run.expected_worktree = worktree;
+                        Vec::new()
+                    });
+                    if let Err(e) = kept.await {
+                        let _ = on.link.stop(&session).await;
+                        *run = self.load(&run.id).await?;
+                        return Ok(Err(Failure::Harness(format!("it opened a session, but Gossamr couldn't keep its branch: {e}"))));
+                    }
+                }
+            }
+            None => eprintln!("the harness didn't list session {session}, so run {} has no branch yet", run.id),
+        }
+        *run = self.load(&run.id).await?;
         Ok(Ok(()))
     }
 
@@ -178,7 +207,7 @@ impl RunService {
         }
         Some(match link.send(session, text).await {
             Ok(answered) => self.load(&run.id).await.map(|run| (run, answered)),
-            Err(why) if why == super::link::ANSWER_ON_ITS_WAY => Err(Error::Proposal(why)),
+            Err(why) if why == super::link::ANSWER_ON_ITS_WAY || why == super::link::NOT_RUNNING => Err(Error::Proposal(why)),
             Err(why) => Err(Error::Proposal(format!("The harness didn't take it: {why}"))),
         })
     }

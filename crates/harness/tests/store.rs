@@ -201,6 +201,18 @@ fn store_a_sessions_folder_comes_back_byte_for_byte_even_when_it_is_not_utf8() {
 }
 
 #[test]
+fn store_a_session_whose_folder_is_not_utf8_does_not_fail_the_listing_of_them_all() {
+    use std::os::unix::ffi::OsStrExt;
+    let (_tmp, dir) = data_dir();
+    let store = Store::open(&dir).unwrap();
+    store.create_session("a", "mock", false, Path::new(std::ffi::OsStr::from_bytes(b"/work/caf\xe9")), None).unwrap();
+    store.create_session("b", "mock", false, Path::new("/work/plain"), None).unwrap();
+    let listed = serde_json::to_value(store.sessions().unwrap()).expect("the listing serialises");
+    let cwds: Vec<&str> = listed.as_array().unwrap().iter().map(|row| row["cwd"].as_str().unwrap()).collect();
+    assert!(cwds.contains(&"/work/caf\u{fffd}") && cwds.contains(&"/work/plain"), "{cwds:?}");
+}
+
+#[test]
 fn store_an_event_of_a_type_this_build_does_not_know_reads_as_withheld() {
     let (_tmp, dir) = data_dir();
     let store = Store::open(&dir).unwrap();

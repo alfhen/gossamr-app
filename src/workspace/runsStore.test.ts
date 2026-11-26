@@ -448,7 +448,7 @@ describe("the run sheet", () => {
       await done;
       await settle();
       expect(send).toHaveBeenCalledTimes(1);
-      expect(send).toHaveBeenCalledWith(run.id, "Yes, keep it.");
+      expect(send).toHaveBeenCalledWith(run.id, "Yes, keep it.", undefined);
       expect(s().runs.find((r) => r.id === run.id)).toMatchObject({ state: "working", needs: null, shortId: run.shortId });
       expect(s().answering.size).toBe(0);
     });
@@ -514,7 +514,7 @@ describe("the run sheet", () => {
       const two = s().answer(second.id, "No");
       await s().answer(first.id, "Yes again");
       await Promise.all([one, two]);
-      expect(send.mock.calls).toEqual([[first.id, "Yes"], [second.id, "No"]]);
+      expect(send.mock.calls).toEqual([[first.id, "Yes", undefined], [second.id, "No", undefined]]);
     });
 
     it("is refused for a permission prompt", async () => {

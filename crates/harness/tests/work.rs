@@ -194,6 +194,9 @@ async fn a_session_that_names_a_repo_works_in_a_new_worktree_of_its_clone() {
     assert_eq!(rig.git(&rig.worktree("harness-1"), &["rev-parse", "--abbrev-ref", "HEAD"]), "harness-1");
     assert_eq!(rig.git(&rig.worktree("harness-1"), &["log", "--format=%s", "-1"]), "first", "from origin/main, the remote's default branch");
     assert!(rig.clone().join(".git").is_dir());
+    let listed = client.call(Op::Sessions).await.unwrap();
+    let row = listed.as_array().unwrap().iter().find(|row| row["id"] == session.as_str()).unwrap().clone();
+    assert_eq!((row["branch"].as_str(), row["cwd"].as_str()), (Some("harness-1"), rig.worktree("harness-1").to_str()), "the listing names its branch and its worktree");
 
     let again = open(&mut client, open_op("mock", None, Some("acme/webshop"), Some("main"), Some("harness-1"))).await;
     assert!(matches!(&again, Err(Error::Said(why)) if why.contains("already there")), "a branch that is there is refused");
