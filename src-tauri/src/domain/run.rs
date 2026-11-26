@@ -759,6 +759,9 @@ pub struct SessionFollow {
     /// The app took the session back from Terminal; it is starting again until its `started` comes.
     #[serde(default)]
     pub taken_back: bool,
+    /// The app resumed the session, with a carry on or a message; it is starting again until its `started` comes.
+    #[serde(default)]
+    pub resuming: bool,
     /// The harness took the run's brief. A brief waiting for a slot is taken; its `prompted` comes when it is sent.
     #[serde(default)]
     pub briefed: bool,

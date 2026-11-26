@@ -46,9 +46,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     let at = DateTime::from_timestamp_millis(event.ms).unwrap_or(now);
     let mut rows = Rows { run_id: run.id.clone(), at, rows: Vec::new() };
     let before = run.state;
-    // A take back that failed or closed again did not start: its run is no longer one starting up.
+    // A take back or a resume that failed or closed again did not start: its run is no longer one starting up.
     if matches!(body, Body::Failed { .. } | Body::Closed { .. }) {
-        follow.taken_back = false;
+        (follow.taken_back, follow.resuming) = (false, false);
     }
     match body {
         Body::Started { resumed: true, provider_session } => {
@@ -56,7 +56,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.closed = false;
             follow.stop_asked = false;
             follow.ended = false;
-            follow.taken_back = false;
+            (follow.taken_back, follow.resuming) = (false, false);
             run.handed_over = false;
             reopen(run);
             if follow.answered.is_some() {

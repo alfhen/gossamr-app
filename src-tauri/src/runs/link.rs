@@ -53,6 +53,8 @@ pub const NOT_RUNNING: &str = "Its agent isn't running any more, so it takes no 
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
+/// How long `caught_up` waits for an event before it asks the harness again.
+const CAUGHT_UP_TICK: Duration = Duration::from_millis(500);
 
 enum Command {
     /// Watch the session from after `after`; answered once the harness took the watch.
@@ -162,13 +164,52 @@ impl Link {
         if let Some(why) = self.kept(session).await {
             return Err(why);
         }
-        self.call(Op::Resume { session: session.to_owned(), carry_on: Some(prompt.to_owned()) }).await?;
-        let counted = self.inner.core.apply_session(session, |_, follow| {
-            follow.carry_ons = if counted { follow.carry_ons + 1 } else { 0 };
-            Vec::new()
-        });
-        let follow = counted.await.map_err(|e| e.to_string())?.map(|applied| applied.follow).unwrap_or_default();
+        // Counted, the cut taken and the session marked as starting, before the call, as a take back marks itself: the
+        // call's watch may apply the new start's cut before it returns, which must read the new count, and a message or
+        // a carry on that reads the follow meanwhile finds nothing to resume, and a message goes to the new start. A
+        // refusal puts them back.
+        let (carry_ons, cut) = match self.inner.core.session_run(session).await.map_err(|e| e.to_string())? {
+            Some((_, follow)) => (follow.carry_ons, follow.cut),
+            None => (0, None),
+        };
+        let mark = |carry_ons: u32, cut: Option<String>, resuming: bool| {
+            self.inner.core.apply_session(session, move |_, follow| {
+                (follow.carry_ons, follow.cut, follow.resuming) = (carry_ons, cut, resuming);
+                Vec::new()
+            })
+        };
+        mark(if counted { carry_ons + 1 } else { 0 }, None, true).await.map_err(|e| e.to_string())?;
+        if let Err(why) = self.call(Op::Resume { session: session.to_owned(), carry_on: Some(prompt.to_owned()) }).await {
+            if let Err(e) = mark(carry_ons, cut, false).await {
+                eprintln!("couldn't put back the count of carry-ons of session {session}: {e}");
+            }
+            return Err(why);
+        }
+        let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
         self.follow(session, follow.seq).await
+    }
+
+    /// Waits up to `limit` until the app has applied every event the harness holds for each session it follows, and
+    /// marked lost each turn the harness no longer runs: after a harness start, once the watch has reconnected and
+    /// caught up. False if that did not happen within `limit`.
+    pub async fn caught_up(&self, limit: Duration) -> bool {
+        let mut applied = self.applied();
+        let caught_up = async {
+            while !self.is_caught_up().await {
+                // An event applied, or a moment for a harness still starting, before asking again.
+                let _ = tokio::time::timeout(CAUGHT_UP_TICK, applied.changed()).await;
+            }
+        };
+        tokio::time::timeout(limit, caught_up).await.is_ok()
+    }
+
+    async fn is_caught_up(&self) -> bool {
+        let (Ok(listed), Ok(followed)) = (self.ask(Op::Sessions).await, self.inner.core.followed_sessions().await) else { return false };
+        let rows: HashMap<&str, &Value> = listed.as_array().into_iter().flatten().filter_map(|row| Some((row["id"].as_str()?, row))).collect();
+        followed.iter().all(|(session, follow)| match rows.get(session.as_str()) {
+            Some(row) => row["last_seq"].as_u64().unwrap_or(0) <= follow.seq && !(follow.in_turn && !follow.closed && row["running"] != true),
+            None => true,
+        })
     }
 
     /// Takes a session handed over to Terminal back and follows it again. The harness watches the new start on the

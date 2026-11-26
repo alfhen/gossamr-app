@@ -81,6 +81,9 @@ pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it 
 
 pub use super::consumer::CARRY_ONS;
 
+/// How long the carry on after a restart waits for the app to catch up with the harness's sessions.
+const CATCH_UP_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The prompt that takes up a turn a restart cut.
 pub const CARRY_ON: &str = "The harness restarted while you were working, so your last turn was cut short. Carry on where you left off.";
 
@@ -214,17 +217,24 @@ impl RunService {
     /// with no turn ending by itself between. What the harness refuses, and why, goes on the run's timeline.
     pub async fn carry_on_after_restart(&self) {
         let Some(on) = &self.harness else { return };
+        // The old harness's end of each turn it cut reaches the app only once the link has reconnected and caught up.
+        if !on.link.caught_up(CATCH_UP_TAKES_UP_TO).await {
+            eprintln!("the app had not caught up with the harness's sessions after {CATCH_UP_TAKES_UP_TO:?}, so only the runs it had read as cut are carried on");
+        }
         let stopped = crate::domain::RunQuery { states: Some(vec![RunState::Stopped]), ..Default::default() };
         let Ok(runs) = self.core.runs_list(&stopped).await else { return };
         for run in runs {
             let Some(session) = run.harness_session.clone() else { continue };
+            // As a message holds it for its resume, and read again under it: a message, or another pass, that resumed
+            // the session meanwhile has taken its cut, so only one of them sends.
+            let _turn = self.launching.lock().await;
             let Ok(Some((_, follow))) = self.core.session_run(&session).await else { continue };
             if follow.cut.is_none() || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
                 continue;
             }
             let said = match on.link.carry_on(&session, CARRY_ON).await {
                 Ok(()) => "Carried on after the harness restarted".to_owned(),
-                Err(why) => format!("Not carried on after the harness restarted: {why}"),
+                Err(why) => format!("Not carried on after the harness restarted: {}", plain_refusal(&why)),
             };
             let row = RunEvent { run_id: run.id.clone(), seq: 0, at: chrono::Utc::now(), kind: "follow_up".into(), text: said, detail: None };
             if let Err(e) = self.core.append_run_events(&run.id, &[row]).await {
@@ -375,8 +385,8 @@ impl RunService {
     pub(super) async fn send_on_harness(&self, run: &Run, text: &str) -> Option<Result<(Run, Delivery)>> {
         let (link, session) = self.on_harness_of(run)?;
         let follow = self.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
-        // A session just taken back is starting again: its run reads stopped until its `started` comes.
-        let starting = follow.taken_back;
+        // A session just taken back or resumed is starting again: its run reads stopped until its `started` comes.
+        let starting = follow.taken_back || follow.resuming;
         // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
         // prompt, and the turn it starts takes the run out of Failed.
         let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
@@ -398,7 +408,7 @@ impl RunService {
     async fn resume_on_harness(&self, link: &Link, session: &str, run: &Run, text: &str) -> Result<(Run, Delivery)> {
         match link.resume_with(session, text).await {
             Ok(()) => self.load(&run.id).await.map(|run| (run, Delivery::Resumed)),
-            Err(why) => Err(Error::Proposal(format!("The harness didn't resume it: {why}"))),
+            Err(why) => Err(Error::Proposal(format!("The harness didn't resume it: {}", plain_refusal(&why)))),
         }
     }
 
