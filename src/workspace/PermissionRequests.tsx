@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../components/Button";
 import { ButtonGroup } from "../components/ButtonGroup";
 import { labelsByRun } from "../lib/workstreamStage";
@@ -22,12 +22,32 @@ function useAgentName(run: Run, label?: string) {
  */
 export function PermissionItem({ run, request, label, size }: { run: Run; request: PermissionRequest; label?: string; size?: Size }) {
   const name = useAgentName(run, label);
-  const answering = useRuns((s) => s.permissionAnswering.get(answeringKey(run.id, request.id)));
-  return <PermissionItemView name={name} request={request} answering={answering ?? null} size={size} onAnswer={(decision) => void useRuns.getState().answerPermission(run.id, request.id, decision)} />;
+  const key = answeringKey(run.id, request.id);
+  const answering = useRuns((s) => s.permissionAnswering.get(key));
+  const answered = useRuns((s) => s.permissionAnswered.has(key));
+  const settled = useSettled(`${run.id}\u0000${openPermissions(run).map((p) => p.id).join(",")}`);
+  return <PermissionItemView name={name} request={request} answering={answering ?? null} held={answered || !settled} size={size} onAnswer={(decision) => void useRuns.getState().answerPermission(run.id, request.id, decision)} />;
 }
 
-export function PermissionItemView({ name, request, answering, size = "md", onAnswer }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; size?: Size; onAnswer(decision: "allow" | "deny"): void }) {
+/** How long an item's buttons wait after it appears or its run's requests change: a second click of a double-click lands on nothing. */
+export const SETTLE_MS = 400;
+
+/**
+ * False for `SETTLE_MS` after `key` changes. When an answered request leaves, the next one moves up under the pointer;
+ * its buttons wake only after the second click of a double-click would have landed.
+ */
+function useSettled(key: string) {
+  const [settled, setSettled] = useState<string | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(key), SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [key]);
+  return settled === key;
+}
+
+export function PermissionItemView({ name, request, answering, held = false, size = "md", onAnswer }: { name: string; request: PermissionRequest; answering: "allow" | "deny" | null; held?: boolean; size?: Size; onAnswer(decision: "allow" | "deny"): void }) {
   const why = denyOnlyWhy(request);
+  const off = !!answering || held;
   return (
     <div data-permission-request={request.id} className="grid gap-2">
       <p className="m-0 font-semibold text-ws-ink">
@@ -46,11 +66,11 @@ export function PermissionItemView({ name, request, answering, size = "md", onAn
       <div onClick={(ev) => ev.stopPropagation()} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && ev.stopPropagation()}>
         <ButtonGroup label="Answer the permission request">
           {canAllow(request) && (
-            <Button size={size} disabled={!!answering} onClick={() => onAnswer("allow")}>
+            <Button size={size} disabled={off} onClick={() => onAnswer("allow")}>
               {answering === "allow" ? "Allowing…" : "Allow"}
             </Button>
           )}
-          <Button size={size} disabled={!!answering} onClick={() => onAnswer("deny")}>
+          <Button size={size} disabled={off} onClick={() => onAnswer("deny")}>
             {answering === "deny" ? "Denying…" : "Deny"}
           </Button>
         </ButtonGroup>

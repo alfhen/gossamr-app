@@ -9,22 +9,16 @@ export type InputField = { name: Seg[]; type: "text"; lines: Seg[][] } | { name:
 const NAMES: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x0b: "VT", 0x0c: "FF", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
 
 /**
- * Whether a terminal would hide `code`, or show it as something else: control characters (ESC starts an ANSI escape),
- * bidirectional marks, which can make a command read backwards, and zero-width characters. A tab and a line break stay.
+ * What a terminal hides, or shows as something else: control characters (ESC starts an ANSI escape), format characters
+ * such as the bidirectional marks that can make a command read backwards, line and paragraph separators, and every
+ * character Unicode says to draw as nothing (zero-width spaces, U+034F, variation selectors, tag characters).
  */
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
+
+/** Whether a terminal would hide `code`. A tab and a line break stay as they are. */
 export function hides(code: number): boolean {
   if (code === 0x09 || code === 0x0a) return false;
-  return (
-    code < 0x20 ||
-    (code >= 0x7f && code <= 0x9f) ||
-    code === 0xad ||
-    code === 0x061c ||
-    code === 0x180e ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x2028 && code <= 0x202e) ||
-    (code >= 0x2060 && code <= 0x2069) ||
-    code === 0xfeff
-  );
+  return HIDDEN.test(String.fromCodePoint(code));
 }
 
 export const placeholder = (code: number) => `⟨${NAMES[code] ?? `U+${code.toString(16).toUpperCase().padStart(4, "0")}`}⟩`;

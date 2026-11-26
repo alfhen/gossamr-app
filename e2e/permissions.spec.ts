@@ -66,6 +66,18 @@ test("a masked request and one rebuilt after the harness lost it offer only Deny
   await expect(rebuilt.getByRole("button", { name: "Allow" })).toHaveCount(0);
 });
 
+test("after an answered request leaves, the one that moves up waits a moment before it can be answered, and a double-click answers one", async ({ page }) => {
+  await expect(requestsOn(page, "WEB-100")).toHaveCount(2);
+  await requestsOn(page, "WEB-100").first().getByRole("button", { name: "Allow" }).dblclick();
+  await expect(requestsOn(page, "WEB-100")).toHaveCount(1);
+  const next = requestsOn(page, "WEB-100");
+  await expect(next.getByRole("button", { name: "Allow" })).toBeDisabled({ timeout: 300 });
+  await expect(next.getByRole("button", { name: "Deny" })).toBeDisabled({ timeout: 300 });
+  await expect(next.getByRole("button", { name: "Allow" })).toBeEnabled();
+  expect((await mockPermissionAnswers(page)).map((a) => [a.request, a.decision])).toEqual([["perm-2", "allow"]]);
+  await expect(next).toContainText("git push origin web-100-page-speed-2a3b");
+});
+
 test("a request the harness cut offers only Deny and says why", async ({ page }) => {
   const ask = requestsOn(page, "SUP-13");
   await expect(ask).toContainText("This request was too large to show whole, so it can only be denied.");

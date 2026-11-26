@@ -90,6 +90,13 @@ describe("a permission request's item", () => {
     expect(HOOK_CONTENT.split("\n").length).toBe(3);
   });
 
+  it("holds both buttons while held: answered, or just moved into place", () => {
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} held onAnswer={vi.fn()} />);
+    const answers = buttons(html).filter((b) => b.text === "Allow" || b.text === "Deny");
+    expect(answers.map((b) => b.text)).toEqual(["Allow", "Deny"]);
+    for (const b of answers) expect(b.tag).toContain("disabled");
+  });
+
   it("disables both buttons while an answer is on its way, and says which", () => {
     const html = item(request(), "allow");
     const answers = buttons(html).filter((b) => b.text === "Allowing…" || b.text === "Deny");
@@ -180,6 +187,17 @@ describe("the runs store's permission answer", () => {
     expect(await first).toBe(true);
     expect(answer).toHaveBeenCalledTimes(1);
     expect(useRuns.getState().permissionAnswering.size).toBe(0);
+  });
+
+  it("never answers a request a second time once its answer went through, while the list still shows it", async () => {
+    const backend = seeded();
+    const answer = vi.spyOn(backend, "runsAnswerPermission");
+    useRuns.getState().init(backend);
+    const run = byKey(backend, "WEB-100");
+    expect(await useRuns.getState().answerPermission(run.id, "perm-2", "deny")).toBe(true);
+    expect(await useRuns.getState().answerPermission(run.id, "perm-2", "allow")).toBe(false);
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect(backend.runs.permissionAnswers.map((a) => a.request)).toEqual(["perm-2"]);
   });
 
   it("says why an answer was refused", async () => {

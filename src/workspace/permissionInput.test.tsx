@@ -10,7 +10,7 @@ const shown = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&quot;/g, 
 
 describe("what a terminal would hide", () => {
   it("is marked: control characters, ANSI escapes, bidirectional marks and zero-width characters", () => {
-    for (const code of [0x00, 0x0d, 0x1b, 0x7f, 0x9b, 0x200b, 0x200d, 0x200e, 0x202e, 0x2066, 0x2069, 0x2060, 0xfeff, 0x00ad]) expect(hides(code)).toBe(true);
+    for (const code of [0x00, 0x0d, 0x1b, 0x7f, 0x9b, 0x200b, 0x200d, 0x200e, 0x202e, 0x2066, 0x2069, 0x2060, 0xfeff, 0x00ad, 0x2028]) expect(hides(code)).toBe(true);
     for (const code of [0x09, 0x0a, 0x20, 0x41, 0xe9, 0x4e2d]) expect(hides(code)).toBe(false);
     expect(flat(segments("rm -rf ‮/ tmp"))).toBe("rm -rf ⟨U+202E⟩/ tmp");
     expect(flat(segments("\u001b[31mok\u001b[0m"))).toBe("⟨ESC⟩[31mok⟨ESC⟩[0m");
@@ -66,6 +66,18 @@ describe("a request's input as fields", () => {
   });
 });
 
+describe("characters Unicode draws as nothing", () => {
+  it("are marked too, beyond the zero-width spaces: U+034F, Hangul fillers, variation selectors and tag characters", () => {
+    for (const code of [0x034f, 0x115f, 0x3164, 0xffa0, 0x17b4, 0x180b, 0xfe0f, 0xe0001, 0xe0041, 0x1d173, 0x2065]) expect(hides(code), code.toString(16)).toBe(true);
+  });
+
+  it("are marked in a command on screen, so a script name can't hide another", () => {
+    const html = renderToStaticMarkup(<RequestInput kind="command" input={{ command: "bash ./verify\u034f.sh" }} />);
+    expect(shown(html)).toContain("bash ./verify⟨U+034F⟩.sh");
+    expect(html).not.toContain("\u034f");
+  });
+});
+
 describe("the input on screen", () => {
   it("shows every field and value as text, never as HTML, with hidden characters marked", () => {
     const html = renderToStaticMarkup(<RequestInput kind="command" input={{ command: "echo <b>hi</b>\nrm -rf ‮tmp", dangerouslyDisableSandbox: true }} />);
@@ -74,6 +86,12 @@ describe("the input on screen", () => {
     expect(shown(html)).toContain("rm -rf ⟨U+202E⟩tmp");
     expect(shown(html)).toContain("dangerouslyDisableSandbox");
     expect(html.match(/data-hidden-char/g)).toHaveLength(1);
+  });
+
+  it("is never capped in height, so a long input can't scroll out of sight beside Allow", () => {
+    const html = renderToStaticMarkup(<RequestInput kind="command" input={{ command: Array.from({ length: 60 }, (_, i) => `echo ${i}`).join("\n") }} />);
+    expect(html).not.toMatch(/max-h-|overflow-(auto|scroll|hidden)/);
+    expect(shown(html)).toContain("echo 59");
   });
 
   it("shows removed and added lines apart", () => {

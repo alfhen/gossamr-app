@@ -38,13 +38,14 @@ function Lines({ lines, mark, tone = "" }: { lines: Seg[][]; mark?: "−" | "+";
 
 /**
  * The whole input a request would pass the agent, every field by its name, so nothing an Allow gives is out of sight: no
- * hover, no click, no cut. A long one scrolls in its box.
+ * hover, no click, no cut, no scrolling in its own box.
  */
 export function RequestInput({ kind, input }: { kind: PermissionKind; input: unknown }) {
   const fields = inputFields(kind, input);
   if (!fields.length) return null;
   return (
-    <dl data-request-input className="selectable m-0 grid max-h-80 gap-2 overflow-auto rounded-md border border-ws-sep bg-ws-bar px-2.5 py-1.5">
+    // No height cap: a box that scrolled could keep the end of a command out of sight while Allow is in reach.
+    <dl data-request-input className="selectable m-0 grid gap-2 rounded-md border border-ws-sep bg-ws-bar px-2.5 py-1.5">
       {fields.map((field, i) => (
         <div key={i} data-input-field className="grid gap-0.5">
           <dt className="font-mono text-xs text-ws-ink3">
