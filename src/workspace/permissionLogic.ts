@@ -28,7 +28,7 @@ export function denyOnlyWhy(request: Pick<PermissionRequest, "denyOnly" | "maske
   if (canAllow(request)) return null;
   if (request.masked) return "Part of this is hidden; run it yourself in Terminal if you trust it.";
   if (typeof request.input === "string") return "This request was too large to show whole, so it can only be denied.";
-  // An integer past 2^53 the app refuses too (`ONLY_DENY_INEXACT`); a stack of combining marks only the page can't show.
+  // The app refuses both too: an integer past 2^53 (`ONLY_DENY_INEXACT`) and a stack of combining marks (`ONLY_DENY_MARKS`).
   const inexact = request.input != null && typeof request.input === "object" ? inexactIn(request.input) : null;
   if (inexact === "number") return "Gossamr can't show this request exactly, so it can only be denied.";
   if (inexact === "marks") return "Part of this is a stack of marks Gossamr shows only as a count, so it can only be denied.";

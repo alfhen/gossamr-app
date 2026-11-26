@@ -1473,21 +1473,51 @@ async fn permission_a_request_the_harness_masked_part_of_says_so_and_can_only_be
 }
 
 #[tokio::test]
+async fn permission_a_secret_in_a_request_is_masked_by_the_app_kept_nowhere_in_app_sqlite_and_can_only_be_denied() {
+    for (command, secret) in [("GITHUB_TOKEN=abc123secretvalue npm test", "abc123secretvalue"), ("mysql --password=hunter2 -u root", "hunter2")] {
+        let served = Served::new(&PERMITS.replace("git commit -m 'Blue button'", command), 4);
+        let rig = on_harness(&served).await;
+        let run = rig.launched(1).await;
+        let open = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].clone();
+        assert!(open.masked && open.deny_only && !open.subject.contains(secret) && !open.input.to_string().contains(secret), "{command}: {open:?}");
+        assert!(!serde_json::to_string(&rig.get(&run).await).unwrap().contains(secret), "{command}: what the page is sent");
+        assert_eq!(refused(&rig, &run, &open.id, Decision::Allow).await, ONLY_DENY_MASKED);
+        for file in ["app.sqlite", "app.sqlite-wal"] {
+            let bytes = std::fs::read(rig.fx.dir.join(file)).unwrap_or_default();
+            assert!(!bytes.windows(secret.len()).any(|w| w == secret.as_bytes()), "{command}: {secret} in {file}");
+        }
+        rig.svc.answer_permission(&run.id, &open.id, Decision::Deny).await.unwrap();
+        let done = until_state(&rig, &run, RunState::Done).await;
+        assert_eq!(answers(&served, &done).await, [(open.id, Decision::Deny, None)]);
+    }
+}
+
+#[tokio::test]
 async fn permission_the_command_refuses_an_allow_of_a_masked_request_or_one_with_no_whole_input_whatever_its_flag_says() {
     let served = Served::new(PERMITS, 4);
     let rig = on_harness(&served).await;
     let run = rig.launched(1).await;
     let id = until_state(&rig, &run, RunState::NeedsPermission).await.permissions[0].id.clone();
-    for (input, masked, why) in [(None, true, ONLY_DENY_MASKED), (Some(serde_json::Value::Null), false, ONLY_DENY_KIND), (Some(serde_json::json!("git com")), false, ONLY_DENY_CUT), (Some(serde_json::json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_993_u64 })), false, ONLY_DENY_INEXACT)] {
+    let marks = format!("echo e{}", "\u{301}\u{302}\u{303}");
+    let cases = [
+        (None, true, PermissionKind::Command, ONLY_DENY_MASKED),
+        (Some(serde_json::Value::Null), false, PermissionKind::Command, ONLY_DENY_KIND),
+        (Some(serde_json::json!("git com")), false, PermissionKind::Command, ONLY_DENY_CUT),
+        (Some(serde_json::json!({ "command": "sleep 1", "timeout": 9_007_199_254_740_993_u64 })), false, PermissionKind::Command, ONLY_DENY_INEXACT),
+        (Some(serde_json::json!({ "amount": 1.234_567_890_123_456_8e29 })), false, PermissionKind::Command, ONLY_DENY_INEXACT),
+        (Some(serde_json::json!({ "command": marks })), false, PermissionKind::Command, ONLY_DENY_MARKS),
+        (Some(serde_json::json!({ "command": "ls" })), false, PermissionKind::Other, ONLY_DENY_KIND),
+    ];
+    for (input, masked, kind, why) in cases {
         rig.set(&run, |run| {
             let open = &mut run.permissions[0];
-            (open.masked, open.deny_only) = (masked, false);
+            (open.masked, open.deny_only, open.kind) = (masked, false, kind);
             if let Some(input) = input {
                 open.input = input;
             }
         })
         .await;
-        assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, why);
+        assert_eq!(refused(&rig, &run, &id, Decision::Allow).await, why, "{kind:?}");
     }
     assert!(answers(&served, &run).await.is_empty(), "none reached the harness");
     rig.svc.answer_permission(&run.id, &id, Decision::Deny).await.unwrap();

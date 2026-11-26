@@ -502,6 +502,55 @@ fn permission_a_request_carries_all_of_its_input_and_only_a_masked_one_of_these_
 }
 
 #[test]
+fn permission_a_secret_the_harness_let_through_is_masked_by_the_app_before_it_is_kept_or_shown_and_can_only_be_denied() {
+    use harness::event::PermissionKind;
+    let secrets = [
+        (json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"),
+        (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"),
+        (json!({ "url": "https://api.example/v1", "headers": { "Authorization": "Bearer s3cr3tbearer" } }), "s3cr3tbearer"),
+    ];
+    for (input, secret) in secrets {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
+        let open = &p.run.permissions[0];
+        assert!(open.masked && open.deny_only, "{secret}: masked, so deny-only");
+        assert!(open.subject.contains(super::super::redact::MASK) || open.input.to_string().contains(super::super::redact::MASK), "{secret}");
+        let kept = serde_json::to_string(&p.run).unwrap() + &serde_json::to_string(&p.follow).unwrap() + &format!("{:?}", p.rows);
+        assert!(!kept.contains(secret), "{secret} is kept nowhere in the run, its follow or its rows");
+    }
+}
+
+#[test]
+fn permission_a_request_the_page_cant_show_exactly_is_deny_only_a_rounded_float_or_a_stack_of_marks() {
+    use harness::event::PermissionKind;
+    let deny = |input: serde_json::Value| {
+        let mut p = Played::new();
+        p.play(started());
+        p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
+        p.run.permissions[0].deny_only
+    };
+    assert!(deny(json!({ "amount": 1.234_567_890_123_456_8e29 })), "an integer past the u64 range, as the harness rounded it");
+    assert!(deny(json!({ "amount": 9_007_199_254_740_994.0_f64 })), "an integral float past 2^53");
+    assert!(!deny(json!({ "ratio": 0.5, "big": 1e3, "edge": 9_007_199_254_740_991.0_f64 })), "floats the page shows as sent");
+    assert!(deny(json!({ "command": format!("echo e{}", "\u{301}\u{302}\u{303}") })), "three marks on one character");
+    assert!(deny(json!({ format!("k{}", "\u{301}\u{302}\u{303}"): "v" })), "in a key too");
+    assert!(!deny(json!({ "command": "echo Vie\u{323}\u{302}t" })), "two marks, as accented words have");
+    assert!(!deny(json!({ "command": "echo x\u{fe0f}\u{fe0f}\u{fe0f}" })), "marks drawn as nothing, which the page shows one by one");
+}
+
+#[test]
+fn permission_a_request_with_nothing_to_mask_is_kept_as_it_came() {
+    use harness::event::PermissionKind;
+    let input = json!({ "command": "npm test -- --runInBand", "description": "Run the tests" });
+    let mut p = Played::new();
+    p.play(started());
+    p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input: input.clone() }]);
+    let open = &p.run.permissions[0];
+    assert_eq!((&open.input, open.masked, open.deny_only), (&input, false, false));
+}
+
+#[test]
 fn permission_a_summary_that_holds_less_than_the_request_says_so() {
     use harness::event::PermissionKind;
     let cases = [

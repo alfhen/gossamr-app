@@ -120,8 +120,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             }
         }
         Body::Permission { id, kind, tool, input } => {
-            let what = summary(&tool, &input, event.cut.is_some());
-            let asked = request(id.clone(), kind, tool, input, event.cut.is_some());
+            let harness_cut = event.cut.is_some();
+            let asked = request(id.clone(), kind, tool.clone(), input, harness_cut);
+            let what = summary(&tool, &asked.input, harness_cut);
             follow.permissions.push((id, asked.deny_only, cut(&redact(&format!("Wants to use {what}")), NEEDS_KEPT)));
             run.permissions.push(asked);
             rows.add("ask", &format!("Asks to use {what}"), None);
@@ -549,9 +550,12 @@ fn describe(name: &str, input: &Value) -> String {
 
 /// A permission request as the run keeps it. A kind this build does not know is still a request, one the person can
 /// only deny, as is one cut or masked, and one whose input is not an object: cut to text, or a payload no longer kept.
+/// The app's own redactor runs over it first, so a secret the harness let through is neither kept nor shown; a request
+/// it masked anything in is masked, so deny-only. An allow sends the driver's own copy, so what runs is unchanged.
 fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bool) -> PermissionRequest {
-    let masked = holds_mask(&input);
-    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input);
+    let (input, ours) = masked_copy(&input);
+    let masked = ours || holds_mask(&input);
+    let deny_only = cut || masked || kind == PermissionKind::Other || !input.is_object() || !shows_exactly(&input) || stacks_marks(&input);
     PermissionRequest { id, kind, tool, subject: subject(&input), input, masked, deny_only }
 }
 
@@ -569,10 +573,53 @@ fn holds_more(input: &Value) -> bool {
 pub(super) fn shows_exactly(value: &Value) -> bool {
     const SAFE: u64 = (1 << 53) - 1;
     match value {
+        // An integer past the `u64` or `i64` range, or written as a float, arrives as an `f64` the harness already rounded.
+        Value::Number(n) if n.is_f64() => n.as_f64().is_none_or(|f| f.fract() != 0.0 || f.abs() <= SAFE as f64),
         Value::Number(n) => n.as_u64().is_none_or(|n| n <= SAFE) && n.as_i64().is_none_or(|n| n.unsigned_abs() <= SAFE),
         Value::Array(items) => items.iter().all(shows_exactly),
         Value::Object(fields) => fields.values().all(shows_exactly),
         _ => true,
+    }
+}
+
+/// `value` with the app's redactor run over every text in it, keys and values, and whether that masked anything.
+fn masked_copy(value: &Value) -> (Value, bool) {
+    match value {
+        Value::String(text) => {
+            let out = redact(text);
+            let masked = out != *text;
+            (Value::String(out), masked)
+        }
+        Value::Array(items) => {
+            let (items, masked): (Vec<_>, Vec<_>) = items.iter().map(masked_copy).unzip();
+            (Value::Array(items), masked.into_iter().any(|m| m))
+        }
+        Value::Object(fields) => {
+            let mut masked = false;
+            let fields = fields
+                .iter()
+                .map(|(key, value)| {
+                    let name = redact(key);
+                    let (value, inner) = masked_copy(value);
+                    masked |= inner || name != *key;
+                    (name, value)
+                })
+                .collect();
+            (Value::Object(fields), masked)
+        }
+        other => (other.clone(), false),
+    }
+}
+
+/// Whether a key or a text in it stacks more than two combining marks on one character, which the page shows only as a
+/// count, not as which marks they are. Marks Unicode draws as nothing are shown one by one there, so they don't count.
+pub(super) fn stacks_marks(value: &Value) -> bool {
+    static STACK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"[\p{Mn}\p{Me}--\p{Default_Ignorable_Code_Point}]{3,}").expect("a valid pattern"));
+    match value {
+        Value::String(text) => STACK.is_match(text),
+        Value::Array(items) => items.iter().any(stacks_marks),
+        Value::Object(fields) => fields.iter().any(|(key, value)| STACK.is_match(key) || stacks_marks(value)),
+        _ => false,
     }
 }
 
