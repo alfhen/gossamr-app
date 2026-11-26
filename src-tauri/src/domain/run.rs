@@ -291,19 +291,36 @@ fn pr_checkout(spec: &RunSpec) -> &str {
     spec.pr_sha.as_deref().unwrap_or("FETCH_HEAD")
 }
 
-/// The exact text handed to the agent as its prompt: one base brief around Pip's. A pull request is checked out at its
-/// pinned commit and never replaced by the base branch when that fails, which would test something else and could pass.
+/// Where an agent's worktree comes from, which the brief's first step follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start {
+    /// `claude --bg --worktree` and Codex: a worktree at the clone's HEAD, which the agent moves onto its branch.
+    OwnCheckout,
+    /// The harness made the worktree on the run's branch `<name>` from the fetched `origin/<base>`.
+    HarnessWorktree,
+}
+
+/// The exact text handed to an agent that sets up its own worktree: one base brief around Pip's. A pull request is
+/// checked out at its pinned commit and never replaced by the base branch when that fails, which would test something
+/// else and could pass.
 pub fn render_prompt(spec: &RunSpec) -> String {
+    render_prompt_from(spec, Start::OwnCheckout)
+}
+
+/// `render_prompt`, for an agent whose worktree came from `start`.
+pub fn render_prompt_from(spec: &RunSpec, start: Start) -> String {
     let (base, name) = (&spec.base, &spec.name);
     let role = spec.role.as_str();
     let article = if role.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
     let on = spec.ticket.as_deref().map_or_else(|| "the task below".to_string(), without_markers);
     let site = spec.ticket.as_ref().and(spec.site.as_deref()).map(|site| without_markers(&site.split_whitespace().collect::<Vec<_>>().join(" ")));
     let on_site = site.as_ref().map(|site| format!(" (on {site})")).unwrap_or_default();
-    let mut parts = vec![
-        format!("You are working as {article} {role} on {on}{on_site}."),
-        format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
-    ];
+    let worktree = match (start, spec.pr) {
+        (Start::OwnCheckout, _) => format!("Your worktree starts at the clone's current HEAD, which may not be `{base}`. First run `git fetch origin {base}` and `git checkout -B worktree-{name} origin/{base}` in your worktree (it has no changes yet), then continue."),
+        (Start::HarnessWorktree, None) => format!("Your worktree is ready, on branch `{name}` made from `origin/{base}`. Commit and push on `{name}`; don't check out or create another branch."),
+        (Start::HarnessWorktree, Some(_)) => format!("Your worktree is on branch `{name}`, made from `origin/{base}`. Check out the pull request below in it, as it says, and create no other branch."),
+    };
+    let mut parts = vec![format!("You are working as {article} {role} on {on}{on_site}."), worktree];
     if site.is_some() {
         parts.push(format!("Another Jira site can have a ticket with the same key. Put the full key, {on}, in the title of any pull request you open."));
     }
@@ -874,6 +891,22 @@ mod tests {
 
     fn ticketed() -> RunSpec {
         RunSpec { ticket: Some("CA-412".into()), ticket_block: Some("CA-412: Cart total\n\nTotal is off".into()), report: true, ..with_role("builder") }
+    }
+
+    #[test]
+    fn a_harness_runs_brief_says_its_worktree_is_on_its_own_branch_and_the_old_paths_brief_is_unchanged() {
+        let old = "Your worktree starts at the clone's current HEAD, which may not be `main`. First run `git fetch origin main` and `git checkout -B worktree-eng-1-fix-cart-3f9a origin/main` in your worktree (it has no changes yet), then continue.";
+        let made = "Your worktree is ready, on branch `eng-1-fix-cart-3f9a` made from `origin/main`. Commit and push on `eng-1-fix-cart-3f9a`; don't check out or create another branch.";
+        let own = render_prompt(&ticketed());
+        assert_eq!(own.split("\n\n").nth(1), Some(old), "the old path's step, word for word");
+        assert_eq!(render_prompt_from(&ticketed(), Start::OwnCheckout), own);
+        let harness = render_prompt_from(&ticketed(), Start::HarnessWorktree);
+        assert_eq!(harness, own.replacen(old, made, 1), "the same brief but for where its worktree is");
+        assert!(!harness.contains("worktree-") && !harness.contains("git checkout"), "{harness}");
+        let pinned = RunSpec { pr: Some(12), pr_sha: Some("a1b2c3d4e5f6".into()), ..with_role("reviewer") };
+        let review = render_prompt_from(&pinned, Start::HarnessWorktree);
+        assert_eq!(review.split("\n\n").nth(1), Some("Your worktree is on branch `eng-1-fix-cart-3f9a`, made from `origin/main`. Check out the pull request below in it, as it says, and create no other branch."));
+        assert!(review.contains("`git fetch origin pull/12/head` then `git checkout --detach a1b2c3d4e5f6`"), "the pinned checkout stays: {review}");
     }
 
     #[test]
