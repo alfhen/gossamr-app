@@ -480,6 +480,9 @@ async fn a_call_whose_answer_is_on_its_way_is_not_answered_again_on_a_reconnect(
 #[tokio::test]
 async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
     let mut bed = Bed::new(ASKS).await;
+    let counting = Arc::new(Counting { direct: bed.direct.clone(), at: Mutex::new(Vec::new()) });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    bed.link = Link::start(bed.rig.fx.core.clone(), counting.clone(), bed.tickets.clone(), bed.rig.notices.clone(), changed);
     let (run, session) = bed.started().await;
     let (_, follow) = bed.until(&run, |r, _| r.state == RunState::NeedsAnswer).await;
     bed.served.shut_down().await;
@@ -491,11 +494,12 @@ async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
     // The verifier's quiet spell: long enough for every watch the reconnect made of the closed session to have ended.
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     let before = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap().1.seq;
+    let connects = counting.at.lock().unwrap().len();
     bed.link.call(Op::AnswerQuestion { session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
-    // At once: the watching connection follows it now, not at some later reconnect, seconds on.
-    let resumed = tokio::time::timeout(std::time::Duration::from_millis(1500), bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1)).await;
-    let (_, resumed) = resumed.expect("the resumed start's events were applied at once");
+    let (_, resumed) = bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1).await;
     assert!(resumed.seq > before);
+    // On the watching connection as it was: the call's own connection is the one new one, and no reconnect came first.
+    assert_eq!(counting.at.lock().unwrap().len(), connects + 1, "applied with no reconnect");
     let rows = bed.rows(&run).await;
     assert!(rows.iter().any(|(_, text)| text == "Resumed") && rows.iter().any(|(_, text)| text == "Its question was answered"), "{rows:?}");
     bed.end().await;
