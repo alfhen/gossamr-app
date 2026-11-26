@@ -509,3 +509,33 @@ fn a_take_back_that_fails_or_closes_again_no_longer_counts_as_starting() {
         assert!(!p.follow.taken_back);
     }
 }
+
+#[test]
+fn a_refused_signature_inside_a_quoted_shell_or_from_an_ssh_signer_is_seen() {
+    let refused_by = |command: &str, output: &str| {
+        let mut p = Played::new();
+        p.play(started()).play([bash("t1", command), Body::ToolResult { id: "t1".into(), output: json!(output), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+        p.run.state
+    };
+    assert_eq!(refused_by("bash -c \"git commit -m x\"", REFUSED), RunState::Failed);
+    assert_eq!(refused_by("sh -c 'cd repo && git commit -am x'", REFUSED), RunState::Failed);
+    let ssh = "error: Couldn't load public key /x.pub: No such file or directory?\n\nfatal: failed to write commit object";
+    assert_eq!(refused_by("git commit -m x", ssh), RunState::Failed, "an ssh signer's error");
+}
+
+#[test]
+fn a_signing_refusal_whose_session_then_closed_says_to_ask_pip_since_a_message_cannot_reach_it() {
+    let mut p = Played::new();
+    p.play(started()).play([bash("t1", "git commit -m fix"), Body::ToolResult { id: "t1".into(), output: json!(REFUSED), error: true }, Body::TurnEnded { how: TurnEnd::Done }]);
+    assert_eq!(p.run.error.as_deref(), Some(SIGNING_NEEDS_YOU));
+    p.play([Body::Closed { by: ClosedBy::Unknown }]);
+    assert_eq!((p.run.state, p.run.failure, p.run.error.as_deref()), (RunState::Failed, Some(RunFailure::SigningNeedsYou), Some(SIGNING_NEEDS_YOU_CLOSED)));
+}
+
+#[test]
+fn a_message_dropped_as_the_session_ended_is_said_not_to_have_reached_the_agent() {
+    let mut p = Played::new();
+    p.play(started()).play([Body::Failed { kind: FailKind::Provider, reason: "the provider failed".into() }, Body::PromptsDropped]);
+    assert_eq!(p.run.last_detail.as_deref(), Some(NOT_DELIVERED));
+    assert!(p.rows.iter().any(|row| row.kind == "error" && row.text == NOT_DELIVERED));
+}

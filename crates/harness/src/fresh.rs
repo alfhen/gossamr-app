@@ -271,8 +271,13 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     odd.sort();
     odd.dedup();
     if !odd.is_empty() {
+        let more = odd.len().saturating_sub(5);
         odd.truncate(5);
-        return Fetched::Not(format!("the clone has settings Gossamr didn't make ({}), which a fetch would honour", odd.join(", ")));
+        let listed = match more {
+            0 => odd.join(", "),
+            n => format!("{}, and {n} more", odd.join(", ")),
+        };
+        return Fetched::Not(format!("the clone has settings Gossamr didn't make ({listed}), which a fetch would honour"));
     }
     if !default_fetch_rules(git, path, &keys).await {
         return Fetched::Not("the clone's fetch rules were changed, and a fetch would follow them".into());

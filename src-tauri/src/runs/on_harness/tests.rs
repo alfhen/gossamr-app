@@ -408,10 +408,7 @@ fn claude_runs_open_on_the_harnesss_claude_driver_unless_a_debug_build_serves_th
 
 #[tokio::test]
 async fn a_run_on_the_harness_records_the_branch_and_worktree_the_harness_made_so_its_pull_request_is_found() {
-    let (_repo, setup) = on_a_bare_repo();
-    let mut served = Served::idle();
-    served.serve_as(FINISHES, 4, setup, "claude");
-    let rig = on_harness_as(&served, "claude", 6).await;
+    let (_repo, served, _git, rig) = shared(FINISHES).await;
     let run = rig.launched(1).await;
     let done = until_state(&rig, &run, RunState::Done).await;
     let row = sessions(&served).await.into_iter().find(|s| s["id"] == done.harness_session.as_deref().unwrap()).unwrap();
@@ -477,6 +474,19 @@ struct Git {
     env: Vec<(String, String)>,
 }
 
+/// The app and a harness on `script` that share one home and one git, as the app and its harness do, with a real
+/// clone where the rig made its stand-in.
+async fn shared(script: &str) -> (tempfile::TempDir, Served, Git, Rig) {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (repo, setup, git) = bare_repo_at(Some(fx.home.canonicalize().unwrap()));
+    let mut served = Served::idle();
+    served.serve_as(script, 4, setup, "claude");
+    let rig = on_harness_sharing(fx, &served, &git).await;
+    std::fs::remove_dir_all(&rig.clone).unwrap();
+    git.run(rig.clone.parent().unwrap(), &["clone", "--quiet", "https://github.com/acme/webshop.git", "webshop"]);
+    (repo, served, git, rig)
+}
+
 /// The app on `served`, opening runs on its `claude` driver, with the same home and git as the harness of `git`'s
 /// temp repo, so what the app asks git is what the harness would find.
 async fn on_harness_sharing(fx: crate::inbox::testing::Fixture, served: &Served, git: &Git) -> Rig {
@@ -498,14 +508,18 @@ impl Git {
         let out = std::process::Command::new("git").current_dir(dir).args(args).env_clear().envs(self.env.clone()).output().unwrap();
         assert!(out.status.success(), "git {args:?}");
     }
+
+    /// What git printed, for a command that must work.
+    fn run_ok(&self, dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git").current_dir(dir).args(args).env_clear().envs(self.env.clone()).output().unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
 }
 
 #[tokio::test]
 async fn clean_up_closes_a_finished_runs_session_and_removes_its_worktree_through_the_harness() {
-    let (_repo, setup, git) = bare_repo();
-    let mut served = Served::idle();
-    served.serve_as(FINISHES, 4, setup, "claude");
-    let rig = on_harness_as(&served, "claude", 6).await;
+    let (_repo, _served, git, rig) = shared(FINISHES).await;
     let run = rig.launched(1).await;
     let done = until_state(&rig, &run, RunState::Done).await;
     assert!(crate::runs::cleanup::cleanable(&done), "a finished harness run has its worktree to remove");
@@ -876,10 +890,7 @@ async fn a_run_whose_open_kept_no_branch_has_the_harnesss_at_the_next_connect_wh
 
 #[tokio::test]
 async fn delete_keeps_a_harness_runs_session_on_record_while_its_worktree_stays_and_drops_it_once_removed() {
-    let (_repo, setup, _git) = bare_repo();
-    let mut served = Served::idle();
-    served.serve_as(FINISHES, 4, setup, "claude");
-    let rig = on_harness_as(&served, "claude", 6).await;
+    let (_repo, _served, _git, rig) = shared(FINISHES).await;
     let kept = rig.launched(1).await;
     let removed = rig.launched(2).await;
     for run in [&kept, &removed] {
@@ -1015,5 +1026,101 @@ async fn a_clean_up_refused_for_the_clones_own_settings_says_how_to_remove_them_
     let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
     let way_out = crate::runs::service::fresh::clone_settings_way_out(&message, &rig.clone).expect("the reason is the clone's settings");
     assert!(message.ends_with(&way_out), "{message}");
-    assert!(way_out.contains("config --unset commit.gpgsign"), "{way_out}");
+    assert!(way_out.contains("config --unset-all commit.gpgsign"), "{way_out}");
+}
+
+/// Closes the run's session as another client's Stop would, and waits until the app reads it closed.
+async fn closed_elsewhere(rig: &Rig, served: &Served, run: &Run) -> String {
+    let session = rig.get(run).await.harness_session.unwrap();
+    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    session
+}
+
+#[tokio::test]
+async fn attach_on_a_session_terminal_could_not_resume_is_refused_before_terminal_opens_and_clean_up_then_goes_ahead() {
+    let (_repo, served, git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    closed_elsewhere(&rig, &served, &run).await;
+    std::fs::remove_dir_all(git.worktree(&done.spec.name)).unwrap();
+    let refused = rig.svc.attach(&run.id).await.unwrap_err().to_string();
+    assert!(refused.contains("is not handed over") && refused.contains("worktree is gone"), "the harness's answer, not the app's remembered id: {refused}");
+    assert!(rig.opened.0.lock().unwrap().is_empty(), "Terminal did not open");
+    assert!(!rig.get(&run).await.handed_over);
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), crate::runs::cleanup::Cleanup::Removed);
+}
+
+#[tokio::test]
+async fn a_handed_over_run_whose_worktree_you_removed_is_cleaned_up_as_the_refusal_says() {
+    let (_repo, _served, git, rig) = shared(FINISHES).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    rig.svc.attach(&run.id).await.unwrap();
+    let handed = until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap_err().to_string(), crate::runs::cleanup::HANDED_OVER_CLEANUP);
+    assert!(crate::runs::cleanup::HANDED_OVER_CLEANUP.contains("I took it back"), "it names the button");
+    // What it says: remove the worktree yourself, then Clean up.
+    std::fs::remove_dir_all(git.worktree(&done.spec.name)).unwrap();
+    assert!(crate::runs::cleanup::cleanable(&rig.get(&run).await), "Clean up is offered again");
+    assert_eq!(rig.svc.cleanup(&run.id).await.unwrap(), crate::runs::cleanup::Cleanup::Removed, "{:?}", handed.last_detail);
+    assert!(git.run_ok(&rig.clone, &["branch", "--list", &done.spec.name]).trim().is_empty(), "the branch goes too");
+}
+
+#[tokio::test]
+async fn attach_on_a_run_waiting_on_you_says_so_and_what_to_do() {
+    let served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::NeedsAnswer).await;
+    assert_eq!(rig.svc.attach(&run.id).await.unwrap_err().to_string(), HAND_OVER_WAITING);
+}
+
+#[tokio::test]
+async fn clean_up_of_a_run_whose_branch_the_app_does_not_know_yet_asks_the_harness_for_it_before_closing() {
+    let (_repo, _served, git, rig) = shared(TWO_TURNS).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let worktree = git.worktree(&done.spec.name);
+    std::fs::write(worktree.join("FIX"), "fixed\n").unwrap();
+    git.run(&worktree, &["add", "FIX"]);
+    git.run(&worktree, &["commit", "--quiet", "-m", "the fix"]);
+    // As if the open's listing had failed: the app has no branch for it yet.
+    rig.set(&run, |r| r.branch = None).await;
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert!(message.starts_with("Nothing was removed"), "the check ran on the harness's branch: {message}");
+    let session = done.harness_session.unwrap();
+    assert!(!rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "and the agent was left running");
+}
+
+#[tokio::test]
+async fn a_take_back_the_harness_refuses_leaves_no_mark_that_the_run_is_starting() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let session = done.harness_session.unwrap();
+    // Never handed over, so the harness refuses the take back.
+    assert!(rig.svc.harness.as_ref().unwrap().link.take_back(&session).await.is_err());
+    assert!(!rig.fx.core.session_run(&session).await.unwrap().unwrap().1.taken_back, "the mark set before the call is taken off");
+}
+
+#[tokio::test]
+async fn the_move_marks_a_run_whose_login_cannot_be_read_interrupted_without_a_stop_so_it_can_finish() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let going = old_path(&rig, 1, RunState::Working).await;
+    rig.set(&going, |r| r.runs_on = Some(crate::model_choice::ModelChoice { instance_id: "claude-removed".into(), model: "default".into(), effort: None })).await;
+    rig.svc.move_to_harness().await;
+    let after = rig.get(&going).await;
+    assert_eq!((after.state, after.failure), (RunState::Failed, Some(crate::domain::RunFailure::Interrupted)));
+    assert!(rig.cli.0.lock().unwrap().stops.is_empty(), "nothing could stop it");
+    assert!(rig.fx.core.harness_moved().await.unwrap(), "and the move is done");
 }

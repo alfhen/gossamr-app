@@ -136,19 +136,30 @@ impl RunService {
 pub(crate) fn clone_settings_way_out(why: &str, clone: &std::path::Path) -> Option<String> {
     const SAID: &str = "the clone has settings Gossamr didn't make (";
     let listed = why.split_once(SAID)?.1.split_once(')')?.0;
+    let (listed, more) = match listed.rsplit_once(", and ") {
+        Some((keys, more)) if more.ends_with(" more") => (keys, more.trim_end_matches(" more").parse::<usize>().ok()),
+        _ => (listed, None),
+    };
     let keys: Vec<&str> = listed.split(", ").map(str::trim).filter(|key| !key.is_empty()).collect();
     let (hidden, plain): (Vec<&str>, Vec<&str>) = keys.iter().partition(|key| key.contains('*'));
     let at = format!("git -C '{}' config", clone.display());
     let mut parts = Vec::new();
     if !plain.is_empty() {
-        let each: Vec<String> = plain.iter().map(|key| format!("`{at} --unset {key}`")).collect();
+        // `--unset-all`: a setting such as `credential.helper` can have several values, which `--unset` refuses.
+        let each: Vec<String> = plain.iter().map(|key| format!("`{at} --unset-all {key}`")).collect();
         parts.push(format!("remove {} with {}", if plain.len() == 1 { "it" } else { "them" }, each.join(" and ")));
     }
-    if !hidden.is_empty() {
-        parts.push(format!("find {} shown with `*` with `{at} --list --show-origin`", if hidden.len() == 1 { "the one" } else { "those" }));
+    let rest = match (hidden.len(), more) {
+        (0, None) => None,
+        (0, Some(n)) => Some(format!("the {n} more")),
+        (1, None) => Some("the one shown with `*`".to_owned()),
+        (_, None) => Some("those shown with `*`".to_owned()),
+        (_, Some(n)) => Some(format!("those shown with `*` and the {n} more")),
+    };
+    if let Some(rest) = rest {
+        parts.push(format!("find {rest} with `{at} --list --show-origin`"));
     }
     let sentence = parts.join(", and ");
     let mut chars = sentence.chars();
     Some(format!("{}{}.", chars.next()?.to_uppercase(), chars.as_str()))
 }
-

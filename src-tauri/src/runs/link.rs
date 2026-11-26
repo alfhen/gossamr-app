@@ -134,10 +134,22 @@ impl Link {
     /// Takes a session handed over to Terminal back and follows it again. The harness watches the new start on the
     /// connection that asked, which is this call's own, so the watching connection reads it from what was applied.
     pub async fn take_back(&self, session: &str) -> Result<(), String> {
-        self.call(Op::TakeBack { session: session.to_owned() }).await?;
-        let taken = self.inner.core.apply_session(session, |run, follow| {
-            run.handed_over = false;
+        // Marked before the call, whose watch may apply the new start's end before the call returns: a mark set after
+        // it would undo the `failed` or `closed` that cleared it.
+        let marked = self.inner.core.apply_session(session, |_, follow| {
             follow.taken_back = true;
+            Vec::new()
+        });
+        marked.await.map_err(|e| e.to_string())?;
+        if let Err(why) = self.call(Op::TakeBack { session: session.to_owned() }).await {
+            let _ = self.inner.core.apply_session(session, |_, follow| {
+                follow.taken_back = false;
+                Vec::new()
+            }).await;
+            return Err(why);
+        }
+        let taken = self.inner.core.apply_session(session, |run, _| {
+            run.handed_over = false;
             Vec::new()
         });
         let follow = taken.await.map_err(|e| e.to_string())?.map(|applied| applied.follow).unwrap_or_default();

@@ -1151,14 +1151,19 @@ mod clones {
         let why = "nothing was removed: the clone couldn't be fetched, because the clone has settings Gossamr didn't make (commit.gpgsign, url.*.insteadof), which a fetch would honour";
         assert_eq!(
             crate::runs::service::fresh::clone_settings_way_out(why, clone).as_deref(),
-            Some("Remove it with `git -C '/w/acme/webshop' config --unset commit.gpgsign`, and find the one shown with `*` with `git -C '/w/acme/webshop' config --list --show-origin`.")
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset-all commit.gpgsign`, and find the one shown with `*` with `git -C '/w/acme/webshop' config --list --show-origin`.")
         );
         let two = "the clone has settings Gossamr didn't make (commit.gpgsign, tag.gpgsign), which a fetch would honour";
         assert_eq!(
             crate::runs::service::fresh::clone_settings_way_out(two, clone).as_deref(),
-            Some("Remove them with `git -C '/w/acme/webshop' config --unset commit.gpgsign` and `git -C '/w/acme/webshop' config --unset tag.gpgsign`.")
+            Some("Remove them with `git -C '/w/acme/webshop' config --unset-all commit.gpgsign` and `git -C '/w/acme/webshop' config --unset-all tag.gpgsign`.")
         );
         assert_eq!(crate::runs::service::fresh::clone_settings_way_out("the branch is not fully merged", clone), None, "any other refusal");
+        let cut = "the clone has settings Gossamr didn't make (a.one, url.*.insteadof, and 2 more), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(cut, clone).as_deref(),
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset-all a.one`, and find those shown with `*` and the 2 more with `git -C '/w/acme/webshop' config --list --show-origin`.")
+        );
     }
 
     #[tokio::test]

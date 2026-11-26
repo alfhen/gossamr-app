@@ -360,18 +360,10 @@ impl Harness {
                     return Err(Error::Refused(format!("session {id} may not carry on: question {question} is open, and its answer is the next prompt")));
                 }
             }
-            let provider_session =
-                row.provider_session.ok_or_else(|| Error::Driver(format!("session {id} has no provider session id to resume")))?;
-            // A clean-up cut short after the worktree went leaves nothing to resume in.
-            if row.work.is_some() && row.cwd.symlink_metadata().is_err() {
-                return Err(Error::Refused(format!("session {id}'s worktree is gone, so it can't be resumed: clean it up")));
+            if let Some(why) = self.why_not_resumable(store, id, &row, live)? {
+                return Err(why);
             }
-            // A later session may have the same branch, and so the same folder, again: it is that session's now.
-            if let Some(work) = &row.work
-                && store.worktree_owner(work, |other| live.contains_key(other))?.as_deref() != Some(id)
-            {
-                return Err(Error::Refused(format!("another session works in session {id}'s worktree now, so it can't be resumed")));
-            }
+            let provider_session = row.provider_session.clone().expect("checked by why_not_resumable");
             let driver = self.driver(&row.provider)?;
             let endpoint = match row.endpoint {
                 Some(endpoint) => endpoint,
@@ -390,6 +382,38 @@ impl Harness {
             Ok(Plan { driver, provider, cwd, locked, model, login, effort, resume, notices: Vec::new(), endpoint, tools, result_schema })
         })?;
         Ok((events, second, after))
+    }
+
+    /// Why a session that is not running could not be started again, a take back included: the one check a take back
+    /// and a hand over of a closed session share, so nothing is handed over that only a take back could undo while a
+    /// take back is refused, and a clean-up can tell such a session from one Terminal may still resume.
+    fn why_not_resumable(&self, store: &Store, id: &str, row: &crate::store::SessionRow, live: &HashMap<String, Live>) -> Result<Option<Error>> {
+        if row.cleaned {
+            return Ok(Some(Error::CleanedUp(id.to_owned())));
+        }
+        if row.ends_with_client {
+            return Ok(Some(Error::EndedWithClient(id.to_owned())));
+        }
+        if row.cannot_resume {
+            return Ok(Some(Error::CannotResume(id.to_owned())));
+        }
+        if row.given_up {
+            return Ok(Some(given_up(id, "resumed")));
+        }
+        if row.provider_session.is_none() {
+            return Ok(Some(Error::Driver(format!("session {id} has no provider session id to resume"))));
+        }
+        // A clean-up cut short after the worktree went leaves nothing to resume in.
+        if row.work.is_some() && row.cwd.symlink_metadata().is_err() {
+            return Ok(Some(Error::Refused(format!("session {id}'s worktree is gone, so it can't be resumed: clean it up"))));
+        }
+        // A later session may have the same branch, and so the same folder, again: it is that session's now.
+        if let Some(work) = &row.work
+            && store.worktree_owner(work, |other| live.contains_key(other))?.as_deref() != Some(id)
+        {
+            return Ok(Some(Error::Refused(format!("another session works in session {id}'s worktree now, so it can't be resumed"))));
+        }
+        Ok(self.driver(&row.provider).err())
     }
 
     /// Sends a prompt. One sent while a turn runs waits for that turn to end.
@@ -495,6 +519,10 @@ impl Harness {
                     }
                     if row.given_up {
                         return Err(given_up(id, "handed over"));
+                    }
+                    // Only a take back clears the mark: a session it would refuse is not handed over.
+                    if let Some(why) = self.why_not_resumable(store, id, &row, &live)? {
+                        return Err(Error::Refused(format!("session {id} is not handed over, since Terminal could not resume it: {why}")));
                     }
                     if !row.handed_over {
                         store.set_handed_over(id, true)?;
@@ -647,8 +675,8 @@ impl Harness {
             if row.given_up {
                 return Err(given_up(id, "cleaned up"));
             }
-            // Terminal works in it now, whoever asks.
-            if row.handed_over {
+            // Terminal works in it now, whoever asks, unless nothing could resume it there or here.
+            if row.handed_over && self.inner.with_store(|store| self.why_not_resumable(store, id, &row, &live))?.is_none() {
                 return Err(Error::HandedOver(id.to_owned()));
             }
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only

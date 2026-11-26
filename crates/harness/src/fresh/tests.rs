@@ -425,3 +425,15 @@ fn identity_keys_are_the_only_settings_an_agent_may_add_without_stopping_the_fet
         assert!(!written_by_gossamr_tools(key), "{key}");
     }
 }
+
+#[tokio::test]
+async fn a_clone_with_more_than_five_settings_gossamr_did_not_make_says_how_many_more() {
+    let rig = Rig::new("many-keys");
+    let path = agents_root(&rig.home).join("acme/webshop");
+    std::fs::create_dir_all(path.join(".git")).unwrap();
+    std::fs::write(path.join(".fake-origin"), "https://github.com/acme/webshop.git").unwrap();
+    std::fs::write(path.join(".fake-config"), "a.one=1\nb.two=2\nc.three=3\nd.four=4\ne.five=5\nf.six=6\ng.seven=7\n").unwrap();
+    let ensured = ensure_clone(&rig.git("ok", None), &rig.home, "acme/webshop", true).await.unwrap();
+    let Some(Fetched::Not(why)) = ensured.fetched else { panic!("{ensured:?}") };
+    assert!(why.contains("(a.one, b.two, c.three, d.four, e.five, and 2 more)"), "{why}");
+}

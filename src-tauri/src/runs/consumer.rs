@@ -23,6 +23,8 @@ pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
 pub const ANSWER_WAITS_RESUME: &str = "Your answer waits for the session to resume";
 pub const SIGNING_NEEDS_YOU: &str = "A commit needs your signing agent, which refused it: unlock it (for example 1Password), then message the agent to commit again.";
+pub const NOT_DELIVERED: &str = "Your message didn't reach the agent: its session ended before it read it. Send it again once the run is going.";
+pub const SIGNING_NEEDS_YOU_CLOSED: &str = "A commit needs your signing agent, which refused it, and the run's session has since ended: unlock it (for example 1Password), then ask Pip to start it again.";
 pub const AGENT_LOST: &str = "The harness lost this run's agent: it stopped without saying so. Ask Pip to start it again.";
 pub const CUT: &str = "The agent stopped in the middle of a turn";
 const NOT_KEPT: &str = "Asked a question; its text was not kept";
@@ -75,7 +77,11 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.last_detail = Some(SLOT_WAIT.into());
             rows.add("update", SLOT_WAIT, None);
         }
-        Body::PromptsDropped => rows.add("update", "Messages it had not read yet were dropped", None),
+        // A message taken while the session was ending never reached the agent: say so where it is read.
+        Body::PromptsDropped => {
+            run.last_detail = Some(NOT_DELIVERED.into());
+            rows.add("error", NOT_DELIVERED, None);
+        }
         Body::TurnStarted => {
             follow.in_turn = true;
             reopen(run);
@@ -242,6 +248,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         // can be resumed, and its question stays until a `question_closed`.
         // Who closed it (`by`) is read in H10c-2.
         Body::Closed { .. } => {
+            // A message can no longer reach it, so the way out its failure names is the one that still works.
+            if run.failure == Some(RunFailure::SigningNeedsYou) {
+                run.error = Some(SIGNING_NEEDS_YOU_CLOSED.into());
+            }
             follow.closed = true;
             follow.ended = follow.stop_asked;
             follow.in_turn = false;
@@ -351,14 +361,15 @@ fn signing_refused(said: &str) -> bool {
     let said = said.to_lowercase();
     // Whole words, so "design" or "assign" is no signer.
     let mut words = said.split(|c: char| !(c.is_alphanumeric() || c == '-'));
-    said.contains("failed to write commit object") && words.any(|word| ["sign", "signing", "1password", "gpg", "ssh-keygen"].contains(&word))
+    said.contains("failed to write commit object") && words.any(|word| ["sign", "signing", "1password", "gpg", "ssh-keygen", "ssh", "key", "agent"].contains(&word))
 }
 
 /// Whether a shell call's command runs `git commit`, past git's own options (`git -C dir -c key=value commit`).
 fn runs_git_commit(input: &Value) -> bool {
     let Some(command) = input.get("command").and_then(Value::as_str) else { return false };
     command.split(['\n', ';', '&', '|']).any(|part| {
-        let mut words = part.split_whitespace().skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
+        // Quotes off, so `bash -c "git commit …"` and `sh -c 'git commit …'` are seen too.
+        let mut words = part.split_whitespace().map(|word| word.trim_matches(['"', '\''])).skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
         while let Some(word) = words.next() {
             match word {
                 "-c" | "-C" => {

@@ -34,12 +34,18 @@ pub enum Cleanup {
 }
 
 /// Why Clean up leaves a run handed over to Terminal: Terminal resumes it in its worktree.
-pub const HANDED_OVER_CLEANUP: &str = "Handed over to Terminal. Take it back, or remove its worktree yourself.";
+pub const HANDED_OVER_CLEANUP: &str = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
+
+/// A run handed over to Terminal whose worktree is still there: once you removed it, nothing resumes the session,
+/// and the harness cleans it up.
+fn terminal_works_in(run: &Run) -> bool {
+    run.handed_over && run.expected_worktree.symlink_metadata().is_ok()
+}
 
 /// A run that is over and still has something to remove: its worktree, or an earlier session that was kept.
 pub fn cleanable(run: &Run) -> bool {
     let over = matches!(run.state, RunState::Done | RunState::Failed | RunState::Stopped | RunState::Unknown);
-    let on_harness = run.harness_session.is_some() && run.worktree_removed_at.is_none() && !run.handed_over;
+    let on_harness = run.harness_session.is_some() && run.worktree_removed_at.is_none() && !terminal_works_in(run);
     over && (on_harness || run.short_id.is_some() && (run.worktree_removed_at.is_none() || !run.leftover_sessions().is_empty()))
 }
 
@@ -86,7 +92,7 @@ impl RunService {
         if !worktree_pending && leftovers.is_empty() {
             return Err(refuse("This run's worktree is already removed."));
         }
-        if run.harness_session.is_some() && run.handed_over {
+        if run.harness_session.is_some() && terminal_works_in(&run) {
             return Err(refuse(HANDED_OVER_CLEANUP));
         }
         if !cleanable(&run) {
