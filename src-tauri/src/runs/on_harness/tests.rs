@@ -826,6 +826,35 @@ async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_t
     assert_eq!((follow.carry_ons, rig.fx.core.run_events(&run.id).await.unwrap().len()), (CARRY_ONS, rows), "past three in a row it waits for you");
 }
 
+/// Waits until the harness keeps `want` for the run's session and the run says so.
+async fn until_mode(served: &Served, rig: &Rig, run: &Run, want: AgentPermissions) {
+    let word = serde_json::to_value(want).unwrap();
+    tokio::time::timeout(WAIT, async {
+        while modes(served, rig, run).await != (word.clone(), Some(want)) {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the session did not take {want:?}"));
+}
+
+#[tokio::test]
+async fn a_change_of_settings_reaches_an_agent_in_the_middle_of_its_turn_with_no_message_and_its_timeline_says_so() {
+    let served = Served::new(BUILDS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    assert_eq!(rig.get(&run).await.state, RunState::Working, "still in its turn");
+    choose(&rig, AgentPermissions::Ask);
+    until_mode(&served, &rig, &run, AgentPermissions::Ask).await;
+    choose(&rig, AgentPermissions::Auto);
+    until_mode(&served, &rig, &run, AgentPermissions::Auto).await;
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    let said: Vec<&String> = rows.iter().filter(|text| text.starts_with("Permissions are now")).collect();
+    assert_eq!(said, [crate::runs::link::NOW_ASK, crate::runs::link::NOW_AUTO], "one line per change, none for the start: {rows:?}");
+    assert!(!rows.iter().any(|text| text == "Message sent"), "no message went with it");
+}
+
 #[tokio::test]
 async fn a_carry_on_after_a_harness_restart_starts_the_agent_in_the_mode_chosen_since() {
     let mut served = Served::new(BUILDS, 4);

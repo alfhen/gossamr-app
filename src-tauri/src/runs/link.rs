@@ -98,6 +98,11 @@ struct Inner {
     /// Settings' choice of who settles a Claude agent's permission prompts, sent with each call that can reach or start
     /// a session's agent, so a change reaches agents already started: the next message, answer, resume or take back.
     permissions: std::sync::Mutex<AgentPermissions>,
+    /// One change of the choice is sent to the sessions at a time, each with the choice of that moment, so a quick
+    /// second change is never overtaken by the first.
+    choosing: tokio::sync::Mutex<()>,
+    /// The runtime the link started on: a change of Settings comes from a thread that has none.
+    runtime: tokio::runtime::Handle,
     /// How many of the next follows fail, for a test of what a failed follow leaves.
     #[cfg(test)]
     failing_follows: std::sync::atomic::AtomicUsize,
@@ -107,7 +112,7 @@ impl Link {
     /// Starts the watching task, which follows every session the app's runs still follow.
     pub fn start(core: Arc<Core>, connect: Arc<dyn Connect>, tools: Arc<dyn ClientTools>, notifier: Arc<dyn RunNotifier>, changed: Arc<dyn Fn(&str) + Send + Sync>) -> Link {
         let (commands, received) = mpsc::unbounded_channel();
-        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), permissions: std::sync::Mutex::new(AgentPermissions::Auto), #[cfg(test)] failing_follows: Default::default() });
+        let inner = Arc::new(Inner { core, connect, tools, notifier, changed, commands, applied: watch::channel(0).0, unread: Default::default(), answering: Default::default(), permissions: std::sync::Mutex::new(AgentPermissions::Ask), choosing: tokio::sync::Mutex::new(()), runtime: tokio::runtime::Handle::current(), #[cfg(test)] failing_follows: Default::default() });
         tokio::spawn(watching(Arc::downgrade(&inner), received));
         Link { inner }
     }
@@ -137,19 +142,44 @@ impl Link {
             Op::Send { session, permissions, .. } | Op::AnswerQuestion { session, permissions, .. } | Op::Resume { session, permissions, .. } | Op::TakeBack { session, permissions } => {
                 Some((session.clone(), *permissions.get_or_insert(now)))
             }
+            Op::SetPermissions { session, permissions } => Some((session.clone(), *permissions)),
             _ => None,
         };
         let mut client = self.inner.connect.connect().await?;
-        let answered = client.call(op).await.map_err(|e| e.to_string())?;
+        let answered = client.call(op).await.map_err(|e| e.to_string());
+        // Noted though the harness refused the op: it keeps the choice before it does the op's own work.
         if let Some((session, permissions)) = asked {
             self.note_permissions(&session, permissions).await;
         }
-        Ok(answered)
+        answered
     }
 
-    /// Settings' choice of who settles a Claude agent's permission prompts, from now on.
+    /// Settings' choice of who settles a Claude agent's permission prompts, from now on, for the calls that follow.
     pub fn set_permissions(&self, permissions: AgentPermissions) {
         *self.inner.permissions.lock().unwrap_or_else(|p| p.into_inner()) = permissions;
+    }
+
+    /// As `set_permissions`, and sent at once to every session the app follows whose agent may run, so an agent in
+    /// the middle of a turn switches then, not at its next message. One the harness cannot reach takes it with its
+    /// next message, answer or resume.
+    pub fn choose_permissions(&self, permissions: AgentPermissions) {
+        if self.permissions() == permissions {
+            return;
+        }
+        self.set_permissions(permissions);
+        let link = Link { inner: self.inner.clone() };
+        self.inner.runtime.spawn(async move {
+            let _one_at_a_time = link.inner.choosing.lock().await;
+            let followed = match link.inner.core.followed_sessions().await {
+                Ok(followed) => followed,
+                Err(e) => return eprintln!("couldn't read the sessions to send agents' permissions to: {e}"),
+            };
+            for (session, _) in followed.into_iter().filter(|(_, follow)| !follow.closed) {
+                if let Err(why) = link.ask(Op::SetPermissions { session: session.clone(), permissions: link.permissions() }).await {
+                    eprintln!("couldn't send agents' permissions to session {session}; it takes them with its next message: {why}");
+                }
+            }
+        });
     }
 
     pub fn permissions(&self) -> AgentPermissions {
@@ -157,13 +187,24 @@ impl Link {
     }
 
     /// Keeps on the session's run what the harness was last asked for, for the run sheet to show.
+    /// A change after the first says so on the run's timeline: an answer, a take back or a change of Settings can move
+    /// a run's agent to another mode.
     async fn note_permissions(&self, session: &str, permissions: AgentPermissions) {
         let noted = self.inner.core.apply_session(session, move |run, _| {
-            run.agent_permissions = Some(permissions);
-            Vec::new()
+            let before = run.agent_permissions.replace(permissions);
+            if before.is_none_or(|before| before == permissions) {
+                return Vec::new();
+            }
+            let text = match permissions {
+                AgentPermissions::Auto => NOW_AUTO,
+                AgentPermissions::Ask => NOW_ASK,
+            };
+            vec![crate::domain::RunEvent { run_id: run.id.clone(), seq: 0, at: Utc::now(), kind: "update".into(), text: text.into(), detail: None }]
         });
-        if let Err(e) = noted.await {
-            eprintln!("couldn't keep the permissions of session {session} on its run: {e}");
+        match noted.await {
+            Ok(Some(applied)) => self.inner.after(&applied.before, &applied.run),
+            Ok(None) => {}
+            Err(e) => eprintln!("couldn't keep the permissions of session {session} on its run: {e}"),
         }
     }
 
@@ -838,6 +879,10 @@ impl Inner {
         self.applied.send_modify(|n| *n += 1);
     }
 }
+
+/// What a run's timeline says when its agent's permissions change after its start.
+pub const NOW_AUTO: &str = "Permissions are now Auto, as Agent settings say";
+pub const NOW_ASK: &str = "Permissions are now Ask for each step, as Agent settings say";
 
 /// Why the harness keeps the session of listed `row` from any resume, as its row says.
 fn kept_by(row: &Value) -> Option<String> {

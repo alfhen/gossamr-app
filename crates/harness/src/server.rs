@@ -481,6 +481,7 @@ impl Client {
                 done(harness.send(&session, text))
             }
             Op::Cancel { session } => done(harness.cancel(&session)),
+            Op::SetPermissions { session, permissions } => done(harness.set_permissions(&session, Some(permissions))),
             Op::Answer { session, request, decision, message } => done(harness.answer(&session, &request, decision, message)),
             Op::ToolResult { session, call, output, error } => done(harness.tool_result(&session, &call, output, error)),
             // It may resume the session, which waits for the shell as an open does.

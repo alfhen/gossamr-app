@@ -157,7 +157,7 @@ export function Setup({ api, onSignedIn, onUseSampleData }: { api: FirstRunApi; 
       <div className="grid w-full max-w-[520px] gap-5">
         <div>
           <h1 className="font-display m-0 text-xl font-bold">Connect your accounts</h1>
-          <p className="mt-1 mb-0 text-ws-ink2">Pip drafts and you approve what Gossamr posts to Jira or GitHub. Agents in Auto can push and run gh without asking you. You can change that in Agent settings.</p>
+          <p className="mt-1 mb-0 text-ws-ink2">Pip drafts and you approve what Gossamr posts to Jira or GitHub. By default, agents can push and run gh without asking you. You can change that in Agent settings.</p>
         </div>
         <ul aria-label="Accounts" className="m-0 grid list-none border-y border-ws-sep p-0">
           <GithubRow api={api} />

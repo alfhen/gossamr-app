@@ -8,7 +8,7 @@ test.describe("the first-run screen", () => {
     await page.goto("/?firstRun=ready");
     await expect(page.getByRole("heading", { name: "Connect your accounts" })).toBeVisible();
     // Auto is the default, so the promise says what agents may do unasked.
-    await expect(page.locator("body")).toContainText("Pip drafts and you approve what Gossamr posts to Jira or GitHub. Agents in Auto can push and run gh without asking you. You can change that in Agent settings.");
+    await expect(page.locator("body")).toContainText("Pip drafts and you approve what Gossamr posts to Jira or GitHub. By default, agents can push and run gh without asking you. You can change that in Agent settings.");
     await expect(gh(page)).toContainText("Authenticated · ada");
     await expect(gh(page)).toContainText("gh is signed in as ada on github.com");
     await expect(gh(page)).toContainText("Agents use this account to clone and push.");

@@ -53,7 +53,17 @@ pub const NOT_MANUAL: &str = "Your Claude Code settings run this agent in";
 /// What the session is told when `init` names a mode other than the one asked for, if it should be told: a session
 /// that asks for each step and starts in another mode may run steps without asking.
 fn mode_notice(asked: Permissions, mode: &str) -> Option<String> {
-    let named = match mode {
+    let named = named(mode);
+    match asked {
+        Permissions::Auto if mode != "auto" => Some(format!("{NO_AUTO}, so Claude runs this agent in {named} mode.")),
+        Permissions::Ask if !matches!(mode, "default" | "manual") => Some(format!("{NOT_MANUAL} {named} mode, so it may run steps without asking you.")),
+        _ => None,
+    }
+}
+
+/// A mode as Claude Code's own settings show it.
+fn named(mode: &str) -> &str {
+    match mode {
         "default" | "manual" => "Manual",
         "acceptEdits" => "Accept edits",
         "plan" => "Plan",
@@ -61,11 +71,6 @@ fn mode_notice(asked: Permissions, mode: &str) -> Option<String> {
         "dontAsk" => "Don't ask",
         "bypassPermissions" => "Bypass permissions",
         other => other,
-    };
-    match asked {
-        Permissions::Auto if mode != "auto" => Some(format!("{NO_AUTO}, so Claude runs this agent in {named} mode.")),
-        Permissions::Ask if !matches!(mode, "default" | "manual") => Some(format!("{NOT_MANUAL} {named} mode, so it may run steps without asking you.")),
-        _ => None,
     }
 }
 
@@ -369,6 +374,8 @@ pub struct Stream {
     permissions: Option<Permissions>,
     /// What the next `init` is checked against: set at the start and at each switch, cleared once checked.
     unchecked: Option<Permissions>,
+    /// The `set_permission_mode` request not yet answered, and the mode the agent had before it.
+    switching: Option<(String, Permissions)>,
     /// The cost Claude's last `result` gave, a running total, for a `result` that does not say its turn's own.
     cost_so_far: f64,
 }
@@ -491,8 +498,8 @@ impl Stream {
         let (waiting, servers, setup) = (Some(vec![]), None, None);
         let (locked, refused) = (None, false);
         let cost_so_far = 0.0;
-        let (permissions, unchecked) = (None, None);
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, permissions, unchecked, cost_so_far }
+        let (permissions, unchecked, switching) = (None, None, None);
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, permissions, unchecked, switching, cost_so_far }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -549,12 +556,24 @@ impl Stream {
     /// `set_permission_mode` and its next `init` names the new mode). A locked session, and one that has it already,
     /// sends nothing.
     pub fn set_permissions(&mut self, permissions: Permissions) {
-        if self.permissions.is_none_or(|now| now == permissions) {
-            return;
-        }
+        let Some(before) = self.permissions.filter(|now| *now != permissions) else { return };
         self.permissions = Some(permissions);
         self.unchecked = Some(permissions);
         self.request(json!({"subtype": "set_permission_mode", "mode": mode_of(permissions)}));
+        self.switching = Some((format!("gossamr-{}", self.requests), before));
+    }
+
+    /// Claude's answer to the last switch: a refusal leaves the agent in the mode it had, and the client is told.
+    fn switched(&mut self, line: &Value) {
+        let Some((_, before)) = self.switching.take() else { return };
+        if line["response"]["subtype"] == "success" {
+            return;
+        }
+        let asked = self.permissions.replace(before).map_or("", mode_of);
+        self.unchecked = None;
+        let why = line["response"]["error"].as_str().unwrap_or("no reason given");
+        let text = format!("Claude didn't switch this agent to {} mode ({why}), so it goes on in {} mode.", named(asked), named(mode_of(before)));
+        self.emit(Body::Notice { text });
     }
 
     pub fn request(&mut self, request: Value) {
@@ -679,6 +698,7 @@ impl Stream {
             }
             // A setup answer, success or not: Claude reads the rest either way and reports what fails.
             Some("control_response") if self.setup.as_ref().is_some_and(|(id, _)| line["response"]["request_id"] == id.as_str()) => self.set_up(&line),
+            Some("control_response") if self.switching.as_ref().is_some_and(|(id, _)| line["response"]["request_id"] == id.as_str()) => self.switched(&line),
             Some("control_request") => self.asks(&line),
             Some("control_cancel_request") => {
                 if let Some(id) = line["request_id"].as_str()
@@ -1047,6 +1067,27 @@ mod tests {
         locked.sent();
         locked.stream.set_permissions(Permissions::Auto);
         assert_eq!(switches(&mut locked), Vec::<String>::new(), "a locked session's profile is never changed");
+    }
+
+    #[test]
+    fn a_switch_claude_refuses_puts_the_mode_back_and_says_so_and_one_it_takes_says_nothing() {
+        let switch_id = |w: &mut Wire| w.sent().into_iter().rev().find(|line| line["request"]["subtype"] == "set_permission_mode").map(|line| line["request_id"].as_str().unwrap().to_owned()).unwrap();
+        let mut w = wire();
+        (w.stream.permissions, w.stream.unchecked) = (Some(Permissions::Auto), None);
+        w.sent();
+        w.stream.set_permissions(Permissions::Ask);
+        let id = switch_id(&mut w);
+        w.agent(json!({"type": "control_response", "response": {"subtype": "success", "request_id": id, "response": {"mode": "default"}}}));
+        assert!(w.said().is_empty(), "taken");
+        assert_eq!(w.stream.permissions, Some(Permissions::Ask));
+        w.stream.set_permissions(Permissions::Auto);
+        let id = switch_id(&mut w);
+        w.agent(json!({"type": "control_response", "response": {"subtype": "error", "request_id": id, "error": "auto mode is off"}}));
+        let refused = "Claude didn't switch this agent to Auto mode (auto mode is off), so it goes on in Manual mode.";
+        assert_eq!(w.said(), [Body::Notice { text: refused.into() }]);
+        assert_eq!(w.stream.permissions, Some(Permissions::Ask), "the mode it has");
+        w.stream.set_permissions(Permissions::Auto);
+        assert_eq!(w.sent().iter().filter(|line| line["request"]["subtype"] == "set_permission_mode").count(), 1, "so a later switch to Auto is sent again");
     }
 
     #[test]

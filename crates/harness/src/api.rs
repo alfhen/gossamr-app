@@ -165,6 +165,9 @@ pub enum Op {
         permissions: Option<crate::driver::Permissions>,
     },
     Cancel { session: String },
+    /// Who settles the session's permission prompts from now on, with nothing else sent: kept for every later start,
+    /// and a running agent switches to it at once, in the middle of a turn too. A locked session ignores it.
+    SetPermissions { session: String, permissions: crate::driver::Permissions },
     Answer {
         session: String,
         request: String,
