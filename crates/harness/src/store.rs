@@ -330,6 +330,12 @@ impl Store {
             .ok_or_else(|| Error::NoSuchSession(id.to_owned()))
     }
 
+    /// Who settles the session's permission prompts from its next start on.
+    pub fn set_permissions(&self, id: &str, permissions: Permissions) -> Result<()> {
+        self.conn.execute("UPDATE sessions SET permissions = ?2 WHERE id = ?1", params![id, permissions.stored()])?;
+        Ok(())
+    }
+
     /// None says "carry on" may be sent again.
     pub fn set_no_carry_on(&self, id: &str, why: Option<&str>) -> Result<()> {
         self.conn.execute("UPDATE sessions SET no_carry_on = ?2 WHERE id = ?1", params![id, why])?;

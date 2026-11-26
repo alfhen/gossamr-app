@@ -79,12 +79,12 @@ pub fn parse(command: &str, args: &[&str], data: &mut Option<PathBuf>, token_std
             let after = flag("--after").flatten().map_or(Some(0), |after| after.parse().ok())?;
             Some(Command::Events { session: session.clone(), after, follow: flag("--follow").is_some() })
         }
-        ("send", [session, text]) if known(&[]) => call(Op::Send { session: session.clone(), text: text.clone() }),
-        ("resume", [session]) if known(&["--carry-on"]) => call(Op::Resume { session: session.clone(), carry_on: flag("--carry-on").flatten().map(str::to_owned) }),
-        ("take-back", [session]) if known(&[]) => call(Op::TakeBack { session: session.clone() }),
+        ("send", [session, text]) if known(&[]) => call(Op::Send { permissions: None, session: session.clone(), text: text.clone() }),
+        ("resume", [session]) if known(&["--carry-on"]) => call(Op::Resume { permissions: None, session: session.clone(), carry_on: flag("--carry-on").flatten().map(str::to_owned) }),
+        ("take-back", [session]) if known(&[]) => call(Op::TakeBack { permissions: None, session: session.clone() }),
         ("answer", [session, question]) if known(&["--text"]) => {
             let text = flag("--text")??.to_owned();
-            call(Op::AnswerQuestion { session: session.clone(), question: question.clone(), text })
+            call(Op::AnswerQuestion { permissions: None, session: session.clone(), question: question.clone(), text })
         }
         ("answer", [session, request, word]) if known(&["--message"]) => {
             let message = flag("--message").flatten().map(str::to_owned);
@@ -163,7 +163,7 @@ async fn run(client: &mut Client, provider: String, answers: Vec<Decision>, prom
     let opened = client.call(open).await?;
     let session = opened["session"].as_str().ok_or_else(|| Error::Protocol("`open` named no session".into()))?.to_owned();
     eprintln!("harness: session {session}");
-    client.call(Op::Send { session: session.clone(), text: prompt }).await?;
+    client.call(Op::Send { permissions: None, session: session.clone(), text: prompt }).await?;
     // Done only once a turn has ended, and not in a failure: a connection that drops before then is not done.
     let (mut answers, mut ok, mut ended) = (answers.into_iter(), true, false);
     // A turn that ends while a question is open is not the end: the answer comes as the next prompt.

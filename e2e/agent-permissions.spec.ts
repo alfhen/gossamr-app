@@ -15,7 +15,7 @@ test.describe("Claude agents' permissions", () => {
     const sheet = await agentSettings(page);
     const permissions = sheet.getByRole("combobox", { name: "Claude agents' permissions" });
     await expect(permissions).toHaveValue("auto");
-    await expect(sheet).toContainText("Claude decides which steps are safe and runs them. It can push, delete or reset without asking you.");
+    await expect(sheet).toContainText("Claude decides which steps are safe and runs them without asking you. That can include force-pushing, resetting, running scripts from the internet and sending files to other sites.");
     await permissions.selectOption({ label: "Ask for each step" });
     await expect(permissions).toHaveValue("ask");
     await expect(sheet).toContainText("You allow or deny each step that needs it.");

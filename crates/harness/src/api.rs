@@ -155,7 +155,15 @@ pub enum Op {
         #[serde(default)]
         result_schema: Option<Value>,
     },
-    Send { session: String, text: String },
+    Send {
+        session: String,
+        text: String,
+        /// With a value, who settles the agent's permission prompts from now on, as `open`'s `permissions`: it is kept
+        /// with the session for every later start, and a running agent switches to it at once. Left out, the session
+        /// keeps what it has. A locked session ignores it.
+        #[serde(default)]
+        permissions: Option<crate::driver::Permissions>,
+    },
     Cancel { session: String },
     Answer {
         session: String,
@@ -176,7 +184,16 @@ pub enum Op {
     /// harness shuts down leaves it open, to be answered again after the restart. A session that is not running is
     /// resumed first, with a new tools token. A question that Stop, a hand-over, the deny that ended the turn that
     /// asked it, a clean-up or a resume refused for good closed is refused.
-    AnswerQuestion { session: String, question: String, text: String },
+    AnswerQuestion {
+        session: String,
+        question: String,
+        text: String,
+        /// With a value, who settles the agent's permission prompts from now on, as `open`'s `permissions`: it is kept
+        /// with the session for every later start, and a running agent switches to it at once. Left out, the session
+        /// keeps what it has. A locked session ignores it.
+        #[serde(default)]
+        permissions: Option<crate::driver::Permissions>,
+    },
     Close { session: String },
     /// Closes the session as handed over to Terminal, keeping its provider id for a later resume. It answers once the
     /// hand-over is taken, even if the agent goes before the session reads it, but only the `handed_over` event
@@ -200,11 +217,23 @@ pub enum Op {
         session: String,
         #[serde(default)]
         carry_on: Option<String>,
+        /// With a value, who settles the agent's permission prompts from now on, as `open`'s `permissions`: it is kept
+        /// with the session for every later start, and a running agent switches to it at once. Left out, the session
+        /// keeps what it has. A locked session ignores it.
+        #[serde(default)]
+        permissions: Option<crate::driver::Permissions>,
     },
     /// Resumes a session handed over to Terminal, and watches it, as `resume` does. The app sends it only on the
     /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
     /// over is refused: resume it. Refused, as `resume` is, while the rows say `held` or the row says `given_up`.
-    TakeBack { session: String },
+    TakeBack {
+        session: String,
+        /// With a value, who settles the agent's permission prompts from now on, as `open`'s `permissions`: it is kept
+        /// with the session for every later start, and a running agent switches to it at once. Left out, the session
+        /// keeps what it has. A locked session ignores it.
+        #[serde(default)]
+        permissions: Option<crate::driver::Permissions>,
+    },
     /// Refused while the session runs, for one given up on, whose agent may still work in its worktree (checked again
     /// first, as `resume` does), and, as `resume` is, while the rows say `held`.
     CleanUp { session: String },

@@ -187,7 +187,7 @@ function WorkFolder({ git, onReveal }: { git: WorkFolderGit | null | undefined; 
 const FIELD = "w-20 rounded-md border border-ws-sep2 bg-ws-win px-2 py-1 text-sm text-ws-ink";
 
 const PERMISSIONS_HINT: Record<AgentPermissions, string> = {
-  auto: "Claude decides which steps are safe and runs them. It can push, delete or reset without asking you.",
+  auto: "Claude decides which steps are safe and runs them without asking you. That can include force-pushing, resetting, running scripts from the internet and sending files to other sites.",
   ask: "You allow or deny each step that needs it.",
 };
 

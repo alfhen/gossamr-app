@@ -430,7 +430,7 @@ const ANSWER_WAITS_RESUME = "Your answer waits for the session to resume";
 const ANSWER_ON_ITS_WAY = "Your answer is on its way to the agent. Send more once it has arrived.";
 
 /** A run on the harness has its harness session and no Claude session id, as H10b writes it. */
-const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null });
+const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null, agentPermissions: "auto" as const });
 
 /** A long command, so the page is seen to show it whole. */
 export const LONG_COMMAND = "pnpm vitest run src/campaigns/sendTime.test.ts src/campaigns/schedule.test.ts --reporter=verbose && git add src/campaigns/sendTime.ts src/campaigns/sendTime.test.ts && git commit -m \"Pick each campaign's send time from the last 30 days of opens\"";
@@ -1154,7 +1154,7 @@ export class MockRuns {
     const problem = answerProblem(text);
     if (problem) throw new Error(problem);
     // The harness holds every answer until the agent's turn ends.
-    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? ANSWER_WAITS : null, answerWaits: run.harnessSession ? true : undefined, handedOver: false });
+    const next = this.update(id, { state: "working", needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, lastProgressAt: this.now(), lastDetail: run.harnessSession ? ANSWER_WAITS : null, answerWaits: run.harnessSession ? true : undefined, handedOver: false, ...(run.harnessSession ? { agentPermissions: this.limits.permissions ?? "auto" } : {}) });
     this.markStale(id);
     this.answeredAt.set(id, [...(this.answeredAt.get(id) ?? []), next.lastProgressAt]);
     this.changed();

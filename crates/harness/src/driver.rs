@@ -148,6 +148,9 @@ pub enum Command {
     /// `id` is the driver's own id of the request. A deny can say why.
     Answer { id: String, decision: Decision, message: Option<String> },
     Cancel,
+    /// Who settles the agent's permission prompts from now on. A driver that cannot switch a running agent, and a locked
+    /// session, ignore it; the next start reads it from the session's row.
+    SetPermissions(Permissions),
     /// Ends the session. The driver closes `output` once the agent is gone.
     Stop,
     /// Sent when a stopped agent has not gone in time: kill its process tree.

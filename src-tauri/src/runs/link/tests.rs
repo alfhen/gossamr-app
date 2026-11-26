@@ -89,7 +89,7 @@ impl Bed {
         let tools = vec![harness::tools::ToolSpec { name: "read_ticket".into(), description: String::new(), input_schema: json!({ "type": "object" }) }];
         let open = Op::Open { provider: "mock".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools, result_schema: None };
         let session = self.link.open(&run.id, open).await.unwrap();
-        self.link.call(Op::Send { session: session.clone(), text: "the brief".into() }).await.unwrap();
+        self.link.call(Op::Send { permissions: None, session: session.clone(), text: "the brief".into() }).await.unwrap();
         (run, session)
     }
 
@@ -173,7 +173,7 @@ async fn a_question_waits_on_the_person_and_its_answer_reaches_the_agent() {
     assert_eq!(asking.needs.as_deref(), Some("Which colour should the button be?"));
     assert!(bed.rig.noticed().contains(&(Attention::Needs, RunState::NeedsAnswer)));
     let question = follow.question.unwrap();
-    bed.link.call(Op::AnswerQuestion { session, question, text: "Blue".into() }).await.unwrap();
+    bed.link.call(Op::AnswerQuestion { permissions: None, session, question, text: "Blue".into() }).await.unwrap();
     let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
     assert_eq!((done.needs, follow.question), (None, None));
     bed.end().await;
@@ -220,7 +220,7 @@ async fn a_deny_leaves_a_question_whose_call_returned_open_and_its_answer_comes_
     let (denied, follow) = bed.until(&run, |_, f| f.turns == 1).await;
     assert_eq!((denied.state, denied.needs.as_deref()), (RunState::NeedsAnswer, Some("Which colour should the button be?")));
     assert_eq!(follow.question.as_deref(), Some(question.as_str()), "the deny closed no question");
-    bed.link.call(Op::AnswerQuestion { session, question, text: "Blue".into() }).await.unwrap();
+    bed.link.call(Op::AnswerQuestion { permissions: None, session, question, text: "Blue".into() }).await.unwrap();
     let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done).await;
     assert_eq!((done.needs, follow.question, done.last_detail.as_deref()), (None, None, Some("Blue it is.")));
     bed.end().await;
@@ -326,7 +326,7 @@ const THREE_TURNS: &str = r#"{"prompt": null}
 
 /// Sends a prompt on a client of the test's and waits on it for the turn's end.
 async fn turn_away(client: &mut Client, session: &str, text: &str) {
-    client.call(Op::Send { session: session.to_owned(), text: text.into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: session.to_owned(), text: text.into() }).await.unwrap();
     loop {
         if let Some(harness::client::Push::Event { event, .. }) = tokio::time::timeout(WAIT, client.push()).await.unwrap().unwrap() {
             if event.body.ends_turn() {
@@ -374,7 +374,7 @@ async fn events_the_harness_lost_are_named_once_each_time_and_the_run_reads_on_w
     );
 
     // It still follows the session: the next turn's events arrive.
-    bed.link.call(Op::Send { session: session.clone(), text: "and again".into() }).await.unwrap();
+    bed.link.call(Op::Send { permissions: None, session: session.clone(), text: "and again".into() }).await.unwrap();
     let (done, follow) = bed.until(&run, |r, _| r.state == RunState::Done && r.last_detail.as_deref() == Some("Three.")).await;
     assert_eq!((follow.lost, done.state), (2, RunState::Done));
     bed.end().await;
@@ -500,7 +500,7 @@ async fn a_session_an_answer_resumes_after_a_restart_is_followed_at_once() {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     let before = bed.rig.fx.core.session_run(&session).await.unwrap().unwrap().1.seq;
     let connects = counting.at.lock().unwrap().len();
-    bed.link.call(Op::AnswerQuestion { session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
+    bed.link.call(Op::AnswerQuestion { permissions: None, session, question: follow.question.unwrap(), text: "Blue".into() }).await.unwrap();
     let (_, resumed) = bed.until(&run, |_, f| f.question.is_none() && f.prompts > 1).await;
     assert!(resumed.seq > before);
     // On the watching connection as it was: the call's own connection is the one new one, and no reconnect came first.

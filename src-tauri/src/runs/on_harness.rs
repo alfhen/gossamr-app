@@ -179,6 +179,7 @@ pub fn first_prompt(run: &Run) -> String {
 
 impl RunService {
     pub fn with_harness(mut self, on: OnHarness) -> Self {
+        on.link.set_permissions(self.settings().permissions);
         self.harness = Some(on);
         self
     }
@@ -193,14 +194,14 @@ impl RunService {
         }
         let config = crate::config::AppConfig::load(&self.core.data_dir());
         let login = config.providers.iter().find(|p| p.id == run.instance_id()).and_then(|p| p.config.config_dir.clone());
-        let opened = on.link.open(&run.id, open_op(run, &on.provider, model, login, self.settings().permissions)).await;
+        let opened = on.link.open(&run.id, open_op(run, &on.provider, model, login, on.link.permissions())).await;
         // The link may have bound the session, and applied its first events, before a later step failed.
         *run = self.load(&run.id).await?;
         let session = match opened {
             Ok(session) => session,
             Err(why) => return Ok(Err(Failure::Harness(no_session(&why, &on.provider)))),
         };
-        if let Err(why) = on.link.call(Op::Send { session: session.clone(), text: first_prompt(run) }).await {
+        if let Err(why) = on.link.call(Op::Send { permissions: None, session: session.clone(), text: first_prompt(run) }).await {
             let _ = on.link.stop(&session).await;
             *run = self.load(&run.id).await?;
             return Ok(Err(Failure::Harness(format!("it didn't take the brief: {why}"))));

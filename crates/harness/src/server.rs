@@ -476,25 +476,31 @@ impl Client {
                 self.watch(id.clone(), (vec![], false, 0), Some(events), 0);
                 Ok(json!({ "session": id }))
             }
-            Op::Send { session, text } => done(harness.send(&session, text)),
+            Op::Send { session, text, permissions } => {
+                harness.set_permissions(&session, permissions)?;
+                done(harness.send(&session, text))
+            }
             Op::Cancel { session } => done(harness.cancel(&session)),
             Op::Answer { session, request, decision, message } => done(harness.answer(&session, &request, decision, message)),
             Op::ToolResult { session, call, output, error } => done(harness.tool_result(&session, &call, output, error)),
             // It may resume the session, which waits for the shell as an open does.
-            Op::AnswerQuestion { session, question, text } => {
+            Op::AnswerQuestion { session, question, text, permissions } => {
+                harness.set_permissions(&session, permissions)?;
                 self.captured().await;
                 done(harness.answer_question(&session, &question, text).await)
             }
             Op::Close { session } => done(harness.close(&session)),
             Op::HandOver { session } => done(harness.hand_over(&session)),
             // Watched in the same step, as an open is, so a locked session's client misses none of the new start.
-            Op::Resume { session, carry_on } => {
+            Op::Resume { session, carry_on, permissions } => {
+                harness.set_permissions(&session, permissions)?;
                 self.captured().await;
                 let (feed, after) = harness.resume_watched(&session, carry_on, false)?;
                 self.watch(session.clone(), (vec![], false, 0), Some(feed), after);
                 Ok(json!({ "session": session }))
             }
-            Op::TakeBack { session } => {
+            Op::TakeBack { session, permissions } => {
+                harness.set_permissions(&session, permissions)?;
                 self.captured().await;
                 let (feed, after) = harness.resume_watched(&session, None, true)?;
                 self.watch(session.clone(), (vec![], false, 0), Some(feed), after);

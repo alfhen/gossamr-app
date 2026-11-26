@@ -41,8 +41,39 @@ pub const LOCKED: &[&str] = &["--permission-mode", "dontAsk", "--tools", "", "--
 /// the login (an admin's `disableAutoMode`, a model it does not support), Claude starts in Manual instead.
 pub const AUTO: &[&str] = &["--permission-mode", "auto"];
 
-/// What a session that asked for auto mode is told when Claude started in another mode.
-pub const NO_AUTO: &str = "Auto mode isn't available to this Claude login or model, so the agent asks for each step.";
+/// How a notice begins when a session asked for auto mode and Claude started it in another mode.
+pub const NO_AUTO: &str = "Auto mode isn't available to this Claude login or model";
+
+/// How a notice begins when a session asked for each step and the login's own default started it in another mode.
+pub const NOT_MANUAL: &str = "Your Claude Code settings run this agent in";
+
+/// What the session is told when `init` names a mode other than the one asked for, if it should be told: a session
+/// that asks for each step and starts in another mode may run steps without asking.
+fn mode_notice(asked: Permissions, mode: &str) -> Option<String> {
+    let named = match mode {
+        "default" | "manual" => "Manual",
+        "acceptEdits" => "Accept edits",
+        "plan" => "Plan",
+        "auto" => "Auto",
+        "dontAsk" => "Don't ask",
+        "bypassPermissions" => "Bypass permissions",
+        other => other,
+    };
+    match asked {
+        Permissions::Auto if mode != "auto" => Some(format!("{NO_AUTO}, so Claude runs this agent in {named} mode.")),
+        Permissions::Ask if !matches!(mode, "default" | "manual") => Some(format!("{NOT_MANUAL} {named} mode, so it may run steps without asking you.")),
+        _ => None,
+    }
+}
+
+/// The mode `set_permission_mode` switches a running agent to. Ask is Manual: the stricter reading of asking for each
+/// step, where a start passes no mode and the login's own default applies.
+fn mode_of(permissions: Permissions) -> &'static str {
+    match permissions {
+        Permissions::Auto => "auto",
+        Permissions::Ask => "default",
+    }
+}
 
 /// How long a stopped agent has before its process group gets SIGTERM, while a background task keeps it.
 pub const TERM_AFTER: Duration = Duration::from_secs(3);
@@ -262,7 +293,8 @@ impl ClaudeDriver {
         });
         let mut stream = Stream::new(lines, output, launch.resume.as_deref());
         stream.locked = launch.locked.then(|| launch.tools.allowed.clone());
-        stream.auto_unchecked = !launch.locked && launch.permissions == Permissions::Auto;
+        stream.permissions = (!launch.locked).then_some(launch.permissions);
+        stream.unchecked = stream.permissions;
         let agent = Agent {
             child,
             process: process.clone(),
@@ -331,8 +363,10 @@ pub struct Stream {
     locked: Option<Vec<String>>,
     /// Claude offered a locked session another tool, so the agent must go and nothing more it says is passed on.
     refused: bool,
-    /// The session asked for auto mode and `init` has not yet said whether it got it.
-    auto_unchecked: bool,
+    /// What a normal session asked for, now; None for a locked one, whose profile decides.
+    permissions: Option<Permissions>,
+    /// What the next `init` is checked against: set at the start and at each switch, cleared once checked.
+    unchecked: Option<Permissions>,
     /// The cost Claude's last `result` gave, a running total, for a `result` that does not say its turn's own.
     cost_so_far: f64,
 }
@@ -372,6 +406,7 @@ impl Agent {
                     Some(Command::Prompt(text)) => self.stream.prompt(text),
                     Some(Command::Answer { id, decision, message }) => self.stream.answer(&id, decision, message),
                     Some(Command::Cancel) => self.stream.cancel(),
+                    Some(Command::SetPermissions(permissions)) => self.stream.set_permissions(permissions),
                     Some(Command::Stop) => {
                         going = true;
                         self.stream.close();
@@ -454,8 +489,8 @@ impl Stream {
         let (waiting, servers, setup) = (Some(vec![]), None, None);
         let (locked, refused) = (None, false);
         let cost_so_far = 0.0;
-        let auto_unchecked = false;
-        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, auto_unchecked, cost_so_far }
+        let (permissions, unchecked) = (None, None);
+        Stream { lines: Some(lines), output, started: resume.is_some(), turn, cancelled, held, asked, requests, waiting, servers, setup, locked, refused, permissions, unchecked, cost_so_far }
     }
 
     /// Closes stdin, which is how Claude is told to go.
@@ -506,6 +541,18 @@ impl Stream {
                 let _ = lines.send(line);
             }
         }
+    }
+
+    /// Switches the running agent to `permissions`, ahead of any prompt sent after it (2.1.331 answers
+    /// `set_permission_mode` and its next `init` names the new mode). A locked session, and one that has it already,
+    /// sends nothing.
+    pub fn set_permissions(&mut self, permissions: Permissions) {
+        if self.permissions.is_none_or(|now| now == permissions) {
+            return;
+        }
+        self.permissions = Some(permissions);
+        self.unchecked = Some(permissions);
+        self.request(json!({"subtype": "set_permission_mode", "mode": mode_of(permissions)}));
     }
 
     pub fn request(&mut self, request: Value) {
@@ -596,13 +643,14 @@ impl Stream {
                     self.emit(Body::Started { provider_session: session.to_owned(), resumed: false });
                 }
                 // Claude starts in Manual, saying nothing else, when auto mode is not available to the login or the
-                // model (2.1.331): only `init` tells. A CLI that names no mode is not taken to have fallen back.
-                if self.auto_unchecked
+                // model (2.1.331), and a start that passes no mode takes the login's own default: only `init` tells.
+                // A CLI that names no mode is not taken to have fallen back.
+                if let Some(asked) = self.unchecked
                     && let Some(mode) = line["permissionMode"].as_str()
                 {
-                    self.auto_unchecked = false;
-                    if mode != "auto" {
-                        self.emit(Body::Notice { text: NO_AUTO.into() });
+                    self.unchecked = None;
+                    if let Some(text) = mode_notice(asked, mode) {
+                        self.emit(Body::Notice { text });
                     }
                 }
                 self.begin();
@@ -944,10 +992,10 @@ mod tests {
     }
 
     #[test]
-    fn a_session_that_asked_for_auto_is_told_once_when_init_says_claude_started_in_another_mode() {
-        let notices = |asked: bool, inits: &[Value]| {
+    fn a_session_is_told_once_when_init_names_a_mode_other_than_the_one_it_asked_for() {
+        let notices = |asked: Option<Permissions>, inits: &[Value]| {
             let mut w = wire();
-            w.stream.auto_unchecked = asked;
+            (w.stream.permissions, w.stream.unchecked) = (asked, asked);
             w.stream.prompt("go".into());
             for init in inits {
                 w.agent(init.clone());
@@ -961,10 +1009,40 @@ mod tests {
             }
             line
         };
-        assert_eq!(notices(true, &[init(Some("default")), init(Some("default"))]), [NO_AUTO], "Manual, said once");
-        assert_eq!(notices(true, &[init(Some("auto")), init(Some("default"))]), Vec::<String>::new(), "it got auto; a later turn's init is not checked");
-        assert_eq!(notices(true, &[init(None)]), Vec::<String>::new(), "a CLI that names no mode");
-        assert_eq!(notices(false, &[init(Some("default"))]), Vec::<String>::new(), "a session that asked for nothing");
+        let (auto, ask) = (Some(Permissions::Auto), Some(Permissions::Ask));
+        let manual = format!("{NO_AUTO}, so Claude runs this agent in Manual mode.");
+        assert_eq!(notices(auto, &[init(Some("default")), init(Some("default"))]), [manual], "Manual, said once");
+        assert_eq!(notices(auto, &[init(Some("acceptEdits"))]), [format!("{NO_AUTO}, so Claude runs this agent in Accept edits mode.")], "the mode it got, named");
+        assert_eq!(notices(auto, &[init(Some("auto")), init(Some("default"))]), Vec::<String>::new(), "it got auto; a later turn's init is not checked");
+        assert_eq!(notices(auto, &[init(None)]), Vec::<String>::new(), "a CLI that names no mode");
+        assert_eq!(notices(ask, &[init(Some("default"))]), Vec::<String>::new(), "asks, in Manual");
+        let bypass = "Your Claude Code settings run this agent in Bypass permissions mode, so it may run steps without asking you.";
+        assert_eq!(notices(ask, &[init(Some("bypassPermissions"))]), [bypass], "asked to ask, and the login's own default runs every step");
+        assert_eq!(notices(None, &[init(Some("bypassPermissions"))]), Vec::<String>::new(), "a locked session's profile decides");
+    }
+
+    #[test]
+    fn a_running_agent_switches_mode_once_per_change_and_a_locked_one_never() {
+        let switches = |w: &mut Wire| -> Vec<String> {
+            w.sent().into_iter().filter(|line| line["request"]["subtype"] == "set_permission_mode").map(|line| line["request"]["mode"].as_str().unwrap().to_owned()).collect()
+        };
+        let mut w = wire();
+        (w.stream.permissions, w.stream.unchecked) = (Some(Permissions::Auto), None);
+        w.sent();
+        w.stream.set_permissions(Permissions::Ask);
+        w.stream.set_permissions(Permissions::Ask);
+        assert_eq!(switches(&mut w), ["default"], "to Manual, once");
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "permissionMode": "default"}));
+        assert!(!w.said().iter().any(|body| matches!(body, Body::Notice { .. })), "it got what it asked for");
+        w.stream.set_permissions(Permissions::Auto);
+        assert_eq!(switches(&mut w), ["auto"]);
+        w.agent(json!({"type": "system", "subtype": "init", "session_id": "s-1", "permissionMode": "default"}));
+        assert!(w.said().iter().any(|body| matches!(body, Body::Notice { text } if text.starts_with(NO_AUTO))), "the switch to auto is checked too");
+        let mut locked = wire();
+        locked.stream.locked = Some(vec![]);
+        locked.sent();
+        locked.stream.set_permissions(Permissions::Auto);
+        assert_eq!(switches(&mut locked), Vec::<String>::new(), "a locked session's profile is never changed");
     }
 
     #[test]

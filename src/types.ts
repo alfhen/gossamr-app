@@ -575,6 +575,8 @@ export interface Run {
   inWorkFolder?: boolean;
   /** The harness session the run is, once it opened one. */
   harnessSession?: string;
+  /** Who settles its agent's permission prompts, as Gossamr last asked the harness: at the start and with each message, answer and resume since. */
+  agentPermissions?: AgentPermissions;
   /** The harness took your answer to its open question, and it has not reached the agent yet; `lastDetail` says so in words. */
   answerWaits?: boolean;
   /** Its session was handed over to Terminal: a message to it needs you to say you took it back (`runsAnswer`'s `tookBack`). */

@@ -106,11 +106,11 @@ test.describe("Inbox", () => {
 test("Settings states what Gossamr posts and what agents may do, and Work does not", async ({ page }) => {
   await openApp(page, "runs=empty");
   await openAgents(page);
-  await expect(page.locator("body")).not.toContainText("until you approve it");
+  await expect(page.locator("body")).not.toContainText("until you approve a draft");
   await expect(page.locator("body")).not.toContainText("Claude Code settings");
   await page.locator("aside", { has: page.getByRole("navigation", { name: "Workspace" }) }).getByRole("button", { name: "Settings" }).click();
   const promises = page.locator("[data-promises] li");
-  await expect(promises).toHaveText(["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run on Claude with its own Claude Code settings, so they can push branches and use your own tools."]);
+  await expect(promises).toHaveText(["Gossamr posts nothing to Jira or GitHub until you approve a draft. Agents in Auto can push and run gh without asking you.", "Agents run on Claude with its own Claude Code settings, so they can push branches and use your own tools. In Auto, Gossamr picks their permission mode, not your settings. Change it in Agent settings."]);
 });
 
 test("the theme control moves with the arrow keys and Space flips the Follow my screen switch", async ({ page }) => {

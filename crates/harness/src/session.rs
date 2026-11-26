@@ -171,6 +171,7 @@ enum Request {
     Answer { id: String, decision: Decision, message: Option<String> },
     ToolResult { id: String, reply: Reply },
     Cancel,
+    SetPermissions(Permissions),
     /// A client's Stop, or the client a session ends with leaving: what its `closed` says.
     Stop(ClosedBy),
     HandOver,
@@ -504,6 +505,26 @@ impl Harness {
     /// Cancels the running turn, or a prompt that waits for a slot.
     pub fn cancel(&self, id: &str) -> Result<()> {
         self.request(id, Request::Cancel)
+    }
+
+    /// Who settles the session's permission prompts from now on: kept on its row for every later start, and sent to its
+    /// running agent, if one runs, ahead of anything asked after this. None changes nothing, and a locked session's
+    /// profile is never changed. Under the lock a start takes the session by, so a start that begins now reads the new
+    /// value or gets the request.
+    pub fn set_permissions(&self, id: &str, permissions: Option<Permissions>) -> Result<()> {
+        let Some(permissions) = permissions else { return Ok(()) };
+        let live = self.inner.live();
+        let locked = self.inner.with_store(|store| {
+            let row = store.session(id)?;
+            if !row.locked {
+                store.set_permissions(id, permissions)?;
+            }
+            Ok(row.locked)
+        })?;
+        if let Some(entry) = live.get(id).filter(|_| !locked) {
+            let _ = entry.requests.send(Request::SetPermissions(permissions));
+        }
+        Ok(())
     }
 
     /// Stops the session. It is closed once its agent has gone, which its `closed` event says; until then it takes no
@@ -1709,6 +1730,9 @@ impl Task {
                             let _ = link.commands.send(Command::Cancel);
                         }
                     },
+                    Some(Request::SetPermissions(permissions)) => {
+                        let _ = link.commands.send(Command::SetPermissions(permissions));
+                    }
                     Some(Request::Answer { id, decision, message }) => {
                         let open = self.open_requests().remove(&id);
                         if let Some(OpenRequest { driver_id, .. }) = open

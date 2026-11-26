@@ -423,7 +423,7 @@ describe("agent settings", () => {
     const view = (settings: typeof SETTINGS) => renderToStaticMarkup(<AgentsSettingsView runs={[]} stopping={false} keepRunning={0} settings={settings} cleanup={null} onSettings={vi.fn()} onRevealWorkFolder={vi.fn()} onCleanup={vi.fn()} onStopAll={vi.fn()} onClose={vi.fn()} />);
     const unsent = view({ ...SETTINGS, permissions: undefined });
     expect(unsent).toMatch(/<option value="auto" selected/);
-    expect(unsent).toContain("Claude decides which steps are safe and runs them. It can push, delete or reset without asking you.");
+    expect(unsent).toContain("Claude decides which steps are safe and runs them without asking you. That can include force-pushing, resetting, running scripts from the internet and sending files to other sites.");
     const asks = view({ ...SETTINGS, permissions: "ask" });
     expect(asks).toMatch(/<option value="ask" selected/);
     expect(asks).toContain("You allow or deny each step that needs it.");

@@ -15,7 +15,7 @@ const sources = (dir: string): string[] =>
 
 describe("the two facts the app states", () => {
   it("are said in Settings, and in no other screen", () => {
-    expect(PROMISES).toEqual(["Gossamr posts nothing to Jira or GitHub until you approve it.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools."]);
+    expect(PROMISES).toEqual(["Gossamr posts nothing to Jira or GitHub until you approve a draft. Agents in Auto can push and run gh without asking you.", "Agents run with your own Claude Code settings, so they can push branches and use your own tools. In Auto, Gossamr picks their permission mode, not your settings. Change it in Agent settings."]);
     const restating = sources(root)
       .filter((path) => !path.endsWith("workspace/Settings.tsx"))
       .filter((path) => /Claude Code settings|until you approve|until you choose|push branches|your own tools/i.test(readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "")));

@@ -220,7 +220,7 @@ async fn events_a_client_that_reconnects_after_n_gets_exactly_what_it_missed() {
     let served = serve(SCRIPT);
     let mut first = connect(&served).await;
     let id = open(&mut first).await;
-    first.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    first.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     let seen = events_until(&mut first, |body| matches!(body, Body::Text { .. })).await;
     let after = seen.last().unwrap().seq;
     drop(first);
@@ -254,7 +254,7 @@ async fn requests_each_request_of_the_api_works_against_the_mock() {
     assert_eq!(providers["drivers"].as_array().unwrap().len(), 1);
     let id = open(&mut client).await;
     let s = || id.clone();
-    client.call(Op::Send { session: s(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: s(), text: "go".into() }).await.unwrap();
     let asked = events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
     let Body::Permission { id: request, .. } = &asked.last().unwrap().body else { unreachable!() };
     let wrong = client.call(Op::Answer { session: s(), request: "p-never".into(), decision: Decision::Allow, message: None }).await;
@@ -268,7 +268,7 @@ async fn requests_each_request_of_the_api_works_against_the_mock() {
     assert!(matches!(&ended[0].body, Body::ToolResult { output, error: false, .. } if output["title"] == "T"));
     assert_eq!(served.mock.replies(&provider_session(&served, &id))[0].as_ref().unwrap().output["title"], "T", "the agent got the result");
 
-    client.call(Op::Send { session: s(), text: "again".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: s(), text: "again".into() }).await.unwrap();
     events_until(&mut client, |body| *body == Body::TurnStarted).await;
     client.call(Op::Cancel { session: s() }).await.unwrap();
     events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
@@ -373,7 +373,7 @@ async fn locked_a_client_that_stops_reading_misses_no_event_and_gets_each_whole(
     let mut slow = connect(&served).await;
     let id = open_as(&mut slow, true, false).await;
     let mut done = served.harness.subscribe(&id).unwrap();
-    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    slow.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     // The client reads nothing until the session has closed.
     loop {
         match done.recv().await {
@@ -399,7 +399,7 @@ async fn events_a_watch_from_past_the_end_pushes_nothing_at_or_below_its_number(
     let served = serve(SCRIPT);
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
-    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
     let mut watcher = connect(&served).await;
     watcher.call(Op::Watch { session: id.clone(), after: 1_000 }).await.unwrap();
@@ -447,7 +447,7 @@ async fn locked_a_reconnecting_client_gets_kept_fields_and_not_the_text() {
     let served = serve(SCRIPT);
     let mut first = connect(&served).await;
     let id = open_as(&mut first, true, false).await;
-    first.call(Op::Send { session: id.clone(), text: "a private prompt".into() }).await.unwrap();
+    first.call(Op::Send { permissions: None, session: id.clone(), text: "a private prompt".into() }).await.unwrap();
     let live = events_until(&mut first, |body| matches!(body, Body::Permission { .. })).await;
     assert!(live.iter().any(|event| event.body == Body::Text { text: "two".into() }), "the connected client gets the text");
     drop(first);
@@ -489,7 +489,7 @@ async fn shutdown_stops_every_session_and_frees_the_data_folder() {
     let mut served = serve(SCRIPT);
     let mut client = connect(&served).await;
     let (idle, asking) = (open(&mut client).await, open(&mut client).await);
-    client.call(Op::Send { session: asking.clone(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: asking.clone(), text: "go".into() }).await.unwrap();
     loop {
         match next_event(&mut client).await.body {
             Body::Permission { .. } => break,
@@ -523,11 +523,11 @@ async fn requests_a_question_is_answered_as_the_next_prompt_and_hand_over_keeps_
     let served = serve(QUESTION);
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
-    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     let asked = events_until(&mut client, |body| matches!(body, Body::Question { .. })).await;
     let Body::Question { id: question, .. } = &asked.last().unwrap().body else { unreachable!() };
-    client.call(Op::AnswerQuestion { session: id.clone(), question: question.clone(), text: "this one".into() }).await.unwrap();
-    let again = client.call(Op::AnswerQuestion { session: id.clone(), question: question.clone(), text: "twice".into() }).await;
+    client.call(Op::AnswerQuestion { permissions: None, session: id.clone(), question: question.clone(), text: "this one".into() }).await.unwrap();
+    let again = client.call(Op::AnswerQuestion { permissions: None, session: id.clone(), question: question.clone(), text: "twice".into() }).await;
     assert!(matches!(again, Err(Error::Said(_))), "a question is answered once: {again:?}");
     let answered = events_until(&mut client, |body| *body == Body::Text { text: "thanks".into() }).await;
     assert!(answered.iter().any(|event| event.body == Body::Prompted { text: "this one".into() }), "the answer went as the next prompt");
@@ -626,7 +626,7 @@ async fn limits_an_event_over_the_cap_is_cut_stored_and_sent_cut_and_readers_go_
         let served = serve(&big_say(len));
         let mut client = connect(&served).await;
         let id = open_as(&mut client, locked, false).await;
-        client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+        client.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
         let seen = events_until(&mut client, |body| *body == Body::Text { text: "after".into() }).await;
         let big = seen.iter().find(|event| matches!(&event.body, Body::Text { text } if text.starts_with('y'))).expect("the big text came, cut");
         let Body::Text { text } = &big.body else { unreachable!() };
@@ -653,7 +653,7 @@ async fn limits_events_come_in_pages_and_the_client_reads_them_all() {
     let served = serve(&script);
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
-    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
     let first = client.call(Op::Events { session: id.clone(), after: 0 }).await.unwrap();
     assert_eq!(first["more"], json!(true), "the first page is not all");
@@ -763,7 +763,7 @@ async fn limits_a_cut_permission_request_can_only_be_denied_and_one_too_large_to
     let served = serve(&big_permissions());
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
-    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     let asked = events_until(&mut client, |body| matches!(body, Body::Permission { .. })).await;
     let event = asked.last().unwrap();
     assert!(event.cut.is_some(), "its input was cut");
@@ -827,7 +827,7 @@ async fn tokens_a_watching_connection_of_a_revoked_token_gets_nothing_after_the_
     let other = Token::random();
     first.call(Op::TokenNew { stored_key: encode(&other.stored_key()) }).await.unwrap();
     let id = open_as(&mut first, true, false).await;
-    first.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    first.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     events_until(&mut first, |body| matches!(body, Body::TurnEnded { .. })).await;
     let mut watcher = Client::connect(&served.dir, &other).await.unwrap();
     watcher.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
@@ -839,7 +839,7 @@ async fn tokens_a_watching_connection_of_a_revoked_token_gets_nothing_after_the_
     let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
     first.call(Op::TokenRevoke { token: other_id }).await.unwrap();
     // A locked session's text, made after the revoke has answered.
-    first.call(Op::Send { session: id.clone(), text: "again".into() }).await.unwrap();
+    first.call(Op::Send { permissions: None, session: id.clone(), text: "again".into() }).await.unwrap();
     events_until(&mut first, |body| matches!(body, Body::TurnEnded { .. })).await;
     match tokio::time::timeout(Duration::from_secs(60), watcher.push()).await.unwrap() {
         Ok(None) | Err(_) => {}
@@ -860,7 +860,7 @@ async fn locked_a_client_past_the_backlog_is_told_events_were_lost() {
     let mut slow = connect(&served).await;
     let id = open_as(&mut slow, true, false).await;
     let mut done = served.harness.subscribe(&id).unwrap();
-    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    slow.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     // The client reads nothing until the session has closed.
     loop {
         match done.recv().await {
@@ -895,7 +895,7 @@ async fn events_an_unlocked_client_that_stops_reading_reads_what_it_missed_from_
     let mut slow = connect(&served).await;
     let id = open(&mut slow).await;
     let mut done = served.harness.subscribe(&id).unwrap();
-    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    slow.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     loop {
         match done.recv().await {
             Ok(event) if matches!(event.body, Body::Closed { .. }) => break,
@@ -962,7 +962,7 @@ async fn locked_a_client_past_the_backlogs_bytes_is_told_events_were_lost() {
     let mut slow = connect(&served).await;
     let id = open_as(&mut slow, true, false).await;
     let closing = until_closed(&served, &id);
-    slow.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    slow.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     closing.await;
     let end = loop {
         match tokio::time::timeout(Duration::from_secs(60), slow.push()).await.unwrap().unwrap() {
@@ -984,7 +984,7 @@ async fn tokens_a_revoke_ends_a_connection_whose_client_stopped_reading() {
     // The watcher reads nothing, so the harness's writes to it block once the socket is full.
     let mut stuck = Client::connect(&served.dir, &other).await.unwrap();
     stuck.call(Op::Watch { session: id.clone(), after: 0 }).await.unwrap();
-    admin.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    admin.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     closing.await;
     let listed = admin.call(Op::TokenList).await.unwrap();
     let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
@@ -1078,7 +1078,7 @@ async fn tokens_a_revoke_that_cuts_a_write_short_drops_the_connection_without_fl
     stuck.send(Message::text(json!(Proof { proof: encode(&other.answer(hello.as_bytes())) }).to_string())).await.unwrap();
     stuck.next().await;
     stuck.send(Message::text(json!({ "id": 1, "op": "watch", "session": id, "after": 0 }).to_string())).await.unwrap();
-    admin.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    admin.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     closing.await;
     let listed = admin.call(Op::TokenList).await.unwrap();
     let other_id = listed.as_array().unwrap().iter().find(|row| row["yours"] == json!(false)).unwrap()["id"].as_i64().unwrap();
@@ -1143,7 +1143,7 @@ async fn shutdown_a_client_that_asks_once_it_has_begun_is_told_so() {
     let opened = asking.call(Op::Open { provider: "stuck".into(), cwd: Some("/nowhere".into()), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None }).await.unwrap();
     let id = opened["session"].as_str().unwrap().to_owned();
     let mut events = harness.subscribe(&id).unwrap();
-    asking.call(Op::Send { session: id, text: "run".into() }).await.unwrap();
+    asking.call(Op::Send { permissions: None, session: id, text: "run".into() }).await.unwrap();
     until(&mut events, |body| matches!(body, Body::TurnStarted)).await;
     let first_ask = tokio::spawn(async move { asking.call(Op::Shutdown { no_carry_on: None }).await });
     // On this one thread, `run` removes the socket and closes the asks in one step; the stuck agent then holds the
@@ -1193,7 +1193,7 @@ async fn tokens_watchers_in_the_middle_of_pushes_get_nothing_stored_after_the_re
     let said = failed.clone();
     let feed = tokio::spawn(async move {
         while feeds.load(std::sync::atomic::Ordering::Relaxed) {
-            if let Err(e) = feeder.call(Op::Send { session: session.clone(), text: "go".into() }).await {
+            if let Err(e) = feeder.call(Op::Send { permissions: None, session: session.clone(), text: "go".into() }).await {
                 *said.lock().unwrap() = Some(e.to_string());
                 return;
             }
@@ -1349,7 +1349,7 @@ async fn claude_a_client_opens_a_claude_session_through_the_socket_with_the_clau
     let open = Op::Open { provider: "claude".into(), cwd: Some(cwd), repo: None, base: None, branch: None, locked: false, model: None, login: None, effort: None, permissions: Default::default(), ends_with_client: false, tools: vec![], result_schema: None };
     let id = client.call(open).await.unwrap()["session"].as_str().unwrap().to_owned();
     let prompt = std::fs::read_to_string(&fixture).unwrap().lines().map(|line| serde_json::from_str::<Value>(line).unwrap()).find(|line| line["dir"] == "to_agent" && line["data"]["type"] == "user").unwrap();
-    client.call(Op::Send { session: id.clone(), text: prompt["data"]["message"]["content"][0]["text"].as_str().unwrap().into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id.clone(), text: prompt["data"]["message"]["content"][0]["text"].as_str().unwrap().into() }).await.unwrap();
     let seen = events_until(&mut client, |body| body.ends_turn()).await;
     assert!(seen.iter().any(|event| matches!(event.body, Body::Text { .. })), "Claude's text came over the socket");
     assert_eq!(seen.last().map(|event| &event.body), Some(&Body::TurnEnded { how: harness::event::TurnEnd::Done }));
@@ -1373,7 +1373,7 @@ const LONG_TURN: &str = "{\"prompt\": null}\n{\"say\": \"working\"}\n{\"sleep\":
 /// The client's session in its long turn: it has said it works.
 async fn working(client: &mut Client, ends_with_client: bool) -> String {
     let id = open_as(client, false, ends_with_client).await;
-    client.call(Op::Send { session: id.clone(), text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id.clone(), text: "go".into() }).await.unwrap();
     events_until(client, |body| *body == Body::Text { text: "working".into() }).await;
     id
 }
@@ -1413,7 +1413,7 @@ async fn closed_by_an_agent_that_dies_in_the_middle_of_its_turn_says_agent() {
     let served = serve("{\"prompt\": null}\n{\"say\": \"working\"}");
     let mut client = connect(&served).await;
     let id = open(&mut client).await;
-    client.call(Op::Send { session: id, text: "go".into() }).await.unwrap();
+    client.call(Op::Send { permissions: None, session: id, text: "go".into() }).await.unwrap();
     let seen = events_until(&mut client, |body| matches!(body, Body::Closed { .. })).await;
     assert!(seen.iter().any(|event| matches!(event.body, Body::Failed { kind: harness::event::FailKind::AgentStopped, .. })));
     assert_eq!(seen.last().unwrap().body, Body::Closed { by: ClosedBy::Agent });
@@ -1463,7 +1463,7 @@ async fn closed_by_says_signal_only_for_what_a_logout_sends_and_agent_for_a_cras
         let served = serve(&format!("{{\"prompt\": null}}\n{{\"say\": \"working\"}}\n{end}"));
         let mut client = connect(&served).await;
         let id = open(&mut client).await;
-        client.call(Op::Send { session: id, text: "go".into() }).await.unwrap();
+        client.call(Op::Send { permissions: None, session: id, text: "go".into() }).await.unwrap();
         let seen = events_until(&mut client, |body| matches!(body, Body::Closed { .. })).await;
         let failed = seen.iter().find_map(|event| match &event.body {
             Body::Failed { reason, .. } => Some(reason.clone()),

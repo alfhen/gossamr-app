@@ -245,3 +245,20 @@ describe("an answer that waits for a stopped session to resume", () => {
     expect(answerSentText({ ...run, state: "working" })).toBe("Answer sent. The agent gets it when its current turn ends.");
   });
 });
+
+describe("a run's permissions", () => {
+  it("shows the mode Gossamr last asked its agent for, and nothing for a run that never had a session", () => {
+    const run = byKey(harness(), "CA-407");
+    expect(sheet({ ...run, agentPermissions: "auto" })).toMatch(/data-agent-permissions[^>]*>Permissions <b[^>]*>Auto<\/b>/);
+    expect(sheet({ ...run, agentPermissions: "ask" })).toMatch(/data-agent-permissions[^>]*>Permissions <b[^>]*>Ask for each step<\/b>/);
+    expect(sheet({ ...run, agentPermissions: undefined })).not.toContain("data-agent-permissions");
+  });
+
+  it("takes the setting of the moment with an answer in the mock, as the backend sends it with each message", async () => {
+    const backend = harness();
+    const run = byKey(backend, "CA-407");
+    expect(run.agentPermissions).toBe("auto");
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), permissions: "ask" });
+    expect(backend.runs.answer(run.id, "Yes, keep 10% back.").agentPermissions).toBe("ask");
+  });
+});

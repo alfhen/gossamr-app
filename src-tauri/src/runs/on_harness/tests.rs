@@ -741,6 +741,46 @@ const BUILDS: &str = r#"{"prompt": null}
 {"end": "done"}
 {"prompt": null}"#;
 
+
+const TALKS: &str = r#"{"prompt": null}
+{"say": "First."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Second."}
+{"end": "done"}
+{"prompt": null}
+{"say": "Third."}
+{"end": "done"}
+{"prompt": null}"#;
+
+/// What the harness keeps for the run's session, and what the run says it asked for.
+async fn modes(served: &Served, rig: &Rig, run: &Run) -> (serde_json::Value, Option<AgentPermissions>) {
+    let session = rig.get(run).await.harness_session.expect("opened on the harness");
+    let listed = sessions(served).await.into_iter().find(|row| row["id"] == session.as_str()).expect("listed");
+    (listed["permissions"].clone(), rig.get(run).await.agent_permissions)
+}
+
+fn choose(rig: &Rig, permissions: AgentPermissions) {
+    rig.svc.set_settings(crate::config::AgentSettings { permissions, ..rig.svc.settings() }).unwrap();
+}
+
+#[tokio::test]
+async fn a_message_after_settings_change_takes_the_new_choice_to_an_agent_already_started_both_ways() {
+    let served = Served::new(TALKS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "First.").await;
+    assert_eq!(modes(&served, &rig, &run).await, (serde_json::json!("auto"), Some(AgentPermissions::Auto)));
+    choose(&rig, AgentPermissions::Ask);
+    rig.svc.message_agent(&run.id, "Undo that.", crate::domain::Actor::Person).await.unwrap();
+    until_detail(&rig, &run, "Second.").await;
+    assert_eq!(modes(&served, &rig, &run).await, (serde_json::json!("ask"), Some(AgentPermissions::Ask)), "Ask reached the agent started in Auto");
+    choose(&rig, AgentPermissions::Auto);
+    rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap();
+    until_detail(&rig, &run, "Third.").await;
+    assert_eq!(modes(&served, &rig, &run).await, (serde_json::json!("auto"), Some(AgentPermissions::Auto)), "and back");
+}
+
 #[tokio::test]
 async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_times_waits_for_you() {
     let mut served = Served::new(BUILDS, 4);
@@ -784,6 +824,29 @@ async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_t
     rig.svc.carry_on_after_restart().await;
     let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
     assert_eq!((follow.carry_ons, rig.fx.core.run_events(&run.id).await.unwrap().len()), (CARRY_ONS, rows), "past three in a row it waits for you");
+}
+
+#[tokio::test]
+async fn a_carry_on_after_a_harness_restart_starts_the_agent_in_the_mode_chosen_since() {
+    let mut served = Served::new(BUILDS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    assert_eq!(modes(&served, &rig, &run).await.0, "auto");
+    choose(&rig, AgentPermissions::Ask);
+    served.shut_down().await;
+    served.serve_again(4).await;
+    until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    rig.svc.carry_on_after_restart().await;
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text == "Carried on after the harness restarted") {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the carry on was sent");
+    assert_eq!(modes(&served, &rig, &run).await, (serde_json::json!("ask"), Some(AgentPermissions::Ask)));
 }
 
 #[tokio::test]
