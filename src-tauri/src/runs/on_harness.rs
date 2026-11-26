@@ -47,6 +47,14 @@ const INTERRUPTED_ASKING: &str = "Stopped when Gossamr moved agents to the harne
 /// Why Attach refuses a run in a turn.
 pub const HAND_OVER_IN_TURN: &str = "Its agent is in the middle of a turn, and opening it in Terminal would cut that turn short. Wait for the turn to end, or stop it first.";
 
+/// A clean-up refusal, with how to remove the clone's settings when they are why: the clone note says the same.
+fn with_way_out(refusal: &str, run: &Run) -> String {
+    match super::service::fresh::clone_settings_way_out(refusal, &run.spec.clone_path) {
+        Some(out) => format!("{refusal} {out}"),
+        None => refusal.to_owned(),
+    }
+}
+
 /// The harness's refusal as a sentence for the person: its words without the kind it starts with.
 fn plain_refusal(why: &str) -> String {
     let said = why.strip_prefix("refused: ").unwrap_or(why);
@@ -344,7 +352,7 @@ impl RunService {
         // Asked before the close: a refusal after it would have stopped the agent for nothing.
         if open {
             if let Some(kept) = self.kept_on_harness(run).await {
-                return Some(Ok(Some(plain_refusal(&kept))));
+                return Some(Ok(Some(with_way_out(&plain_refusal(&kept), run))));
             }
         }
         if open {
@@ -363,7 +371,7 @@ impl RunService {
                 return Some(Ok(Some("The session hasn't closed yet, so it can't be cleaned up. Try again in a moment.".into())));
             }
         }
-        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err().map(|why| plain_refusal(&why))))
+        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err().map(|why| with_way_out(&plain_refusal(&why), run))))
     }
 
     /// Why git would keep a harness run's worktree and branch, asked with the app's own git as the harness would remove

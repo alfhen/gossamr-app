@@ -1135,6 +1135,33 @@ mod clones {
     }
 
     #[tokio::test]
+    async fn a_clone_with_settings_gossamr_did_not_make_is_noted_with_how_to_remove_them() {
+        let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-config"), "remote.origin.url=https://github.com/acme/webshop.git\ncommit.gpgsign=false\nurl.file:///x.insteadof=https://github.com/\n").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        let notes = events(&rig, &run).await;
+        let note = notes.iter().find(|t| t.starts_with("Couldn't update Gossamr's clone of acme/webshop: ")).unwrap_or_else(|| panic!("{notes:?}"));
+        let way_out = crate::runs::service::fresh::clone_settings_way_out(note, &rig.clone).unwrap();
+        assert!(note.contains(&way_out) && note.ends_with("The agent starts from what was fetched before."), "{note}");
+    }
+
+    #[test]
+    fn the_way_out_of_a_clones_settings_names_each_key_to_remove_and_how_to_find_a_hidden_one() {
+        let clone = std::path::Path::new("/w/acme/webshop");
+        let why = "nothing was removed: the clone couldn't be fetched, because the clone has settings Gossamr didn't make (commit.gpgsign, url.*.insteadof), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(why, clone).as_deref(),
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset commit.gpgsign`, and find the one shown with `*` with `git -C '/w/acme/webshop' config --list --show-origin`.")
+        );
+        let two = "the clone has settings Gossamr didn't make (commit.gpgsign, tag.gpgsign), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(two, clone).as_deref(),
+            Some("Remove them with `git -C '/w/acme/webshop' config --unset commit.gpgsign` and `git -C '/w/acme/webshop' config --unset tag.gpgsign`.")
+        );
+        assert_eq!(crate::runs::service::fresh::clone_settings_way_out("the branch is not fully merged", clone), None, "any other refusal");
+    }
+
+    #[tokio::test]
     async fn a_fetch_that_fails_is_noted_on_the_run_and_the_launch_goes_on() {
         let rig = ready().await;
         std::fs::write(rig.clone.join(".fake-fetch-fails"), "").unwrap();

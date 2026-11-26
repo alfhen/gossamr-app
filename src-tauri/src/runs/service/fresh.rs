@@ -122,9 +122,33 @@ impl RunService {
         }
         let ensured = ensured.map_err(clone_failure)?;
         if let Some(Fetched::Not(why)) = &ensured.fetched {
-            let text = format!("Couldn't update Gossamr's clone of {}: {why}. The agent starts from what was fetched before.", spec.repo);
+            let way_out = clone_settings_way_out(why, &ensured.path).map(|out| format!(" {out}")).unwrap_or_default();
+            let text = format!("Couldn't update Gossamr's clone of {}: {why}.{way_out} The agent starts from what was fetched before.", spec.repo);
             self.note_clone(run, "clone_note", text).await;
         }
         Ok(Some(git.commit_identity(&ensured.path).await))
     }
 }
+
+/// How to remove the settings a refusal of git names when Gossamr won't fetch a clone with settings it didn't make: one
+/// sentence, the same wherever the refusal is shown. A key shown with `*` hides part of itself, which only the clone's
+/// own config can tell. None for any other refusal.
+pub(crate) fn clone_settings_way_out(why: &str, clone: &std::path::Path) -> Option<String> {
+    const SAID: &str = "the clone has settings Gossamr didn't make (";
+    let listed = why.split_once(SAID)?.1.split_once(')')?.0;
+    let keys: Vec<&str> = listed.split(", ").map(str::trim).filter(|key| !key.is_empty()).collect();
+    let (hidden, plain): (Vec<&str>, Vec<&str>) = keys.iter().partition(|key| key.contains('*'));
+    let at = format!("git -C '{}' config", clone.display());
+    let mut parts = Vec::new();
+    if !plain.is_empty() {
+        let each: Vec<String> = plain.iter().map(|key| format!("`{at} --unset {key}`")).collect();
+        parts.push(format!("remove {} with {}", if plain.len() == 1 { "it" } else { "them" }, each.join(" and ")));
+    }
+    if !hidden.is_empty() {
+        parts.push(format!("find {} shown with `*` with `{at} --list --show-origin`", if hidden.len() == 1 { "the one" } else { "those" }));
+    }
+    let sentence = parts.join(", and ");
+    let mut chars = sentence.chars();
+    Some(format!("{}{}.", chars.next()?.to_uppercase(), chars.as_str()))
+}
+

@@ -998,3 +998,22 @@ async fn a_run_taken_back_takes_your_message_while_it_still_reads_stopped_from_i
     rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap();
     until_detail(&rig, &run, "Back again.").await;
 }
+
+#[tokio::test]
+async fn a_clean_up_refused_for_the_clones_own_settings_says_how_to_remove_them_as_the_clone_note_does() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (_repo, setup, git) = bare_repo_at(Some(fx.home.canonicalize().unwrap()));
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_sharing(fx, &served, &git).await;
+    std::fs::remove_dir_all(&rig.clone).unwrap();
+    git.run(rig.clone.parent().unwrap(), &["clone", "--quiet", "https://github.com/acme/webshop.git", "webshop"]);
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    // As an agent's `git config` in its worktree writes the clone's shared config.
+    git.run(&rig.clone, &["config", "commit.gpgsign", "false"]);
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    let way_out = crate::runs::service::fresh::clone_settings_way_out(&message, &rig.clone).expect("the reason is the clone's settings");
+    assert!(message.ends_with(&way_out), "{message}");
+    assert!(way_out.contains("config --unset commit.gpgsign"), "{way_out}");
+}
