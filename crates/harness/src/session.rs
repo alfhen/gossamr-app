@@ -635,6 +635,8 @@ impl Harness {
             if live.contains_key(id) {
                 return Err(Error::Running(id.to_owned()));
             }
+            // As a resume is: while a leftover is still to be checked, any session's agent may still run.
+            self.inner.with_store(|store| self.inner.leftovers_stopped(store, &live))?;
             let row = self.inner.with_store(|store| store.session(id))?;
             // Its agent may still work in the worktree.
             if row.given_up.is_some() && self.inner.with_store(|store| Ok(still_given_up(store, id, &live)))? {

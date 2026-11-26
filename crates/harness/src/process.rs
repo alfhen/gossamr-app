@@ -188,11 +188,44 @@ pub fn left_of(leader: &Process, worktree: Option<&std::path::Path>) -> Left {
         pids.sort_unstable();
         match members_check(leader, worktree.is_some(), within.as_deref(), &pids) {
             Some(left) => return left,
+            // Only exited processes, twice: where a listing can hide a member, a group that still answers may hold one
+            // that runs, so it is kept until they are reaped.
+            None if before.as_ref() == Some(&pids) && listing_may_hide() && group_answers(group) => {
+                return Left::Unknown("only exited processes of its group could be listed, and the group still answers")
+            }
             None if before.as_ref() == Some(&pids) => return Left::Nothing,
             None => before = Some(pids),
         }
     }
     Left::Unknown("its group kept changing while it was listed")
+}
+
+/// Whether a listing of a group can miss a member that runs: `/proc` mounted with `hidepid`, which hides another user's
+/// processes, or makes them unreadable.
+fn listing_may_hide() -> bool {
+    #[cfg(any(test, feature = "testing"))]
+    if let Some(hides) = seam::hides() {
+        return hides;
+    }
+    hidepid()
+}
+
+#[cfg(target_os = "linux")]
+fn hidepid() -> bool {
+    static HIDES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HIDES.get_or_init(|| {
+        let Ok(mounts) = std::fs::read_to_string("/proc/self/mountinfo") else { return true };
+        // `<id> <parent> <dev> <root> <mount point> <options> ... - <type> <source> <super options>`
+        mounts.lines().filter(|line| line.split(' ').nth(4) == Some("/proc")).any(|line| {
+            let options = line.rsplit(' ').next().unwrap_or_default();
+            options.split(',').filter_map(|option| option.strip_prefix("hidepid=")).any(|value| value != "0" && value != "off")
+        })
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn hidepid() -> bool {
+    false
 }
 
 /// Whether the group answers to a signal 0: it has a member, maybe one the harness may not signal.
@@ -384,6 +417,16 @@ pub mod seam {
         static REFUSED_GROUPS: RefCell<HashMap<libc::pid_t, usize>> = RefCell::new(HashMap::new());
         static LISTINGS: RefCell<Vec<(libc::pid_t, Listing, bool)>> = const { RefCell::new(Vec::new()) };
         static SWALLOWED: RefCell<HashSet<libc::pid_t>> = RefCell::new(HashSet::new());
+        static HIDES: RefCell<Option<bool>> = const { RefCell::new(None) };
+    }
+
+    /// Whether a group's listing may hide a member that runs, as with `hidepid`, in place of asking the system.
+    pub fn listing_hides(hides: bool) {
+        HIDES.with(|set| *set.borrow_mut() = Some(hides));
+    }
+
+    pub(super) fn hides() -> Option<bool> {
+        HIDES.with(|set| *set.borrow())
     }
 
     pub(super) fn intercept(target: libc::pid_t, signal: libc::c_int) -> Option<std::io::Result<()>> {

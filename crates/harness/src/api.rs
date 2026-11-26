@@ -200,8 +200,8 @@ pub enum Op {
     /// person's word that they took the session back from Terminal; until then `resume` refuses it. One never handed
     /// over is refused: resume it. Refused, as `resume` is, while the rows say `held` or the row says `given_up`.
     TakeBack { session: String },
-    /// Refused while the session runs, and for one given up on, whose agent may still work in its worktree: checked
-    /// again first, as `resume` does.
+    /// Refused while the session runs, for one given up on, whose agent may still work in its worktree (checked again
+    /// first, as `resume` does), and, as `resume` is, while the rows say `held`.
     CleanUp { session: String },
     /// Answers the list of sessions (`store::Listed`). A row's `open_question` is the id of the question its agent
     /// asked through `ask` that is still open, or null, so a client that reconnects need not read the events for it.

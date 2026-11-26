@@ -689,8 +689,10 @@ async fn leftover_whose_giving_up_cannot_be_written_holds_every_resume_until_it_
     sql(&dir, "CREATE TRIGGER no_giving_up BEFORE UPDATE OF given_up ON sessions WHEN NEW.given_up = 1 BEGIN SELECT RAISE(FAIL, 'no'); END");
     let harness = started_harness(&dir);
     assert!(!is_given_up(&dir), "the write failed");
-    let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
-    assert!(refused.contains("could not check for agents an earlier harness left running") && refused.contains("record them"), "{refused}");
+    for refused in [harness.resume("s").await.err(), harness.clean_up("s").await.err()] {
+        let refused = refused.map(|e| e.to_string()).unwrap_or_default();
+        assert!(refused.contains("could not check for agents an earlier harness left running") && refused.contains("record them"), "{refused}");
+    }
     sql(&dir, "DROP TRIGGER no_giving_up");
     let refused = harness.resume("s").await.err().map(|e| e.to_string()).unwrap_or_default();
     assert!(refused.contains("a process in session s's group may still run"), "{refused}");
@@ -759,4 +761,25 @@ async fn leftover_freed_by_a_watched_resume_ends_before_the_watch_begins() {
         let _ = child.kill();
         child.wait().unwrap();
     }
+}
+
+#[test]
+fn leftover_whose_group_lists_only_an_exited_process_twice_but_still_answers_where_listings_hide_stays_given_up() {
+    // A zombie seen, and a member hidden, as `hidepid` hides another user's: the group still answers for it.
+    let (_tmp, dir) = data_dir();
+    let worktree = worktree(&dir);
+    let (leader, work) = a_leader_gone_with_its_work_left(&worktree);
+    left_in(&dir, Some(&leader), &worktree);
+    let mut exited = Command::new("/usr/bin/true").spawn().unwrap();
+    while process::started_of(exited.id()).is_some() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    process::seam::list_group_as(leader.pid, Listing::Members(vec![exited.id() as libc::pid_t]));
+    process::seam::listing_hides(true);
+    let harness = started_harness(&dir);
+    assert!(process::alive(&work), "not killed");
+    assert_eq!(process::seam::sent_to(work.pid), Vec::<i32>::new());
+    assert_eq!(row(harness, &dir), (true, vec![("s".to_owned(), leader)]), "kept on record, and given up on");
+    exited.wait().unwrap();
+    kill(&work);
 }
