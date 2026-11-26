@@ -614,6 +614,10 @@ fn request(id: String, kind: PermissionKind, tool: String, input: Value, cut: bo
 /// The harness's own copy of the permission request an event asks, masked only by the harness: what the page shows, and
 /// what an allow sends, since an allow sends the driver's own copy. A withheld one has no input to show.
 pub fn harness_copy(event: &Event) -> Option<PermissionRequest> {
+    // A withheld event has lost its input, so the stored copy shows more of it.
+    if matches!(event.body, Body::Withheld { .. }) {
+        return None;
+    }
     match readable(&event.body)? {
         Body::Permission { id, kind, tool, input } => Some(build(id, kind, tool, input, event.cut.is_some(), false)),
         _ => None,
