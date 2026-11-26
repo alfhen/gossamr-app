@@ -53,7 +53,9 @@ async fn permissions_a_locked_session_is_never_switched_and_its_row_never_change
     let (_tmp, dir) = data_dir();
     let mock = mock(WAITS);
     let harness = harness(&dir, &mock, 4);
-    let (id, mut events) = open(&harness, true).await;
+    let spec = harness::session::Open { provider: "mock".into(), locked: true, cwd: "/nowhere".into(), tools: tools(), permissions: Permissions::Auto, ..Default::default() };
+    let (id, mut events) = harness.open(spec).await.unwrap();
+    assert_eq!(listed(&harness, &id), Permissions::Ask, "opened asking for Auto, it keeps nothing a switch would not");
     let ps = provider_session(&next(&mut events).await.body);
     for permissions in [Permissions::Auto, Permissions::Ask, Permissions::Auto] {
         harness.set_permissions(&id, Some(permissions)).unwrap();

@@ -254,6 +254,15 @@ describe("a run's permissions", () => {
     expect(sheet({ ...run, agentPermissions: undefined })).not.toContain("data-agent-permissions");
   });
 
+  it("follows a change of Settings in the mock for every run whose agent may run, and leaves the others", async () => {
+    const backend = harness();
+    const before = backend.runs.list().filter((r) => r.harnessSession);
+    await backend.runsSetSettings({ ...(await backend.runsSettings()), permissions: "ask" });
+    const live = (state: string) => ["working", "needsAnswer", "needsPermission"].includes(state);
+    expect(before.some((r) => live(r.state)) && before.some((r) => !live(r.state))).toBe(true);
+    for (const run of before) expect(backend.runs.list().find((r) => r.id === run.id)!.agentPermissions).toBe(live(run.state) ? "ask" : "auto");
+  });
+
   it("takes the setting of the moment with an answer in the mock, as the backend sends it with each message", async () => {
     const backend = harness();
     const run = byKey(backend, "CA-407");

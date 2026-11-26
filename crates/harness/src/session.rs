@@ -267,7 +267,8 @@ impl Harness {
                 model: spec.model.as_deref(),
                 login: spec.login.as_deref(),
                 effort: spec.effort.as_deref(),
-                permissions: spec.permissions,
+                // A locked session's profile decides, so its row keeps what a switch would never change.
+                permissions: if spec.locked { Permissions::Ask } else { spec.permissions },
                 work: spec.work.as_ref(),
                 endpoint: Some(&endpoint),
                 tools: &spec.tools,

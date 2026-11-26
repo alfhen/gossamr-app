@@ -1496,6 +1496,11 @@ export class MockRuns {
       // A value the backend doesn't know asks for each step, as its config reader does.
       permissions: settings.permissions === undefined ? "auto" : settings.permissions === "auto" ? "auto" : "ask",
     };
+    // As the backend sends a change to every session whose agent may run, mid-turn too.
+    const permissions = this.limits.permissions;
+    const live = this.runs.filter((r) => r.harnessSession && r.agentPermissions && r.agentPermissions !== permissions && ["working", "needsAnswer", "needsPermission"].includes(r.state));
+    for (const run of live) this.update(run.id, { agentPermissions: permissions });
+    if (live.length) this.changed();
     return this.limits;
   }
 
