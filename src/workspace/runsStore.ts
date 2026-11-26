@@ -1,13 +1,14 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { labelsByRun } from "../lib/workstreamStage";
-import type { CleanupResult, ClearFilter, DeleteResult, ItemRef, ModelChoice, Run } from "../types";
+import { HANDED_OVER_ASK, type CleanupResult, type ClearFilter, type DeleteResult, type ItemRef, type ModelChoice, type Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { STILL_UNTRUSTED, failureHelp, installUrl, type FailureAct } from "./failureHelp";
 import { NO_FILTERS, agentGroups, stepRun, stopAllText, type AgentFilters, type NeedsScope } from "./agentsLogic";
 import { openTicket, showMe } from "./jump";
 import { forgetSettledAnswers } from "./keptAnswers";
+import { answerSentText } from "./runSheetLogic";
 import { readStored, writeStored } from "./storage";
 import { messageOf, useToasts } from "./toasts";
 import { DEFAULT_INSTANCE, instanceOf } from "./providerLogic";
@@ -67,6 +68,8 @@ interface RunsState {
   drafting: string | null;
   /** Runs whose answer is on its way to the agent. */
   answering: ReadonlySet<string>;
+  /** Runs whose answer was refused because they were handed over to Terminal, until one goes through. */
+  handedOverAsked: ReadonlySet<string>;
   /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
@@ -94,14 +97,14 @@ interface RunsState {
   startNow(id: string): Promise<void>;
   /** Changes what a queued run runs on. */
   setModel(id: string, choice: ModelChoice): Promise<void>;
-  /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. */
-  answer(id: string, text: string): Promise<boolean>;
+  /** Sends the person's answer to a run that is asking a question; the run carries on under the same id. `tookBack`: you took a run handed over to Terminal back. */
+  answer(id: string, text: string, options?: { tookBack?: boolean }): Promise<boolean>;
   /** Takes a listed session over as the continuation of a stopped or finished run, after the person chose it. */
   adoptSession(id: string, session: string): Promise<void>;
   /** With `trust`, Gossamr first trusts the run's own clone for its login; a refusal is kept for the run's card. */
   retryLaunch(id: string, options?: { trust?: boolean }): Promise<void>;
   /** The step a failed launch needs the person for: trusting the clone, Terminal to sign in or trust the folder, or the install page. */
-  fix(id: string, act: FailureAct): Promise<void>;
+  fix(id: string, act: Exclude<FailureAct, "pip" | "cleanup">): Promise<void>;
   /** Notes that the person copied the command to run it themselves, which is as good as opening Terminal. */
   noteCopied(id: string): void;
   /**
@@ -209,6 +212,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   stopping: false,
   drafting: null,
   answering: new Set<string>(),
+  handedOverAsked: new Set<string>(),
   answered: {},
   ...idle,
 
@@ -319,17 +323,21 @@ export const useRuns = create<RunsState>((set, get) => ({
     void get().reload();
   },
 
-  async answer(id, text) {
+  async answer(id, text, options) {
     const { backend, answering } = get();
     if (!backend || answering.has(id)) return false;
     set({ answering: new Set([...answering, id]) });
+    const asked = (on: boolean) => set({ handedOverAsked: new Set([...get().handedOverAsked].filter((x) => x !== id).concat(on ? [id] : [])) });
     try {
-      const run = await backend.runsAnswer(id, text);
+      const run = await backend.runsAnswer(id, text, options);
       set({ answered: { ...get().answered, [id]: run.lastProgressAt } });
-      useToasts.getState().push("Answer sent. The agent is picking it back up. Only the agent sees your answer; nothing goes to Jira.", "info");
+      asked(false);
+      useToasts.getState().push(`${answerSentText(run)} Only the agent sees your answer; nothing goes to Jira.`, "info");
       return true;
     } catch (e) {
-      useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
+      // The answer box asks whether you took it back, so a toast would only repeat it.
+      if (messageOf(e).includes(HANDED_OVER_ASK)) asked(true);
+      else useToasts.getState().push(`Couldn't send the answer: ${messageOf(e)}`);
       return false;
     } finally {
       set({ answering: new Set([...get().answering].filter((x) => x !== id)) });
