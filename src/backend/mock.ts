@@ -637,6 +637,18 @@ export class MockBackend implements Backend {
     this.runs.attach(id);
   }
 
+  async runsTakeOver(id: string) {
+    this.runs.attach(id, true);
+  }
+
+  async runsResumeCommand(id: string) {
+    return this.runs.resumeCommand(id);
+  }
+
+  async runsTakeBack(id: string) {
+    return this.runs.takeBack(id);
+  }
+
   async runsTrustFolder(id: string) {
     this.runs.trustFolder(id);
   }

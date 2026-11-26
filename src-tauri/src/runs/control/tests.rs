@@ -890,3 +890,16 @@ fn an_attach_word_with_a_quote_or_a_space_is_refused_before_a_script_is_written(
     let _ = std::fs::remove_dir_all(dir2);
     let _ = std::fs::remove_dir_all(home);
 }
+
+#[test]
+fn hand_over_resume_line_is_the_attach_files_command_with_each_word_quoted_on_the_runs_login() {
+    let words = ["--resume".to_owned(), "1b2c3d4e-0000-4000-8000-000000000001".to_owned()];
+    let line = resume_line(Some(&folder_login()), Path::new("/opt/bin/claude"), Path::new("/work/it's here"), &words).unwrap();
+    let (cd, rest) = line.split_once(" && ").unwrap();
+    assert_eq!(cd, "cd '/work/it'\\''s here'", "a quote in the path stays one word");
+    assert!(rest.ends_with("'/opt/bin/claude' '--resume' '1b2c3d4e-0000-4000-8000-000000000001'"), "{line}");
+    assert!(line.contains("CLAUDE_CONFIG_DIR='/Users/me/.claude-work' '/opt/bin/claude'"), "on the run's own login folder: {line}");
+    let plain = resume_line(None, Path::new("/opt/bin/claude"), Path::new("/work/w"), &words).unwrap();
+    assert_eq!(plain, "cd '/work/w' && '/opt/bin/claude' '--resume' '1b2c3d4e-0000-4000-8000-000000000001'", "the usual login sets nothing");
+    assert_eq!(crate::runs::shell::commands(&plain), [vec!["cd", "/work/w"], vec!["/opt/bin/claude", "--resume", "1b2c3d4e-0000-4000-8000-000000000001"]], "a shell reads it as two commands, each word whole");
+}

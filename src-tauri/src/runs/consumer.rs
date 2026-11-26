@@ -18,6 +18,8 @@ const NEEDS_KEPT: usize = super::tracker::NEEDS_KEPT;
 
 pub const SLOT_WAIT: &str = "Waits for a free slot: the harness runs as many agents as it allows";
 pub const HANDED_OVER: &str = "Handed over to Terminal";
+/// A run Resume here took back from Terminal, as `RESUMED_HERE` in `src/types.ts`.
+pub const RESUMED_HERE: &str = "Resumed here. Message the agent to go on.";
 pub const STOPPED_AFTER_DENY: &str = "Stopped after a deny";
 pub const LOST: &str = "Part of this run's record was lost";
 pub const ANSWER_WAITS: &str = "Your answer waits for the turn to end";
@@ -56,9 +58,15 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.closed = false;
             follow.stop_asked = false;
             follow.ended = false;
+            let taken_back = follow.taken_back;
             (follow.taken_back, follow.resuming) = (false, false);
             run.handed_over = false;
-            reopen(run);
+            // Resume here starts it with no prompt: it waits at rest for a message, which starts its turn.
+            if taken_back && follow.answered.is_none() {
+                run.last_detail = Some(RESUMED_HERE.into());
+            } else {
+                reopen(run);
+            }
             if follow.answered.is_some() {
                 run.last_detail = Some(ANSWER_WAITS.into());
             }

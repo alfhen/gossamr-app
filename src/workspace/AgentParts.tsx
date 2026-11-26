@@ -58,8 +58,8 @@ export function OpenInTerminal({ run, onOpen, filled = true }: { run: Run; onOpe
     <Button
       variant={filled ? "primary" : "plain"}
       size="sm"
-      disabled={!run.shortId}
-      title={run.shortId ? undefined : "There is no session to open yet"}
+      disabled={!run.shortId && !run.harnessSession}
+      title={run.shortId || run.harnessSession ? undefined : "There is no session to open yet"}
       onClick={(ev) => (ev.stopPropagation(), onOpen())}
     >
       <Icon name="term" />
@@ -249,7 +249,10 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
     }
     case "done":
       return (
-        <p className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>{createdFrom(run) ?? resultHeadline(run.summary ?? run.result) ?? "Finished"}</p>
+        <>
+          <p className={`${clamp(2)} m-0 min-w-0 text-ws-ink2 [overflow-wrap:anywhere]`}>{createdFrom(run) ?? resultHeadline(run.summary ?? run.result) ?? "Finished"}</p>
+          {run.handedOver && <p className="m-0 text-xs text-ws-ink2">Handed over to Terminal</p>}
+        </>
       );
     case "stopped":
       return (

@@ -1,5 +1,5 @@
 import { denyOnlyWhy } from "../workspace/permissionLogic";
-import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
+import { HANDED_OVER_ASK, HANDED_OVER_CLEANUP, NOT_HANDED_OVER, RESUMED_HERE, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
 import { containerRef, itemRef } from "./mockConnector";
@@ -1233,8 +1233,11 @@ export class MockRuns {
     return { stopped: active.length, failed: 0, waiting: waiting.length };
   }
 
-  attach(id: string) {
+  /** `takeOver`: from a request Gossamr can only deny, which cuts the turn waiting on it. */
+  attach(id: string, takeOver = false) {
     const run = this.get(id);
+    if (run?.harnessSession) return this.handOver(run, takeOver);
+    if (takeOver) throw new Error("Only a run on the harness can be taken over in Terminal.");
     if (!run?.shortId) throw new Error("that run has no session to attach to yet");
     if (run.runsOn && !this.providers.has(run.runsOn.instanceId)) throw new Error("That Claude was removed. Pick another.");
     this.attached.push(id);
@@ -1245,6 +1248,38 @@ export class MockRuns {
     this.attachCommands.push("codex resume");
     this.update(id, { state: "stopped", needs: null, suggestedReply: null, endedAt: this.now(), lastDetail: "Opened in Terminal" });
     this.changed();
+  }
+
+  /** As `hand_over_on_harness`: a session at rest, or one waiting on a permission you take over, is closed as handed over and opened in Terminal. */
+  private handOver(run: Run, takeOver: boolean) {
+    if (!run.handedOver) {
+      if (run.state === "working" || run.state === "launching") throw new Error("Its agent is in the middle of a turn, and opening it in Terminal would cut that turn short. Wait for the turn to end, or stop it first.");
+      if (run.state === "needsAnswer" || (run.state === "needsPermission" && !takeOver)) throw new Error("It is waiting on you; answer or stop it first.");
+    }
+    this.attached.push(run.id);
+    this.attachCommands.push("claude --resume");
+    if (run.handedOver) return;
+    const cut = run.state === "needsPermission";
+    this.update(run.id, { handedOver: true, lastDetail: "Handed over to Terminal", ...(cut ? { state: "stopped" as const, needs: null, permissions: [], endedAt: this.now() } : {}) });
+    this.changed();
+  }
+
+  /** The provider's resume of a run handed over to Terminal, as one line, as `resume_command` gives it. */
+  resumeCommand(id: string): string {
+    const run = this.get(id);
+    if (!run?.harnessSession || !run.handedOver) throw new Error(NOT_HANDED_OVER);
+    const quote = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`;
+    return `cd ${quote(run.expectedWorktree)} && ${quote("/usr/local/bin/claude")} --resume ${quote(run.harnessSession)}`;
+  }
+
+  /** Resume here: the session is taken back and started again, so it takes messages again. */
+  takeBack(id: string): Run {
+    const run = this.get(id);
+    if (!run?.harnessSession || !run.handedOver) throw new Error(NOT_HANDED_OVER);
+    // As the harness's fold: it waits at rest, as it read when handed over, for a message to start its turn.
+    const next = this.update(id, { handedOver: false, lastDetail: RESUMED_HERE });
+    this.changed();
+    return next;
   }
 
   private failed(id: string, want: RunFailure["type"], refusal: string): Run {

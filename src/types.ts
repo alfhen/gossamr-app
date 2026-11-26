@@ -641,6 +641,12 @@ export interface Run {
 /** Why a message to a run handed over to Terminal waits on you, as `HANDED_OVER_ASK` in `runs/message.rs`. */
 export const HANDED_OVER_ASK = "It was handed over to Terminal. Say whether you took it back there before Gossamr resumes it.";
 
+/** A run Resume here took back from Terminal, as `RESUMED_HERE` in `runs/consumer.rs`. */
+export const RESUMED_HERE = "Resumed here. Message the agent to go on.";
+
+/** Why Resume here and the resume command refuse a run, as `NOT_HANDED_OVER` in `runs/on_harness.rs`. */
+export const NOT_HANDED_OVER = "It isn't handed over to Terminal.";
+
 /** Why Clean up leaves a run handed over to Terminal while its worktree is there, as `HANDED_OVER_CLEANUP` in `runs/cleanup.rs`. */
 export const HANDED_OVER_CLEANUP = "Handed over to Terminal, which works in its worktree. Message the agent and press I took it back, or remove the worktree yourself once you are done there, then Clean up.";
 

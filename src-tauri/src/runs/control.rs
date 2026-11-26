@@ -102,6 +102,27 @@ fn login_lines(login: Option<&ProviderEnv>) -> Result<String> {
     Ok(format!("{unset}export {name}='{folder}'\n"))
 }
 
+/// What `write_attach_file` runs, as one line to type in Terminal: each word quoted for the shell.
+pub fn resume_line(login: Option<&ProviderEnv>, program: &Path, worktree: &Path, words: &[String]) -> Result<String> {
+    let text = |path: &Path| path.to_str().map(str::to_owned).ok_or_else(|| refuse(format!("{} isn't a path Terminal can be given", path.display())));
+    let mut steps = vec![format!("cd {}", super::shell::quote(&text(worktree)?))];
+    let mut command = String::new();
+    if let Some(login) = login.and_then(ProviderEnv::terminal_login) {
+        if !login.unset.is_empty() {
+            steps.push(format!("unset {}", login.unset.join(" ")));
+        }
+        let (name, folder) = login.export;
+        command.push_str(&format!("{name}={} ", super::shell::quote(&text(Path::new(folder))?)));
+    }
+    command.push_str(&super::shell::quote(&text(program)?));
+    for word in words {
+        command.push(' ');
+        command.push_str(&super::shell::quote(word));
+    }
+    steps.push(command);
+    Ok(steps.join(" && "))
+}
+
 fn digest_of(text: &str) -> String {
     Sha256::digest(text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
@@ -390,9 +411,22 @@ impl RunService {
 
     /// Opens Terminal in the run's worktree with the backend's attach command for its session.
     pub async fn attach(&self, run_id: &str) -> Result<()> {
+        self.attach_as(run_id, false).await
+    }
+
+    /// Take over in Terminal, from a permission request Gossamr can only deny: `attach`, cutting the turn that waits
+    /// on it, so you can run it yourself there.
+    pub async fn take_over(&self, run_id: &str) -> Result<()> {
+        self.attach_as(run_id, true).await
+    }
+
+    async fn attach_as(&self, run_id: &str, take_over: bool) -> Result<()> {
         let run = self.load(run_id).await?;
-        if let Some(handed) = self.hand_over_on_harness(&run).await {
+        if let Some(handed) = self.hand_over_on_harness(&run, take_over).await {
             return handed;
+        }
+        if take_over {
+            return Err(refuse("Only a run on the harness can be taken over in Terminal."));
         }
         let session = Session::of(&run).ok_or_else(|| refuse("This run has no session to open yet."))?;
         let tc = self.observing_toolchain(&run).await?;

@@ -63,6 +63,9 @@ const UNCHECKED: &str = "Gossamr couldn't check this run's work before stopping 
 /// Why Attach refuses a run that waits on you in the middle of its turn.
 pub const HAND_OVER_WAITING: &str = "It is waiting on you; answer or stop it first.";
 
+/// Why Resume here and the resume command refuse a run.
+pub const NOT_HANDED_OVER: &str = "It isn't handed over to Terminal.";
+
 /// Why Attach refuses a run in a turn.
 pub const HAND_OVER_IN_TURN: &str = "Its agent is in the middle of a turn, and opening it in Terminal would cut that turn short. Wait for the turn to end, or stop it first.";
 
@@ -252,7 +255,9 @@ impl RunService {
             // the session meanwhile has taken its cut, so only one of them sends.
             let _turn = self.launching.lock().await;
             let Ok(Some((_, follow))) = self.core.session_run(&session).await else { continue };
-            if follow.cut.is_none() || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
+            // Terminal has it: only Resume here takes it back.
+            let handed_over = self.load(&run.id).await.map_or(true, |run| run.handed_over);
+            if handed_over || follow.cut.is_none() || !follow.closed || follow.ended || follow.question.is_some() || follow.carry_ons >= CARRY_ONS {
                 continue;
             }
             let said = match on.link.carry_on(&session, CARRY_ON).await {
@@ -431,6 +436,8 @@ impl RunService {
         // A turn failed and its session still runs (a refused signature, a provider error): the message is its next
         // prompt, and the turn it starts takes the run out of Failed.
         let runs_on = run.state == RunState::Failed && follow.briefed && !follow.closed;
+        // Taken back with Resume here, it reads as it did when handed over while its session waits at rest again.
+        let runs_on = runs_on || run.state == RunState::Stopped && follow.provider_session.is_some() && !follow.closed && !follow.stop_asked;
         if !starting && !runs_on && (matches!(run.state, RunState::Stopped | RunState::Failed) && resumable(&follow) || wakes(run, &follow)) {
             return Some(self.resume_on_harness(link, session, run, text).await);
         }
@@ -581,15 +588,17 @@ impl RunService {
     }
 
     /// Hands a run's session to Terminal: the harness closes it as handed over, so nothing resumes it until you take it
-    /// back, and Terminal opens the provider's resume of it in its worktree, on the run's login. `None` for a run not on
-    /// the harness.
-    pub(super) async fn hand_over_on_harness(&self, run: &Run) -> Option<Result<()>> {
+    /// back, and Terminal opens the provider's resume of it in its worktree, on the run's login. With `take_over`, as
+    /// a request it can only deny offers, a turn waiting on a permission is cut so you can run it yourself there.
+    /// `None` for a run not on the harness.
+    pub(super) async fn hand_over_on_harness(&self, run: &Run, take_over: bool) -> Option<Result<()>> {
         let (link, session) = self.on_harness_of(run)?;
         Some(async {
             let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
             let resumed_by = follow.provider_session.clone().ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to open.".into()))?;
-            // A hand-over cuts a running turn and drops the messages queued for it: Terminal takes a session at rest.
-            if follow.in_turn && !follow.closed {
+            // A hand-over cuts a running turn and drops the messages queued for it: Terminal takes a session at rest,
+            // but for a permission you chose to answer there yourself.
+            if follow.in_turn && !follow.closed && !(take_over && run.state == RunState::NeedsPermission) {
                 let waits = matches!(run.state, RunState::NeedsAnswer | RunState::NeedsPermission);
                 return Err(Error::Proposal(if waits { HAND_OVER_WAITING } else { HAND_OVER_IN_TURN }.into()));
             }
@@ -623,6 +632,29 @@ impl RunService {
             let file = super::control::write_attach_file(&dir, tc.login.as_ref(), &program, &session_folder(run), &words)?;
             self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
         }.await)
+    }
+
+    /// The provider's own resume of a run handed over to Terminal, as you would type it there: in its worktree, on its
+    /// login, with no guard and none of Gossamr's tools.
+    pub async fn resume_command(&self, run_id: &str) -> Result<String> {
+        let run = self.load(run_id).await?;
+        let (_, session) = self.on_harness_of(&run).filter(|_| run.handed_over).ok_or_else(|| Error::Proposal(NOT_HANDED_OVER.into()))?;
+        let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
+        let resumed_by = follow.provider_session.ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to resume.".into()))?;
+        let tc = self.observing_toolchain(&run).await?;
+        let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
+        super::control::resume_line(tc.login.as_ref(), &program, &session_folder(&run), &["--resume".to_owned(), resumed_by])
+    }
+
+    /// Resume here: on your word that you took a run handed over to Terminal back, the harness takes its session back
+    /// and starts it again by id, and it takes messages from then on.
+    pub async fn take_back(&self, run_id: &str) -> Result<Run> {
+        let _turn = self.launching.lock().await;
+        let run = self.load(run_id).await?;
+        if !run.handed_over {
+            return Err(Error::Proposal(NOT_HANDED_OVER.into()));
+        }
+        self.take_back_on_harness(&run).await.unwrap_or_else(|| Err(Error::Proposal(NOT_HANDED_OVER.into())))
     }
 
     /// Asks the harness to stop a run's session; the run reads stopped once it closed. `None` for a run not on it.

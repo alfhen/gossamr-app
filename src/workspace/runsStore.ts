@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Backend } from "../backend/types";
 import { labelsByRun } from "../lib/workstreamStage";
-import { HANDED_OVER_ASK, type CleanupResult, type ClearFilter, type DeleteResult, type ItemRef, type ModelChoice, type Run } from "../types";
+import { HANDED_OVER_ASK, RESUMED_HERE, type CleanupResult, type ClearFilter, type DeleteResult, type ItemRef, type ModelChoice, type Run } from "../types";
 import { useWorkspace } from "../workspaceStore";
 import { clearSentence } from "../lib/archiveRuns";
 import { STILL_UNTRUSTED, failureHelp, installUrl, type FailureAct } from "./failureHelp";
@@ -149,6 +149,10 @@ interface RunsState {
   /** Puts run `id` back in Needs you if it is dismissed, leaving every other dismissal as it is. */
   undismiss(id: string, before?: ReadonlySet<string>): void;
   attach(id: string): Promise<void>;
+  /** Take over in Terminal, from a permission request Gossamr can only deny. */
+  takeOver(id: string): Promise<void>;
+  /** Resume here, once you said you took the run back from Terminal; `true` once the harness took it back. */
+  takeBack(id: string): Promise<boolean>;
   stopAll(): Promise<void>;
   /** Removes a finished run's worktree. Null when the call failed, which is shown as a message. */
   cleanup(id: string): Promise<CleanupResult | null>;
@@ -540,6 +544,32 @@ export const useRuns = create<RunsState>((set, get) => ({
       await backend.runsAttach(id);
     } catch (e) {
       useToasts.getState().push(`Couldn't open Terminal: ${messageOf(e)}`);
+    }
+  },
+
+  async takeOver(id) {
+    const { backend } = get();
+    if (!backend) return;
+    try {
+      await backend.runsTakeOver(id);
+    } catch (e) {
+      useToasts.getState().push(`Couldn't take it over in Terminal: ${messageOf(e)}`);
+    }
+    void get().reload();
+  },
+
+  async takeBack(id) {
+    const { backend } = get();
+    if (!backend) return false;
+    try {
+      await backend.runsTakeBack(id);
+      useToasts.getState().push(RESUMED_HERE, "info");
+      return true;
+    } catch (e) {
+      useToasts.getState().push(`Couldn't resume it here: ${messageOf(e)}`);
+      return false;
+    } finally {
+      void get().reload();
     }
   },
 
