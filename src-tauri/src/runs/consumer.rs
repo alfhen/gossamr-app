@@ -256,6 +256,13 @@ pub fn agent_lost(run: &mut Run, follow: &mut SessionFollow, now: DateTime<Utc>)
     run.state = RunState::Stopped;
     run.last_detail = Some(AGENT_LOST.into());
     run.ended_at = Some(now);
+    // A Stop that found the agent lost is the person's end of the run: nothing is left to answer.
+    if follow.stop_asked {
+        follow.ended = true;
+        follow.question = None;
+        follow.asked = None;
+        drop_answer(run, follow);
+    }
     settle(run, follow);
     run.asking = run.state == RunState::NeedsAnswer;
     run.needs = (run.state == RunState::NeedsAnswer).then(|| follow.asked.clone()).flatten();

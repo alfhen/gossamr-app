@@ -45,6 +45,9 @@ fn refuse(message: impl Into<String>) -> Error {
 /// Marks a run as being cleaned up until dropped, on every way out of `cleanup`.
 struct Cleaning<'a>(&'a RunService, String);
 
+/// What Clean up and Delete say of a run on the harness until clean-up goes through it.
+pub(super) const ON_HARNESS_LATER: &str = "Clean up for an agent on the harness comes in a coming update. Its worktree stays in ~/Gossamr/agents until then.";
+
 impl Drop for Cleaning<'_> {
     fn drop(&mut self) {
         self.0.cleaning.lock().expect("cleaning lock poisoned").remove(&self.1);
@@ -82,7 +85,7 @@ impl RunService {
             return Err(refuse("This run's worktree is already removed."));
         }
         if run.harness_session.is_some() {
-            return Err(refuse("Clean up for an agent on the harness comes in a coming update. Its worktree stays in ~/Gossamr/agents until then."));
+            return Err(refuse(ON_HARNESS_LATER));
         }
         if !cleanable(&run) {
             return Err(refuse(match run.state {

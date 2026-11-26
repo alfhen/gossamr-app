@@ -417,3 +417,13 @@ fn a_lost_agent_keeps_the_question_it_asked_for_you_to_answer() {
     assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.asking), (RunState::NeedsAnswer, Some("Which colour?"), true));
     assert_eq!(p.follow.question.as_deref(), Some("q1"));
 }
+
+#[test]
+fn a_stop_that_finds_the_agent_lost_ends_the_run_and_its_question() {
+    let mut p = Played::new();
+    p.play(started()).play([Body::Question { id: "q1".into(), text: "Which colour?".into() }]);
+    p.follow.stop_asked = true;
+    agent_lost(&mut p.run, &mut p.follow, Utc::now());
+    assert_eq!((p.run.state, p.run.needs.as_deref(), p.run.asking), (RunState::Stopped, None, false));
+    assert!(p.follow.ended && p.follow.question.is_none(), "nothing more is followed or answered");
+}

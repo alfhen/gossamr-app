@@ -541,3 +541,55 @@ async fn a_harness_run_is_not_held_back_by_claudes_trust_question_which_its_prin
     let opened = rig.get(&run).await;
     assert!(opened.harness_session.is_some() && opened.failure.is_none(), "{:?}", opened.error);
 }
+
+#[tokio::test]
+async fn a_run_whose_open_kept_no_branch_has_the_harnesss_at_the_next_connect() {
+    let (_repo, setup) = on_a_bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let (branch, worktree) = (done.branch.clone().unwrap(), done.expected_worktree.clone());
+    // As if the listing after the brief had failed, or the app had quit before it.
+    let session = done.harness_session.clone().unwrap();
+    rig.fx.core.apply_session(&session, |run, _| {
+        run.branch = None;
+        run.expected_worktree = std::path::PathBuf::from("/elsewhere");
+        Vec::new()
+    }).await.unwrap();
+    // The app again: a new link, whose connect reads the listing.
+    let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    let reads = Arc::new(crate::agent::agent_tools::HarnessReads(rig.fx.core.clone()));
+    let again = Link::start(rig.fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed);
+    let mut applied = again.applied();
+    let filled = tokio::time::timeout(WAIT, async {
+        loop {
+            let now = rig.get(&run).await;
+            if now.branch.is_some() {
+                return now;
+            }
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(50), applied.changed()).await;
+        }
+    })
+    .await
+    .expect("the connect filled the branch in");
+    assert_eq!((filled.branch.as_deref(), &filled.expected_worktree), (Some(branch.as_str()), &worktree));
+}
+
+#[tokio::test]
+async fn delete_says_a_harness_runs_worktree_is_cleaned_up_later_and_keeps_its_session_on_record() {
+    let served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    rig.svc.archive(std::slice::from_ref(&run.id)).await.unwrap();
+    let info = rig.svc.worktree_info(&run.id).await.unwrap();
+    assert_eq!((info.removable, info.reason.as_deref()), (false, Some(crate::runs::cleanup::ON_HARNESS_LATER)));
+    let refused = rig.svc.delete(&run.id, true).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::cleanup::ON_HARNESS_LATER);
+    rig.svc.delete(&run.id, false).await.unwrap();
+    let rows: i64 = rusqlite::Connection::open(rig.fx.dir.join("app.sqlite")).unwrap().query_row("SELECT count(*) FROM run_sessions WHERE run_id = ?1", [&run.id], |r| r.get(0)).unwrap();
+    assert_eq!(rows, 1, "the only record of its worktree stays");
+}

@@ -704,3 +704,20 @@ async fn a_stop_or_a_message_leaves_a_session_whose_stored_events_the_app_has_no
     assert!(!bed.rows(&run).await.iter().any(|(_, text)| text == consumer::AGENT_LOST));
     bed.end().await;
 }
+
+#[tokio::test]
+async fn a_turn_whose_harness_went_after_storing_events_the_app_had_not_read_ends_as_lost_once_they_are_applied() {
+    let mut bed = Bed::new(STREAM).await;
+    let (run, session) = lost(&bed).await;
+    bed.served.shut_down().await;
+    bed.relink();
+    // What the agent did while the app was away, stored before its harness was killed: no end.
+    let stored = {
+        let store = harness::store::Store::open(&bed.served.dir).unwrap();
+        store.append(&session, &harness::event::Body::Text { text: "Still at it.".into() }, 0).unwrap().seq
+    };
+    bed.served.serve(STREAM, 4);
+    let (after, follow) = bed.until(&run, |r, _| r.state == RunState::Stopped).await;
+    assert_eq!((follow.seq, after.last_detail.as_deref()), (stored, Some(consumer::AGENT_LOST)), "its events are applied, then its turn is lost");
+    bed.end().await;
+}
