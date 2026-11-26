@@ -423,14 +423,18 @@ function seeded(i: number, seed: Seed, epoch: number): Run {
 
 /** What a run on the harness says while it holds your answer, as `ANSWER_WAITS` in `runs/consumer.rs`. */
 const ANSWER_WAITS = "Your answer waits for the turn to end";
+/** The same, for a session that closed before the answer reached the agent, as `ANSWER_WAITS_RESUME`. */
+const ANSWER_WAITS_RESUME = "Your answer waits for the session to resume";
+/** Why a message waits while the harness holds your answer, as `ANSWER_ON_ITS_WAY` in `runs/link.rs`. */
+const ANSWER_ON_ITS_WAY = "Your answer is on its way to the agent. Send more once it has arrived.";
 
 /** A run on the harness has its harness session and no Claude session id, as H10b writes it. */
 const harnessOf = (i: number) => ({ harnessSession: `hs-0000-4000-8000-00000000000${i}`, shortId: null, sessionId: null });
 
 /**
  * Runs in each state the page shows for runs on the harness: signing needs you, interrupted, handed over (asking, and
- * stopped as H10b ends it), an answer it holds, and a clean-up refused. Each is on a ticket the sample cache has, so Ask
- * Pip opens its workstream.
+ * stopped as H10b ends it), an answer it holds (in a turn, and for a session to resume), a clean-up refused, and a session
+ * the harness couldn't open. Each is on a ticket the sample cache has, so Ask Pip opens its workstream.
  */
 const HARNESS_SEEDS: Seed[] = [
   { key: "CA-405", name: "ca-405-back-in-stock-1a2c", state: "failed", minutesAgo: 18, over: { ...harnessOf(1), error: "git commit failed: error: 1Password: agent returned an error. fatal: failed to write commit object", failure: { type: "signingNeedsYou" }, branch: "worktree-ca-405-back-in-stock-1a2c" } },
@@ -439,6 +443,8 @@ const HARNESS_SEEDS: Seed[] = [
   { key: "CA-407", name: "ca-407-send-time-7d8f", state: "needsAnswer", minutesAgo: 9, over: { ...harnessOf(3), asking: true, needs: "Should the test keep 10% back as a control?", lastDetail: "Waiting for an answer" } },
   { key: "DEVOPS-490", name: "devops-490-backfill-9e0a", state: "done", minutesAgo: 21 * 24 * 60, quietMinutes: 20 * 24 * 60, unpushed: true, over: { result: "The backfill replayed the last 30 days of events.", branch: "worktree-devops-490-backfill-9e0a" } },
   { key: "SUP-15", name: "sup-15-wholesale-1b2d", state: "stopped", minutesAgo: 40, over: { ...harnessOf(5), handedOver: true, lastDetail: "Handed over to Terminal" } },
+  { key: "SUP-10", name: "sup-10-discount-code-2c3e", state: "stopped", minutesAgo: 33, over: { ...harnessOf(6), answerWaits: true, lastDetail: ANSWER_WAITS_RESUME } },
+  { key: "CA-406", name: "ca-406-translate-footer-4e5f", state: "failed", minutesAgo: 12, over: { error: "The harness couldn't start the agent: the session limit is reached", failure: { type: "other" } } },
 ];
 
 /** Two failed launches that come from Gossamr's work folder: a run set up in the person's own clone, and a folder in the way of Gossamr's. */
@@ -1067,6 +1073,7 @@ export class MockRuns {
     const run = this.get(id);
     if (!run) throw new Error(`There is no agent ${id}.`);
     if (run.handedOver) throw new Error(HANDED_OVER_ASK);
+    if (run.answerWaits) throw new Error(ANSWER_ON_ITS_WAY);
     const body = withoutMarkers(text).trim();
     const problem = answerProblem(body);
     if (problem) throw new Error(problem);
@@ -1206,7 +1213,7 @@ export class MockRuns {
   retryLaunch(id: string, options?: { trust?: boolean }): Run {
     const run = this.get(id);
     if (!run) throw new Error("that run no longer exists");
-    if (run.state !== "failed" || run.shortId) throw new Error(`This run is ${run.state} and has nothing to retry.`);
+    if (run.state !== "failed" || run.shortId || run.harnessSession) throw new Error(`This run is ${run.state} and has nothing to retry.`);
     if (options?.trust) this.trustClone(run);
     const at = this.now();
     const next = this.stillBlocked(run)

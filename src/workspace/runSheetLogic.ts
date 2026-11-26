@@ -87,8 +87,9 @@ export const answerable = (run: Pick<Run, "state" | "unsentAnswer">) => run.stat
 
 export const answerDraft = (run: Pick<Run, "unsentAnswer">) => run.unsentAnswer ?? "";
 
-/** What "Answer sent" says; a run on the harness may hold the answer until the agent's turn ends. */
-export const answerSentText = (run: Partial<Pick<Run, "answerWaits">>) => (run.answerWaits ? "Answer sent. The agent gets it when its current turn ends." : "Answer sent. The agent is picking it back up.");
+/** What "Answer sent" says; a run on the harness may hold the answer until the agent's turn ends, or, once stopped, until its session resumes. */
+export const answerSentText = (run: Partial<Pick<Run, "answerWaits" | "state">>) =>
+  !run.answerWaits ? "Answer sent. The agent is picking it back up." : run.state === "stopped" ? "Answer sent. It waits for the session to resume." : "Answer sent. The agent gets it when its current turn ends.";
 
 /** What Claude suggested answering, offered beside the box for the person to take, never put in it for them. */
 export const suggestedAnswer = (run: Pick<Run, "suggestedReply" | "unsentAnswer">) => (run.unsentAnswer ? null : run.suggestedReply?.trim() || null);

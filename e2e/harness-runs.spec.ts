@@ -130,3 +130,12 @@ test("the sheet's Answer sent line says the agent gets the answer when its turn 
   await sheet.getByRole("button", { name: "Send answer" }).click();
   await expect(sheet.locator("[data-answer-sent]")).toHaveText("Answer sent. The agent gets it when its current turn ends.");
 });
+
+test("a session the harness couldn't open says why and offers Retry launch, and an answer waiting on a stopped session says so", async ({ page }) => {
+  await expect(card(page, "CA-406")).toContainText("The harness couldn't start the agent: the session limit is reached");
+  await expect(card(page, "SUP-10")).toContainText("Your answer waits for the session to resume");
+  const sheet = await sheetOf(page, "CA-406");
+  await expect(sheet).toContainText("It didn't start");
+  await sheet.getByRole("button", { name: "Retry launch" }).click();
+  await expect.poll(async () => (await runOf(page, "CA-406")).state).toBe("queued");
+});

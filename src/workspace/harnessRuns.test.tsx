@@ -188,3 +188,51 @@ describe("an answer the harness holds until the turn ends", () => {
     expect(answerSentText({})).toBe("Answer sent. The agent is picking it back up.");
   });
 });
+
+describe("Pip's message while the harness holds your answer", () => {
+  it("is refused in the mock with the app's words until the answer has arrived", async () => {
+    const backend = harness();
+    const run = byKey(backend, "CA-407");
+    await backend.runsAnswer(run.id, "Yes, keep 10% back.");
+    expect(() => backend.runs.messageAgent(run.id, "Also check the subject lines.")).toThrow("Your answer is on its way to the agent. Send more once it has arrived.");
+    backend.runs.advance(run.id);
+    const after = (() => {
+      try {
+        return backend.runs.messageAgent(run.id, "Also check the subject lines.");
+      } catch (e) {
+        return (e as Error).message;
+      }
+    })();
+    expect(after).not.toContain("on its way");
+  });
+});
+
+describe("a run whose session the harness couldn't open", () => {
+  it("shows the reason as the app wrote it and offers Retry launch, since it has no session to keep", () => {
+    const run = byKey(harness(), "CA-406");
+    expect(run).toMatchObject({ state: "failed", shortId: null, failure: { type: "other" } });
+    expect(run.harnessSession).toBeUndefined();
+    expect(failureHelp(run)).toBeNull();
+    expect(rowText(run, NOW)).toBe("The harness couldn't start the agent: the session limit is reached");
+    const html = sheet(run);
+    expect(html).toContain("It didn&#x27;t start");
+    expect(buttons(html)).toContain("Retry launch");
+    const [need] = needs({ runs: [run], proposals: [], workstreams: [], dismissed: new Set(), connections: [] } as unknown as Parameters<typeof needs>[0]).filter((n) => n.kind === "failure");
+    expect(need.primary).toMatchObject({ id: "retry", label: "Retry" });
+  });
+
+  it("is retried by the mock, which refuses a retry for a run that has a harness session, as the app does", async () => {
+    const backend = harness();
+    expect((await backend.runsRetryLaunch(byKey(backend, "CA-406").id)).state).toBe("queued");
+    await expect(backend.runsRetryLaunch(byKey(backend, "CA-405").id)).rejects.toThrow("has nothing to retry");
+  });
+});
+
+describe("an answer that waits for a stopped session to resume", () => {
+  it("reads as the app writes it, and Answer sent says it waits for the session, not the turn", () => {
+    const run = byKey(harness(), "SUP-10");
+    expect(rowText(run, NOW)).toBe("Your answer waits for the session to resume");
+    expect(answerSentText(run)).toBe("Answer sent. It waits for the session to resume.");
+    expect(answerSentText({ ...run, state: "working" })).toBe("Answer sent. The agent gets it when its current turn ends.");
+  });
+});
