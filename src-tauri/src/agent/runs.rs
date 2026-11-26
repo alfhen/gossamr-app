@@ -501,6 +501,13 @@ fn take_start(st: &McpState, request_id: &str) -> std::result::Result<(), String
     Ok(())
 }
 
+/// Counts a start that already happened, past the turn's limit if need be: the agent runs either way.
+fn count_start(st: &McpState, request_id: &str) {
+    if let Some(taken) = st.runs.lock().expect("runs lock poisoned").get_mut(request_id) {
+        taken.starts += 1;
+    }
+}
+
 fn give_back_start(st: &McpState, request_id: &str) {
     if let Some(taken) = st.runs.lock().expect("runs lock poisoned").get_mut(request_id) {
         taken.starts = taken.starts.saturating_sub(1);
@@ -570,13 +577,18 @@ async fn message(st: &McpState, pip: &PipRun, request_id: &str, args: &Value) ->
     in_reach_of_conversation(pip, run.spec.workstream.as_deref())?;
     let text = crate::runs::result::scrub(required(args, "text")?).trim().to_string();
     let name = name_of(st, pip, &run).await;
-    let resumes = matches!(run.state, RunState::Done | RunState::Stopped);
-    if resumes {
+    // A message wakes a finished, stopped or failed run, whichever way it reaches it: it resumes its session, or it is
+    // the next prompt of one still open, which starts a turn. Only a message that does not get through gives its start
+    // back. A run that reads as working and whose agent the harness lost is resumed too, known only once it is.
+    let reserved = matches!(run.state, RunState::Done | RunState::Stopped | RunState::Failed);
+    if reserved {
         take_start(st, request_id)?;
     }
     let sent = st.driver.message(&run.id, &text).await;
-    if resumes && !matches!(sent, Ok((_, Delivery::Resumed))) {
-        give_back_start(st, request_id);
+    match (reserved, &sent) {
+        (true, Err(_)) => give_back_start(st, request_id),
+        (false, Ok((_, Delivery::Resumed))) => count_start(st, request_id),
+        _ => {}
     }
     let (_, delivery) = sent.map_err(|e| e.to_string())?;
     (st.workstreams)(&run.connection_id);

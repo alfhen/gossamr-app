@@ -24,8 +24,13 @@ async fn on_harness_as(served: &Served, provider: &str, cap: usize) -> Rig {
     let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
     let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
     let reads = Arc::new(crate::agent::agent_tools::HarnessReads(fx.core.clone()));
-    let link = Arc::new(Link::start(fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed));
-    ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap)).await
+    // One notifier for the link and the service, as the app has, so a test reads what Pip was told.
+    let notices = Arc::new(Notices::default());
+    let link = Arc::new(Link::start(fx.core.clone(), direct, reads, notices.clone(), changed));
+    let told = notices.clone();
+    let mut rig = ready_on(fx, |svc| svc.with_harness(OnHarness { link, provider: provider.into() }).with_cap(cap).with_notifier(told)).await;
+    rig.notices = notices;
+    rig
 }
 
 async fn sessions(served: &Served) -> Vec<serde_json::Value> {
@@ -696,6 +701,92 @@ async fn the_move_is_safe_to_run_again_after_a_crash_between_the_stop_and_its_ma
     assert_eq!(rig.cli.0.lock().unwrap().stops.len(), 2, "a second stop of a stopped agent harms nothing");
 }
 
+const BUILDS: &str = r#"{"prompt": null}
+{"say": "Starting a long build."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn after_a_harness_restart_a_cut_run_carries_on_and_one_carried_on_three_times_waits_for_you() {
+    let mut served = Served::new(BUILDS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let cut = until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    assert_eq!(cut.state, RunState::Stopped);
+    let session = cut.harness_session.clone().unwrap();
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    rig.svc.carry_on_after_restart().await;
+    let resumed = tokio::time::timeout(WAIT, async {
+        loop {
+            let rows = rig.fx.core.run_events(&run.id).await.unwrap();
+            if rows.iter().any(|e| e.text == "Resumed") && rows.iter().any(|e| e.text == "Carried on after the harness restarted") {
+                return rows;
+            }
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the carry on was sent");
+    assert!(resumed.iter().any(|e| e.text == "Resumed") && resumed.iter().any(|e| e.text == "Carried on after the harness restarted"));
+    assert!(!resumed.iter().any(|e| e.text == "Message sent"), "Gossamr's own carry on is no message of yours");
+    let mut client = served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.clone(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    assert!(events.iter().any(|e| e.body == Body::Prompted { text: CARRY_ON.into() }), "the carry on reached the agent");
+    let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert_eq!(follow.carry_ons, 1);
+    // As a third cut in a row leaves the run but for the fail the fold gives it, so only the count keeps it waiting.
+    rig.fx.core.apply_session(&session, |run, f| {
+        run.state = RunState::Stopped;
+        f.carry_ons = CARRY_ONS;
+        f.cut = Some(crate::runs::consumer::CUT.into());
+        f.closed = true;
+        Vec::new()
+    }).await.unwrap();
+    let rows = rig.fx.core.run_events(&run.id).await.unwrap().len();
+    rig.svc.carry_on_after_restart().await;
+    let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert_eq!((follow.carry_ons, rig.fx.core.run_events(&run.id).await.unwrap().len()), (CARRY_ONS, rows), "past three in a row it waits for you");
+}
+
+#[tokio::test]
+async fn a_run_the_app_stopped_or_one_whose_question_is_open_is_not_carried_on() {
+    let mut served = Served::new(ASKS, 4);
+    let rig = on_harness(&served).await;
+    let asking = rig.launched(1).await;
+    until_state(&rig, &asking, RunState::NeedsAnswer).await;
+    let stopped = rig.launched(2).await;
+    until_state(&rig, &stopped, RunState::NeedsAnswer).await;
+    rig.svc.stop(&stopped.id).await.unwrap();
+    until_state(&rig, &stopped, RunState::Stopped).await;
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let (_, follow) = rig.fx.core.session_run(&rig.get(&asking).await.harness_session.unwrap()).await.unwrap().unwrap();
+    assert!(follow.question.is_some());
+    // Each as a cut run would be but for the one thing that keeps it from carrying on.
+    for (run, question, ended) in [(&asking, true, false), (&stopped, false, true)] {
+        rig.set(run, |r| r.state = RunState::Stopped).await;
+        let session = rig.get(run).await.harness_session.unwrap();
+        rig.fx.core.apply_session(&session, |_, f| {
+            (f.cut, f.closed, f.ended) = (Some(crate::runs::consumer::CUT.into()), true, ended);
+            if !question {
+                f.question = None;
+            }
+            Vec::new()
+        }).await.unwrap();
+    }
+    rig.svc.carry_on_after_restart().await;
+    for run in [&asking, &stopped] {
+        let (_, follow) = rig.fx.core.session_run(&rig.get(run).await.harness_session.unwrap()).await.unwrap().unwrap();
+        assert_eq!(follow.carry_ons, 0, "{}", run.id);
+        let asked = rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text.contains("arried on"));
+        assert!(!asked, "{}: the app did not even ask the harness", run.id);
+    }
+}
+
 #[tokio::test]
 async fn the_move_ends_the_question_an_old_run_waited_on_and_says_so() {
     let served = Served::new(WORKS_LONG, 4);
@@ -741,41 +832,6 @@ async fn a_run_whose_commit_the_signing_agent_refused_takes_the_message_its_text
     assert_eq!(delivery, crate::runs::message::Delivery::Queued);
     let done = until_state(&rig, &run, RunState::Done).await;
     assert_eq!((done.error, done.failure, done.last_detail.as_deref()), (None, None, Some("Committed.")));
-}
-
-#[tokio::test]
-async fn a_run_whose_agent_the_harness_lost_says_to_ask_pip_and_a_new_run_on_its_ticket_starts() {
-    let served = Served::new(FINISHES, 4);
-    let rig = on_harness(&served).await;
-    let run = rig.launched(1).await;
-    until_state(&rig, &run, RunState::Done).await;
-    let session = rig.get(&run).await.harness_session.unwrap();
-    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
-    // As if the harness had died mid-turn with no shutdown: the app still reads a turn the harness no longer runs.
-    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
-    tokio::time::timeout(WAIT, async {
-        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
-            applied.changed().await.unwrap();
-        }
-    })
-    .await
-    .unwrap();
-    rig.fx.core.apply_session(&session, |run, follow| {
-        (follow.closed, follow.ended, follow.in_turn) = (false, false, true);
-        run.state = RunState::Working;
-        run.ended_at = None;
-        Vec::new()
-    }).await.unwrap();
-    let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err();
-    assert!(refused.to_string().contains(crate::runs::consumer::AGENT_LOST), "{refused}");
-    let lost = rig.get(&run).await;
-    assert_eq!((lost.state, lost.last_detail.as_deref()), (RunState::Stopped, Some(crate::runs::consumer::AGENT_LOST)));
-    assert!(!crate::runs::consumer::AGENT_LOST.contains("Message the agent"), "a message is refused, so the text does not offer it");
-    // What the text says: Pip starts it again, as a new run on the same ticket.
-    let again = rig.fx.core.queue_test_run(crate::domain::RunSpec { name: "eng-1-fix-cart-again".into(), ..rig.spec(1) }, Some(rig.fx.item("CA-1"))).await.unwrap();
-    let started = rig.svc.start_now(&again.id).await.unwrap();
-    assert!(started.harness_session.is_some(), "the new run opened on the harness");
-    until_state(&rig, &started, RunState::Done).await;
 }
 
 #[tokio::test]
@@ -1303,6 +1359,346 @@ async fn clean_up_of_a_closed_session_the_harness_refuses_says_why_in_a_sentence
     assert!(git.worktree(&done.spec.name).is_dir());
 }
 
+/// A long build a shutdown can cut, and a long turn after it for a resume to start, since the mock skips the turn it
+/// cut. That turn does not end, so an end that resets the count of carry-ons does not come.
+const BUILDS_ON: &str = r#"{"prompt": null}
+{"say": "Starting a long build."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}
+{"say": "Back on the build."}
+{"sleep": 600000}
+{"end": "done"}
+{"prompt": null}"#;
+
+/// A run whose long turn a harness shutdown cut, read as cut once the harness serves again.
+async fn cut_by_a_shutdown(served: &mut Served) -> (Rig, Run, String) {
+    let rig = on_harness(served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let cut = until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    let session = cut.harness_session.clone().unwrap();
+    (rig, cut, session)
+}
+
+/// The run once its session resumed and the message was sent: in a turn, or done with it.
+async fn until_resumed(rig: &Rig, run: &Run) -> Run {
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    let resumed = tokio::time::timeout(WAIT, async {
+        loop {
+            let rows = rig.fx.core.run_events(&run.id).await.unwrap();
+            let now = rig.get(run).await;
+            if rows.iter().any(|e| e.text == "Resumed") && rows.iter().any(|e| e.text == "Message sent") && matches!(now.state, RunState::Working | RunState::Done) {
+                return now;
+            }
+            applied.changed().await.unwrap();
+        }
+    })
+    .await;
+    match resumed {
+        Ok(run) => run,
+        Err(_) => {
+            let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+            panic!("the run did not resume, it is {:?}: {rows:?}", rig.get(run).await.state)
+        }
+    }
+}
+
+/// Whether `text` reached the session's agent as a prompt.
+async fn prompted(served: &Served, session: &str, text: &str) -> bool {
+    let mut client = served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.to_owned(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    events.iter().any(|e| e.body == Body::Prompted { text: text.into() })
+}
+
+#[tokio::test]
+async fn a_message_to_a_cut_run_resumes_its_session_with_the_message_and_starts_the_carry_ons_again() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    rig.fx.core.apply_session(&session, |_, f| {
+        f.carry_ons = 2;
+        Vec::new()
+    }).await.unwrap();
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Go on with the build.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    until_resumed(&rig, &run).await;
+    assert!(prompted(&served, &session, "Go on with the build.").await, "the message is the resumed session's prompt");
+    assert_eq!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.carry_ons, 0);
+}
+
+#[tokio::test]
+async fn a_run_failed_after_three_carry_ons_takes_the_message_its_text_asks_for() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // As the fold leaves it when the cut after the third carry-on closes.
+    rig.fx.core.apply_session(&session, |run, f| {
+        f.carry_ons = CARRY_ONS;
+        run.state = RunState::Failed;
+        run.error = Some(crate::runs::consumer::CUT_AGAIN.into());
+        Vec::new()
+    }).await.unwrap();
+    assert!(crate::runs::consumer::CUT_AGAIN.contains("Message the agent to start it again"));
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Start again.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    let working = until_resumed(&rig, &run).await;
+    assert_eq!((working.error, working.failure), (None, None));
+    assert!(prompted(&served, &session, "Start again.").await);
+}
+
+#[tokio::test]
+async fn a_message_that_finds_the_agent_lost_starts_it_again_as_the_run_then_says() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // As if the harness had died with no shutdown: the app still reads the turn, and the harness has none.
+    rig.fx.core.apply_session(&session, |run, f| {
+        (f.closed, f.in_turn, f.cut) = (false, true, None);
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    assert!(crate::runs::consumer::AGENT_LOST.contains("Message the agent to start it again"));
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Pick it up.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    assert!(rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text == crate::runs::consumer::AGENT_LOST), "the timeline says it was lost");
+    until_resumed(&rig, &run).await;
+    assert!(prompted(&served, &session, "Pick it up.").await);
+}
+
+#[tokio::test]
+async fn a_run_you_stopped_or_a_crash_failed_is_not_resumed_by_a_message() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // Stopped by you (even with a cut before it), failed by a crash, and stopped by another client's Stop.
+    let cut = Some(crate::runs::consumer::CUT.to_owned());
+    for (ended, cut, state) in [(true, cut, RunState::Stopped), (false, None, RunState::Failed), (false, None, RunState::Stopped)] {
+        rig.fx.core.apply_session(&session, |run, f| {
+            (f.ended, f.cut) = (ended, cut.clone());
+            run.state = state;
+            Vec::new()
+        }).await.unwrap();
+        let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err();
+        assert!(refused.to_string().contains("so it takes no message"), "{state:?} {ended}: {refused}");
+    }
+    assert!(!prompted(&served, &session, "Go on.").await, "the app did not resume it");
+}
+
+#[tokio::test]
+async fn a_cut_run_whose_session_the_harness_keeps_is_not_carried_on_or_resumed_by_a_message_and_says_why() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // As a shutdown that stopped waiting for its agent leaves it, with no agent on record: kept until it is checked.
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET given_up = 1, given_up_why = 'a shutdown stopped waiting for it' WHERE id = ?1", [&session]).unwrap();
+    let keeps = format!("ession {session}'s agent may still run (a shutdown stopped waiting for it)");
+    let plain = "Its agent may still run (a shutdown stopped waiting for it)";
+    // The row's own words: a resume the harness refused would come back as a `refused:` error.
+    let link = rig.svc.harness.as_ref().unwrap().link.clone();
+    let kept = link.carry_on(&session, CARRY_ON).await.unwrap_err();
+    assert!(kept.starts_with(&format!("s{keeps}")), "no resume was sent: {kept}");
+    rig.svc.carry_on_after_restart().await;
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    let said = rows.iter().find(|text| text.starts_with("Not carried on after the harness restarted: ")).unwrap_or_else(|| panic!("{rows:?}"));
+    assert!(said.contains(plain) && !said.contains(&session) && !said.contains(CARRY_ON_BY_MESSAGE), "the reason, in plain words, and no way on a message would refuse: {said}");
+    let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err().to_string();
+    assert!(refused.starts_with("The harness didn't resume it: ") && refused.contains(plain) && !refused.contains(&session), "{refused}");
+    assert_eq!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.carry_ons, 0, "nothing counted");
+    assert!(!prompted(&served, &session, CARRY_ON).await && !prompted(&served, &session, "Go on.").await, "nothing reached the agent");
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+}
+
+#[tokio::test]
+async fn a_cut_after_three_carry_ons_in_a_row_fails_the_run_and_tells_pip() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    rig.svc.carry_on_after_restart().await;
+    until_detail(&rig, &run, "Back on the build.").await;
+    // As if this were the third carry-on in a row: the next cut is not carried on.
+    rig.fx.core.apply_session(&session, |_, f| {
+        f.carry_ons = CARRY_ONS;
+        Vec::new()
+    }).await.unwrap();
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let failed = until_state(&rig, &run, RunState::Failed).await;
+    assert_eq!(failed.error.as_deref(), Some(crate::runs::consumer::CUT_AGAIN));
+    let told: Vec<(String, crate::runs::tracker::Attention)> = rig.notices.0.lock().unwrap().iter().map(|(id, why, _)| (id.clone(), *why)).collect();
+    assert!(told.contains(&(run.id.clone(), crate::runs::tracker::Attention::Failed)), "Pip hears of it: {told:?}");
+    let rows = rig.fx.core.run_events(&run.id).await.unwrap().len();
+    rig.svc.carry_on_after_restart().await;
+    assert_eq!(rig.fx.core.run_events(&run.id).await.unwrap().len(), rows, "and it is not carried on again");
+}
+
+#[tokio::test]
+async fn a_carry_on_called_straight_after_a_restart_waits_for_the_cut_and_carries_the_run_on_once() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down().await;
+    served.serve_again(4).await;
+    // As the app's start and Settings > Harness call it: before the link has reconnected and read the cut.
+    rig.svc.carry_on_after_restart().await;
+    let carried = |rows: Vec<RunEvent>| rows.iter().filter(|e| e.text == "Carried on after the harness restarted").count();
+    assert_eq!(carried(rig.fx.core.run_events(&run.id).await.unwrap()), 1, "carried on once the cut was read");
+    until_detail(&rig, &run, "Back on the build.").await;
+    assert!(prompted(&served, &session, CARRY_ON).await);
+    rig.svc.carry_on_after_restart().await;
+    assert_eq!(carried(rig.fx.core.run_events(&run.id).await.unwrap()), 1, "a second pass finds nothing cut");
+}
+
+/// A carry on and a message to one cut run, queued for the launch lock in the order given, which it keeps: the first
+/// resumes the session, and the second finds nothing cut. What the message's send gave, and whether it carried on.
+async fn carry_on_and_message(carry_first: bool) -> (crate::runs::message::Delivery, bool, Vec<Event>) {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    let rig = Arc::new(rig);
+    let held = rig.svc.launching.clone().lock_owned().await;
+    let carry = || {
+        let rig = rig.clone();
+        tokio::spawn(async move { rig.svc.carry_on_after_restart().await })
+    };
+    let message = || {
+        let (rig, id) = (rig.clone(), run.id.clone());
+        tokio::spawn(async move { rig.svc.message_agent(&id, "Use the brand blue.", crate::domain::Actor::Person).await })
+    };
+    let pause = || tokio::time::sleep(std::time::Duration::from_millis(300));
+    let (carrying, messaging) = if carry_first {
+        let carrying = carry();
+        pause().await;
+        (carrying, message())
+    } else {
+        let messaging = message();
+        pause().await;
+        (carry(), messaging)
+    };
+    pause().await;
+    drop(held);
+    let (_, delivery) = messaging.await.unwrap().unwrap();
+    carrying.await.unwrap();
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert!(!rows.iter().any(|text| text.starts_with("Not carried on")), "neither is refused for the other: {rows:?}");
+    until_detail(&rig, &run, "Back on the build.").await;
+    let mut client = served.client().await;
+    let events: Vec<Event> = serde_json::from_value(client.call(Op::Events { session: session.clone(), after: 0 }).await.unwrap()["events"].clone()).unwrap();
+    assert_eq!(events.iter().filter(|e| matches!(e.body, Body::Started { resumed: true, .. })).count(), 1, "one new start");
+    (delivery, rows.iter().any(|text| text == "Carried on after the harness restarted"), events)
+}
+
+#[tokio::test]
+async fn a_carry_on_before_a_message_resumes_a_cut_run_once_and_the_message_waits_for_its_turn() {
+    let (delivery, carried, events) = carry_on_and_message(true).await;
+    assert_eq!((delivery, carried), (crate::runs::message::Delivery::Queued, true), "the message goes to the start the carry on made");
+    assert!(events.iter().any(|e| e.body == Body::Prompted { text: CARRY_ON.into() }));
+}
+
+#[tokio::test]
+async fn a_message_before_a_carry_on_resumes_a_cut_run_once_with_the_message_and_the_carry_on_finds_nothing_cut() {
+    let (delivery, carried, events) = carry_on_and_message(false).await;
+    assert_eq!((delivery, carried), (crate::runs::message::Delivery::Resumed, false));
+    assert!(events.iter().any(|e| e.body == Body::Prompted { text: "Use the brand blue.".into() }));
+    assert!(!events.iter().any(|e| e.body == Body::Prompted { text: CARRY_ON.into() }), "no carry on was sent");
+}
+
+#[tokio::test]
+async fn a_carry_on_the_harness_refuses_is_not_counted_keeps_the_cut_for_the_next_restart_and_says_why_plainly() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // As a deny-ended turn leaves it in the harness: it refuses a carry on and says why.
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE sessions SET no_carry_on = 'you denied its last request' WHERE id = ?1", [&session]).unwrap();
+    rig.svc.carry_on_after_restart().await;
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    let said = rows.iter().find(|text| text.starts_with("Not carried on after the harness restarted: ")).unwrap_or_else(|| panic!("{rows:?}"));
+    assert!(said.ends_with(&format!(": It may not carry on: you denied its last request. {CARRY_ON_BY_MESSAGE}")) && !said.contains(&session), "plain words, no `refused:` and no id, and the way on: {said}");
+    let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert_eq!((follow.carry_ons, follow.cut.is_some(), follow.resuming), (0, true, false), "put back as it was");
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped);
+}
+
+#[tokio::test]
+async fn a_run_whose_harness_went_without_a_shutdown_is_carried_on_once_and_pip_is_not_told() {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    let (_, before) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    served.shut_down().await;
+    // Read, so no push of the old connection lands after the rewind below.
+    until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    // What a harness killed mid-turn leaves for the app instead: the next harness ends the start it left as
+    // `harness_went`, and the app, which was not there to read the end, reads it once it reconnects.
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    raw.execute("UPDATE events SET payload = json_set(payload, '$.by', 'harness_went') WHERE session = ?1 AND type = 'closed'", [&session]).unwrap();
+    raw.execute("UPDATE events SET payload = json_set(payload, '$.reason', 'the harness that ran this agent went, and the next one stopped it') WHERE session = ?1 AND type = 'failed'", [&session]).unwrap();
+    rig.fx.core.apply_session(&session, move |run, f| {
+        *f = before;
+        run.state = RunState::Working;
+        run.ended_at = None;
+        Vec::new()
+    }).await.unwrap();
+    served.serve_again(4).await;
+    rig.svc.carry_on_after_restart().await;
+    // Rewound to before the cut, the run is cut again only by the stored end it reads now.
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert_eq!(rows.iter().filter(|text| *text == "Carried on after the harness restarted").count(), 1, "{rows:?}");
+    until_detail(&rig, &run, "Back on the build.").await;
+    assert!(prompted(&served, &session, CARRY_ON).await);
+    let told: Vec<crate::runs::tracker::Attention> = rig.notices.0.lock().unwrap().iter().filter(|(id, ..)| *id == run.id).map(|(_, why, _)| *why).collect();
+    assert!(!told.contains(&crate::runs::tracker::Attention::Failed), "nothing failed, so Pip hears nothing: {told:?}");
+}
+
+/// A turn waiting on a permission when the harness shut down, and a second turn for a message.
+const ASKS_PERMISSION_THEN_GOES_ON: &str = r#"{"prompt": null}
+{"say": "Reading the cart."}
+{"permission": {"kind": "tool", "tool": "Read"}}
+{"end": "done"}
+{"prompt": null}
+{"say": "Back to it."}
+{"end": "done"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_run_cut_with_a_permission_request_open_is_not_carried_on_but_takes_your_message_and_goes_on() {
+    let mut served = Served::new(ASKS_PERMISSION_THEN_GOES_ON, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::NeedsPermission).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down().await;
+    served.serve_again(4).await;
+    rig.svc.carry_on_after_restart().await;
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    let said = rows.iter().find(|text| text.starts_with("Not carried on after the harness restarted: ")).unwrap_or_else(|| panic!("{rows:?}"));
+    assert!(said.contains("It may not carry on") && said.ends_with(CARRY_ON_BY_MESSAGE) && !said.contains(&session), "the harness's rule, said plainly, and the way on: {said}");
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Go ahead and read it.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    let done = until_state(&rig, &run, RunState::Done).await;
+    assert_eq!(done.last_detail.as_deref(), Some("Back to it."));
+    assert!(prompted(&served, &session, "Go ahead and read it.").await, "your message is the next prompt");
+    assert!(!prompted(&served, &session, CARRY_ON).await, "and no carry on was sent");
+}
+
+#[tokio::test]
+async fn a_message_to_a_run_whose_resume_has_not_started_yet_goes_to_the_new_start() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Working).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    // As a resume leaves it before its `started` is read: the harness runs it, and the run still reads stopped.
+    rig.fx.core.apply_session(&session, |run, f| {
+        run.state = RunState::Stopped;
+        f.resuming = true;
+        Vec::new()
+    }).await.unwrap();
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Use the brand blue.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Queued);
+}
+
 const PERMITS: &str = r#"{"prompt": null}
 {"permission": {"kind": "command", "tool": "Bash", "input": {"command": "git commit -m 'Blue button'"}}}
 {"say": "Went on after the answer."}
@@ -1559,4 +1955,170 @@ async fn permission_the_command_refuses_an_allow_of_a_masked_request_or_one_with
     assert!(answers(&served, &run).await.is_empty(), "none reached the harness");
     rig.svc.answer_permission(&run.id, &id, Decision::Deny).await.unwrap();
     until_state(&rig, &run, RunState::Done).await;
+}
+
+#[tokio::test]
+async fn a_message_to_a_cut_run_whose_follow_fails_after_the_resume_is_still_sent_and_nothing_is_put_back() {
+    for failing in [1, 2] {
+        message_with_failing_follows(failing).await;
+    }
+}
+
+async fn message_with_failing_follows(failing: usize) {
+    let mut served = Served::new(BUILDS_ON, 4);
+    let (rig, run, session) = cut_by_a_shutdown(&mut served).await;
+    // The resume's follow, then the one after the message: neither may cost the message.
+    rig.svc.harness.as_ref().unwrap().link.fail_follows(failing);
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Go on with the build.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed, "the harness took the resume");
+    assert!(rig.fx.core.session_run(&session).await.unwrap().unwrap().1.cut.is_none(), "the old cut is not put back");
+    let sent = tokio::time::timeout(WAIT, async {
+        while !prompted(&served, &session, "Go on with the build.").await {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    });
+    sent.await.expect("the message reached the agent");
+    if failing == 1 {
+        until_detail(&rig, &run, "Back on the build.").await;
+    }
+}
+
+#[tokio::test]
+async fn pips_message_to_a_cut_run_is_refused_when_you_paused_its_workstream_while_it_waited() {
+    use crate::domain::workstream::PauseReason;
+    let mut served = Served::new(BUILDS_ON, 4);
+    let rig = on_harness(&served).await;
+    let (run, ws) = rig.launched_in_workstream(1).await;
+    until_detail(&rig, &run, "Starting a long build.").await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down().await;
+    served.serve_again(4).await;
+    until_detail(&rig, &run, crate::runs::consumer::CUT).await;
+    let rig = Arc::new(rig);
+    let held = rig.svc.launching.clone().lock_owned().await;
+    let messaging = tokio::spawn({
+        let (rig, id) = (rig.clone(), run.id.clone());
+        async move { rig.svc.message_agent(&id, "Use the brand blue.", crate::domain::Actor::Pip).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    rig.fx.core.pause_workstream(&rig.fx.scope, &ws, PauseReason::Person, crate::domain::Actor::Person).await.unwrap();
+    drop(held);
+    let refused = messaging.await.unwrap().unwrap_err().to_string();
+    assert!(refused.contains("is paused"), "{refused}");
+    assert_eq!(rig.get(&run).await.state, RunState::Stopped, "not resumed");
+    assert!(!prompted(&served, &session, "Use the brand blue.").await);
+}
+
+#[tokio::test]
+async fn a_finished_run_whose_harness_went_without_a_shutdown_stays_done_and_is_not_carried_on() {
+    let mut served = Served::new(FINISHES, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    let (_, before) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    served.shut_down().await;
+    // Read, so no push of the old connection lands after the rewind below.
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the close was read");
+    // What the next harness writes for a session idle between turns when its harness was killed: an agent stopped,
+    // and a close as `harness_went`, in place of the shutdown's close. The app reads it once it reconnects.
+    let raw = rusqlite::Connection::open(served.dir.join("harness.sqlite")).unwrap();
+    let closed: i64 = raw.query_row("SELECT seq FROM events WHERE session = ?1 AND type = 'closed'", [&session], |row| row.get(0)).unwrap();
+    raw.execute("UPDATE events SET type = 'failed', payload = '{\"type\":\"failed\",\"kind\":\"agent_stopped\",\"reason\":\"the harness that ran this agent went, and the next one stopped it\"}' WHERE session = ?1 AND seq = ?2", rusqlite::params![&session, closed]).unwrap();
+    drop(raw);
+    let store = harness::store::Store::open(&served.dir).unwrap();
+    store.append(&session, &Body::Closed { by: harness::event::ClosedBy::HarnessWent }, harness::store::now_ms()).unwrap();
+    drop(store);
+    rig.fx.core.apply_session(&session, move |_, f| {
+        *f = before;
+        Vec::new()
+    }).await.unwrap();
+    let told = rig.notices.0.lock().unwrap().len();
+    served.serve_again(4).await;
+    rig.svc.carry_on_after_restart().await;
+    let (_, follow) = rig.fx.core.session_run(&session).await.unwrap().unwrap();
+    assert!(follow.closed && follow.cut.is_none() && follow.seq as i64 == closed + 1, "the new end was read, and it cut nothing: {follow:?}");
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.error), (RunState::Done, None), "a finished run stays done");
+    let rows: Vec<String> = rig.fx.core.run_events(&run.id).await.unwrap().into_iter().map(|e| e.text).collect();
+    assert!(!rows.iter().any(|text| text.contains("arried on") || text == crate::runs::consumer::CUT), "{rows:?}");
+    assert!(!prompted(&served, &session, CARRY_ON).await);
+    assert_eq!(rig.notices.0.lock().unwrap().len(), told, "Pip is told nothing new");
+}
+
+/// A turn that finishes, and an agent that then ends by a signal the harness did not send, as a logout's.
+const FINISHES_THEN_IS_SIGNALLED: &str = r#"{"prompt": null}
+{"say": "Looking at the cart."}
+{"end": "done"}
+{"fail": "claude exited, ended by signal 15"}
+{"prompt": null}"#;
+
+#[tokio::test]
+async fn a_finished_runs_agent_ended_between_turns_leaves_it_done_and_pip_is_not_told_again() {
+    let served = Served::new(FINISHES_THEN_IS_SIGNALLED, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.run_events(&run.id).await.unwrap().iter().any(|e| e.text == "claude exited, ended by signal 15") {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the agent's end is on the timeline");
+    let after = rig.get(&run).await;
+    assert_eq!((after.state, after.error), (RunState::Done, None));
+    let told: Vec<crate::runs::tracker::Attention> = rig.notices.0.lock().unwrap().iter().filter(|(id, ..)| *id == run.id).map(|(_, why, _)| *why).collect();
+    assert_eq!(told, [crate::runs::tracker::Attention::Done], "told once that it was done, and nothing of the agent's end");
+}
+
+#[tokio::test]
+async fn a_message_wakes_a_finished_run_whose_session_a_restart_closed_and_the_agent_gets_it() {
+    let mut served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let session = rig.get(&run).await.harness_session.unwrap();
+    served.shut_down().await;
+    served.serve_again(4).await;
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the restart's close was read");
+    assert_eq!(rig.get(&run).await.state, RunState::Done, "a restart leaves a finished run done");
+    // One you stopped, or cleaned up, takes no message.
+    for stopped in [true, false] {
+        let before = rig.get(&run).await;
+        rig.fx.core.apply_session(&session, move |run, f| {
+            if stopped {
+                f.ended = true;
+            } else {
+                run.worktree_removed_at = Some(chrono::Utc::now());
+            }
+            Vec::new()
+        }).await.unwrap();
+        let refused = rig.svc.message_agent(&run.id, "Go on.", crate::domain::Actor::Person).await.unwrap_err().to_string();
+        assert!(refused.contains("takes no message"), "stopped {stopped}: {refused}");
+        rig.fx.core.apply_session(&session, move |run, f| {
+            f.ended = false;
+            run.worktree_removed_at = before.worktree_removed_at;
+            Vec::new()
+        }).await.unwrap();
+    }
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Make it darker.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Resumed);
+    until_detail(&rig, &run, "Back again.").await;
+    assert!(prompted(&served, &session, "Make it darker.").await, "the agent got the message");
+    assert!(!prompted(&served, &session, CARRY_ON).await, "as itself, not a carry on");
 }

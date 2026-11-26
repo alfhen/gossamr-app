@@ -58,6 +58,16 @@ pub const NOT_RUNNING_TO_ANSWER: &str = "Its agent isn't running any more, so th
 
 const RETRY_FIRST: Duration = Duration::from_millis(100);
 const RETRY_MOST: Duration = Duration::from_secs(5);
+/// Why a message did not resume a session and reach it: the harness refused the resume, or took it and then not the
+/// message.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotResumed {
+    Refused(String),
+    NotSent(String),
+}
+
+/// How long `caught_up` waits for an event before it asks the harness again.
+const CAUGHT_UP_TICK: Duration = Duration::from_millis(500);
 
 enum Command {
     /// Watch the session from after `after`; answered once the harness took the watch.
@@ -148,6 +158,89 @@ impl Link {
             return Err(why);
         }
         Ok(session)
+    }
+
+    /// Resumes a session that is not running with `carry_on` as its prompt, counting it, and follows it again. The harness
+    /// refuses one a deny, a cancel, a stop or an open request forbids, or a shutdown gave up on, and says why.
+    pub async fn carry_on(&self, session: &str, carry_on: &str) -> Result<(), String> {
+        self.resume(session, Some(carry_on)).await
+    }
+
+    /// Resumes a session that is not running and sends it the person's or Pip's message as its next prompt. Not as a
+    /// carry on: the harness refuses one after a stop, a deny, a cancel or a request left open, which the person's own
+    /// choice to go on must not meet. A message starts the count of carry-ons again.
+    pub async fn resume_with(&self, session: &str, text: &str) -> Result<(), NotResumed> {
+        self.resume(session, None).await.map_err(NotResumed::Refused)?;
+        // Asked apart from its follow, as the resume is: a watch that failed must not read as a message that was not
+        // taken. Nothing is open to answer in a session just resumed.
+        self.ask(Op::Send { session: session.to_owned(), text: text.to_owned() }).await.map_err(NotResumed::NotSent)?;
+        let follow = self.inner.core.session_run(session).await.ok().flatten().map(|(_, follow)| follow).unwrap_or_default();
+        if let Err(e) = self.follow(session, follow.seq).await {
+            eprintln!("couldn't follow session {session} after a message resumed it; the next connect follows it: {e}");
+        }
+        Ok(())
+    }
+
+    /// Resumes a session that is not running, with `carry_on` as its prompt, counted, or with none, which starts the
+    /// count again.
+    async fn resume(&self, session: &str, carry_on: Option<&str>) -> Result<(), String> {
+        let counted = carry_on.is_some();
+        // While the harness keeps the session no resume is sent: its row says why, and what to do.
+        if let Some(why) = self.kept(session).await {
+            return Err(why);
+        }
+        // Counted, the cut taken and the session marked as starting, before the call, as a take back marks itself: the
+        // call's watch may apply the new start's cut before it returns, which must read the new count, and a message or
+        // a carry on that reads the follow meanwhile finds nothing to resume, and a message goes to the new start. A
+        // refusal puts them back.
+        let (carry_ons, cut) = match self.inner.core.session_run(session).await.map_err(|e| e.to_string())? {
+            Some((_, follow)) => (follow.carry_ons, follow.cut),
+            None => (0, None),
+        };
+        let mark = |carry_ons: u32, cut: Option<String>, resuming: bool| {
+            self.inner.core.apply_session(session, move |_, follow| {
+                (follow.carry_ons, follow.cut, follow.resuming) = (carry_ons, cut, resuming);
+                Vec::new()
+            })
+        };
+        mark(if counted { carry_ons + 1 } else { 0 }, None, true).await.map_err(|e| e.to_string())?;
+        // Asked apart from its follow, so only a refusal puts the marks back.
+        if let Err(why) = self.ask(Op::Resume { session: session.to_owned(), carry_on: carry_on.map(str::to_owned) }).await {
+            if let Err(e) = mark(carry_ons, cut, false).await {
+                eprintln!("couldn't put back the count of carry-ons of session {session}: {e}");
+            }
+            return Err(why);
+        }
+        // Taken: the session starts again whether or not this watch is set up, and the next connect follows it, so a
+        // failed follow leaves it marked as starting and the message is sent all the same.
+        let follow = self.inner.core.session_run(session).await.map_err(|e| e.to_string())?.map(|(_, follow)| follow).unwrap_or_default();
+        if let Err(e) = self.follow(session, follow.seq).await {
+            eprintln!("couldn't follow session {session} after its resume; the next connect follows it: {e}");
+        }
+        Ok(())
+    }
+
+    /// Waits up to `limit` until the app has applied every event the harness holds for each session it follows, and
+    /// marked lost each turn the harness no longer runs: after a harness start, once the watch has reconnected and
+    /// caught up. False if that did not happen within `limit`.
+    pub async fn caught_up(&self, limit: Duration) -> bool {
+        let mut applied = self.applied();
+        let caught_up = async {
+            while !self.is_caught_up().await {
+                // An event applied, or a moment for a harness still starting, before asking again.
+                let _ = tokio::time::timeout(CAUGHT_UP_TICK, applied.changed()).await;
+            }
+        };
+        tokio::time::timeout(limit, caught_up).await.is_ok()
+    }
+
+    async fn is_caught_up(&self) -> bool {
+        let (Ok(listed), Ok(followed)) = (self.ask(Op::Sessions).await, self.inner.core.followed_sessions().await) else { return false };
+        let rows: HashMap<&str, &Value> = listed.as_array().into_iter().flatten().filter_map(|row| Some((row["id"].as_str()?, row))).collect();
+        followed.iter().all(|(session, follow)| match rows.get(session.as_str()) {
+            Some(row) => row["last_seq"].as_u64().unwrap_or(0) <= follow.seq && !(follow.in_turn && !follow.closed && row["running"] != true),
+            None => true,
+        })
     }
 
     /// Takes a session handed over to Terminal back and follows it again. The harness watches the new start on the
@@ -271,6 +364,12 @@ impl Link {
     pub async fn listed(&self, session: &str) -> Option<Value> {
         let listed = self.call(Op::Sessions).await.ok()?;
         listed.as_array()?.iter().find(|row| row["id"] == session).cloned()
+    }
+
+    /// Why the harness resumes `session` for no one now, from its row: `held` while it could not check for agents an
+    /// earlier harness left running, or `given_up` while an agent or process this session left may still run.
+    pub async fn kept(&self, session: &str) -> Option<String> {
+        kept_by(&self.listed(session).await?)
     }
 
     async fn open_question(&self, session: &str) -> Option<String> {
@@ -684,6 +783,11 @@ impl Inner {
         }
         self.applied.send_modify(|n| *n += 1);
     }
+}
+
+/// Why the harness keeps the session of listed `row` from any resume, as its row says.
+fn kept_by(row: &Value) -> Option<String> {
+    row["held"].as_str().or_else(|| row["given_up"].as_str()).map(str::to_owned)
 }
 
 #[cfg(test)]
