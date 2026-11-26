@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use harness::claude::driver::ClaudeDriver;
+use harness::env::RunEnv;
 use harness::event::{Body, Event};
 use harness::session::{Harness, Open};
 use harness::store::Store;
@@ -14,6 +15,21 @@ use harness::work::Setup;
 use sha2::{Digest, Sha256};
 
 use super::{settings, types};
+
+/// The login folders the agent's environment `shell` picks besides the usual ones: `CODEX_HOME` and
+/// `CLAUDE_CONFIG_DIR`, with each one's config files and credential files.
+fn chosen_folders(shell: &RunEnv) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let (mut config, mut credentials) = (vec![], vec![]);
+    if let Some(folder) = shell.get("CODEX_HOME").map(PathBuf::from) {
+        config.push(folder.join("config.toml"));
+        credentials.push(folder.join("auth.json"));
+    }
+    if let Some(folder) = shell.get("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+        config.extend([folder.join("settings.json"), folder.join("settings.local.json")]);
+        credentials.push(folder.join(".credentials.json"));
+    }
+    (config, credentials)
+}
 
 /// The login folders' config files, as `spikes/acp/scripts/env.sh` lists them: each is hashed.
 pub fn config_files(home: &Path) -> Vec<PathBuf> {
@@ -33,9 +49,7 @@ pub fn config_files(home: &Path) -> Vec<PathBuf> {
     .iter()
     .map(|file| home.join(file))
     .collect();
-    if let Some(folder) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        files.push(PathBuf::from(folder).join("settings.json"));
-    }
+    files.sort();
     files
 }
 
@@ -44,18 +58,20 @@ pub fn credential_files(home: &Path) -> Vec<PathBuf> {
     [".claude/.credentials.json", ".codex/auth.json", ".gemini/oauth_creds.json", ".gemini/google_accounts.json"].iter().map(|file| home.join(file)).collect()
 }
 
-/// One line per file, with the home folder written `~`, so a failure names no path of the person's.
-pub fn login_snapshot(home: &Path) -> Vec<String> {
+/// One line per file, with the home folder written `~`, so a failure names no path of the person's: the usual login
+/// folders' files, and those of the folders the agent's captured environment `shell` picks.
+pub fn login_snapshot(home: &Path, shell: &RunEnv) -> Vec<String> {
     let shown = |path: &Path| format!("~/{}", path.strip_prefix(home).unwrap_or(path).display());
+    let (chosen_config, chosen_credentials) = chosen_folders(shell);
     let mut lines = vec![];
-    for file in config_files(home) {
+    for file in config_files(home).into_iter().chain(chosen_config) {
         let state = match std::fs::read(&file) {
             Ok(bytes) => format!("{:x}", Sha256::digest(&bytes)).chars().take(16).collect(),
             Err(_) => "absent".to_owned(),
         };
         lines.push(format!("{} {state}", shown(&file)));
     }
-    for file in credential_files(home) {
+    for file in credential_files(home).into_iter().chain(chosen_credentials) {
         let state = match std::fs::metadata(&file) {
             Ok(meta) => format!("{} {:?}", meta.len(), meta.modified().ok()),
             Err(_) => "absent".to_owned(),
@@ -113,21 +129,6 @@ pub struct Ran {
 /// checked while it runs and after, and nothing of the session may be left.
 pub async fn real_session(real: Real<'_>) -> Ran {
     let home = dirs::home_dir().expect("a home folder");
-    let before = login_snapshot(&home);
-    let watching = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let watcher = {
-        let (home, before, watching) = (home.clone(), before.clone(), watching.clone());
-        // A write that is undone before the end is still seen.
-        tokio::spawn(async move {
-            while watching.load(std::sync::atomic::Ordering::Relaxed) {
-                if login_snapshot(&home) != before {
-                    return false;
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            true
-        })
-    };
     let tmp = tempfile::tempdir().unwrap();
     let (scratch, remote, data) = (tmp.path().join("scratch"), tmp.path().join("remote.git"), tmp.path().join("data"));
     let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).output().unwrap().status.success(), "git {}", args[0]);
@@ -146,6 +147,22 @@ pub async fn real_session(real: Real<'_>) -> Ran {
     for marker in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID"] {
         assert!(shell.get(marker).is_none(), "{marker} reached the agent's environment");
     }
+    // Taken from the environment the agent gets, so a login folder it picks is watched too.
+    let before = login_snapshot(&home, &shell);
+    let watching = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let watcher = {
+        let (home, shell, before, watching) = (home.clone(), shell.clone(), before.clone(), watching.clone());
+        // A write that is undone before the end is still seen.
+        tokio::spawn(async move {
+            while watching.load(std::sync::atomic::Ordering::Relaxed) {
+                if login_snapshot(&home, &shell) != before {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            true
+        })
+    };
     // Claude on its cheapest model; Codex on the person's own, at a low effort.
     let (provider, binary, model, effort) = match real.codex {
         true => ("codex", setup.places().find(harness::provider::Provider::Codex, &shell).expect("codex is installed"), None, Some("low".to_owned())),
@@ -187,7 +204,7 @@ pub async fn real_session(real: Real<'_>) -> Ran {
 
     watching.store(false, std::sync::atomic::Ordering::Relaxed);
     let unchanged_while_running = watcher.await.unwrap();
-    let after = login_snapshot(&home);
+    let after = login_snapshot(&home, &shell);
     let changed: Vec<&String> = after.iter().filter(|line| !before.contains(line)).collect();
     assert!(unchanged_while_running && changed.is_empty(), "a login's config changed: {changed:?}");
     Ran { seen, rest, scratch, _tmp: tmp }

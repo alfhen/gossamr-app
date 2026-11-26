@@ -3,9 +3,9 @@
 //!
 //! `FAKE_APP_SERVER_OUT` names a folder that gets `argv.json`, `env.json` (every variable's name, and the values of
 //! `CODEX_HOME` and `FAKE_APP_SERVER_*` only), `pid`, `requests.jsonl` (each line received, with every header value
-//! written `<redacted>` and the test's secret masked) and, with `FAKE_APP_SERVER_SECRET_FILE`, `secret.json`: the
-//! variables whose value holds the secret, how many arguments do, and how many requests carry it in an
-//! `Authorization` header.
+//! written `<redacted>` and the token masked anywhere else) and, once a request carries a bearer token in a server's
+//! `Authorization` header, `secret.json`: the variables whose value holds that token, how many arguments do, and how
+//! many requests carry it in that header. The token is learned from the header, so no test writes it down.
 //!
 //! `app-server generate-json-schema --out <folder>` writes the three schema files the driver reads, without the names
 //! `FAKE_APP_SERVER_MISSING` lists (comma-separated). `FAKE_APP_SERVER_VERSION` is the version `initialize` names
@@ -14,7 +14,10 @@
 //! its usage and completes; `command` starts `sleep 60` in a process group of its own, writes its pid to
 //! `command.pid`, and waits for `turn/interrupt`, which leaves the sleep running, as Codex does (H0, row 3). At the
 //! end of stdin it exits and leaves any sleep it started; with `FAKE_APP_SERVER_STAY` set it ignores SIGTERM and stays
-//! instead, as an agent that will not stop does. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
+//! instead, as an agent that will not stop does; with `FAKE_APP_SERVER_EXIT_ON_INTERRUPT` set, `turn/interrupt` makes it
+//! exit at once, as an app-server that crashed, leaving its sleep. `background` starts, in a group of its own, a shell
+//! that starts `sleep 60` a moment later, writes its pid to `inner.pid` and exits, as `npm run dev &` does: the sleep is
+//! then no child of app-server's, only a member of the shell's group. `approval` sends the request `FAKE_APP_SERVER_APPROVAL` names, as id
 //! 900, and completes the turn once it is answered.
 
 use std::io::{BufRead, Write};
@@ -65,10 +68,9 @@ fn serve(out: &Path, argv: &[String]) -> ExitCode {
     let vars: Vec<(String, String)> = std::env::vars().collect();
     let shown = |name: &str| name == "CODEX_HOME" || name.starts_with("FAKE_APP_SERVER_");
     let env: serde_json::Map<String, Value> = vars.iter().map(|(name, value)| (name.clone(), if shown(name) { Value::from(value.as_str()) } else { Value::Null })).collect();
-    let secret = std::env::var("FAKE_APP_SERVER_SECRET_FILE").ok().and_then(|file| std::fs::read_to_string(file).ok()).map(|secret| secret.trim().to_owned());
-    let secrets: Vec<String> = secret.iter().cloned().collect();
-    let shown_argv: Vec<String> = argv.iter().map(|arg| redact::text(arg, &secrets)).collect();
-    let _ = std::fs::write(out.join("argv.json"), Value::from(shown_argv).to_string());
+    let mut secret: Option<String> = None;
+    let shown_argv = |secrets: &[String]| Value::from(argv.iter().map(|arg| redact::text(arg, secrets)).collect::<Vec<_>>()).to_string();
+    let _ = std::fs::write(out.join("argv.json"), shown_argv(&[]));
     let _ = std::fs::write(out.join("env.json"), Value::Object(env).to_string());
     let _ = std::fs::write(out.join("pid"), std::process::id().to_string());
     let Ok(mut requests) = std::fs::File::create(out.join("requests.jsonl")) else { return ExitCode::from(1) };
@@ -76,16 +78,23 @@ fn serve(out: &Path, argv: &[String]) -> ExitCode {
     let stdin = std::io::stdin();
     for line in stdin.lock().lines().map_while(Result::ok) {
         let Ok(request) = serde_json::from_str::<Value>(&line) else { continue };
+        if secret.is_none() {
+            secret = bearer(&request);
+            // Written again with the token masked, now that it is known.
+            if let Some(token) = &secret {
+                let _ = std::fs::write(out.join("argv.json"), shown_argv(std::slice::from_ref(token)));
+            }
+        }
         if let Some(secret) = &secret {
             fake.headers += usize::from(carries(&request, secret));
             let held = json!({
-                "env": vars.iter().filter(|(name, value)| name != "FAKE_APP_SERVER_SECRET_FILE" && value.contains(secret.as_str())).map(|(name, _)| name).collect::<Vec<_>>(),
+                "env": vars.iter().filter(|(_, value)| value.contains(secret.as_str())).map(|(name, _)| name).collect::<Vec<_>>(),
                 "argv": argv.iter().filter(|arg| arg.contains(secret.as_str())).count(),
                 "headers": fake.headers,
             });
             let _ = std::fs::write(out.join("secret.json"), held.to_string());
         }
-        let _ = writeln!(requests, "{}", kept(request.clone(), &secrets)).and_then(|()| requests.flush());
+        let _ = writeln!(requests, "{}", kept(request.clone(), &secret.iter().cloned().collect::<Vec<_>>())).and_then(|()| requests.flush());
         fake.answer(&request);
     }
     if stays {
@@ -94,6 +103,12 @@ fn serve(out: &Path, argv: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// The bearer token the first of a request's servers carries in its `Authorization` header.
+fn bearer(request: &Value) -> Option<String> {
+    let servers = request["params"]["config"]["mcp_servers"].as_object()?;
+    servers.values().find_map(|server| server["http_headers"]["Authorization"].as_str()?.strip_prefix("Bearer ").map(str::to_owned))
 }
 
 /// Whether a request names `secret` as an `Authorization` header of one of its thread's servers.
@@ -150,6 +165,7 @@ impl Fake {
             }
             Some("thread/resume") => self.say(json!({"id": id, "result": {"thread": {"id": params["threadId"]}}})),
             Some("turn/start") => self.turn_start(id, params),
+            Some("turn/interrupt") if std::env::var_os("FAKE_APP_SERVER_EXIT_ON_INTERRUPT").is_some() => std::process::exit(0),
             Some("turn/interrupt") => {
                 self.say(json!({"id": id, "result": {}}));
                 if let Some(turn) = self.turn.take() {
@@ -174,6 +190,13 @@ impl Fake {
         self.turn = Some(turn.clone());
         self.say(json!({"id": id, "result": {"turn": {"id": turn, "status": "inProgress"}}}));
         self.notify("turn/started", json!({"threadId": thread, "turn": {"id": turn}}));
+        if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("background") {
+            let (shell, inner) = (self.out.join("shell.pid"), self.out.join("inner.pid"));
+            let script = format!("echo $$ > '{}'; sleep 0.3; /bin/sleep 60 & echo $! > '{}'", shell.display(), inner.display());
+            let _ = std::process::Command::new("/bin/sh").args(["-c", &script]).process_group(0).spawn();
+            self.notify("item/started", json!({"threadId": thread, "turnId": turn, "item": {"type": "commandExecution", "id": format!("cmd-{n}"), "command": "sleep 60 &"}}));
+            return;
+        }
         if std::env::var("FAKE_APP_SERVER_TURN").as_deref() == Ok("approval") {
             let method = std::env::var("FAKE_APP_SERVER_APPROVAL").unwrap_or_default();
             self.say(json!({"id": 900, "method": method, "params": {"threadId": thread, "turnId": turn, "itemId": format!("item-{n}")}}));

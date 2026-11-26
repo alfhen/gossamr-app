@@ -53,6 +53,10 @@ pub const STOP_TAKES_UP_TO: Duration = Duration::from_secs(10);
 /// How long Codex has to answer `initialize` and the thread's start before the session fails.
 pub const SETUP_WITHIN: Duration = Duration::from_secs(60);
 
+/// How often the driver notes app-server's process tree while it runs, so a command it started in a group of its own
+/// is known when app-server goes, however it goes.
+const TREE_EVERY: Duration = Duration::from_secs(1);
+
 /// How long the schema the shape check reads may take to write.
 const SCHEMA_WITHIN: Duration = Duration::from_secs(20);
 
@@ -64,8 +68,8 @@ pub struct CodexDriver {
     term_after: Duration,
     stop_takes_up_to: Duration,
     setup_within: Duration,
-    /// The binaries whose shape passed, with when each was last written, so an unchanged one is not checked again.
-    checked: Mutex<HashMap<PathBuf, std::time::SystemTime>>,
+    /// The binaries whose shape passed, each with its file's stamp, so an unchanged one is not checked again.
+    checked: Mutex<HashMap<PathBuf, Stamp>>,
 }
 
 enum Binary {
@@ -100,8 +104,8 @@ impl CodexDriver {
 
     /// The protocol's shape, from the binary's own schema: every name in `NEEDED`.
     fn check_shape(&self, binary: &Path, launch: &Launch) -> Result<(), OpenError> {
-        let written = std::fs::metadata(binary).and_then(|meta| meta.modified()).ok();
-        let checked = self.checked.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(binary).copied();
+        let written = stamp(binary);
+        let checked = self.checked.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(binary).cloned();
         if written.is_some() && checked == written {
             return Ok(());
         }
@@ -115,6 +119,17 @@ impl CodexDriver {
         }
         Ok(())
     }
+}
+
+/// What tells one installed file from another: the real file's device, inode, size and change time. npm unpacks every
+/// file with one fixed modification time, so that alone would miss an upgrade; no unpacker can set the change time.
+type Stamp = (PathBuf, u64, u64, u64, i64, i64);
+
+fn stamp(binary: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let real = std::fs::canonicalize(binary).ok()?;
+    let meta = std::fs::metadata(&real).ok()?;
+    Some((real, meta.dev(), meta.ino(), meta.size(), meta.ctime(), meta.ctime_nsec()))
 }
 
 /// The names of `NEEDED` the binary's schema lacks, read from what `app-server generate-json-schema` writes into a
@@ -263,7 +278,7 @@ struct Agent {
     stderr: (tokio::task::JoinHandle<()>, Arc<Mutex<Option<String>>>),
     end: Option<EndReport>,
     sent: Vec<libc::c_int>,
-    /// What app-server had started when it was told to go: a command it leaves running is not in its group.
+    /// What app-server has started, noted while it runs: a command it leaves running is not in its group.
     tree: Vec<Process>,
 }
 
@@ -276,6 +291,7 @@ impl Agent {
         let (mut going, mut listening) = (false, true);
         // A command app-server started can hold its stdout open after it exits, so its exit ends the session too.
         let mut exited = None;
+        let mut tree_every = tokio::time::interval(TREE_EVERY);
         let until = |when: Option<tokio::time::Instant>| async move {
             match when {
                 Some(at) => tokio::time::sleep_until(at).await,
@@ -292,6 +308,10 @@ impl Agent {
                     Ok(Some((_, true))) => self.rpc.emit(Body::Notice { text: format!("Codex wrote a line over {} MiB, which was skipped.", LINE_MAX >> 20) }),
                     Ok(Some((line, false))) => {
                         self.rpc.read(&line);
+                        // A command starts with its item: noted now, while app-server surely leads it.
+                        if std::mem::take(&mut self.rpc.item_started) {
+                            self.note_tree();
+                        }
                         if self.rpc.broken && !going {
                             going = true;
                             self.kill();
@@ -333,6 +353,7 @@ impl Agent {
                     kill_at = None;
                     self.kill();
                 }
+                _ = tree_every.tick() => self.note_tree(),
                 () = until(setup_until) => {
                     setup_until = None;
                     going = true;
@@ -341,11 +362,14 @@ impl Agent {
                 }
             }
         }
-        // Whatever of the group is left, and what app-server had started outside it, goes too.
-        let _ = process::kill_group(&self.process);
-        for left in &self.tree {
-            let _ = process::signal(left, libc::SIGKILL);
+        // Whatever of the group is left, and what app-server had started outside it, goes too. Its output can end
+        // while it runs, and then this kill is the driver's own.
+        self.note_tree();
+        if process::alive(&self.process) {
+            self.sent.push(libc::SIGKILL);
         }
+        let _ = process::kill_group(&self.process);
+        self.kill_tree();
         let status = match exited {
             Some(status) => Some(status),
             None => child.wait().await.ok(),
@@ -381,6 +405,9 @@ impl Agent {
     }
 
     fn note_tree(&mut self) {
+        // Kept until nothing is left of it, neither it nor its group, or its pid is another process's: an exited
+        // command's group can still hold what it started.
+        self.tree.retain(|left| !process::nothing_has(left.pid) && process::started_of(left.pid).is_none_or(|started| started == left.started));
         for found in process::descendants(&self.process) {
             if !self.tree.contains(&found) {
                 self.tree.push(found);
@@ -392,14 +419,23 @@ impl Agent {
         self.note_tree();
         self.sent.push(libc::SIGKILL);
         let _ = process::kill_group(&self.process);
+        self.kill_tree();
+    }
+
+    /// Each process of the noted tree, and the group each led: a command in a group of its own leaves what it started
+    /// there when it exits.
+    fn kill_tree(&self) {
         for left in &self.tree {
             let _ = process::signal(left, libc::SIGKILL);
+            process::kill_led_group(left);
         }
     }
 }
 
 /// The running turn: its id once `turn/start` is answered, and whether it was interrupted.
 struct Turn {
+    /// The id of its `turn/start`, whose answer alone names it.
+    request: u64,
     id: Option<String>,
     cancelled: bool,
     /// The thread's token total when the turn began, so its usage is what it added.
@@ -435,6 +471,8 @@ struct Rpc {
     total: Option<Value>,
     /// A setup answer was an error, so the agent must go.
     broken: bool,
+    /// An item started since the agent last looked, so its process tree may have grown.
+    item_started: bool,
 }
 
 impl Rpc {
@@ -455,6 +493,7 @@ impl Rpc {
             effort: chosen(&launch.effort),
             total: None,
             broken: false,
+            item_started: false,
         };
         // No `capabilities`, so `experimentalApi` is never set.
         let client = json!({"name": "gossamr", "title": "Gossamr", "version": env!("CARGO_PKG_VERSION")});
@@ -493,12 +532,18 @@ impl Rpc {
         if let Some(effort) = &self.effort {
             params["effort"] = Value::from(effort.as_str());
         }
-        self.turn = Some(Turn { id: None, cancelled: false, from: self.total.clone() });
         self.emit(Body::TurnStarted);
         self.request(Asked::Turn, "turn/start", params);
+        self.turn = Some(Turn { request: self.next, id: None, cancelled: false, from: self.total.clone() });
     }
 
     fn cancel(&mut self) {
+        if self.turn.is_none() && self.held.pop_front().is_some() {
+            // A prompt that waits for the thread never reaches Codex: its turn ends cancelled, as a sent one's would.
+            self.emit(Body::TurnStarted);
+            self.emit(Body::TurnEnded { how: TurnEnd::Cancelled });
+            return;
+        }
         let Some(turn) = self.turn.as_mut().filter(|turn| !turn.cancelled) else { return };
         turn.cancelled = true;
         if turn.id.is_some() {
@@ -518,8 +563,8 @@ impl Rpc {
             (Some(method), Some(id)) => self.asks(method, id.clone()),
             (Some(method), None) => self.notified(method, &line["params"]),
             (None, Some(id)) => {
-                let asked = id.as_u64().and_then(|id| self.asked.remove(&id));
-                self.answered(asked, &line);
+                let (id, asked) = (id.as_u64(), id.as_u64().and_then(|id| self.asked.remove(&id)));
+                self.answered(id, asked, &line);
             }
             (None, None) => {}
         }
@@ -536,10 +581,10 @@ impl Rpc {
             _ => return self.send(json!({"id": id, "error": {"code": -32601, "message": "not supported by this client"}})),
         };
         self.send(json!({"id": id, "result": declined}));
-        self.emit(Body::Notice { text: format!("Codex asked {what}, and it was declined: approvals come with H7b, and until then each is declined.") });
+        self.emit(Body::Notice { text: format!("Codex asked {what}. Gossamr can't answer Codex's approvals yet, so it declined this.") });
     }
 
-    fn answered(&mut self, asked: Option<Asked>, line: &Value) {
+    fn answered(&mut self, request: Option<u64>, asked: Option<Asked>, line: &Value) {
         let error = line["error"]["message"].as_str().map(str::to_owned).or_else(|| line.get("error").map(|_| "Codex refused the request".to_owned()));
         match (asked, error) {
             (Some(Asked::Initialize), None) => self.initialized(&line["result"]),
@@ -555,7 +600,8 @@ impl Rpc {
             }
             (Some(Asked::Turn), None) => {
                 let id = line["result"]["turn"]["id"].as_str().map(str::to_owned);
-                if let Some(turn) = self.turn.as_mut().filter(|turn| turn.id.is_none()) {
+                // Only the running turn's own: a turn that completed before its answer came must not name the next.
+                if let Some(turn) = self.turn.as_mut().filter(|turn| Some(turn.request) == request && turn.id.is_none()) {
                     turn.id = id;
                     if turn.cancelled {
                         self.interrupt();
@@ -563,12 +609,12 @@ impl Rpc {
                 }
             }
             (Some(Asked::Initialize | Asked::Thread), Some(error)) => self.setup_failed(error),
-            (Some(Asked::Turn), Some(error)) => {
+            (Some(Asked::Turn), Some(error)) if self.turn.as_ref().is_some_and(|turn| Some(turn.request) == request) => {
                 self.turn = None;
                 self.emit(Body::Failed { kind: FailKind::Provider, reason: error });
                 self.next_prompt();
             }
-            (Some(Asked::Interrupt) | None, _) => {}
+            (Some(Asked::Interrupt | Asked::Turn) | None, _) => {}
         }
     }
 
@@ -597,6 +643,7 @@ impl Rpc {
         let item = &params["item"];
         match method {
             "item/started" => {
+                self.item_started = true;
                 let (name, input) = match item["type"].as_str() {
                     Some("commandExecution") => ("command".to_owned(), json!({"command": item["command"]})),
                     Some("fileChange") => ("file_change".to_owned(), json!({"changes": item["changes"]})),
@@ -676,6 +723,58 @@ fn usage(from: Option<&Value>, to: Option<&Value>) -> Option<Body> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An `Rpc` whose thread `thr` has started, with what it writes and says.
+    fn rpc() -> (Rpc, mpsc::UnboundedReceiver<String>, mpsc::UnboundedReceiver<Body>) {
+        let (lines, written) = mpsc::unbounded_channel();
+        let (output, said) = mpsc::unbounded_channel();
+        let launch = Launch {
+            cwd: "/nowhere".into(),
+            locked: false,
+            model: None,
+            login: None,
+            effort: None,
+            resume: None,
+            tools_token: crate::driver::Secret::random(),
+            tools: crate::tools::ToolsEndpoint::unattached(),
+            result_schema: None,
+            env: vec![],
+        };
+        (Rpc::new(lines, output, &launch), written, said)
+    }
+
+    fn drained<T>(from: &mut mpsc::UnboundedReceiver<T>) -> Vec<T> {
+        std::iter::from_fn(|| from.try_recv().ok()).collect()
+    }
+
+    #[test]
+    fn a_cancel_of_a_prompt_that_waits_for_the_thread_ends_its_turn_and_never_sends_it() {
+        let (mut rpc, mut written, mut said) = rpc();
+        rpc.prompt("go".into());
+        rpc.cancel();
+        assert_eq!(drained(&mut said), [Body::TurnStarted, Body::TurnEnded { how: TurnEnd::Cancelled }]);
+        rpc.answered(Some(2), Some(Asked::Thread), &json!({"result": {"thread": {"id": "thr"}}}));
+        let sent = drained(&mut written);
+        assert!(!sent.iter().any(|line| line.contains("turn/start")), "the cancelled prompt never went: {sent:?}");
+    }
+
+    #[test]
+    fn a_turn_start_answer_names_only_its_own_turn() {
+        let (mut rpc, mut written, _said) = rpc();
+        rpc.thread = Some("thr".into());
+        rpc.prompt("first".into());
+        let first = rpc.next;
+        // The first turn completes before its `turn/start` is answered; the next starts at once.
+        rpc.notified("turn/completed", &json!({"turn": {"id": "turn-1", "status": "completed"}}));
+        rpc.prompt("second".into());
+        let second = rpc.next;
+        rpc.answered(Some(first), Some(Asked::Turn), &json!({"result": {"turn": {"id": "turn-1"}}}));
+        rpc.answered(Some(second), Some(Asked::Turn), &json!({"result": {"turn": {"id": "turn-2"}}}));
+        drained(&mut written);
+        rpc.cancel();
+        let interrupt: Value = serde_json::from_str(&drained(&mut written).pop().expect("an interrupt")).unwrap();
+        assert_eq!((&interrupt["method"], &interrupt["params"]["turnId"]), (&json!("turn/interrupt"), &json!("turn-2")), "the running turn is the one interrupted");
+    }
 
     #[test]
     fn a_version_is_read_from_the_user_agent_and_nothing_else() {

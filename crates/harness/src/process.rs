@@ -289,6 +289,20 @@ fn members_left(_group: libc::pid_t) -> Listing {
     Listing::Full
 }
 
+/// Kills the group `process` led, if it led one, as a command an agent started in a group of its own does: what that
+/// command started lives on in its group after it exits. While it runs, only when it is its group's leader; once it has
+/// exited, only while no running process has its pid (it may be a zombie its parent has not reaped), since no pid is
+/// given out again while it names a group that has members.
+pub fn kill_led_group(process: &Process) {
+    let pid = process.pid as libc::pid_t;
+    let exited = started_of(process.pid).is_none() && !refuses_signals(process.pid);
+    // SAFETY: getpgid only reads the process's group.
+    let leads = if alive(process) { (unsafe { libc::getpgid(pid) }) == pid } else { exited };
+    if leads {
+        let _ = deliver(-pid, libc::SIGKILL);
+    }
+}
+
 /// Every process `process` started, and theirs, each with its start time, while `process` is still the run's. Taken
 /// before it goes: once it has, its children belong to the system and no longer lead back to it.
 pub fn descendants(process: &Process) -> Vec<Process> {

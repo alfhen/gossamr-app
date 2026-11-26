@@ -31,7 +31,6 @@ async fn codex_real_a_session_asks_is_answered_and_ends_with_a_result_that_fits(
 #[ignore]
 async fn codex_real_the_drivers_thread_start_in_an_empty_signed_out_codex_home_leaves_no_config_toml() {
     let home = dirs::home_dir().expect("a home folder");
-    let before = login_snapshot(&home);
     let tmp = tempfile::tempdir().unwrap();
     let (login, data, clone) = (tmp.path().join("codex-home"), tmp.path().join("data"), tmp.path().join("clone"));
     std::fs::create_dir_all(&login).unwrap();
@@ -45,6 +44,7 @@ async fn codex_real_the_drivers_thread_start_in_an_empty_signed_out_codex_home_l
     let setup = harness::work::Setup::of_this_machine(data);
     setup.capture().await.expect("the shell's environment is read");
     let shell = setup.shell().expect("a capture");
+    let before = login_snapshot(&home, &shell);
     let binary = setup.places().find(harness::provider::Provider::Codex, &shell).expect("codex is installed");
     // The usual agent environment with `CODEX_HOME` at the empty folder: a login folder the harness takes must be in the
     // home folder, where this test writes nothing.
@@ -66,5 +66,5 @@ async fn codex_real_the_drivers_thread_start_in_an_empty_signed_out_codex_home_l
     link.commands.send(Command::Stop).unwrap();
     while tokio::time::timeout(Duration::from_secs(20), link.output.recv()).await.expect("app-server goes").is_some() {}
     assert!(!login.join("config.toml").exists(), "the driver's thread/start wrote no config.toml");
-    assert_eq!(login_snapshot(&home), before, "and no login's config changed");
+    assert_eq!(login_snapshot(&home, &shell), before, "and no login's config changed");
 }

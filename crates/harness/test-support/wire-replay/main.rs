@@ -348,10 +348,12 @@ impl Replay {
                         self.hush();
                     }
                     let mut data = line.data.clone();
+                    // Taken before the mapping, which gives a string id a fresh one of its own.
+                    let recorded_id = data.get("id").map(Value::to_string);
                     self.ids.agent(&mut data);
                     if self.rpc && data.get("method").is_none() {
                         // An answer to the driver's request carries the driver's id.
-                        if let Some(sent) = data.get("id").and_then(|id| self.ids.rpc.get(&id.to_string())).cloned() {
+                        if let Some(sent) = recorded_id.and_then(|id| self.ids.rpc.get(&id)).cloned() {
                             data["id"] = sent;
                         }
                     }
@@ -977,20 +979,22 @@ mod tests {
     }
 
     #[test]
-    fn an_app_server_answer_carries_the_drivers_own_id() {
-        let line = |seq: u64, dir: &str, data: Value| Recorded { seq, dir: dir.into(), data };
-        let recording = vec![
-            line(1, "to_agent", json!({"id": 1, "method": "initialize", "params": {}})),
-            line(2, "from_agent", json!({"id": 1, "result": {"userAgent": "x/0.171.0 (y)"}})),
-        ];
-        let (lines, input) = std::sync::mpsc::channel();
-        let sent = json!({"id": 7, "method": "initialize", "params": {"clientInfo": {"name": "any"}}}).to_string();
-        lines.send(Ok(Arrived { text: sent, stamp: 0, at: Instant::now() })).unwrap();
-        drop(lines);
-        let mut out = vec![];
-        Replay::new(recording).play(&input, &AtomicUsize::new(0), &mut out, &mut vec![]).unwrap();
-        let played: Value = serde_json::from_str(String::from_utf8(out).unwrap().lines().next().unwrap()).unwrap();
-        assert_eq!(played["id"], 7, "the recorded answer to request 1 goes back as the answer to the driver's 7");
+    fn an_app_server_answer_carries_the_drivers_own_id_a_number_or_a_string() {
+        for (recorded, live) in [(json!(1), json!(7)), (json!("req-a"), json!("mine-1"))] {
+            let line = |seq: u64, dir: &str, data: Value| Recorded { seq, dir: dir.into(), data };
+            let recording = vec![
+                line(1, "to_agent", json!({"id": recorded, "method": "initialize", "params": {}})),
+                line(2, "from_agent", json!({"id": recorded, "result": {"userAgent": "x/0.171.0 (y)"}})),
+            ];
+            let (lines, input) = std::sync::mpsc::channel();
+            let sent = json!({"id": live, "method": "initialize", "params": {"clientInfo": {"name": "any"}}}).to_string();
+            lines.send(Ok(Arrived { text: sent, stamp: 0, at: Instant::now() })).unwrap();
+            drop(lines);
+            let mut out = vec![];
+            Replay::new(recording).play(&input, &AtomicUsize::new(0), &mut out, &mut vec![]).unwrap();
+            let played: Value = serde_json::from_str(String::from_utf8(out).unwrap().lines().next().unwrap()).unwrap();
+            assert_eq!(played["id"], live, "the recorded answer to {recorded} goes back as the answer to the driver's {live}");
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 mod common;
 
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +19,8 @@ use serde_json::Value;
 
 const FAKE: &str = env!("CARGO_BIN_EXE_fake-codex-app-server");
 
-/// A launch of the fake in a folder of its own, with `extra` in its environment; the secret is the session's token.
+/// A launch of the fake in a folder of its own, with `extra` in its environment. The fake learns the session's token
+/// from the header it receives, so the test never writes it to a file.
 struct Run {
     tmp: tempfile::TempDir,
     out: PathBuf,
@@ -34,13 +36,7 @@ impl Run {
     }
 
     fn launch(&self, extra: &[(&str, &str)], resume: Option<&str>, model: Option<&str>, effort: Option<&str>) -> Launch {
-        let secret = self.tmp.path().join("secret");
-        std::fs::write(&secret, self.token.expose()).unwrap();
-        let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [
-            ("PATH", "/usr/bin:/bin".to_owned()),
-            ("FAKE_APP_SERVER_OUT", self.out.display().to_string()),
-            ("FAKE_APP_SERVER_SECRET_FILE", secret.display().to_string()),
-        ]
+        let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = [("PATH", "/usr/bin:/bin".to_owned()), ("FAKE_APP_SERVER_OUT", self.out.display().to_string())]
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
         .collect();
@@ -65,9 +61,14 @@ impl Run {
     }
 
     fn pid_of(&self, file: &str) -> Process {
-        let pid: u32 = std::fs::read_to_string(self.out.join(file)).unwrap().trim().parse().unwrap();
-        Process { pid, started: process::started_of(pid).expect("it runs") }
+        process_in(&self.out, file)
     }
+}
+
+/// The process whose pid the fake wrote to `file` in `out`, while it runs.
+fn process_in(out: &Path, file: &str) -> Process {
+    let pid: u32 = std::fs::read_to_string(out.join(file)).unwrap().trim().parse().unwrap();
+    Process { pid, started: process::started_of(pid).expect("it runs") }
 }
 
 fn driver() -> CodexDriver {
@@ -267,10 +268,112 @@ async fn codex_each_approval_is_declined_in_its_own_shape_until_h7b_and_the_turn
         let said = one_turn(&run, run.launch(&[("FAKE_APP_SERVER_TURN", "approval"), ("FAKE_APP_SERVER_APPROVAL", method)], None, None, None)).await;
         let answer = run.requests().into_iter().find(|line| line["id"] == 900 && line.get("method").is_none()).unwrap_or_else(|| panic!("{method} was answered"));
         assert_eq!(answer["result"], declined, "{method}");
-        let told = said.iter().any(|body| matches!(body, Body::Notice { text } if text.contains("declined: approvals come with H7b")));
+        let told = said.iter().any(|body| matches!(body, Body::Notice { text } if text.contains("Gossamr can't answer Codex's approvals yet, so it declined this.")));
         assert!(told, "the session says it was declined: {said:?}");
         assert_eq!(said.last(), Some(&Body::TurnEnded { how: TurnEnd::Done }), "{method}: the turn did not wait on it");
     }
+}
+
+/// Until `process` has gone, within 10 s.
+async fn gone(process: &Process, what: &str) {
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while process::alive(process) {
+        assert!(tokio::time::Instant::now() < given, "{what} was left running");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn codex_a_command_left_by_an_app_server_that_exits_unasked_goes_with_it() {
+    let run = Run::new();
+    let extra = [("FAKE_APP_SERVER_TURN", "command"), ("FAKE_APP_SERVER_EXIT_ON_INTERRUPT", "1")];
+    let mut link = driver().open(run.launch(&extra, None, None, None)).unwrap();
+    link.commands.send(Command::Prompt("go".into())).unwrap();
+    said_until(&mut link, |body| matches!(body, Body::ToolCall { .. })).await;
+    let command = run.pid_of("command.pid");
+    // The interrupt makes the fake exit at once, with no stop or kill from the driver, its sleep in a group of its own.
+    link.commands.send(Command::Cancel).unwrap();
+    while tokio::time::timeout(Duration::from_secs(10), link.output.recv()).await.expect("the agent's end").is_some() {}
+    gone(&command, "the command app-server started").await;
+}
+
+#[tokio::test]
+async fn codex_a_live_leftovers_command_in_a_group_of_its_own_is_stopped_with_it() {
+    use std::io::Write;
+    let (tmp, data) = data_dir();
+    let out = tmp.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    // An app-server a dead harness left, in the middle of a command it started in a group of its own.
+    let mut left = std::process::Command::new(FAKE)
+        .arg("app-server")
+        .env("FAKE_APP_SERVER_OUT", &out)
+        .env("FAKE_APP_SERVER_TURN", "command")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let mut stdin = left.stdin.take().unwrap();
+    for line in [r#"{"id":1,"method":"initialize","params":{}}"#, r#"{"id":2,"method":"thread/start","params":{}}"#, r#"{"id":3,"method":"turn/start","params":{"threadId":"thr-fake-1"}}"#] {
+        writeln!(stdin, "{line}").unwrap();
+    }
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !out.join("command.pid").exists() {
+        assert!(tokio::time::Instant::now() < given, "the fake started its command");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (agent, command) = (Process { pid: left.id(), started: process::started_of(left.id()).unwrap() }, process_in(&out, "command.pid"));
+    let store = Store::open(&data).unwrap();
+    store.create_session("s", "codex", false, tmp.path(), None).unwrap();
+    store.set_agent("s", Some(&agent)).unwrap();
+    let harness = harness_on(&data, store, &[], &out);
+    gone(&command, "the leftover's command").await;
+    assert!(left.wait().unwrap().signal().is_some(), "and the app-server itself was killed");
+    harness.shutdown().await;
+    drop(stdin);
+}
+
+#[tokio::test]
+async fn codex_stop_kills_what_a_command_left_in_its_group_after_it_exited() {
+    // As `npm run dev &`: the command's shell exits, and the server it started lives on in the shell's group, no child of
+    // app-server's any more.
+    let run = Run::new();
+    let mut link = driver().open(run.launch(&[("FAKE_APP_SERVER_TURN", "background")], None, None, None)).unwrap();
+    link.commands.send(Command::Prompt("go".into())).unwrap();
+    said_until(&mut link, |body| matches!(body, Body::ToolCall { .. })).await;
+    let given = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !run.out.join("inner.pid").exists() || std::fs::read_to_string(run.out.join("inner.pid")).unwrap().trim().is_empty() {
+        assert!(tokio::time::Instant::now() < given, "the shell started its sleep");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let inner = run.pid_of("inner.pid");
+    let shell: u32 = std::fs::read_to_string(run.out.join("shell.pid")).unwrap().trim().parse().unwrap();
+    while process::started_of(shell).is_some() {
+        assert!(tokio::time::Instant::now() < given, "the shell exited");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    stopped(&mut link).await;
+    gone(&inner, "what the command left in its group").await;
+}
+
+#[tokio::test]
+async fn codex_a_binary_installed_again_with_the_same_modification_time_is_checked_again() {
+    // As npm unpacks every file of every version with one fixed modification time.
+    let dir = tempfile::tempdir().unwrap();
+    let codex = dir.path().join("codex");
+    std::fs::copy(FAKE, &codex).unwrap();
+    let written = std::fs::metadata(&codex).unwrap().modified().unwrap();
+    let driver = CodexDriver::new(codex.clone()).with_graces(Duration::from_millis(300), Duration::from_millis(1_500));
+    let first = Run::new();
+    let mut link = driver.open(first.launch(&[], None, None, None)).unwrap();
+    stopped(&mut link).await;
+    std::fs::remove_file(&codex).unwrap();
+    std::fs::copy(FAKE, &codex).unwrap();
+    std::fs::File::options().write(true).open(&codex).unwrap().set_modified(written).unwrap();
+    assert_eq!(std::fs::metadata(&codex).unwrap().modified().unwrap(), written, "the same modification time");
+    let second = Run::new();
+    let refused = driver.open(second.launch(&[("FAKE_APP_SERVER_MISSING", "turn/interrupt")], None, None, None)).err().expect("checked again, and refused");
+    assert_eq!(refused.kind, FailKind::VersionNotSupported);
 }
 
 #[tokio::test]
