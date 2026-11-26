@@ -39,6 +39,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
     let at = DateTime::from_timestamp_millis(event.ms).unwrap_or(now);
     let mut rows = Rows { run_id: run.id.clone(), at, rows: Vec::new() };
     let before = run.state;
+    // A take back that failed or closed again did not start: its run is no longer one starting up.
+    if matches!(body, Body::Failed { .. } | Body::Closed { .. }) {
+        follow.taken_back = false;
+    }
     match body {
         Body::Started { resumed: true, provider_session } => {
             follow.provider_session = Some(provider_session);
@@ -83,7 +87,10 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             run.last_detail = first_line(&text);
             rows.add("update", &text, None);
         }
-        Body::ToolCall { name, input, .. } => {
+        Body::ToolCall { id, name, input } => {
+            if runs_git_commit(&input) {
+                follow.commits.push(id);
+            }
             let what = describe(&name, &input);
             run.last_detail = Some(redact(&what));
             rows.add(tool_kind(&name), &what, None);
@@ -95,9 +102,13 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
         Body::ToolResult { id, error, output } => {
             follow.calls.retain(|(open, ..)| *open != id);
             let said = plain(&output);
-            if signing_refused(&said) {
+            let commit = follow.commits.iter().position(|open| *open == id).map(|at| follow.commits.remove(at)).is_some();
+            if commit && error && signing_refused(&said) {
                 follow.signing_refused = true;
                 rows.add("error", "A commit wasn't signed: your signing agent refused it", Some(&said));
+            } else if commit && !error {
+                // Committed after all, signed: the turn's work is safe.
+                follow.signing_refused = false;
             } else if error {
                 rows.add("error", "A tool call failed", Some(&said));
             }
@@ -169,6 +180,7 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
             follow.turns += 1;
             follow.permissions.clear();
             follow.calls.clear();
+            follow.commits.clear();
             match how {
                 TurnEnd::Done => {
                     follow.carry_ons = 0;
@@ -183,8 +195,9 @@ pub fn fold(run: &mut Run, follow: &mut SessionFollow, event: &Event, now: DateT
                 run.last_detail = (how == TurnEnd::Denied).then(|| STOPPED_AFTER_DENY.into()).or(run.last_detail.take());
                 run.ended_at = Some(now);
             }
-            // The turn's work could not be committed, whatever the agent made of it: the person has to act.
-            if std::mem::take(&mut follow.signing_refused) && follow.question.is_none() {
+            // The turn's work could not be committed, whatever the agent made of it: the person has to act. A turn that
+            // ends on a question keeps the mark for the turn its answer starts.
+            if follow.question.is_none() && std::mem::take(&mut follow.signing_refused) {
                 run.state = RunState::Failed;
                 run.error = Some(SIGNING_NEEDS_YOU.into());
                 run.failure = Some(RunFailure::SigningNeedsYou);
@@ -336,7 +349,27 @@ fn drop_answer(run: &mut Run, follow: &mut SessionFollow) {
 /// What git says when the signing program refused a commit: it wrote no commit object, and the signer said why.
 fn signing_refused(said: &str) -> bool {
     let said = said.to_lowercase();
-    said.contains("failed to write commit object") && ["sign", "1password", "gpg", "ssh-keygen"].iter().any(|signer| said.contains(signer))
+    // Whole words, so "design" or "assign" is no signer.
+    let mut words = said.split(|c: char| !(c.is_alphanumeric() || c == '-'));
+    said.contains("failed to write commit object") && words.any(|word| ["sign", "signing", "1password", "gpg", "ssh-keygen"].contains(&word))
+}
+
+/// Whether a shell call's command runs `git commit`, past git's own options (`git -C dir -c key=value commit`).
+fn runs_git_commit(input: &Value) -> bool {
+    let Some(command) = input.get("command").and_then(Value::as_str) else { return false };
+    command.split(['\n', ';', '&', '|']).any(|part| {
+        let mut words = part.split_whitespace().skip_while(|word| *word != "git" && !word.ends_with("/git")).skip(1);
+        while let Some(word) = words.next() {
+            match word {
+                "-c" | "-C" => {
+                    words.next();
+                }
+                option if option.starts_with('-') => {}
+                sub => return sub == "commit",
+            }
+        }
+        false
+    })
 }
 
 /// A run its session takes up again, after a failed turn, a stop or a close: no longer over.

@@ -481,8 +481,29 @@ impl Harness {
     }
 
     /// Closes the session as handed over to Terminal, which its `handed_over` event says. Its provider id is kept,
-    /// so it can be resumed there or later.
+    /// so it can be resumed there or later. A session that is already closed is marked handed over as it is, so
+    /// nothing but a take back resumes or cleans up what Terminal now works in.
     pub fn hand_over(&self, id: &str) -> Result<()> {
+        {
+            // Under the lock a start takes the session by, so a resume cannot start from a row being handed over.
+            let live = self.inner.live();
+            if !live.contains_key(id) {
+                return self.inner.with_store(|store| {
+                    let row = store.session(id)?;
+                    if row.cleaned {
+                        return Err(Error::Refused(format!("session {id} is cleaned up, so there is nothing to hand over")));
+                    }
+                    if row.given_up {
+                        return Err(given_up(id, "handed over"));
+                    }
+                    if !row.handed_over {
+                        store.set_handed_over(id, true)?;
+                        store.append(id, &Body::HandedOver, now_ms())?;
+                    }
+                    Ok(())
+                });
+            }
+        }
         self.stop(id, Request::HandOver)
     }
 
@@ -625,6 +646,10 @@ impl Harness {
             // Its agent may still work in the worktree.
             if row.given_up {
                 return Err(given_up(id, "cleaned up"));
+            }
+            // Terminal works in it now, whoever asks.
+            if row.handed_over {
+                return Err(Error::HandedOver(id.to_owned()));
             }
             // A worktree has one owner among the sessions not cleaned up that name it (`Store::worktree_owner`); only
             // the owner's clean-up removes it. Asked before the reservation, so a failed read leaves none behind.

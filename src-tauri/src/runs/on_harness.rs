@@ -44,6 +44,16 @@ const CLOSE_TAKES_UP_TO: std::time::Duration = std::time::Duration::from_secs(30
 const INTERRUPTED_ROW: &str = "Stopped when Gossamr moved agents to the harness. Ask Pip to start it again.";
 const INTERRUPTED_ASKING: &str = "Stopped when Gossamr moved agents to the harness, before you answered its question. Ask Pip to start it again.";
 
+/// Why Attach refuses a run in a turn.
+pub const HAND_OVER_IN_TURN: &str = "Its agent is in the middle of a turn, and opening it in Terminal would cut that turn short. Wait for the turn to end, or stop it first.";
+
+/// The harness's refusal as a sentence for the person: its words without the kind it starts with.
+fn plain_refusal(why: &str) -> String {
+    let said = why.strip_prefix("refused: ").unwrap_or(why);
+    let mut chars = said.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 /// What an agent of the old path reads when the move to the harness stopped it.
 pub const INTERRUPTED: &str = "Gossamr stopped this agent when it moved agents to the harness, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
 pub const INTERRUPTED_BEFORE_ANSWER: &str = "Gossamr stopped this agent when it moved agents to the harness, before you answered its question, and it can't pick up where it stopped. Its worktree is kept; Clean up removes it. Ask Pip to start it again.";
@@ -99,14 +109,12 @@ fn no_session(why: &str, provider: &str) -> String {
 
 /// The folder a run's session works in: the clone for the mock, else the worktree the harness makes beside the clone,
 /// `<clone>+worktrees/<branch>`, as `harness::work` names it.
-fn session_folder(run: &Run, provider: &str) -> std::path::PathBuf {
-    let clone = &run.spec.clone_path;
-    if provider == MOCK {
-        return clone.clone();
+fn session_folder(run: &Run) -> std::path::PathBuf {
+    // The worktree the harness reported, kept with the branch it made; a session with no branch works in the clone.
+    match run.branch {
+        Some(_) => run.expected_worktree.clone(),
+        None => run.spec.clone_path.clone(),
     }
-    let mut folder = clone.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
-    folder.push("+worktrees");
-    clone.with_file_name(folder).join(&run.spec.name)
 }
 
 /// The first prompt: the brief the person approved. The harness adds its own guard as system text.
@@ -184,20 +192,50 @@ impl RunService {
             return;
         }
         let going = vec![RunState::Launching, RunState::Working, RunState::NeedsAnswer, RunState::NeedsPermission, RunState::SystemBlocked, RunState::Unknown];
-        let Ok(runs) = self.core.runs_list(&crate::domain::RunQuery { states: Some(going), ..Default::default() }).await else { return };
+        // Listed and read under the lock, so a run that ended while a launch held it is not marked interrupted.
         let _turn = self.launching.lock().await;
+        let Ok(runs) = self.core.runs_list(&crate::domain::RunQuery { states: Some(going.clone()), ..Default::default() }).await else { return };
+        // Every run passed over is left for the next start, so the move is marked done only once none is.
         let mut all_stopped = true;
+        let left = |run: &Run, why: &str| eprintln!("the move to the harness left run {} for the next start: {why}", run.id);
         for run in runs.iter().filter(|run| run.harness_session.is_none()) {
-            let (Some(session), Ok(tc)) = (super::backend::Session::of(run), self.observing_toolchain(run).await) else { continue };
+            let Some(session) = super::backend::Session::of(run) else {
+                left(run, "it has no session on the old path yet");
+                all_stopped = false;
+                continue;
+            };
+            let tc = match self.observing_toolchain(run).await {
+                Ok(tc) => tc,
+                Err(e) => {
+                    left(run, &format!("its login can't be read: {e}"));
+                    all_stopped = false;
+                    continue;
+                }
+            };
             if tc.driver != crate::connections::Driver::Claude {
                 continue;
             }
-            if let Err(e) = tc.backend.stop(&session).await {
-                eprintln!("couldn't stop run {}'s agent on the old path: {e}", run.id);
-                all_stopped = false;
+            match tc.backend.stop(&session).await {
+                Ok(()) => {}
+                // `claude stop` of a job it no longer has: the agent is gone already.
+                Err(e) if e.to_string().contains("No job matching") => {}
+                Err(e) => {
+                    left(run, &format!("its agent couldn't be stopped: {e}"));
+                    all_stopped = false;
+                    continue;
+                }
+            }
+            let mut run = match self.load(&run.id).await {
+                Ok(run) => run,
+                Err(e) => {
+                    left(&run.clone(), &format!("it couldn't be read again: {e}"));
+                    all_stopped = false;
+                    continue;
+                }
+            };
+            if !going.contains(&run.state) {
                 continue;
             }
-            let Ok(mut run) = self.load(&run.id).await else { continue };
             // A question it waited on goes with it, as at a Stop: nothing can answer it now.
             let asked = run.needs.is_some() && run.state == RunState::NeedsAnswer;
             self.end_ask_on(tc.backend.as_ref(), &run);
@@ -218,6 +256,10 @@ impl RunService {
             }
             if let Err(e) = self.index.mark_terminal(&run.id) {
                 eprintln!("couldn't update the run index: {e}");
+            }
+            // It waited on you: Pip hears that it can't be answered now.
+            if asked {
+                self.notifier.notify(&run, super::tracker::Attention::Failed);
             }
         }
         if all_stopped {
@@ -299,6 +341,12 @@ impl RunService {
         let (link, session) = self.on_harness_of(run)?;
         let closed = |follow: &crate::domain::SessionFollow| follow.closed;
         let open = matches!(self.core.session_run(session).await, Ok(Some((_, follow))) if !closed(&follow));
+        // Asked before the close: a refusal after it would have stopped the agent for nothing.
+        if open {
+            if let Some(kept) = self.kept_on_harness(run).await {
+                return Some(Ok(Some(plain_refusal(&kept))));
+            }
+        }
         if open {
             let mut applied = link.applied();
             if let Err(why) = link.stop(session).await {
@@ -315,7 +363,22 @@ impl RunService {
                 return Some(Ok(Some("The session hasn't closed yet, so it can't be cleaned up. Try again in a moment.".into())));
             }
         }
-        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err()))
+        Some(Ok(link.call(Op::CleanUp { session: session.to_owned() }).await.err().map(|why| plain_refusal(&why))))
+    }
+
+    /// Why git would keep a harness run's worktree and branch, asked with the app's own git as the harness would remove
+    /// them. None when it would remove them, for a session with no worktree, or when git can't be asked, which leaves the
+    /// answer to the harness.
+    async fn kept_on_harness(&self, run: &Run) -> Option<String> {
+        let branch = run.branch.as_deref()?;
+        let git = self.git().await.ok()?;
+        let home = self.home.as_deref();
+        let _lock = match home {
+            Some(home) => Some(super::fresh::lock_repo(home, &run.spec.repo).await.ok()?),
+            None => None,
+        };
+        let worktree = super::repo::Worktree { repo: &run.spec.repo, clone: &run.spec.clone_path, path: &run.expected_worktree, branch, base: &run.spec.base };
+        super::repo::kept_by_git(&git, home, worktree).await.ok().flatten()
     }
 
     /// Takes a session handed over to Terminal back, on the person's word that they took it back there, so it can be
@@ -325,7 +388,7 @@ impl RunService {
         let (link, session) = self.on_harness_of(run)?;
         Some(match link.take_back(session).await {
             Ok(()) => self.load(&run.id).await,
-            Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {why}"))),
+            Err(why) => Err(Error::Proposal(format!("The harness didn't take the session back: {}", plain_refusal(&why)))),
         })
     }
 
@@ -334,11 +397,23 @@ impl RunService {
     /// the harness.
     pub(super) async fn hand_over_on_harness(&self, run: &Run) -> Option<Result<()>> {
         let (link, session) = self.on_harness_of(run)?;
-        let provider = self.harness.as_ref()?.provider.clone();
         Some(async {
             let follow = self.core.session_run(session).await?.map(|(_, follow)| follow).unwrap_or_default();
             let resumed_by = follow.provider_session.clone().ok_or_else(|| Error::Proposal("Its session hasn't started yet, so there is nothing to open.".into()))?;
-            if !follow.closed {
+            // A hand-over cuts a running turn and drops the messages queued for it: Terminal takes a session at rest.
+            if follow.in_turn && !follow.closed {
+                return Err(Error::Proposal(HAND_OVER_IN_TURN.into()));
+            }
+            if follow.closed {
+                // The harness marks a closed session handed over as it is; the app no longer follows it, so it reads
+                // the mark here.
+                link.call(Op::HandOver { session: session.to_owned() }).await.map_err(|why| Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why))))?;
+                self.core.apply_session(session, |run, _| {
+                    run.handed_over = true;
+                    run.last_detail = Some(super::consumer::HANDED_OVER.into());
+                    Vec::new()
+                }).await?;
+            } else {
                 // The app's own end of the turn, so it is not a cut that "carry on" would take up.
                 let asked = |asked: bool| {
                     self.core.apply_session(session, move |_, follow| {
@@ -349,14 +424,14 @@ impl RunService {
                 asked(true).await?;
                 if let Err(why) = link.call(Op::HandOver { session: session.to_owned() }).await {
                     asked(false).await?;
-                    return Err(Error::Proposal(format!("The harness didn't hand the session over: {why}")));
+                    return Err(Error::Proposal(format!("The harness didn't hand the session over: {}", plain_refusal(&why))));
                 }
             }
             let tc = self.observing_toolchain(run).await?;
             let program = tc.backend.binary().ok_or_else(|| Error::Claude("Gossamr can't tell which program to open.".into()))?;
             let dir = self.core.data_dir().join(super::control::ATTACH_DIR);
             let words = vec!["--resume".to_owned(), resumed_by];
-            let file = super::control::write_attach_file(&dir, tc.login.as_ref(), &program, &session_folder(run, &provider), &words)?;
+            let file = super::control::write_attach_file(&dir, tc.login.as_ref(), &program, &session_folder(run), &words)?;
             self.terminal.open(&file, self.settings().terminal).map_err(|e| Error::Claude(format!("Couldn't open Terminal: {e}")))
         }.await)
     }

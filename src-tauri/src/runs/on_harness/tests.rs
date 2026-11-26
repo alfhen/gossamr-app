@@ -436,9 +436,15 @@ async fn a_harness_run_needs_its_login_signed_in_and_not_a_claude_that_has_bg() 
 
 /// `on_a_bare_repo`, with the home folder the harness clones into and a git to run in it.
 fn bare_repo() -> (tempfile::TempDir, harness::work::Setup, Git) {
+    bare_repo_at(None)
+}
+
+/// `bare_repo`, with the harness's home `home` when given.
+fn bare_repo_at(home: Option<std::path::PathBuf>) -> (tempfile::TempDir, harness::work::Setup, Git) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    let (home, data, remote, config) = (root.join("home"), root.join("data"), root.join("remote/github.com"), root.join("gitconfig"));
+    let (data, remote, config) = (root.join("data"), root.join("remote/github.com"), root.join("gitconfig"));
+    let home = home.unwrap_or_else(|| root.join("home"));
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(&config, format!("[url \"file://{}/\"]\n\tinsteadOf = https://github.com/\n[user]\n\tname = Test\n\temail = test@example.invalid\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n", remote.display())).unwrap();
     let env = vec![
@@ -467,6 +473,18 @@ fn bare_repo() -> (tempfile::TempDir, harness::work::Setup, Git) {
 struct Git {
     home: std::path::PathBuf,
     env: Vec<(String, String)>,
+}
+
+/// The app on `served`, opening runs on its `claude` driver, with the same home and git as the harness of `git`'s
+/// temp repo, so what the app asks git is what the harness would find.
+async fn on_harness_sharing(fx: crate::inbox::testing::Fixture, served: &Served, git: &Git) -> Rig {
+    let direct = Arc::new(Direct { dir: served.dir.clone(), token: served.token.clone() });
+    let changed: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(|_| {});
+    let reads = Arc::new(crate::agent::agent_tools::HarnessReads(fx.core.clone()));
+    let link = Arc::new(Link::start(fx.core.clone(), direct, reads, Arc::new(Notices::default()), changed));
+    let env: Vec<(&str, String)> = git.env.iter().map(|(key, value)| (key.as_str(), value.clone())).collect();
+    let home = git.home.clone();
+    crate::runs::rig::ready_in(fx, &env, move |svc| svc.with_harness(OnHarness { link, provider: "claude".into() }).with_cap(6).with_home(home)).await
 }
 
 impl Git {
@@ -573,21 +591,68 @@ async fn a_run_handed_over_to_terminal_takes_your_message_only_once_you_say_you_
 }
 
 #[tokio::test]
-async fn attach_hands_a_harness_run_to_terminal_to_resume_there_and_the_run_reads_handed_over() {
+async fn attach_refuses_a_run_in_a_turn_since_a_hand_over_would_cut_it_and_drop_its_messages() {
     let served = Served::new(WORKS_LONG, 4);
     let rig = on_harness(&served).await;
     let run = rig.launched(1).await;
     until_state(&rig, &run, RunState::Working).await;
+    let refused = rig.svc.attach(&run.id).await.unwrap_err().to_string();
+    assert_eq!(refused, HAND_OVER_IN_TURN);
+    assert!(rig.opened.0.lock().unwrap().is_empty(), "Terminal did not open");
+    let still = rig.get(&run).await;
+    assert_eq!((still.state, still.handed_over), (RunState::Working, false));
+}
+
+#[tokio::test]
+async fn attach_hands_a_finished_run_to_terminal_in_the_worktree_the_harness_made_and_a_take_back_from_there_works() {
+    let (_repo, setup, git) = bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(TWO_TURNS, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
     rig.svc.attach(&run.id).await.unwrap();
-    let handed = until_state(&rig, &run, RunState::Stopped).await;
-    assert!(handed.handed_over, "{:?}", handed.last_detail);
-    assert_eq!(handed.last_detail.as_deref(), Some(crate::runs::consumer::HANDED_OVER), "the app's own end, not a cut");
+    let handed = until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    assert!(handed.handed_over && !crate::runs::cleanup::cleanable(&handed), "Clean up leaves what Terminal works in");
     let opened = rig.opened.0.lock().unwrap().clone();
     assert_eq!(opened.len(), 1, "Terminal opened once");
     let script = std::fs::read_to_string(&opened[0]).unwrap();
-    let (_, follow) = rig.fx.core.session_run(&handed.harness_session.unwrap()).await.unwrap().unwrap();
+    let (_, follow) = rig.fx.core.session_run(&done.harness_session.clone().unwrap()).await.unwrap().unwrap();
     assert!(script.contains(&format!("--resume {}", follow.provider_session.unwrap())), "{script}");
-    assert!(script.contains(&format!("cd '{}'", run.spec.clone_path.display())), "in the mock's folder: {script}");
+    assert!(script.contains(&format!("cd '{}'", done.expected_worktree.display())), "in the harness's worktree: {script}");
+    assert!(git.worktree(&done.spec.name).is_dir());
+    rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap();
+    let back = until_detail(&rig, &run, "Back again.").await;
+    assert!(!back.handed_over, "taken back after Attach's own hand-over");
+}
+
+#[tokio::test]
+async fn attach_on_a_run_whose_session_is_closed_marks_it_handed_over_and_clean_up_then_leaves_it() {
+    let (_repo, setup, git) = bare_repo();
+    let mut served = Served::idle();
+    served.serve_as(FINISHES, 4, setup, "claude");
+    let rig = on_harness_as(&served, "claude", 6).await;
+    let run = rig.launched(1).await;
+    until_state(&rig, &run, RunState::Done).await;
+    let stopped = rig.get(&run).await;
+    let session = stopped.harness_session.clone().unwrap();
+    // Closed by another client, as a run stopped elsewhere is.
+    served.client().await.call(Op::Close { session: session.clone() }).await.unwrap();
+    let mut applied = rig.svc.harness.as_ref().unwrap().link.applied();
+    tokio::time::timeout(WAIT, async {
+        while !rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed {
+            applied.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    rig.svc.attach(&run.id).await.unwrap();
+    let handed = rig.get(&run).await;
+    assert!(handed.handed_over, "marked, though its session was already closed");
+    assert!(sessions(&served).await.iter().any(|row| row["id"] == session.as_str()), "listed");
+    let refused = rig.svc.cleanup(&run.id).await.unwrap_err().to_string();
+    assert_eq!(refused, crate::runs::cleanup::HANDED_OVER_CLEANUP);
+    assert!(git.worktree(&stopped.spec.name).is_dir(), "the worktree Terminal resumes in stays");
 }
 
 #[tokio::test]
@@ -798,4 +863,110 @@ async fn delete_keeps_a_harness_runs_session_on_record_while_its_worktree_stays_
     rig.svc.delete(&removed.id, false).await.unwrap();
     let rows = |id: &str| -> i64 { rusqlite::Connection::open(rig.fx.dir.join("app.sqlite")).unwrap().query_row("SELECT count(*) FROM run_sessions WHERE run_id = ?1", [id], |r| r.get(0)).unwrap() };
     assert_eq!((rows(&kept.id), rows(&removed.id)), (1, 0), "the only record of a worktree that stays is kept");
+}
+
+#[tokio::test]
+async fn a_clean_up_git_would_refuse_is_refused_before_the_session_is_closed_so_the_agent_still_takes_a_message() {
+    let fx = fixture_watching(&["acme/webshop"]).await;
+    let (_repo, setup, git) = bare_repo_at(Some(fx.home.canonicalize().unwrap()));
+    let mut served = Served::idle();
+    served.serve_as(TWO_TURNS, 4, setup, "claude");
+    let rig = on_harness_sharing(fx, &served, &git).await;
+    // A real clone where the rig made its stand-in, for the app's git and the harness's to share.
+    std::fs::remove_dir_all(&rig.clone).unwrap();
+    git.run(rig.clone.parent().unwrap(), &["clone", "--quiet", "https://github.com/acme/webshop.git", "webshop"]);
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let worktree = git.worktree(&done.spec.name);
+    std::fs::write(worktree.join("FIX"), "fixed\n").unwrap();
+    git.run(&worktree, &["add", "FIX"]);
+    git.run(&worktree, &["commit", "--quiet", "-m", "the fix"]);
+    let crate::runs::cleanup::Cleanup::Refused { message } = rig.svc.cleanup(&run.id).await.unwrap() else { panic!("refused") };
+    assert!(message.starts_with("Nothing was removed: the branch"), "git's reason, as a sentence: {message}");
+    let session = done.harness_session.clone().unwrap();
+    assert!(!rig.fx.core.session_run(&session).await.unwrap().unwrap().1.closed, "the session was not closed");
+    let (_, delivery) = rig.svc.message_agent(&run.id, "Push your branch.", crate::domain::Actor::Person).await.unwrap();
+    assert_eq!(delivery, crate::runs::message::Delivery::Queued);
+    until_detail(&rig, &run, "Back again.").await;
+    assert!(worktree.join("FIX").is_file(), "the work stays");
+}
+
+/// A run of the old path in `state`, with its `claude --bg` short id.
+async fn old_path(rig: &Rig, n: u32, state: RunState) -> Run {
+    let run = rig.fx.core.queue_test_run(rig.spec(n), None).await.unwrap();
+    rig.set(&run, |r| {
+        r.state = state;
+        r.short_id = Some(crate::runs::cli::ShortId::parse(&format!("{n:08x}")).unwrap());
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_run_that_ends_while_the_move_waits_for_a_launch_is_left_as_it_ended() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = Arc::new(on_harness(&served).await);
+    let going = old_path(&rig, 1, RunState::Working).await;
+    let held = rig.svc.launching.clone().lock_owned().await;
+    let moving = tokio::spawn({
+        let rig = rig.clone();
+        async move { rig.svc.move_to_harness().await }
+    });
+    tokio::task::yield_now().await;
+    rig.set(&going, |r| r.state = RunState::Done).await;
+    drop(held);
+    moving.await.unwrap();
+    assert_eq!((rig.get(&going).await.state, rig.cli.0.lock().unwrap().stops.len()), (RunState::Done, 0), "not stopped, not marked interrupted");
+    assert!(rig.fx.core.harness_moved().await.unwrap());
+}
+
+#[tokio::test]
+async fn the_move_is_done_only_once_every_agent_is_stopped_and_a_job_claude_no_longer_has_counts_as_stopped() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let going = old_path(&rig, 1, RunState::Working).await;
+    rig.cli.with(|s| s.stop_fails = true);
+    rig.svc.move_to_harness().await;
+    assert_eq!(rig.get(&going).await.state, RunState::Working, "a stop that failed leaves the run");
+    assert!(!rig.fx.core.harness_moved().await.unwrap(), "and the move for the next start");
+    rig.cli.with(|s| s.stop_says = Some("No job matching 00000001".into()));
+    rig.svc.move_to_harness().await;
+    assert_eq!(rig.get(&going).await.failure, Some(crate::domain::RunFailure::Interrupted), "its job is gone: stopped");
+    assert!(rig.fx.core.harness_moved().await.unwrap());
+}
+
+#[tokio::test]
+async fn a_launch_with_no_session_yet_keeps_the_move_for_the_next_start() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.fx.core.queue_test_run(rig.spec(1), None).await.unwrap();
+    rig.set(&run, |r| r.state = RunState::Launching).await;
+    rig.svc.move_to_harness().await;
+    assert!(!rig.fx.core.harness_moved().await.unwrap(), "passed over, so not done");
+}
+
+#[tokio::test]
+async fn a_run_the_move_stopped_while_it_waited_on_your_answer_wakes_pip_once() {
+    let served = Served::new(WORKS_LONG, 4);
+    let rig = on_harness(&served).await;
+    let asking = old_path(&rig, 1, RunState::NeedsAnswer).await;
+    let asking = rig.set(&asking, |r| r.needs = Some("Which database?".into())).await;
+    let working = old_path(&rig, 2, RunState::Working).await;
+    rig.svc.move_to_harness().await;
+    let told: Vec<(String, crate::runs::tracker::Attention)> = rig.notices.0.lock().unwrap().iter().map(|(id, why, _)| (id.clone(), *why)).collect();
+    assert_eq!(told, vec![(asking.id.clone(), crate::runs::tracker::Attention::Failed)], "only the one that waited on you: {told:?} ({})", working.id);
+}
+
+#[tokio::test]
+async fn a_run_taken_back_takes_your_message_while_it_still_reads_stopped_from_its_hand_over() {
+    let served = Served::new(TWO_TURNS, 4);
+    let rig = on_harness(&served).await;
+    let run = rig.launched(1).await;
+    let done = until_state(&rig, &run, RunState::Done).await;
+    let link = &rig.svc.harness.as_ref().unwrap().link;
+    link.call(Op::HandOver { session: done.harness_session.clone().unwrap() }).await.unwrap();
+    until_detail(&rig, &run, crate::runs::consumer::HANDED_OVER).await;
+    // As a run reads that Terminal had stopped: a send to a stopped run is refused but for a take back.
+    rig.set(&run, |r| r.state = RunState::Stopped).await;
+    rig.svc.answer_took_back(&run.id, "Carry on.", true).await.unwrap();
+    until_detail(&rig, &run, "Back again.").await;
 }
