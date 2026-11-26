@@ -621,8 +621,8 @@ export class MockBackend implements Backend {
     return this.runs.answer(id, text, "person", !!options?.tookBack);
   }
 
-  async runsAnswerPermission(_id: string, _request: string, _decision: "allow" | "deny"): Promise<Run> {
-    throw new Error("The mock has no permission requests to answer yet.");
+  async runsAnswerPermission(id: string, request: string, decision: "allow" | "deny"): Promise<Run> {
+    return this.runs.answerPermission(id, request, decision);
   }
 
   async runsAdoptSession(id: string, session: string) {

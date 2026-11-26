@@ -13,6 +13,7 @@ import { GroupBatch, GroupChip } from "./NeedsYou";
 import { groupId, openNeed, openPipAsk, setPaneIntent, takePaneIntent } from "./needsActions";
 import { chipLabel, editedTitle } from "../lib/needs";
 import { PermissionAsk } from "./PermissionAsk";
+import { PermissionItem } from "./PermissionRequests";
 import { useWorkView } from "./workViewStore";
 import { RunAnswer } from "./RunAnswer";
 import { SignInBox } from "./RunSheet";
@@ -224,6 +225,8 @@ export const paneStop = (pane: HTMLElement): HTMLElement => pane.querySelector<H
 /** The first thing the person decides with in the pane: a permission's buttons, an answer box, a draft's main button, else the first button. */
 export function firstDecision(root: HTMLElement): HTMLElement | null {
   const body = '[data-needs-pane-body]';
+  // Allow is never where the keyboard lands by itself: the heading is.
+  if (root.querySelector(`${body} [data-permission-request]`)) return paneStop(root);
   const decisions = root.querySelector<HTMLElement>(`${body} [data-permission-decisions] button:not(:disabled)`);
   if (decisions) return decisions;
   const answer = root.querySelector<HTMLElement>(`${body} textarea:not(:disabled)`);
@@ -340,8 +343,11 @@ function Decision({ need }: { need: Need }) {
   const view = useWorkstreams((s) => (need.workstreamId ? s.list.find((v) => v.workstream.id === need.workstreamId) : undefined));
   const proposal = useWorkspace((s) => (need.target.type === "draft" ? s.proposals[need.target.id] : undefined));
   switch (need.kind) {
-    case "permission":
-      return run ? <PermissionBody run={run} /> : null;
+    case "permission": {
+      if (!need.requestId) return run ? <PermissionBody run={run} /> : null;
+      const request = run?.permissions?.find((p) => p.id === need.requestId);
+      return run && request ? <PermissionItem run={run} request={request} /> : null;
+    }
     case "question":
       return run ? <AnswerBody run={run} /> : null;
     case "pipAsk":

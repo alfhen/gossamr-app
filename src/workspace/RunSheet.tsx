@@ -24,6 +24,8 @@ import { cleanupReason } from "./cleanupLogic";
 import { answerable, answerSentText, sheetTopOn, canStartNow, stopControl } from "./runSheetLogic";
 import { RunAnswer } from "./RunAnswer";
 import { PermissionAsk } from "./PermissionAsk";
+import { PermissionRequests, useClosingIn } from "./PermissionRequests";
+import { openPermissions } from "./permissionLogic";
 import { RunContinuation } from "./RunContinuation";
 import { Changes, Found, type ResultActions } from "./RunResult";
 import { openOnGithub } from "./githubUi";
@@ -137,6 +139,17 @@ export function SignInBox({ run, onAttach }: { run: Run; onAttach(): void }) {
 }
 
 function Attention({ run, label, opened, trust, answering, slotPlace, on }: { run: Run; label?: string; opened: boolean; trust?: TrustState; answering: boolean; slotPlace: number | null; on: RunSheetActions }) {
+  const asks = openPermissions(run).length;
+  const closing = useClosingIn(run, "sheet");
+  if (asks || closing)
+    return (
+      <Box tone="needs" label="Permission request">
+        <BoxTitle icon="hand" tone="needs">
+          {asks > 1 ? `Asks for ${asks} permissions` : "Asks for permission"}
+        </BoxTitle>
+        <PermissionRequests run={run} label={label} where="sheet" />
+      </Box>
+    );
   switch (run.state) {
     case "needsPermission":
       return (
@@ -289,7 +302,7 @@ export function RunSheetView({ run, now, ticketTitle, place, label, wide, onWide
   const view = useStateView(run, now);
   const stop = stopControl(run);
   const title = runTitle(run, ticketTitle);
-  const attention = ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run);
+  const attention = openPermissions(run).length > 0 || ["needsPermission", "needsAnswer", "systemBlocked", "unknown", "failed", "queued"].includes(run.state) || answerable(run);
   const live = run.state === "working" ? progressText(run) : null;
   return (
     <SheetFrame
