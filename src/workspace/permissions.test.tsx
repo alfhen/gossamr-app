@@ -52,8 +52,8 @@ describe("a permission request's item", () => {
   it("offers only Deny for a request the harness cut or can't read, and says why", () => {
     const cut = item(request({ denyOnly: true }));
     expect(buttons(cut).map((b) => b.text)).toEqual(["Copy", "Deny"]);
-    expect(unescape(cut)).toContain("It was too long for Gossamr to get whole, so you can only deny it.");
-    expect(denyOnlyWhy({ kind: "other", denyOnly: true })).toBe("Gossamr can't read this kind of request, so you can only deny it.");
+    expect(unescape(cut)).toContain("This request was too large to show whole, so it can only be denied.");
+    expect(denyOnlyWhy({ kind: "other", denyOnly: true })).toBe("Gossamr can't read this kind of request, so it can only be denied.");
     expect(denyOnlyWhy({ kind: "command" })).toBeNull();
   });
 
@@ -95,7 +95,7 @@ describe("answering a permission request in the mock", () => {
     const backend = seeded();
     const run = byKey(backend, "CA-407");
     expect(backend.runs.answerPermission(run.id, "perm-1", "allow")).toMatchObject({ state: "working", lastDetail: "Allowed Bash", permissions: undefined });
-    expect(() => backend.runs.answerPermission(run.id, "perm-1", "allow")).toThrow("That permission request isn't open any more.");
+    expect(() => backend.runs.answerPermission(run.id, "perm-1", "allow")).toThrow("That request isn't open any more: it was answered or withdrawn, or it isn't this run's.");
     expect(backend.runs.permissionAnswers).toEqual([{ run: run.id, request: "perm-1", decision: "allow" }]);
   });
 
@@ -111,7 +111,7 @@ describe("answering a permission request in the mock", () => {
   it("refuses Allow on a request that can only be denied, and takes Deny", () => {
     const backend = seeded();
     const run = byKey(backend, "SUP-13");
-    expect(() => backend.runs.answerPermission(run.id, "perm-4", "allow")).toThrow("That request can only be denied.");
+    expect(() => backend.runs.answerPermission(run.id, "perm-4", "allow")).toThrow("This request was too large to show whole, so it can only be denied.");
     expect(backend.runs.answerPermission(run.id, "perm-4", "deny")).toMatchObject({ state: "working", lastDetail: "Denied Bash" });
   });
 
@@ -129,7 +129,7 @@ describe("answering a permission request in the mock", () => {
     backend.runs.stop(run.id);
     expect(byKey(backend, "CA-407")).toMatchObject({ state: "stopped" });
     expect(byKey(backend, "CA-407").permissions).toBeUndefined();
-    expect(() => backend.runs.answerPermission(run.id, "perm-1", "deny")).toThrow("It is stopped, so it has no permission request to answer.");
+    expect(() => backend.runs.answerPermission(run.id, "perm-1", "deny")).toThrow("This run is stopped, so it has no request to answer.");
   });
 });
 
@@ -153,6 +153,6 @@ describe("the runs store's permission answer", () => {
     const backend = seeded();
     useRuns.getState().init(backend);
     expect(await useRuns.getState().answerPermission(byKey(backend, "SUP-13").id, "perm-4", "allow")).toBe(false);
-    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Couldn't allow it: That request can only be denied."]);
+    expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Couldn't allow it: This request was too large to show whole, so it can only be denied."]);
   });
 });

@@ -14,10 +14,10 @@ export const permissionWants = (request: Pick<PermissionRequest, "kind">) => WAN
 /** The line a request for more permissions carries: the others ask for one action, this one for more reach. */
 export const PERMISSIONS_WARNING = "Allowing this gives the agent more access than it started with.";
 
-/** Why a request has no Allow, or null when it has one. */
+/** Why a request has no Allow, or null when it has one: the app's refusal of an Allow, `ONLY_DENY_KIND` and `ONLY_DENY_CUT` in runs/on_harness.rs. */
 export function denyOnlyWhy(request: Pick<PermissionRequest, "kind" | "denyOnly">): string | null {
   if (!request.denyOnly) return null;
-  return request.kind === "other" ? "Gossamr can't read this kind of request, so you can only deny it." : "It was too long for Gossamr to get whole, so you can only deny it.";
+  return request.kind === "other" ? "Gossamr can't read this kind of request, so it can only be denied." : "This request was too large to show whole, so it can only be denied.";
 }
 
 /** The run's open requests: those of a run on the harness. A run without them asks in its own Terminal prompt. */

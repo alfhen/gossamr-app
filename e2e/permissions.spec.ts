@@ -37,7 +37,7 @@ test("two open requests are two items, each answered on its own, and the run wai
 
 test("a request the harness cut offers only Deny and says why", async ({ page }) => {
   const ask = requestsOn(page, "SUP-13");
-  await expect(ask).toContainText("It was too long for Gossamr to get whole, so you can only deny it.");
+  await expect(ask).toContainText("This request was too large to show whole, so it can only be denied.");
   await expect(ask.getByRole("button", { name: "Allow" })).toHaveCount(0);
   await ask.getByRole("button", { name: "Deny" }).click();
   await expect(requestsOn(page, "SUP-13")).toHaveCount(0);

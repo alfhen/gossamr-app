@@ -1,3 +1,4 @@
+import { denyOnlyWhy } from "../workspace/permissionLogic";
 import { HANDED_OVER_ASK, type AgentSettings, type PermissionRequest, type WorkFolderGit, type ChangedFile, type WorkDoc, type CleanupResult, type ContainerRef, type CodeChange, type ItemRef, Run, RunEvent, RunFailure, RunQuery, RunOutcome, RunSpec, RunsChanged, RunState } from "../types";
 import type { ClearFilter, ClearPreview, DeleteResult, ModelChoice, WorktreeInfo } from "../types";
 import { isArchivable, runsWithPendingDrafts, selectClearable } from "../lib/archiveRuns";
@@ -814,11 +815,12 @@ export class MockRuns {
   answerPermission(id: string, request: string, decision: "allow" | "deny"): Run {
     const run = this.get(id);
     if (!run) throw new Error(`There is no agent ${id}.`);
-    if (run.handedOver) throw new Error("It is handed over to Terminal, so you answer it there.");
-    if (TERMINAL.includes(run.state)) throw new Error(`It is ${run.state}, so it has no permission request to answer.`);
+    // The app's words, from `answer_permission` in runs/on_harness.rs and `NOT_OPEN` in runs/link.rs.
+    if (run.handedOver) throw new Error("It was handed over to Terminal, so answer it there.");
+    if (TERMINAL.includes(run.state) || run.state === "queued" || run.state === "launching") throw new Error(`This run is ${run.state}, so it has no request to answer.`);
     const asked = run.permissions?.find((p) => p.id === request);
-    if (!asked) throw new Error("That permission request isn't open any more.");
-    if (decision === "allow" && asked.denyOnly) throw new Error("That request can only be denied.");
+    if (!asked) throw new Error("That request isn't open any more: it was answered or withdrawn, or it isn't this run's.");
+    if (decision === "allow" && asked.denyOnly) throw new Error(denyOnlyWhy(asked)!);
     this.permissionAnswers.push({ run: id, request, decision });
     return this.closePermission(run, request, `${decision === "allow" ? "Allowed" : "Denied"} ${asked.tool}`);
   }
