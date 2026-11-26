@@ -2123,14 +2123,36 @@ mod tests {
         let harness = Harness::new(Store::open(&tmp.path().join("data")).unwrap(), drivers, Settings::default());
         let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), ..Open::default() }).await.unwrap();
         let Ok(Event { body: Body::Started { provider_session, .. }, .. }) = events.recv().await else { panic!("started first") };
-        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
-        set(&harness.inner.hooks.before_call, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
-        let sent = std::time::Instant::now();
+        // The session takes the call 2000 ms after it reached the endpoint, as when it is busy.
+        let took = took_after_a_busy_session(&harness, 2000);
         harness.send(&id, "go").unwrap();
-        while events.recv().await.is_ok_and(|event| !matches!(event.body, Body::TurnEnded { .. })) {}
+        let ended = loop {
+            let event = events.recv().await.unwrap();
+            if matches!(event.body, Body::TurnEnded { .. }) {
+                break event.ms;
+            }
+        };
         assert_eq!(mock.replies(&provider_session), [Ok(Reply { output: json!(QUESTION_PENDING), error: false })]);
-        // From the session's own moment it would return at 1500 + 2250 ms, past the limit.
-        assert!(sent.elapsed() < Duration::from_millis(limit), "returned before the limit, from the call's start: {:?}", sent.elapsed());
+        // The wait is 2250 ms. From the call's arrival it ends at most 250 ms after the take; from the take, 2250 ms
+        // after it. Only time after the take counts, so a slow start of the turn or of the endpoint cannot fail this.
+        let after = ended - took();
+        assert!(after < 1250, "returned {after} ms after the session took it: the wait counts from the call's arrival");
+    }
+
+    /// Makes the session take its next call `busy` ms after it reached the endpoint. What it gives says when the
+    /// session took it, in the milliseconds an event's `ms` is in.
+    fn took_after_a_busy_session(harness: &Harness, busy: u64) -> impl Fn() -> i64 {
+        let took = Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN));
+        let at = took.clone();
+        set(&harness.inner.hooks.before_call, Box::new(move || {
+            std::thread::sleep(Duration::from_millis(busy));
+            at.store(now_ms(), Ordering::Relaxed);
+        }) as Hook);
+        move || {
+            let took = took.load(Ordering::Relaxed);
+            assert_ne!(took, i64::MIN, "the session took the call");
+            took
+        }
     }
 
     /// The session's events until `last` takes one, each within 10 s.
@@ -2442,14 +2464,22 @@ mod tests {
         let tools = vec![ToolSpec { name: "read_ticket".into(), description: "Read a ticket.".into(), input_schema: json!({"type": "object"}) }];
         let (id, mut events) = harness.open(Open { provider: "mock".into(), cwd: "/nowhere".into(), tools, ..Open::default() }).await.unwrap();
         events.recv().await.unwrap();
-        // The session takes the call half the limit after it reached the endpoint, as when it is busy.
-        set(&harness.inner.hooks.before_call, Box::new(|| std::thread::sleep(Duration::from_millis(1500))) as Hook);
-        let sent = std::time::Instant::now();
+        // The session takes the call 2000 ms after it reached the endpoint, as when it is busy.
+        let took = took_after_a_busy_session(&harness, 2000);
         harness.send(&id, "go").unwrap();
-        let seen = events_until(&mut events, |body| matches!(body, Body::TurnEnded { .. })).await;
-        assert!(seen.iter().any(|body| matches!(body, Body::ToolResult { output, error: true, .. } if output == &json!(format!("timed out after {limit} ms")))), "{seen:?}");
-        // From the session's own moment the cut would come at 1500 + 3000 ms.
-        assert!(sent.elapsed() < Duration::from_millis(4000), "cut at the limit from the call's arrival: {:?}", sent.elapsed());
+        let timed_out = json!(format!("timed out after {limit} ms"));
+        let cut = loop {
+            let event = tokio::time::timeout(Duration::from_secs(10), events.recv()).await.expect("an event within 10 s").unwrap();
+            match event.body {
+                Body::ToolResult { output, error: true, .. } if output == timed_out => break event.ms,
+                Body::TurnEnded { .. } => panic!("the turn ended with no cut"),
+                _ => {}
+            }
+        };
+        // From the call's arrival the cut comes at most 1000 ms after the take; from the take, 3000 ms after it. Only
+        // time after the take counts, so a slow start of the turn or of the endpoint cannot fail this.
+        let after = cut - took();
+        assert!(after < 2000, "cut {after} ms after the session took the call: the limit counts from its arrival");
     }
 
     #[tokio::test]
