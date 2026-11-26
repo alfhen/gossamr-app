@@ -272,10 +272,14 @@ pub(crate) async fn fetch(git: &Git, path: &Path) -> Fetched {
     odd.dedup();
     let at = quoted(path);
     if !odd.is_empty() {
+        let more = odd.len().saturating_sub(5);
         odd.truncate(5);
+        let listed = match more {
+            0 => odd.join(", "),
+            n => format!("{}, and {n} more", odd.join(", ")),
+        };
         return Fetched::Not(format!(
-            "the clone has settings Gossamr didn't make ({}), which a fetch would honour. To clear them, `git -C {at} config --local --list --name-only` lists each in full and `git -C {at} config --local --unset-all <name>` removes one",
-            odd.join(", ")
+            "the clone has settings Gossamr didn't make ({listed}), which a fetch would honour. To clear them, `git -C {at} config --local --list --name-only` lists each in full and `git -C {at} config --local --unset-all <name>` removes one"
         ));
     }
     if let Some((key, want)) = changed_fetch_rule(git, path, &keys).await {

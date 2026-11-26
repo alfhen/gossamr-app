@@ -2009,6 +2009,40 @@ async fn a_live_session_owns_its_worktree_before_its_provider_id_comes() {
     assert!(worktree.exists(), "and its clean-up leaves the live session's worktree alone");
 }
 
+#[tokio::test]
+async fn hand_over_of_a_closed_session_marks_it_so_only_a_take_back_resumes_it_and_nothing_cleans_it_up() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock("{\"prompt\": null}"), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    harness.close(&id).unwrap();
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
+    while harness.sessions().unwrap().iter().any(|row| row.id == id && row.running) {
+        tokio::task::yield_now().await;
+    }
+    harness.hand_over(&id).expect("a closed session is handed over as it is");
+    assert!(harness.events(&id, 0).unwrap().iter().any(|event| event.body == Body::HandedOver), "its record says so");
+    assert!(matches!(harness.resume(&id).await, Err(Error::HandedOver(_))));
+    assert!(matches!(harness.clean_up(&id).await, Err(Error::HandedOver(_))), "Terminal works in its worktree");
+    harness.hand_over(&id).expect("a second hand over changes nothing");
+    assert_eq!(harness.events(&id, 0).unwrap().iter().filter(|event| event.body == Body::HandedOver).count(), 1);
+    harness.take_back(&id).await.expect("taken back");
+}
+
+#[tokio::test]
+async fn clean_up_of_a_session_handed_over_to_terminal_is_refused_whoever_asks() {
+    let (_tmp, dir) = data_dir();
+    let harness = harness(&dir, &mock("{\"prompt\": null}"), 4);
+    let (id, mut events) = open(&harness, false).await;
+    next(&mut events).await;
+    harness.hand_over(&id).unwrap();
+    until(&mut events, |body| matches!(*body, Body::Closed { .. })).await;
+    while harness.sessions().unwrap().iter().any(|row| row.id == id && row.running) {
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(harness.clean_up(&id).await, Err(Error::HandedOver(_))));
+}
+
 /// A driver whose open blocks its thread until the test lets it go, as one that starts a slow process does.
 struct SlowOpen {
     mock: harness::mock::Mock,

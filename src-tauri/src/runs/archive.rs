@@ -119,9 +119,6 @@ impl RunService {
         if run.worktree_removed_at.is_some() {
             return Err("The worktree is already removed.".into());
         }
-        if run.harness_session.is_some() {
-            return Err(super::cleanup::ON_HARNESS_LATER.into());
-        }
         if !cleanable(run) {
             return Err("This run has no session whose worktree Gossamr can remove.".into());
         }

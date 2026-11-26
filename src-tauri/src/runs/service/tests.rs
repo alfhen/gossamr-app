@@ -1135,6 +1135,63 @@ mod clones {
     }
 
     #[tokio::test]
+    async fn a_clone_with_settings_gossamr_did_not_make_is_noted_with_how_to_remove_them() {
+        let rig = ready().await;
+        std::fs::write(rig.clone.join(".fake-config"), "remote.origin.url=https://github.com/acme/webshop.git\ncommit.gpgsign=false\nurl.file:///x.insteadof=https://github.com/\n").unwrap();
+        let run = rig.svc.start_now(&rig.queued(1).await.id).await.unwrap();
+        let notes = events(&rig, &run).await;
+        let note = notes.iter().find(|t| t.starts_with("Couldn't update Gossamr's clone of acme/webshop: ")).unwrap_or_else(|| panic!("{notes:?}"));
+        let way_out = crate::runs::service::fresh::clone_settings_way_out(note, &rig.clone).unwrap();
+        assert!(note.contains(&way_out) && note.ends_with("The agent starts from what was fetched before."), "{note}");
+        assert!(!note.contains("To clear them") && note.matches("Remove it with").count() == 1, "one way out, the one that names each key: {note}");
+    }
+
+    #[test]
+    fn a_harness_refusal_of_a_clones_settings_keeps_one_way_out_the_one_that_names_each_key() {
+        let clone = std::path::Path::new("/w/acme/webshop");
+        let why = "nothing was removed: the clone couldn't be fetched, because the clone has settings Gossamr didn't make (a.one, b.two, c.three, d.four, e.five, and 2 more), which a fetch would honour. To clear them, `git -C '/w/acme/webshop' config --local --list --name-only` lists each in full and `git -C '/w/acme/webshop' config --local --unset-all <name>` removes one";
+        let said = crate::runs::service::fresh::with_clone_way_out(why, clone);
+        assert!(said.starts_with("nothing was removed: the clone couldn't be fetched, because the clone has settings Gossamr didn't make (a.one, b.two, c.three, d.four, e.five, and 2 more), which a fetch would honour. Remove them with `git -C '/w/acme/webshop' config --unset-all a.one`"), "{said}");
+        assert!(said.ends_with(", and find the 2 more with `git -C '/w/acme/webshop' config --list --show-origin`."), "{said}");
+        assert!(!said.contains("To clear them") && said.matches("Remove them with").count() == 1, "{said}");
+        let other = "the clone's fetch rule remote.origin.fetch was changed, and a fetch would follow it. To clear it, run `git -C '/w' config --local --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'`";
+        assert_eq!(crate::runs::service::fresh::with_clone_way_out(other, clone), other, "a refusal it has no way out for keeps the harness's own");
+    }
+
+    #[test]
+    fn the_way_out_of_a_clones_settings_names_each_key_to_remove_and_how_to_find_a_hidden_one() {
+        let clone = std::path::Path::new("/w/acme/webshop");
+        let why = "nothing was removed: the clone couldn't be fetched, because the clone has settings Gossamr didn't make (commit.gpgsign, url.*.insteadof), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(why, clone).as_deref(),
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset-all commit.gpgsign`, and find the one shown with `*` with `git -C '/w/acme/webshop' config --list --show-origin`.")
+        );
+        let two = "the clone has settings Gossamr didn't make (commit.gpgsign, tag.gpgsign), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(two, clone).as_deref(),
+            Some("Remove them with `git -C '/w/acme/webshop' config --unset-all commit.gpgsign` and `git -C '/w/acme/webshop' config --unset-all tag.gpgsign`.")
+        );
+        assert_eq!(crate::runs::service::fresh::clone_settings_way_out("the branch is not fully merged", clone), None, "any other refusal");
+        let quote = std::path::Path::new("/Users/O'Neil/acme/webshop");
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(two, quote).as_deref(),
+            Some("Remove them with `git -C '/Users/O'\\''Neil/acme/webshop' config --unset-all commit.gpgsign` and `git -C '/Users/O'\\''Neil/acme/webshop' config --unset-all tag.gpgsign`."),
+            "a quote in the path is escaped for the shell"
+        );
+        let cut = "the clone has settings Gossamr didn't make (a.one, url.*.insteadof, and 2 more), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(cut, clone).as_deref(),
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset-all a.one`, and find those shown with `*` and the 2 more with `git -C '/w/acme/webshop' config --list --show-origin`.")
+        );
+        let cut_plain = "the clone has settings Gossamr didn't make (a.one, and 3 more), which a fetch would honour";
+        assert_eq!(
+            crate::runs::service::fresh::clone_settings_way_out(cut_plain, clone).as_deref(),
+            Some("Remove it with `git -C '/w/acme/webshop' config --unset-all a.one`, and find the 3 more with `git -C '/w/acme/webshop' config --list --show-origin`."),
+            "a list cut with no `*` key"
+        );
+    }
+
+    #[tokio::test]
     async fn a_fetch_that_fails_is_noted_on_the_run_and_the_launch_goes_on() {
         let rig = ready().await;
         std::fs::write(rig.clone.join(".fake-fetch-fails"), "").unwrap();
