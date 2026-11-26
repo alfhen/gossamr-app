@@ -1,4 +1,5 @@
 import type { PermissionRequest, Run } from "../types";
+import { segments, type Seg } from "./permissionInput";
 
 /** What the agent wants, after "wants to", by the kind of request. */
 const WANTS: Record<PermissionRequest["kind"], string> = {
@@ -33,8 +34,24 @@ export const openPermissions = (run: Pick<Run, "permissions">): readonly Permiss
 
 /** The one line a list row shows for a run with open requests. */
 export function permissionsRow(requests: readonly PermissionRequest[]): string {
-  return requests.length === 1 ? `Wants to ${permissionWants(requests[0])}` : `Asks ${requests.length} permissions`;
+  return requests.length === 1 ? `Wants to ${permissionWants(requests[0])}` : `Asks for ${requests.length} permissions`;
 }
+
+/** Characters of the subject a Needs you row shows, so two requests of one kind can be told apart. */
+const ROW_CHARS = 80;
+
+/**
+ * The subject's first line for a row: cut, and with what a terminal hides shown as placeholders. The whole request is in
+ * its decision, beside its buttons; this only tells requests apart.
+ */
+export function subjectLine(subject: string): string {
+  const first = flat(segments(subject.split("\n")[0] ?? ""));
+  const chars = [...first];
+  const more = chars.length > ROW_CHARS || subject.includes("\n");
+  return chars.slice(0, ROW_CHARS).join("").trimEnd() + (more ? "…" : "");
+}
+
+const flat = (segs: Seg[]) => segs.map((seg) => ("text" in seg ? seg.text : seg.hidden)).join("");
 
 /** Where a request's answer is kept while it is on its way: by run and request, since ids are the harness's. */
 export const answeringKey = (runId: string, requestId: string) => `${runId}\u0000${requestId}`;

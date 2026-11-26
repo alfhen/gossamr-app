@@ -144,7 +144,7 @@ function Attention({ run, label, opened, trust, answering, slotPlace, on }: { ru
     return (
       <Box tone="needs" label="Permission request">
         <BoxTitle icon="hand" tone="needs">
-          {asks === 1 ? "The agent is asking permission" : `The agent is asking ${asks} permissions`}
+          {asks === 1 ? "Asks for permission" : `Asks for ${asks} permissions`}
         </BoxTitle>
         <PermissionRequests run={run} label={label} />
       </Box>

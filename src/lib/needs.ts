@@ -1,6 +1,6 @@
 import { type ConnectionInfo, type Intent, type ItemRef, type Proposal, type Run, type WorkstreamView } from "../types";
 import { permissionRequest } from "../workspace/agentsLogic";
-import { openPermissions, permissionWants } from "../workspace/permissionLogic";
+import { openPermissions, permissionWants, subjectLine } from "../workspace/permissionLogic";
 import { failureHelp } from "../workspace/failureHelp";
 import { DEFAULT_INSTANCE, instanceOf } from "../workspace/providerLogic";
 import { docText } from "./docs";
@@ -400,8 +400,8 @@ export function needs({ workstreams, runs, proposals, dismissed, pausedAt, title
           group: "unblock",
           kind: "permission",
           title: `${name} asks to ${wants}`,
-          // The whole subject is in the decision, beside its buttons; a sentence would have to cut it.
-          why: `${name} wants to ${wants}${ask.tool ? ` with ${ask.tool}` : ""}.`,
+          // Enough of the subject to tell two requests apart; the whole request is in the decision, beside its buttons.
+          why: `${name} wants to ${wants}${ask.tool ? ` with ${ask.tool}` : ""}${ask.subject.trim() ? `: ${subjectLine(ask.subject)}` : "."}`,
           ifYouWait: `The agent waits; ${stays}.`,
           primary: action("open", "Review"),
           secondary: [],

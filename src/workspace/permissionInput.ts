@@ -1,7 +1,7 @@
 import type { PermissionKind } from "../types";
 
-/** A run of plain text, or a character a terminal would hide, shown as a marked placeholder. */
-export type Seg = { text: string } | { hidden: string };
+/** A run of plain text, or what a terminal would hide, shown as a marked placeholder with a name a screen reader says. */
+export type Seg = { text: string } | { hidden: string; label: string };
 
 /** A field of a request's input, by its own name: plain text as lines, or a change as the lines it removes and adds. */
 export type InputField = { name: Seg[]; type: "text"; lines: Seg[][] } | { name: Seg[]; type: "change"; removed: Seg[][]; added: Seg[][] };
@@ -10,18 +10,20 @@ const NAMES: Record<number, string> = { 0x00: "NUL", 0x07: "BEL", 0x08: "BS", 0x
 
 /**
  * What a terminal hides, or shows as something else: control characters (ESC starts an ANSI escape), format characters
- * such as the bidirectional marks that can make a command read backwards, line and paragraph separators, and every
- * character Unicode says to draw as nothing (zero-width spaces, U+034F, variation selectors, tag characters).
+ * such as the bidirectional marks that can make a command read backwards, line and paragraph separators, private-use and
+ * unassigned code points, and every character Unicode says to draw as nothing (zero-width spaces, U+034F, Hangul fillers,
+ * variation selectors, tag characters). The placeholder's own brackets are marked too, so typed text can't pass for one.
  */
-const HIDDEN = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/u;
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u27e8\u27e9]/u;
 
-/** Whether a terminal would hide `code`. A tab and a line break stay as they are. */
+/** Whether a terminal would hide `code`, or it could pass for a placeholder. A tab and a line break stay as they are. */
 export function hides(code: number): boolean {
   if (code === 0x09 || code === 0x0a) return false;
   return HIDDEN.test(String.fromCodePoint(code));
 }
 
-export const placeholder = (code: number) => `⟨${NAMES[code] ?? `U+${code.toString(16).toUpperCase().padStart(4, "0")}`}⟩`;
+const codeName = (code: number) => NAMES[code] ?? `U+${code.toString(16).toUpperCase().padStart(4, "0")}`;
+export const placeholder = (code: number) => `⟨${codeName(code)}⟩`;
 
 /** `text` with every character a terminal would hide marked, as segments. */
 export function segments(text: string): Seg[] {
@@ -35,14 +37,32 @@ export function segments(text: string): Seg[] {
     }
     if (plain) out.push({ text: plain });
     plain = "";
-    out.push({ hidden: placeholder(code) });
+    out.push({ hidden: placeholder(code), label: `hidden character ${codeName(code)}` });
   }
   if (plain) out.push({ text: plain });
   return out;
 }
 
-/** `text` as its lines, each with its hidden characters marked. */
-export const lines = (text: string): Seg[][] => text.split("\n").map(segments);
+/** Blank lines in a row from which they are one marked line, so a gap can't push what follows out of mind. */
+const BLANK_RUN = 3;
+
+/** `text` as its lines, each with its hidden characters marked, and a run of blank lines as one marked line. */
+export function lines(text: string): Seg[][] {
+  const out: Seg[][] = [];
+  const all = text.split("\n");
+  for (let i = 0; i < all.length; ) {
+    let end = i;
+    while (end < all.length && !all[end].trim()) end++;
+    if (end - i >= BLANK_RUN) {
+      out.push([{ hidden: `⟨${end - i} blank lines⟩`, label: `${end - i} blank lines` }]);
+      i = end;
+    } else {
+      out.push(segments(all[i]));
+      i++;
+    }
+  }
+  return out;
+}
 
 const asText = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? String(value));
 const text = (name: string, value: unknown): InputField => ({ name: segments(name), type: "text", lines: lines(asText(value)) });

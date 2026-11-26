@@ -75,6 +75,8 @@ interface RunsState {
   permissionAnswering: ReadonlyMap<string, "allow" | "deny">;
   /** Permission requests answered here, by `answeringKey`: never answered again, while the list still shows them. */
   permissionAnswered: ReadonlySet<string>;
+  /** Why the last answer to a permission request was refused, by `answeringKey`, until the next answer to it. */
+  permissionRefused: ReadonlyMap<string, string>;
   /** Runs Pip started that have not left the queue: a launch that fails is announced. */
   launching: ReadonlySet<string>;
   sheet: RunSheetTarget | null;
@@ -222,6 +224,7 @@ export const useRuns = create<RunsState>((set, get) => ({
   handedOverAsked: new Set<string>(),
   permissionAnswering: new Map(),
   permissionAnswered: new Set<string>(),
+  permissionRefused: new Map(),
   answered: {},
   ...idle,
 
@@ -358,13 +361,17 @@ export const useRuns = create<RunsState>((set, get) => ({
     const { backend, permissionAnswering, permissionAnswered } = get();
     const key = answeringKey(id, request);
     if (!backend || permissionAnswering.has(key) || permissionAnswered.has(key)) return false;
-    set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]) });
+    const refused = new Map(get().permissionRefused);
+    refused.delete(key);
+    set({ permissionAnswering: new Map([...permissionAnswering, [key, decision]]), permissionRefused: refused });
     try {
       await backend.runsAnswerPermission(id, request, decision);
       // Request ids are the harness's and never come back, so the key stays: the item is gone by the next read.
       set({ permissionAnswered: new Set([...get().permissionAnswered, key]) });
       return true;
     } catch (e) {
+      // The item keeps the reason until the next answer: a toast alone goes away.
+      set({ permissionRefused: new Map([...get().permissionRefused, [key, messageOf(e)]]) });
       useToasts.getState().push(`Couldn't ${decision} it: ${messageOf(e)}`);
       return false;
     } finally {

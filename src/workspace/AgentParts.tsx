@@ -183,10 +183,13 @@ export function RunBody({ run, now, onAttach, failure }: { run: Run; now: number
   const shown = useDecisionShown();
   const instance = useRunInstance(run);
   if (openPermissions(run).length) {
-    if (shown.need?.runId === run.id && shown.need.kind === "permission") return <p className="m-0 text-ws-ink2">Asking you in Needs you, in the open workstream.</p>;
+    // The one Needs you shows is answered there; the run's others stay here.
+    const there = shown.need?.runId === run.id && shown.need.kind === "permission" ? shown.need.requestId : undefined;
+    if (there && openPermissions(run).every((p) => p.id === there)) return <p className="m-0 text-ws-ink2">Asking you in Needs you, in the open workstream.</p>;
     return (
       <div className="grid gap-2 rounded-lg border border-ws-sep bg-ws-win px-2.5 py-2">
-        <PermissionRequests run={run} size="sm" />
+        {there && <p className="m-0 text-sm text-ws-ink2">One more is open in Needs you.</p>}
+        <PermissionRequests run={run} size="sm" except={there} />
       </div>
     );
   }

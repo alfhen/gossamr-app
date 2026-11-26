@@ -1,13 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockBackend } from "../backend/mock";
-import { HOOK_CONTENT, LONG_COMMAND } from "../backend/mockRuns";
+import { HOOK_CONTENT, LONG_COMMAND, LONG_SCRIPT } from "../backend/mockRuns";
 import { needs } from "../lib/needs";
 import type { PermissionRequest, Run } from "../types";
 import { rowText } from "./AgentParts";
 import { NO_FILTERS } from "./agentsLogic";
 import { PermissionItemView } from "./PermissionRequests";
-import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow } from "./permissionLogic";
+import { PERMISSIONS_WARNING, denyOnlyWhy, permissionWants, permissionsRow, subjectLine } from "./permissionLogic";
 import { useRuns } from "./runsStore";
 import { useToasts } from "./toasts";
 
@@ -28,7 +28,7 @@ const needsOf = (runs: Run[]) => needs({ runs, proposals: [], workstreams: [], d
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
-  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, permissionAnswering: new Map() });
+  useRuns.setState({ dismissed: new Set(), filters: NO_FILTERS, permissionAnswering: new Map(), permissionAnswered: new Set(), permissionRefused: new Map() });
   useToasts.getState().clear();
 });
 
@@ -90,6 +90,15 @@ describe("a permission request's item", () => {
     expect(HOOK_CONTENT.split("\n").length).toBe(3);
   });
 
+  it("puts Allow and Deny after the last line of an input thousands of lines long, with nothing pinning them", () => {
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request({ input: { command: LONG_SCRIPT } })} answering={null} onAnswer={vi.fn()} />);
+    const last = html.indexOf('migrating batch 3000');
+    expect(last).toBeGreaterThan(0);
+    expect(html.indexOf(">Allow<")).toBeGreaterThan(last);
+    expect(html.indexOf(">Deny<")).toBeGreaterThan(last);
+    expect(html).not.toMatch(/sticky|fixed|max-h-/);
+  });
+
   it("holds both buttons while held: answered, or just moved into place", () => {
     const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} held onAnswer={vi.fn()} />);
     const answers = buttons(html).filter((b) => b.text === "Allow" || b.text === "Deny");
@@ -116,16 +125,19 @@ describe("a run with open permission requests", () => {
     for (const n of items) expect(n.primary).toEqual({ id: "open", label: "Review" });
   });
 
-  it("keeps the subject out of the Needs you sentence, which would have to cut it", () => {
+  it("names enough of each subject in Needs you to tell two requests of one kind apart, cut, with hidden characters shown", () => {
     const [n] = needsOf([byKey(seeded(), "CA-407")]);
-    expect(n.why).toMatch(/wants to run a command with Bash\.$/);
-    expect(n.why).not.toContain("pnpm");
+    expect(n.why).toMatch(/wants to run a command with Bash: pnpm vitest run src\/campaigns\/sendTime\.test\.ts .*…$/);
+    expect([...n.why.split(": ").slice(1).join(": ")].length).toBeLessThanOrEqual(81);
+    const two = needsOf([{ ...byKey(seeded(), "WEB-100"), permissions: [request({ id: "a", subject: "pnpm test src/a.test.ts" }), request({ id: "b", subject: "git push --force origin main" })] }]);
+    expect(two.map((x) => x.why.split(": ")[1])).toEqual(["pnpm test src/a.test.ts", "git push --force origin main"]);
+    expect(subjectLine("ls \u202Etxt.hs\nrm -rf /")).toBe("ls ⟨U+202E⟩txt.hs…");
   });
 
   it("reads in a list row as what it wants, or how many it asks", () => {
     const backend = seeded();
     expect(rowText(byKey(backend, "CA-407"), NOW)).toBe("Wants to run a command");
-    expect(rowText(byKey(backend, "WEB-100"), NOW)).toBe("Asks 2 permissions");
+    expect(rowText(byKey(backend, "WEB-100"), NOW)).toBe("Asks for 2 permissions");
     expect(permissionsRow([request({ kind: "file_change" })])).toBe("Wants to change a file");
   });
 });
@@ -205,5 +217,19 @@ describe("the runs store's permission answer", () => {
     useRuns.getState().init(backend);
     expect(await useRuns.getState().answerPermission(byKey(backend, "SUP-13").id, "perm-4", "allow")).toBe(false);
     expect(useToasts.getState().toasts.map((t) => t.text)).toEqual(["Couldn't allow it: This request was too large to show whole, so it can only be denied."]);
+  });
+
+  it("keeps a refused answer's reason for the item until the next answer to it", async () => {
+    const backend = seeded();
+    useRuns.getState().init(backend);
+    const run = byKey(backend, "SUP-13");
+    const key = [...useRuns.getState().permissionRefused.keys()];
+    expect(key).toEqual([]);
+    await useRuns.getState().answerPermission(run.id, "perm-4", "allow");
+    expect([...useRuns.getState().permissionRefused.values()]).toEqual(["This request was too large to show whole, so it can only be denied."]);
+    await useRuns.getState().answerPermission(run.id, "perm-4", "deny");
+    expect(useRuns.getState().permissionRefused.size).toBe(0);
+    const html = renderToStaticMarkup(<PermissionItemView name="R1" request={request()} answering={null} refused="That request isn't open any more." onAnswer={vi.fn()} />);
+    expect(unescape(html)).toContain("Not answered: That request isn't open any more.");
   });
 });

@@ -7,7 +7,7 @@ function Segs({ segs }: { segs: Seg[] }) {
     <>
       {segs.map((seg, i) =>
         "hidden" in seg ? (
-          <span key={i} data-hidden-char className="rounded border border-ws-warn px-0.5 text-ws-warn">
+          <span key={i} data-hidden-char role="img" aria-label={seg.label} className="rounded border border-ws-warn px-0.5 text-ws-warn">
             {seg.hidden}
           </span>
         ) : (
