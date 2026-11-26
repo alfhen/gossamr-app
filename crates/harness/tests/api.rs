@@ -1473,3 +1473,38 @@ async fn closed_by_says_signal_only_for_what_a_logout_sends_and_agent_for_a_cras
         assert_eq!(seen.last().unwrap().body, Body::Closed { by }, "{end}");
     }
 }
+
+const TWO_TURNS: &str = r#"{"prompt": null}
+{"say": "one"}
+{"end": "done"}
+{"prompt": null}
+{"say": "two"}
+{"end": "done"}
+{"prompt": null}"#;
+
+/// The session's `permissions` as `sessions` lists it.
+async fn listed_permissions(client: &mut Client, id: &str) -> Value {
+    let rows = client.call(Op::Sessions).await.unwrap();
+    rows.as_array().unwrap().iter().find(|row| row["id"] == id).expect("listed")["permissions"].clone()
+}
+
+#[tokio::test]
+async fn permissions_a_send_with_a_choice_switches_the_agent_before_its_prompt_and_set_permissions_alone_switches_it_back() {
+    let served = serve(TWO_TURNS);
+    let mut client = connect(&served).await;
+    let id = open(&mut client).await;
+    assert_eq!(listed_permissions(&mut client, &id).await, "ask");
+    client.call(Op::Send { session: id.clone(), text: "go".into(), permissions: Some(harness::driver::Permissions::Auto) }).await.unwrap();
+    events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
+    assert_eq!(listed_permissions(&mut client, &id).await, "auto", "kept for the next start");
+    let started = provider_session(&served, &id);
+    let received = served.mock.received(&started);
+    let switched = received.iter().position(|command| *command == harness::driver::Command::SetPermissions(harness::driver::Permissions::Auto));
+    let prompted = received.iter().position(|command| *command == harness::driver::Command::Prompt("go".into()));
+    assert!(switched.is_some() && switched < prompted, "the switch, then the prompt: {received:?}");
+    client.call(Op::SetPermissions { session: id.clone(), permissions: harness::driver::Permissions::Ask }).await.unwrap();
+    client.call(Op::Send { session: id.clone(), text: "again".into(), permissions: None }).await.unwrap();
+    events_until(&mut client, |body| matches!(body, Body::TurnEnded { .. })).await;
+    assert_eq!(listed_permissions(&mut client, &id).await, "ask", "a send with none keeps what it has");
+    assert!(served.mock.received(&started).contains(&harness::driver::Command::SetPermissions(harness::driver::Permissions::Ask)));
+}

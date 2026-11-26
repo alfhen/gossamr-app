@@ -1180,7 +1180,10 @@ export class MockRuns {
       this.answer(id, body, "pip");
       return "answered";
     }
+    // The backend sends the setting of the moment with each message to a run on the harness.
+    const mode: Partial<Run> = run.harnessSession ? { agentPermissions: this.limits.permissions ?? "auto" } : {};
     if (run.state === "working") {
+      if (run.harnessSession) this.update(id, mode);
       this.queued.set(id, body);
       this.workstreams?.record(ws, "pip", "agent_message_queued", { runId: id, detail: String([...body].length) });
       this.changed();
@@ -1193,7 +1196,7 @@ export class MockRuns {
     if (!run.shortId) throw new Error("It has no session to carry on in.");
     const passes = (run.passes ?? 1) + 1;
     this.followUps.set(id, [...(this.followUps.get(id) ?? []), { text: "Pip sent a message", detail: `Pass ${passes}.` }]);
-    this.update(id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading Pip's message" });
+    this.update(id, { state: "working", passes, needs: null, suggestedReply: null, unsentAnswer: null, error: null, endedAt: null, continuedAt: this.now(), lastProgressAt: this.now(), lastDetail: "Reading Pip's message", ...mode });
     this.markStale(id);
     this.workstreams?.record(ws, "pip", "run_resumed", { runId: id, detail: String([...body].length) });
     this.changed();

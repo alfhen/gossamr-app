@@ -263,6 +263,17 @@ describe("a run's permissions", () => {
     for (const run of before) expect(backend.runs.list().find((r) => r.id === run.id)!.agentPermissions).toBe(live(run.state) ? "ask" : "auto");
   });
 
+  it("takes the setting of the moment with a message to a working run in the mock, as the backend sends it", () => {
+    const backend = harness();
+    // A run on the harness in the middle of its turn, as the seed has none.
+    const working = (backend.runs as unknown as { update(id: string, patch: Partial<Run>): Run }).update(byKey(backend, "CA-407").id, { state: "working", needs: null });
+    expect(working.agentPermissions).toBe("auto");
+    // As a run whose mode was set before a change of Settings the backend could not send.
+    (backend.runs as unknown as { limits: { permissions: string } }).limits.permissions = "ask";
+    expect(backend.runs.messageAgent(working.id, "Use the blue one.")).toBe("queued");
+    expect(backend.runs.list().find((r) => r.id === working.id)!.agentPermissions).toBe("ask");
+  });
+
   it("takes the setting of the moment with an answer in the mock, as the backend sends it with each message", async () => {
     const backend = harness();
     const run = byKey(backend, "CA-407");
