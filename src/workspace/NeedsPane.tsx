@@ -257,7 +257,7 @@ function PermissionBody({ run }: { run: Run }) {
 function AnswerBody({ run }: { run: Run }) {
   const answering = useRuns((s) => s.answering.has(run.id));
   const store = useRuns.getState();
-  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text) => store.answer(run.id, text), attach: () => void store.attach(run.id) }} />;
+  return <RunAnswer key={run.id} run={run} answering={answering} on={{ answer: (text, options) => store.answer(run.id, text, options), attach: () => void store.attach(run.id) }} />;
 }
 
 function Dismiss({ run }: { run: Run }) {
@@ -277,7 +277,7 @@ function FailureBody({ run }: { run: Run }) {
   return (
     <Box tone="failed" label="Failure">
       <BoxTitle icon="alert" tone="failed">
-        {run.shortId ? "The run stopped without finishing" : "It didn't start"}
+        {run.shortId || run.harnessSession ? "The run stopped without finishing" : "It didn't start"}
       </BoxTitle>
       {help ? (
         <>
@@ -289,7 +289,7 @@ function FailureBody({ run }: { run: Run }) {
         <pre className="selectable m-0 font-mono text-sm leading-normal break-words whitespace-pre-wrap text-ws-ink2">{run.error?.trim() || "No reason was recorded."}</pre>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        {!help && !run.shortId && (
+        {!help && !run.shortId && !run.harnessSession && (
           <Btn tone="primary" icon="retry" onClick={() => void store.retryLaunch(run.id)}>
             Retry launch
           </Btn>
