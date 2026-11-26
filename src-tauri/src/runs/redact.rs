@@ -59,9 +59,16 @@ fn words(s: &str) -> Vec<Range<usize>> {
     out
 }
 
-pub(super) fn is_secret_name(name: &str) -> bool {
+fn is_secret_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     SECRET_NAMES.iter().any(|n| lower.contains(n))
+}
+
+/// Whether a JSON key names a secret: a secret-looking name, or a header that carries one (`Authorization`, `Cookie`).
+/// The text rules see a header only with its colon, so a key holding the header's name alone needs this.
+pub(super) fn is_secret_key(key: &str) -> bool {
+    let header = key.trim().trim_end_matches(':');
+    is_secret_name(key) || HEADERS.iter().map(|h| h.trim_end_matches(':')).chain(["set-cookie", "proxy-authorization"]).any(|h| h.eq_ignore_ascii_case(header))
 }
 
 fn word_spans(body: &str, spans: &mut Vec<Range<usize>>) {

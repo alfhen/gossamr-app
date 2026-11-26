@@ -532,7 +532,7 @@ fn permission_the_app_keeps_a_copy_its_redactor_masked_and_shows_and_allows_from
 #[test]
 fn permission_a_secret_the_harness_let_through_is_kept_nowhere_in_the_run_its_follow_or_its_rows() {
     use harness::event::PermissionKind;
-    for (input, secret) in [(json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"), (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"), (json!({ "command": "env", "env": { "GITHUB_TOKEN=abc123keysecret": "1" } }), "abc123keysecret"), (json!({ "command": "env", "env": { "GITHUB_TOKEN": "abc123undername" } }), "abc123undername"), (json!({ "command": "deploy", "secrets": { "github": ["abc123inalist"] } }), "abc123inalist")] {
+    for (input, secret) in [(json!({ "command": "GITHUB_TOKEN=abc123secretvalue npm test" }), "abc123secretvalue"), (json!({ "command": "mysql --password=hunter2 -u root" }), "hunter2"), (json!({ "command": "env", "env": { "GITHUB_TOKEN=abc123keysecret": "1" } }), "abc123keysecret"), (json!({ "command": "env", "env": { "GITHUB_TOKEN": "abc123undername" } }), "abc123undername"), (json!({ "command": "deploy", "secrets": { "github": ["abc123inalist"] } }), "abc123inalist"), (json!({ "url": "https://api.example.com", "headers": { "Authorization": "Basic dXNlcjpwYXNz" } }), "dXNlcjpwYXNz"), (json!({ "url": "https://api.example.com", "headers": { "Cookie": "sid=3f9a07c1e2" } }), "3f9a07c1e2"), (json!({ "headers": { "set-cookie": "sid=4b8e16d0f3", "Proxy-Authorization": "Basic cHJveHk6cHc=" } }), "4b8e16d0f3")] {
         let mut p = Played::new();
         p.play(started());
         p.play([Body::Permission { id: "p1".into(), kind: PermissionKind::Command, tool: "Bash".into(), input }]);
@@ -567,6 +567,8 @@ fn permission_a_text_under_a_key_that_names_a_secret_is_masked_in_the_stored_cop
     assert_eq!(masked, json!({ "env": { "GITHUB_TOKEN": crate::runs::redact::MASK, "TOKEN_TTL": 60 }, "private": true, "password": "" }));
     let (_, ours) = masked_copy(&json!({ "command": "gh repo create acme/site", "private": true }));
     assert!(!ours, "nothing secret to mask");
+    let (masked, _) = masked_copy(&json!({ "headers": { "Proxy-Authorization": "Basic cHJveHk6cHc=", "Accept": "*/*" } }));
+    assert_eq!(masked, json!({ "headers": { "Proxy-Authorization": crate::runs::redact::MASK, "Accept": "*/*" } }), "an ordinary header is kept");
 }
 
 #[test]

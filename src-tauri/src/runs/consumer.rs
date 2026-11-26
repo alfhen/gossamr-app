@@ -662,7 +662,7 @@ fn masked_copy(value: &Value) -> (Value, bool) {
     masked_under(value, false)
 }
 
-/// `masked_copy`, where `secret` says the value sits under a key that names a secret (`GITHUB_TOKEN`, `password`): then
+/// `masked_copy`, where `secret` says the value sits under a key that names a secret (`GITHUB_TOKEN`, `Authorization`): then
 /// every text in it is masked whole, since `redact` sees the text alone. A number or a flag there is kept, so
 /// `"private": true` stays readable.
 fn masked_under(value: &Value, secret: bool) -> (Value, bool) {
@@ -690,7 +690,7 @@ fn masked_under(value: &Value, secret: bool) -> (Value, bool) {
                     name = format!("{base} {n}");
                     n += 1;
                 }
-                let (value, inner) = masked_under(value, secret || super::redact::is_secret_name(key));
+                let (value, inner) = masked_under(value, secret || super::redact::is_secret_key(key));
                 masked |= inner;
                 out.insert(name, value);
             }
