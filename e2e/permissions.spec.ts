@@ -62,6 +62,7 @@ test("a masked request and one rebuilt after the harness lost it offer only Deny
   await expect(masked.getByRole("button", { name: "Allow" })).toHaveCount(0);
   const rebuilt = requestsOn(page, "DEVOPS-473").last();
   await expect(rebuilt).toContainText("Gossamr can't show all of this request, so it can only be denied.");
+  await expect(rebuilt).toContainText("Wants to use Bash: rm -rf build … (and more)");
   await expect(rebuilt.getByRole("button", { name: "Allow" })).toHaveCount(0);
 });
 

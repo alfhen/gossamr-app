@@ -468,7 +468,7 @@ const PERMISSION_SEEDS: Seed[] = [
     name: "devops-473-duplicate-events-0c1d",
     state: "needsPermission",
     minutesAgo: 18,
-    over: asking(5, [ask("perm-6", "tool", "mcp__ops__request", "https://api.example.invalid/queues/dead-letter", { url: "https://api.example.invalid/queues/dead-letter", method: "DELETE" }), ask("perm-7", "other", "", "", null, { denyOnly: true })]),
+    over: asking(5, [ask("perm-6", "tool", "mcp__ops__request", "https://api.example.invalid/queues/dead-letter", { url: "https://api.example.invalid/queues/dead-letter", method: "DELETE" }), ask("perm-7", "other", "", "Wants to use Bash: rm -rf build … (and more)", null, { denyOnly: true })]),
   },
 ];
 
