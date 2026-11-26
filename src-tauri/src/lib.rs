@@ -775,7 +775,7 @@ async fn runs_answer(runs: State<'_, RunsState>, id: String, text: String, took_
 }
 
 /// Allows or denies one open permission request of a run on the harness, once. Only the person answers one: no Pip or
-/// agent tool reaches this.
+/// agent tool reaches this (`no_pip_or_agent_tool_reaches_a_permission_answer`).
 #[tauri::command]
 async fn runs_answer_permission(runs: State<'_, RunsState>, id: String, request: String, decision: harness::event::Decision) -> Result<Run> {
     runs.answer_permission(&id, &request, decision).await

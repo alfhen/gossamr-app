@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use harness::api::Op;
 use harness::client::Client;
+use harness::event::{Decision, PermissionKind};
 
 use super::failure::Failure;
 use super::link::{Connect, Link};
@@ -37,6 +38,10 @@ pub const MOCK: &str = "mock";
 
 /// How long after a run launched the harness can create its session: an open waits for the shell and makes a clone.
 const OPEN_TAKES_UP_TO_MS: i64 = 10 * 60 * 1000;
+
+pub const HANDED_OVER_PERMISSION: &str = "It was handed over to Terminal, so answer it there.";
+pub const ONLY_DENY_CUT: &str = "This request was too large to show whole, so it can only be denied.";
+pub const ONLY_DENY_KIND: &str = "Gossamr can't read this kind of request, so it can only be denied.";
 
 const NO_BRIEF: &str = "Gossamr stopped before it sent the agent its brief, so the session was closed. Ask Pip to start it again.";
 
@@ -212,9 +217,30 @@ impl RunService {
         })
     }
 
-    /// Allows or denies one open permission request of `run_id`, once.
-    pub async fn answer_permission(&self, _run_id: &str, _request: &str, _decision: harness::event::Decision) -> Result<Run> {
-        Err(Error::Proposal("Gossamr can't answer permission requests yet.".into()))
+    /// Allows or denies one open permission request of `run_id`, once, for that request alone. Only the person's page
+    /// calls this: an allow is theirs to give, never Pip's or an agent's.
+    pub async fn answer_permission(&self, run_id: &str, request: &str, decision: Decision) -> Result<Run> {
+        let refuse = |why: &str| Err(Error::Proposal(why.to_owned()));
+        if decision == Decision::Other {
+            return refuse("An answer is allow or deny.");
+        }
+        let run = self.load(run_id).await?;
+        let Some((link, session)) = self.on_harness_of(&run) else { return refuse("This run isn't on the harness: answer it in Terminal.") };
+        if run.handed_over {
+            return refuse(HANDED_OVER_PERMISSION);
+        }
+        if matches!(run.state, RunState::Queued | RunState::Launching | RunState::Done | RunState::Failed | RunState::Stopped) {
+            return refuse(&format!("This run is {}, so it has no request to answer.", run.state.as_str()));
+        }
+        let Some(open) = run.permissions.iter().find(|open| open.id == request) else { return refuse(super::link::NOT_OPEN) };
+        if open.deny_only && decision == Decision::Allow {
+            return refuse(if open.kind == PermissionKind::Other { ONLY_DENY_KIND } else { ONLY_DENY_CUT });
+        }
+        match link.permit(session, request, decision).await {
+            Ok(()) => self.load(run_id).await,
+            Err(why) if why == super::link::NOT_OPEN || why == super::link::NOT_RUNNING_TO_ANSWER => refuse(&why),
+            Err(why) => refuse(&format!("The harness didn't take your answer: {why}")),
+        }
     }
 
     /// Asks the harness to stop a run's session; the run reads stopped once it closed. `None` for a run not on it.
